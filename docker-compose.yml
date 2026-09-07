@@ -1,0 +1,44 @@
+# Lab / dev : TimescaleDB + l'application hors-bande.
+# En production le controleur tourne sur une VM de management, jamais sur le chemin
+# des paquets et jamais sur un PoP.
+
+services:
+  timescaledb:
+    image: ${TIMESCALE_IMAGE:-timescale/timescaledb:latest-pg16}
+    container_name: freeqos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-qos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-qos}
+      # Le controleur ecrit en continu : on evite les checkpoints trop agressifs.
+      TIMESCALEDB_TELEMETRY: "off"
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qos} -d ${POSTGRES_DB:-qos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    container_name: freeqos-app
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-qos}:${POSTGRES_PASSWORD:-changeme}@timescaledb:5432/${POSTGRES_DB:-qos}
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    volumes:
+      # Inventaire des routeurs monte en lecture seule (les mots de passe restent en env).
+      - ./config:/app/config:ro
+
+volumes:
+  pgdata:

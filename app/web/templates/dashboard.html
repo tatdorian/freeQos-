@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>freeQoS - controleur QoS/QoE</title>
+  <style>
+    :root { color-scheme: light dark; --bd:#8883; --mut:#0009; }
+    @media (prefers-color-scheme: dark) { :root { --mut:#fff9; } }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+           margin: 0; padding: 1.5rem; max-width: 1200px; }
+    h1 { font-size: 1.25rem; margin: 0 0 .25rem; }
+    h2 { font-size: .95rem; margin: 2rem 0 .5rem; text-transform: uppercase;
+         letter-spacing: .06em; color: var(--mut); }
+    .sub { color: var(--mut); font-size: .85rem; margin: 0 0 1rem; }
+    .badge { display:inline-block; padding:.1rem .5rem; border:1px solid var(--bd);
+             border-radius:999px; font-size:.75rem; }
+    table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+    th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid var(--bd); }
+    th { font-weight: 600; color: var(--mut); font-size: .75rem;
+         text-transform: uppercase; letter-spacing: .04em; }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+             gap: .75rem; }
+    .card { border: 1px solid var(--bd); border-radius: .5rem; padding: .7rem .9rem; }
+    .card .k { font-size: .7rem; text-transform: uppercase; letter-spacing: .05em;
+               color: var(--mut); }
+    .card .v { font-size: 1.4rem; font-variant-numeric: tabular-nums; }
+    .ok { color: #16a34a; } .ko { color: #dc2626; }
+    footer { margin-top: 2.5rem; font-size: .75rem; color: var(--mut); }
+    a { color: inherit; }
+  </style>
+</head>
+<body>
+  <h1>freeQoS <span class="badge">hors-bande &middot; phase 1 &middot; lecture seule</span></h1>
+  <p class="sub">
+    Boucle centrale lente : collecte, referentiel, baselines.
+    La boucle locale rapide vit sur le PoP et n'est pas geree ici.
+    &middot; <a href="/docs">API</a>
+  </p>
+
+  <div data-src="/ui/fragments/overview" data-every="10">
+    <p class="sub">Chargement...</p>
+  </div>
+
+  <h2>Abonnes - dernier echantillon</h2>
+  <div data-src="/ui/fragments/subscribers" data-every="10">
+    <p class="sub">Chargement...</p>
+  </div>
+
+  <h2>Backhauls radio - capacite mesuree</h2>
+  <div data-src="/ui/fragments/backhauls" data-every="15">
+    <p class="sub">Chargement...</p>
+  </div>
+
+  <footer>
+    rx = upload abonne, tx = download abonne (point de vue du routeur).
+    <span id="err" class="ko"></span>
+  </footer>
+
+  <script>
+    // Rafraichissement des fragments rendus cote serveur. Volontairement sans
+    // bibliotheque externe : le controleur doit rester utilisable sur une VM de
+    // management sans acces internet.
+    function refresh(el) {
+      fetch(el.dataset.src, { headers: { 'Accept': 'text/html' } })
+        .then(function (r) {
+          if (!r.ok) { throw new Error(r.status + ' ' + r.statusText); }
+          return r.text();
+        })
+        .then(function (html) {
+          el.innerHTML = html;
+          document.getElementById('err').textContent = '';
+        })
+        .catch(function (e) {
+          document.getElementById('err').textContent = ' - ' + el.dataset.src + ' : ' + e.message;
+        });
+    }
+    document.querySelectorAll('[data-src]').forEach(function (el) {
+      refresh(el);
+      setInterval(function () { refresh(el); }, parseInt(el.dataset.every, 10) * 1000);
+    });
+  </script>
+</body>
+</html>

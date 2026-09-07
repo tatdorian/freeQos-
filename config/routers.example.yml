@@ -1,0 +1,54 @@
+# Inventaire des routeurs MikroTik interroges par le controleur.
+# Copier en config/routers.yml (ignore par git) et adapter.
+#
+# SECURITE : jamais de mot de passe ici. On declare le NOM d'une variable
+# d'environnement (password_env) qui porte le secret.
+#
+# Phase 1 : lecture seule via le compte qos-ro.
+# Phase 2 : les champs rw_* seront utilises pour pousser les files CAKE.
+
+routers:
+  - name: pop-nord
+    host: 10.10.0.11          # CHR RouterOS 7.21.5 en lab EVE-NG
+    port: 8728                # 8728 = API binaire, 8729 = api-ssl
+    username: qos-ro
+    password_env: MT_POP_NORD_PASSWORD
+    role: pop                 # pop | core | gateway
+    pop_name: PoP Nord
+    enabled: true
+    timeout_s: 5.0
+    # RouterOS nomme l'interface dynamique d'une session PPPoE <pppoe-LOGIN>.
+    # A adapter si le profil PPP utilise un autre nommage.
+    pppoe_interface_pattern: "<pppoe-{login}>"
+    # Phase 2 (non utilise aujourd'hui)
+    rw_username: qos-rw
+    rw_password_env: MT_POP_NORD_RW_PASSWORD
+
+  - name: pop-sud
+    host: 10.10.0.12
+    port: 8728
+    username: qos-ro
+    password_env: MT_POP_SUD_PASSWORD
+    role: pop
+    pop_name: PoP Sud
+    enabled: true
+
+  # Gateway : utile en phase 2 pour le shaping egress internet.
+  - name: gw-core
+    host: 10.10.0.1
+    username: qos-ro
+    password_env: MT_GW_PASSWORD
+    role: gateway
+    enabled: false
+
+# Backhauls radio associes aux PoPs. Lecture seule : on ne pilote jamais la radio,
+# on lit sa capacite pour en faire le debit parent du shaping.
+backhauls:
+  - name: bh-nord-pri
+    pop_name: PoP Nord
+    uisp_device_id: 8a2f1c3e-0000-4000-8000-000000000001
+    nominal_capacity_mbps: 500
+  - name: bh-sud-pri
+    pop_name: PoP Sud
+    uisp_device_id: 8a2f1c3e-0000-4000-8000-000000000002
+    nominal_capacity_mbps: 300

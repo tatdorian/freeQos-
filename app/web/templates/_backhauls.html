@@ -1,0 +1,23 @@
+<table>
+  <thead>
+    <tr><th>Backhaul</th><th>PoP</th><th>Nominal</th><th>Capacite mesuree</th>
+        <th>Down</th><th>Up</th><th>Signal</th><th>Airtime</th><th>Mesure</th></tr>
+  </thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td>{{ row.name }}{% if not row.online %} <span class="ko">hors ligne</span>{% endif %}</td>
+      <td>{{ row.pop_name or '-' }}</td>
+      <td class="num">{% if row.nominal_capacity_mbps %}{{ '%g'|format(row.nominal_capacity_mbps) }} Mbps{% else %}-{% endif %}</td>
+      <td class="num">{% if row.capacity_mbps is not none %}{{ '%.1f'|format(row.capacity_mbps) }} Mbps{% else %}-{% endif %}</td>
+      <td class="num">{% if row.capacity_down_mbps is not none %}{{ '%.1f'|format(row.capacity_down_mbps) }}{% else %}-{% endif %}</td>
+      <td class="num">{% if row.capacity_up_mbps is not none %}{{ '%.1f'|format(row.capacity_up_mbps) }}{% else %}-{% endif %}</td>
+      <td class="num">{% if row.signal_dbm is not none %}{{ '%.0f'|format(row.signal_dbm) }} dBm{% else %}-{% endif %}</td>
+      <td class="num">{% if row.airtime_pct is not none %}{{ '%.0f'|format(row.airtime_pct) }} %{% else %}-{% endif %}</td>
+      <td>{{ row.ts.strftime('%H:%M:%S') if row.ts else '-' }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="9">Aucun backhaul declare (section <code>backhauls</code> de l'inventaire).</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
