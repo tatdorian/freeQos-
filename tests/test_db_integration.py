@@ -30,7 +30,21 @@ pytestmark = pytest.mark.skipif(
     not DSN, reason="TEST_DATABASE_URL non defini : tests d'integration ignores"
 )
 
-NOW = datetime.now(tz=UTC).replace(microsecond=0)
+
+def _maintenant() -> datetime:
+    """Horodatage de reference, recalcule a CHAQUE test.
+
+    Une constante figee a l'import derivait de l'heure de PostgreSQL au fil de
+    la suite : les vues qui filtrent sur "les deux dernieres minutes" finissaient
+    par ne plus voir les echantillons ecrits par le test. Flake garanti le jour
+    ou la suite ralentit.
+    """
+    return datetime.now(tz=UTC).replace(microsecond=0)
+
+
+@pytest.fixture
+def now() -> datetime:
+    return _maintenant()
 
 
 @pytest.fixture
@@ -94,7 +108,7 @@ async def test_referentiel_upsert(database: Database) -> None:
     assert row["pop_id"] == pop_id
 
 
-async def test_ecriture_et_relecture_des_metriques(database: Database) -> None:
+async def test_ecriture_et_relecture_des_metriques(database: Database, now: datetime) -> None:
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
@@ -108,7 +122,7 @@ async def test_ecriture_et_relecture_des_metriques(database: Database) -> None:
         (
             subscriber_id,
             SubscriberSample(
-                ts=NOW - timedelta(seconds=10 * i),
+                ts=now - timedelta(seconds=10 * i),
                 login="dupont",
                 router_name="pop-nord",
                 pop_name="PoP Nord",
@@ -131,8 +145,8 @@ async def test_ecriture_et_relecture_des_metriques(database: Database) -> None:
 
     points = await repo.subscriber_metrics(
         subscriber_id,
-        start=NOW - timedelta(minutes=5),
-        end=NOW + timedelta(seconds=1),
+        start=now - timedelta(minutes=5),
+        end=now + timedelta(seconds=1),
         bucket_seconds=60,
     )
     # Les buckets sont alignes sur l'epoch : les 6 echantillons peuvent tomber
@@ -144,7 +158,7 @@ async def test_ecriture_et_relecture_des_metriques(database: Database) -> None:
     assert points == sorted(points, key=lambda point: point["bucket"])
 
 
-async def test_vue_dernier_echantillon(database: Database) -> None:
+async def test_vue_dernier_echantillon(database: Database, now: datetime) -> None:
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
@@ -160,10 +174,10 @@ async def test_vue_dernier_echantillon(database: Database) -> None:
 
     await writer.write_subscriber_metrics(
         [
-            (petit, sample(NOW - timedelta(seconds=10), 1e6, 2e6)),
-            (petit, sample(NOW, 1.5e6, 3e6)),
-            (gros, sample(NOW - timedelta(seconds=10), 50e6, 90e6)),
-            (gros, sample(NOW, 60e6, 95e6)),
+            (petit, sample(now - timedelta(seconds=10), 1e6, 2e6)),
+            (petit, sample(now, 1.5e6, 3e6)),
+            (gros, sample(now - timedelta(seconds=10), 50e6, 90e6)),
+            (gros, sample(now, 60e6, 95e6)),
         ]
     )
 
@@ -171,10 +185,10 @@ async def test_vue_dernier_echantillon(database: Database) -> None:
     assert [row["pppoe_login"] for row in latest] == ["gros", "petit"]
     # Seul le dernier point de chaque abonne remonte.
     assert latest[0]["tx_bps"] == 95e6
-    assert latest[0]["ts"] == NOW
+    assert latest[0]["ts"] == now
 
 
-async def test_metriques_backhaul(database: Database) -> None:
+async def test_metriques_backhaul(database: Database, now: datetime) -> None:
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
@@ -189,7 +203,7 @@ async def test_metriques_backhaul(database: Database) -> None:
             (
                 backhaul_id,
                 BackhaulSample(
-                    ts=NOW - timedelta(seconds=30),
+                    ts=now - timedelta(seconds=30),
                     device_id="dev-1",
                     capacity_mbps=480,
                     capacity_down_mbps=360,
@@ -201,7 +215,7 @@ async def test_metriques_backhaul(database: Database) -> None:
             (
                 backhaul_id,
                 BackhaulSample(
-                    ts=NOW,
+                    ts=now,
                     device_id="dev-1",
                     capacity_mbps=180,  # fade
                     capacity_down_mbps=135,
@@ -218,15 +232,15 @@ async def test_metriques_backhaul(database: Database) -> None:
 
     points = await repo.backhaul_metrics(
         backhaul_id,
-        start=NOW - timedelta(minutes=5),
-        end=NOW + timedelta(seconds=1),
+        start=now - timedelta(minutes=5),
+        end=now + timedelta(seconds=1),
         bucket_seconds=300,
     )
     # Le creux de capacite est ce qui contraint le debit parent du shaping.
     assert points[-1]["capacity_mbps_min"] == 180
 
 
-async def test_historique_des_cycles_et_compteurs(database: Database) -> None:
+async def test_historique_des_cycles_et_compteurs(database: Database, now: datetime) -> None:
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
@@ -236,7 +250,7 @@ async def test_historique_des_cycles_et_compteurs(database: Database) -> None:
     await writer.record_run(
         RunResult(
             job="collect_subscribers",
-            started_at=NOW,
+            started_at=now,
             duration_s=0.12,
             ok=False,
             items=3,
@@ -253,14 +267,14 @@ async def test_historique_des_cycles_et_compteurs(database: Database) -> None:
     assert counters["subscribers"] == 1
 
 
-async def test_touch_et_mise_a_jour_des_plans(database: Database) -> None:
+async def test_touch_et_mise_a_jour_des_plans(database: Database, now: datetime) -> None:
     directory = PgDirectory(database.pool)
     repo = MetricsRepository(database.pool)
 
     pop_id = await directory.ensure_pop("PoP Nord")
     subscriber_id = await directory.ensure_subscriber("dupont", pop_id=pop_id)
 
-    await directory.touch_subscribers({subscriber_id: ("10.20.0.42", NOW)})
+    await directory.touch_subscribers({subscriber_id: ("10.20.0.42", now)})
     await directory.update_plans({subscriber_id: Plan(300, 50, "radius:user")})
 
     row = await repo.get_subscriber(subscriber_id)
@@ -270,7 +284,7 @@ async def test_touch_et_mise_a_jour_des_plans(database: Database) -> None:
     assert row["plan_source"] == "radius:user"
 
 
-async def test_suppression_en_cascade(database: Database) -> None:
+async def test_suppression_en_cascade(database: Database, now: datetime) -> None:
     """Supprimer un abonne doit emporter ses metriques : sinon la retention
     Timescale laisserait des orphelins impossibles a rattacher."""
     directory = PgDirectory(database.pool)
@@ -283,7 +297,7 @@ async def test_suppression_en_cascade(database: Database) -> None:
             (
                 subscriber_id,
                 SubscriberSample(
-                    ts=NOW, login="temporaire", router_name="r", pop_name="p", rx_bps=1.0
+                    ts=now, login="temporaire", router_name="r", pop_name="p", rx_bps=1.0
                 ),
             )
         ]
@@ -460,7 +474,7 @@ async def test_routeur_dont_le_secret_est_illisible_est_ecarte(database: Databas
 # ---------------------------------------------------------------------------
 
 
-async def test_vues_du_tableau_de_bord(database: Database) -> None:
+async def test_vues_du_tableau_de_bord(database: Database, now: datetime) -> None:
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
@@ -479,10 +493,10 @@ async def test_vues_du_tableau_de_bord(database: Database) -> None:
 
     await writer.write_subscriber_metrics(
         [
-            (a, sample(NOW - timedelta(seconds=20), 1e6, 10e6)),
-            (a, sample(NOW, 2e6, 20e6)),
-            (b, sample(NOW - timedelta(seconds=20), 5e6, 50e6)),
-            (b, sample(NOW, 6e6, 60e6)),
+            (a, sample(now - timedelta(seconds=20), 1e6, 10e6)),
+            (a, sample(now, 2e6, 20e6)),
+            (b, sample(now - timedelta(seconds=20), 5e6, 50e6)),
+            (b, sample(now, 6e6, 60e6)),
         ]
     )
     await writer.write_backhaul_metrics(
@@ -490,7 +504,7 @@ async def test_vues_du_tableau_de_bord(database: Database) -> None:
             (
                 backhaul_id,
                 BackhaulSample(
-                    ts=NOW,
+                    ts=now,
                     device_id="dev-1",
                     capacity_mbps=400,
                     signal_dbm=-55,
@@ -499,7 +513,7 @@ async def test_vues_du_tableau_de_bord(database: Database) -> None:
             )
         ]
     )
-    await directory.touch_subscribers({a: ("10.0.0.1", NOW), b: ("10.0.0.2", NOW)})
+    await directory.touch_subscribers({a: ("10.0.0.1", now), b: ("10.0.0.2", now)})
 
     overview = await repo.overview()
     assert overview["online"] == 2
@@ -515,7 +529,7 @@ async def test_vues_du_tableau_de_bord(database: Database) -> None:
     assert tree[0]["backhauls"][0]["capacity_mbps"] == 400.0
 
     series = await repo.throughput_series(
-        start=NOW - timedelta(minutes=5), end=NOW + timedelta(seconds=1), bucket_seconds=300
+        start=now - timedelta(minutes=5), end=now + timedelta(seconds=1), bucket_seconds=300
     )
     # Un seul bucket : la moyenne par abonne est sommee, jamais les echantillons
     # bruts (sinon un abonne a deux mesures compterait double).
@@ -524,7 +538,7 @@ async def test_vues_du_tableau_de_bord(database: Database) -> None:
     assert series[0]["subscribers"] == 2
 
 
-async def test_throughput_ne_double_compte_pas(database: Database) -> None:
+async def test_throughput_ne_double_compte_pas(database: Database, now: datetime) -> None:
     """Regression : sommer directement les echantillons gonflerait le total des
     que le bucket depasse la periode de collecte."""
     directory = PgDirectory(database.pool)
@@ -540,7 +554,7 @@ async def test_throughput_ne_double_compte_pas(database: Database) -> None:
             (
                 seul,
                 SubscriberSample(
-                    ts=NOW - timedelta(seconds=10 * i),
+                    ts=now - timedelta(seconds=10 * i),
                     login="solo",
                     router_name="r",
                     pop_name="p",
@@ -553,7 +567,7 @@ async def test_throughput_ne_double_compte_pas(database: Database) -> None:
     )
 
     series = await repo.throughput_series(
-        start=NOW - timedelta(minutes=5), end=NOW + timedelta(seconds=1), bucket_seconds=300
+        start=now - timedelta(minutes=5), end=now + timedelta(seconds=1), bucket_seconds=300
     )
 
     # Les buckets sont alignes sur l'epoch : les echantillons peuvent se repartir
@@ -758,7 +772,7 @@ async def test_journal_des_commandes(database: Database) -> None:
     assert "max-limit=20000000/100000000" in lignes[0]["command"]
 
 
-async def test_cycle_de_vie_d_un_boost(database: Database) -> None:
+async def test_cycle_de_vie_d_un_boost(database: Database, now: datetime) -> None:
     """Pose, expiration, purge : le cycle complet contre le vrai SQL."""
     from datetime import UTC, datetime, timedelta
 
@@ -830,7 +844,7 @@ async def test_drapeaux_runtime(database: Database) -> None:
     assert await repo.get_flag("enforcement_enabled") is False
 
 
-async def test_seconds_left_est_un_nombre(database: Database) -> None:
+async def test_seconds_left_est_un_nombre(database: Database, now: datetime) -> None:
     """EXTRACT(EPOCH ...) renvoie un Decimal, serialise en CHAINE par l'API :
     l'interface ferait alors une division sur du texte."""
     from datetime import UTC, datetime, timedelta
@@ -852,7 +866,7 @@ async def test_seconds_left_est_un_nombre(database: Database) -> None:
     assert 1700 < restant < 1801
 
 
-async def test_suppression_d_un_pop_emporte_ses_donnees(database: Database) -> None:
+async def test_suppression_d_un_pop_emporte_ses_donnees(database: Database, now: datetime) -> None:
     """Retirer un routeur de l'inventaire ne suffit pas : le site, ses abonnes et
     leur historique restent en base tant qu'on ne fait pas le menage."""
     directory = PgDirectory(database.pool)
@@ -870,7 +884,7 @@ async def test_suppression_d_un_pop_emporte_ses_donnees(database: Database) -> N
             [
                 (
                     abonne,
-                    SubscriberSample(ts=NOW, login="x", router_name="r", pop_name="p", rx_bps=1.0),
+                    SubscriberSample(ts=now, login="x", router_name="r", pop_name="p", rx_bps=1.0),
                 )
             ]
         )

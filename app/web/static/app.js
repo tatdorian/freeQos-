@@ -35,7 +35,45 @@ function bps(v) {
   return { v: n.toFixed(0), u: 'bps' };
 }
 function bpsText(v) { const b = bps(v); return b.v + ' ' + b.u; }
-function mbps(v) { return (Number(v) || 0).toFixed(v >= 100 ? 0 : 1) + ' Mbps'; }
+/** Formate un debit exprime en Mbps, en choisissant l'unite lisible.
+ *  Un lien de secours a 512 kbps ne doit pas s'afficher "0.5 Mbps". */
+function mbps(v) {
+  const n = Number(v) || 0;
+  if (n && n < 1) return (n * 1000).toFixed(n < 0.1 ? 1 : 0) + ' kbps';
+  if (n >= 1000) return (n / 1000).toFixed(n >= 10000 ? 0 : 2) + ' Gbps';
+  return n.toFixed(n >= 100 ? 0 : 1) + ' Mbps';
+}
+
+/** Meilleure unite pour PRE-REMPLIR un champ de saisie, avec sa valeur. */
+function bestUnit(mbpsValue) {
+  const n = Number(mbpsValue);
+  if (!n) return { value: '', unit: 'mbps' };
+  if (n < 1) return { value: +(n * 1000).toFixed(3), unit: 'kbps' };
+  if (n >= 1000) return { value: +(n / 1000).toFixed(3), unit: 'gbps' };
+  return { value: +n.toFixed(3), unit: 'mbps' };
+}
+
+const UNITES = [['kbps', 'kbps'], ['mbps', 'Mbps'], ['gbps', 'Gbps']];
+
+/** Select d'unite associe a un champ de debit. */
+function unitSelect(id, selected) {
+  return '<select id="' + id + '" style="width:auto;flex:0 0 auto">' +
+    UNITES.map(([v, label]) => '<option value="' + v + '"' +
+      (v === selected ? ' selected' : '') + '>' + label + '</option>').join('') +
+    '</select>';
+}
+
+/** Lit un couple (champ, unite) et renvoie la valeur en Mbps, ou null. */
+function readRate(inputId, unitId) {
+  const brut = document.getElementById(inputId).value;
+  if (brut === '') return null;
+  const n = Number(brut);
+  if (!isFinite(n)) return null;
+  const unite = document.getElementById(unitId).value;
+  if (unite === 'kbps') return n / 1000;
+  if (unite === 'gbps') return n * 1000;
+  return n;
+}
 
 function pct(value, max) {
   if (!max || max <= 0) return null;
@@ -561,7 +599,7 @@ async function loadSubscribers() {
         '<td class="login">' + esc(r.pppoe_login) + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td>' +
         '<td class="num">' + (r.plan_down_mbps
-          ? esc(r.plan_down_mbps + '/' + (r.plan_up_mbps || 0)) : '-') + '</td>' +
+          ? esc(mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0)) : '-') + '</td>' +
         '<td class="num" style="color:var(--down)">' + esc(bpsText(r.tx_bps)) + '</td>' +
         '<td>' + meter(r.tx_bps, planDown) + '</td>' +
         '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
@@ -612,7 +650,9 @@ async function openSubscriber(id) {
       '<button class="sm" id="drawer-close">Fermer</button></div>' +
       '<div class="grid stats" style="margin-bottom:1rem">' +
         statCard('', 'PoP', esc(s.pop_name || '-'), '', '') +
-        statCard('', 'Plan', s.plan_down_mbps ? esc(s.plan_down_mbps + '/' + (s.plan_up_mbps || 0)) : '-', 'Mbps', esc(s.plan_source || '')) +
+        statCard('', 'Plan', s.plan_down_mbps
+          ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : '-',
+          '', esc(s.plan_source || '')) +
         statCard('', 'Derniere IP', esc(s.last_ip || '-'), '', '') +
       '</div>' +
       (data.points.some((p) => p.rtt_ms_avg !== null && p.rtt_ms_avg !== undefined)
@@ -938,7 +978,7 @@ function renderTopologyLinks(links) {
         '<td class="num">' + (l.capacity_mbps ? esc(mbps(l.capacity_mbps)) : '-') + '</td>' +
         '<td class="num">' + (impose
           ? '<span style="color:var(--warn)">' +
-            esc((l.max_down_mbps || 0) + '/' + (l.max_up_mbps || 0)) + ' Mbps</span>'
+            esc(mbps(l.max_down_mbps || 0) + ' / ' + mbps(l.max_up_mbps || 0)) + '</span>'
           : '<span style="color:var(--faint)">auto</span>') + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' +
           '<button class="sm" data-edit-link="' + esc(l.key) + '">Bande passante</button>' +
@@ -971,6 +1011,10 @@ async function openBandwidthEditor(scope, cible) {
     console.warn('Politique non relue :', err);
   }
 
+  // Pre-remplir dans l'unite la plus lisible : 0.512 Mbps s'affiche 512 kbps.
+  const dep = bestUnit(actuelle.max_down_mbps);
+  const mon = bestUnit(actuelle.max_up_mbps);
+
   const root = document.getElementById('drawer-root');
   root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
     '<div class="drawer-head"><h3>' + esc(nom) + '</h3>' +
@@ -981,12 +1025,18 @@ async function openBandwidthEditor(scope, cible) {
       'plutot que dans le buffer de la radio.</span></div>' : '') +
     '<form class="stack" id="bw-form">' +
       '<div class="row-2">' +
-        '<div class="field"><label for="bw-down">Download (Mbps)</label>' +
-          '<input id="bw-down" type="number" min="0" step="1" value="' +
-          esc(actuelle.max_down_mbps || '') + '" placeholder="auto (plan RADIUS ou capacite mesuree)"></div>' +
-        '<div class="field"><label for="bw-up">Upload (Mbps)</label>' +
-          '<input id="bw-up" type="number" min="0" step="1" value="' +
-          esc(actuelle.max_up_mbps || '') + '" placeholder="auto"></div>' +
+        '<div class="field"><label for="bw-down">Download</label>' +
+          '<div style="display:flex;gap:.4rem">' +
+            '<input id="bw-down" type="number" min="0" step="any" value="' +
+            esc(dep.value) + '" placeholder="auto (plan ou capacite mesuree)">' +
+            unitSelect('bw-down-unit', dep.unit) +
+          '</div></div>' +
+        '<div class="field"><label for="bw-up">Upload</label>' +
+          '<div style="display:flex;gap:.4rem">' +
+            '<input id="bw-up" type="number" min="0" step="any" value="' +
+            esc(mon.value) + '" placeholder="auto">' +
+            unitSelect('bw-up-unit', mon.unit) +
+          '</div></div>' +
       '</div>' +
       '<div class="field"><label for="bw-note">Note</label>' +
         '<input id="bw-note" value="' + esc(actuelle.note || '') +
@@ -1007,15 +1057,14 @@ async function openBandwidthEditor(scope, cible) {
 
   document.getElementById('bw-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const down = document.getElementById('bw-down').value;
-    const up = document.getElementById('bw-up').value;
     try {
       await api('/shaping/policies', {
         method: 'PUT',
         body: JSON.stringify({
           scope: scope, target_key: cle,
-          max_down_mbps: down === '' ? null : Number(down),
-          max_up_mbps: up === '' ? null : Number(up),
+          // Converti en Mbps ici : la base ne connait qu'une seule unite.
+          max_down_mbps: readRate('bw-down', 'bw-down-unit'),
+          max_up_mbps: readRate('bw-up', 'bw-up-unit'),
           enabled: true,
           note: document.getElementById('bw-note').value || null,
         }),
@@ -1062,7 +1111,7 @@ function openBoostEditor(abonne) {
     '<button class="sm" id="drawer-close">Fermer</button></div>' +
 
     '<div class="notice">Plan actuel : <strong>' +
-      esc(planDown + '/' + planUp) + ' Mbps</strong>' +
+      esc(mbps(planDown)) + ' / ' + esc(mbps(planUp)) + '</strong>' +
       '<span class="hint">Le boost prime sur le plan et sur toute surcharge ' +
       'permanente, puis s\'efface a echeance sans intervention.</span></div>' +
 
@@ -1079,14 +1128,20 @@ function openBoostEditor(abonne) {
       '<div class="field"><label>Debit</label>' +
         '<div class="boost-choices" id="boost-factors">' +
         FACTEURS.map((f) => '<button type="button" data-mult="' + f + '">x' + f +
-          (planDown ? ' (' + Math.round(planDown * f) + ' Mbps)' : '') + '</button>').join('') +
+          (planDown ? ' (' + esc(mbps(planDown * f)) + ')' : '') + '</button>').join('') +
         '</div></div>' +
 
       '<div class="row-2">' +
-        '<div class="field"><label for="boost-down">Download (Mbps)</label>' +
-          '<input id="boost-down" type="number" min="1" step="1" placeholder="inchange"></div>' +
-        '<div class="field"><label for="boost-up">Upload (Mbps)</label>' +
-          '<input id="boost-up" type="number" min="1" step="1" placeholder="inchange"></div>' +
+        '<div class="field"><label for="boost-down">Download</label>' +
+          '<div style="display:flex;gap:.4rem">' +
+            '<input id="boost-down" type="number" min="0" step="any" placeholder="inchange">' +
+            unitSelect('boost-down-unit', 'mbps') +
+          '</div></div>' +
+        '<div class="field"><label for="boost-up">Upload</label>' +
+          '<div style="display:flex;gap:.4rem">' +
+            '<input id="boost-up" type="number" min="0" step="any" placeholder="inchange">' +
+            unitSelect('boost-up-unit', 'mbps') +
+          '</div></div>' +
       '</div>' +
 
       '<div class="field"><label for="boost-reason">Motif</label>' +
@@ -1116,15 +1171,19 @@ function openBoostEditor(abonne) {
       document.querySelectorAll('#boost-factors button')
         .forEach((x) => x.classList.remove('active'));
       b.classList.add('active');
-      document.getElementById('boost-down').value = Math.round(planDown * Number(b.dataset.mult)) || '';
-      document.getElementById('boost-up').value = Math.round(planUp * Number(b.dataset.mult)) || '';
+      const facteur = Number(b.dataset.mult);
+      [['boost-down', planDown], ['boost-up', planUp]].forEach(([id, plan]) => {
+        const choix = bestUnit(plan * facteur);
+        document.getElementById(id).value = choix.value;
+        document.getElementById(id + '-unit').value = choix.unit;
+      });
     });
   });
 
   document.getElementById('boost-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const down = document.getElementById('boost-down').value;
-    const up = document.getElementById('boost-up').value;
+    const down = readRate('boost-down', 'boost-down-unit');
+    const up = readRate('boost-up', 'boost-up-unit');
     if (!down && !up) {
       document.getElementById('boost-result').innerHTML =
         '<div class="notice err">Choisissez un facteur ou saisissez un debit.</div>';
@@ -1136,8 +1195,8 @@ function openBoostEditor(abonne) {
         body: JSON.stringify({
           login: abonne.pppoe_login,
           duration_minutes: Number(champMinutes.value) || 60,
-          down_mbps: down ? Number(down) : null,
-          up_mbps: up ? Number(up) : null,
+          down_mbps: down,
+          up_mbps: up,
           reason: document.getElementById('boost-reason').value || null,
           apply_now: true,
         }),

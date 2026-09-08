@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.api.deps import ContainerDep, RepositoryDep
 from app.enforcement.routeros import MissingWriteCredentialsError
@@ -105,13 +105,56 @@ async def shaping_state(
 
 
 # ---------------------------------------------------------------- politique
+def _en_mbps(
+    mbps: float | None, kbps: float | None, gbps: float | None, champ: str
+) -> float | None:
+    """Ramene un debit a l'unite interne unique : le Mbps.
+
+    Melanger les unites en base serait une fabrique a bugs ; on convertit donc a
+    l'entree. Fournir deux unites pour le meme champ est ambigu, donc refuse.
+    """
+    fournis = [(v, u) for v, u in ((mbps, "mbps"), (kbps, "kbps"), (gbps, "gbps")) if v is not None]
+    if len(fournis) > 1:
+        raise ValueError(
+            f"{champ} : une seule unite a la fois "
+            f"({', '.join(u for _, u in fournis)} fournis ensemble)"
+        )
+    if not fournis:
+        return None
+    valeur, unite = fournis[0]
+    if unite == "kbps":
+        return valeur / 1000.0
+    if unite == "gbps":
+        return valeur * 1000.0
+    return valeur
+
+
 class PolicyInput(BaseModel):
+    """Surcharge permanente de debit.
+
+    Le debit s'exprime au choix en kbps, Mbps ou Gbps : un lien radio de secours
+    ou un abonne bride se comptent souvent en centaines de kilobits, ou saisir
+    0.512 Mbps serait absurde.
+    """
+
     scope: Literal["link", "subscriber"]
     target_key: str = Field(min_length=1, max_length=256)
     max_down_mbps: float | None = Field(default=None, ge=0, le=100_000)
     max_up_mbps: float | None = Field(default=None, ge=0, le=100_000)
+    max_down_kbps: float | None = Field(default=None, ge=0, le=100_000_000)
+    max_up_kbps: float | None = Field(default=None, ge=0, le=100_000_000)
+    max_down_gbps: float | None = Field(default=None, ge=0, le=100)
+    max_up_gbps: float | None = Field(default=None, ge=0, le=100)
     enabled: bool = True
     note: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _normaliser(self) -> PolicyInput:
+        self.max_down_mbps = _en_mbps(
+            self.max_down_mbps, self.max_down_kbps, self.max_down_gbps, "download"
+        )
+        self.max_up_mbps = _en_mbps(self.max_up_mbps, self.max_up_kbps, self.max_up_gbps, "upload")
+        return self
 
 
 @router.get("/shaping/policies", summary="Surcharges de debit posees a la main")
@@ -304,10 +347,20 @@ class BoostInput(BaseModel):
     duration_minutes: int = Field(ge=1, le=60 * 24 * 7)
     down_mbps: float | None = Field(default=None, gt=0, le=100_000)
     up_mbps: float | None = Field(default=None, gt=0, le=100_000)
+    down_kbps: float | None = Field(default=None, gt=0, le=100_000_000)
+    up_kbps: float | None = Field(default=None, gt=0, le=100_000_000)
+    down_gbps: float | None = Field(default=None, gt=0, le=100)
+    up_gbps: float | None = Field(default=None, gt=0, le=100)
     # Alternative pratique : multiplier le plan plutot que saisir un debit.
     multiplier: float | None = Field(default=None, gt=1, le=50)
     reason: str | None = Field(default=None, max_length=300)
     apply_now: bool = True
+
+    @model_validator(mode="after")
+    def _normaliser(self) -> BoostInput:
+        self.down_mbps = _en_mbps(self.down_mbps, self.down_kbps, self.down_gbps, "download")
+        self.up_mbps = _en_mbps(self.up_mbps, self.up_kbps, self.up_gbps, "upload")
+        return self
 
 
 @router.get("/shaping/boosts", summary="Boosts en cours")
@@ -348,7 +401,10 @@ async def create_boost(
     if down is None and up is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Precisez down_mbps, up_mbps ou multiplier",
+            detail=(
+                "Precisez un debit (down_mbps / down_kbps / down_gbps, idem en "
+                "upload) ou un multiplier"
+            ),
         )
 
     expire_le = datetime.now(tz=UTC) + timedelta(minutes=payload.duration_minutes)

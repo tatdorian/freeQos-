@@ -178,8 +178,26 @@ raison et ce qui change :
 Topologie) ou *Débit* sur un abonné. Enregistrer **n'écrit rien sur le routeur** — cela
 enregistre l'intention. Le plan montre ensuite ce qui en découle.
 
+**Unités.** Chaque champ de débit a son sélecteur **kbps / Mbps / Gbps** : un abonné bridé
+à 512 kbps ou un lien de secours ne se saisissent pas en `0.512 Mbps`. L'affichage suit la
+même logique — un plan à 512 kbps s'écrit « 512 kbps », pas « 0.5 Mbps ». En interne tout
+est ramené au **Mbps, unité unique** : mélanger les unités en base serait une fabrique à
+bugs, la conversion se fait donc une seule fois, à l'entrée.
+
+L'API accepte les trois : `max_down_mbps`, `max_down_kbps` ou `max_down_gbps` (idem en
+upload, et `down_*` / `up_*` pour un boost). Deux unités pour le même sens sont refusées —
+ambigu, mieux vaut ne pas deviner. Les deux sens peuvent en revanche utiliser des unités
+différentes.
+
+```bash
+# Brider un abonné à 512/128 kbps
+curl -X PUT localhost:8000/api/v1/shaping/policies -H 'Content-Type: application/json' \
+  -d '{"scope":"subscriber","target_key":"dupont","max_down_kbps":512,"max_up_kbps":128}'
+# → /queue/simple/… max-limit=128000/512000
+```
+
 **Coup de boost temporaire.** Bouton *Boost* sur un abonné (onglet Abonnés ou arbre
-réseau) : une durée, un facteur (×2, ×3, ×5) ou un débit explicite, un motif. Le boost est
+réseau) : une durée, un facteur (×2, ×3, ×5) ou un débit explicite — en kbps, Mbps ou Gbps —, un motif. Le boost est
 appliqué immédiatement si l'écriture est autorisée, et **expire tout seul** — un job
 vérifie l'échéance toutes les 30 s et ramène la file au débit normal. La file RouterOS ne
 sait rien de la durée : c'est le contrôleur qui la fait respecter.
@@ -491,7 +509,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 343 tests, dont 319 sans aucune infrastructure
+make test        # 363 tests, dont 339 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et
@@ -509,7 +527,8 @@ refus quand `ENFORCEMENT_ENABLED` est faux, absence de repli sur le compte de le
 files tierces jamais modifiées ni supprimées, coupe-circuit sur les gros plans, arrêt au
 premier échec, idempotence du plan (rejouer ne produit rien), refus d'un boost sans
 échéance, retour automatique au plan après expiration, et lecture des droits réels du
-compte (y compris le cas indéterminable, qui ne doit pas bloquer).
+compte (y compris le cas indéterminable, qui ne doit pas bloquer), conversion des unités
+et idempotence sur les petits débits (RouterOS relit `512k` là où on a écrit `512000`).
 
 ### Tests d'intégration (optionnels)
 
