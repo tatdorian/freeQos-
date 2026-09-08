@@ -347,6 +347,15 @@ class ShapingService:
                 if lien.name == backhaul["name"]:
                     lien.measured_capacity_mbps = backhaul["capacity_mbps"]
 
+        # L'ADRESSE VIENT DU ROUTEUR, PAS DE LA BASE.
+        #
+        # C'est elle qui portera la file. Une adresse issue de la derniere
+        # collecte peut avoir jusqu'a un cycle de retard : si l'abonne s'est
+        # reconnecte entre-temps, le pool a pu reattribuer son IP a un voisin,
+        # et on briderait le mauvais client. /ppp/active est la seule source qui
+        # dit ce qui est vrai a l'instant ou l'on ecrit.
+        sessions = {s.login: s for s in await collector.collect()}
+
         abonnes: list[SubscriberTarget] = []
         for ligne in await self.metrics.subscriber_latest(limit=5000, order_by="login"):
             if ligne.get("pop_name") != pop_name:
@@ -354,30 +363,73 @@ class ShapingService:
             login = str(ligne["pppoe_login"])
             surcharge = surcharges_abonnes.get(login, {})
             secteur = rattachements.get(login)
+            session = sessions.pop(login, None)
             abonnes.append(
-                SubscriberTarget(
-                    login=login,
-                    interface=collector.config.pppoe_interface_pattern.format(
-                        login=login, name=login, user=login
-                    ),
-                    plan_down_mbps=ligne.get("plan_down_mbps"),
-                    plan_up_mbps=ligne.get("plan_up_mbps"),
-                    override_down_mbps=surcharge.get("max_down_mbps"),
-                    override_up_mbps=surcharge.get("max_up_mbps"),
-                    boost_down_mbps=surcharge.get("boost_down_mbps"),
-                    boost_up_mbps=surcharge.get("boost_up_mbps"),
-                    boost_expires_at=surcharge.get("boost_expires_at"),
-                    enabled=surcharge.get("enabled", True),
+                self._cible_abonne(
+                    login,
+                    collector=collector,
+                    session=session,
+                    plan_down=ligne.get("plan_down_mbps"),
+                    plan_up=ligne.get("plan_up_mbps"),
+                    surcharge=surcharge,
+                    parent=parent_par_noeud.get(secteur) if secteur else None,
+                )
+            )
+
+        # Sessions ouvertes que la base ne connait pas encore (abonne apparu
+        # entre deux cycles de collecte). Une surcharge posee a la main doit
+        # s'appliquer des maintenant, sans attendre le prochain tour.
+        for login, session in sessions.items():
+            surcharge = surcharges_abonnes.get(login, {})
+            if not surcharge:
+                continue
+            secteur = rattachements.get(login)
+            abonnes.append(
+                self._cible_abonne(
+                    login,
+                    collector=collector,
+                    session=session,
+                    plan_down=None,
+                    plan_up=None,
+                    surcharge=surcharge,
                     parent=parent_par_noeud.get(secteur) if secteur else None,
                 )
             )
 
         return liens, abonnes
 
-    async def plan_router(self, router_name: str) -> Plan:
+    def _cible_abonne(
+        self,
+        login: str,
+        *,
+        collector: MikrotikCollector,
+        session: Any,
+        plan_down: float | None,
+        plan_up: float | None,
+        surcharge: dict[str, Any],
+        parent: str | None,
+    ) -> SubscriberTarget:
+        return SubscriberTarget(
+            login=login,
+            interface=collector.config.pppoe_interface_pattern.format(
+                login=login, name=login, user=login
+            ),
+            address=getattr(session, "address", None),
+            plan_down_mbps=plan_down,
+            plan_up_mbps=plan_up,
+            override_down_mbps=surcharge.get("max_down_mbps"),
+            override_up_mbps=surcharge.get("max_up_mbps"),
+            boost_down_mbps=surcharge.get("boost_down_mbps"),
+            boost_up_mbps=surcharge.get("boost_up_mbps"),
+            boost_expires_at=surcharge.get("boost_expires_at"),
+            enabled=surcharge.get("enabled", True),
+            parent=parent,
+        )
+
+    async def plan_router(self, router_name: str, *, prune: bool | None = None) -> Plan:
         """Raccourci : assemble l'etat desire puis compare au routeur."""
         liens, abonnes = await self.build_targets(router_name)
-        return await self.plan(router_name, links=liens, subscribers=abonnes)
+        return await self.plan(router_name, links=liens, subscribers=abonnes, prune=prune)
 
     # ------------------------------------------------------------- boosts
     async def expire_boosts(self) -> dict[str, Any]:
@@ -408,7 +460,16 @@ class ShapingService:
 
         for router_name in await self._routers_for_logins(logins):
             try:
-                plan = await self.plan_router(router_name)
+                # JAMAIS de purge dans une application automatique.
+                #
+                # Ce job ecrit sans revue humaine. Depuis que la file est
+                # accrochee a l'adresse de la session, un /ppp/active vide --
+                # coupure momentanee de l'API, PoP qui redemarre -- ferait
+                # apparaitre tout le monde comme hors ligne, et la purge
+                # supprimerait toutes les files du PoP sans que personne ne
+                # l'ait vu passer. Ce job n'a besoin que de RAMENER les debits
+                # boostes : il n'a aucune raison de supprimer quoi que ce soit.
+                plan = await self.plan_router(router_name, prune=False)
                 if plan.is_empty:
                     continue
                 applique = await self.apply(plan, dry_run=False)
@@ -436,12 +497,13 @@ class ShapingService:
         *,
         links: list[LinkTarget],
         subscribers: list[SubscriberTarget],
+        prune: bool | None = None,
     ) -> Plan:
         """Calcule ce qu'il faudrait faire. N'ecrit rien."""
         collector = self._collector(router_name)
         etat = await self._inspect_one(collector)
 
-        types, files = desired_state(
+        types, files, ecartes = desired_state(
             links=links,
             subscribers=subscribers,
             safety_factor=self.settings.shaping_safety_factor,
@@ -450,15 +512,18 @@ class ShapingService:
                 overhead=self.settings.cake_overhead,
                 rtt_ms=self.settings.cake_rtt_ms,
             ),
+            target_mode=self.settings.subscriber_queue_target,
         )
-        return build_plan(
+        plan = build_plan(
             router_name,
             desired_types=types,
             desired_queues=files,
             actual_types=etat.queue_types,
             actual_queues=etat.simple_queues,
-            prune=self.settings.shaping_prune,
+            prune=self.settings.shaping_prune if prune is None else prune,
         )
+        plan.skipped = ecartes
+        return plan
 
     # ---------------------------------------------------------------- apply
     async def apply(self, plan: Plan, *, dry_run: bool = True) -> ApplyResult:

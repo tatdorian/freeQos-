@@ -206,6 +206,15 @@ class Settings(BaseSettings):
     shaping_floor_mbps: float = 5.0
     # Supprimer nos files devenues inutiles. A desactiver pendant une migration.
     shaping_prune: bool = True
+    # Sur quoi accrocher la file d'un abonne.
+    #
+    # "address" (defaut) : target=10.20.0.10/32. L'adresse de la session en
+    #   cours, relue sur le routeur a chaque plan. Le sens est celui du client
+    #   (max-limit=montant/descendant), et un abonne hors ligne n'a pas de file.
+    # "interface" : target=<pppoe-login>. Deconseille -- l'interface dynamique
+    #   est recreee a chaque reconnexion, et RouterOS INVERSE alors le sens des
+    #   deux limites. Conserve pour un parc qui en depend deja.
+    subscriber_queue_target: Literal["address", "interface"] = "address"
     # Encapsulation a compter dans CAKE. PPPoE sur ethernet = 8 + 14 octets ;
     # ajouter 4 par etiquette VLAN, 4 par label MPLS. Sous-estimer revient a
     # shaper au-dessus de la capacite du lien, ce qui annule l'AQM.

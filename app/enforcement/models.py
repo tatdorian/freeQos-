@@ -6,6 +6,7 @@ permet d'afficher un plan a l'operateur avant d'envoyer quoi que ce soit.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -28,6 +29,34 @@ def slugify(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_-]+", "-", value.strip())
     slug = re.sub(r"-{2,}", "-", slug).strip("-")
     return slug[:48] or "sans-nom"
+
+
+def address_target(value: Any) -> str | None:
+    """Adresse d'abonne au format attendu par ``/queue/simple target``.
+
+    Sortie CANONIQUE (``10.20.0.10/32``, ``2001:db8::1/128``) et non l'adresse
+    nue, pour une raison de reconciliation : RouterOS reecrit toujours la cible
+    avec son prefixe. Ecrire ``10.20.0.10`` puis relire ``10.20.0.10/32``
+    produirait un ecart a chaque cycle, donc un ``set`` inutile a chaque plan.
+
+    Accepte ce que renvoient les deux sources : une chaine issue de
+    ``/ppp/active`` et un objet ``ipaddress`` issu de la colonne INET.
+    """
+    if value is None:
+        return None
+    texte = str(value).strip()
+    if not texte:
+        return None
+    # Une session PPPoE porte une seule adresse : un prefixe plus large serait
+    # une erreur de saisie, et shaperait les voisins de l'abonne.
+    try:
+        interface = ipaddress.ip_interface(texte)
+    except ValueError:
+        return None
+    adresse = interface.ip
+    if adresse.is_unspecified or adresse.is_loopback:
+        return None
+    return f"{adresse}/{adresse.max_prefixlen}"
 
 
 def format_rate(mbps: float | None) -> str:
@@ -171,6 +200,18 @@ class PlanAction:
 
 
 @dataclass(slots=True)
+class PlanSkip:
+    """Un abonne volontairement laisse de cote, et pourquoi.
+
+    Sans cette trace, un abonne absent du plan est indiscernable d'un abonne
+    correctement shape : l'exploitant chercherait la panne au mauvais endroit.
+    """
+
+    login: str
+    reason: str
+
+
+@dataclass(slots=True)
 class PlanConflict:
     """Un nom desire est deja pris par une ligne qui ne nous appartient pas."""
 
@@ -186,6 +227,7 @@ class Plan:
     router_name: str
     actions: list[PlanAction] = field(default_factory=list)
     conflicts: list[PlanConflict] = field(default_factory=list)
+    skipped: list[PlanSkip] = field(default_factory=list)
     unchanged: int = 0
 
     @property
@@ -218,6 +260,7 @@ class Plan:
             "conflicts": [
                 {"name": c.name, "path": c.path, "detail": c.detail} for c in self.conflicts
             ],
+            "skipped": [{"login": s.login, "reason": s.reason} for s in self.skipped],
         }
 
 

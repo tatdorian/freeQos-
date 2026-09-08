@@ -27,8 +27,10 @@ from app.enforcement.models import (
     Plan,
     PlanAction,
     PlanConflict,
+    PlanSkip,
     QueueSpec,
     QueueTypeSpec,
+    address_target,
     slugify,
 )
 
@@ -36,6 +38,25 @@ logger = logging.getLogger(__name__)
 
 QUEUE_TYPE_UP = f"{PREFIX}cake-up"
 QUEUE_TYPE_DOWN = f"{PREFIX}cake-down"
+
+# Sur quoi une file abonne est accrochee.
+#
+# ADRESSE (defaut). ``target=10.20.0.10/32`` designe l'abonne sans ambiguite, et
+# surtout le sens y est celui du client : ``max-limit=montant/descendant`` ou le
+# montant est ce qui VIENT de la cible. C'est ce que fait tout le monde.
+#
+# INTERFACE. ``target=<pppoe-alice>`` semble plus direct, mais trois choses le
+# rendent inutilisable en pratique :
+#   1. l'interface dynamique est recreee a chaque reconnexion, la file reste
+#      accrochee a un objet disparu et devient inactive ;
+#   2. le sens s'INVERSE -- RouterOS raisonne alors du point de vue de
+#      l'interface, donc ``100M/500M`` bride le descendant a 100 et le montant a
+#      500, exactement l'inverse du plan vendu ;
+#   3. les chevrons du nom dynamique ne passent pas l'API sur RouterOS 7.
+# Le mode reste disponible pour un parc qui l'utilise deja, mais ce n'est pas le
+# defaut, et ce n'est pas conseille.
+TARGET_ADDRESS = "address"
+TARGET_INTERFACE = "interface"
 
 
 # Source du debit finalement applique, exposee a l'interface.
@@ -85,6 +106,9 @@ class SubscriberTarget:
     interface: str
     plan_down_mbps: float | None
     plan_up_mbps: float | None
+    # Adresse de la session en cours. C'est elle qui porte la file : sans elle,
+    # l'abonne est hors ligne et il n'y a rien a brider.
+    address: str | None = None
     parent: str | None = None
     override_down_mbps: float | None = None
     override_up_mbps: float | None = None
@@ -95,7 +119,17 @@ class SubscriberTarget:
 
     @property
     def queue_name(self) -> str:
+        """Cle de reconciliation, STABLE : elle ne depend pas de l'adresse.
+
+        C'est ce qui fait qu'un changement d'IP produit un ``set target=...`` sur
+        la file existante, et non une suppression suivie d'une creation."""
         return f"{PREFIX}{slugify(self.login)}"
+
+    def queue_target(self, mode: str = TARGET_ADDRESS) -> str | None:
+        """Ce que la file doit viser, ou None si l'abonne n'est pas shapable."""
+        if mode == TARGET_INTERFACE:
+            return self.interface or None
+        return address_target(self.address)
 
     def boost_active(self, now: datetime | None = None) -> bool:
         """Un boost sans echeance n'existe pas : ce serait une surcharge."""
@@ -194,8 +228,13 @@ def desired_state(
     floor_mbps: float = 5.0,
     queue_types: Sequence[QueueTypeSpec] | None = None,
     now: datetime | None = None,
-) -> tuple[list[QueueTypeSpec], list[QueueSpec]]:
-    """Construit l'etat desire complet pour un routeur."""
+    target_mode: str = TARGET_ADDRESS,
+) -> tuple[list[QueueTypeSpec], list[QueueSpec], list[PlanSkip]]:
+    """Construit l'etat desire complet pour un routeur.
+
+    Renvoie aussi les abonnes ECARTES et pourquoi : un abonne qui disparait
+    silencieusement du plan est indiscernable d'un abonne correctement shape.
+    """
     types = list(queue_types) if queue_types is not None else desired_queue_types()
 
     files: list[QueueSpec] = []
@@ -231,18 +270,66 @@ def desired_state(
         )
 
     parents_connus = {file.name for file in files}
+    ecartes: list[PlanSkip] = []
+
+    # Deux abonnes qui reclament la MEME adresse : l'un des deux est perime
+    # (session fermee dont l'IP a ete reattribuee, doublon de collecte). On ne
+    # peut pas savoir lequel, et RouterOS n'appliquerait de toute facon que la
+    # premiere file, en silence. On n'ecrit donc ni l'une ni l'autre.
+    occurrences: dict[str, list[str]] = {}
+    for subscriber in subscribers:
+        # Seuls comptent ceux qui produiraient VRAIMENT une file : un abonne
+        # sans debit a appliquer ne prend la place de personne.
+        if not subscriber.enabled:
+            continue
+        if subscriber.effective_down_at(now) is None and subscriber.effective_up_at(now) is None:
+            continue
+        cible = subscriber.queue_target(target_mode)
+        if cible is not None:
+            occurrences.setdefault(cible, []).append(subscriber.login)
+    ambigues = {cible: logins for cible, logins in occurrences.items() if len(logins) > 1}
+
     for subscriber in subscribers:
         if not subscriber.enabled:
+            ecartes.append(PlanSkip(subscriber.login, "shaping desactive pour cet abonne"))
             continue
         down = subscriber.effective_down_at(now)
         up = subscriber.effective_up_at(now)
         if down is None and up is None:
+            ecartes.append(
+                PlanSkip(subscriber.login, "aucun debit a appliquer (ni plan, ni surcharge)")
+            )
             continue
+
+        cible = subscriber.queue_target(target_mode)
+        if cible is None:
+            # Cas courant et normal : l'abonne n'a pas de session ouverte. Ecrire
+            # une file sur sa DERNIERE adresse connue serait dangereux -- entre
+            # temps le pool a pu la reattribuer, et on briderait un autre client.
+            ecartes.append(
+                PlanSkip(
+                    subscriber.login,
+                    "aucune adresse en cours : abonne hors ligne, rien a brider",
+                )
+            )
+            continue
+
+        if cible in ambigues:
+            autres = [x for x in ambigues[cible] if x != subscriber.login]
+            ecartes.append(
+                PlanSkip(
+                    subscriber.login,
+                    f"adresse {cible} revendiquee aussi par {', '.join(autres)} : "
+                    "impossible de savoir qui est a jour, aucune file ecrite",
+                )
+            )
+            continue
+
         parent = subscriber.parent if subscriber.parent in parents_connus else None
         files.append(
             QueueSpec(
                 name=subscriber.queue_name,
-                target=subscriber.interface,
+                target=cible,
                 max_up_mbps=up,
                 max_down_mbps=down,
                 parent=parent,
@@ -251,7 +338,7 @@ def desired_state(
                 order=1000,
             )
         )
-    return types, files
+    return types, files, ecartes
 
 
 def _is_managed(row: dict[str, Any]) -> bool:

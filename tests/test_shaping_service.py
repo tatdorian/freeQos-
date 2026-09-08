@@ -213,6 +213,7 @@ async def test_plan_complet_depuis_un_routeur_vierge(
             SubscriberTarget(
                 login="dupont",
                 interface="<pppoe-dupont>",
+                address="10.20.0.10",
                 plan_down_mbps=100,
                 plan_up_mbps=20,
                 parent="freeqos-parent-bh-nord",
@@ -440,3 +441,129 @@ async def test_bascule_refusee_si_verrouille(
     with pytest.raises(EnforcementLockedError):
         await service.set_enforcement(True)
     assert service.enforcement_enabled is False
+
+
+# =========================================================================
+# L'adresse qui porte la file
+# =========================================================================
+
+
+async def test_l_adresse_vient_du_routeur_pas_de_la_base(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """La base peut avoir un cycle de retard. Entre-temps l'abonne a pu se
+    reconnecter et le pool reattribuer son ancienne IP a un voisin : ecrire une
+    file sur l'adresse stockee briderait le mauvais client."""
+    routeur.active[0]["address"] = "10.20.0.77"
+    depot = DepotBoosts()
+    metriques = MetriquesMinimales(
+        [
+            {
+                "pppoe_login": "dupont",
+                "pop_name": "PoP Test",
+                "plan_down_mbps": 100,
+                "plan_up_mbps": 20,
+                "last_ip": "10.20.0.10",
+            }
+        ]
+    )
+    service = make_service(settings, routeur, repository=depot, metrics=metriques)
+    await service.registry.reload()
+
+    _, abonnes = await service.build_targets("pop-test")
+
+    assert [a.address for a in abonnes] == ["10.20.0.77"]
+    assert abonnes[0].queue_target() == "10.20.0.77/32"
+
+
+async def test_un_abonne_sans_session_n_est_pas_shape(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    routeur.active.clear()
+    depot = DepotBoosts()
+    metriques = MetriquesMinimales(
+        [
+            {
+                "pppoe_login": "parti",
+                "pop_name": "PoP Test",
+                "plan_down_mbps": 100,
+                "plan_up_mbps": 20,
+            }
+        ]
+    )
+    service = make_service(settings, routeur, repository=depot, metrics=metriques)
+    await service.registry.reload()
+
+    plan = await service.plan_router("pop-test")
+
+    files = [a for a in plan.actions if a.path == "/queue/simple"]
+    assert files == []
+    assert [(s.login, "hors ligne" in s.reason) for s in plan.skipped] == [("parti", True)]
+
+
+async def test_une_session_inconnue_de_la_base_est_shapee_si_surchargee(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Abonne apparu entre deux cycles de collecte : une bride posee a la main
+    doit prendre effet tout de suite, pas au prochain tour."""
+    routeur.add_session("nouveau", address="10.20.0.55")
+
+    class DepotSurcharge(DepotBoosts):
+        async def policy_map(self, scope):
+            if scope != "subscriber":
+                return {}
+            return {"nouveau": {"max_down_mbps": 5.0, "max_up_mbps": 1.0, "enabled": True}}
+
+    service = make_service(
+        settings, routeur, repository=DepotSurcharge(), metrics=MetriquesMinimales([])
+    )
+    await service.registry.reload()
+
+    _, abonnes = await service.build_targets("pop-test")
+
+    assert [a.login for a in abonnes] == ["nouveau"]
+    assert abonnes[0].queue_target() == "10.20.0.55/32"
+    assert abonnes[0].effective_down == 5.0
+
+
+async def test_une_lecture_de_sessions_en_echec_ne_produit_pas_de_plan(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Le pire scenario : /ppp/active tombe, tout le monde parait hors ligne, et
+    la purge efface les files de tout le PoP. L'erreur doit remonter."""
+    routeur.raise_on_ppp = TimeoutError("routeur muet")
+    service = make_service(
+        settings, routeur, repository=DepotBoosts(), metrics=MetriquesMinimales([])
+    )
+    await service.registry.reload()
+
+    with pytest.raises((TimeoutError, Exception)):
+        await service.build_targets("pop-test")
+
+
+async def test_une_application_automatique_ne_purge_jamais(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Un job qui ecrit sans revue humaine n'a aucune raison de SUPPRIMER. Sans
+    ce garde-fou, une coupure momentanee de /ppp/active suffirait a effacer
+    toutes les files du PoP."""
+    routeur.active.clear()
+    routeur.simple_queue_rows = [
+        {
+            ".id": "*1",
+            "name": "freeqos-parti",
+            "target": "10.20.0.10/32",
+            "max-limit": "20M/100M",
+            "comment": MANAGED_COMMENT,
+        }
+    ]
+    service = make_service(
+        settings, routeur, repository=DepotBoosts(), metrics=MetriquesMinimales([])
+    )
+    await service.registry.reload()
+
+    avec_purge = await service.plan_router("pop-test")
+    sans_purge = await service.plan_router("pop-test", prune=False)
+
+    assert avec_purge.counts()["remove"] == 1
+    assert sans_purge.counts()["remove"] == 0

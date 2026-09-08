@@ -21,6 +21,8 @@ from app.enforcement.planner import (
 
 def abonne(login="dupont", down=100.0, up=20.0, **kwargs) -> SubscriberTarget:
     kwargs.setdefault("interface", f"<pppoe-{login}>")
+    # Une session ouverte, donc une adresse : c'est elle qui porte la file.
+    kwargs.setdefault("address", "10.20.0.10")
     return SubscriberTarget(login=login, plan_down_mbps=down, plan_up_mbps=up, **kwargs)
 
 
@@ -66,7 +68,7 @@ def test_capacite_inconnue() -> None:
 
 # ---------------------------------------------------------------- etat desire
 def test_etat_desire_complet() -> None:
-    types, files = desired_state(
+    types, files, _ = desired_state(
         links=[lien()], subscribers=[abonne(parent="freeqos-parent-bh-nord")]
     )
 
@@ -83,23 +85,23 @@ def test_etat_desire_complet() -> None:
 
 def test_lien_sans_capacite_ne_cree_pas_de_parent() -> None:
     """Sans capacite connue, un parent poserait un plafond arbitraire."""
-    _, files = desired_state(links=[lien(capacity=None)], subscribers=[abonne()])
+    _, files, _ = desired_state(links=[lien(capacity=None)], subscribers=[abonne()])
     assert [f.name for f in files] == ["freeqos-dupont"]
 
 
 def test_parent_inconnu_est_ignore() -> None:
     """Referencer un parent inexistant ferait echouer la commande RouterOS."""
-    _, files = desired_state(links=[], subscribers=[abonne(parent="freeqos-parent-absent")])
+    _, files, _ = desired_state(links=[], subscribers=[abonne(parent="freeqos-parent-absent")])
     assert files[0].parent is None
 
 
 def test_abonne_sans_plan_ni_surcharge_ignore() -> None:
-    _, files = desired_state(links=[], subscribers=[abonne(down=None, up=None)])
+    _, files, _ = desired_state(links=[], subscribers=[abonne(down=None, up=None)])
     assert files == []
 
 
 def test_surcharge_abonne_prime_sur_le_plan() -> None:
-    _, files = desired_state(
+    _, files, _ = desired_state(
         links=[], subscribers=[abonne(down=100, up=20, override_down_mbps=250)]
     )
     assert files[0].max_down_mbps == 250
@@ -107,13 +109,13 @@ def test_surcharge_abonne_prime_sur_le_plan() -> None:
 
 
 def test_abonne_desactive_ignore() -> None:
-    _, files = desired_state(links=[], subscribers=[abonne(enabled=False)])
+    _, files, _ = desired_state(links=[], subscribers=[abonne(enabled=False)])
     assert files == []
 
 
 # ----------------------------------------------------------------------- plan
 def test_plan_sur_routeur_vierge() -> None:
-    types, files = desired_state(links=[lien()], subscribers=[abonne()])
+    types, files, _ = desired_state(links=[lien()], subscribers=[abonne()])
     plan = build_plan(
         "pop-nord", desired_types=types, desired_queues=files, actual_types=[], actual_queues=[]
     )
@@ -126,7 +128,7 @@ def test_plan_sur_routeur_vierge() -> None:
 
 def test_la_commande_est_lisible_avant_envoi() -> None:
     """C'est ce que l'operateur voit dans l'interface avant d'appliquer."""
-    _, files = desired_state(links=[], subscribers=[abonne()])
+    _, files, _ = desired_state(links=[], subscribers=[abonne()])
     plan = build_plan(
         "pop", desired_types=[], desired_queues=files, actual_types=[], actual_queues=[]
     )
@@ -134,7 +136,9 @@ def test_la_commande_est_lisible_avant_envoi() -> None:
     commande = plan.actions[0].command
     assert commande.startswith("/queue/simple/add ")
     assert "name=freeqos-dupont" in commande
-    assert 'target="<pppoe-dupont>"' in commande
+    # La cible est l'ADRESSE de la session, sous sa forme canonique : c'est
+    # elle que RouterOS relira, donc la seule qui ne produise pas un faux ecart.
+    assert "target=10.20.0.10/32" in commande
     assert "max-limit=20000000/100000000" in commande
     # Pas de guillemets superflus : freeqos:managed ne contient aucun caractere
     # ambigu pour le shell RouterOS.
@@ -142,11 +146,11 @@ def test_la_commande_est_lisible_avant_envoi() -> None:
 
 
 def test_etat_deja_conforme_ne_produit_rien() -> None:
-    types, files = desired_state(links=[], subscribers=[abonne()])
+    types, files, _ = desired_state(links=[], subscribers=[abonne()])
     existante = {
         ".id": "*1",
         "name": "freeqos-dupont",
-        "target": "<pppoe-dupont>",
+        "target": "10.20.0.10/32",
         "max-limit": "20000000/100000000",
         "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
         "comment": MANAGED_COMMENT,
@@ -162,11 +166,11 @@ def test_etat_deja_conforme_ne_produit_rien() -> None:
 def test_ecriture_routeros_comparee_sans_se_tromper_de_forme() -> None:
     """RouterOS relit '20M/100M' la ou on a ecrit des bits : ce n'est pas un
     changement, et le confondre provoquerait une reecriture a chaque cycle."""
-    _, files = desired_state(links=[], subscribers=[abonne()])
+    _, files, _ = desired_state(links=[], subscribers=[abonne()])
     existante = {
         ".id": "*1",
         "name": "freeqos-dupont",
-        "target": "<pppoe-dupont>",
+        "target": "10.20.0.10/32",
         "max-limit": "20M/100M",
         "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
         "comment": MANAGED_COMMENT,
@@ -178,11 +182,11 @@ def test_ecriture_routeros_comparee_sans_se_tromper_de_forme() -> None:
 
 
 def test_changement_de_debit_produit_un_set() -> None:
-    _, files = desired_state(links=[], subscribers=[abonne(down=300)])
+    _, files, _ = desired_state(links=[], subscribers=[abonne(down=300)])
     existante = {
         ".id": "*7",
         "name": "freeqos-dupont",
-        "target": "<pppoe-dupont>",
+        "target": "10.20.0.10/32",
         "max-limit": "20M/100M",
         "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
         "comment": MANAGED_COMMENT,
@@ -204,11 +208,11 @@ def test_changement_de_debit_produit_un_set() -> None:
 def test_une_file_non_marquee_n_est_jamais_modifiee() -> None:
     """Regle absolue : ce qui n'a pas notre marqueur appartient a l'operateur
     ou a RADIUS. On signale le conflit, on ne touche a rien."""
-    _, files = desired_state(links=[], subscribers=[abonne()])
+    _, files, _ = desired_state(links=[], subscribers=[abonne()])
     manuelle = {
         ".id": "*1",
         "name": "freeqos-dupont",
-        "target": "<pppoe-dupont>",
+        "target": "10.20.0.10/32",
         "max-limit": "1M/1M",
         "comment": "pose a la main par l'exploitant",
     }
@@ -293,7 +297,7 @@ def test_type_cake_existant_mais_different() -> None:
 
 
 def test_serialisation_du_plan() -> None:
-    types, files = desired_state(links=[lien()], subscribers=[abonne()])
+    types, files, _ = desired_state(links=[lien()], subscribers=[abonne()])
     plan = build_plan(
         "pop-nord", desired_types=types, desired_queues=files, actual_types=[], actual_queues=[]
     )

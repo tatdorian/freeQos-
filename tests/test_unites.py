@@ -90,12 +90,13 @@ def test_les_petits_debits_arrivent_juste(mbps: float, bits: str) -> None:
 
 
 def test_commande_complete_en_kilobits() -> None:
-    _, files = desired_state(
+    _, files, _ = desired_state(
         links=[],
         subscribers=[
             SubscriberTarget(
                 login="bride",
                 interface="<pppoe-bride>",
+                address="10.20.0.10",
                 plan_down_mbps=0.512,
                 plan_up_mbps=0.128,
             )
@@ -110,12 +111,13 @@ def test_commande_complete_en_kilobits() -> None:
 def test_idempotence_sur_les_petits_debits() -> None:
     """RouterOS relit '512k' la ou on a ecrit 512000 : ce n'est pas un changement,
     sinon la file serait reecrite a chaque cycle."""
-    _, files = desired_state(
+    _, files, _ = desired_state(
         links=[],
         subscribers=[
             SubscriberTarget(
                 login="bride",
                 interface="<pppoe-bride>",
+                address="10.20.0.10",
                 plan_down_mbps=0.512,
                 plan_up_mbps=0.128,
             )

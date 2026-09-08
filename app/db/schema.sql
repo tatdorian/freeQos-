@@ -389,7 +389,10 @@ SELECT DISTINCT ON (m.subscriber_id)
        m.rx_bps,
        m.tx_bps,
        m.rtt_ms,
-       m.session_uptime_s
+       m.session_uptime_s,
+       -- Adresse de la derniere session connue. C'est elle que vise la file
+       -- de l'abonne ; l'interface doit pouvoir la montrer avant d'ecrire.
+       s.last_ip
 FROM subscriber_metrics m
 JOIN subscribers s ON s.id = m.subscriber_id
 LEFT JOIN pops p   ON p.id = s.pop_id

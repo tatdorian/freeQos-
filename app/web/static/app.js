@@ -715,7 +715,10 @@ async function openSubscriber(id) {
               ? '<span class="badge warn">impose</span> plan : ' +
                 esc(mbps(s.plan_down_mbps || 0))
               : esc(s.plan_source || 'plan RADIUS')) +
-        statCard('', 'Derniere IP', esc(s.last_ip || '-'), '', '') +
+        statCard('', 'Cible de la file', esc(s.last_ip ? s.last_ip + '/32' : '-'), '',
+          s.last_ip
+            ? 'adresse de la session'
+            : '<span style="color:var(--warn)">hors ligne : aucune file</span>') +
       '</div>' +
       (data.points.some((p) => p.rtt_ms_avg !== null && p.rtt_ms_avg !== undefined)
         ? '<div class="notice">Latence sur la fenetre : moyenne ' +
@@ -1236,6 +1239,20 @@ async function openBandwidthEditor(scope, cible) {
       '</strong><span class="hint">Le debit impose devrait rester sous cette valeur : ' +
       'c\'est ce qui fait que la file se forme dans CAKE, ou on la controle, ' +
       'plutot que dans le buffer de la radio.</span></div>' : '') +
+    // Sur quoi la file sera reellement accrochee : l'exploitant doit pouvoir
+    // relier ce qu'il saisit ici a la ligne qu'il verra dans /queue/simple.
+    (scope === 'subscriber'
+      ? (cible.last_ip
+          ? '<div class="notice">La file visera <code>' + esc(cible.last_ip) +
+            '/32</code><span class="hint">C\'est l\'adresse de la session en cours, ' +
+            'relue sur le routeur au moment du plan. Elle est reecrite toute seule ' +
+            'si l\'abonne se reconnecte avec une autre IP.</span></div>'
+          : '<div class="notice warn">Aucune adresse connue pour cet abonne.' +
+            '<span class="hint">La limite est enregistree, mais aucune file ne sera ' +
+            'ecrite tant qu\'il n\'a pas de session ouverte : poser une file sur une ' +
+            'ancienne adresse briderait le client qui l\'a recuperee entre-temps.</span>' +
+            '</div>')
+      : '') +
     '<form class="stack" id="bw-form">' +
       '<div class="row-2">' +
         '<div class="field"><label for="bw-down">Download</label>' +
@@ -1610,6 +1627,26 @@ async function computePlan() {
   }
 }
 
+/** Abonnes volontairement laisses de cote. Les motifs identiques sont
+ *  regroupes : "42 abonnes hors ligne" se lit, quarante-deux lignes non. */
+function renderEcartes(ecartes) {
+  if (!ecartes || !ecartes.length) return '';
+  const parMotif = new Map();
+  ecartes.forEach((s) => {
+    if (!parMotif.has(s.reason)) parMotif.set(s.reason, []);
+    parMotif.get(s.reason).push(s.login);
+  });
+  return '<div class="notice"><strong>' + ecartes.length +
+    ' abonne(s) hors du plan.</strong> Ce n\'est pas une erreur : ce sont ceux ' +
+    'pour lesquels il n\'y a rien a ecrire.' +
+    [...parMotif.entries()].map(([motif, logins]) =>
+      '<span class="hint"><b>' + esc(motif) + '</b> &mdash; ' +
+      esc(logins.slice(0, 12).join(', ')) +
+      (logins.length > 12 ? ' et ' + (logins.length - 12) + ' autre(s)' : '') +
+      '</span>').join('') +
+    '</div>';
+}
+
 function renderPlan(plan, routeur) {
   const host = document.getElementById('shaping-plan');
   const c = plan.counts;
@@ -1624,6 +1661,10 @@ function renderPlan(plan, routeur) {
       '<span class="hint">' + plan.conflicts.map((x) => esc(x.name)).join(', ') +
       '</span></div>';
   }
+
+  // Un abonne absent du plan sans explication est indiscernable d'un abonne
+  // correctement shape : on dit qui est ecarte et pourquoi.
+  html += renderEcartes(plan.skipped);
 
   if (!total) {
     html += '<div class="notice ok">Rien a faire : la configuration du routeur ' +

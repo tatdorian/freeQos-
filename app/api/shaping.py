@@ -573,7 +573,10 @@ async def _apply_for_subscriber(container: ContainerDep, login: str) -> dict[str
             ),
         }
     try:
-        plan = await container.shaping.plan_router(routeurs[0])
+        # Sans purge : cette application est automatique, elle n'a pas ete
+        # relue. Elle doit poser le nouveau debit de cet abonne, pas decider de
+        # supprimer les files des autres.
+        plan = await container.shaping.plan_router(routeurs[0], prune=False)
         applique = await container.shaping.apply(plan, dry_run=False)
         return applique.to_dict()
     except Exception as exc:  # noqa: BLE001

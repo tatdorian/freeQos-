@@ -1176,3 +1176,34 @@ async def test_la_derniere_mesure_par_port_est_bien_la_plus_recente(
     assert len(lignes) == 1
     assert lignes[0]["tx_bps"] == 999.0
     assert lignes[0]["fresh"] is True
+
+
+async def test_la_vue_expose_l_adresse_qui_portera_la_file(
+    database: Database, now: datetime
+) -> None:
+    """L'interface doit pouvoir montrer la cible AVANT d'ecrire quoi que ce
+    soit : sans cette colonne, l'exploitant fixe un debit sans savoir sur quelle
+    adresse il atterrira."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("Site")
+    abonne = await directory.ensure_subscriber(
+        "avec-ip", pop_id=pop_id, plan=Plan(100, 20, "radius")
+    )
+    await writer.write_subscriber_metrics(
+        [
+            (
+                abonne,
+                SubscriberSample(
+                    ts=now, login="avec-ip", router_name="r", pop_name="Site", tx_bps=1.0
+                ),
+            )
+        ]
+    )
+    await directory.touch_subscribers({abonne: ("10.20.0.42", now)})
+
+    ligne = (await repo.subscriber_latest(limit=5))[0]
+
+    assert str(ligne["last_ip"]) == "10.20.0.42"

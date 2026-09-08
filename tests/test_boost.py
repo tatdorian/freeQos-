@@ -18,6 +18,7 @@ def abonne(**kwargs) -> SubscriberTarget:
     base = {
         "login": "dupont",
         "interface": "<pppoe-dupont>",
+        "address": "10.20.0.10",
         "plan_down_mbps": 100.0,
         "plan_up_mbps": 20.0,
     }
@@ -82,7 +83,7 @@ def test_echeance_exacte_compte_comme_expiree() -> None:
 
 # ------------------------------------------------------------ etat desire
 def test_la_file_porte_le_debit_boostee() -> None:
-    _, files = desired_state(
+    _, files, _ = desired_state(
         links=[],
         subscribers=[abonne(boost_down_mbps=500, boost_expires_at=MAINTENANT + timedelta(hours=1))],
         now=MAINTENANT,
@@ -95,8 +96,8 @@ def test_la_file_revient_seule_apres_echeance() -> None:
     permet au job d'expiration de simplement replanifier."""
     cible = abonne(boost_down_mbps=500, boost_expires_at=MAINTENANT + timedelta(minutes=30))
 
-    _, pendant = desired_state(links=[], subscribers=[cible], now=MAINTENANT)
-    _, apres = desired_state(links=[], subscribers=[cible], now=MAINTENANT + timedelta(hours=1))
+    _, pendant, _ = desired_state(links=[], subscribers=[cible], now=MAINTENANT)
+    _, apres, _ = desired_state(links=[], subscribers=[cible], now=MAINTENANT + timedelta(hours=1))
 
     assert pendant[0].max_limit == "20000000/500000000"
     assert apres[0].max_limit == "20000000/100000000"

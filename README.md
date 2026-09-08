@@ -205,8 +205,51 @@ raison et ce qui change :
 ```
 /queue/type/add name=freeqos-cake-down kind=cake cake-overhead=22 cake-rtt=50ms
 /queue/simple/add name=freeqos-parent-BH-Nord target=ether2 max-limit=300000000/300000000 …
-/queue/simple/add name=freeqos-dupont target="<pppoe-dupont>" max-limit=20000000/100000000 …
+/queue/simple/add name=freeqos-dupont target=10.20.0.12/32 max-limit=20000000/100000000 …
 ```
+
+**Sur quoi la file d'un abonné est accrochée : son adresse.** Le détail décide de tout le
+reste, et le mauvais choix échoue en silence.
+
+`target=<pppoe-dupont>` semble le plus direct — c'est bien l'interface de l'abonné. Trois
+choses le rendent inutilisable :
+
+1. l'interface dynamique est **recréée à chaque reconnexion** ; la file reste accrochée à
+   un objet disparu et devient inactive, sans rien signaler ;
+2. RouterOS **inverse alors le sens** des deux limites — il raisonne du point de vue de
+   l'interface — donc un plan 100 down / 20 up est appliqué à l'envers ;
+3. les chevrons du nom dynamique ne passent pas l'API sur RouterOS 7.
+
+`target=10.20.0.12/32` n'a aucun de ces défauts : le sens est celui du client
+(`max-limit=montant/descendant`, le montant étant ce qui **vient** de la cible), et
+l'adresse est ce que le routeur relit. Elle est écrite sous sa forme **canonique** avec son
+préfixe : RouterOS réécrit toujours `10.20.0.12` en `10.20.0.12/32`, et envoyer l'adresse
+nue produirait un écart à chaque cycle, donc un `set` perpétuel.
+
+**L'adresse est relue sur le routeur au moment du plan**, jamais prise en base. Une adresse
+stockée peut avoir un cycle de retard ; si l'abonné s'est reconnecté entre-temps, le pool a
+pu réattribuer son IP à un voisin, et la file briderait le mauvais client. `/ppp/active`
+est la seule source qui dise ce qui est vrai à l'instant où l'on écrit.
+
+Il en découle trois comportements, tous visibles dans le plan :
+
+| Situation | Ce qui se passe |
+|---|---|
+| Abonné **hors ligne** | aucune file. Écrire sur sa dernière adresse connue briderait celui qui l'a récupérée |
+| Abonné **reconnecté** sur une autre IP | `set target=…` sur la file existante. Le nom de file ne dépend pas de l'adresse, donc pas de suppression/recréation |
+| **Deux abonnés** sur la même adresse | aucune des deux files. L'un des deux est périmé, on ne sait pas lequel, et RouterOS n'appliquerait que la première — en silence |
+
+Chaque abonné écarté est listé avec son motif : un abonné absent du plan sans explication
+est indiscernable d'un abonné correctement shapé.
+
+`SUBSCRIBER_QUEUE_TARGET=interface` rétablit l'ancien comportement pour un parc qui en
+dépend déjà. Ce n'est pas conseillé, pour les trois raisons ci-dessus.
+
+**Les écritures automatiques ne suppriment jamais.** L'expiration d'un boost et
+l'application immédiate d'une bride écrivent sans relecture humaine : elles posent des
+files, jamais n'en retirent. Sans cette règle, une coupure momentanée de `/ppp/active`
+ferait passer tout le monde pour hors ligne et effacerait les files de tout un PoP. Seul un
+plan relu dans l'interface peut supprimer.
 
 **Pour changer une bande passante** : cliquer *Bande passante* sur un lien (onglet
 Topologie) ou *Débit* sur un abonné. Enregistrer **n'écrit rien sur le routeur** — cela
