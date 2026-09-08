@@ -27,13 +27,16 @@ class Database:
         min_size: int = 1,
         max_size: int = 8,
         command_timeout: float = 15.0,
+        auto_create: bool = True,
     ) -> None:
         self._dsn = dsn
         self._min_size = min_size
         self._max_size = max_size
         self._command_timeout = command_timeout
+        self._auto_create = auto_create
         self._pool: asyncpg.Pool | None = None
         self.timescale_available: bool = False
+        self.database_created: bool = False
 
     @property
     def pool(self) -> asyncpg.Pool:
@@ -67,13 +70,85 @@ class Database:
                     "Pool PostgreSQL ouvert (min=%s max=%s)", self._min_size, self._max_size
                 )
                 return
+            except asyncpg.InvalidCatalogNameError as exc:
+                # La base n'existe pas encore : premier demarrage hors
+                # docker-compose. On la cree plutot que de renvoyer l'operateur
+                # vers un createdb manuel.
+                last_error = exc
+                if not self._auto_create or not await self._create_database():
+                    break
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
                 if attempt == retries:
                     break
                 logger.warning("Base injoignable (tentative %d/%d) : %s", attempt, retries, exc)
                 await asyncio.sleep(delay_s)
-        raise RuntimeError(f"Connexion a PostgreSQL impossible : {last_error}") from last_error
+
+        indice = self._connect_hint(last_error)
+        raise RuntimeError(
+            f"Connexion a PostgreSQL impossible : {last_error}." + (f" {indice}" if indice else "")
+        ) from last_error
+
+    async def _create_database(self) -> bool:
+        """Cree la base nommee dans le DSN, en se connectant a 'postgres'.
+
+        Echoue proprement si le compte n'a pas le droit CREATEDB : ce n'est pas
+        une raison de masquer le probleme derriere une trace asyncpg.
+        """
+        nom = self._database_name()
+        if not nom:
+            return False
+        dsn_admin = self._dsn.rsplit("/", 1)[0] + "/postgres"
+        try:
+            conn = await asyncpg.connect(dsn=dsn_admin, timeout=10)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Base '%s' absente, et la base d'administration est injoignable : %s", nom, exc
+            )
+            return False
+        try:
+            # Le nom vient du DSN fourni par l'operateur ; on le cite malgre tout.
+            await conn.execute(f'CREATE DATABASE "{nom}"')
+            self.database_created = True
+            logger.warning("Base de donnees '%s' creee automatiquement", nom)
+            return True
+        except asyncpg.DuplicateDatabaseError:
+            return True  # course avec une autre instance : tres bien
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Creation de la base '%s' impossible : %s. Creez-la a la main : "
+                'CREATE DATABASE "%s";',
+                nom,
+                exc,
+                nom,
+            )
+            return False
+        finally:
+            await conn.close()
+
+    def _database_name(self) -> str | None:
+        fin = self._dsn.rsplit("/", 1)
+        if len(fin) != 2 or not fin[1]:
+            return None
+        return fin[1].split("?", 1)[0]
+
+    def _connect_hint(self, error: Exception | None) -> str:
+        """Traduit l'erreur de connexion en action concrete."""
+        texte = str(error or "").lower()
+        nom = self._database_name() or "qos"
+        if "does not exist" in texte:
+            return (
+                f'Creez la base : CREATE DATABASE "{nom}"; ou laissez docker compose s\'en charger.'
+            )
+        if "password authentication" in texte or "role" in texte:
+            return "Verifiez l'utilisateur et le mot de passe de DATABASE_URL."
+        if "connect call failed" in texte or "refused" in texte:
+            return (
+                "Verifiez que PostgreSQL ecoute a cette adresse. Hors docker, "
+                "DATABASE_URL doit pointer sur localhost et non sur l'hote "
+                "'timescaledb', qui n'existe que dans le reseau docker."
+            )
+        return ""
 
     async def close(self) -> None:
         if self._pool is not None:

@@ -67,16 +67,12 @@ corrélés, qui est le seul chiffre qui garantit qu'un débit sera calculable.
 **Enregistrer** ajoute le PoP à l'inventaire : il est interrogé **au cycle suivant,
 sans redémarrage**.
 
-Prérequis, une seule fois :
+Aucun prérequis : la clé de chiffrement est générée au premier démarrage (voir plus haut).
+Si elle manque malgré tout — chemin non inscriptible, volume Docker absent — l'API
+**refuse** d'enregistrer un PoP et le dit dans l'interface : elle n'écrira jamais un mot de
+passe de routeur en clair dans PostgreSQL.
 
-```bash
-python -m app.services.crypto     # génère une clé Fernet
-# la coller dans APP_SECRET_KEY du .env, puis redémarrer
-```
-
-Sans cette clé l'API **refuse** d'enregistrer un PoP et le dit dans l'interface : elle
-n'écrira jamais un mot de passe de routeur en clair dans PostgreSQL. Les mots de passe
-enregistrés sont chiffrés au repos ; la clé, elle, reste dans l'environnement.
+Pour la générer à la main : `python -m app.services.crypto`.
 
 Les deux inventaires coexistent :
 
@@ -446,7 +442,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 271 tests, dont 252 sans aucune infrastructure
+make test        # 285 tests, dont 266 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

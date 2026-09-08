@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 
 from app.collectors.radius import (
     FreeradiusSqlPlanProvider,
@@ -34,7 +35,7 @@ from app.services.collection import (
     JOB_SUBSCRIBERS,
     CollectionService,
 )
-from app.services.crypto import SecretBox
+from app.services.crypto import KeySource, SecretBox, load_or_create_key
 from app.services.registry import RouterRegistry
 from app.services.rtt import RttProber
 from app.services.shaping import ShapingService
@@ -121,6 +122,7 @@ async def build_container(settings: Settings) -> Container:
         min_size=settings.db_pool_min,
         max_size=settings.db_pool_max,
         command_timeout=settings.db_command_timeout_s,
+        auto_create=settings.db_auto_create,
     )
     await database.connect()
     if settings.db_auto_migrate:
@@ -137,11 +139,19 @@ async def build_container(settings: Settings) -> Container:
     plan_provider = build_plan_provider(settings)
     backhaul_provider = build_backhaul_provider(settings)
 
-    secrets = SecretBox(settings.app_secret_key)
+    cle, source, chemin = load_or_create_key(
+        env_key=settings.app_secret_key,
+        key_file=settings.app_secret_key_file,
+        autogenerate=settings.app_secret_key_autogenerate,
+    )
+    secrets = SecretBox(cle)
     if not secrets.available:
         # Non bloquant : l'inventaire fichier fonctionne sans cle. Seul l'ajout
         # de PoP depuis l'interface est indisponible.
         logger.warning("Ajout de PoP par l'interface desactive : %s", secrets.unavailable_reason)
+    elif source == KeySource.GENERATED:
+        await _warn_if_secrets_orphaned(database, chemin)
+
     routers_repo = RoutersRepository(database.pool, secrets)
     topology_repo = TopologyRepository(database.pool)
     registry = RouterRegistry(settings, repository=routers_repo)
@@ -199,6 +209,31 @@ async def build_container(settings: Settings) -> Container:
         routers_repo=routers_repo,
         topology_repo=topology_repo,
     )
+
+
+async def _warn_if_secrets_orphaned(database: Database, key_file: Path | None) -> None:
+    """Alerte si une cle NEUVE arrive alors que des secrets sont deja stockes.
+
+    C'est le scenario catastrophe : fichier de cle perdu (volume non monte,
+    conteneur recree), donc mots de passe de routeurs devenus indechiffrables.
+    Le controleur continue de tourner — l'inventaire fichier n'est pas concerne —
+    mais l'operateur doit le savoir tout de suite, pas le decouvrir au prochain
+    cycle de collecte.
+    """
+    try:
+        async with database.pool.acquire() as conn:
+            existants = await conn.fetchval("SELECT count(*) FROM routers")
+    except Exception:  # noqa: BLE001 - table pas encore creee au tout premier demarrage
+        return
+    if existants:
+        logger.error(
+            "Une NOUVELLE cle de chiffrement vient d'etre generee alors que %d "
+            "routeur(s) sont deja enregistres : leurs mots de passe sont "
+            "desormais illisibles. Restaurez l'ancien fichier de cle (%s) ou "
+            "resaisissez ces mots de passe dans l'interface.",
+            existants,
+            key_file,
+        )
 
 
 async def shutdown_container(container: Container) -> None:

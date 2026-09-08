@@ -17,10 +17,16 @@ Generer une cle :
 from __future__ import annotations
 
 import logging
+import os
+import stat
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 PREFIX = "fernet:"
+
+# Permissions attendues sur le fichier de cle : lisible par son seul proprietaire.
+KEY_FILE_MODE = 0o600
 
 
 class SecretUnavailableError(RuntimeError):
@@ -36,9 +42,11 @@ class SecretBox:
 
         if not key:
             self._error = (
-                "APP_SECRET_KEY n'est pas defini : impossible d'enregistrer un "
-                "routeur depuis l'interface. Generez une cle avec "
-                "'python -m app.services.crypto'."
+                "Aucune cle de chiffrement disponible : impossible d'enregistrer "
+                "un routeur depuis l'interface. Elle devrait etre generee "
+                "automatiquement au premier demarrage ; verifiez que "
+                "APP_SECRET_KEY_FILE pointe sur un chemin inscriptible, ou "
+                "renseignez APP_SECRET_KEY."
             )
             return
 
@@ -72,13 +80,123 @@ class SecretBox:
             raise SecretUnavailableError(
                 "Secret non chiffre en base : refus de l'utiliser tel quel"
             )
-        return self._require().decrypt(token[len(PREFIX) :].encode()).decode()
+        from cryptography.fernet import InvalidToken
+
+        try:
+            return self._require().decrypt(token[len(PREFIX) :].encode()).decode()
+        except InvalidToken as exc:
+            # InvalidToken n'a pas de message : sans cette traduction, l'operateur
+            # lirait "secret illisible :" suivi de rien du tout.
+            raise SecretUnavailableError(
+                "dechiffrement impossible : la cle actuelle n'est pas celle qui a "
+                "servi a chiffrer ce secret. Restaurez le fichier de cle d'origine "
+                "ou resaisissez le mot de passe."
+            ) from exc
 
 
 def generate_key() -> str:
     from cryptography.fernet import Fernet
 
     return Fernet.generate_key().decode()
+
+
+class KeySource:
+    """D'ou vient la cle. Utile pour dire a l'operateur ce qui s'est passe."""
+
+    ENV = "env"
+    FILE = "file"
+    GENERATED = "generated"
+    NONE = "none"
+
+
+def load_or_create_key(
+    *,
+    env_key: str | None,
+    key_file: Path | None,
+    autogenerate: bool = True,
+) -> tuple[str | None, str, Path | None]:
+    """Resout la cle de chiffrement au demarrage.
+
+    Ordre : variable d'environnement, puis fichier, puis generation.
+
+    POURQUOI UN FICHIER, ET PAS UNE GENERATION EN MEMOIRE
+    -----------------------------------------------------
+    Une cle regeneree a chaque demarrage rendrait ILLISIBLES tous les mots de
+    passe deja stockes. La cle doit survivre au processus, donc etre ecrite
+    quelque part. Elle ne va pas en base : ce serait la ranger a cote de ce
+    qu'elle protege.
+
+    Retourne (cle, source, chemin du fichier).
+    """
+    if env_key:
+        return env_key, KeySource.ENV, None
+
+    if key_file is None:
+        return None, KeySource.NONE, None
+
+    key_file = Path(key_file)
+    if key_file.is_file():
+        try:
+            cle = key_file.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            logger.error("Fichier de cle %s illisible : %s", key_file, exc)
+            return None, KeySource.NONE, key_file
+        if cle:
+            _warn_if_readable_by_others(key_file)
+            return cle, KeySource.FILE, key_file
+        logger.warning("Fichier de cle %s vide : il sera regenere", key_file)
+    elif key_file.exists():
+        # Cas frequent avec Docker : un bind-mount vers un fichier inexistant
+        # cree un REPERTOIRE a sa place.
+        logger.error(
+            "%s existe mais n'est pas un fichier. Si c'est un montage Docker, "
+            "montez un volume sur le repertoire parent plutot que sur le fichier.",
+            key_file,
+        )
+        return None, KeySource.NONE, key_file
+
+    if not autogenerate:
+        return None, KeySource.NONE, key_file
+
+    cle = generate_key()
+    try:
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        # Creation en 0600 des l'origine : ne jamais laisser la cle lisible,
+        # meme brievement, entre l'ecriture et le chmod.
+        descripteur = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, KEY_FILE_MODE)
+        with os.fdopen(descripteur, "w", encoding="utf-8") as fichier:
+            fichier.write(cle + "\n")
+        os.chmod(key_file, KEY_FILE_MODE)
+    except OSError as exc:
+        logger.error(
+            "Cle de chiffrement non ecrite dans %s (%s). Elle ne survivrait pas a "
+            "un redemarrage : l'ajout de PoP depuis l'interface reste desactive.",
+            key_file,
+            exc,
+        )
+        return None, KeySource.NONE, key_file
+
+    logger.warning(
+        "Cle de chiffrement generee dans %s. SAUVEGARDEZ CE FICHIER : sans lui, "
+        "les mots de passe des routeurs enregistres depuis l'interface seront "
+        "definitivement illisibles.",
+        key_file,
+    )
+    return cle, KeySource.GENERATED, key_file
+
+
+def _warn_if_readable_by_others(key_file: Path) -> None:
+    try:
+        mode = key_file.stat().st_mode
+    except OSError:
+        return
+    if mode & (stat.S_IRWXG | stat.S_IRWXO):
+        logger.warning(
+            "Le fichier de cle %s est lisible au-dela de son proprietaire. "
+            "Corrigez avec : chmod 600 %s",
+            key_file,
+            key_file,
+        )
 
 
 if __name__ == "__main__":  # pragma: no cover - utilitaire en ligne de commande

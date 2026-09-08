@@ -130,6 +130,8 @@ class Settings(BaseSettings):
     db_pool_min: int = 1
     db_pool_max: int = 8
     db_auto_migrate: bool = True
+    # Cree la base nommee dans DATABASE_URL si elle n'existe pas encore.
+    db_auto_create: bool = True
     db_command_timeout_s: float = 15.0
 
     # --- Politiques Timescale (0 = desactive) ---
@@ -185,6 +187,11 @@ class Settings(BaseSettings):
     # l'interface. Sans elle, l'API refuse d'en enregistrer (elle n'ecrira jamais
     # un secret en clair). Generer avec : python -m app.services.crypto
     app_secret_key: str | None = None
+    # Ou persister la cle si APP_SECRET_KEY n'est pas fourni. Elle DOIT survivre
+    # aux redemarrages : une cle regeneree rendrait illisibles tous les mots de
+    # passe deja stockes.
+    app_secret_key_file: Path | None = Path("data/secret.key")
+    app_secret_key_autogenerate: bool = True
 
     # --- Shaping (phase 2) ---
     # On shape SOUS la capacite reelle pour que la file se forme dans CAKE, ou on

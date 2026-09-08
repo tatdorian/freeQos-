@@ -17,5 +17,9 @@ config/routers.json
 htmlcov/
 *.log
 pgdata/
+
+# Cle de chiffrement : ne doit JAMAIS etre versionnee.
+data/
+*.key
 .idea/
 .vscode/

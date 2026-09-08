@@ -17,7 +17,10 @@ RUN pip install --upgrade pip && \
 COPY app ./app
 
 # L'app est hors-bande et purement cliente : aucun privilege requis.
-RUN useradd --create-home --uid 10001 qos && chown -R qos:qos /app
+# /app/data recoit la cle de chiffrement generee au premier demarrage.
+RUN mkdir -p /app/data && \
+    useradd --create-home --uid 10001 qos && \
+    chown -R qos:qos /app
 USER qos
 
 EXPOSE 8000

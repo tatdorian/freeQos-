@@ -39,6 +39,12 @@ services:
     volumes:
       # Inventaire des routeurs monte en lecture seule (les mots de passe restent en env).
       - ./config:/app/config:ro
+      # Cle de chiffrement generee au premier demarrage. Volume NOMME et non
+      # bind-mount : elle survit a un docker compose down/up, qui recree le
+      # conteneur. La perdre rendrait illisibles les mots de passe des routeurs
+      # enregistres depuis l'interface.
+      - qosdata:/app/data
 
 volumes:
   pgdata:
+  qosdata:

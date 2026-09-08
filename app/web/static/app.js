@@ -478,7 +478,11 @@ async function loadRouters() {
     html += '<div class="notice warn"><strong>Ajout depuis l\'interface indisponible.</strong> ' +
       esc(data.secrets_reason || '') +
       '<span class="hint">Sans cle, l\'API refuse d\'ecrire un mot de passe de routeur : ' +
-      'il ne sera jamais stocke en clair. Renseignez <code>APP_SECRET_KEY</code> puis redemarrez.</span></div>';
+      'il ne sera jamais stocke en clair. Normalement la cle est generee toute seule ' +
+      'au premier demarrage dans <code>APP_SECRET_KEY_FILE</code> ; verifiez que ce ' +
+      'chemin est inscriptible (avec Docker, un volume doit etre monte sur ' +
+      '<code>/app/data</code>). Sinon, renseignez <code>APP_SECRET_KEY</code> ' +
+      'puis redemarrez.</span></div>';
   }
   (data.skipped || []).forEach((message) => {
     html += '<div class="notice err">' + esc(message) + '</div>';
