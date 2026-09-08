@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from app.enforcement.models import (
@@ -39,29 +40,55 @@ QUEUE_TYPE_DOWN = f"{PREFIX}cake-down"
 
 @dataclass(slots=True)
 class SubscriberTarget:
-    """Un abonne a shaper."""
+    """Un abonne a shaper.
+
+    Trois niveaux de debit, du plus fort au plus faible :
+      1. le BOOST, tant qu'il n'a pas expire ;
+      2. la surcharge manuelle permanente ;
+      3. le plan commercial venu de RADIUS.
+    """
 
     login: str
     interface: str
     plan_down_mbps: float | None
     plan_up_mbps: float | None
     parent: str | None = None
-    # Surcharge manuelle depuis l'interface. Prime sur le plan commercial.
     override_down_mbps: float | None = None
     override_up_mbps: float | None = None
+    boost_down_mbps: float | None = None
+    boost_up_mbps: float | None = None
+    boost_expires_at: datetime | None = None
     enabled: bool = True
 
     @property
     def queue_name(self) -> str:
         return f"{PREFIX}{slugify(self.login)}"
 
+    def boost_active(self, now: datetime | None = None) -> bool:
+        """Un boost sans echeance n'existe pas : ce serait une surcharge."""
+        if self.boost_expires_at is None:
+            return False
+        if self.boost_down_mbps is None and self.boost_up_mbps is None:
+            return False
+        return self.boost_expires_at > (now or datetime.now(tz=UTC))
+
+    def effective_down_at(self, now: datetime | None = None) -> float | None:
+        if self.boost_active(now) and self.boost_down_mbps:
+            return self.boost_down_mbps
+        return self.override_down_mbps or self.plan_down_mbps
+
+    def effective_up_at(self, now: datetime | None = None) -> float | None:
+        if self.boost_active(now) and self.boost_up_mbps:
+            return self.boost_up_mbps
+        return self.override_up_mbps or self.plan_up_mbps
+
     @property
     def effective_down(self) -> float | None:
-        return self.override_down_mbps if self.override_down_mbps else self.plan_down_mbps
+        return self.effective_down_at()
 
     @property
     def effective_up(self) -> float | None:
-        return self.override_up_mbps if self.override_up_mbps else self.plan_up_mbps
+        return self.effective_up_at()
 
 
 @dataclass(slots=True)
@@ -125,6 +152,7 @@ def desired_state(
     safety_factor: float = 0.90,
     floor_mbps: float = 5.0,
     queue_types: Sequence[QueueTypeSpec] | None = None,
+    now: datetime | None = None,
 ) -> tuple[list[QueueTypeSpec], list[QueueSpec]]:
     """Construit l'etat desire complet pour un routeur."""
     types = list(queue_types) if queue_types is not None else desired_queue_types()
@@ -165,15 +193,17 @@ def desired_state(
     for subscriber in subscribers:
         if not subscriber.enabled:
             continue
-        if subscriber.effective_down is None and subscriber.effective_up is None:
+        down = subscriber.effective_down_at(now)
+        up = subscriber.effective_up_at(now)
+        if down is None and up is None:
             continue
         parent = subscriber.parent if subscriber.parent in parents_connus else None
         files.append(
             QueueSpec(
                 name=subscriber.queue_name,
                 target=subscriber.interface,
-                max_up_mbps=subscriber.effective_up,
-                max_down_mbps=subscriber.effective_down,
+                max_up_mbps=up,
+                max_down_mbps=down,
                 parent=parent,
                 queue_up=QUEUE_TYPE_UP,
                 queue_down=QUEUE_TYPE_DOWN,

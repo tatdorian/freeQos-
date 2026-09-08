@@ -234,6 +234,136 @@ class TopologyRepository:
     async def policy_map(self, scope: str) -> dict[str, dict[str, Any]]:
         return {row["target_key"]: row for row in await self.policies(scope)}
 
+    # -------------------------------------------------------------- boost
+    async def set_boost(
+        self,
+        *,
+        scope: str,
+        target_key: str,
+        down_mbps: float | None,
+        up_mbps: float | None,
+        expires_at,
+        reason: str | None = None,
+        updated_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Pose un boost temporaire, en creant la ligne de politique si besoin.
+
+        Le boost n'ecrase pas la surcharge permanente : il vient par-dessus et
+        s'efface a echeance, laissant l'abonne revenir a son plan.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO shaping_policies
+                       (scope, target_key, boost_down_mbps, boost_up_mbps,
+                        boost_expires_at, boost_reason, updated_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ON CONFLICT (scope, target_key) DO UPDATE SET
+                    boost_down_mbps  = EXCLUDED.boost_down_mbps,
+                    boost_up_mbps    = EXCLUDED.boost_up_mbps,
+                    boost_expires_at = EXCLUDED.boost_expires_at,
+                    boost_reason     = EXCLUDED.boost_reason,
+                    updated_by       = EXCLUDED.updated_by,
+                    updated_at       = now()
+                RETURNING *
+                """,
+                scope,
+                target_key,
+                down_mbps,
+                up_mbps,
+                expires_at,
+                reason,
+                updated_by,
+            )
+        return dict(row)
+
+    async def clear_boost(self, scope: str, target_key: str) -> bool:
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                """
+                UPDATE shaping_policies
+                   SET boost_down_mbps = NULL, boost_up_mbps = NULL,
+                       boost_expires_at = NULL, boost_reason = NULL, updated_at = now()
+                 WHERE scope = $1 AND target_key = $2 AND boost_expires_at IS NOT NULL
+                """,
+                scope,
+                target_key,
+            )
+        return not resultat.endswith(" 0")
+
+    async def active_boosts(self, scope: str | None = None) -> list[dict[str, Any]]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT scope, target_key, boost_down_mbps, boost_up_mbps,
+                       boost_expires_at, boost_reason,
+                       EXTRACT(EPOCH FROM (boost_expires_at - now()))::double precision
+                           AS seconds_left
+                  FROM shaping_policies
+                 WHERE boost_expires_at IS NOT NULL AND boost_expires_at > now()
+                   AND ($1::text IS NULL OR scope = $1)
+                 ORDER BY boost_expires_at
+                """,
+                scope,
+            )
+        return [dict(row) for row in rows]
+
+    async def expired_boosts(self) -> list[dict[str, Any]]:
+        """Boosts arrives a echeance mais dont les champs trainent encore.
+
+        C'est ce que le job d'expiration doit nettoyer, et surtout : ce sont les
+        abonnes dont la file doit etre ramenee a son debit normal.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT scope, target_key, boost_expires_at
+                  FROM shaping_policies
+                 WHERE boost_expires_at IS NOT NULL AND boost_expires_at <= now()
+                """
+            )
+        return [dict(row) for row in rows]
+
+    async def purge_expired_boosts(self) -> int:
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                """
+                UPDATE shaping_policies
+                   SET boost_down_mbps = NULL, boost_up_mbps = NULL,
+                       boost_expires_at = NULL, boost_reason = NULL, updated_at = now()
+                 WHERE boost_expires_at IS NOT NULL AND boost_expires_at <= now()
+                """
+            )
+        return int(resultat.rsplit(" ", 1)[-1] or 0)
+
+    # ------------------------------------------------------ drapeaux runtime
+    async def get_flag(self, name: str) -> bool | None:
+        async with self._pool.acquire() as conn:
+            return await conn.fetchval("SELECT value FROM runtime_flags WHERE name = $1", name)
+
+    async def set_flag(
+        self, name: str, value: bool, *, updated_by: str | None = None, reason: str | None = None
+    ) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO runtime_flags (name, value, updated_by, reason)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (name) DO UPDATE SET
+                    value = EXCLUDED.value, updated_by = EXCLUDED.updated_by,
+                    reason = EXCLUDED.reason, updated_at = now()
+                """,
+                name,
+                value,
+                updated_by,
+                reason,
+            )
+
+    async def flag_detail(self, name: str) -> dict[str, Any] | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM runtime_flags WHERE name = $1", name)
+        return dict(row) if row else None
+
     # ---------------------------------------------------------------- audit
     async def record_audit(
         self, router_name: str, *, dry_run: bool, outcomes: list[tuple[Any, bool, str]]

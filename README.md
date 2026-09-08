@@ -48,7 +48,7 @@ doit être passé à `true` explicitement, et chaque plan demande une applicatio
 ```bash
 cp .env.example .env                       # adapter POSTGRES_PASSWORD au minimum
 cp config/routers.example.yml config/routers.yml
-export MT_POP_NORD_PASSWORD='...'          # jamais dans un fichier versionné
+export MT_POP_1_PASSWORD='...'             # jamais dans un fichier versionné
 
 docker compose up -d --build
 open http://localhost:8000/                # tableau de bord
@@ -91,9 +91,14 @@ Quatre vues, thème sombre, à `http://localhost:8000/` :
 - **Tableau de bord** — débit global (download/upload en miroir, graphe live), abonnés en
   ligne, débit vendu et son taux d'utilisation, capacité backhaul, top consommateurs avec
   barre d'usage vs plan, cartes backhaul (capacité vs nominal, charge vs capacité).
-- **Arbre réseau** — PoP → backhaul, charge réelle face à la capacité radio du moment.
-  C'est ce rapport qui déterminera le débit parent du shaping en phase 2.
-- **Abonnés** — table filtrable ; un clic ouvre la série de débit de l'abonné.
+- **Arbre réseau** — la vraie hiérarchie `gateway → cœur → PoP → radio → abonnés`,
+  repliable, reconstruite depuis `/ip/neighbor`. La découverte de voisinage étant
+  **symétrique**, le sens amont/aval est déduit du rôle de chaque équipement : un PoP qui
+  voit son gateway produirait sinon un gateway *sous* le PoP. Les abonnés sont regroupés
+  sous un nœud repliable, avec leurs totaux.
+- **Abonnés** — sessions filtrables **par PoP** et par login, avec débit vs plan, latence,
+  boost en cours et son décompte. Un clic ouvre la série de l'abonné ; les boutons *Débit*
+  et *Boost* agissent directement.
 - **PoPs** — inventaire et connexion d'un routeur.
 
 Aucune dépendance externe : ni framework, ni CDN, ni chaîne de build. Les graphes sont du
@@ -144,6 +149,13 @@ légèrement **sous** la capacité réelle du lien (`SHAPING_SAFETY_FACTOR`, 90 
 pour que la file se forme dans CAKE — où on la contrôle — plutôt que dans le buffer de la
 radio, où on ne peut rien.
 
+**Autoriser l'écriture.** L'interrupteur de l'onglet Shaping bascule
+`ENFORCEMENT_ENABLED` **sans redémarrage** : la variable d'environnement ne sert plus
+qu'à l'amorçage, ensuite c'est la base qui fait foi et la bascule survit au redémarrage.
+Activer demande une confirmation et un motif, tracé dans le journal ; couper est immédiat
+et sans cérémonie. `ENFORCEMENT_LOCKED=true` interdit la bascule depuis l'interface, pour
+qui préfère garder la friction du redémarrage.
+
 **Le parcours, en trois temps volontairement séparés :**
 
 ```
@@ -165,6 +177,17 @@ raison et ce qui change :
 **Pour changer une bande passante** : cliquer *Bande passante* sur un lien (onglet
 Topologie) ou *Débit* sur un abonné. Enregistrer **n'écrit rien sur le routeur** — cela
 enregistre l'intention. Le plan montre ensuite ce qui en découle.
+
+**Coup de boost temporaire.** Bouton *Boost* sur un abonné (onglet Abonnés ou arbre
+réseau) : une durée, un facteur (×2, ×3, ×5) ou un débit explicite, un motif. Le boost est
+appliqué immédiatement si l'écriture est autorisée, et **expire tout seul** — un job
+vérifie l'échéance toutes les 30 s et ramène la file au débit normal. La file RouterOS ne
+sait rien de la durée : c'est le contrôleur qui la fait respecter.
+
+Trois niveaux de débit, du plus fort au plus faible : **boost** (tant qu'il court),
+**surcharge permanente**, **plan RADIUS**. Le boost n'écrase pas la surcharge, il passe
+par-dessus puis s'efface. Un boost sans échéance est refusé : ce serait une surcharge
+déguisée qui ne s'effacerait jamais.
 
 **Cinq garde-fous, dans cet ordre :**
 
@@ -322,26 +345,26 @@ rediriger un PoP vers un CHR de lab sans toucher à l'inventaire :
 ```bash
 ROUTERS_FILE=config/routers.yml
 # ou
-ROUTERS='[{"name":"pop-nord","host":"10.10.0.11","password_env":"MT_POP_NORD_PASSWORD"}]'
+ROUTERS='[{"name":"pop-1","host":"10.10.0.11","password_env":"MT_POP_1_PASSWORD"}]'
 ```
 
 ```yaml
 # config/routers.yml
 routers:
-  - name: pop-nord
+  - name: pop-1
     host: 10.10.0.11
     port: 8728                # 8728 API binaire, 8729 api-ssl
     username: qos-ro          # LECTURE SEULE en phase 1
-    password_env: MT_POP_NORD_PASSWORD   # nom de la variable, jamais le secret
+    password_env: MT_POP_1_PASSWORD   # nom de la variable, jamais le secret
     role: pop                 # pop | core | gateway
-    pop_name: PoP Nord
+    pop_name: Site 1
     pppoe_interface_pattern: "<pppoe-{login}>"
-    rw_username: qos-rw       # phase 2, non utilisé aujourd'hui
-    rw_password_env: MT_POP_NORD_RW_PASSWORD
+    rw_username: qos-rw       # utilisé uniquement par l'enforcement
+    rw_password_env: MT_POP_1_RW_PASSWORD
 
 backhauls:
-  - name: bh-nord-pri
-    pop_name: PoP Nord
+  - name: bh-1
+    pop_name: Site 1
     uisp_device_id: 8a2f1c3e-…
     nominal_capacity_mbps: 500
 ```
@@ -402,6 +425,10 @@ que la boucle centrale devra suivre, sans radio.
 | `PUT` · `DELETE` | `/api/v1/shaping/policies` | Fixer / retirer un débit imposé |
 | `POST` | `/api/v1/shaping/plan` | Commandes exactes, **sans rien envoyer** |
 | `POST` | `/api/v1/shaping/apply` | Exécution (`dry_run` par défaut) |
+| `GET` · `PUT` | `/api/v1/shaping/enforcement` | Lire / basculer l'autorisation d'écriture |
+| `GET` · `POST` | `/api/v1/shaping/boosts` | Boosts en cours / en poser un |
+| `DELETE` | `/api/v1/shaping/boosts/{login}` | Retirer un boost avant échéance |
+| `DELETE` | `/api/v1/pops/{id}` | Retirer un site et tout son historique |
 | `GET` | `/api/v1/shaping/audit` | Journal des commandes envoyées |
 | `GET` | `/api/v1/status` · `/status/runs` · `/status/counters` | Exploitation |
 | `POST` | `/api/v1/jobs/{job}/run` | Rejoue un cycle de **lecture** hors cadence |
@@ -418,7 +445,12 @@ Documentation interactive : `/docs`.
 l'interface, mot de passe chiffré, diagnostic de la dernière connexion),
 `topology_nodes` / `topology_links` (graphe découvert), `subscriber_attachments`
 (abonné → secteur radio), `shaping_policies` (débits imposés à la main),
-`enforcement_audit` (journal des commandes envoyées).
+`enforcement_audit` (journal des commandes envoyées), `runtime_flags` (drapeaux
+basculables à chaud, dont l'autorisation d'écriture).
+
+Le schéma comporte une section de **migrations de colonnes** (`ADD COLUMN IF NOT EXISTS`) :
+`CREATE TABLE IF NOT EXISTS` ne touche pas une table déjà présente, une installation
+existante ne recevrait donc jamais les colonnes ajoutées après coup.
 
 **Séries temporelles** (hypertables) :
 
@@ -442,7 +474,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 285 tests, dont 266 sans aucune infrastructure
+make test        # 324 tests, dont 301 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et
@@ -458,7 +490,8 @@ secret sans clé de chiffrement, tourniquet et péremption des mesures de latenc
 Côté enforcement, la couverture porte d'abord sur ce qui doit **empêcher** une écriture :
 refus quand `ENFORCEMENT_ENABLED` est faux, absence de repli sur le compte de lecture,
 files tierces jamais modifiées ni supprimées, coupe-circuit sur les gros plans, arrêt au
-premier échec, idempotence du plan (rejouer ne produit rien).
+premier échec, idempotence du plan (rejouer ne produit rien), refus d'un boost sans
+échéance, et retour automatique au plan après expiration.
 
 ### Tests d'intégration (optionnels)
 

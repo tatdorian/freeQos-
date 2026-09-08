@@ -45,7 +45,8 @@ async def database():
             "TRUNCATE subscriber_metrics, backhaul_metrics, qoe_scores, "
             "collector_runs, subscribers, backhauls, routers, pops, "
             "topology_nodes, topology_links, subscriber_attachments, "
-            "shaping_policies, enforcement_audit RESTART IDENTITY CASCADE"
+            "shaping_policies, enforcement_audit, runtime_flags "
+            "RESTART IDENTITY CASCADE"
         )
     yield db
     await db.close()
@@ -555,8 +556,13 @@ async def test_throughput_ne_double_compte_pas(database: Database) -> None:
         start=NOW - timedelta(minutes=5), end=NOW + timedelta(seconds=1), bucket_seconds=300
     )
 
-    assert len(series) == 1
-    assert series[0]["tx_bps"] == pytest.approx(100e6)  # et non 600 Mbps
+    # Les buckets sont alignes sur l'epoch : les echantillons peuvent se repartir
+    # sur deux buckets selon l'heure d'execution. Ce qui compte est que CHACUN
+    # vaille 100 Mbps et non un multiple : sommer les echantillons bruts
+    # donnerait 600 Mbps.
+    assert series
+    assert all(point["tx_bps"] == pytest.approx(100e6) for point in series)
+    assert all(point["subscribers"] == 1 for point in series)
 
 
 # ---------------------------------------------------------------------------
@@ -750,3 +756,134 @@ async def test_journal_des_commandes(database: Database) -> None:
     assert lignes[0]["dry_run"] is False
     assert lignes[0]["command"].startswith("/queue/simple/set")
     assert "max-limit=20000000/100000000" in lignes[0]["command"]
+
+
+async def test_cycle_de_vie_d_un_boost(database: Database) -> None:
+    """Pose, expiration, purge : le cycle complet contre le vrai SQL."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+
+    # Un boost encore valide.
+    await repo.set_boost(
+        scope="subscriber",
+        target_key="alice",
+        down_mbps=500,
+        up_mbps=100,
+        expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
+        reason="geste commercial",
+        updated_by="ui",
+    )
+    # Un boost deja echu.
+    await repo.set_boost(
+        scope="subscriber",
+        target_key="bob",
+        down_mbps=300,
+        up_mbps=None,
+        expires_at=datetime.now(tz=UTC) - timedelta(minutes=5),
+    )
+
+    actifs = await repo.active_boosts()
+    assert [b["target_key"] for b in actifs] == ["alice"]
+    assert actifs[0]["seconds_left"] > 3500
+    assert actifs[0]["boost_reason"] == "geste commercial"
+
+    echus = await repo.expired_boosts()
+    assert [b["target_key"] for b in echus] == ["bob"]
+
+    assert await repo.purge_expired_boosts() == 1
+    assert await repo.expired_boosts() == []
+    # Le boost valide n'a pas ete emporte.
+    assert len(await repo.active_boosts()) == 1
+
+    # Le boost cohabite avec une surcharge permanente sans l'ecraser.
+    await repo.upsert_policy(
+        scope="subscriber", target_key="alice", max_down_mbps=150, max_up_mbps=30
+    )
+    politique = (await repo.policies("subscriber"))[0]
+    assert politique["max_down_mbps"] == 150
+    assert politique["boost_down_mbps"] == 500
+
+    assert await repo.clear_boost("subscriber", "alice") is True
+    assert await repo.clear_boost("subscriber", "alice") is False
+    # Retirer le boost laisse la surcharge en place.
+    assert (await repo.policies("subscriber"))[0]["max_down_mbps"] == 150
+
+
+async def test_drapeaux_runtime(database: Database) -> None:
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+
+    assert await repo.get_flag("enforcement_enabled") is None
+
+    await repo.set_flag("enforcement_enabled", True, updated_by="ui", reason="bascule de nuit")
+    assert await repo.get_flag("enforcement_enabled") is True
+
+    detail = await repo.flag_detail("enforcement_enabled")
+    assert detail["reason"] == "bascule de nuit"
+    assert detail["updated_by"] == "ui"
+
+    await repo.set_flag("enforcement_enabled", False, updated_by="ui")
+    assert await repo.get_flag("enforcement_enabled") is False
+
+
+async def test_seconds_left_est_un_nombre(database: Database) -> None:
+    """EXTRACT(EPOCH ...) renvoie un Decimal, serialise en CHAINE par l'API :
+    l'interface ferait alors une division sur du texte."""
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+    await repo.set_boost(
+        scope="subscriber",
+        target_key="alice",
+        down_mbps=500,
+        up_mbps=None,
+        expires_at=datetime.now(tz=UTC) + timedelta(minutes=30),
+    )
+
+    restant = (await repo.active_boosts())[0]["seconds_left"]
+
+    assert isinstance(restant, float)
+    assert 1700 < restant < 1801
+
+
+async def test_suppression_d_un_pop_emporte_ses_donnees(database: Database) -> None:
+    """Retirer un routeur de l'inventaire ne suffit pas : le site, ses abonnes et
+    leur historique restent en base tant qu'on ne fait pas le menage."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    garde = await directory.ensure_pop("Site conserve")
+    jetable = await directory.ensure_pop("Site obsolete", "10.10.0.99")
+    reste = await directory.ensure_subscriber("reste", pop_id=garde)
+    part = await directory.ensure_subscriber("part", pop_id=jetable)
+    await directory.ensure_backhaul("bh-obsolete", pop_id=jetable, uisp_device_id="dev-x")
+
+    for abonne in (reste, part):
+        await writer.write_subscriber_metrics(
+            [
+                (
+                    abonne,
+                    SubscriberSample(ts=NOW, login="x", router_name="r", pop_name="p", rx_bps=1.0),
+                )
+            ]
+        )
+
+    emporte = await repo.delete_pop(jetable)
+
+    assert emporte == {"subscribers": 1, "backhauls": 1}
+    async with database.pool.acquire() as conn:
+        assert await conn.fetchval("SELECT count(*) FROM pops") == 1
+        assert await conn.fetchval("SELECT count(*) FROM subscribers") == 1
+        assert await conn.fetchval("SELECT count(*) FROM backhauls") == 0
+        # Les metriques de l'abonne parti suivent, celles de l'autre restent.
+        assert await conn.fetchval("SELECT count(*) FROM subscriber_metrics") == 1
+
+    with pytest.raises(LookupError):
+        await repo.delete_pop(jetable)

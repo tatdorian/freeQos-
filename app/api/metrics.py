@@ -16,6 +16,34 @@ async def list_pops(repo: RepositoryDep) -> list[dict[str, Any]]:
     return await repo.list_pops()
 
 
+@router.delete("/pops/{pop_id}", summary="Retirer un PoP et ses donnees")
+async def delete_pop(
+    repo: RepositoryDep,
+    pop_id: Annotated[int, Path(ge=1)],
+    confirm: Annotated[
+        bool, Query(description="Obligatoire : la suppression est definitive")
+    ] = False,
+) -> dict[str, Any]:
+    """Supprime le PoP, ses abonnes, ses backhauls et leur historique.
+
+    Retirer un routeur de l'inventaire ne suffit pas : ses donnees restent, ce
+    qui est voulu. Cet appel est le menage explicite, et il est irreversible.
+    """
+    if not confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Suppression definitive du PoP, de ses abonnes et de tout leur "
+                "historique de mesures : 'confirm' doit valoir true."
+            ),
+        )
+    try:
+        supprime = await repo.delete_pop(pop_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return {"deleted": True, "cascaded": supprime}
+
+
 @router.get("/subscribers", summary="Liste des abonnes")
 async def list_subscribers(
     repo: RepositoryDep,

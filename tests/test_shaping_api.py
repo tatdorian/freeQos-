@@ -33,6 +33,7 @@ class FauxDepotTopologie:
         self.link_rows: list[dict[str, Any]] = []
         self.node_rows: list[dict[str, Any]] = []
         self.attachment_rows: dict[str, str] = {}
+        self.flags: dict[str, bool] = {}
 
     async def save_snapshot(self, snapshot):
         self.saved_nodes += len(snapshot.nodes)
@@ -58,6 +59,84 @@ class FauxDepotTopologie:
 
     async def delete_policy(self, scope, target_key):
         return self._policies.pop((scope, target_key), None) is not None
+
+    async def set_boost(
+        self, *, scope, target_key, down_mbps, up_mbps, expires_at, reason=None, updated_by=None
+    ):
+        cle = (scope, target_key)
+        ligne = self._policies.setdefault(cle, {"scope": scope, "target_key": target_key})
+        ligne.update(
+            {
+                "boost_down_mbps": down_mbps,
+                "boost_up_mbps": up_mbps,
+                "boost_expires_at": expires_at,
+                "boost_reason": reason,
+                "updated_by": updated_by,
+            }
+        )
+        return ligne
+
+    async def clear_boost(self, scope, target_key):
+        ligne = self._policies.get((scope, target_key))
+        if not ligne or ligne.get("boost_expires_at") is None:
+            return False
+        ligne.update(
+            {
+                "boost_down_mbps": None,
+                "boost_up_mbps": None,
+                "boost_expires_at": None,
+                "boost_reason": None,
+            }
+        )
+        return True
+
+    async def active_boosts(self, scope=None):
+        from datetime import UTC, datetime
+
+        maintenant = datetime.now(tz=UTC)
+        resultat = []
+        for ligne in self._policies.values():
+            echeance = ligne.get("boost_expires_at")
+            if echeance is None or echeance <= maintenant:
+                continue
+            if scope not in (None, ligne["scope"]):
+                continue
+            resultat.append({**ligne, "seconds_left": (echeance - maintenant).total_seconds()})
+        return resultat
+
+    async def expired_boosts(self):
+        from datetime import UTC, datetime
+
+        maintenant = datetime.now(tz=UTC)
+        return [
+            ligne
+            for ligne in self._policies.values()
+            if ligne.get("boost_expires_at") and ligne["boost_expires_at"] <= maintenant
+        ]
+
+    async def purge_expired_boosts(self):
+        echus = await self.expired_boosts()
+        for ligne in echus:
+            ligne.update(
+                {
+                    "boost_down_mbps": None,
+                    "boost_up_mbps": None,
+                    "boost_expires_at": None,
+                    "boost_reason": None,
+                }
+            )
+        return len(echus)
+
+    async def get_flag(self, name):
+        return self.flags.get(name)
+
+    async def set_flag(self, name, value, *, updated_by=None, reason=None):
+        self.flags[name] = value
+
+    async def flag_detail(self, name):
+        if name not in self.flags:
+            return None
+        return {"name": name, "value": self.flags[name], "reason": None}
 
     async def policies(self, scope=None):
         return [p for p in self._policies.values() if scope in (None, p["scope"])]
@@ -354,3 +433,221 @@ def test_rattachement_vers_un_lien_inconnu_reste_sans_parent(
 
     file_abonne = next(a for a in body["actions"] if a["name"] == "freeqos-dupont")
     assert "parent=" not in file_abonne["command"]
+
+
+# ==========================================================================
+# Bascule de l'enforcement depuis l'interface
+# ==========================================================================
+
+
+def test_etat_initial_lecture_seule(client: TestClient) -> None:
+    body = client.get("/api/v1/shaping/enforcement").json()
+    assert body["enabled"] is False
+    assert body["locked"] is False
+
+
+def test_activation_exige_une_confirmation(client: TestClient) -> None:
+    """Autoriser l'ecriture sur des routeurs de production merite un geste."""
+    reponse = client.put("/api/v1/shaping/enforcement", json={"enabled": True})
+
+    assert reponse.status_code == 400
+    assert "confirm" in reponse.json()["detail"]
+    assert client.container.shaping.enforcement_enabled is False  # type: ignore[attr-defined]
+
+
+def test_activation_leve_le_verrou_global_mais_pas_les_autres(client: TestClient) -> None:
+    """Les verrous sont independants : activer l'enforcement ne dispense pas
+    d'avoir un compte d'ecriture sur le routeur."""
+    avant = client.post(
+        "/api/v1/shaping/apply",
+        json={"router": "pop-test", "dry_run": False, "confirm": True},
+    )
+    assert avant.status_code == 409
+    assert "lecture seule" in avant.json()["detail"]
+
+    client.put(
+        "/api/v1/shaping/enforcement",
+        json={"enabled": True, "confirm": True, "reason": "bascule de nuit"},
+    )
+    assert client.container.shaping.enforcement_enabled is True  # type: ignore[attr-defined]
+
+    apres = client.post(
+        "/api/v1/shaping/apply",
+        json={"router": "pop-test", "dry_run": False, "confirm": True},
+    )
+    # Toujours refuse, mais pour une autre raison : le compte qos-rw manque.
+    assert apres.status_code == 409
+    assert "rw_username" in apres.json()["detail"]
+
+
+def test_coupure_immediate_sans_confirmation(client: TestClient) -> None:
+    """Revenir en lecture seule ne doit jamais demander de ceremonie."""
+    client.put("/api/v1/shaping/enforcement", json={"enabled": True, "confirm": True})
+
+    reponse = client.put("/api/v1/shaping/enforcement", json={"enabled": False})
+
+    assert reponse.status_code == 200
+    assert client.container.shaping.enforcement_enabled is False  # type: ignore[attr-defined]
+
+
+def test_bascule_persistee(client: TestClient, topo: FauxDepotTopologie) -> None:
+    from app.services.shaping import FLAG_ENFORCEMENT
+
+    client.put(
+        "/api/v1/shaping/enforcement",
+        json={"enabled": True, "confirm": True, "reason": "essai"},
+    )
+    assert topo.flags[FLAG_ENFORCEMENT] is True
+
+
+def test_verrou_interdit_la_bascule(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    """Un exploitant qui tient a la friction du redemarrage doit pouvoir la garder."""
+    settings.enforcement_locked = True
+    client = make_client(settings, topo, routeur)
+
+    reponse = client.put("/api/v1/shaping/enforcement", json={"enabled": True, "confirm": True})
+
+    assert reponse.status_code == 409
+    assert "ENFORCEMENT_LOCKED" in reponse.json()["detail"]
+    assert client.container.shaping.enforcement_enabled is False  # type: ignore[attr-defined]
+
+
+def test_la_base_prime_sur_l_environnement(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    """Une bascule faite depuis l'interface ne doit pas etre perdue au redemarrage."""
+    from app.services.shaping import FLAG_ENFORCEMENT
+
+    topo.flags[FLAG_ENFORCEMENT] = True
+    settings.enforcement_enabled = False
+    client = make_client(settings, topo, routeur)
+
+    import asyncio
+
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        client.container.shaping.load_flags()  # type: ignore[attr-defined]
+    )
+    assert client.container.shaping.enforcement_enabled is True  # type: ignore[attr-defined]
+
+
+# ==========================================================================
+# Boost
+# ==========================================================================
+
+
+def test_boost_par_multiplicateur(client: TestClient, topo: FauxDepotTopologie) -> None:
+    reponse = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 60, "multiplier": 3},
+    )
+
+    assert reponse.status_code == 200
+    boost = reponse.json()["boost"]
+    # Le plan de reference est 100/20 Mbps.
+    assert boost["down_mbps"] == 300
+    assert boost["up_mbps"] == 60
+    assert boost["duration_minutes"] == 60
+
+
+def test_boost_par_debit_explicite(client: TestClient) -> None:
+    body = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 15, "down_mbps": 800},
+    ).json()
+
+    assert body["boost"]["down_mbps"] == 800
+    assert body["boost"]["up_mbps"] is None
+
+
+def test_boost_sans_debit_refuse(client: TestClient) -> None:
+    reponse = client.post(
+        "/api/v1/shaping/boosts", json={"login": "dupont", "duration_minutes": 60}
+    )
+    assert reponse.status_code == 400
+
+
+def test_boost_sur_abonne_inconnu(client: TestClient) -> None:
+    reponse = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "inconnu", "duration_minutes": 60, "multiplier": 2},
+    )
+    assert reponse.status_code == 404
+
+
+def test_duree_bornee(client: TestClient) -> None:
+    """Un boost d'un an ne serait plus un boost."""
+    trop_long = {"login": "dupont", "duration_minutes": 60 * 24 * 400, "multiplier": 2}
+    assert client.post("/api/v1/shaping/boosts", json=trop_long).status_code == 422
+    nul = {"login": "dupont", "duration_minutes": 0, "multiplier": 2}
+    assert client.post("/api/v1/shaping/boosts", json=nul).status_code == 422
+
+
+def test_boost_enregistre_meme_si_ecriture_coupee(
+    client: TestClient, topo: FauxDepotTopologie
+) -> None:
+    """Poser un boost doit reussir en lecture seule : le retour dit alors
+    pourquoi rien n'a ete pousse."""
+    body = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 30, "multiplier": 2},
+    ).json()
+
+    assert body["boost"]["down_mbps"] == 200
+    assert body["applied"]["ok"] is False
+    assert "lecture seule" in body["applied"]["detail"] or "desactive" in body["applied"]["detail"]
+
+
+def test_boost_pousse_quand_l_ecriture_est_permise(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    settings.enforcement_enabled = True
+    settings.routers[0].rw_username = "qos-rw"
+    ecriture = FauxClientEcriture()
+    client = make_client(settings, topo, routeur, ecriture=ecriture)
+
+    body = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 30, "multiplier": 4},
+    ).json()
+
+    assert body["applied"]["ok"] is True
+    # La commande poussee porte bien le debit boostee : 100 x 4 = 400 Mbps.
+    commandes = [a.command for a in ecriture.executed]
+    assert any("400000000" in c for c in commandes)
+
+
+def test_boost_visible_dans_la_liste(client: TestClient) -> None:
+    client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 45, "multiplier": 2, "reason": "geste co"},
+    )
+    boosts = client.get("/api/v1/shaping/boosts").json()
+
+    assert len(boosts) == 1
+    assert boosts[0]["target_key"] == "dupont"
+    assert boosts[0]["boost_reason"] == "geste co"
+
+
+def test_retrait_anticipe(client: TestClient) -> None:
+    client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 60, "multiplier": 2},
+    )
+
+    assert client.delete("/api/v1/shaping/boosts/dupont").status_code == 200
+    assert client.get("/api/v1/shaping/boosts").json() == []
+    # Retirer deux fois n'est pas une erreur silencieuse.
+    assert client.delete("/api/v1/shaping/boosts/dupont").status_code == 404
+
+
+def test_le_boost_apparait_dans_le_plan(client: TestClient) -> None:
+    client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 60, "down_mbps": 750},
+    )
+    plan = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
+
+    file_abonne = next(a for a in plan["actions"] if a["name"] == "freeqos-dupont")
+    assert "750000000" in file_abonne["command"]

@@ -141,11 +141,28 @@ CREATE TABLE IF NOT EXISTS shaping_policies (
     max_down_mbps   DOUBLE PRECISION,
     max_up_mbps     DOUBLE PRECISION,
     enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Coup de boost temporaire. Il prime sur la surcharge permanente tant que
+    -- boost_expires_at n'est pas depasse, puis s'efface tout seul.
+    boost_down_mbps DOUBLE PRECISION,
+    boost_up_mbps   DOUBLE PRECISION,
+    boost_expires_at TIMESTAMPTZ,
+    boost_reason    TEXT,
     note            TEXT,
     updated_by      TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (scope, target_key)
+);
+
+-- Drapeaux modifiables a chaud depuis l'interface. Ils sont amorces par les
+-- variables d'environnement au premier demarrage, puis c'est la base qui fait
+-- foi : basculer l'enforcement ne doit pas demander un redemarrage.
+CREATE TABLE IF NOT EXISTS runtime_flags (
+    name        TEXT PRIMARY KEY,
+    value       BOOLEAN NOT NULL,
+    updated_by  TEXT,
+    reason      TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- Journal de TOUTE commande envoyee a un equipement. C'est la trace dont on a
@@ -163,6 +180,7 @@ CREATE TABLE IF NOT EXISTS enforcement_audit (
 );
 
 CREATE INDEX IF NOT EXISTS idx_enforcement_audit_ts ON enforcement_audit (ts DESC);
+
 
 -- -----------------------------------------------------------------------------
 -- Series temporelles
@@ -219,6 +237,33 @@ CREATE TABLE IF NOT EXISTS collector_runs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_collector_runs_job_ts ON collector_runs (job, started_at DESC);
+
+-- -----------------------------------------------------------------------------
+-- Migrations de colonnes
+--
+-- CREATE TABLE IF NOT EXISTS ne touche pas une table deja presente : sans cette
+-- section, une installation existante ne recevrait jamais les colonnes ajoutees
+-- apres coup. Chaque ligne est idempotente et peut etre rejouee sans risque.
+-- -----------------------------------------------------------------------------
+
+ALTER TABLE subscriber_metrics ADD COLUMN IF NOT EXISTS rtt_ms           DOUBLE PRECISION;
+ALTER TABLE subscriber_metrics ADD COLUMN IF NOT EXISTS session_uptime_s INTEGER;
+
+ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS kind_override TEXT;
+
+ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS boost_down_mbps  DOUBLE PRECISION;
+ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS boost_up_mbps    DOUBLE PRECISION;
+ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS boost_expires_at TIMESTAMPTZ;
+ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS boost_reason     TEXT;
+
+ALTER TABLE routers ADD COLUMN IF NOT EXISTS identity         TEXT;
+ALTER TABLE routers ADD COLUMN IF NOT EXISTS board_name       TEXT;
+ALTER TABLE routers ADD COLUMN IF NOT EXISTS routeros_version TEXT;
+
+-- Depend d'une colonne ci-dessus : ne peut etre cree qu'apres les migrations.
+CREATE INDEX IF NOT EXISTS idx_shaping_boost_expiry
+    ON shaping_policies (boost_expires_at)
+    WHERE boost_expires_at IS NOT NULL;
 
 -- -----------------------------------------------------------------------------
 -- Hypertables + politiques (uniquement si TimescaleDB est disponible)

@@ -29,6 +29,7 @@ from app.models import Plan
 from app.scheduler import Scheduler
 from app.services.collection import (
     JOB_BACKHAULS,
+    JOB_BOOSTS,
     JOB_INVENTORY,
     JOB_PLANS,
     JOB_RTT,
@@ -155,7 +156,12 @@ async def build_container(settings: Settings) -> Container:
     routers_repo = RoutersRepository(database.pool, secrets)
     topology_repo = TopologyRepository(database.pool)
     registry = RouterRegistry(settings, repository=routers_repo)
-    shaping = ShapingService(settings, registry=registry, repository=topology_repo)
+    shaping = ShapingService(
+        settings, registry=registry, repository=topology_repo, metrics=repository
+    )
+    # Le drapeau d'ecriture vient de la base une fois amorce : le basculer depuis
+    # l'interface ne doit pas demander un redemarrage.
+    await shaping.load_flags()
 
     rtt_prober = None
     if settings.rtt_enabled:
@@ -192,6 +198,11 @@ async def build_container(settings: Settings) -> Container:
     scheduler.add_job(JOB_INVENTORY, settings.inventory_refresh_interval_s, reload_inventory)
     if rtt_prober is not None:
         scheduler.add_job(JOB_RTT, settings.rtt_interval_s, collection.probe_rtt)
+
+    async def expire_boosts() -> None:
+        await shaping.expire_boosts()
+
+    scheduler.add_job(JOB_BOOSTS, settings.boost_check_interval_s, expire_boosts)
 
     return Container(
         settings=settings,

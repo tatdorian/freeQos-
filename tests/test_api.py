@@ -253,12 +253,15 @@ def build_container(
     # Le registre doit connaitre les collecteurs sans passer par reload(), qui
     # est asynchrone et suppose une base.
     registry.adopt(collectors)
-    shaping = ShapingService(settings, registry=registry, repository=topology_repo)
+    metrics_repo = FakeRepository()
+    shaping = ShapingService(
+        settings, registry=registry, repository=topology_repo, metrics=metrics_repo
+    )
     return Container(
         settings=settings,
         database=FakeDatabase(reachable=db_reachable),  # type: ignore[arg-type]
         writer=writer,
-        repository=FakeRepository(),  # type: ignore[arg-type]
+        repository=metrics_repo,  # type: ignore[arg-type]
         directory=directory,
         plan_provider=plan_provider,
         backhaul_provider=backhaul_provider,
@@ -447,3 +450,10 @@ def test_api_non_initialisee_repond_503(settings: Settings) -> None:
     app.state.settings = settings
     register_routes(app, settings)
     assert TestClient(app).get("/api/v1/pops").status_code == 503
+
+
+def test_suppression_d_un_pop_exige_confirmation(client: TestClient) -> None:
+    """Effacer un site emporte tout son historique : ca ne s'improvise pas."""
+    reponse = client.delete("/api/v1/pops/1")
+    assert reponse.status_code == 400
+    assert "definitive" in reponse.json()["detail"]

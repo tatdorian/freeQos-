@@ -57,10 +57,16 @@
 
     <!-- --------------------------------------------------- arbre reseau -->
     <section id="view-network">
-      <h2>PoP &rarr; backhaul &rarr; abonnes</h2>
+      <div class="toolbar">
+        <button id="btn-tree-expand">Tout deplier</button>
+        <button id="btn-tree-collapse">Tout replier</button>
+        <span class="spacer"></span>
+        <span class="mode">gateway &rarr; coeur &rarr; PoP &rarr; radio &rarr; abonnes</span>
+      </div>
       <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Charge reelle mesuree face a la capacite radio du moment. C'est ce rapport
-        qui determinera le debit parent du shaping en phase 2.
+        Hierarchie reconstruite depuis <code>/ip/neighbor</code>. La decouverte de
+        voisinage etant symetrique, le sens amont/aval est deduit du role de chaque
+        equipement — corrigez-le dans l'onglet Topologie s'il est mal devine.
       </p>
       <div id="network-tree"></div>
     </section>
@@ -68,6 +74,7 @@
     <!-- -------------------------------------------------------- abonnes -->
     <section id="view-subscribers">
       <div class="toolbar">
+        <select id="sub-pop" style="width:auto"></select>
         <input type="search" id="sub-search" placeholder="Filtrer par login PPPoE...">
         <span class="spacer"></span>
         <span class="mode" id="sub-count"></span>
@@ -101,7 +108,11 @@
         <button id="btn-inspect">Analyser l'existant</button>
         <button id="btn-plan">Calculer le plan</button>
         <span class="spacer"></span>
-        <span class="mode" id="enforcement-pill"></span>
+        <label class="switch" id="enforcement-switch" title="Autoriser l'ecriture sur les routeurs">
+          <input type="checkbox" id="enforcement-toggle">
+          <span class="rail"></span>
+          <span class="label" id="enforcement-label">enforcement</span>
+        </label>
       </div>
       <div id="shaping-notice"></div>
       <div id="shaping-state"></div>
@@ -113,6 +124,9 @@
     <!-- ----------------------------------------------------------- PoPs -->
     <section id="view-pops">
       <div id="pops-notice"></div>
+
+      <h2>Sites connus</h2>
+      <div class="table-wrap" id="pops-table"></div>
 
       <h2>Routeurs interroges</h2>
       <div class="table-wrap" id="routers-table"></div>

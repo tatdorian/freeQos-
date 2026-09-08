@@ -33,6 +33,7 @@ JOB_BACKHAULS = "collect_backhauls"
 JOB_PLANS = "refresh_plans"
 JOB_INVENTORY = "reload_inventory"
 JOB_RTT = "probe_rtt"
+JOB_BOOSTS = "expire_boosts"
 
 
 class CollectionService:

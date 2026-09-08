@@ -14,15 +14,15 @@ Aucun endpoint de lecture n'ecrit sur un equipement. Le seul qui le fasse exige
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import ContainerDep, RepositoryDep
-from app.enforcement.planner import LinkTarget, SubscriberTarget
 from app.enforcement.routeros import MissingWriteCredentialsError
-from app.services.shaping import EnforcementDisabledError
+from app.services.shaping import EnforcementDisabledError, EnforcementLockedError
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +164,7 @@ async def build_shaping_plan(
     """Produit le plan : la liste exacte des commandes RouterOS qui seraient
     envoyees, avec pour chacune la raison et ce qui change."""
     try:
-        liens, abonnes = await _targets_for(container, metrics, payload.router)
+        liens, abonnes = await container.shaping.build_targets(payload.router)
         plan = await container.shaping.plan(payload.router, links=liens, subscribers=abonnes)
     except KeyError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -210,7 +210,7 @@ async def apply_shaping(
             detail="Application reelle : 'confirm' doit valoir true",
         )
     try:
-        liens, abonnes = await _targets_for(container, metrics, payload.router)
+        liens, abonnes = await container.shaping.build_targets(payload.router)
         plan = await container.shaping.plan(payload.router, links=liens, subscribers=abonnes)
         resultat = await container.shaping.apply(plan, dry_run=payload.dry_run)
     except EnforcementDisabledError as exc:
@@ -235,79 +235,163 @@ async def audit(
     return await _require_topology(container).audit(limit=limit)
 
 
-# ------------------------------------------------------------------ interne
-async def _targets_for(
-    container: ContainerDep, metrics: RepositoryDep, router_name: str
-) -> tuple[list[LinkTarget], list[SubscriberTarget]]:
-    """Assemble l'etat desire a partir de la base et des surcharges.
+# ------------------------------------------------- bascule de l'enforcement
+class EnforcementInput(BaseModel):
+    enabled: bool
+    reason: str | None = Field(default=None, max_length=300)
+    # Activer l'ecriture sur des routeurs de production merite un geste explicite.
+    confirm: bool = False
 
-    Les liens viennent de la topologie (capacite physique) et des backhauls
-    (capacite radio mesuree) ; les abonnes de leur plan RADIUS. Les surcharges
-    posees dans l'interface priment sur les deux.
+
+@router.get("/shaping/enforcement", summary="Etat du drapeau d'ecriture")
+async def enforcement_state(container: ContainerDep) -> dict[str, Any]:
+    detail = None
+    if container.topology_repo is not None:
+        from app.services.shaping import FLAG_ENFORCEMENT
+
+        detail = await container.topology_repo.flag_detail(FLAG_ENFORCEMENT)
+    return {
+        "enabled": container.shaping.enforcement_enabled,
+        "locked": container.shaping.enforcement_locked,
+        "env_default": container.settings.enforcement_enabled,
+        "last_change": detail,
+    }
+
+
+@router.put("/shaping/enforcement", summary="Activer ou couper l'ecriture sur les routeurs")
+async def set_enforcement(payload: EnforcementInput, container: ContainerDep) -> dict[str, Any]:
+    """Bascule sans redemarrage.
+
+    Activer exige une confirmation ; couper n'en demande pas — revenir en
+    lecture seule doit toujours etre immediat.
+    """
+    if payload.enabled and not payload.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Activer l'enforcement autorise l'ecriture sur vos routeurs : "
+                "'confirm' doit valoir true."
+            ),
+        )
+    try:
+        return await container.shaping.set_enforcement(payload.enabled, reason=payload.reason)
+    except EnforcementLockedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------ boost
+class BoostInput(BaseModel):
+    """Coup de debit temporaire sur un abonne PPPoE."""
+
+    login: str = Field(min_length=1, max_length=128)
+    duration_minutes: int = Field(ge=1, le=60 * 24 * 7)
+    down_mbps: float | None = Field(default=None, gt=0, le=100_000)
+    up_mbps: float | None = Field(default=None, gt=0, le=100_000)
+    # Alternative pratique : multiplier le plan plutot que saisir un debit.
+    multiplier: float | None = Field(default=None, gt=1, le=50)
+    reason: str | None = Field(default=None, max_length=300)
+    apply_now: bool = True
+
+
+@router.get("/shaping/boosts", summary="Boosts en cours")
+async def list_boosts(container: ContainerDep) -> list[dict[str, Any]]:
+    return await _require_topology(container).active_boosts()
+
+
+@router.post("/shaping/boosts", summary="Donner un coup de debit temporaire")
+async def create_boost(
+    payload: BoostInput, container: ContainerDep, metrics: RepositoryDep
+) -> dict[str, Any]:
+    """Pose un boost puis, si demande, l'applique immediatement.
+
+    Il expire tout seul : un job verifie l'echeance et ramene la file au debit
+    normal. Sans cela le boost resterait indefiniment, la file RouterOS ne
+    sachant rien de sa duree.
     """
     repo = _require_topology(container)
-    surcharges_liens = await repo.policy_map("link")
-    surcharges_abonnes = await repo.policy_map("subscriber")
 
-    collector = container.shaping._collector(router_name)  # noqa: SLF001
-    pop_name = collector.config.effective_pop_name
-
-    liens: list[LinkTarget] = []
-    # cle du noeud d'en face -> file parent, pour rattacher chaque abonne au
-    # lien qu'il traverse REELLEMENT et non a un lien pris au hasard.
-    parent_par_noeud: dict[str, str] = {}
-    for lien in await repo.links():
-        if lien.get("discovered_by") != router_name or not lien.get("interface"):
-            continue
-        surcharge = surcharges_liens.get(lien["key"], {})
-        if surcharge and not surcharge.get("enabled", True):
-            continue
-        cible = LinkTarget(
-            name=str(lien.get("target_name") or lien["interface"]),
-            interface=str(lien["interface"]),
-            measured_capacity_mbps=lien.get("capacity_mbps"),
-            override_down_mbps=surcharge.get("max_down_mbps"),
-            override_up_mbps=surcharge.get("max_up_mbps"),
-        )
-        liens.append(cible)
-        if lien.get("target_key"):
-            parent_par_noeud[str(lien["target_key"])] = cible.queue_name
-
-    # Capacite radio mesuree : elle prime sur le debit negocie du port ethernet,
-    # car c'est elle le vrai goulot d'un backhaul sans fil.
-    for backhaul in await metrics.backhaul_latest():
-        if backhaul.get("pop_name") != pop_name or not backhaul.get("capacity_mbps"):
-            continue
-        for lien in liens:
-            if lien.name == backhaul["name"]:
-                lien.measured_capacity_mbps = backhaul["capacity_mbps"]
-
-    # Rattachement issu de la jointure caller-id PPPoE <-> station UISP. C'est
-    # le SEUL moyen de savoir par quel secteur passe un abonne. Sans lui, on ne
-    # devine pas : la file abonne reste sans parent, ce qui shape correctement le
-    # dernier km mais ne gere pas la contention sur le backhaul.
-    rattachements = await repo.attachments()
-
-    abonnes: list[SubscriberTarget] = []
-    for ligne in await metrics.subscriber_latest(limit=5000, order_by="login"):
-        if ligne.get("pop_name") != pop_name:
-            continue
-        login = str(ligne["pppoe_login"])
-        surcharge = surcharges_abonnes.get(login, {})
-        secteur = rattachements.get(login)
-        abonnes.append(
-            SubscriberTarget(
-                login=login,
-                interface=collector.config.pppoe_interface_pattern.format(
-                    login=login, name=login, user=login
-                ),
-                plan_down_mbps=ligne.get("plan_down_mbps"),
-                plan_up_mbps=ligne.get("plan_up_mbps"),
-                override_down_mbps=surcharge.get("max_down_mbps"),
-                override_up_mbps=surcharge.get("max_up_mbps"),
-                enabled=surcharge.get("enabled", True),
-                parent=parent_par_noeud.get(secteur) if secteur else None,
-            )
+    abonne = next(
+        (
+            row
+            for row in await metrics.subscriber_latest(limit=5000, order_by="login")
+            if row["pppoe_login"] == payload.login
+        ),
+        None,
+    )
+    if abonne is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Aucune session active pour '{payload.login}'",
         )
 
-    return liens, abonnes
+    down, up = payload.down_mbps, payload.up_mbps
+    if payload.multiplier is not None:
+        down = down or (abonne.get("plan_down_mbps") or 0) * payload.multiplier or None
+        up = up or (abonne.get("plan_up_mbps") or 0) * payload.multiplier or None
+    if down is None and up is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Precisez down_mbps, up_mbps ou multiplier",
+        )
+
+    expire_le = datetime.now(tz=UTC) + timedelta(minutes=payload.duration_minutes)
+    politique = await repo.set_boost(
+        scope="subscriber",
+        target_key=payload.login,
+        down_mbps=down,
+        up_mbps=up,
+        expires_at=expire_le,
+        reason=payload.reason,
+        updated_by="ui",
+    )
+
+    resultat: dict[str, Any] = {
+        "boost": {
+            "login": payload.login,
+            "down_mbps": politique["boost_down_mbps"],
+            "up_mbps": politique["boost_up_mbps"],
+            "expires_at": expire_le,
+            "duration_minutes": payload.duration_minutes,
+        },
+        "applied": None,
+    }
+
+    if payload.apply_now:
+        resultat["applied"] = await _apply_for_subscriber(container, payload.login)
+    return resultat
+
+
+@router.delete("/shaping/boosts/{login}", summary="Retirer un boost avant son echeance")
+async def clear_boost(
+    login: str, container: ContainerDep, apply_now: Annotated[bool, Query()] = True
+) -> dict[str, Any]:
+    retire = await _require_topology(container).clear_boost("subscriber", login)
+    if not retire:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Aucun boost en cours")
+    applique = await _apply_for_subscriber(container, login) if apply_now else None
+    return {"cleared": True, "applied": applique}
+
+
+async def _apply_for_subscriber(container: ContainerDep, login: str) -> dict[str, Any] | None:
+    """Applique le plan du routeur qui porte cet abonne, si l'ecriture est permise.
+
+    Ne leve pas : poser un boost doit reussir meme quand l'enforcement est
+    coupe. Le retour dit alors pourquoi rien n'a ete pousse.
+    """
+    routeurs = await container.shaping._routers_for_logins({login})  # noqa: SLF001
+    if not routeurs:
+        return {"ok": False, "detail": "aucun routeur ne porte cet abonne"}
+    if not container.shaping.enforcement_enabled:
+        return {
+            "ok": False,
+            "detail": (
+                "enforcement desactive : le boost est enregistre mais rien n'a ete "
+                "pousse sur le routeur"
+            ),
+        }
+    try:
+        plan = await container.shaping.plan_router(routeurs[0])
+        applique = await container.shaping.apply(plan, dry_run=False)
+        return applique.to_dict()
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}

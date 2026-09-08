@@ -225,7 +225,10 @@ function hideTooltip() { if (tooltipEl) tooltipEl.style.display = 'none'; }
 
 /* ------------------------------------------------------- tableau de bord */
 
-const state = { view: 'dashboard', rangeMinutes: 60, subSearch: '', routers: [], lastPoints: [] };
+const state = {
+  view: 'dashboard', rangeMinutes: 60, subSearch: '', subPop: '',
+  routers: [], lastPoints: [], lastTree: [],
+};
 
 function statCard(cls, label, value, unit, sub) {
   return '<div class="card stat ' + cls + '"><div class="label">' + esc(label) + '</div>' +
@@ -333,80 +336,224 @@ function renderBackhaulCards(tree) {
 
 /* ---------------------------------------------------------- arbre reseau */
 
+const ICONE = {
+  gateway: 'GW', core: 'CORE', pop: 'POP', radio: 'RF',
+  sector: 'SECT', cpe: 'CPE', unknown: '?', subscriber: 'ABO',
+};
+
+/** Etat de repli, conserve entre deux rafraichissements pour ne pas refermer
+ *  une branche que l'operateur vient d'ouvrir. */
+const treeCollapsed = new Set();
+let treeInitialise = false;
+
+/** Rang d'un role dans la hierarchie. Plus petit = plus en amont. */
+const RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, unknown: 5 };
+
+/**
+ * Construit la hierarchie reelle a partir des noeuds, des liens et des abonnes.
+ *
+ * La decouverte de voisinage est SYMETRIQUE : /ip/neighbor dit "ces deux
+ * equipements sont adjacents", pas lequel est en amont. Un PoP qui voit son
+ * gateway produit un lien PoP -> gateway, ce qui mettrait la passerelle sous
+ * le PoP. On oriente donc chaque lien par le role de ses extremites.
+ */
+function buildTree(nodes, links, subscribers) {
+  const parNoeud = new Map(nodes.map((n) => [n.key, { ...n, children: [], link: null }]));
+  const cibles = new Set();
+
+  const oriente = links.map((l) => {
+    const a = parNoeud.get(l.source_key);
+    const b = parNoeud.get(l.target_key);
+    if (!a || !b) return l;
+    const rangA = RANG[a.kind] === undefined ? 5 : RANG[a.kind];
+    const rangB = RANG[b.kind] === undefined ? 5 : RANG[b.kind];
+    // La cible est plus en amont que la source : on retourne le lien.
+    if (rangB < rangA) {
+      return { ...l, source_key: l.target_key, target_key: l.source_key, inverted: true };
+    }
+    return l;
+  });
+
+  oriente.forEach((l) => {
+    const parent = parNoeud.get(l.source_key);
+    const enfant = parNoeud.get(l.target_key);
+    if (!parent || !enfant || parent === enfant) return;
+    // Un equipement vu par deux PoPs ne doit pas etre duplique : on garde le
+    // premier rattachement et on note l'autre comme lien secondaire.
+    if (cibles.has(l.target_key)) {
+      parent.children.push({ ...enfant, key: enfant.key + '@' + parent.key,
+                             children: [], link: l, alias: true });
+      return;
+    }
+    cibles.add(l.target_key);
+    enfant.link = l;
+    parent.children.push(enfant);
+  });
+
+  // Les abonnes sont regroupes sous un noeud repliable : les lister a plat sous
+  // le PoP noierait la structure des que le parc depasse quelques dizaines.
+  const parPop = new Map();
+  (subscribers || []).forEach((s) => {
+    if (!s.pop_name) return;
+    if (!parPop.has(s.pop_name)) parPop.set(s.pop_name, []);
+    parPop.get(s.pop_name).push(s);
+  });
+  parNoeud.forEach((n) => {
+    const abonnes = parPop.get(n.name);
+    if (!abonnes || !abonnes.length) return;
+    const total = abonnes.reduce(
+      (acc, s) => ({ tx: acc.tx + (s.tx_bps || 0), rx: acc.rx + (s.rx_bps || 0) }),
+      { tx: 0, rx: 0 },
+    );
+    n.children.push({
+      key: 'abos:' + n.key,
+      name: abonnes.length + ' abonne(s)',
+      kind: 'subscriber',
+      group: true,
+      totals: total,
+      children: abonnes.map((s) => ({
+        key: 'sub:' + s.pppoe_login, name: s.pppoe_login, kind: 'subscriber',
+        children: [], subscriber: s,
+      })),
+    });
+  });
+
+  const racines = [...parNoeud.values()].filter((n) => !cibles.has(n.key));
+  return racines.length ? racines : [...parNoeud.values()];
+}
+
+function renderTreeNode(node, profondeur) {
+  const estFeuille = node.children.length === 0;
+  const replie = treeCollapsed.has(node.key);
+  const s = node.subscriber;
+
+  let charge = '';
+  let debits = '';
+  if (node.group) {
+    debits =
+      '<span class="d">&darr; ' + esc(bpsText(node.totals.tx)) + '</span>' +
+      '<span class="u">&uarr; ' + esc(bpsText(node.totals.rx)) + '</span>';
+  } else if (s) {
+    const plan = (s.plan_down_mbps || 0) * 1e6;
+    debits =
+      '<span class="d">&darr; ' + esc(bpsText(s.tx_bps)) + '</span>' +
+      '<span class="u">&uarr; ' + esc(bpsText(s.rx_bps)) + '</span>';
+    charge = '<div class="tree-load">' + meter(s.tx_bps, plan) + '</div>';
+  } else if (node.link && node.link.capacity_mbps) {
+    charge = '<span class="tree-meta">' + esc(mbps(node.link.capacity_mbps)) + '</span>';
+  }
+
+  let ligne =
+    '<div class="tree-row">' +
+      '<button class="tree-toggle' + (estFeuille ? ' leaf' : '') + '"' +
+        (estFeuille ? ' disabled' : ' data-toggle-node="' + esc(node.key) + '"') + '>' +
+        (estFeuille ? '&middot;' : replie ? '+' : '\u2212') + '</button>' +
+      '<span class="tree-icon" style="color:' + (KIND_COLOR[node.kind] || 'var(--faint)') + '">' +
+        esc(ICONE[node.kind] || '?') + '</span>' +
+      '<span class="tree-name">' + esc(node.name) + '</span>' +
+      (node.alias ? '<span class="badge">lien secondaire</span>' : '') +
+      (node.link && node.link.interface
+        ? '<span class="tree-meta">' + esc(node.link.interface) + '</span>' : '') +
+      (s && s.rtt_ms !== null && s.rtt_ms !== undefined
+        ? '<span class="tree-meta">' + rtt(s.rtt_ms) + '</span>' : '') +
+      (s && s.boost_expires_at ? '<span class="boost-pill">boost</span>' : '') +
+      '<span class="tree-rates">' + debits + charge +
+        (s ? '<span class="tree-actions">' +
+              '<button class="sm" data-tree-boost="' + esc(s.pppoe_login) + '">Boost</button>' +
+             '</span>' : '') +
+      '</span>' +
+    '</div>';
+
+  let enfants = '';
+  if (!estFeuille && !replie) {
+    enfants = '<div class="tree-children">' +
+      node.children.map((c) => renderTreeNode(c, profondeur + 1)).join('') + '</div>';
+  }
+  return '<div class="tree-node">' + ligne + enfants + '</div>';
+}
+
 async function loadNetwork() {
-  const tree = await api('/network/tree');
+  const [topo, abonnes] = await Promise.all([
+    api('/topology'),
+    api('/subscribers/latest?limit=500&order_by=login'),
+  ]);
   const host = document.getElementById('network-tree');
-  if (!tree.length) {
-    host.innerHTML = '<div class="card"><div class="empty">Aucun PoP connu.</div></div>';
+
+  if (!topo.nodes.length) {
+    host.innerHTML = '<div class="card"><div class="empty">' +
+      'Aucun equipement decouvert.<br>Lancez la decouverte dans l\'onglet Topologie : ' +
+      'elle lit /ip/neighbor sur chaque PoP pour reconstruire la hierarchie.</div></div>';
     return;
   }
-  host.innerHTML = tree.map((pop) => {
-    const total = (Number(pop.tx_bps) || 0) + (Number(pop.rx_bps) || 0);
-    const capacityMbps = (pop.backhauls || [])
-      .reduce((sum, b) => sum + (Number(b.capacity_mbps) || 0), 0);
-    const soldMbps = Number(pop.sold_down_mbps) || 0;
 
-    const children = (pop.backhauls || []).map((b) => {
-      const cap = Number(b.capacity_mbps) || 0;
-      const nominal = Number(b.nominal_capacity_mbps) || 0;
-      const fade = nominal > 0 ? pct(cap, nominal) : null;
-      return '<div class="child">' +
-        '<span class="name">' + esc(b.name) +
-          (b.online === false ? ' <span class="badge crit">hors ligne</span>' : '') +
-          '<span class="badge">' + esc(mbps(cap)) + '</span></span>' +
-        '<span style="display:flex;gap:1.2rem;align-items:center">' +
-          '<span style="font-size:.74rem;color:var(--faint)">signal ' +
-            esc(b.signal_dbm !== null && b.signal_dbm !== undefined ? b.signal_dbm + ' dBm' : '-') + '</span>' +
-          (fade === null ? '' : meter(cap, nominal, fade < 50 ? 'crit' : fade < 80 ? 'warn' : 'ok')) +
-        '</span></div>';
-    }).join('');
+  const racines = buildTree(topo.nodes, topo.links, abonnes);
+  state.lastTree = racines;
+  if (!treeInitialise) {
+    // Au premier affichage on montre la structure reseau, pas 500 abonnes.
+    const replier = (n) => {
+      if (n.group) treeCollapsed.add(n.key);
+      n.children.forEach(replier);
+    };
+    racines.forEach(replier);
+    treeInitialise = true;
+  }
+  host.innerHTML = '<div class="card"><div class="tree">' +
+    racines.map((n) => renderTreeNode(n, 0)).join('') + '</div></div>';
 
-    return '<div class="card node">' +
-      '<div class="node-head">' +
-        '<div class="node-title">' + esc(pop.name) +
-          '<span class="host">' + esc(pop.router_host || '') + '</span>' +
-          '<span class="badge">' + esc(pop.online || 0) + ' / ' + esc(pop.subscribers || 0) + ' en ligne</span>' +
-        '</div>' +
-        '<div class="node-metrics">' +
-          '<span class="d">&darr; ' + esc(bpsText(pop.tx_bps)) + '</span>' +
-          '<span class="u">&uarr; ' + esc(bpsText(pop.rx_bps)) + '</span>' +
-        '</div>' +
-      '</div>' +
-      '<div class="children">' +
-        '<div class="child" style="border:0">' +
-          '<span class="name" style="color:var(--muted)">Charge vs capacite radio</span>' +
-          (capacityMbps > 0 ? meter(total / 1e6, capacityMbps)
-            : '<span class="pct" style="color:var(--faint)">pas de backhaul mesure</span>') +
-        '</div>' +
-        '<div class="child" style="border:0">' +
-          '<span class="name" style="color:var(--muted)">Charge vs debit vendu</span>' +
-          (soldMbps > 0 ? meter(total / 1e6, soldMbps, 'down')
-            : '<span class="pct" style="color:var(--faint)">plans inconnus</span>') +
-        '</div>' +
-        (children || '<div class="child" style="border:0"><span class="name" style="color:var(--faint)">Aucun backhaul rattache a ce PoP.</span></div>') +
-      '</div></div>';
-  }).join('');
+  host.querySelectorAll('[data-toggle-node]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const cle = b.dataset.toggleNode;
+      if (treeCollapsed.has(cle)) treeCollapsed.delete(cle);
+      else treeCollapsed.add(cle);
+      loadNetwork();
+    });
+  });
+  host.querySelectorAll('[data-tree-boost]').forEach((b) => {
+    const ligne = abonnes.find((s) => s.pppoe_login === b.dataset.treeBoost);
+    b.addEventListener('click', () => openBoostEditor(ligne));
+  });
 }
 
 /* --------------------------------------------------------------- abonnes */
 
 async function loadSubscribers() {
-  const query = state.subSearch ? '&search=' + encodeURIComponent(state.subSearch) : '';
-  const rows = await api('/subscribers/latest?limit=200' + query);
-  document.getElementById('sub-count').textContent = rows.length + ' abonne(s) avec mesure';
+  let query = state.subSearch ? '&search=' + encodeURIComponent(state.subSearch) : '';
+  if (state.subPop) query += '&pop_id=' + encodeURIComponent(state.subPop);
+  const [rows, pops, boosts] = await Promise.all([
+    api('/subscribers/latest?limit=200' + query),
+    api('/pops'),
+    api('/shaping/boosts').catch(() => []),
+  ]);
+
+  // Le filtre PoP repond a "voir les connexions depuis un PoP".
+  const select = document.getElementById('sub-pop');
+  if (select.dataset.filled !== String(pops.length)) {
+    select.innerHTML = '<option value="">Tous les PoPs</option>' +
+      pops.map((p) => '<option value="' + p.id + '">' + esc(p.name) +
+        ' (' + p.subscriber_count + ')</option>').join('');
+    select.dataset.filled = String(pops.length);
+    select.value = state.subPop || '';
+  }
+
+  const parLogin = {};
+  (boosts || []).forEach((b) => { if (b.scope === 'subscriber') parLogin[b.target_key] = b; });
+
+  document.getElementById('sub-count').textContent =
+    rows.length + ' session(s)' + (state.subPop ? ' sur ce PoP' : '');
 
   const host = document.getElementById('subscribers-table');
   if (!rows.length) {
     host.innerHTML = '<div class="empty">' +
-      (state.subSearch ? 'Aucun abonne ne correspond.' :
+      (state.subSearch || state.subPop ? 'Aucune session ne correspond au filtre.' :
         'Aucune mesure. Connectez un PoP et ouvrez une session PPPoE.') + '</div>';
     return;
   }
   host.innerHTML =
     '<table><thead><tr><th>Login PPPoE</th><th>PoP</th><th class="num">Plan</th>' +
     '<th class="num">Download</th><th style="width:140px">vs plan</th>' +
-    '<th class="num">Upload</th><th class="num">Latence</th>' +
-    '<th class="num">Session</th><th class="num">Mesure</th><th></th>' +
+    '<th class="num">Upload</th><th class="num">Latence</th><th>Boost</th>' +
+    '<th class="num">Session</th><th class="num">Mesure</th>' +
+    '<th class="sticky-actions"></th>' +
     '</tr></thead><tbody>' +
     rows.map((r) => {
       const planDown = (r.plan_down_mbps || 0) * 1e6;
@@ -419,13 +566,35 @@ async function loadSubscribers() {
         '<td>' + meter(r.tx_bps, planDown) + '</td>' +
         '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
         '<td class="num">' + rtt(r.rtt_ms) + '</td>' +
+        '<td>' + (parLogin[r.pppoe_login]
+          ? '<span class="boost-pill" title="' +
+            esc(parLogin[r.pppoe_login].boost_reason || '') + '">' +
+            esc(Math.max(0, Math.round(parLogin[r.pppoe_login].seconds_left / 60))) +
+            ' min</span>'
+          : '<span style="color:var(--faint)">-</span>') + '</td>' +
         '<td class="num">' + esc(uptime(r.session_uptime_s)) + '</td>' +
         '<td class="num" style="color:var(--faint)">' + esc(clock(r.ts)) + '</td>' +
+        '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
+          '<button class="sm" data-bw="' + esc(r.pppoe_login) + '">Debit</button>' +
+          '<button class="sm" data-boost="' + esc(r.pppoe_login) + '">Boost</button>' +
+        '</div></td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
 
   host.querySelectorAll('tr[data-sub]').forEach((tr) => {
-    tr.addEventListener('click', () => openSubscriber(tr.dataset.sub));
+    // Un clic sur un bouton d'action ne doit pas aussi ouvrir la fiche.
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      openSubscriber(tr.dataset.sub);
+    });
+  });
+  host.querySelectorAll('[data-bw]').forEach((b) => {
+    const ligne = rows.find((r) => r.pppoe_login === b.dataset.bw);
+    b.addEventListener('click', () => openBandwidthEditor('subscriber', ligne));
+  });
+  host.querySelectorAll('[data-boost]').forEach((b) => {
+    const ligne = rows.find((r) => r.pppoe_login === b.dataset.boost);
+    b.addEventListener('click', () => openBoostEditor(ligne));
   });
 }
 
@@ -468,7 +637,44 @@ function closeDrawer() { document.getElementById('drawer-root').innerHTML = ''; 
 
 /* ------------------------------------------------------------------ PoPs */
 
+async function loadPops() {
+  const pops = await api('/pops');
+  const host = document.getElementById('pops-table');
+  if (!pops.length) {
+    host.innerHTML = '<div class="empty">Aucun site. Ils apparaissent des qu\'un ' +
+      'routeur remonte des sessions.</div>';
+    return;
+  }
+  host.innerHTML =
+    '<table><thead><tr><th>Site</th><th>Routeur</th><th class="num">Abonnes</th>' +
+    '<th class="num">Backhauls</th><th></th></tr></thead><tbody>' +
+    pops.map((p) => '<tr>' +
+      '<td><strong>' + esc(p.name) + '</strong></td>' +
+      '<td class="login">' + esc(p.router_host || '-') + '</td>' +
+      '<td class="num">' + p.subscriber_count + '</td>' +
+      '<td class="num">' + p.backhaul_count + '</td>' +
+      '<td><div class="actions" style="justify-content:flex-end">' +
+        '<button class="sm danger" data-del-pop="' + p.id + '">Supprimer</button>' +
+      '</div></td></tr>').join('') + '</tbody></table>';
+
+  host.querySelectorAll('[data-del-pop]').forEach((b) => {
+    const pop = pops.find((p) => String(p.id) === b.dataset.delPop);
+    b.addEventListener('click', async () => {
+      if (!confirm('Supprimer definitivement "' + pop.name + '" ?\n\n' +
+          pop.subscriber_count + ' abonne(s) et ' + pop.backhaul_count +
+          ' backhaul(s) seront effaces, ainsi que TOUT leur historique de mesures.\n\n' +
+          'Retirez aussi le routeur de l\'inventaire, sinon le site sera recree ' +
+          'au prochain cycle.')) return;
+      try {
+        await api('/pops/' + pop.id + '?confirm=true', { method: 'DELETE' });
+        await loadRouters();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
 async function loadRouters() {
+  await loadPops();
   const data = await api('/pops/routers');
   state.routers = data.routers;
 
@@ -833,6 +1039,138 @@ async function openBandwidthEditor(scope, cible) {
   });
 }
 
+/* ----------------------------------------------------------------- boost */
+
+const DUREES = [
+  { label: '15 min', minutes: 15 },
+  { label: '1 h', minutes: 60 },
+  { label: '4 h', minutes: 240 },
+  { label: '24 h', minutes: 1440 },
+];
+const FACTEURS = [2, 3, 5];
+
+/** Coup de debit temporaire sur un abonne PPPoE. Il expire tout seul : un job
+ *  verifie l'echeance et ramene la file au debit normal. */
+function openBoostEditor(abonne) {
+  if (!abonne) return;
+  const planDown = abonne.plan_down_mbps || 0;
+  const planUp = abonne.plan_up_mbps || 0;
+
+  const root = document.getElementById('drawer-root');
+  root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
+    '<div class="drawer-head"><h3>Boost &middot; ' + esc(abonne.pppoe_login) + '</h3>' +
+    '<button class="sm" id="drawer-close">Fermer</button></div>' +
+
+    '<div class="notice">Plan actuel : <strong>' +
+      esc(planDown + '/' + planUp) + ' Mbps</strong>' +
+      '<span class="hint">Le boost prime sur le plan et sur toute surcharge ' +
+      'permanente, puis s\'efface a echeance sans intervention.</span></div>' +
+
+    '<form class="stack" id="boost-form">' +
+      '<div class="field"><label>Duree</label>' +
+        '<div class="boost-choices" id="boost-durations">' +
+        DUREES.map((d, i) => '<button type="button" data-minutes="' + d.minutes + '"' +
+          (i === 1 ? ' class="active"' : '') + '>' + esc(d.label) + '</button>').join('') +
+        '</div>' +
+        '<input id="boost-minutes" type="number" min="1" max="10080" value="60" ' +
+          'style="margin-top:.4rem" aria-label="duree en minutes">' +
+        '<span class="help">en minutes</span></div>' +
+
+      '<div class="field"><label>Debit</label>' +
+        '<div class="boost-choices" id="boost-factors">' +
+        FACTEURS.map((f) => '<button type="button" data-mult="' + f + '">x' + f +
+          (planDown ? ' (' + Math.round(planDown * f) + ' Mbps)' : '') + '</button>').join('') +
+        '</div></div>' +
+
+      '<div class="row-2">' +
+        '<div class="field"><label for="boost-down">Download (Mbps)</label>' +
+          '<input id="boost-down" type="number" min="1" step="1" placeholder="inchange"></div>' +
+        '<div class="field"><label for="boost-up">Upload (Mbps)</label>' +
+          '<input id="boost-up" type="number" min="1" step="1" placeholder="inchange"></div>' +
+      '</div>' +
+
+      '<div class="field"><label for="boost-reason">Motif</label>' +
+        '<input id="boost-reason" placeholder="geste commercial, depannage... (optionnel)"></div>' +
+
+      '<div id="boost-result"></div>' +
+      '<div class="actions">' +
+        '<button type="submit" class="primary">Lancer le boost</button>' +
+        '<button type="button" id="boost-clear" class="danger">Retirer le boost en cours</button>' +
+      '</div>' +
+    '</form>';
+
+  root.querySelector('.drawer-backdrop').addEventListener('click', closeDrawer);
+  document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+
+  const champMinutes = document.getElementById('boost-minutes');
+  document.querySelectorAll('#boost-durations button').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#boost-durations button')
+        .forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      champMinutes.value = b.dataset.minutes;
+    });
+  });
+  document.querySelectorAll('#boost-factors button').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('#boost-factors button')
+        .forEach((x) => x.classList.remove('active'));
+      b.classList.add('active');
+      document.getElementById('boost-down').value = Math.round(planDown * Number(b.dataset.mult)) || '';
+      document.getElementById('boost-up').value = Math.round(planUp * Number(b.dataset.mult)) || '';
+    });
+  });
+
+  document.getElementById('boost-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const down = document.getElementById('boost-down').value;
+    const up = document.getElementById('boost-up').value;
+    if (!down && !up) {
+      document.getElementById('boost-result').innerHTML =
+        '<div class="notice err">Choisissez un facteur ou saisissez un debit.</div>';
+      return;
+    }
+    try {
+      const r = await api('/shaping/boosts', {
+        method: 'POST',
+        body: JSON.stringify({
+          login: abonne.pppoe_login,
+          duration_minutes: Number(champMinutes.value) || 60,
+          down_mbps: down ? Number(down) : null,
+          up_mbps: up ? Number(up) : null,
+          reason: document.getElementById('boost-reason').value || null,
+          apply_now: true,
+        }),
+      });
+      const applique = r.applied || {};
+      document.getElementById('boost-result').innerHTML =
+        '<div class="notice ' + (applique.ok === false ? 'warn' : 'ok') + '">' +
+        '<strong>Boost actif jusqu\'a ' +
+        esc(new Date(r.boost.expires_at).toLocaleString('fr-FR')) + '.</strong>' +
+        '<span class="hint">' +
+        (applique.ok === false
+          ? esc(applique.detail || '')
+          : (applique.applied || 0) + ' commande(s) poussee(s) sur le routeur.') +
+        '</span></div>';
+      await refresh();
+    } catch (err) {
+      document.getElementById('boost-result').innerHTML =
+        '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+
+  document.getElementById('boost-clear').addEventListener('click', async () => {
+    try {
+      await api('/shaping/boosts/' + encodeURIComponent(abonne.pppoe_login), { method: 'DELETE' });
+      closeDrawer();
+      await refresh();
+    } catch (err) {
+      document.getElementById('boost-result').innerHTML =
+        '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+}
+
 /* --------------------------------------------------------------- shaping */
 
 async function loadShaping() {
@@ -842,13 +1180,70 @@ async function loadShaping() {
     select.innerHTML = inventaire.routers
       .map((r) => '<option value="' + esc(r.name) + '">' + esc(r.name) + '</option>').join('');
   }
-  const sante = await fetch('/health/ready').then((r) => r.json()).catch(() => ({}));
-  const pill = document.getElementById('enforcement-pill');
-  pill.textContent = sante.enforcement_enabled
-    ? 'enforcement ACTIF' : 'enforcement desactive (lecture seule)';
-  pill.style.color = sante.enforcement_enabled ? 'var(--warn)' : 'var(--muted)';
-
+  await refreshEnforcement();
   await loadAudit();
+}
+
+async function refreshEnforcement() {
+  const etat = await api('/shaping/enforcement');
+  const toggle = document.getElementById('enforcement-toggle');
+  const label = document.getElementById('enforcement-label');
+
+  toggle.checked = etat.enabled;
+  toggle.disabled = etat.locked;
+  label.textContent = etat.locked
+    ? 'enforcement verrouille'
+    : etat.enabled ? 'ecriture AUTORISEE' : 'lecture seule';
+  label.style.color = etat.enabled ? 'var(--warn)' : 'var(--muted)';
+  document.getElementById('enforcement-switch').title = etat.locked
+    ? 'ENFORCEMENT_LOCKED=true : la bascule est interdite depuis l\'interface'
+    : 'Autoriser ou couper l\'ecriture sur les routeurs';
+
+  const notice = document.getElementById('shaping-notice');
+  if (etat.enabled) {
+    notice.innerHTML = '<div class="notice warn"><strong>Ecriture autorisee.</strong> ' +
+      'Les plans appliques modifient reellement les routeurs. Seules les files ' +
+      'portant <code>freeqos:managed</code> sont concernees.' +
+      (etat.last_change && etat.last_change.reason
+        ? '<span class="hint">Motif : ' + esc(etat.last_change.reason) + '</span>' : '') +
+      '</div>';
+  } else {
+    notice.innerHTML = '<div class="notice"><strong>Lecture seule.</strong> ' +
+      'Les plans sont calcules et affiches, mais rien n\'est envoye. ' +
+      'Basculez l\'interrupteur pour autoriser l\'ecriture.' +
+      (etat.locked
+        ? '<span class="hint">Verrouille par <code>ENFORCEMENT_LOCKED=true</code> : ' +
+          'seul un redemarrage avec <code>ENFORCEMENT_ENABLED</code> modifie peut ' +
+          'autoriser l\'ecriture.</span>'
+        : '') + '</div>';
+  }
+}
+
+async function toggleEnforcement(active) {
+  const toggle = document.getElementById('enforcement-toggle');
+  if (active && !confirm(
+      "Autoriser l'ecriture sur les routeurs ?\n\n" +
+      'A partir de maintenant, appliquer un plan modifiera reellement leur ' +
+      'configuration. Seules les files marquees freeqos:managed sont touchees.')) {
+    toggle.checked = false;
+    return;
+  }
+  const motif = active
+    ? (prompt('Motif (trace dans le journal, optionnel) :') || null)
+    : null;
+  toggle.disabled = true;
+  try {
+    await api('/shaping/enforcement', {
+      method: 'PUT',
+      body: JSON.stringify({ enabled: active, confirm: true, reason: motif }),
+    });
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    toggle.disabled = false;
+    await refreshEnforcement();
+    await refreshHealth();
+  }
 }
 
 async function loadAudit() {
@@ -1008,10 +1403,15 @@ async function refreshHealth() {
     const res = await fetch('/health/ready');
     const body = await res.json();
     dot.className = 'dot' + (res.ok ? '' : ' stale');
-    pill.textContent = 'hors-bande · lecture seule · ' +
+    // Le mode d'ecriture est la premiere chose a savoir : l'afficher en dur
+    // comme "lecture seule" alors que l'enforcement est actif serait mensonger.
+    const mode = body.enforcement_enabled ? 'ECRITURE ACTIVE' : 'lecture seule';
+    pill.textContent = 'hors-bande · ' + mode + ' · ' +
       body.collectors_active + ' routeur(s)' +
       (body.routers_skipped ? ' · ' + body.routers_skipped + ' ignore(s)' : '') +
       (body.timescaledb ? ' · timescale' : '');
+    pill.style.color = body.enforcement_enabled ? 'var(--warn)' : '';
+    pill.style.borderColor = body.enforcement_enabled ? 'rgba(210,153,34,.45)' : '';
     pill.title = body.stale_jobs && body.stale_jobs.length
       ? 'Jobs en retard : ' + body.stale_jobs.join(', ') : 'Cycles a l\'heure';
   } catch (err) {
@@ -1068,7 +1468,19 @@ document.getElementById('range-select').addEventListener('change', (e) => {
   loadThroughput();
 });
 document.getElementById('btn-test').addEventListener('click', testConnection);
+document.getElementById('btn-tree-expand').addEventListener('click', () => {
+  treeCollapsed.clear();
+  loadNetwork();
+});
+document.getElementById('btn-tree-collapse').addEventListener('click', () => {
+  const replier = (n) => { treeCollapsed.add(n.key); n.children.forEach(replier); };
+  (state.lastTree || []).forEach(replier);
+  loadNetwork();
+});
 document.getElementById('btn-inspect').addEventListener('click', inspectShaping);
+document.getElementById('enforcement-toggle').addEventListener('change', (e) => {
+  toggleEnforcement(e.target.checked);
+});
 document.getElementById('btn-plan').addEventListener('click', computePlan);
 document.getElementById('btn-discover').addEventListener('click', async (e) => {
   e.target.disabled = true;
@@ -1088,6 +1500,11 @@ document.getElementById('btn-discover').addEventListener('click', async (e) => {
   }
 });
 document.getElementById('router-form').addEventListener('submit', saveRouter);
+
+document.getElementById('sub-pop').addEventListener('change', (e) => {
+  state.subPop = e.target.value;
+  loadSubscribers();
+});
 
 let searchTimer = null;
 document.getElementById('sub-search').addEventListener('input', (e) => {

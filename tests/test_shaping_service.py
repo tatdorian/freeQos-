@@ -204,3 +204,180 @@ async def test_un_pop_injoignable_n_annule_pas_la_decouverte(
     assert snapshot.nodes == {}
     assert len(snapshot.warnings) == 1
     assert "TimeoutError" in snapshot.warnings[0]
+
+
+# =========================================================================
+# Expiration des boosts
+# =========================================================================
+
+
+class DepotBoosts:
+    """Depot minimal centre sur les boosts."""
+
+    def __init__(self, echus: list[dict] | None = None) -> None:
+        self.echus = echus or []
+        self.purges = 0
+        self.flags: dict[str, bool] = {}
+        self.audit_rows: list = []
+
+    async def expired_boosts(self):
+        return self.echus
+
+    async def purge_expired_boosts(self):
+        self.purges = len(self.echus)
+        self.echus = []
+        return self.purges
+
+    async def policy_map(self, scope):
+        return {}
+
+    async def attachments(self):
+        return {}
+
+    async def links(self):
+        return []
+
+    async def get_flag(self, name):
+        return self.flags.get(name)
+
+    async def set_flag(self, name, value, *, updated_by=None, reason=None):
+        self.flags[name] = value
+
+    async def record_audit(self, router_name, *, dry_run, outcomes):
+        self.audit_rows.extend(outcomes)
+        return len(outcomes)
+
+
+class MetriquesMinimales:
+    def __init__(self, abonnes: list[dict]) -> None:
+        self.abonnes = abonnes
+
+    async def subscriber_latest(self, **kwargs):
+        return self.abonnes
+
+    async def backhaul_latest(self, **kwargs):
+        return []
+
+
+async def test_rien_a_faire_sans_boost_echu(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    depot = DepotBoosts()
+    service = make_service(settings, routeur, repository=depot)
+    await service.registry.reload()
+
+    resultat = await service.expire_boosts()
+
+    assert resultat["expired"] == 0
+    assert depot.purges == 0
+
+
+async def test_boost_echu_purge_et_file_ramenee(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Sans cette etape le boost resterait indefiniment : la file RouterOS ne
+    sait rien de l'echeance."""
+    settings.enforcement_enabled = True
+    settings.routers[0].rw_username = "qos-rw"
+    depot = DepotBoosts([{"scope": "subscriber", "target_key": "dupont"}])
+    ecriture = FauxClientEcriture()
+    service = make_service(
+        settings, routeur, repository=depot, write_client_factory=lambda c: ecriture
+    )
+    service.metrics = MetriquesMinimales(
+        [
+            {
+                "pppoe_login": "dupont",
+                "pop_name": "PoP Test",
+                "plan_down_mbps": 100,
+                "plan_up_mbps": 20,
+            }
+        ]
+    )
+    await service.registry.reload()
+
+    resultat = await service.expire_boosts()
+
+    assert resultat["expired"] == 1
+    assert resultat["routers"] == ["pop-test"]
+    # La file est reecrite au debit du plan, pas au debit boostee.
+    commandes = [a.command for a in ecriture.executed]
+    assert any("20000000/100000000" in c for c in commandes)
+
+
+async def test_boost_echu_sans_enforcement(settings: Settings, routeur: FakeRouterOsClient) -> None:
+    """En lecture seule on purge quand meme la base, mais on dit clairement que
+    la file du routeur garde son debit boostee."""
+    settings.enforcement_enabled = False
+    depot = DepotBoosts([{"scope": "subscriber", "target_key": "dupont"}])
+    service = make_service(settings, routeur, repository=depot)
+    await service.registry.reload()
+
+    resultat = await service.expire_boosts()
+
+    assert resultat["expired"] == 1
+    assert resultat["routers"] == []
+    assert resultat["errors"] and "enforcement desactive" in resultat["errors"][0]
+
+
+async def test_seuls_les_routeurs_concernes_sont_replanifies(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Un boost sur un PoP ne doit pas declencher une reecriture de tout le parc."""
+    depot = DepotBoosts([{"scope": "subscriber", "target_key": "dupont"}])
+    service = make_service(settings, routeur, repository=depot)
+    service.metrics = MetriquesMinimales(
+        [
+            {"pppoe_login": "dupont", "pop_name": "PoP Test"},
+            {"pppoe_login": "autre", "pop_name": "PoP Lointain"},
+        ]
+    )
+    await service.registry.reload()
+
+    routeurs = await service._routers_for_logins({"dupont"})
+
+    assert routeurs == ["pop-test"]
+    assert await service._routers_for_logins({"inexistant"}) == []
+
+
+# =========================================================================
+# Bascule du drapeau
+# =========================================================================
+
+
+async def test_amorcage_du_drapeau(settings: Settings, routeur: FakeRouterOsClient) -> None:
+    """Au premier demarrage la base est vide : elle recoit la valeur d'env."""
+    settings.enforcement_enabled = True
+    depot = DepotBoosts()
+    service = make_service(settings, routeur, repository=depot)
+
+    await service.load_flags()
+
+    assert depot.flags["enforcement_enabled"] is True
+
+
+async def test_la_base_fait_foi_apres_amorcage(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Une bascule faite depuis l'interface survit au redemarrage."""
+    settings.enforcement_enabled = False
+    depot = DepotBoosts()
+    depot.flags["enforcement_enabled"] = True
+    service = make_service(settings, routeur, repository=depot)
+
+    await service.load_flags()
+
+    assert service.enforcement_enabled is True
+
+
+async def test_bascule_refusee_si_verrouille(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    from app.services.shaping import EnforcementLockedError
+
+    settings.enforcement_locked = True
+    service = make_service(settings, routeur, repository=DepotBoosts())
+
+    with pytest.raises(EnforcementLockedError):
+        await service.set_enforcement(True)
+    assert service.enforcement_enabled is False

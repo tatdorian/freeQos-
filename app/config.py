@@ -209,6 +209,11 @@ class Settings(BaseSettings):
     # Coupe-circuit : un plan anormalement gros signale un etat desire mal
     # calcule, il vaut mieux s'arreter que de reecrire tout un PoP.
     enforcement_max_actions: int = 500
+    # Interdit la bascule depuis l'interface : seul un redemarrage avec
+    # ENFORCEMENT_ENABLED modifie peut alors autoriser l'ecriture.
+    enforcement_locked: bool = False
+    # Verifie l'echeance des boosts et ramene les files a leur debit normal.
+    boost_check_interval_s: float = 30.0
     topology_refresh_interval_s: float = 900.0
 
     # --- Garde-fous ---

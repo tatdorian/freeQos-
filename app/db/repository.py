@@ -38,6 +38,35 @@ class MetricsRepository:
             )
         return _rows(records)
 
+    async def delete_pop(self, pop_id: int) -> dict[str, int]:
+        """Supprime un PoP et tout ce qui en depend.
+
+        Retirer un routeur de l'inventaire ne fait pas disparaitre ses donnees :
+        le PoP, ses abonnes et leurs metriques restent en base. C'est voulu — on
+        ne perd pas un historique par accident — mais il faut donc un moyen
+        explicite de faire le menage.
+        """
+        async with self._pool.acquire() as conn, conn.transaction():
+            compte = await conn.fetchrow(
+                """
+                SELECT (SELECT count(*) FROM subscribers WHERE pop_id = $1) AS subscribers,
+                       (SELECT count(*) FROM backhauls WHERE pop_id = $1)   AS backhauls
+                """,
+                pop_id,
+            )
+            # subscribers.pop_id est en ON DELETE SET NULL : c'est voulu, pour ne
+            # pas perdre un historique lors d'une reorganisation. La suppression
+            # explicite d'un site doit donc emporter ses abonnes elle-meme,
+            # sinon ils resteraient orphelins.
+            await conn.execute("DELETE FROM subscribers WHERE pop_id = $1", pop_id)
+            supprime = await conn.execute("DELETE FROM pops WHERE id = $1", pop_id)
+        if supprime.endswith(" 0"):
+            raise LookupError(f"PoP {pop_id} inconnu")
+        return {
+            "subscribers": compte["subscribers"],
+            "backhauls": compte["backhauls"],
+        }
+
     # ------------------------------------------------------------- Abonnes
     async def list_subscribers(
         self,
