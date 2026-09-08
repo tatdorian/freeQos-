@@ -11,26 +11,31 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from app.collectors.mikrotik import MikrotikCollector
 from app.collectors.radius import (
     FreeradiusSqlPlanProvider,
     MockPlanProvider,
     PlanProvider,
 )
 from app.collectors.uisp import BackhaulCapacityProvider, MockBackhaulProvider, UispProvider
-from app.config import MissingSecretError, Settings
+from app.config import Settings
 from app.db.database import Database
 from app.db.directory import Directory, PgDirectory
 from app.db.repository import MetricsRepository
+from app.db.routers_repo import RoutersRepository
 from app.db.writer import MetricsWriter, PgMetricsWriter
 from app.models import Plan
 from app.scheduler import Scheduler
 from app.services.collection import (
     JOB_BACKHAULS,
+    JOB_INVENTORY,
     JOB_PLANS,
+    JOB_RTT,
     JOB_SUBSCRIBERS,
     CollectionService,
 )
+from app.services.crypto import SecretBox
+from app.services.registry import RouterRegistry
+from app.services.rtt import RttProber
 
 logger = logging.getLogger(__name__)
 
@@ -69,26 +74,12 @@ def build_backhaul_provider(settings: Settings) -> BackhaulCapacityProvider:
         variation_pct=settings.mock_backhaul_variation_pct,
         period_s=settings.mock_backhaul_period_s,
         seed=settings.mock_backhaul_seed,
+        nominal_by_device={
+            backhaul.uisp_device_id: backhaul.nominal_capacity_mbps
+            for backhaul in settings.enabled_backhauls
+            if backhaul.uisp_device_id and backhaul.nominal_capacity_mbps
+        },
     )
-
-
-def build_collectors(settings: Settings) -> list[MikrotikCollector]:
-    collectors: list[MikrotikCollector] = []
-    for router in settings.enabled_routers:
-        try:
-            # Verification precoce du secret : mieux vaut un demarrage bruyant
-            # qu'un routeur silencieusement absent de la collecte.
-            router.resolve_password()
-        except MissingSecretError as exc:
-            logger.error("Routeur ignore : %s", exc)
-            continue
-        collectors.append(MikrotikCollector(router))
-    if not collectors:
-        logger.warning(
-            "Aucun routeur exploitable : verifiez ROUTERS_FILE / ROUTERS et les "
-            "variables de mot de passe. L'API de lecture reste disponible."
-        )
-    return collectors
 
 
 @dataclass
@@ -102,6 +93,9 @@ class Container:
     backhaul_provider: BackhaulCapacityProvider
     collection: CollectionService
     scheduler: Scheduler
+    secrets: SecretBox
+    registry: RouterRegistry
+    routers_repo: RoutersRepository | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -135,14 +129,39 @@ async def build_container(settings: Settings) -> Container:
     plan_provider = build_plan_provider(settings)
     backhaul_provider = build_backhaul_provider(settings)
 
+    secrets = SecretBox(settings.app_secret_key)
+    if not secrets.available:
+        # Non bloquant : l'inventaire fichier fonctionne sans cle. Seul l'ajout
+        # de PoP depuis l'interface est indisponible.
+        logger.warning("Ajout de PoP par l'interface desactive : %s", secrets.unavailable_reason)
+    routers_repo = RoutersRepository(database.pool, secrets)
+    registry = RouterRegistry(settings, repository=routers_repo)
+
+    rtt_prober = None
+    if settings.rtt_enabled:
+        logger.info(
+            "Sonde de latence active : %d abonne(s) toutes les %gs (/ping depuis le PoP)",
+            settings.rtt_batch_size,
+            settings.rtt_interval_s,
+        )
+        rtt_prober = RttProber(
+            batch_size=settings.rtt_batch_size,
+            max_age_s=settings.rtt_max_age_s,
+            count=settings.rtt_count,
+        )
+
     collection = CollectionService(
         settings,
-        collectors=build_collectors(settings),
+        collectors=await registry.reload(),
         backhaul_provider=backhaul_provider,
         plan_provider=plan_provider,
         directory=directory,
         writer=writer,
+        rtt_prober=rtt_prober,
     )
+
+    async def reload_inventory() -> None:
+        collection.set_collectors(await registry.reload())
 
     scheduler = Scheduler()
     scheduler.add_job(
@@ -150,6 +169,9 @@ async def build_container(settings: Settings) -> Container:
     )
     scheduler.add_job(JOB_BACKHAULS, settings.backhaul_interval_s, collection.collect_backhauls)
     scheduler.add_job(JOB_PLANS, settings.plan_refresh_interval_s, collection.refresh_plans)
+    scheduler.add_job(JOB_INVENTORY, settings.inventory_refresh_interval_s, reload_inventory)
+    if rtt_prober is not None:
+        scheduler.add_job(JOB_RTT, settings.rtt_interval_s, collection.probe_rtt)
 
     return Container(
         settings=settings,
@@ -161,10 +183,14 @@ async def build_container(settings: Settings) -> Container:
         backhaul_provider=backhaul_provider,
         collection=collection,
         scheduler=scheduler,
+        secrets=secrets,
+        registry=registry,
+        routers_repo=routers_repo,
     )
 
 
 async def shutdown_container(container: Container) -> None:
     await container.scheduler.stop()
+    container.registry.close_all()
     await container.collection.aclose()
     await container.database.close()

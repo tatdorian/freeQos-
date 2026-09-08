@@ -8,12 +8,8 @@ from pydantic import SecretStr
 from app.collectors.radius import FreeradiusSqlPlanProvider, MockPlanProvider
 from app.collectors.uisp import MockBackhaulProvider, UispProvider
 from app.config import RouterConfig, Settings
-from app.container import (
-    build_backhaul_provider,
-    build_collectors,
-    build_container,
-    build_plan_provider,
-)
+from app.container import build_backhaul_provider, build_container, build_plan_provider
+from app.services.registry import collectors_from_settings
 
 
 async def test_enforcement_active_bloque_le_demarrage(settings: Settings) -> None:
@@ -63,5 +59,5 @@ def test_routeur_sans_secret_est_ignore_pas_fatal(settings: Settings) -> None:
         RouterConfig(name="ok", host="192.0.2.11", password="present"),
         RouterConfig(name="ko", host="192.0.2.12", password_env="VARIABLE_ABSENTE"),
     ]
-    collectors = build_collectors(settings)
+    collectors = collectors_from_settings(settings)
     assert [c.name for c in collectors] == ["ok"]

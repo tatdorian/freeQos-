@@ -14,7 +14,7 @@ degrade proprement en tables classiques quand l'extension est absente.
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -30,7 +30,7 @@ pytestmark = pytest.mark.skipif(
     not DSN, reason="TEST_DATABASE_URL non defini : tests d'integration ignores"
 )
 
-NOW = datetime.now(tz=timezone.utc).replace(microsecond=0)
+NOW = datetime.now(tz=UTC).replace(microsecond=0)
 
 
 @pytest.fixture
@@ -43,7 +43,8 @@ async def database():
         # Repartir d'une base propre a chaque test.
         await conn.execute(
             "TRUNCATE subscriber_metrics, backhaul_metrics, qoe_scores, "
-            "collector_runs, subscribers, backhauls, pops RESTART IDENTITY CASCADE"
+            "collector_runs, subscribers, backhauls, routers, pops "
+            "RESTART IDENTITY CASCADE"
         )
     yield db
     await db.close()
@@ -65,6 +66,7 @@ async def test_le_schema_s_applique_et_est_rejouable(database: Database) -> None
         "pops",
         "subscribers",
         "backhauls",
+        "routers",
         "subscriber_metrics",
         "backhaul_metrics",
         "qoe_scores",
@@ -301,9 +303,7 @@ async def test_bout_en_bout_routeur_vers_api(database: Database) -> None:
     from tests.conftest import FakeRouterOsClient
     from tests.test_collection_service import Clock
 
-    router = RouterConfig(
-        name="pop-nord", host="192.0.2.11", password="lab", pop_name="PoP Nord"
-    )
+    router = RouterConfig(name="pop-nord", host="192.0.2.11", password="lab", pop_name="PoP Nord")
     settings = Settings(
         _env_file=None,
         database_url=DSN,
@@ -353,7 +353,7 @@ async def test_bout_en_bout_routeur_vers_api(database: Database) -> None:
     par_login = {row["pppoe_login"]: row for row in latest}
     assert par_login["dupont"]["rx_bps"] == 10_000_000.0  # upload abonne
     assert par_login["dupont"]["tx_bps"] == 20_000_000.0  # download abonne
-    assert par_login["martin"]["rx_bps"] == 0.0           # en ligne mais inactif
+    assert par_login["martin"]["rx_bps"] == 0.0  # en ligne mais inactif
     # Le classement top talkers place le plus consommateur en tete.
     assert latest[0]["pppoe_login"] == "dupont"
 
@@ -374,3 +374,185 @@ async def test_bout_en_bout_routeur_vers_api(database: Database) -> None:
 
     runs = await repo.recent_runs()
     assert {run["job"] for run in runs} == {"collect_subscribers", "collect_backhauls"}
+
+
+# ---------------------------------------------------------------------------
+# Inventaire dynamique des routeurs
+# ---------------------------------------------------------------------------
+
+
+async def test_cycle_de_vie_d_un_routeur_en_base(database: Database) -> None:
+    from app.db.routers_repo import (
+        DuplicateRouterError,
+        RouterNotFoundError,
+        RoutersRepository,
+    )
+    from app.services.crypto import SecretBox, generate_key
+
+    secrets = SecretBox(generate_key())
+    repo = RoutersRepository(database.pool, secrets)
+
+    created = await repo.create(
+        {"name": "pop-nord", "host": "10.10.0.11", "pop_name": "PoP Nord"},
+        "mot-de-passe-du-routeur",
+    )
+    assert created["name"] == "pop-nord"
+    assert "password_enc" not in created  # jamais renvoye
+
+    # Le secret est chiffre au repos.
+    async with database.pool.acquire() as conn:
+        stocke = await conn.fetchval(
+            "SELECT password_enc FROM routers WHERE id = $1", created["id"]
+        )
+    assert "mot-de-passe-du-routeur" not in stocke
+    assert stocke.startswith("fernet:")
+
+    # Il redevient utilisable pour construire un collecteur.
+    configs = await repo.load_configs()
+    assert len(configs) == 1
+    assert configs[0].resolve_password() == "mot-de-passe-du-routeur"
+
+    with pytest.raises(DuplicateRouterError):
+        await repo.create({"name": "pop-nord", "host": "10.10.0.99"}, "x")
+
+    # Modification partielle : le secret n'est pas touche.
+    updated = await repo.update(created["id"], {"host": "10.10.0.12"})
+    assert updated["host"] == "10.10.0.12"
+    assert (await repo.load_configs())[0].resolve_password() == "mot-de-passe-du-routeur"
+
+    await repo.record_success(created["id"], {"identity": "chr-nord", "version": "7.21.5"})
+    assert (await repo.get_public(created["id"]))["identity"] == "chr-nord"
+
+    await repo.record_failure(created["id"], "connexion refusee")
+    assert (await repo.get_public(created["id"]))["last_error"] == "connexion refusee"
+
+    await repo.delete(created["id"])
+    with pytest.raises(RouterNotFoundError):
+        await repo.get_public(created["id"])
+
+
+async def test_routeur_dont_le_secret_est_illisible_est_ecarte(database: Database) -> None:
+    """Cle changee ou valeur alteree : ce routeur est ecarte avec un diagnostic,
+    les autres continuent de tourner."""
+    from app.db.routers_repo import RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    repo = RoutersRepository(database.pool, SecretBox(generate_key()))
+    bon = await repo.create({"name": "pop-bon", "host": "10.10.0.11"}, "secret")
+    casse = await repo.create({"name": "pop-casse", "host": "10.10.0.12"}, "secret")
+
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE routers SET password_enc = 'en-clair-anomalie' WHERE id = $1", casse["id"]
+        )
+
+    configs = await repo.load_configs()
+
+    assert [c.name for c in configs] == ["pop-bon"]
+    assert (await repo.get_public(casse["id"]))["last_error"] is not None
+    assert (await repo.get_public(bon["id"]))["last_error"] is None
+
+
+# ---------------------------------------------------------------------------
+# Vues du tableau de bord
+# ---------------------------------------------------------------------------
+
+
+async def test_vues_du_tableau_de_bord(database: Database) -> None:
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    backhaul_id = await directory.ensure_backhaul(
+        "bh-nord", pop_id=pop_id, uisp_device_id="dev-1", nominal_capacity_mbps=500
+    )
+    a = await directory.ensure_subscriber("alice", pop_id=pop_id, plan=Plan(100, 20, "mock"))
+    b = await directory.ensure_subscriber("bob", pop_id=pop_id, plan=Plan(300, 50, "mock"))
+
+    def sample(ts: datetime, rx: float, tx: float) -> SubscriberSample:
+        return SubscriberSample(
+            ts=ts, login="x", router_name="r", pop_name="PoP Nord", rx_bps=rx, tx_bps=tx
+        )
+
+    await writer.write_subscriber_metrics(
+        [
+            (a, sample(NOW - timedelta(seconds=20), 1e6, 10e6)),
+            (a, sample(NOW, 2e6, 20e6)),
+            (b, sample(NOW - timedelta(seconds=20), 5e6, 50e6)),
+            (b, sample(NOW, 6e6, 60e6)),
+        ]
+    )
+    await writer.write_backhaul_metrics(
+        [
+            (
+                backhaul_id,
+                BackhaulSample(
+                    ts=NOW,
+                    device_id="dev-1",
+                    capacity_mbps=400,
+                    signal_dbm=-55,
+                    airtime_pct=40,
+                ),
+            )
+        ]
+    )
+    await directory.touch_subscribers({a: ("10.0.0.1", NOW), b: ("10.0.0.2", NOW)})
+
+    overview = await repo.overview()
+    assert overview["online"] == 2
+    # Somme des derniers echantillons : 20 + 60 Mbps.
+    assert overview["tx_bps"] == 80e6
+    assert overview["sold_down_mbps"] == 400.0
+    assert overview["backhaul_capacity_mbps"] == 400.0
+
+    tree = await repo.network_tree()
+    assert tree[0]["name"] == "PoP Nord"
+    assert tree[0]["online"] == 2
+    assert tree[0]["tx_bps"] == 80e6
+    assert tree[0]["backhauls"][0]["capacity_mbps"] == 400.0
+
+    series = await repo.throughput_series(
+        start=NOW - timedelta(minutes=5), end=NOW + timedelta(seconds=1), bucket_seconds=300
+    )
+    # Un seul bucket : la moyenne par abonne est sommee, jamais les echantillons
+    # bruts (sinon un abonne a deux mesures compterait double).
+    assert len(series) == 1
+    assert series[0]["tx_bps"] == pytest.approx(15e6 + 55e6)
+    assert series[0]["subscribers"] == 2
+
+
+async def test_throughput_ne_double_compte_pas(database: Database) -> None:
+    """Regression : sommer directement les echantillons gonflerait le total des
+    que le bucket depasse la periode de collecte."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("PoP Nord")
+    seul = await directory.ensure_subscriber("solo", pop_id=pop_id)
+
+    # Six echantillons a 100 Mbps dans le meme bucket d'une minute.
+    await writer.write_subscriber_metrics(
+        [
+            (
+                seul,
+                SubscriberSample(
+                    ts=NOW - timedelta(seconds=10 * i),
+                    login="solo",
+                    router_name="r",
+                    pop_name="p",
+                    rx_bps=0.0,
+                    tx_bps=100e6,
+                ),
+            )
+            for i in range(6)
+        ]
+    )
+
+    series = await repo.throughput_series(
+        start=NOW - timedelta(minutes=5), end=NOW + timedelta(seconds=1), bucket_seconds=300
+    )
+
+    assert len(series) == 1
+    assert series[0]["tx_bps"] == pytest.approx(100e6)  # et non 600 Mbps

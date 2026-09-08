@@ -207,3 +207,77 @@ async def test_les_resultats_de_cycle_sont_historises(settings: Settings) -> Non
     await service.collect_subscribers()
     assert "collect_subscribers" in service.last_results
     assert writer.runs[-1].job == "collect_subscribers"
+
+
+async def test_le_rtt_est_rattache_a_l_echantillon(settings: Settings) -> None:
+    """Une seule ligne par abonne et par cycle : la latence rejoint la mesure de
+    debit plutot que de creer des lignes supplementaires quasi vides."""
+    from app.services.rtt import RttProber
+
+    client = FakeRouterOsClient()
+    client.ping_reply = "9ms"
+    client.add_session("dupont", rx_byte=0, tx_byte=0, address="10.20.0.10")
+
+    clock = Clock()
+    prober = RttProber(batch_size=10, count=2, clock=clock)
+    collectors = [MikrotikCollector(cfg, client=client) for cfg in settings.routers]
+    writer = InMemoryMetricsWriter()
+    service = CollectionService(
+        settings,
+        collectors=collectors,
+        backhaul_provider=MockBackhaulProvider(clock=clock),
+        plan_provider=MockPlanProvider(),
+        directory=InMemoryDirectory(),
+        writer=writer,
+        clock=clock,
+        rtt_prober=prober,
+    )
+
+    # Premier cycle : aucune sonde n'a encore tourne.
+    await service.collect_subscribers()
+    assert writer.subscriber_rows[-1][1].rtt_ms is None
+
+    # La sonde tourne sur les cibles decouvertes au cycle precedent.
+    result = await service.probe_rtt()
+    assert result.ok and result.items == 1
+    assert client.pings == [("10.20.0.10", 2)]
+
+    # Le cycle suivant rattache la mesure.
+    clock.advance(10.0)
+    await service.collect_subscribers()
+    assert writer.subscriber_rows[-1][1].rtt_ms == 9.0
+
+
+async def test_sans_sonde_le_rtt_reste_nul(settings: Settings) -> None:
+    """Comportement par defaut : la colonne existe, elle reste vide."""
+    client = FakeRouterOsClient()
+    client.add_session("dupont", rx_byte=0, tx_byte=0)
+    service, writer, _ = build_service(settings, {"pop-test": client})
+
+    await service.collect_subscribers()
+
+    assert writer.subscriber_rows[-1][1].rtt_ms is None
+    assert client.pings == []
+
+
+async def test_abonne_sans_adresse_n_est_pas_sonde(settings: Settings) -> None:
+    from app.services.rtt import RttProber
+
+    client = FakeRouterOsClient()
+    client.active.append({"name": "sans-ip", "uptime": "01:00:00"})
+    clock = Clock()
+    service = CollectionService(
+        settings,
+        collectors=[MikrotikCollector(cfg, client=client) for cfg in settings.routers],
+        backhaul_provider=MockBackhaulProvider(clock=clock),
+        plan_provider=MockPlanProvider(),
+        directory=InMemoryDirectory(),
+        writer=InMemoryMetricsWriter(),
+        clock=clock,
+        rtt_prober=RttProber(clock=clock),
+    )
+
+    await service.collect_subscribers()
+    await service.probe_rtt()
+
+    assert client.pings == []

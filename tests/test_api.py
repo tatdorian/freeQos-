@@ -20,6 +20,8 @@ from app.db.writer import InMemoryMetricsWriter
 from app.main import register_routes
 from app.scheduler import Scheduler
 from app.services.collection import JOB_SUBSCRIBERS, CollectionService
+from app.services.crypto import SecretBox, generate_key
+from app.services.registry import RouterRegistry
 from tests.conftest import FakeRouterOsClient
 
 NOW = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
@@ -145,6 +147,54 @@ class FakeRepository:
             }
         ]
 
+    async def overview(self) -> dict[str, Any]:
+        return {
+            "subscribers": 1,
+            "online": 1,
+            "shaped": 1,
+            "rx_bps": 5_000_000.0,
+            "tx_bps": 40_000_000.0,
+            "sold_down_mbps": 100.0,
+            "sold_up_mbps": 20.0,
+            "pops": 1,
+            "backhauls": 1,
+            "backhaul_capacity_mbps": 420.0,
+            "last_metric_ts": NOW,
+        }
+
+    async def throughput_series(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return [{"bucket": NOW, "rx_bps": 5_000_000.0, "tx_bps": 40_000_000.0, "subscribers": 1}]
+
+    async def network_tree(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": 1,
+                "name": "PoP Test",
+                "router_host": "192.0.2.11",
+                "subscribers": 1,
+                "online": 1,
+                "rx_bps": 5_000_000.0,
+                "tx_bps": 40_000_000.0,
+                "sold_down_mbps": 100.0,
+                "backhauls": (
+                    [
+                        {
+                            "backhaul_id": 1,
+                            "name": "bh-test",
+                            "pop_id": 1,
+                            "pop_name": "PoP Test",
+                            "capacity_mbps": 420.0,
+                            "nominal_capacity_mbps": 500.0,
+                            "signal_dbm": -52.0,
+                            "airtime_pct": 33.0,
+                            "online": True,
+                            "ts": NOW,
+                        }
+                    ]
+                ),
+            }
+        ]
+
     async def recent_runs(self, **kwargs: Any) -> list[dict[str, Any]]:
         return [
             {
@@ -168,9 +218,17 @@ class FakeRepository:
         }
 
 
-def build_container(settings: Settings, *, db_reachable: bool = True) -> Container:
-    client = FakeRouterOsClient()
-    client.add_session("dupont", rx_byte=1000, tx_byte=2000)
+def build_container(
+    settings: Settings,
+    *,
+    db_reachable: bool = True,
+    secrets: SecretBox | None = None,
+    routers_repo: Any = None,
+    client: FakeRouterOsClient | None = None,
+) -> Container:
+    client = client or FakeRouterOsClient()
+    if not client.active:
+        client.add_session("dupont", rx_byte=1000, tx_byte=2000)
     collectors = [MikrotikCollector(cfg, client=client) for cfg in settings.routers]
     writer = InMemoryMetricsWriter()
     directory = InMemoryDirectory()
@@ -186,6 +244,10 @@ def build_container(settings: Settings, *, db_reachable: bool = True) -> Contain
     )
     scheduler = Scheduler()
     scheduler.add_job(JOB_SUBSCRIBERS, 10, collection.collect_subscribers)
+
+    registry = RouterRegistry(
+        settings, repository=routers_repo, client_factory=lambda config: client
+    )
     return Container(
         settings=settings,
         database=FakeDatabase(reachable=db_reachable),  # type: ignore[arg-type]
@@ -196,6 +258,9 @@ def build_container(settings: Settings, *, db_reachable: bool = True) -> Contain
         backhaul_provider=backhaul_provider,
         collection=collection,
         scheduler=scheduler,
+        secrets=secrets if secrets is not None else SecretBox(generate_key()),
+        registry=registry,
+        routers_repo=routers_repo,
     )
 
 
@@ -226,7 +291,9 @@ def test_readiness_ok(client: TestClient) -> None:
     body = response.json()
     assert body["status"] == "ready"
     assert body["database"] == "ok"
-    assert body["routers_configured"] == 1
+    assert body["routers_in_file"] == 1
+    assert body["collectors_active"] == 1
+    assert body["routers_skipped"] == 0
     # Garde-fou hors-bande visible dans la sonde.
     assert body["enforcement_enabled"] is False
 
@@ -288,6 +355,34 @@ def test_backhauls(client: TestClient) -> None:
     assert body["points"][0]["capacity_mbps_min"] == 380.0
 
 
+# ------------------------------------------------- vues du tableau de bord
+def test_overview(client: TestClient) -> None:
+    body = client.get("/api/v1/overview").json()
+    assert body["online"] == 1
+    assert body["tx_bps"] == 40_000_000.0
+    assert body["backhaul_capacity_mbps"] == 420.0
+
+
+def test_throughput(client: TestClient) -> None:
+    body = client.get("/api/v1/throughput?minutes=60&bucket_seconds=30").json()
+    assert body["bucket_seconds"] == 30
+    assert body["points"][0]["tx_bps"] == 40_000_000.0
+    assert "upload abonnes" in body["orientation"]
+
+
+def test_network_tree(client: TestClient) -> None:
+    body = client.get("/api/v1/network/tree").json()
+    assert body[0]["name"] == "PoP Test"
+    assert body[0]["backhauls"][0]["name"] == "bh-test"
+    # Ce que la vue doit permettre : comparer charge et capacite radio.
+    assert body[0]["tx_bps"] == 40_000_000.0
+    assert body[0]["backhauls"][0]["capacity_mbps"] == 420.0
+
+
+def test_recherche_dans_les_abonnes(client: TestClient) -> None:
+    assert client.get("/api/v1/subscribers/latest?search=dup").status_code == 200
+
+
 # ------------------------------------------------------------- exploitation
 def test_status(client: TestClient) -> None:
     body = client.get("/api/v1/status").json()
@@ -322,17 +417,21 @@ def test_historique_et_compteurs(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------- UI
-def test_dashboard_se_rend_sans_dependance_externe(client: TestClient) -> None:
+def test_interface_se_rend(client: TestClient) -> None:
     html = client.get("/").text
     assert "freeQoS" in html
-    # Un controleur souverain ne doit pas dependre d'un CDN pour s'afficher.
-    assert "http://" not in html and "https://" not in html
+    for vue in ("#/dashboard", "#/network", "#/subscribers", "#/pops"):
+        assert vue in html
 
 
-def test_fragments_ui(client: TestClient) -> None:
-    assert "dupont" in client.get("/ui/fragments/subscribers").text
-    assert "bh-test" in client.get("/ui/fragments/backhauls").text
-    assert JOB_SUBSCRIBERS in client.get("/ui/fragments/overview").text
+def test_interface_sans_dependance_externe(client: TestClient) -> None:
+    """Un controleur souverain doit s'afficher sur une VM coupee d'internet."""
+    for chemin in ("/", "/static/app.css", "/static/app.js"):
+        response = client.get(chemin)
+        assert response.status_code == 200, chemin
+        assert "//unpkg" not in response.text
+        assert "//cdn" not in response.text
+        assert "https://" not in response.text
 
 
 def test_api_non_initialisee_repond_503(settings: Settings) -> None:

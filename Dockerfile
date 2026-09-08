@@ -11,7 +11,8 @@ COPY pyproject.toml README.md ./
 RUN pip install --upgrade pip && \
     pip install "fastapi>=0.115" "uvicorn[standard]>=0.30" "pydantic>=2.7" \
                 "pydantic-settings>=2.3" "asyncpg>=0.29" "httpx>=0.27" \
-                "librouteros>=3.2" "jinja2>=3.1" "pyyaml>=6.0"
+                "librouteros>=3.2" "jinja2>=3.1" "pyyaml>=6.0" \
+                "cryptography>=42.0"
 
 COPY app ./app
 

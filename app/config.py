@@ -142,6 +142,20 @@ class Settings(BaseSettings):
     subscriber_interval_s: float = 10.0
     backhaul_interval_s: float = 30.0
     plan_refresh_interval_s: float = 300.0
+    # Filet de securite : recharge l'inventaire meme si une modification a ete
+    # faite hors de cette instance (edition directe en base, seconde instance).
+    inventory_refresh_interval_s: float = 60.0
+
+    # --- Sonde de latence (phase 3 amorcee) ---
+    # DESACTIVEE par defaut : c'est une sonde ACTIVE (/ping depuis le routeur),
+    # elle consomme du CPU routeur, contrairement a la mesure passive de LibreQoS
+    # qui est impossible hors-bande.
+    rtt_enabled: bool = False
+    rtt_interval_s: float = 30.0
+    rtt_batch_size: int = 20
+    rtt_count: int = 2
+    # Au-dela, une mesure n'est plus rattachee aux echantillons.
+    rtt_max_age_s: float = 300.0
 
     # --- Inventaire ---
     routers: list[RouterConfig] = Field(default_factory=list)
@@ -165,6 +179,12 @@ class Settings(BaseSettings):
     radius_rate_attribute: str = "Mikrotik-Rate-Limit"
     radius_default_down_mbps: float = 100.0
     radius_default_up_mbps: float = 20.0
+
+    # --- Secrets ---
+    # Cle Fernet protegeant les mots de passe des routeurs ajoutes depuis
+    # l'interface. Sans elle, l'API refuse d'en enregistrer (elle n'ecrira jamais
+    # un secret en clair). Generer avec : python -m app.services.crypto
+    app_secret_key: str | None = None
 
     # --- Garde-fous ---
     # Phase 2 uniquement : aucune ecriture n'est implementee aujourd'hui.

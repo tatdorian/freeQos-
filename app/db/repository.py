@@ -122,7 +122,12 @@ class MetricsRepository:
         return _rows(records)
 
     async def subscriber_latest(
-        self, *, pop_id: int | None = None, limit: int = 50, order_by: str = "total"
+        self,
+        *,
+        pop_id: int | None = None,
+        search: str | None = None,
+        limit: int = 50,
+        order_by: str = "total",
     ) -> list[dict[str, Any]]:
         """Dernier echantillon par abonne, trie par debit (top talkers)."""
         order_sql = {
@@ -136,10 +141,12 @@ class MetricsRepository:
                 f"""
                 SELECT * FROM subscriber_latest
                  WHERE ($1::int IS NULL OR pop_id = $1)
+                   AND ($2::text IS NULL OR pppoe_login ILIKE '%' || $2 || '%')
                  ORDER BY {order_sql}
-                 LIMIT $2
+                 LIMIT $3
                 """,  # noqa: S608 - order_sql provient d'une liste blanche
                 pop_id,
+                search,
                 limit,
             )
         return _rows(records)
@@ -204,6 +211,118 @@ class MetricsRepository:
                 timedelta(seconds=bucket_seconds),
             )
         return _rows(records)
+
+    # ------------------------------------------------- Vues d'ensemble (UI)
+    async def throughput_series(
+        self,
+        *,
+        start: datetime,
+        end: datetime,
+        bucket_seconds: int = 10,
+        pop_id: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Debit agrege de tout le reseau, par pas de temps.
+
+        On somme d'abord par bucket ET par abonne, puis on additionne : sommer
+        directement fausserait le total des qu'un abonne a plusieurs echantillons
+        dans le meme bucket (ce qui arrive des que le bucket depasse la periode
+        de collecte).
+        """
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                WITH par_abonne AS (
+                    SELECT date_bin($3::interval, m.ts, TIMESTAMPTZ 'epoch') AS bucket,
+                           m.subscriber_id,
+                           avg(m.rx_bps) AS rx_bps,
+                           avg(m.tx_bps) AS tx_bps
+                      FROM subscriber_metrics m
+                      JOIN subscribers s ON s.id = m.subscriber_id
+                     WHERE m.ts >= $1 AND m.ts < $2
+                       AND ($4::int IS NULL OR s.pop_id = $4)
+                     GROUP BY bucket, m.subscriber_id
+                )
+                SELECT bucket,
+                       sum(rx_bps)  AS rx_bps,
+                       sum(tx_bps)  AS tx_bps,
+                       count(*)     AS subscribers
+                  FROM par_abonne
+                 GROUP BY bucket
+                 ORDER BY bucket
+                """,
+                start,
+                end,
+                timedelta(seconds=bucket_seconds),
+                pop_id,
+            )
+        return _rows(records)
+
+    async def overview(self) -> dict[str, Any]:
+        """Chiffres de tete du tableau de bord, en une seule requete."""
+        async with self._pool.acquire() as conn:
+            record = await conn.fetchrow(
+                """
+                WITH recent AS (
+                    SELECT * FROM subscriber_latest
+                     WHERE ts > now() - INTERVAL '2 minutes'
+                )
+                SELECT
+                    (SELECT count(*) FROM subscribers)                     AS subscribers,
+                    (SELECT count(*) FROM recent)                          AS online,
+                    (SELECT count(*) FROM recent WHERE plan_down_mbps IS NOT NULL)
+                                                                           AS shaped,
+                    (SELECT coalesce(sum(rx_bps), 0) FROM recent)          AS rx_bps,
+                    (SELECT coalesce(sum(tx_bps), 0) FROM recent)          AS tx_bps,
+                    (SELECT coalesce(sum(plan_down_mbps), 0) FROM recent)  AS sold_down_mbps,
+                    (SELECT coalesce(sum(plan_up_mbps), 0) FROM recent)    AS sold_up_mbps,
+                    (SELECT count(*) FROM pops)                            AS pops,
+                    (SELECT count(*) FROM backhauls)                       AS backhauls,
+                    (SELECT coalesce(sum(capacity_mbps), 0) FROM backhaul_latest
+                      WHERE ts > now() - INTERVAL '5 minutes')             AS backhaul_capacity,
+                    (SELECT max(ts) FROM subscriber_metrics)               AS last_metric_ts
+                """
+            )
+        result = dict(record) if record else {}
+        # Alias lisible cote API sans allonger la requete au-dela de la marge.
+        if "backhaul_capacity" in result:
+            result["backhaul_capacity_mbps"] = result.pop("backhaul_capacity")
+        return result
+
+    async def network_tree(self) -> list[dict[str, Any]]:
+        """Arbre PoP -> backhauls + abonnes, avec capacite et charge courante.
+
+        C'est la vue qui donne le rapport le plus utile du systeme : le debit
+        reellement ecoule sur un PoP face a la capacite mesuree de sa radio.
+        """
+        async with self._pool.acquire() as conn:
+            pops = await conn.fetch(
+                """
+                WITH recent AS (
+                    SELECT * FROM subscriber_latest
+                     WHERE ts > now() - INTERVAL '2 minutes'
+                )
+                SELECT p.id, p.name, p.router_host,
+                       (SELECT count(*) FROM subscribers s WHERE s.pop_id = p.id)
+                           AS subscribers,
+                       (SELECT count(*) FROM recent r WHERE r.pop_id = p.id)
+                           AS online,
+                       (SELECT coalesce(sum(r.rx_bps), 0) FROM recent r WHERE r.pop_id = p.id)
+                           AS rx_bps,
+                       (SELECT coalesce(sum(r.tx_bps), 0) FROM recent r WHERE r.pop_id = p.id)
+                           AS tx_bps,
+                       (SELECT coalesce(sum(r.plan_down_mbps), 0) FROM recent r
+                         WHERE r.pop_id = p.id) AS sold_down_mbps
+                  FROM pops p
+                 ORDER BY p.name
+                """
+            )
+            backhauls = await conn.fetch("SELECT * FROM backhaul_latest ORDER BY pop_id, name")
+
+        par_pop: dict[int | None, list[dict[str, Any]]] = {}
+        for row in backhauls:
+            par_pop.setdefault(row["pop_id"], []).append(dict(row))
+
+        return [{**dict(pop), "backhauls": par_pop.get(pop["id"], [])} for pop in pops]
 
     # ----------------------------------------------------------- Exploitation
     async def recent_runs(self, *, limit: int = 20) -> list[dict[str, Any]]:

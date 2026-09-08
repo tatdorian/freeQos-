@@ -187,3 +187,21 @@ async def test_uisp_provider_propage_les_erreurs_http() -> None:
     with pytest.raises(httpx.HTTPStatusError):
         await provider.get_capacities(["dev-1"])
     await provider.aclose()
+
+
+async def test_mock_respecte_la_capacite_nominale_de_chaque_lien() -> None:
+    """Un lien declare a 300 Mbps ne doit pas en afficher 580 en lab : sinon le
+    rapport 'capacite mesuree / nominal' de l'interface n'a aucun sens."""
+    provider = MockBackhaulProvider(
+        base_capacity_mbps=450,
+        variation_pct=30,
+        nominal_by_device={"petit": 100.0, "gros": 1000.0},
+        clock=lambda: 4242.0,
+    )
+    samples = await provider.get_capacities(["petit", "gros", "inconnu"])
+
+    # Chaque lien reste dans +/- 30 % de SA capacite nominale.
+    assert 70 <= samples["petit"].capacity_mbps <= 130
+    assert 700 <= samples["gros"].capacity_mbps <= 1300
+    # Un device non declare retombe sur la valeur par defaut.
+    assert 315 <= samples["inconnu"].capacity_mbps <= 585

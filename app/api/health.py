@@ -52,7 +52,11 @@ async def readiness(container: ContainerDep, response: Response) -> dict[str, ob
         "database": "ok" if db_ok else "unreachable",
         "timescaledb": container.database.timescale_available,
         "scheduler_running": container.scheduler.running,
-        "routers_configured": len(settings.enabled_routers),
+        # Deux populations distinctes : ce qui est declare dans l'inventaire
+        # fichier, et ce qui est reellement interroge (fichier + base, moins les
+        # routeurs ecartes faute de secret lisible).
+        "routers_in_file": len(settings.enabled_routers),
+        "routers_skipped": len(container.registry.skipped),
         "collectors_active": len(container.collection.collectors),
         "backhauls_configured": len(container.collection.backhauls),
         "backhaul_provider": settings.backhaul_provider,

@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>freeQoS</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d1117'/%3E%3Cpath d='M3 11 L6 6 L9 9 L13 4' stroke='%2338bdf8' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="dot" id="health-dot"></span> freeQoS</div>
+    <nav class="tabs">
+      <a href="#/dashboard" data-view="dashboard">Tableau de bord</a>
+      <a href="#/network"   data-view="network">Arbre reseau</a>
+      <a href="#/subscribers" data-view="subscribers">Abonnes</a>
+      <a href="#/pops"      data-view="pops">PoPs</a>
+    </nav>
+    <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
+  </header>
+
+  <main>
+    <!-- ------------------------------------------------ tableau de bord -->
+    <section id="view-dashboard">
+      <div class="grid stats" id="stat-row"></div>
+
+      <h2>Debit du reseau</h2>
+      <div class="card">
+        <div class="chart-head">
+          <div class="legend">
+            <span class="d"><i></i>Download abonnes (tx routeur)</span>
+            <span class="u"><i></i>Upload abonnes (rx routeur)</span>
+          </div>
+          <select id="range-select" style="width:auto">
+            <option value="15">15 minutes</option>
+            <option value="60" selected>1 heure</option>
+            <option value="360">6 heures</option>
+            <option value="1440">24 heures</option>
+          </select>
+        </div>
+        <div id="throughput-chart"></div>
+      </div>
+
+      <div class="grid cols-2" style="margin-top:1.25rem">
+        <div>
+          <h2>Top consommateurs</h2>
+          <div class="table-wrap" id="top-talkers"></div>
+        </div>
+        <div>
+          <h2>Backhauls radio</h2>
+          <div id="backhaul-cards"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- --------------------------------------------------- arbre reseau -->
+    <section id="view-network">
+      <h2>PoP &rarr; backhaul &rarr; abonnes</h2>
+      <p class="empty" style="text-align:left;padding:0 0 .8rem">
+        Charge reelle mesuree face a la capacite radio du moment. C'est ce rapport
+        qui determinera le debit parent du shaping en phase 2.
+      </p>
+      <div id="network-tree"></div>
+    </section>
+
+    <!-- -------------------------------------------------------- abonnes -->
+    <section id="view-subscribers">
+      <div class="toolbar">
+        <input type="search" id="sub-search" placeholder="Filtrer par login PPPoE...">
+        <span class="spacer"></span>
+        <span class="mode" id="sub-count"></span>
+      </div>
+      <div class="table-wrap" id="subscribers-table"></div>
+    </section>
+
+    <!-- ----------------------------------------------------------- PoPs -->
+    <section id="view-pops">
+      <div id="pops-notice"></div>
+
+      <h2>Routeurs interroges</h2>
+      <div class="table-wrap" id="routers-table"></div>
+
+      <h2>Connecter un PoP</h2>
+      <div class="card">
+        <form class="stack" id="router-form" autocomplete="off">
+          <div class="row-3">
+            <div class="field">
+              <label for="f-name">Nom du PoP</label>
+              <input id="f-name" name="name" required placeholder="pop-nord">
+              <span class="help">Identifiant unique, sert de cle pour les metriques.</span>
+            </div>
+            <div class="field">
+              <label for="f-host">Adresse de management</label>
+              <input id="f-host" name="host" required placeholder="10.10.0.11">
+            </div>
+            <div class="field">
+              <label for="f-port">Port API</label>
+              <input id="f-port" name="port" type="number" value="8728" min="1" max="65535">
+            </div>
+          </div>
+
+          <div class="row-3">
+            <div class="field">
+              <label for="f-username">Compte (lecture seule)</label>
+              <input id="f-username" name="username" value="qos-ro" required>
+              <span class="help">policy=read,api,test</span>
+            </div>
+            <div class="field">
+              <label for="f-password">Mot de passe</label>
+              <input id="f-password" name="password" type="password" required>
+            </div>
+            <div class="field">
+              <label for="f-role">Role</label>
+              <select id="f-role" name="role">
+                <option value="pop">PoP (concentrateur PPPoE)</option>
+                <option value="core">Coeur de reseau</option>
+                <option value="gateway">Gateway (egress)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="row-3">
+            <div class="field">
+              <label for="f-pop-name">Libelle du site</label>
+              <input id="f-pop-name" name="pop_name" placeholder="PoP Nord (optionnel)">
+            </div>
+            <div class="field">
+              <label for="f-pattern">Motif d'interface PPPoE</label>
+              <input id="f-pattern" name="pppoe_interface_pattern" value="&lt;pppoe-{login}&gt;">
+              <span class="help">Porte les compteurs d'octets.</span>
+            </div>
+            <div class="field">
+              <label for="f-timeout">Delai de garde (s)</label>
+              <input id="f-timeout" name="timeout_s" type="number" step="0.5" min="0.5" max="60" value="5">
+            </div>
+          </div>
+
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
+              <input type="checkbox" id="f-ssl" name="use_ssl"> API TLS (api-ssl, port 8729)
+            </label>
+          </div>
+
+          <div id="form-result"></div>
+
+          <div class="actions">
+            <button type="button" id="btn-test">Tester la connexion</button>
+            <button type="submit" class="primary" id="btn-save">Enregistrer</button>
+            <span class="spacer"></span>
+            <button type="reset">Reinitialiser</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <div id="drawer-root"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

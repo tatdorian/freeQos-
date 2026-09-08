@@ -112,6 +112,39 @@ def parse_mikrotik_rate_limit(value: str | None) -> tuple[float, float] | None:
     return down_bps / 1_000_000.0, up_bps / 1_000_000.0
 
 
+_DURATION = re.compile(
+    r"(?:(?P<h>\d+)h)?(?:(?P<m>\d+)m(?!s))?(?:(?P<s>\d+)s)?"
+    r"(?:(?P<ms>\d+)ms)?(?:(?P<us>\d+)us)?"
+)
+
+
+def parse_routeros_duration_ms(value: object) -> float | None:
+    """Convertit une duree RouterOS en millisecondes.
+
+    ``/ping`` renvoie des valeurs composees comme ``1ms500us`` ou ``2s100ms``.
+    Attention au piege : ``m`` est une minute et ``ms`` une milliseconde, d'ou
+    le lookahead negatif dans l'expression.
+    """
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    match = _DURATION.fullmatch(text)
+    if not match or not any(match.groupdict().values()):
+        return None
+    parts = {k: int(v) if v else 0 for k, v in match.groupdict().items()}
+    return (
+        parts["h"] * 3_600_000
+        + parts["m"] * 60_000
+        + parts["s"] * 1_000
+        + parts["ms"]
+        + parts["us"] / 1000.0
+    )
+
+
 def pppoe_interface_name(pattern: str, login: str) -> str:
     """Construit le nom de l'interface dynamique associee a une session PPPoE."""
     return pattern.format(login=login, name=login, user=login)

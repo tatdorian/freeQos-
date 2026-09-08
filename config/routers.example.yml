@@ -6,12 +6,15 @@
 #
 # Phase 1 : lecture seule via le compte qos-ro.
 # Phase 2 : les champs rw_* seront utilises pour pousser les files CAKE.
+#
+# Les PoPs ajoutes depuis l'interface web ne figurent PAS ici : ils vivent en base,
+# avec leur mot de passe chiffre. En cas d'homonymie, ce fichier a la priorite.
 
 routers:
   - name: pop-nord
     host: 10.10.0.11          # CHR RouterOS 7.21.5 en lab EVE-NG
     port: 8728                # 8728 = API binaire, 8729 = api-ssl
-    username: qos-ro
+    username: qos-ro          # groupe avec policy=read,api,test
     password_env: MT_POP_NORD_PASSWORD
     role: pop                 # pop | core | gateway
     pop_name: PoP Nord

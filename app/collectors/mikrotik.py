@@ -30,6 +30,7 @@ from typing import Any, Protocol
 
 from app.collectors.parsing import (
     parse_counter,
+    parse_routeros_duration_ms,
     parse_routeros_uptime,
     pppoe_interface_name,
 )
@@ -47,6 +48,10 @@ class RouterOsReadClient(Protocol):
     def interfaces(self) -> list[dict[str, Any]]: ...
 
     def identity(self) -> str | None: ...
+
+    def system_resource(self) -> dict[str, Any]: ...
+
+    def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]: ...
 
     def close(self) -> None: ...
 
@@ -139,6 +144,25 @@ class LibrouterosReadClient:
             return None
         return rows[0].get("name") if rows else None
 
+    def system_resource(self) -> dict[str, Any]:
+        rows = self._query("/system/resource")
+        return dict(rows[0]) if rows else {}
+
+    def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]:
+        """Sonde active depuis le routeur vers l'abonne.
+
+        C'est une COMMANDE, pas une ecriture de configuration : elle ne modifie
+        rien sur l'equipement. Elle exige la politique 'test' sur le compte, que
+        le groupe qos-ro possede deja.
+        """
+        with self._lock:
+            try:
+                api = self._ensure()
+                return [dict(row) for row in api("/ping", address=address, count=count)]
+            except Exception:
+                self._drop()
+                raise
+
 
 class MikrotikCollector:
     """Lit les sessions PPPoE d'un routeur et les normalise en PppoeSession."""
@@ -171,6 +195,56 @@ class MikrotikCollector:
 
     def close(self) -> None:
         self._client.close()
+
+    async def ping(self, address: str, count: int = 1) -> float | None:
+        """RTT du routeur vers l'abonne, en millisecondes.
+
+        Retourne None si l'abonne ne repond pas : une absence de mesure vaut
+        mieux qu'une valeur inventee.
+        """
+        timeout = max(self.config.timeout_s * 2, 4.0) + count
+        rows = await asyncio.wait_for(
+            asyncio.to_thread(self._client.ping, address, count), timeout=timeout
+        )
+        times = [
+            parse_routeros_duration_ms(row.get("time"))
+            for row in rows
+            if row.get("time") is not None
+        ]
+        valides = [t for t in times if t is not None]
+        return min(valides) if valides else None
+
+    async def probe(self) -> dict[str, Any]:
+        """Teste la connexion et renvoie de quoi identifier le routeur.
+
+        Utilise par le bouton "Tester la connexion" de l'interface : un
+        administrateur doit pouvoir verifier ses identifiants avant d'enregistrer
+        un PoP, plutot que de decouvrir l'erreur dans les logs dix minutes apres.
+        """
+        timeout = max(self.config.timeout_s * 3, 5.0)
+        return await asyncio.wait_for(asyncio.to_thread(self.probe_sync), timeout=timeout)
+
+    def probe_sync(self) -> dict[str, Any]:
+        resource = self._client.system_resource()
+        sessions = self._client.ppp_active()
+        interfaces = self._client.interfaces()
+        return {
+            "reachable": True,
+            "identity": self._client.identity(),
+            "version": _as_str(resource.get("version")),
+            "board_name": _as_str(resource.get("board-name")),
+            "uptime": _as_str(resource.get("uptime")),
+            "cpu_load": resource.get("cpu-load"),
+            "free_memory": resource.get("free-memory"),
+            "ppp_active_sessions": len(sessions),
+            "interfaces": len(interfaces),
+            # Le point qui compte vraiment : sans correlation, pas de debit.
+            "correlated_sessions": sum(
+                1
+                for session in self._correlate(sessions, interfaces)
+                if session.rx_bytes is not None
+            ),
+        }
 
     # ------------------------------------------------------------------
     def _correlate(

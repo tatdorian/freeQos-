@@ -36,6 +36,9 @@ class FakeRouterOsClient:
         self.calls = 0
         self.closed = False
         self.raise_on_ppp: Exception | None = None
+        self.pings: list[tuple[str, int]] = []
+        self.ping_reply: str | None = "12ms"
+        self.ping_error: Exception | None = None
 
     def ppp_active(self) -> list[dict[str, Any]]:
         self.calls += 1
@@ -48,6 +51,27 @@ class FakeRouterOsClient:
 
     def identity(self) -> str | None:
         return self._identity
+
+    def system_resource(self) -> dict[str, Any]:
+        return {
+            "version": "7.21.5 (stable)",
+            "board-name": "CHR",
+            "uptime": "1w2d03:04:05",
+            "cpu-load": "3",
+            "free-memory": "201326592",
+        }
+
+    def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]:
+        self.pings.append((address, count))
+        if self.ping_error is not None:
+            raise self.ping_error
+        if self.ping_reply is None:
+            # Abonne silencieux : RouterOS renvoie des lignes sans champ 'time'.
+            return [{"seq": str(i), "host": address} for i in range(count)]
+        return [
+            {"seq": str(i), "host": address, "time": self.ping_reply, "ttl": "64"}
+            for i in range(count)
+        ]
 
     def close(self) -> None:
         self.closed = True

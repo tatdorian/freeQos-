@@ -39,6 +39,33 @@ CREATE TABLE IF NOT EXISTS subscribers (
 CREATE INDEX IF NOT EXISTS idx_subscribers_pop      ON subscribers (pop_id);
 CREATE INDEX IF NOT EXISTS idx_subscribers_lastseen ON subscribers (last_seen DESC);
 
+-- Routeurs ajoutes depuis l'interface. Ceux de l'inventaire fichier ne sont PAS
+-- stockes ici : ils gardent leurs secrets en variables d'environnement.
+-- Le mot de passe est chiffre au repos (cf. app/services/crypto.py) ; la cle vit
+-- dans l'environnement, jamais en base.
+CREATE TABLE IF NOT EXISTS routers (
+    id                       SERIAL PRIMARY KEY,
+    name                     TEXT NOT NULL UNIQUE,
+    host                     TEXT NOT NULL,
+    port                     INTEGER NOT NULL DEFAULT 8728,
+    username                 TEXT NOT NULL DEFAULT 'qos-ro',
+    password_enc             TEXT NOT NULL,
+    role                     TEXT NOT NULL DEFAULT 'pop',
+    pop_name                 TEXT,
+    enabled                  BOOLEAN NOT NULL DEFAULT TRUE,
+    use_ssl                  BOOLEAN NOT NULL DEFAULT FALSE,
+    timeout_s                DOUBLE PRECISION NOT NULL DEFAULT 5.0,
+    pppoe_interface_pattern  TEXT NOT NULL DEFAULT '<pppoe-{login}>',
+    -- Diagnostic de la derniere tentative de connexion, affiche dans l'interface.
+    last_ok_at               TIMESTAMPTZ,
+    last_error               TEXT,
+    identity                 TEXT,
+    board_name               TEXT,
+    routeros_version         TEXT,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS backhauls (
     id                     SERIAL PRIMARY KEY,
     pop_id                 INTEGER REFERENCES pops(id) ON DELETE CASCADE,

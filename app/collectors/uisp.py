@@ -186,12 +186,17 @@ class MockBackhaulProvider:
         period_s: float = 600.0,
         seed: int = 1337,
         clock: Callable[[], float] = time.time,
+        nominal_by_device: dict[str, float] | None = None,
     ) -> None:
         self.base_capacity_mbps = base_capacity_mbps
         self.variation_pct = max(0.0, min(variation_pct, 95.0))
         self.period_s = max(period_s, 1.0)
         self.seed = seed
         self._clock = clock
+        # Chaque lien oscille autour de SA capacite nominale : sans cela, un
+        # backhaul declare a 300 Mbps afficherait 580 Mbps en lab, et le rapport
+        # "capacite mesuree / nominal" affiche par l'interface n'aurait aucun sens.
+        self._nominal = dict(nominal_by_device or {})
         self._overrides: dict[str, float] = {}
 
     def set_capacity(self, device_id: str, capacity_mbps: float) -> None:
@@ -205,9 +210,17 @@ class MockBackhaulProvider:
         digest = hashlib.sha256(f"{self.seed}:{device_id}".encode()).digest()
         return (int.from_bytes(digest[:4], "big") / 0xFFFFFFFF) * 2 * math.pi
 
+    def base_for(self, device_id: str) -> float:
+        """Capacite nominale de ce lien, ou la valeur par defaut s'il est inconnu."""
+        return self._nominal.get(device_id) or self.base_capacity_mbps
+
+    def set_nominal(self, device_id: str, capacity_mbps: float) -> None:
+        self._nominal[device_id] = capacity_mbps
+
     def sample_for(self, device_id: str, now: float | None = None) -> BackhaulSample:
         now = self._clock() if now is None else now
         ts = datetime.fromtimestamp(now, tz=UTC)
+        base = self.base_for(device_id)
 
         if device_id in self._overrides:
             capacity = self._overrides[device_id]
@@ -218,9 +231,9 @@ class MockBackhaulProvider:
             main = math.sin(2 * math.pi * now / self.period_s + phase)
             slow = math.sin(2 * math.pi * now / (self.period_s * 7.3) + phase / 2)
             modulation = 1.0 + (self.variation_pct / 100.0) * (0.7 * main + 0.3 * slow)
-            capacity = max(1.0, self.base_capacity_mbps * modulation)
+            capacity = max(1.0, base * modulation)
 
-        ratio = capacity / self.base_capacity_mbps if self.base_capacity_mbps else 1.0
+        ratio = capacity / base if base else 1.0
         # Un signal plus faible accompagne une capacite plus faible : -45 dBm au
         # nominal, jusqu'a -80 dBm quand le lien s'effondre.
         signal = -45.0 - 35.0 * max(0.0, min(1.0, 1.0 - ratio))

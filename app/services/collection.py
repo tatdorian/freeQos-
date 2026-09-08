@@ -24,12 +24,15 @@ from app.db.directory import Directory
 from app.db.writer import MetricsWriter
 from app.models import BackhaulSample, Plan, PppoeSession, RunResult, SubscriberSample
 from app.services.rates import RateTracker
+from app.services.rtt import RttProber
 
 logger = logging.getLogger(__name__)
 
 JOB_SUBSCRIBERS = "collect_subscribers"
 JOB_BACKHAULS = "collect_backhauls"
 JOB_PLANS = "refresh_plans"
+JOB_INVENTORY = "reload_inventory"
+JOB_RTT = "probe_rtt"
 
 
 class CollectionService:
@@ -44,6 +47,7 @@ class CollectionService:
         writer: MetricsWriter,
         backhauls: Sequence[BackhaulConfig] | None = None,
         clock: Callable[[], float] = time.monotonic,
+        rtt_prober: RttProber | None = None,
     ) -> None:
         self.settings = settings
         self.collectors = list(collectors)
@@ -63,6 +67,22 @@ class CollectionService:
         )
         self._known_logins: set[str] = set()
         self.last_results: dict[str, RunResult] = {}
+        # Sonde de latence optionnelle. Sans elle, rtt_ms reste NULL : la colonne
+        # existe depuis la phase 1, elle attendait juste une source.
+        self.rtt_prober = rtt_prober
+        # Cibles du prochain tour de sonde, rafraichies a chaque cycle.
+        self._rtt_targets: list[tuple[int, str, MikrotikCollector]] = []
+
+    def set_collectors(self, collectors: Sequence[MikrotikCollector]) -> None:
+        """Remplace l'ensemble des collecteurs a chaud.
+
+        Appele par le RouterRegistry apres un ajout ou une suppression de PoP
+        depuis l'interface. Le RateTracker n'est PAS purge : ses cles sont
+        prefixees par le nom du routeur, donc les series des routeurs conserves
+        gardent leur point de reference, et celles des routeurs retires seront
+        eliminees au prochain prune.
+        """
+        self.collectors = list(collectors)
 
     # ------------------------------------------------------------------
     # Abonnes
@@ -91,6 +111,7 @@ class CollectionService:
         rows: list[tuple[int, SubscriberSample]] = []
         seen: dict[int, tuple[str | None, datetime]] = {}
         active_keys: set[str] = set()
+        rtt_targets: list[tuple[int, str, MikrotikCollector]] = []
 
         for collector, sessions in sessions_by_router:
             try:
@@ -137,12 +158,23 @@ class CollectionService:
                             tx_bytes=session.tx_bytes,
                             rx_bps=rate.rx_bps,
                             tx_bps=rate.tx_bps,
+                            # Derniere mesure de latence si elle n'est pas perimee.
+                            rtt_ms=(
+                                self.rtt_prober.get(subscriber_id)
+                                if self.rtt_prober is not None
+                                else None
+                            ),
                         ),
                     )
                 )
                 seen[subscriber_id] = (session.address, started_at)
+                if session.address:
+                    rtt_targets.append((subscriber_id, session.address, collector))
 
         self.rates.prune(active_keys)
+        self._rtt_targets = rtt_targets
+        if self.rtt_prober is not None:
+            self.rtt_prober.forget_all_but({sid for sid, _, _ in rtt_targets})
 
         written = 0
         try:
@@ -234,6 +266,34 @@ class CollectionService:
             duration_s=self._clock() - monotonic,
             ok=not errors,
             items=written,
+            errors=errors,
+        )
+        await self._finalize(result)
+        return result
+
+    # ------------------------------------------------------------------
+    # Latence
+    # ------------------------------------------------------------------
+    async def probe_rtt(self) -> RunResult:
+        """Sonde un lot d'abonnes. Les mesures sont rattachees au cycle suivant."""
+        started_at = _utcnow()
+        monotonic = self._clock()
+        errors: list[str] = []
+        answered = 0
+
+        if self.rtt_prober is not None:
+            try:
+                answered = await self.rtt_prober.probe(self._rtt_targets)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(str(exc))
+                logger.exception("Sonde de latence impossible")
+
+        result = RunResult(
+            job=JOB_RTT,
+            started_at=started_at,
+            duration_s=self._clock() - monotonic,
+            ok=not errors,
+            items=answered,
             errors=errors,
         )
         await self._finalize(result)

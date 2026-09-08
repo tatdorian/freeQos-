@@ -33,8 +33,9 @@ En phase 1 les trois sont **observés**, aucun n'est encore piloté.
 | Phase | Contenu | Statut |
 |---|---|---|
 | **1** | Collecte `/ppp active` multi-routeurs, capacité backhaul, plans, TimescaleDB, boucle périodique, API de lecture, `/health` | **fait** |
+| **1.5** | Interface d'administration, connexion d'un PoP depuis l'UI, inventaire à chaud, sonde de latence | **fait** |
 | 2 | Enforcement : files CAKE par abonné et file parent backhaul | à venir |
-| 3 | Score QoE (latence sous charge, RTT par abonné) | table `qoe_scores` déjà créée |
+| 3 | Score QoE (latence **sous charge**) | RTT collecté, corrélation au débit à faire |
 | 4 | Boucle fermée (ajustement selon QoE + capacité radio) | à venir |
 
 Garde-fou : `ENFORCEMENT_ENABLED` est à `false` et **le démarrage échoue si on le passe à
@@ -57,6 +58,85 @@ open http://localhost:8000/docs            # API
 
 Sans routeur sous la main, les providers `mock` suffisent à faire tourner toute la chaîne :
 `BACKHAUL_PROVIDER=mock` et `PLAN_PROVIDER=mock` (valeurs par défaut).
+
+### Connecter un PoP depuis l'interface
+
+Onglet **PoPs** → formulaire *Connecter un PoP*. **Tester la connexion** ouvre une
+session API en lecture seule et renvoie l'identité du routeur, sa version RouterOS et
+le nombre de sessions PPPoE — dont celles dont les compteurs sont effectivement
+corrélés, qui est le seul chiffre qui garantit qu'un débit sera calculable.
+**Enregistrer** ajoute le PoP à l'inventaire : il est interrogé **au cycle suivant,
+sans redémarrage**.
+
+Prérequis, une seule fois :
+
+```bash
+python -m app.services.crypto     # génère une clé Fernet
+# la coller dans APP_SECRET_KEY du .env, puis redémarrer
+```
+
+Sans cette clé l'API **refuse** d'enregistrer un PoP et le dit dans l'interface : elle
+n'écrira jamais un mot de passe de routeur en clair dans PostgreSQL. Les mots de passe
+enregistrés sont chiffrés au repos ; la clé, elle, reste dans l'environnement.
+
+Les deux inventaires coexistent :
+
+| Source | Secrets | Modifiable dans l'UI |
+|---|---|---|
+| `config/routers.yml` (fichier) | variables d'environnement | non — signalé « édité dans routers.yml » |
+| Interface | chiffrés en base (Fernet) | oui — tester / désactiver / retirer |
+
+En cas d'homonymie **le fichier gagne** : une déclaration versionnée et revue prime sur
+une saisie au clavier.
+
+### Interface d'administration
+
+Quatre vues, thème sombre, à `http://localhost:8000/` :
+
+- **Tableau de bord** — débit global (download/upload en miroir, graphe live), abonnés en
+  ligne, débit vendu et son taux d'utilisation, capacité backhaul, top consommateurs avec
+  barre d'usage vs plan, cartes backhaul (capacité vs nominal, charge vs capacité).
+- **Arbre réseau** — PoP → backhaul, charge réelle face à la capacité radio du moment.
+  C'est ce rapport qui déterminera le débit parent du shaping en phase 2.
+- **Abonnés** — table filtrable ; un clic ouvre la série de débit de l'abonné.
+- **PoPs** — inventaire et connexion d'un routeur.
+
+Aucune dépendance externe : ni framework, ni CDN, ni chaîne de build. Les graphes sont du
+SVG généré à la main, pour que le contrôleur reste utilisable sur une VM de management
+coupée d'internet.
+
+### Parité avec LibreQoS : ce qui est possible, ce qui ne l'est pas
+
+L'interface reprend la lecture de LibreQoS, mais la contrainte hors-bande impose une
+différence de fond qu'il vaut mieux connaître avant de comparer les deux :
+
+| Signal | LibreQoS (inline) | freeQoS (hors-bande) |
+|---|---|---|
+| Débit par abonné | compteurs du shaper | `/interface` de la session PPPoE — **équivalent** |
+| Débit par site / backhaul | arbre du shaper | agrégation PoP + capacité UISP — **équivalent** |
+| Débit vs plan | oui | oui — **équivalent** |
+| **RTT par abonné** | **passif**, horodatages TCP de chaque flux | **sonde active** `/ping` depuis le PoP, par lots |
+| **Retransmissions TCP** | passif, eBPF | **impossible** — exige de voir les paquets |
+| Latence **sous charge** | mesurée en continu sur le trafic réel | à dériver en corrélant RTT et débit (phase 3) |
+
+Autrement dit : tout ce qui se lit dans des compteurs est à parité. Tout ce qui exige
+d'inspecter les paquets ne l'est pas, et ne le sera jamais depuis une VM de management —
+c'est le prix du hors-bande, pas une lacune d'implémentation.
+
+La sonde RTT est **désactivée par défaut** (`RTT_ENABLED=false`) : elle consomme du CPU
+routeur, contrairement à la mesure passive. Une fois activée, elle sonde un lot d'abonnés
+par cycle en tourniquet, et la mesure est rattachée à l'échantillon de débit suivant —
+une seule ligne par abonné et par cycle, pas de lignes ne portant qu'un RTT. Un abonné
+qui bloque l'ICMP reste à `NULL` : pas de valeur inventée.
+
+```bash
+RTT_ENABLED=true
+RTT_INTERVAL_S=30      # période de sondage
+RTT_BATCH_SIZE=20      # abonnés sondés par cycle
+```
+
+Le compte `qos-ro` doit posséder la politique `test` (elle est dans le groupe recommandé
+plus bas).
 
 ### Développement
 
@@ -82,6 +162,7 @@ app/
 │   ├── schema.sql       Tables, hypertables, vues (idempotent)
 │   ├── database.py      Pool asyncpg, migration, politiques Timescale
 │   ├── directory.py     Référentiel : PoPs / abonnés / backhauls (upsert + cache)
+│   ├── routers_repo.py  Inventaire dynamique des routeurs (secrets chiffrés)
 │   ├── writer.py        Écriture des séries (+ double mémoire)
 │   └── repository.py    Lectures agrégées pour l'API
 ├── collectors/
@@ -91,8 +172,12 @@ app/
 │   └── parsing.py       Normalisation des valeurs RouterOS/RADIUS
 ├── services/
 │   ├── rates.py         Dérivation des débits + détection de reset de compteurs
+│   ├── crypto.py        Chiffrement des identifiants routeur (Fernet)
+│   ├── registry.py      Inventaire vivant : fusion fichier + base, rechargement à chaud
 │   └── collection.py    Orchestration d'un cycle
-└── web/                 Tableau de bord minimal (HTML rendu serveur, zéro dépendance JS)
+└── web/                 Interface d'administration (SPA sans framework ni CDN)
+    ├── ui.py            Squelette servi par FastAPI
+    └── static/          app.css + app.js (graphes SVG faits main)
 ```
 
 ### Points techniques qui méritent attention
@@ -209,6 +294,14 @@ que la boucle centrale devra suivre, sans radio.
 | `GET` | `/api/v1/subscribers/{id}` | Fiche abonné |
 | `GET` | `/api/v1/subscribers/{id}/metrics` | Série agrégée (`minutes`, `bucket_seconds`) |
 | `GET` | `/api/v1/backhauls` · `/latest` · `/{id}/metrics` | Idem côté radio |
+| `GET` | `/api/v1/overview` | Chiffres de tête du tableau de bord |
+| `GET` | `/api/v1/throughput` | Débit agrégé du réseau dans le temps |
+| `GET` | `/api/v1/network/tree` | Arbre PoP → backhauls, capacité et charge |
+| `GET` | `/api/v1/pops/routers` | Inventaire des routeurs (fichier + base) |
+| `POST` | `/api/v1/pops/routers/test` | Teste une connexion **sans rien enregistrer** |
+| `POST` | `/api/v1/pops/routers` | Enregistre un routeur |
+| `PATCH` · `DELETE` | `/api/v1/pops/routers/{id}` | Modifie / retire un routeur |
+| `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
 | `GET` | `/api/v1/status` · `/status/runs` · `/status/counters` | Exploitation |
 | `POST` | `/api/v1/jobs/{job}/run` | Rejoue un cycle de **lecture** hors cadence |
 | `GET` | `/` | Tableau de bord |
@@ -220,13 +313,14 @@ Documentation interactive : `/docs`.
 ## Modèle de données
 
 **Référentiel** — `pops`, `subscribers` (login PPPoE unique, plan, PoP, `last_seen`),
-`backhauls` (PoP, `uisp_device_id`, capacité nominale).
+`backhauls` (PoP, `uisp_device_id`, capacité nominale), `routers` (PoPs ajoutés depuis
+l'interface, mot de passe chiffré, diagnostic de la dernière connexion).
 
 **Séries temporelles** (hypertables) :
 
 | Table | Contenu |
 |---|---|
-| `subscriber_metrics` | `ts`, `subscriber_id`, `rx_bps`, `tx_bps`, `rx_bytes`, `tx_bytes`, `rtt_ms`, `session_uptime_s` |
+| `subscriber_metrics` | `ts`, `subscriber_id`, `rx_bps`, `tx_bps`, `rx_bytes`, `tx_bytes`, `rtt_ms` (si la sonde est active), `session_uptime_s` |
 | `backhaul_metrics` | `ts`, `backhaul_id`, capacité (globale/down/up), `signal_dbm`, `airtime_pct`, MCS, `online` |
 | `qoe_scores` | `ts`, `subscriber_id`, `score`, `components` — phase 3 |
 
@@ -244,7 +338,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 129 tests, aucune infrastructure requise
+make test        # 186 tests, aucune infrastructure requise
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et
@@ -253,7 +347,9 @@ providers simulés, writer et référentiel en mémoire, horloge injectable.
 
 Couverture notable : corrélation d'interface (y compris ambiguë), reconnexion PPPoE,
 débits aberrants, isolation des pannes multi-routeurs, non-chevauchement du scheduler,
-non-divulgation des secrets par l'API, absence de dépendance CDN dans l'UI.
+non-divulgation des secrets par l'API, absence de dépendance CDN dans l'UI, chiffrement
+des identifiants, fusion et rechargement à chaud de l'inventaire, refus d'écrire un
+secret sans clé de chiffrement, tourniquet et péremption des mesures de latence.
 
 ### Tests d'intégration (optionnels)
 
@@ -288,6 +384,7 @@ configuration, aucune valeur codée en dur. Démarche conseillée :
 
 - Aucun code sur le chemin des paquets.
 - Aucune écriture vers un équipement en phase 1 (ni RouterOS, ni radio, ni CoA RADIUS —
-  seules les interfaces sont posées).
+  seules les interfaces sont posées). Connecter un PoP écrit **en base** quels routeurs
+  interroger ; rien n'est poussé sur le réseau.
 - La radio n'est **jamais** pilotée : sa capacité est lue, point.
 - La boucle locale rapide du PoP n'est pas implémentée ici.

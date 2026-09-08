@@ -31,10 +31,13 @@ async def list_subscribers(
 async def subscribers_latest(
     repo: RepositoryDep,
     pop_id: Annotated[int | None, Query()] = None,
+    search: Annotated[str | None, Query(description="Filtre sur le login PPPoE")] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     order_by: Annotated[Literal["total", "down", "up", "login"], Query()] = "total",
 ) -> list[dict[str, Any]]:
-    return await repo.subscriber_latest(pop_id=pop_id, limit=limit, order_by=order_by)
+    return await repo.subscriber_latest(
+        pop_id=pop_id, search=search, limit=limit, order_by=order_by
+    )
 
 
 @router.get("/subscribers/{subscriber_id}", summary="Fiche d'un abonne")
@@ -109,3 +112,39 @@ async def backhaul_metrics(
         "bucket_seconds": window.bucket_seconds,
         "points": points,
     }
+
+
+# --------------------------------------------------------------------------
+# Vues d'ensemble consommees par le tableau de bord
+# --------------------------------------------------------------------------
+
+
+@router.get("/overview", summary="Chiffres de tete du tableau de bord")
+async def overview(repo: RepositoryDep) -> dict[str, Any]:
+    return await repo.overview()
+
+
+@router.get("/throughput", summary="Debit agrege du reseau dans le temps")
+async def throughput(
+    repo: RepositoryDep,
+    window: TimeRangeDep,
+    pop_id: Annotated[int | None, Query()] = None,
+) -> dict[str, Any]:
+    points = await repo.throughput_series(
+        start=window.start,
+        end=window.end,
+        bucket_seconds=window.bucket_seconds,
+        pop_id=pop_id,
+    )
+    return {
+        "start": window.start,
+        "end": window.end,
+        "bucket_seconds": window.bucket_seconds,
+        "orientation": "rx=upload abonnes, tx=download abonnes (point de vue routeur)",
+        "points": points,
+    }
+
+
+@router.get("/network/tree", summary="Arbre PoP -> backhauls, capacite et charge")
+async def network_tree(repo: RepositoryDep) -> list[dict[str, Any]]:
+    return await repo.network_tree()
