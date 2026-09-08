@@ -38,6 +38,39 @@ QUEUE_TYPE_UP = f"{PREFIX}cake-up"
 QUEUE_TYPE_DOWN = f"{PREFIX}cake-down"
 
 
+# Source du debit finalement applique, exposee a l'interface.
+SOURCE_BOOST = "boost"
+SOURCE_OVERRIDE = "override"
+SOURCE_PLAN = "plan"
+SOURCE_NONE = "none"
+
+
+def effective_rate(
+    *,
+    plan_mbps: float | None,
+    override_mbps: float | None,
+    boost_mbps: float | None,
+    boost_expires_at: datetime | None,
+    now: datetime | None = None,
+) -> tuple[float | None, str]:
+    """Debit reellement applique, et d'ou il vient.
+
+    UNE SEULE implementation de la regle de priorite. L'interface doit afficher
+    exactement ce que le planificateur va ecrire : recoder la regle cote client
+    garantirait qu'elles divergent un jour.
+
+    Priorite : boost non expire, puis surcharge permanente, puis plan RADIUS.
+    """
+    if boost_mbps and boost_expires_at is not None:
+        if boost_expires_at > (now or datetime.now(tz=UTC)):
+            return boost_mbps, SOURCE_BOOST
+    if override_mbps:
+        return override_mbps, SOURCE_OVERRIDE
+    if plan_mbps:
+        return plan_mbps, SOURCE_PLAN
+    return None, SOURCE_NONE
+
+
 @dataclass(slots=True)
 class SubscriberTarget:
     """Un abonne a shaper.
@@ -73,14 +106,22 @@ class SubscriberTarget:
         return self.boost_expires_at > (now or datetime.now(tz=UTC))
 
     def effective_down_at(self, now: datetime | None = None) -> float | None:
-        if self.boost_active(now) and self.boost_down_mbps:
-            return self.boost_down_mbps
-        return self.override_down_mbps or self.plan_down_mbps
+        return effective_rate(
+            plan_mbps=self.plan_down_mbps,
+            override_mbps=self.override_down_mbps,
+            boost_mbps=self.boost_down_mbps,
+            boost_expires_at=self.boost_expires_at,
+            now=now,
+        )[0]
 
     def effective_up_at(self, now: datetime | None = None) -> float | None:
-        if self.boost_active(now) and self.boost_up_mbps:
-            return self.boost_up_mbps
-        return self.override_up_mbps or self.plan_up_mbps
+        return effective_rate(
+            plan_mbps=self.plan_up_mbps,
+            override_mbps=self.override_up_mbps,
+            boost_mbps=self.boost_up_mbps,
+            boost_expires_at=self.boost_expires_at,
+            now=now,
+        )[0]
 
     @property
     def effective_down(self) -> float | None:

@@ -18,6 +18,33 @@ def _rows(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
     return [dict(record) for record in records]
 
 
+def _with_effective_limits(row: dict[str, Any]) -> dict[str, Any]:
+    """Ajoute la limite REELLEMENT appliquee et d'ou elle vient.
+
+    Calculee avec la meme fonction que le planificateur : l'interface doit
+    afficher exactement ce qui sera ecrit sur le routeur. Sans cela, un abonne
+    bride a 512 kbps continuerait de s'afficher avec son plan de 500 Mbps.
+    """
+    from app.enforcement.planner import effective_rate
+
+    descendant, source = effective_rate(
+        plan_mbps=row.get("plan_down_mbps"),
+        override_mbps=row.get("override_down_mbps"),
+        boost_mbps=row.get("boost_down_mbps"),
+        boost_expires_at=row.get("boost_expires_at"),
+    )
+    montant, _ = effective_rate(
+        plan_mbps=row.get("plan_up_mbps"),
+        override_mbps=row.get("override_up_mbps"),
+        boost_mbps=row.get("boost_up_mbps"),
+        boost_expires_at=row.get("boost_expires_at"),
+    )
+    row["effective_down_mbps"] = descendant
+    row["effective_up_mbps"] = montant
+    row["limit_source"] = source
+    return row
+
+
 class MetricsRepository:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
@@ -102,14 +129,20 @@ class MetricsRepository:
                 """
                 SELECT s.id, s.pppoe_login, s.pop_id, p.name AS pop_name,
                        s.plan_down_mbps, s.plan_up_mbps, s.plan_source,
-                       host(s.last_ip) AS last_ip, s.last_seen, s.created_at
+                       host(s.last_ip) AS last_ip, s.last_seen, s.created_at,
+                       pol.max_down_mbps AS override_down_mbps,
+                       pol.max_up_mbps   AS override_up_mbps,
+                       pol.boost_down_mbps, pol.boost_up_mbps, pol.boost_expires_at,
+                       pol.boost_reason, pol.note AS policy_note
                   FROM subscribers s
                   LEFT JOIN pops p ON p.id = s.pop_id
+                  LEFT JOIN shaping_policies pol
+                         ON pol.scope = 'subscriber' AND pol.target_key = s.pppoe_login
                  WHERE s.id = $1
                 """,
                 subscriber_id,
             )
-        return dict(record) if record else None
+        return _with_effective_limits(dict(record)) if record else None
 
     async def get_subscriber_by_login(self, login: str) -> dict[str, Any] | None:
         async with self._pool.acquire() as conn:
@@ -168,9 +201,19 @@ class MetricsRepository:
         async with self._pool.acquire() as conn:
             records = await conn.fetch(
                 f"""
-                SELECT * FROM subscriber_latest
-                 WHERE ($1::int IS NULL OR pop_id = $1)
-                   AND ($2::text IS NULL OR pppoe_login ILIKE '%' || $2 || '%')
+                SELECT l.*,
+                       p.max_down_mbps  AS override_down_mbps,
+                       p.max_up_mbps    AS override_up_mbps,
+                       p.boost_down_mbps,
+                       p.boost_up_mbps,
+                       p.boost_expires_at,
+                       p.boost_reason,
+                       p.note           AS policy_note
+                  FROM subscriber_latest l
+                  LEFT JOIN shaping_policies p
+                         ON p.scope = 'subscriber' AND p.target_key = l.pppoe_login
+                 WHERE ($1::int IS NULL OR l.pop_id = $1)
+                   AND ($2::text IS NULL OR l.pppoe_login ILIKE '%' || $2 || '%')
                  ORDER BY {order_sql}
                  LIMIT $3
                 """,  # noqa: S608 - order_sql provient d'une liste blanche
@@ -178,7 +221,7 @@ class MetricsRepository:
                 search,
                 limit,
             )
-        return _rows(records)
+        return [_with_effective_limits(dict(record)) for record in records]
 
     # ------------------------------------------------------------ Backhauls
     async def list_backhauls(self, *, pop_id: int | None = None) -> list[dict[str, Any]]:

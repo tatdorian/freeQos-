@@ -316,15 +316,15 @@ async function loadTopTalkers() {
   }
   host.innerHTML =
     '<table><thead><tr><th>Login</th><th>PoP</th><th class="num">Download</th>' +
-    '<th style="width:150px">vs plan</th><th class="num">Upload</th>' +
+    '<th style="width:150px">vs limite</th><th class="num">Upload</th>' +
     '<th class="num">Latence</th></tr></thead><tbody>' +
     rows.map((r) => {
-      const planDown = (r.plan_down_mbps || 0) * 1e6;
+      const limiteDown = (r.effective_down_mbps || 0) * 1e6;
       return '<tr class="clickable" data-sub="' + r.subscriber_id + '">' +
         '<td class="login">' + esc(r.pppoe_login) + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td>' +
         '<td class="num" style="color:var(--down)">' + esc(bpsText(r.tx_bps)) + '</td>' +
-        '<td>' + meter(r.tx_bps, planDown) + '</td>' +
+        '<td>' + meter(r.tx_bps, limiteDown) + '</td>' +
         '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
         '<td class="num">' + rtt(r.rtt_ms) + '</td>' +
         '</tr>';
@@ -472,7 +472,7 @@ function renderTreeNode(node, profondeur) {
       '<span class="d">&darr; ' + esc(bpsText(node.totals.tx)) + '</span>' +
       '<span class="u">&uarr; ' + esc(bpsText(node.totals.rx)) + '</span>';
   } else if (s) {
-    const plan = (s.plan_down_mbps || 0) * 1e6;
+    const plan = (s.effective_down_mbps || s.plan_down_mbps || 0) * 1e6;
     debits =
       '<span class="d">&darr; ' + esc(bpsText(s.tx_bps)) + '</span>' +
       '<span class="u">&uarr; ' + esc(bpsText(s.rx_bps)) + '</span>';
@@ -554,6 +554,30 @@ async function loadNetwork() {
 
 /* --------------------------------------------------------------- abonnes */
 
+/** Libelle de la limite appliquee, et d'ou elle vient.
+ *  Afficher le plan RADIUS quand une surcharge existe serait mensonger : ce
+ *  n'est pas ce que le routeur applique. */
+function limitCell(r) {
+  const down = r.effective_down_mbps;
+  const up = r.effective_up_mbps;
+  if (!down && !up) return '<span style="color:var(--faint)">-</span>';
+
+  const texte = esc(mbps(down || 0) + ' / ' + mbps(up || 0));
+  if (r.limit_source === 'plan') return texte;
+
+  const marque = r.limit_source === 'boost'
+    ? '<span class="boost-pill" style="margin-left:.4rem">boost</span>'
+    : '<span class="badge warn" style="margin-left:.4rem">impose</span>';
+  const plan = r.plan_down_mbps
+    ? 'Plan : ' + mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0)
+    : 'Aucun plan RADIUS';
+  const note = r.policy_note || r.boost_reason;
+  const couleur = r.limit_source === 'boost' ? '#a78bfa' : 'var(--warn)';
+
+  return '<span title="' + esc(plan + (note ? ' — ' + note : '')) + '">' +
+    '<span style="color:' + couleur + '">' + texte + '</span>' + marque + '</span>';
+}
+
 async function loadSubscribers() {
   let query = state.subSearch ? '&search=' + encodeURIComponent(state.subSearch) : '';
   if (state.subPop) query += '&pop_id=' + encodeURIComponent(state.subPop);
@@ -587,21 +611,23 @@ async function loadSubscribers() {
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Login PPPoE</th><th>PoP</th><th class="num">Plan</th>' +
-    '<th class="num">Download</th><th style="width:140px">vs plan</th>' +
+    '<table><thead><tr><th>Login PPPoE</th><th>PoP</th>' +
+    '<th class="num" title="Debit reellement applique">Limite</th>' +
+    '<th class="num">Download</th><th style="width:140px">vs limite</th>' +
     '<th class="num">Upload</th><th class="num">Latence</th><th>Boost</th>' +
     '<th class="num">Session</th><th class="num">Mesure</th>' +
     '<th class="sticky-actions"></th>' +
     '</tr></thead><tbody>' +
     rows.map((r) => {
-      const planDown = (r.plan_down_mbps || 0) * 1e6;
+      // La jauge se compare a la limite APPLIQUEE, pas au plan commercial :
+      // un abonne bride a 512 kbps qui en consomme 400 est a 78 %, pas a 0,08 %.
+      const limiteDown = (r.effective_down_mbps || 0) * 1e6;
       return '<tr class="clickable" data-sub="' + r.subscriber_id + '">' +
         '<td class="login">' + esc(r.pppoe_login) + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td>' +
-        '<td class="num">' + (r.plan_down_mbps
-          ? esc(mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0)) : '-') + '</td>' +
+        '<td class="num">' + limitCell(r) + '</td>' +
         '<td class="num" style="color:var(--down)">' + esc(bpsText(r.tx_bps)) + '</td>' +
-        '<td>' + meter(r.tx_bps, planDown) + '</td>' +
+        '<td>' + meter(r.tx_bps, limiteDown) + '</td>' +
         '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
         '<td class="num">' + rtt(r.rtt_ms) + '</td>' +
         '<td>' + (parLogin[r.pppoe_login]
@@ -650,9 +676,17 @@ async function openSubscriber(id) {
       '<button class="sm" id="drawer-close">Fermer</button></div>' +
       '<div class="grid stats" style="margin-bottom:1rem">' +
         statCard('', 'PoP', esc(s.pop_name || '-'), '', '') +
-        statCard('', 'Plan', s.plan_down_mbps
-          ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : '-',
-          '', esc(s.plan_source || '')) +
+        statCard('', 'Limite appliquee',
+          s.effective_down_mbps
+            ? esc(mbps(s.effective_down_mbps) + ' / ' + mbps(s.effective_up_mbps || 0))
+            : '-',
+          '',
+          s.limit_source === 'boost'
+            ? '<span class="boost-pill">boost</span>'
+            : s.limit_source === 'override'
+              ? '<span class="badge warn">impose</span> plan : ' +
+                esc(mbps(s.plan_down_mbps || 0))
+              : esc(s.plan_source || 'plan RADIUS')) +
         statCard('', 'Derniere IP', esc(s.last_ip || '-'), '', '') +
       '</div>' +
       (data.points.some((p) => p.rtt_ms_avg !== null && p.rtt_ms_avg !== undefined)

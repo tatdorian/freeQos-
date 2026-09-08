@@ -901,3 +901,118 @@ async def test_suppression_d_un_pop_emporte_ses_donnees(database: Database, now:
 
     with pytest.raises(LookupError):
         await repo.delete_pop(jetable)
+
+
+async def test_la_limite_appliquee_remonte_avec_sa_source(
+    database: Database, now: datetime
+) -> None:
+    """L'interface doit afficher ce que le routeur applique, pas le plan
+    commercial : un abonne bride a 512 kbps ne doit pas s'afficher a 500 Mbps."""
+    from datetime import timedelta
+
+    from app.db.topology_repo import TopologyRepository
+
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+    politiques = TopologyRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("Site")
+    for login in ("normal", "bride", "boostee"):
+        abonne = await directory.ensure_subscriber(
+            login, pop_id=pop_id, plan=Plan(500, 100, "radius")
+        )
+        await writer.write_subscriber_metrics(
+            [
+                (
+                    abonne,
+                    SubscriberSample(
+                        ts=now,
+                        login=login,
+                        router_name="r",
+                        pop_name="Site",
+                        rx_bps=1e6,
+                        tx_bps=1e6,
+                    ),
+                )
+            ]
+        )
+
+    await politiques.upsert_policy(
+        scope="subscriber",
+        target_key="bride",
+        max_down_mbps=0.512,
+        max_up_mbps=0.128,
+        note="impaye",
+    )
+    await politiques.set_boost(
+        scope="subscriber",
+        target_key="boostee",
+        down_mbps=1500,
+        up_mbps=300,
+        expires_at=now + timedelta(hours=1),
+        reason="geste commercial",
+    )
+
+    par_login = {r["pppoe_login"]: r for r in await repo.subscriber_latest(limit=10)}
+
+    # Sans surcharge : le plan fait foi.
+    assert par_login["normal"]["effective_down_mbps"] == 500
+    assert par_login["normal"]["limit_source"] == "plan"
+
+    # Bride : c'est la surcharge qui est appliquee, et le plan reste visible.
+    assert par_login["bride"]["effective_down_mbps"] == 0.512
+    assert par_login["bride"]["effective_up_mbps"] == 0.128
+    assert par_login["bride"]["limit_source"] == "override"
+    assert par_login["bride"]["plan_down_mbps"] == 500
+    assert par_login["bride"]["policy_note"] == "impaye"
+
+    # Boost : il prime sur tout le reste tant qu'il court.
+    assert par_login["boostee"]["effective_down_mbps"] == 1500
+    assert par_login["boostee"]["limit_source"] == "boost"
+    assert par_login["boostee"]["boost_reason"] == "geste commercial"
+
+    # La fiche detaillee dit la meme chose.
+    fiche = await repo.get_subscriber(par_login["bride"]["subscriber_id"])
+    assert fiche["effective_down_mbps"] == 0.512
+    assert fiche["limit_source"] == "override"
+
+
+async def test_boost_expire_ne_compte_plus_dans_la_limite(
+    database: Database, now: datetime
+) -> None:
+    """Un boost echu ne doit plus etre affiche comme la limite en vigueur."""
+    from datetime import timedelta
+
+    from app.db.topology_repo import TopologyRepository
+
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("Site")
+    abonne = await directory.ensure_subscriber(
+        "ancien-boost", pop_id=pop_id, plan=Plan(100, 20, "radius")
+    )
+    await writer.write_subscriber_metrics(
+        [
+            (
+                abonne,
+                SubscriberSample(
+                    ts=now, login="ancien-boost", router_name="r", pop_name="Site", tx_bps=1.0
+                ),
+            )
+        ]
+    )
+    await TopologyRepository(database.pool).set_boost(
+        scope="subscriber",
+        target_key="ancien-boost",
+        down_mbps=900,
+        up_mbps=None,
+        expires_at=now - timedelta(minutes=5),
+    )
+
+    ligne = (await repo.subscriber_latest(limit=5))[0]
+
+    assert ligne["effective_down_mbps"] == 100
+    assert ligne["limit_source"] == "plan"
