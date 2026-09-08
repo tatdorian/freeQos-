@@ -34,13 +34,12 @@ En phase 1 les trois sont **observés**, aucun n'est encore piloté.
 |---|---|---|
 | **1** | Collecte `/ppp active` multi-routeurs, capacité backhaul, plans, TimescaleDB, boucle périodique, API de lecture, `/health` | **fait** |
 | **1.5** | Interface d'administration, connexion d'un PoP depuis l'UI, inventaire à chaud, sonde de latence | **fait** |
-| 2 | Enforcement : files CAKE par abonné et file parent backhaul | à venir |
+| **2** | Topologie, analyse de l'existant, files CAKE par abonné et parent backhaul | **fait** |
 | 3 | Score QoE (latence **sous charge**) | RTT collecté, corrélation au débit à faire |
 | 4 | Boucle fermée (ajustement selon QoE + capacité radio) | à venir |
 
-Garde-fou : `ENFORCEMENT_ENABLED` est à `false` et **le démarrage échoue si on le passe à
-`true`**, tant que la phase 2 n'existe pas. Aucun module ne contient de méthode d'écriture
-vers un équipement.
+L'enforcement existe désormais, mais reste **désactivé par défaut** : `ENFORCEMENT_ENABLED`
+doit être passé à `true` explicitement, et chaque plan demande une application distincte.
 
 ---
 
@@ -105,6 +104,98 @@ Aucune dépendance externe : ni framework, ni CDN, ni chaîne de build. Les grap
 SVG généré à la main, pour que le contrôleur reste utilisable sur une VM de management
 coupée d'internet.
 
+### Comprendre la topologie : quel lien va où
+
+C'est la question qui conditionne tout le reste — sans elle, impossible de savoir quel
+backhaul un abonné traverse, donc quelle file doit être son parent.
+
+**Cinq sources, réconciliées** :
+
+| Source | Ce qu'elle apporte |
+|---|---|
+| `/ip/neighbor` | **source maîtresse** : MNDP, LLDP et CDP. Pour chaque interface locale, l'équipement d'en face (identité, plateforme, MAC, IP) |
+| `/interface/ethernet` | débit négocié = plafond physique du lien |
+| `/ip/address` | segment L3 auquel appartient le lien |
+| UISP `/devices` | liens radio PtP/PtMP, capacité du moment, rattachement station → AP |
+| `/ppp/active` → `caller-id` | **la jointure clé** : la MAC du CPE de l'abonné |
+
+Ce dernier point mérite d'être souligné. Le champ `caller-id` de `/ppp/active` contient la
+**MAC du CPE**. UISP sait sur quel secteur radio chaque CPE est accroché, et connaît sa
+MAC. **Le rapprochement `caller-id` ↔ MAC de station UISP est le seul moyen de savoir par
+quelle antenne passe un abonné.** Sans lui, on sait qu'il est sur un PoP, pas quelle est sa
+vraie chaîne de goulots.
+
+La réconciliation se fait sur la MAC normalisée : RouterOS écrit `AA:BB:CC:DD:EE:FF`, UISP
+parfois `aa-bb-cc-dd-ee-ff`. Sans normalisation, la jointure échoue en silence.
+
+Le graphe obtenu — `Gateway → Cœur → PoP → Backhaul → Secteur → Abonné` — **est** l'arbre
+de shaping : le parent d'une file abonné est le lien qu'il traverse.
+
+Quand le rattachement est inconnu, la file abonné est créée **sans parent** plutôt qu'avec
+un parent deviné : le dernier km est correctement shapé, la contention backhaul ne l'est
+pas, et le plan le dit explicitement (`unparented_subscribers`). Rattacher un abonné au
+mauvais backhaul serait pire que de ne rien faire.
+
+La classification automatique des rôles est une heuristique (d'après la plateforme
+annoncée) : elle est corrigeable d'un menu déroulant dans l'interface, et la correction
+prime sur la détection.
+
+### Piloter les files
+
+**Le principe.** Preseem et LibreQoS reposent sur la même idée : pour qu'une gestion de
+file serve à quelque chose, il faut que **le goulot soit chez nous**. On shape donc
+légèrement **sous** la capacité réelle du lien (`SHAPING_SAFETY_FACTOR`, 90 % par défaut),
+pour que la file se forme dans CAKE — où on la contrôle — plutôt que dans le buffer de la
+radio, où on ne peut rien.
+
+**Le parcours, en trois temps volontairement séparés :**
+
+```
+GET  /api/v1/shaping/state    ce qui est DÉJÀ configuré sur le routeur
+POST /api/v1/shaping/plan     ce qu'il faudrait changer, commandes exactes
+POST /api/v1/shaping/apply    exécution — dry_run:true par défaut
+```
+
+Dans l'interface : onglet **Shaping** → *Analyser l'existant* → *Calculer le plan* →
+*Appliquer*. Le plan affiche chaque commande RouterOS telle qu'elle sera envoyée, avec sa
+raison et ce qui change :
+
+```
+/queue/type/add name=freeqos-cake-down kind=cake cake-overhead=22 cake-rtt=50ms
+/queue/simple/add name=freeqos-parent-BH-Nord target=ether2 max-limit=300000000/300000000 …
+/queue/simple/add name=freeqos-dupont target="<pppoe-dupont>" max-limit=20000000/100000000 …
+```
+
+**Pour changer une bande passante** : cliquer *Bande passante* sur un lien (onglet
+Topologie) ou *Débit* sur un abonné. Enregistrer **n'écrit rien sur le routeur** — cela
+enregistre l'intention. Le plan montre ensuite ce qui en découle.
+
+**Cinq garde-fous, dans cet ordre :**
+
+1. **Marquage de propriété.** Seules les files portant `comment=freeqos:managed` sont
+   modifiées ou supprimées. Une file posée à la main ou par RADIUS n'est **jamais** touchée ;
+   si son nom entre en collision avec un nom voulu, le plan signale un conflit et s'abstient.
+2. **Plan avant exécution.** Le planificateur est une fonction pure : il produit des
+   commandes comme données. Rien ne part tant qu'on n'a pas appliqué.
+3. **`dry_run` par défaut**, et l'application réelle exige `confirm: true`.
+4. **`ENFORCEMENT_ENABLED`**, le drapeau global : à `false`, aucune écriture ne part,
+   quelle que soit la confirmation.
+5. **Comptes séparés.** L'écriture passe par `qos-rw`, jamais `qos-ro`, sans repli
+   possible. Ne pas déclarer `rw_username` met un PoP hors de portée de toute écriture.
+
+Plus un **coupe-circuit** : au-delà de `ENFORCEMENT_MAX_ACTIONS` (500), le plan est refusé —
+un plan anormalement gros signale presque toujours un état désiré mal calculé.
+
+Toute commande envoyée, y compris simulée, est journalisée dans `enforcement_audit` et
+visible dans l'interface.
+
+**Compte d'écriture RouterOS :**
+
+```
+/user group add name=qos-rw policy=read,write,api,test
+/user add name=qos-rw group=qos-rw password=…
+```
+
 ### Parité avec LibreQoS : ce qui est possible, ce qui ne l'est pas
 
 L'interface reprend la lecture de LibreQoS, mais la contrainte hors-bande impose une
@@ -115,6 +206,7 @@ différence de fond qu'il vaut mieux connaître avant de comparer les deux :
 | Débit par abonné | compteurs du shaper | `/interface` de la session PPPoE — **équivalent** |
 | Débit par site / backhaul | arbre du shaper | agrégation PoP + capacité UISP — **équivalent** |
 | Débit vs plan | oui | oui — **équivalent** |
+| Shaping hiérarchique | HTB + CAKE, arbre du shaper | files simples RouterOS + CAKE, arbre issu de la topologie — **équivalent** |
 | **RTT par abonné** | **passif**, horodatages TCP de chaque flux | **sonde active** `/ping` depuis le PoP, par lots |
 | **Retransmissions TCP** | passif, eBPF | **impossible** — exige de voir les paquets |
 | Latence **sous charge** | mesurée en continu sur le trafic réel | à dériver en corrélant RTT et débit (phase 3) |
@@ -168,12 +260,18 @@ app/
 ├── collectors/
 │   ├── mikrotik.py      RouterOS : /ppp/active + /interface (lecture seule)
 │   ├── uisp.py          BackhaulCapacityProvider : UispProvider | MockBackhaulProvider
+│   ├── topology.py      Découverte du graphe : voisins, capacités, jointure CPE
 │   ├── radius.py        PlanProvider : FreeradiusSqlPlanProvider | MockPlanProvider
 │   └── parsing.py       Normalisation des valeurs RouterOS/RADIUS
+├── enforcement/         PHASE 2 — seul code qui écrit sur un équipement
+│   ├── models.py        État désiré, actions, plan (données pures)
+│   ├── planner.py       Désiré vs réel → commandes. Fonction pure, testée à 100 %
+│   └── routeros.py      Exécution via qos-rw, dry-run, coupe-circuit
 ├── services/
 │   ├── rates.py         Dérivation des débits + détection de reset de compteurs
 │   ├── crypto.py        Chiffrement des identifiants routeur (Fernet)
 │   ├── registry.py      Inventaire vivant : fusion fichier + base, rechargement à chaud
+│   ├── shaping.py       Découverte, analyse de l'existant, plan, application
 │   └── collection.py    Orchestration d'un cycle
 └── web/                 Interface d'administration (SPA sans framework ni CDN)
     ├── ui.py            Squelette servi par FastAPI
@@ -302,6 +400,13 @@ que la boucle centrale devra suivre, sans radio.
 | `POST` | `/api/v1/pops/routers` | Enregistre un routeur |
 | `PATCH` · `DELETE` | `/api/v1/pops/routers/{id}` | Modifie / retire un routeur |
 | `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
+| `GET` | `/api/v1/topology` · `POST /topology/discover` | Graphe du réseau |
+| `PATCH` | `/api/v1/topology/nodes/{key}` | Corriger le rôle d'un équipement |
+| `GET` | `/api/v1/shaping/state` | Ce qui est **déjà** configuré sur les routeurs |
+| `PUT` · `DELETE` | `/api/v1/shaping/policies` | Fixer / retirer un débit imposé |
+| `POST` | `/api/v1/shaping/plan` | Commandes exactes, **sans rien envoyer** |
+| `POST` | `/api/v1/shaping/apply` | Exécution (`dry_run` par défaut) |
+| `GET` | `/api/v1/shaping/audit` | Journal des commandes envoyées |
 | `GET` | `/api/v1/status` · `/status/runs` · `/status/counters` | Exploitation |
 | `POST` | `/api/v1/jobs/{job}/run` | Rejoue un cycle de **lecture** hors cadence |
 | `GET` | `/` | Tableau de bord |
@@ -314,7 +419,10 @@ Documentation interactive : `/docs`.
 
 **Référentiel** — `pops`, `subscribers` (login PPPoE unique, plan, PoP, `last_seen`),
 `backhauls` (PoP, `uisp_device_id`, capacité nominale), `routers` (PoPs ajoutés depuis
-l'interface, mot de passe chiffré, diagnostic de la dernière connexion).
+l'interface, mot de passe chiffré, diagnostic de la dernière connexion),
+`topology_nodes` / `topology_links` (graphe découvert), `subscriber_attachments`
+(abonné → secteur radio), `shaping_policies` (débits imposés à la main),
+`enforcement_audit` (journal des commandes envoyées).
 
 **Séries temporelles** (hypertables) :
 
@@ -338,7 +446,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 186 tests, aucune infrastructure requise
+make test        # 271 tests, dont 252 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et
@@ -350,6 +458,11 @@ débits aberrants, isolation des pannes multi-routeurs, non-chevauchement du sch
 non-divulgation des secrets par l'API, absence de dépendance CDN dans l'UI, chiffrement
 des identifiants, fusion et rechargement à chaud de l'inventaire, refus d'écrire un
 secret sans clé de chiffrement, tourniquet et péremption des mesures de latence.
+
+Côté enforcement, la couverture porte d'abord sur ce qui doit **empêcher** une écriture :
+refus quand `ENFORCEMENT_ENABLED` est faux, absence de repli sur le compte de lecture,
+files tierces jamais modifiées ni supprimées, coupe-circuit sur les gros plans, arrêt au
+premier échec, idempotence du plan (rejouer ne produit rien).
 
 ### Tests d'intégration (optionnels)
 
@@ -383,8 +496,8 @@ configuration, aucune valeur codée en dur. Démarche conseillée :
 ## Non-objectifs assumés
 
 - Aucun code sur le chemin des paquets.
-- Aucune écriture vers un équipement en phase 1 (ni RouterOS, ni radio, ni CoA RADIUS —
-  seules les interfaces sont posées). Connecter un PoP écrit **en base** quels routeurs
-  interroger ; rien n'est poussé sur le réseau.
-- La radio n'est **jamais** pilotée : sa capacité est lue, point.
-- La boucle locale rapide du PoP n'est pas implémentée ici.
+- La radio n'est **jamais** pilotée : sa capacité est lue, point. L'écriture ne concerne
+  que les files RouterOS.
+- Aucune écriture RADIUS (CoA) : seule l'interface est posée.
+- La boucle locale rapide du PoP n'est pas implémentée ici : cette application fixe les
+  baselines que cette boucle respectera.

@@ -166,6 +166,20 @@ class RouterRegistry:
                 pass
             logger.info("Routeur '%s' retire de l'inventaire", name)
 
+    def adopt(self, collectors: Sequence[MikrotikCollector], *, source: str = SOURCE_FILE) -> None:
+        """Enregistre des collecteurs deja construits.
+
+        Sert au demarrage sans base et aux tests : le registre doit connaitre
+        les collecteurs pour que la topologie et le shaping sachent a qui parler,
+        meme quand personne n'a appele reload().
+        """
+        for collector in collectors:
+            nom = collector.name
+            self._collectors[nom] = collector
+            self._fingerprints[nom] = _fingerprint(collector.config)
+            self._sources[nom] = source
+            self._ids.setdefault(nom, None)
+
     def build_probe(self, config: RouterConfig) -> MikrotikCollector:
         """Collecteur jetable pour tester une configuration non encore enregistree."""
         return self._build(config)

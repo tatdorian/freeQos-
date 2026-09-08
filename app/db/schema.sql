@@ -78,6 +78,93 @@ CREATE TABLE IF NOT EXISTS backhauls (
 );
 
 -- -----------------------------------------------------------------------------
+-- Topologie decouverte (phase 2)
+-- -----------------------------------------------------------------------------
+
+-- Un equipement vu sur le reseau. La cle est prefixee par sa source
+-- ("mac:AA:BB:..", "router:pop-nord") pour rester stable entre deux decouvertes.
+CREATE TABLE IF NOT EXISTS topology_nodes (
+    key             TEXT PRIMARY KEY,
+    name            TEXT NOT NULL,
+    kind            TEXT NOT NULL DEFAULT 'unknown',
+    mac             TEXT,
+    address         TEXT,
+    platform        TEXT,
+    version         TEXT,
+    router_name     TEXT,
+    uisp_device_id  TEXT,
+    -- Role corrige a la main dans l'interface : il prime sur l'heuristique.
+    kind_override   TEXT,
+    attributes      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_topology_nodes_mac ON topology_nodes (mac);
+
+-- Une adjacence. capacity_mbps est le plafond PHYSIQUE (debit negocie du port,
+-- ou capacite radio du moment), pas le debit shape.
+CREATE TABLE IF NOT EXISTS topology_links (
+    key             TEXT PRIMARY KEY,
+    source_key      TEXT NOT NULL,
+    target_key      TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    interface       TEXT,
+    capacity_mbps   DOUBLE PRECISION,
+    discovered_by   TEXT,
+    attributes      JSONB NOT NULL DEFAULT '{}'::jsonb,
+    first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_topology_links_source ON topology_links (source_key);
+CREATE INDEX IF NOT EXISTS idx_topology_links_target ON topology_links (target_key);
+
+-- Rattachement abonne -> secteur radio, issu de la jointure caller-id / UISP.
+CREATE TABLE IF NOT EXISTS subscriber_attachments (
+    subscriber_id  BIGINT PRIMARY KEY REFERENCES subscribers(id) ON DELETE CASCADE,
+    sector_key     TEXT,
+    cpe_mac        TEXT,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- -----------------------------------------------------------------------------
+-- Politique de shaping (phase 2)
+-- -----------------------------------------------------------------------------
+
+-- Surcharges posees depuis l'interface. Sans ligne ici, le debit vient du plan
+-- RADIUS (abonne) ou de la capacite mesuree (lien).
+CREATE TABLE IF NOT EXISTS shaping_policies (
+    id              BIGSERIAL PRIMARY KEY,
+    scope           TEXT NOT NULL CHECK (scope IN ('link', 'subscriber')),
+    target_key      TEXT NOT NULL,
+    max_down_mbps   DOUBLE PRECISION,
+    max_up_mbps     DOUBLE PRECISION,
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    note            TEXT,
+    updated_by      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (scope, target_key)
+);
+
+-- Journal de TOUTE commande envoyee a un equipement. C'est la trace dont on a
+-- besoin le jour ou il faut expliquer pourquoi un abonne a change de debit.
+CREATE TABLE IF NOT EXISTS enforcement_audit (
+    id           BIGSERIAL PRIMARY KEY,
+    ts           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    router_name  TEXT NOT NULL,
+    verb         TEXT NOT NULL,
+    path         TEXT NOT NULL,
+    command      TEXT NOT NULL,
+    dry_run      BOOLEAN NOT NULL,
+    ok           BOOLEAN NOT NULL,
+    detail       TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_enforcement_audit_ts ON enforcement_audit (ts DESC);
+
+-- -----------------------------------------------------------------------------
 -- Series temporelles
 -- -----------------------------------------------------------------------------
 

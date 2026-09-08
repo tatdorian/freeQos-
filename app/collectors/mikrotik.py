@@ -53,6 +53,19 @@ class RouterOsReadClient(Protocol):
 
     def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]: ...
 
+    # --- Topologie et etat du shaping (lecture seule) ---
+    def neighbors(self) -> list[dict[str, Any]]: ...
+
+    def ethernet(self) -> list[dict[str, Any]]: ...
+
+    def addresses(self) -> list[dict[str, Any]]: ...
+
+    def simple_queues(self) -> list[dict[str, Any]]: ...
+
+    def queue_types(self) -> list[dict[str, Any]]: ...
+
+    def queue_trees(self) -> list[dict[str, Any]]: ...
+
     def close(self) -> None: ...
 
 
@@ -147,6 +160,32 @@ class LibrouterosReadClient:
     def system_resource(self) -> dict[str, Any]:
         rows = self._query("/system/resource")
         return dict(rows[0]) if rows else {}
+
+    # --- Topologie et etat du shaping (lecture seule) ---
+    def neighbors(self) -> list[dict[str, Any]]:
+        """Voisins MNDP / LLDP / CDP.
+
+        Source maitresse de la topologie : pour chaque interface locale, elle
+        nomme l'equipement d'en face. Aucun autre appel ne donne l'adjacence
+        physique de facon aussi directe.
+        """
+        return self._query("/ip/neighbor")
+
+    def ethernet(self) -> list[dict[str, Any]]:
+        """Ports ethernet : le debit negocie est le plafond physique du lien."""
+        return self._query("/interface/ethernet")
+
+    def addresses(self) -> list[dict[str, Any]]:
+        return self._query("/ip/address")
+
+    def simple_queues(self) -> list[dict[str, Any]]:
+        return self._query("/queue/simple")
+
+    def queue_types(self) -> list[dict[str, Any]]:
+        return self._query("/queue/type")
+
+    def queue_trees(self) -> list[dict[str, Any]]:
+        return self._query("/queue/tree")
 
     def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]:
         """Sonde active depuis le routeur vers l'abonne.

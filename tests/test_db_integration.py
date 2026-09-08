@@ -43,8 +43,9 @@ async def database():
         # Repartir d'une base propre a chaque test.
         await conn.execute(
             "TRUNCATE subscriber_metrics, backhaul_metrics, qoe_scores, "
-            "collector_runs, subscribers, backhauls, routers, pops "
-            "RESTART IDENTITY CASCADE"
+            "collector_runs, subscribers, backhauls, routers, pops, "
+            "topology_nodes, topology_links, subscriber_attachments, "
+            "shaping_policies, enforcement_audit RESTART IDENTITY CASCADE"
         )
     yield db
     await db.close()
@@ -556,3 +557,196 @@ async def test_throughput_ne_double_compte_pas(database: Database) -> None:
 
     assert len(series) == 1
     assert series[0]["tx_bps"] == pytest.approx(100e6)  # et non 600 Mbps
+
+
+# ---------------------------------------------------------------------------
+# Topologie et enforcement (phase 2)
+# ---------------------------------------------------------------------------
+
+
+async def test_persistance_de_la_topologie(database: Database) -> None:
+    from app.collectors.topology import TopologySnapshot, build_from_router
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+    snapshot = TopologySnapshot()
+    build_from_router(
+        snapshot,
+        router_name="pop-nord",
+        pop_name="PoP Nord",
+        host="10.10.0.11",
+        neighbors=[
+            {
+                "interface": "ether1",
+                "identity": "gw",
+                "mac-address": "AA:BB:CC:00:00:01",
+                "platform": "MikroTik",
+            },
+            {
+                "interface": "ether2",
+                "identity": "bh",
+                "mac-address": "DC:9F:DB:11:22:33",
+                "platform": "Ubiquiti",
+            },
+        ],
+        interfaces=[{"name": "ether1", "type": "ether"}],
+        ethernet=[{"name": "ether1", "speed": "1Gbps"}, {"name": "ether2", "rate": "100Mbps"}],
+        addresses=[{"interface": "ether2", "address": "10.50.0.1/30"}],
+    )
+
+    compte = await repo.save_snapshot(snapshot)
+    assert compte["nodes"] == 3 and compte["links"] == 2
+
+    noeuds = {n["key"]: n for n in await repo.nodes()}
+    assert noeuds["router:pop-nord"]["kind"] == "pop"
+    assert noeuds["mac:DC:9F:DB:11:22:33"]["kind"] == "radio"
+    assert noeuds["router:pop-nord"]["fresh"] is True
+
+    liens = {lk["interface"]: lk for lk in await repo.links()}
+    assert liens["ether1"]["capacity_mbps"] == 1000.0
+    assert liens["ether2"]["target_name"] == "bh"
+
+
+async def test_la_decouverte_est_idempotente(database: Database) -> None:
+    """Rejouee toutes les 15 minutes : elle ne doit pas dupliquer le graphe."""
+    from app.collectors.topology import TopologySnapshot, build_from_router
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+
+    def snapshot():
+        s = TopologySnapshot()
+        build_from_router(
+            s,
+            router_name="pop-nord",
+            pop_name="PoP Nord",
+            host="10.10.0.11",
+            neighbors=[
+                {
+                    "interface": "ether1",
+                    "identity": "gw",
+                    "mac-address": "AA:BB:CC:00:00:01",
+                    "platform": "MikroTik",
+                }
+            ],
+            interfaces=[],
+            ethernet=[{"name": "ether1", "speed": "1Gbps"}],
+            addresses=[],
+        )
+        return s
+
+    await repo.save_snapshot(snapshot())
+    await repo.save_snapshot(snapshot())
+
+    assert len(await repo.nodes()) == 2
+    assert len(await repo.links()) == 1
+
+
+async def test_un_equipement_disparu_reste_dans_le_graphe(database: Database) -> None:
+    """Un fade ou un redemarrage ne doit pas effacer un lien : c'est last_seen
+    qui dit ce qui est frais, pas la presence de la ligne."""
+    from app.collectors.topology import TopologySnapshot, build_from_router
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+    complet = TopologySnapshot()
+    build_from_router(
+        complet,
+        router_name="pop",
+        pop_name="P",
+        host="h",
+        neighbors=[
+            {"interface": "e1", "identity": "a", "mac-address": "AA:BB:CC:00:00:01"},
+            {"interface": "e2", "identity": "b", "mac-address": "AA:BB:CC:00:00:02"},
+        ],
+        interfaces=[],
+        ethernet=[],
+        addresses=[],
+    )
+    await repo.save_snapshot(complet)
+
+    partiel = TopologySnapshot()
+    build_from_router(
+        partiel,
+        router_name="pop",
+        pop_name="P",
+        host="h",
+        neighbors=[{"interface": "e1", "identity": "a", "mac-address": "AA:BB:CC:00:00:01"}],
+        interfaces=[],
+        ethernet=[],
+        addresses=[],
+    )
+    await repo.save_snapshot(partiel)
+
+    assert len(await repo.links()) == 2
+
+
+async def test_correction_manuelle_du_role_prime(database: Database) -> None:
+    from app.collectors.topology import TopologyNode, TopologySnapshot
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="mac:AA", name="mystere", kind="unknown"))
+    await repo.save_snapshot(snapshot)
+
+    await repo.set_node_kind("mac:AA", "sector")
+    noeud = (await repo.nodes())[0]
+
+    assert noeud["kind"] == "sector"  # ce que voit l'interface
+    assert noeud["kind_detected"] == "unknown"  # ce que l'heuristique avait trouve
+
+    # Et on peut revenir a la detection automatique.
+    await repo.set_node_kind("mac:AA", None)
+    assert (await repo.nodes())[0]["kind"] == "unknown"
+
+
+async def test_cycle_de_vie_d_une_surcharge(database: Database) -> None:
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+
+    await repo.upsert_policy(
+        scope="link",
+        target_key="lien-1",
+        max_down_mbps=300,
+        max_up_mbps=100,
+        note="bride pendant travaux",
+        updated_by="ui",
+    )
+    # Le meme couple (scope, cible) se met a jour, il ne se duplique pas.
+    await repo.upsert_policy(scope="link", target_key="lien-1", max_down_mbps=500, max_up_mbps=200)
+
+    politiques = await repo.policies("link")
+    assert len(politiques) == 1
+    assert politiques[0]["max_down_mbps"] == 500
+
+    carte = await repo.policy_map("link")
+    assert carte["lien-1"]["max_up_mbps"] == 200
+
+    assert await repo.delete_policy("link", "lien-1") is True
+    assert await repo.delete_policy("link", "lien-1") is False
+
+
+async def test_journal_des_commandes(database: Database) -> None:
+    """La trace dont on a besoin le jour ou il faut expliquer un changement."""
+    from app.db.topology_repo import TopologyRepository
+    from app.enforcement.models import PlanAction
+
+    repo = TopologyRepository(database.pool)
+    action = PlanAction(
+        verb="set",
+        path="/queue/simple",
+        fields={"max-limit": "20000000/100000000"},
+        target_id="*7",
+        name="freeqos-dupont",
+    )
+
+    await repo.record_audit("pop-nord", dry_run=False, outcomes=[(action, True, "*7")])
+
+    lignes = await repo.audit(limit=10)
+    assert len(lignes) == 1
+    assert lignes[0]["router_name"] == "pop-nord"
+    assert lignes[0]["dry_run"] is False
+    assert lignes[0]["command"].startswith("/queue/simple/set")
+    assert "max-limit=20000000/100000000" in lignes[0]["command"]

@@ -186,6 +186,24 @@ class Settings(BaseSettings):
     # un secret en clair). Generer avec : python -m app.services.crypto
     app_secret_key: str | None = None
 
+    # --- Shaping (phase 2) ---
+    # On shape SOUS la capacite reelle pour que la file se forme dans CAKE, ou on
+    # la controle, plutot que dans le buffer de la radio, ou on ne peut rien.
+    # C'est le principe commun a Preseem et LibreQoS.
+    shaping_safety_factor: float = 0.90
+    shaping_floor_mbps: float = 5.0
+    # Supprimer nos files devenues inutiles. A desactiver pendant une migration.
+    shaping_prune: bool = True
+    # Encapsulation a compter dans CAKE. PPPoE sur ethernet = 8 + 14 octets ;
+    # ajouter 4 par etiquette VLAN, 4 par label MPLS. Sous-estimer revient a
+    # shaper au-dessus de la capacite du lien, ce qui annule l'AQM.
+    cake_overhead: int = 22
+    cake_rtt_ms: int = 50
+    # Coupe-circuit : un plan anormalement gros signale un etat desire mal
+    # calcule, il vaut mieux s'arreter que de reecrire tout un PoP.
+    enforcement_max_actions: int = 500
+    topology_refresh_interval_s: float = 900.0
+
     # --- Garde-fous ---
     # Phase 2 uniquement : aucune ecriture n'est implementee aujourd'hui.
     enforcement_enabled: bool = False

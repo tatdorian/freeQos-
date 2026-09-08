@@ -5,7 +5,8 @@
 # d'environnement (password_env) qui porte le secret.
 #
 # Phase 1 : lecture seule via le compte qos-ro.
-# Phase 2 : les champs rw_* seront utilises pour pousser les files CAKE.
+# Phase 2 : les champs rw_* servent a pousser les files CAKE. Un routeur sans
+# rw_* ne peut simplement pas etre modifie par le controleur.
 #
 # Les PoPs ajoutes depuis l'interface web ne figurent PAS ici : ils vivent en base,
 # avec leur mot de passe chiffre. En cas d'homonymie, ce fichier a la priorite.
@@ -23,7 +24,9 @@ routers:
     # RouterOS nomme l'interface dynamique d'une session PPPoE <pppoe-LOGIN>.
     # A adapter si le profil PPP utilise un autre nommage.
     pppoe_interface_pattern: "<pppoe-{login}>"
-    # Phase 2 (non utilise aujourd'hui)
+    # Compte d'ecriture, utilise UNIQUEMENT par l'enforcement (phase 2).
+    # Ne pas le declarer met ce routeur hors de portee de toute ecriture :
+    # c'est un moyen sur de proteger un PoP sensible.
     rw_username: qos-rw
     rw_password_env: MT_POP_NORD_RW_PASSWORD
 

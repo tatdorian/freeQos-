@@ -8,16 +8,17 @@ from pydantic import SecretStr
 from app.collectors.radius import FreeradiusSqlPlanProvider, MockPlanProvider
 from app.collectors.uisp import MockBackhaulProvider, UispProvider
 from app.config import RouterConfig, Settings
-from app.container import build_backhaul_provider, build_container, build_plan_provider
+from app.container import build_backhaul_provider, build_plan_provider
 from app.services.registry import collectors_from_settings
 
 
-async def test_enforcement_active_bloque_le_demarrage(settings: Settings) -> None:
-    """Phase 1 : aucun enforcement n'existe. Activer le drapeau doit echouer
-    bruyamment plutot que laisser croire que du shaping est pousse."""
-    settings.enforcement_enabled = True
-    with pytest.raises(RuntimeError, match="phase 2"):
-        await build_container(settings)
+def test_enforcement_desactive_par_defaut_meme_conteneur_construit() -> None:
+    """Le drapeau reste a false tant que l'operateur ne l'a pas leve lui-meme.
+
+    Depuis la phase 2 il n'empeche plus le demarrage, mais il reste le dernier
+    rempart avant toute ecriture : cf. tests/test_shaping_service.py.
+    """
+    assert Settings(_env_file=None).enforcement_enabled is False
 
 
 def test_choix_du_fournisseur_de_plans(settings: Settings) -> None:

@@ -406,7 +406,7 @@ async function loadSubscribers() {
     '<table><thead><tr><th>Login PPPoE</th><th>PoP</th><th class="num">Plan</th>' +
     '<th class="num">Download</th><th style="width:140px">vs plan</th>' +
     '<th class="num">Upload</th><th class="num">Latence</th>' +
-    '<th class="num">Session</th><th class="num">Mesure</th>' +
+    '<th class="num">Session</th><th class="num">Mesure</th><th></th>' +
     '</tr></thead><tbody>' +
     rows.map((r) => {
       const planDown = (r.plan_down_mbps || 0) * 1e6;
@@ -637,6 +637,364 @@ async function toggleRouter(id) {
   } catch (err) { alert(err.message); }
 }
 
+
+/* ------------------------------------------------------------- topologie */
+
+const KIND_LABEL = {
+  gateway: 'Gateway', core: 'Coeur', pop: 'PoP', radio: 'Radio',
+  sector: 'Secteur', cpe: 'CPE', unknown: 'Inconnu',
+};
+const KIND_COLOR = {
+  gateway: 'var(--accent)', core: 'var(--accent)', pop: 'var(--down)',
+  radio: 'var(--up)', sector: 'var(--up)', cpe: 'var(--muted)', unknown: 'var(--faint)',
+};
+
+async function loadTopology() {
+  const data = await api('/topology');
+  document.getElementById('topo-count').textContent =
+    data.counts.nodes + ' equipement(s), ' + data.counts.links + ' lien(s)';
+
+  renderTopologyGraph(data);
+  renderTopologyLinks(data.links);
+}
+
+/** Graphe en colonnes par role. Un vrai layout de graphe serait plus joli mais
+ *  moins lisible : sur un reseau WISP, la hierarchie EST l'information. */
+function renderTopologyGraph(data) {
+  const host = document.getElementById('topo-graph');
+  if (!data.nodes.length) {
+    host.innerHTML = '<div class="card"><div class="empty">Aucun equipement decouvert.<br>' +
+      'Lancez la decouverte : elle lit /ip/neighbor sur chaque PoP.</div></div>';
+    return;
+  }
+  const ordre = ['gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'unknown'];
+  const parRole = {};
+  data.nodes.forEach((n) => { (parRole[n.kind] = parRole[n.kind] || []).push(n); });
+
+  const voisins = {};
+  data.links.forEach((l) => {
+    (voisins[l.source_key] = voisins[l.source_key] || []).push(l);
+  });
+
+  host.innerHTML = '<div class="grid cols-2">' + ordre.filter((k) => parRole[k]).map((role) =>
+    '<div class="card"><div class="label" style="color:' + KIND_COLOR[role] +
+      ';font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.6rem">' +
+      esc(KIND_LABEL[role]) + ' &middot; ' + parRole[role].length + '</div>' +
+    parRole[role].map((n) => {
+      const sortants = voisins[n.key] || [];
+      return '<div class="child">' +
+        '<span class="name">' + esc(n.name) +
+          (n.fresh ? '' : ' <span class="badge warn">non revu</span>') +
+          (n.platform ? '<span class="host">' + esc(n.platform) + '</span>' : '') +
+        '</span>' +
+        '<span style="display:flex;gap:.6rem;align-items:center">' +
+          (n.address ? '<span class="host">' + esc(n.address) + '</span>' : '') +
+          (sortants.length ? '<span class="badge">' + sortants.length + ' lien(s)</span>' : '') +
+          '<select data-node-kind="' + esc(n.key) + '" style="width:auto;font-size:.72rem;padding:.15rem .35rem">' +
+            ordre.map((k) => '<option value="' + k + '"' +
+              (k === n.kind ? ' selected' : '') + '>' + esc(KIND_LABEL[k]) + '</option>').join('') +
+          '</select>' +
+        '</span></div>';
+    }).join('') + '</div>').join('') + '</div>';
+
+  host.querySelectorAll('[data-node-kind]').forEach((select) => {
+    select.addEventListener('change', async () => {
+      try {
+        await api('/topology/nodes/' + encodeURIComponent(select.dataset.nodeKind) +
+          '?kind=' + select.value, { method: 'PATCH' });
+        await loadTopology();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+function renderTopologyLinks(links) {
+  const host = document.getElementById('topo-links');
+  if (!links.length) {
+    host.innerHTML = '<div class="empty">Aucun lien.</div>';
+    return;
+  }
+  host.innerHTML =
+    '<table><thead><tr><th>Depuis</th><th>Interface</th><th>Vers</th><th>Type</th>' +
+    '<th class="num">Capacite</th><th class="num">Debit impose</th><th></th></tr></thead><tbody>' +
+    links.map((l) => {
+      const impose = l.max_down_mbps || l.max_up_mbps;
+      return '<tr>' +
+        '<td>' + esc(l.source_name || l.source_key) + '</td>' +
+        '<td class="login">' + esc(l.interface || '-') + '</td>' +
+        '<td>' + esc(l.target_name || l.target_key) +
+          ' <span class="badge">' + esc(KIND_LABEL[l.target_kind] || '?') + '</span></td>' +
+        '<td>' + esc(l.kind) + '</td>' +
+        '<td class="num">' + (l.capacity_mbps ? esc(mbps(l.capacity_mbps)) : '-') + '</td>' +
+        '<td class="num">' + (impose
+          ? '<span style="color:var(--warn)">' +
+            esc((l.max_down_mbps || 0) + '/' + (l.max_up_mbps || 0)) + ' Mbps</span>'
+          : '<span style="color:var(--faint)">auto</span>') + '</td>' +
+        '<td><div class="actions" style="justify-content:flex-end">' +
+          '<button class="sm" data-edit-link="' + esc(l.key) + '">Bande passante</button>' +
+        '</div></td></tr>';
+    }).join('') + '</tbody></table>';
+
+  host.querySelectorAll('[data-edit-link]').forEach((b) => {
+    const lien = links.find((l) => l.key === b.dataset.editLink);
+    b.addEventListener('click', () => openBandwidthEditor('link', lien));
+  });
+}
+
+/** Editeur de bande passante : c'est ici qu'on "clique pour modifier". Il
+ *  n'ecrit PAS sur le routeur : il enregistre l'intention, puis renvoie vers le
+ *  plan, ou les commandes exactes sont visibles avant execution. */
+async function openBandwidthEditor(scope, cible) {
+  if (!cible) return;
+  const nom = scope === 'link'
+    ? (cible.target_name || cible.interface) : cible.pppoe_login;
+  const cle = scope === 'link' ? cible.key : cible.pppoe_login;
+  const capacite = cible.capacity_mbps;
+
+  // Relire la surcharge en place : ouvrir sur des champs vides laisserait
+  // croire qu'aucun plafond n'est pose.
+  let actuelle = {};
+  try {
+    const politiques = await api('/shaping/policies?scope=' + scope);
+    actuelle = politiques.find((p) => p.target_key === cle) || {};
+  } catch (err) {
+    console.warn('Politique non relue :', err);
+  }
+
+  const root = document.getElementById('drawer-root');
+  root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
+    '<div class="drawer-head"><h3>' + esc(nom) + '</h3>' +
+    '<button class="sm" id="drawer-close">Fermer</button></div>' +
+    (capacite ? '<div class="notice">Capacite mesuree : <strong>' + esc(mbps(capacite)) +
+      '</strong><span class="hint">Le debit impose devrait rester sous cette valeur : ' +
+      'c\'est ce qui fait que la file se forme dans CAKE, ou on la controle, ' +
+      'plutot que dans le buffer de la radio.</span></div>' : '') +
+    '<form class="stack" id="bw-form">' +
+      '<div class="row-2">' +
+        '<div class="field"><label for="bw-down">Download (Mbps)</label>' +
+          '<input id="bw-down" type="number" min="0" step="1" value="' +
+          esc(actuelle.max_down_mbps || '') + '" placeholder="auto (plan RADIUS ou capacite mesuree)"></div>' +
+        '<div class="field"><label for="bw-up">Upload (Mbps)</label>' +
+          '<input id="bw-up" type="number" min="0" step="1" value="' +
+          esc(actuelle.max_up_mbps || '') + '" placeholder="auto"></div>' +
+      '</div>' +
+      '<div class="field"><label for="bw-note">Note</label>' +
+        '<input id="bw-note" value="' + esc(actuelle.note || '') +
+        '" placeholder="pourquoi ce plafond (optionnel)"></div>' +
+      '<div id="bw-result"></div>' +
+      '<div class="actions">' +
+        '<button type="submit" class="primary">Enregistrer</button>' +
+        '<button type="button" id="bw-clear">Revenir a auto</button>' +
+      '</div>' +
+    '</form>' +
+    '<p class="empty" style="text-align:left;padding:.8rem 0 0">' +
+      'Enregistrer ne touche a aucun routeur. Passez ensuite par l\'onglet ' +
+      'Shaping pour voir les commandes exactes, puis les appliquer.</p>' +
+    '</div>';
+
+  root.querySelector('.drawer-backdrop').addEventListener('click', closeDrawer);
+  document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+
+  document.getElementById('bw-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const down = document.getElementById('bw-down').value;
+    const up = document.getElementById('bw-up').value;
+    try {
+      await api('/shaping/policies', {
+        method: 'PUT',
+        body: JSON.stringify({
+          scope: scope, target_key: cle,
+          max_down_mbps: down === '' ? null : Number(down),
+          max_up_mbps: up === '' ? null : Number(up),
+          enabled: true,
+          note: document.getElementById('bw-note').value || null,
+        }),
+      });
+      document.getElementById('bw-result').innerHTML =
+        '<div class="notice ok">Enregistre. Ouvrez l\'onglet Shaping pour voir ' +
+        'les commandes qui en decoulent.</div>';
+      await refresh();
+    } catch (err) {
+      document.getElementById('bw-result').innerHTML =
+        '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+
+  document.getElementById('bw-clear').addEventListener('click', async () => {
+    try {
+      await api('/shaping/policies/' + scope + '/' + encodeURIComponent(cle), { method: 'DELETE' });
+      closeDrawer();
+      await refresh();
+    } catch (err) { alert(err.message); }
+  });
+}
+
+/* --------------------------------------------------------------- shaping */
+
+async function loadShaping() {
+  const select = document.getElementById('shaping-router');
+  if (!select.options.length) {
+    const inventaire = await api('/pops/routers');
+    select.innerHTML = inventaire.routers
+      .map((r) => '<option value="' + esc(r.name) + '">' + esc(r.name) + '</option>').join('');
+  }
+  const sante = await fetch('/health/ready').then((r) => r.json()).catch(() => ({}));
+  const pill = document.getElementById('enforcement-pill');
+  pill.textContent = sante.enforcement_enabled
+    ? 'enforcement ACTIF' : 'enforcement desactive (lecture seule)';
+  pill.style.color = sante.enforcement_enabled ? 'var(--warn)' : 'var(--muted)';
+
+  await loadAudit();
+}
+
+async function loadAudit() {
+  const rows = await api('/shaping/audit?limit=40');
+  const host = document.getElementById('shaping-audit');
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">Aucune commande envoyee.</div>';
+    return;
+  }
+  host.innerHTML =
+    '<table><thead><tr><th>Quand</th><th>Routeur</th><th>Commande</th>' +
+    '<th>Mode</th><th>Etat</th></tr></thead><tbody>' +
+    rows.map((r) => '<tr>' +
+      '<td class="num" style="color:var(--faint)">' + esc(clock(r.ts)) + '</td>' +
+      '<td>' + esc(r.router_name) + '</td>' +
+      '<td class="login" style="font-size:.74rem">' + esc(r.command) + '</td>' +
+      '<td>' + (r.dry_run ? '<span class="badge">simule</span>'
+        : '<span class="badge warn">applique</span>') + '</td>' +
+      '<td>' + (r.ok ? '<span class="badge ok">ok</span>'
+        : '<span class="badge crit" title="' + esc(r.detail || '') + '">echec</span>') + '</td>' +
+      '</tr>').join('') + '</tbody></table>';
+}
+
+async function inspectShaping() {
+  const routeur = document.getElementById('shaping-router').value;
+  const host = document.getElementById('shaping-state');
+  host.innerHTML = '<div class="notice">Lecture de ' + esc(routeur) + '...</div>';
+  try {
+    const etats = await api('/shaping/state?router=' + encodeURIComponent(routeur));
+    host.innerHTML = etats.map((e) => {
+      if (!e.reachable) {
+        return '<div class="notice err"><strong>' + esc(e.router) + '</strong> injoignable : ' +
+          esc(e.error || '') + '</div>';
+      }
+      return '<div class="card" style="margin-bottom:1rem">' +
+        '<div class="node-head" style="margin-bottom:.8rem">' +
+          '<div class="node-title">' + esc(e.router) + '</div>' +
+          '<div class="node-metrics">' +
+            '<span>' + e.counts.simple_queues + ' file(s) simple(s)</span>' +
+            '<span style="color:var(--down)">' + e.counts.managed + ' geree(s) par freeQoS</span>' +
+            '<span style="color:var(--warn)">' + e.counts.foreign + ' tierce(s)</span>' +
+          '</div></div>' +
+        (e.counts.foreign
+          ? '<div class="notice warn">' + e.counts.foreign + ' file(s) ne portent pas le ' +
+            'marqueur <code>freeqos:managed</code> : posees a la main ou par RADIUS. ' +
+            'Elles ne seront jamais modifiees ni supprimees.' +
+            '<span class="hint">' +
+            e.foreign_queues.slice(0, 8).map((q) => esc(q.name)).join(', ') +
+            (e.foreign_queues.length > 8 ? '...' : '') + '</span></div>'
+          : '<div class="notice ok">Aucune file tierce : le controleur est seul a shaper ' +
+            'sur ce routeur.</div>') +
+        '</div>';
+    }).join('');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+}
+
+async function computePlan() {
+  const routeur = document.getElementById('shaping-router').value;
+  const host = document.getElementById('shaping-plan');
+  host.innerHTML = '<div class="notice">Calcul du plan pour ' + esc(routeur) + '...</div>';
+  try {
+    const plan = await api('/shaping/plan', {
+      method: 'POST', body: JSON.stringify({ router: routeur }),
+    });
+    renderPlan(plan, routeur);
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+}
+
+function renderPlan(plan, routeur) {
+  const host = document.getElementById('shaping-plan');
+  const c = plan.counts;
+  const total = c.add + c.set + c.remove;
+
+  let html = '<h2>Plan pour ' + esc(routeur) + '</h2>';
+
+  if (plan.conflicts.length) {
+    html += '<div class="notice err"><strong>' + plan.conflicts.length +
+      ' conflit(s) de nom.</strong> Ces files existent deja sans notre marqueur : ' +
+      'elles appartiennent a quelqu\'un d\'autre et ne seront pas touchees.' +
+      '<span class="hint">' + plan.conflicts.map((x) => esc(x.name)).join(', ') +
+      '</span></div>';
+  }
+
+  if (!total) {
+    html += '<div class="notice ok">Rien a faire : la configuration du routeur ' +
+      'correspond deja a l\'etat voulu (' + plan.unchanged + ' element(s) conformes).</div>';
+    host.innerHTML = html;
+    return;
+  }
+
+  html += '<div class="notice">' +
+    '<strong>' + total + ' commande(s)</strong> : ' +
+    c.add + ' creation(s), ' + c.set + ' modification(s), ' + c.remove + ' suppression(s). ' +
+    plan.unchanged + ' element(s) deja conformes.' +
+    '<span class="hint">Rien n\'est envoye tant que vous n\'avez pas applique.</span></div>';
+
+  html += '<div class="table-wrap"><table><thead><tr><th>Action</th><th>Raison</th>' +
+    '<th>Commande RouterOS</th></tr></thead><tbody>' +
+    plan.actions.map((a) => {
+      const couleur = a.verb === 'remove' ? 'crit' : a.verb === 'add' ? 'ok' : 'warn';
+      return '<tr>' +
+        '<td><span class="badge ' + couleur + '">' + esc(a.verb) + '</span> ' +
+          esc(a.summary) + '</td>' +
+        '<td style="color:var(--muted);font-size:.76rem">' + esc(a.reason) + '</td>' +
+        '<td class="login" style="font-size:.72rem;white-space:nowrap">' +
+          esc(a.command) + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+
+  html += '<div class="actions" style="margin-top:1rem">' +
+    '<button id="btn-simulate">Simuler (dry-run)</button>' +
+    '<button id="btn-apply" class="primary">Appliquer sur le routeur</button>' +
+    '</div><div id="apply-result"></div>';
+
+  host.innerHTML = html;
+  document.getElementById('btn-simulate').addEventListener('click', () => applyPlan(routeur, true));
+  document.getElementById('btn-apply').addEventListener('click', () => applyPlan(routeur, false));
+}
+
+async function applyPlan(routeur, dryRun) {
+  if (!dryRun && !confirm(
+      'Appliquer reellement sur ' + routeur + ' ?\n\n' +
+      'Des commandes vont etre envoyees au routeur. Seules les files portant ' +
+      'le marqueur freeqos:managed sont concernees.')) {
+    return;
+  }
+  const host = document.getElementById('apply-result');
+  host.innerHTML = '<div class="notice">Execution...</div>';
+  try {
+    const reponse = await api('/shaping/apply', {
+      method: 'POST',
+      body: JSON.stringify({ router: routeur, dry_run: dryRun, confirm: !dryRun }),
+    });
+    const r = reponse.result;
+    host.innerHTML = '<div class="notice ' + (r.ok ? 'ok' : 'err') + '">' +
+      '<strong>' + (r.dry_run ? 'Simulation' : 'Application') + ' : ' +
+      r.applied + ' reussie(s), ' + r.failed + ' echec(s).</strong>' +
+      (r.aborted_reason ? '<span class="hint">' + esc(r.aborted_reason) + '</span>' : '') +
+      (r.failed ? '<span class="hint">' + r.results.filter((x) => !x.ok)
+        .map((x) => esc(x.command) + ' -> ' + esc(x.detail)).join('<br>') + '</span>' : '') +
+      '</div>';
+    await loadAudit();
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+}
+
 /* ---------------------------------------------------------------- sante */
 
 async function refreshHealth() {
@@ -664,6 +1022,8 @@ const LOADERS = {
   dashboard: loadDashboard,
   network: loadNetwork,
   subscribers: loadSubscribers,
+  topology: loadTopology,
+  shaping: loadShaping,
   pops: loadRouters,
 };
 
@@ -704,6 +1064,25 @@ document.getElementById('range-select').addEventListener('change', (e) => {
   loadThroughput();
 });
 document.getElementById('btn-test').addEventListener('click', testConnection);
+document.getElementById('btn-inspect').addEventListener('click', inspectShaping);
+document.getElementById('btn-plan').addEventListener('click', computePlan);
+document.getElementById('btn-discover').addEventListener('click', async (e) => {
+  e.target.disabled = true;
+  const notice = document.getElementById('topo-notice');
+  notice.innerHTML = '<div class="notice">Lecture de /ip/neighbor sur chaque PoP...</div>';
+  try {
+    const r = await api('/topology/discover', { method: 'POST' });
+    notice.innerHTML = '<div class="notice ok">' + r.nodes + ' equipement(s), ' +
+      r.links + ' lien(s) decouvert(s).' +
+      (r.warnings.length ? '<span class="hint">' + r.warnings.map(esc).join('<br>') + '</span>' : '') +
+      '</div>';
+    await loadTopology();
+  } catch (err) {
+    notice.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  } finally {
+    e.target.disabled = false;
+  }
+});
 document.getElementById('router-form').addEventListener('submit', saveRouter);
 
 let searchTimer = null;
@@ -716,5 +1095,8 @@ route();
 refreshHealth();
 // Les PoPs ne changent pas tout seuls : inutile de recharger ce formulaire
 // pendant qu'un administrateur le remplit.
-setInterval(() => { if (state.view !== 'pops') refresh(); }, 10000);
+// Les vues d'edition ne se rafraichissent pas toutes seules : ce serait effacer
+// un formulaire en cours de saisie, ou un plan qu'on est en train de lire.
+const VUES_FIGEES = new Set(['pops', 'shaping', 'topology']);
+setInterval(() => { if (!VUES_FIGEES.has(state.view)) refresh(); }, 10000);
 setInterval(refreshHealth, 15000);

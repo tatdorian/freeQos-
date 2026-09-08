@@ -14,6 +14,8 @@
       <a href="#/dashboard" data-view="dashboard">Tableau de bord</a>
       <a href="#/network"   data-view="network">Arbre reseau</a>
       <a href="#/subscribers" data-view="subscribers">Abonnes</a>
+      <a href="#/topology" data-view="topology">Topologie</a>
+      <a href="#/shaping"  data-view="shaping">Shaping</a>
       <a href="#/pops"      data-view="pops">PoPs</a>
     </nav>
     <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
@@ -71,6 +73,41 @@
         <span class="mode" id="sub-count"></span>
       </div>
       <div class="table-wrap" id="subscribers-table"></div>
+    </section>
+
+    <!-- ------------------------------------------------------- topologie -->
+    <section id="view-topology">
+      <div class="toolbar">
+        <button id="btn-discover">Relancer la decouverte</button>
+        <span class="spacer"></span>
+        <span class="mode" id="topo-count"></span>
+      </div>
+      <div id="topo-notice"></div>
+      <p class="empty" style="text-align:left;padding:0 0 .8rem">
+        Construite a partir de <code>/ip/neighbor</code> (MNDP, LLDP, CDP) pour
+        l'adjacence, <code>/interface/ethernet</code> pour le debit negocie,
+        UISP pour les liens radio, et du <code>caller-id</code> PPPoE pour
+        rattacher chaque abonne a son secteur.
+      </p>
+      <div id="topo-graph"></div>
+      <h2>Liens</h2>
+      <div class="table-wrap" id="topo-links"></div>
+    </section>
+
+    <!-- --------------------------------------------------------- shaping -->
+    <section id="view-shaping">
+      <div class="toolbar">
+        <select id="shaping-router" style="width:auto"></select>
+        <button id="btn-inspect">Analyser l'existant</button>
+        <button id="btn-plan">Calculer le plan</button>
+        <span class="spacer"></span>
+        <span class="mode" id="enforcement-pill"></span>
+      </div>
+      <div id="shaping-notice"></div>
+      <div id="shaping-state"></div>
+      <div id="shaping-plan"></div>
+      <h2>Journal des commandes envoyees</h2>
+      <div class="table-wrap" id="shaping-audit"></div>
     </section>
 
     <!-- ----------------------------------------------------------- PoPs -->

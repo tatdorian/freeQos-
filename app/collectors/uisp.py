@@ -32,6 +32,8 @@ class BackhaulCapacityProvider(Protocol):
 
     async def get_capacities(self, device_ids: Sequence[str]) -> dict[str, BackhaulSample]: ...
 
+    async def raw_devices(self) -> list[dict[str, Any]]: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -163,6 +165,19 @@ class UispProvider:
             logger.warning("UISP : %d device(s) demandes absents de la reponse", len(missing))
         return result
 
+    async def raw_devices(self) -> list[dict[str, Any]]:
+        """Fiches completes, pour la decouverte de topologie.
+
+        La capacite ne suffit pas : il faut la MAC (jointure avec les voisins
+        MikroTik) et le rattachement station -> AP.
+        """
+        response = await self._client.get("/devices")
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload = payload.get("items") or payload.get("devices") or []
+        return [d for d in payload if isinstance(d, dict)]
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
@@ -198,6 +213,7 @@ class MockBackhaulProvider:
         # "capacite mesuree / nominal" affiche par l'interface n'aurait aucun sens.
         self._nominal = dict(nominal_by_device or {})
         self._overrides: dict[str, float] = {}
+        self._devices: list[dict[str, Any]] = []
 
     def set_capacity(self, device_id: str, capacity_mbps: float) -> None:
         """Fige la capacite d'un device : utile pour rejouer un fade en test."""
@@ -256,6 +272,13 @@ class MockBackhaulProvider:
     async def get_capacities(self, device_ids: Sequence[str]) -> dict[str, BackhaulSample]:
         now = self._clock()
         return {d: self.sample_for(d, now) for d in device_ids if d}
+
+    def register_device(self, device: dict[str, Any]) -> None:
+        """Declare une fiche simulee, pour tester la decouverte de topologie."""
+        self._devices.append(device)
+
+    async def raw_devices(self) -> list[dict[str, Any]]:
+        return list(self._devices)
 
     async def aclose(self) -> None:
         return None

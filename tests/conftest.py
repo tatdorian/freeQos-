@@ -37,6 +37,15 @@ class FakeRouterOsClient:
         self.closed = False
         self.raise_on_ppp: Exception | None = None
         self.pings: list[tuple[str, int]] = []
+        # Topologie et files, pour la phase 2.
+        self.neighbor_rows: list[dict[str, Any]] = []
+        self.ethernet_rows: list[dict[str, Any]] = []
+        self.address_rows: list[dict[str, Any]] = []
+        self.simple_queue_rows: list[dict[str, Any]] = []
+        self.queue_type_rows: list[dict[str, Any]] = []
+        self.queue_tree_rows: list[dict[str, Any]] = []
+        self.raise_on_neighbors: Exception | None = None
+        self.raise_on_queues: Exception | None = None
         self.ping_reply: str | None = "12ms"
         self.ping_error: Exception | None = None
 
@@ -60,6 +69,33 @@ class FakeRouterOsClient:
             "cpu-load": "3",
             "free-memory": "201326592",
         }
+
+    # --- Topologie et files (phase 2) ---
+    def neighbors(self) -> list[dict[str, Any]]:
+        if self.raise_on_neighbors is not None:
+            raise self.raise_on_neighbors
+        return [dict(row) for row in self.neighbor_rows]
+
+    def ethernet(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.ethernet_rows]
+
+    def addresses(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.address_rows]
+
+    def simple_queues(self) -> list[dict[str, Any]]:
+        if self.raise_on_queues is not None:
+            raise self.raise_on_queues
+        return [dict(row) for row in self.simple_queue_rows]
+
+    def queue_types(self) -> list[dict[str, Any]]:
+        if self.raise_on_queues is not None:
+            raise self.raise_on_queues
+        return [dict(row) for row in self.queue_type_rows]
+
+    def queue_trees(self) -> list[dict[str, Any]]:
+        if self.raise_on_queues is not None:
+            raise self.raise_on_queues
+        return [dict(row) for row in self.queue_tree_rows]
 
     def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]:
         self.pings.append((address, count))

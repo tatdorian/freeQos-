@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
-from app.api import admin, health, metrics, routers_admin
+from app.api import admin, health, metrics, routers_admin, shaping
 from app.config import Settings, get_settings
 from app.container import build_container, shutdown_container
 from app.logging_conf import setup_logging
@@ -75,6 +75,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     app.include_router(metrics.router, prefix=settings.api_prefix)
     app.include_router(admin.router, prefix=settings.api_prefix)
     app.include_router(routers_admin.router, prefix=settings.api_prefix)
+    app.include_router(shaping.router, prefix=settings.api_prefix)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(ui_router)
 

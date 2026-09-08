@@ -22,6 +22,7 @@ from app.scheduler import Scheduler
 from app.services.collection import JOB_SUBSCRIBERS, CollectionService
 from app.services.crypto import SecretBox, generate_key
 from app.services.registry import RouterRegistry
+from app.services.shaping import ShapingService
 from tests.conftest import FakeRouterOsClient
 
 NOW = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
@@ -224,6 +225,7 @@ def build_container(
     db_reachable: bool = True,
     secrets: SecretBox | None = None,
     routers_repo: Any = None,
+    topology_repo: Any = None,
     client: FakeRouterOsClient | None = None,
 ) -> Container:
     client = client or FakeRouterOsClient()
@@ -248,6 +250,10 @@ def build_container(
     registry = RouterRegistry(
         settings, repository=routers_repo, client_factory=lambda config: client
     )
+    # Le registre doit connaitre les collecteurs sans passer par reload(), qui
+    # est asynchrone et suppose une base.
+    registry.adopt(collectors)
+    shaping = ShapingService(settings, registry=registry, repository=topology_repo)
     return Container(
         settings=settings,
         database=FakeDatabase(reachable=db_reachable),  # type: ignore[arg-type]
@@ -260,7 +266,9 @@ def build_container(
         scheduler=scheduler,
         secrets=secrets if secrets is not None else SecretBox(generate_key()),
         registry=registry,
+        shaping=shaping,
         routers_repo=routers_repo,
+        topology_repo=topology_repo,
     )
 
 

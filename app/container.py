@@ -22,6 +22,7 @@ from app.db.database import Database
 from app.db.directory import Directory, PgDirectory
 from app.db.repository import MetricsRepository
 from app.db.routers_repo import RoutersRepository
+from app.db.topology_repo import TopologyRepository
 from app.db.writer import MetricsWriter, PgMetricsWriter
 from app.models import Plan
 from app.scheduler import Scheduler
@@ -36,6 +37,7 @@ from app.services.collection import (
 from app.services.crypto import SecretBox
 from app.services.registry import RouterRegistry
 from app.services.rtt import RttProber
+from app.services.shaping import ShapingService
 
 logger = logging.getLogger(__name__)
 
@@ -95,18 +97,24 @@ class Container:
     scheduler: Scheduler
     secrets: SecretBox
     registry: RouterRegistry
+    shaping: ShapingService
     routers_repo: RoutersRepository | None = None
+    topology_repo: TopologyRepository | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 async def build_container(settings: Settings) -> Container:
     if settings.enforcement_enabled:
-        # Garde-fou explicite : la phase 2 n'existe pas encore, et l'application
-        # doit rester strictement observatrice tant qu'elle n'est pas ecrite.
-        raise RuntimeError(
-            "ENFORCEMENT_ENABLED=true mais aucun enforcement n'est implemente "
-            "(phase 2). Le controleur reste en lecture seule."
+        # L'enforcement existe (phase 2), mais il reste une capacite d'ecriture
+        # sur des equipements de production : on le dit fort au demarrage.
+        logger.warning(
+            "ENFORCEMENT ACTIF : ce controleur peut ecrire sur les routeurs. "
+            "Seules les files marquees '%s' sont modifiees, et chaque plan reste "
+            "soumis a une application explicite.",
+            "freeqos:managed",
         )
+    else:
+        logger.info("Enforcement desactive : le controleur reste en lecture seule")
 
     database = Database(
         settings.asyncpg_dsn,
@@ -135,7 +143,9 @@ async def build_container(settings: Settings) -> Container:
         # de PoP depuis l'interface est indisponible.
         logger.warning("Ajout de PoP par l'interface desactive : %s", secrets.unavailable_reason)
     routers_repo = RoutersRepository(database.pool, secrets)
+    topology_repo = TopologyRepository(database.pool)
     registry = RouterRegistry(settings, repository=routers_repo)
+    shaping = ShapingService(settings, registry=registry, repository=topology_repo)
 
     rtt_prober = None
     if settings.rtt_enabled:
@@ -185,12 +195,15 @@ async def build_container(settings: Settings) -> Container:
         scheduler=scheduler,
         secrets=secrets,
         registry=registry,
+        shaping=shaping,
         routers_repo=routers_repo,
+        topology_repo=topology_repo,
     )
 
 
 async def shutdown_container(container: Container) -> None:
     await container.scheduler.stop()
+    container.shaping.close()
     container.registry.close_all()
     await container.collection.aclose()
     await container.database.close()
