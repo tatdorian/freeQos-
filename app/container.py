@@ -31,6 +31,7 @@ from app.services.collection import (
     JOB_BACKHAULS,
     JOB_BOOSTS,
     JOB_INVENTORY,
+    JOB_LINKS,
     JOB_PLANS,
     JOB_RTT,
     JOB_SUBSCRIBERS,
@@ -194,6 +195,7 @@ async def build_container(settings: Settings) -> Container:
         JOB_SUBSCRIBERS, settings.subscriber_interval_s, collection.collect_subscribers
     )
     scheduler.add_job(JOB_BACKHAULS, settings.backhaul_interval_s, collection.collect_backhauls)
+    scheduler.add_job(JOB_LINKS, settings.link_interval_s, collection.collect_links)
     scheduler.add_job(JOB_PLANS, settings.plan_refresh_interval_s, collection.refresh_plans)
     scheduler.add_job(JOB_INVENTORY, settings.inventory_refresh_interval_s, reload_inventory)
     if rtt_prober is not None:

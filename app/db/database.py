@@ -199,7 +199,12 @@ class Database:
             logger.info("Politiques Timescale ignorees : extension absente")
             return
 
-        hypertables = ("subscriber_metrics", "backhaul_metrics", "qoe_scores")
+        hypertables = (
+            "subscriber_metrics",
+            "backhaul_metrics",
+            "interface_metrics",
+            "qoe_scores",
+        )
         async with self.pool.acquire() as conn:
             for table in hypertables:
                 is_hypertable = await conn.fetchval(

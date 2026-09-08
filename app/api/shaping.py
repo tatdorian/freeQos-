@@ -54,6 +54,7 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
             "addresses": "/ip/address - segment L3 du lien",
             "uisp": "UISP /devices - liens radio et capacite du moment",
             "pppoe": "/ppp/active caller-id - MAC du CPE, rattache l'abonne au secteur",
+            "counters": "/interface rx-byte,tx-byte - debit mesure du port qui porte le lien",
         },
     }
 
@@ -72,6 +73,115 @@ async def discover(container: ContainerDep) -> dict[str, Any]:
         "links": len(snapshot.links),
         "warnings": snapshot.warnings,
     }
+
+
+@router.get("/topology/links/{key:path}/throughput", summary="Debit mesure d'un lien")
+async def link_throughput(
+    key: str,
+    container: ContainerDep,
+    minutes: Annotated[int, Query(ge=1, le=10080, description="Fenetre d'historique")] = 60,
+    bucket_seconds: Annotated[int, Query(ge=5, le=3600, alias="bucket")] = 30,
+) -> dict[str, Any]:
+    """Le debit d'un lien, maintenant et sur la fenetre demandee.
+
+    La mesure vient des compteurs du PORT qui porte le lien : c'est le seul
+    endroit ou RouterOS compte des octets. ``interface_links`` a plus de 1
+    signale un port partage par plusieurs voisins, donc un debit cumule.
+    """
+    repo = _require_topology(container)
+    lien = await repo.link(key)
+    if lien is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lien inconnu : {key}")
+
+    series: list[dict[str, Any]] = []
+    if lien.get("discovered_by") and lien.get("interface"):
+        series = await repo.interface_series(
+            router_name=lien["discovered_by"],
+            interface=lien["interface"],
+            minutes=minutes,
+            bucket_seconds=bucket_seconds,
+        )
+
+    return {
+        "link": lien,
+        "series": series,
+        "window_minutes": minutes,
+        "bucket_seconds": bucket_seconds,
+        # Dit noir sur blanc d'ou vient le chiffre, pour qu'un port partage ou
+        # un lien radio sans compteur ne passe pas pour une mesure du lien.
+        "measurement": _origine_mesure(lien),
+    }
+
+
+@router.get("/topology/links/{key:path}/live", summary="Mesurer ce lien maintenant")
+async def link_live(key: str, container: ContainerDep) -> dict[str, Any]:
+    """Interroge le routeur pour le debit INSTANTANE du port.
+
+    ``/interface/monitor-traffic`` est une commande de lecture : elle ne change
+    rien sur l'equipement. Si elle echoue (version, droits, port sans
+    compteur), on retombe sur la derniere mesure collectee en disant pourquoi,
+    plutot que de renvoyer une erreur a l'operateur qui voulait juste un chiffre.
+    """
+    repo = _require_topology(container)
+    lien = await repo.link(key)
+    if lien is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lien inconnu : {key}")
+
+    routeur, interface = lien.get("discovered_by"), lien.get("interface")
+    if not routeur or not interface:
+        return {
+            "key": key,
+            "source": "aucune",
+            "detail": (
+                "Ce lien n'est porte par aucun port de routeur "
+                "(adjacence declaree par UISP) : il n'y a pas de compteur a lire."
+            ),
+            "rx_bps": None,
+            "tx_bps": None,
+        }
+
+    try:
+        mesure = await container.collection.measure_link(routeur, interface)
+    except KeyError:
+        detail = f"Routeur '{routeur}' absent de l'inventaire actif"
+    except Exception as exc:  # noqa: BLE001 - on degrade, on ne casse pas
+        detail = f"{type(exc).__name__}: {exc}"
+        logger.warning("Mesure instantanee impossible sur %s/%s : %s", routeur, interface, exc)
+    else:
+        return {
+            "key": key,
+            "router_name": routeur,
+            "interface": interface,
+            "source": "monitor-traffic",
+            "measured_at": datetime.now(tz=UTC),
+            **mesure,
+        }
+
+    return {
+        "key": key,
+        "router_name": routeur,
+        "interface": interface,
+        "source": "compteurs",
+        "detail": detail,
+        "measured_at": lien.get("measured_at"),
+        "rx_bps": lien.get("rx_bps"),
+        "tx_bps": lien.get("tx_bps"),
+    }
+
+
+def _origine_mesure(lien: dict[str, Any]) -> dict[str, Any]:
+    partage = int(lien.get("interface_links") or 0)
+    if not lien.get("interface"):
+        origine, note = "aucune", "Lien sans port local : aucun compteur d'octets."
+    elif partage > 1:
+        origine, note = (
+            "port-partage",
+            f"{partage} voisins sont vus sur {lien['interface']} : "
+            "le debit affiche est celui du port, pas celui de ce seul voisin.",
+        )
+    else:
+        origine, note = "port", f"Compteurs de {lien['interface']} sur {lien.get('discovered_by')}."
+    return {"source": origine, "interface_links": partage, "note": note}
 
 
 @router.patch("/topology/nodes/{key:path}", summary="Corriger le role d'un equipement")

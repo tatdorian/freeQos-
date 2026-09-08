@@ -216,6 +216,30 @@ CREATE TABLE IF NOT EXISTS backhaul_metrics (
     PRIMARY KEY (backhaul_id, ts)
 );
 
+-- Debit mesure d'un PORT de routeur.
+--
+-- La cle est (routeur, interface) et NON le lien de topologie : RouterOS compte
+-- les octets par interface, pas par adjacence. Quand plusieurs voisins sont vus
+-- sur le meme port (un switch entre les deux), tous les liens correspondants
+-- partagent ce chiffre -- l'interface le signale plutot que d'attribuer le meme
+-- trafic a chacun.
+--
+-- Le routeur est designe par son NOM et non par une cle etrangere : l'inventaire
+-- peut vivre dans un fichier, sans ligne dans la table routers. C'est aussi ce
+-- nom que porte topology_links.discovered_by, donc la jointure est directe.
+CREATE TABLE IF NOT EXISTS interface_metrics (
+    ts             TIMESTAMPTZ NOT NULL,
+    router_name    TEXT NOT NULL,
+    interface      TEXT NOT NULL,
+    rx_bps         DOUBLE PRECISION,   -- le routeur RECOIT depuis le voisin
+    tx_bps         DOUBLE PRECISION,   -- le routeur EMET vers le voisin
+    rx_bytes       BIGINT,
+    tx_bytes       BIGINT,
+    running        BOOLEAN,
+    capacity_mbps  DOUBLE PRECISION,   -- debit negocie du port au moment de la mesure
+    PRIMARY KEY (router_name, interface, ts)
+);
+
 -- Phase 3 : creee des maintenant pour figer la retention et eviter une migration.
 CREATE TABLE IF NOT EXISTS qoe_scores (
     ts             TIMESTAMPTZ NOT NULL,
@@ -280,7 +304,8 @@ BEGIN
         RETURN;
     END IF;
 
-    FOREACH tbl IN ARRAY ARRAY['subscriber_metrics', 'backhaul_metrics', 'qoe_scores'] LOOP
+    FOREACH tbl IN ARRAY ARRAY['subscriber_metrics', 'backhaul_metrics',
+                               'interface_metrics', 'qoe_scores'] LOOP
         BEGIN
             -- Signature historique, toujours supportee en 2.x.
             PERFORM create_hypertable(
@@ -332,6 +357,12 @@ BEGIN
                 timescaledb.compress_orderby   = 'ts DESC'
             )$sql$;
         EXECUTE $sql$
+            ALTER TABLE interface_metrics SET (
+                timescaledb.compress,
+                timescaledb.compress_segmentby = 'router_name, interface',
+                timescaledb.compress_orderby   = 'ts DESC'
+            )$sql$;
+        EXECUTE $sql$
             ALTER TABLE qoe_scores SET (
                 timescaledb.compress,
                 timescaledb.compress_segmentby = 'subscriber_id',
@@ -363,6 +394,22 @@ FROM subscriber_metrics m
 JOIN subscribers s ON s.id = m.subscriber_id
 LEFT JOIN pops p   ON p.id = s.pop_id
 ORDER BY m.subscriber_id, m.ts DESC;
+
+-- Derniere mesure connue par port. Le DISTINCT ON s'appuie sur l'index de cle
+-- primaire (router_name, interface, ts) : pas de tri supplementaire.
+CREATE OR REPLACE VIEW interface_latest AS
+SELECT DISTINCT ON (router_name, interface)
+       router_name,
+       interface,
+       ts,
+       rx_bps,
+       tx_bps,
+       rx_bytes,
+       tx_bytes,
+       running,
+       capacity_mbps
+FROM interface_metrics
+ORDER BY router_name, interface, ts DESC;
 
 CREATE OR REPLACE VIEW backhaul_latest AS
 SELECT DISTINCT ON (m.backhaul_id)

@@ -143,6 +143,11 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True
     subscriber_interval_s: float = 10.0
     backhaul_interval_s: float = 30.0
+    # Compteurs des ports, d'ou vient le debit des liens. Deux lectures
+    # (/interface et /interface/ethernet) par routeur et par cycle : la charge
+    # est proportionnelle au nombre de PoPs, pas au nombre d'abonnes. Mettre 0
+    # coupe la mesure sans toucher au reste de la collecte.
+    link_interval_s: float = 10.0
     plan_refresh_interval_s: float = 300.0
     # Filet de securite : recharge l'inventaire meme si une modification a ete
     # faite hors de cette instance (edition directe en base, seconde instance).

@@ -22,7 +22,13 @@ from app.db.database import Database
 from app.db.directory import PgDirectory
 from app.db.repository import MetricsRepository
 from app.db.writer import PgMetricsWriter
-from app.models import BackhaulSample, Plan, RunResult, SubscriberSample
+from app.models import (
+    BackhaulSample,
+    InterfaceSample,
+    Plan,
+    RunResult,
+    SubscriberSample,
+)
 
 DSN = os.environ.get("TEST_DATABASE_URL")
 
@@ -56,8 +62,8 @@ async def database():
     async with db.pool.acquire() as conn:
         # Repartir d'une base propre a chaque test.
         await conn.execute(
-            "TRUNCATE subscriber_metrics, backhaul_metrics, qoe_scores, "
-            "collector_runs, subscribers, backhauls, routers, pops, "
+            "TRUNCATE subscriber_metrics, backhaul_metrics, interface_metrics, "
+            "qoe_scores, collector_runs, subscribers, backhauls, routers, pops, "
             "topology_nodes, topology_links, subscriber_attachments, "
             "shaping_policies, enforcement_audit, runtime_flags "
             "RESTART IDENTITY CASCADE"
@@ -85,6 +91,7 @@ async def test_le_schema_s_applique_et_est_rejouable(database: Database) -> None
         "routers",
         "subscriber_metrics",
         "backhaul_metrics",
+        "interface_metrics",
         "qoe_scores",
         "collector_runs",
     } <= tables
@@ -1016,3 +1023,156 @@ async def test_boost_expire_ne_compte_plus_dans_la_limite(
 
     assert ligne["effective_down_mbps"] == 100
     assert ligne["limit_source"] == "plan"
+
+
+# ------------------------------------------------------- debit des liens
+
+
+async def _poser_un_lien(
+    database: Database, *, interface: str = "ether2", cible: str = "mac:AA:BB:CC:00:00:02"
+) -> str:
+    """Un routeur, un voisin, une adjacence : le minimum pour porter un debit."""
+    cle = f"router:pop-nord|{interface}|{cible}"
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO topology_nodes (key, name, kind) VALUES
+                ('router:pop-nord', 'PoP Nord', 'pop'), ($1, 'voisin', 'radio')
+            ON CONFLICT (key) DO NOTHING
+            """,
+            cible,
+        )
+        await conn.execute(
+            """
+            INSERT INTO topology_links
+                   (key, source_key, target_key, kind, interface, capacity_mbps, discovered_by)
+            VALUES ($1, 'router:pop-nord', $2, 'ethernet', $3, 1000, 'pop-nord')
+            ON CONFLICT (key) DO NOTHING
+            """,
+            cle,
+            cible,
+            interface,
+        )
+    return cle
+
+
+async def test_le_debit_mesure_remonte_sur_le_lien(database: Database, now: datetime) -> None:
+    """La jointure qui compte : (discovered_by, interface) contre les compteurs."""
+    from app.db.topology_repo import TopologyRepository
+
+    cle = await _poser_un_lien(database)
+    writer = PgMetricsWriter(database.pool)
+    await writer.write_interface_metrics(
+        [
+            InterfaceSample(
+                ts=now,
+                router_name="pop-nord",
+                interface="ether2",
+                rx_bps=12_000_000,
+                tx_bps=340_000_000,
+                running=True,
+                capacity_mbps=1000,
+            )
+        ]
+    )
+
+    lien = await TopologyRepository(database.pool).link(cle)
+
+    assert lien is not None
+    assert lien["tx_bps"] == 340_000_000
+    assert lien["rx_bps"] == 12_000_000
+    assert lien["port_capacity_mbps"] == 1000
+    assert lien["measure_fresh"] is True
+    assert lien["interface_links"] == 1
+
+
+async def test_un_port_partage_signale_le_nombre_de_voisins(
+    database: Database, now: datetime
+) -> None:
+    """Deux voisins derriere un switch : le compteur du port est le meme pour
+    les deux liens. Sans ce compte, l'interface ferait croire a deux mesures
+    independantes et le total serait double."""
+    from app.db.topology_repo import TopologyRepository
+
+    await _poser_un_lien(database, cible="mac:AA:BB:CC:00:00:02")
+    await _poser_un_lien(database, cible="mac:AA:BB:CC:00:00:03")
+    await PgMetricsWriter(database.pool).write_interface_metrics(
+        [
+            InterfaceSample(
+                ts=now, router_name="pop-nord", interface="ether2", rx_bps=1.0, tx_bps=2.0
+            )
+        ]
+    )
+
+    liens = await TopologyRepository(database.pool).links()
+
+    assert len(liens) == 2
+    assert {lien["interface_links"] for lien in liens} == {2}
+    assert {lien["tx_bps"] for lien in liens} == {2.0}
+
+
+async def test_un_lien_sans_mesure_reste_lisible(database: Database) -> None:
+    """Un lien decouvert mais jamais mesure ne doit pas disparaitre de la liste :
+    la jointure est bien une LEFT JOIN."""
+    from app.db.topology_repo import TopologyRepository
+
+    cle = await _poser_un_lien(database)
+    lien = await TopologyRepository(database.pool).link(cle)
+
+    assert lien is not None
+    assert lien["rx_bps"] is None
+    assert lien["measured_at"] is None
+
+
+async def test_la_serie_de_debit_est_agregee_par_bucket(database: Database, now: datetime) -> None:
+    from app.db.topology_repo import TopologyRepository
+
+    writer = PgMetricsWriter(database.pool)
+    await writer.write_interface_metrics(
+        [
+            InterfaceSample(
+                ts=now - timedelta(seconds=decalage),
+                router_name="pop-nord",
+                interface="ether2",
+                rx_bps=1_000_000.0 * (i + 1),
+                tx_bps=10_000_000.0 * (i + 1),
+                capacity_mbps=1000,
+            )
+            for i, decalage in enumerate((0, 10, 20, 300))
+        ]
+    )
+
+    serie = await TopologyRepository(database.pool).interface_series(
+        router_name="pop-nord", interface="ether2", minutes=60, bucket_seconds=60
+    )
+
+    assert len(serie) >= 2
+    # La pointe est conservee a cote de la moyenne : c'est elle qui dit si le
+    # lien a sature, une moyenne sur une minute la gommerait.
+    assert max(p["tx_peak_bps"] for p in serie) == 40_000_000.0
+    assert all(p["capacity_mbps"] == 1000 for p in serie)
+
+
+async def test_la_derniere_mesure_par_port_est_bien_la_plus_recente(
+    database: Database, now: datetime
+) -> None:
+    from app.db.topology_repo import TopologyRepository
+
+    writer = PgMetricsWriter(database.pool)
+    await writer.write_interface_metrics(
+        [
+            InterfaceSample(
+                ts=now - timedelta(minutes=5),
+                router_name="pop-nord",
+                interface="ether1",
+                tx_bps=1.0,
+            ),
+            InterfaceSample(ts=now, router_name="pop-nord", interface="ether1", tx_bps=999.0),
+        ]
+    )
+
+    lignes = await TopologyRepository(database.pool).interface_latest()
+
+    assert len(lignes) == 1
+    assert lignes[0]["tx_bps"] == 999.0
+    assert lignes[0]["fresh"] is True

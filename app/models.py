@@ -7,6 +7,14 @@ CONVENTION DE SENS (source d'erreur numero un sur ce type de systeme) :
 tous les compteurs et debits abonnes sont exprimes DU POINT DE VUE DU ROUTEUR.
   - rx = le routeur recoit depuis l'abonne  -> c'est l'UPLOAD de l'abonne
   - tx = le routeur emet vers l'abonne      -> c'est le DOWNLOAD de l'abonne
+
+Meme convention sur une interface physique, l'"abonne" devenant l'equipement
+d'en face :
+  - rx = le routeur recoit DEPUIS le voisin
+  - tx = le routeur emet VERS le voisin
+Selon que le voisin soit en amont (passerelle) ou en aval (secteur radio), le
+meme tx est le trafic montant ou descendant du reseau. On ne devine donc pas :
+on stocke le sens brut et l'interface nomme l'equipement d'en face.
 """
 
 from __future__ import annotations
@@ -50,6 +58,32 @@ class SubscriberSample:
     rx_bps: float | None = None
     tx_bps: float | None = None
     rtt_ms: float | None = None  # phase 3 (latence sous charge)
+
+
+@dataclass(slots=True)
+class InterfaceSample:
+    """Compteurs et debit d'UNE interface physique de routeur.
+
+    C'est le seul endroit ou le debit d'un lien peut reellement etre mesure :
+    RouterOS compte les octets par interface, pas par adjacence. Un lien de la
+    topologie herite donc du debit de l'interface qui le porte -- et quand
+    plusieurs voisins sont vus sur le meme port (un switch entre les deux), le
+    chiffre est celui du port, partage entre eux. L'interface le dit plutot que
+    de faire croire a une mesure par voisin.
+    """
+
+    ts: datetime
+    router_name: str
+    interface: str
+    kind: str | None = None  # type RouterOS : ether, vlan, bridge, wlan...
+    running: bool | None = None
+    # Debit negocie du port, quand c'est un ethernet. Sert de plafond aux jauges.
+    capacity_mbps: float | None = None
+    rx_bytes: int | None = None
+    tx_bytes: int | None = None
+    # None tant qu'on n'a pas deux mesures exploitables, comme pour les abonnes.
+    rx_bps: float | None = None
+    tx_bps: float | None = None
 
 
 @dataclass(slots=True)

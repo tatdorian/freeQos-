@@ -12,7 +12,7 @@ from typing import Protocol, runtime_checkable
 
 import asyncpg
 
-from app.models import BackhaulSample, RunResult, SubscriberSample
+from app.models import BackhaulSample, InterfaceSample, RunResult, SubscriberSample
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,8 @@ class MetricsWriter(Protocol):
     ) -> int: ...
 
     async def write_backhaul_metrics(self, rows: Sequence[tuple[int, BackhaulSample]]) -> int: ...
+
+    async def write_interface_metrics(self, rows: Sequence[InterfaceSample]) -> int: ...
 
     async def record_run(self, result: RunResult) -> None: ...
 
@@ -100,6 +102,38 @@ class PgMetricsWriter:
             )
         return len(payload)
 
+    async def write_interface_metrics(self, rows: Sequence[InterfaceSample]) -> int:
+        """Debits des ports. La cle porte deja le routeur : pas de resolution
+        d'identifiant, donc pas d'aller-retour supplementaire avec la base."""
+        if not rows:
+            return 0
+        payload = [
+            (
+                sample.ts,
+                sample.router_name,
+                sample.interface,
+                sample.rx_bps,
+                sample.tx_bps,
+                sample.rx_bytes,
+                sample.tx_bytes,
+                sample.running,
+                sample.capacity_mbps,
+            )
+            for sample in rows
+        ]
+        async with self._pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO interface_metrics
+                       (ts, router_name, interface, rx_bps, tx_bps,
+                        rx_bytes, tx_bytes, running, capacity_mbps)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (router_name, interface, ts) DO NOTHING
+                """,
+                payload,
+            )
+        return len(payload)
+
     async def record_run(self, result: RunResult) -> None:
         async with self._pool.acquire() as conn:
             await conn.execute(
@@ -122,6 +156,7 @@ class InMemoryMetricsWriter:
     def __init__(self) -> None:
         self.subscriber_rows: list[tuple[int, SubscriberSample]] = []
         self.backhaul_rows: list[tuple[int, BackhaulSample]] = []
+        self.interface_rows: list[InterfaceSample] = []
         self.runs: list[RunResult] = []
 
     async def write_subscriber_metrics(self, rows: Sequence[tuple[int, SubscriberSample]]) -> int:
@@ -130,6 +165,10 @@ class InMemoryMetricsWriter:
 
     async def write_backhaul_metrics(self, rows: Sequence[tuple[int, BackhaulSample]]) -> int:
         self.backhaul_rows.extend(rows)
+        return len(rows)
+
+    async def write_interface_metrics(self, rows: Sequence[InterfaceSample]) -> int:
+        self.interface_rows.extend(rows)
         return len(rows)
 
     async def record_run(self, result: RunResult) -> None:

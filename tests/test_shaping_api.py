@@ -6,7 +6,9 @@ equipement : les tests portent d'abord sur ce qui doit l'empecher.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 import pytest
 from fastapi import FastAPI
@@ -33,6 +35,7 @@ class FauxDepotTopologie:
         self.link_rows: list[dict[str, Any]] = []
         self.node_rows: list[dict[str, Any]] = []
         self.attachment_rows: dict[str, str] = {}
+        self.series_rows: list[dict[str, Any]] = []
         self.flags: dict[str, bool] = {}
 
     async def save_snapshot(self, snapshot):
@@ -45,6 +48,23 @@ class FauxDepotTopologie:
 
     async def links(self):
         return self.link_rows
+
+    async def link(self, key):
+        for ligne in self.link_rows:
+            if ligne["key"] == key:
+                return ligne
+        return None
+
+    async def interface_series(self, *, router_name, interface, minutes=60, bucket_seconds=30):
+        return [
+            ligne
+            for ligne in self.series_rows
+            if ligne.get("router_name", router_name) == router_name
+            and ligne.get("interface", interface) == interface
+        ]
+
+    async def interface_latest(self):
+        return list(self.series_rows)
 
     async def attachments(self):
         return dict(self.attachment_rows)
@@ -181,6 +201,24 @@ def topo() -> FauxDepotTopologie:
             "discovered_by": "pop-test",
             "max_down_mbps": None,
             "max_up_mbps": None,
+            # Debit mesure du port qui porte ce lien.
+            "rx_bps": 12_000_000.0,
+            "tx_bps": 340_000_000.0,
+            "running": True,
+            "port_capacity_mbps": 1000.0,
+            "measured_at": datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+            "measure_fresh": True,
+            "interface_links": 1,
+        }
+    ]
+    depot.series_rows = [
+        {
+            "bucket": datetime(2026, 1, 1, 11, 59, tzinfo=UTC),
+            "rx_bps": 11_000_000.0,
+            "tx_bps": 300_000_000.0,
+            "rx_peak_bps": 12_000_000.0,
+            "tx_peak_bps": 340_000_000.0,
+            "capacity_mbps": 1000.0,
         }
     ]
     return depot
@@ -218,6 +256,81 @@ def make_client(settings, topo, routeur, *, ecriture=None) -> TestClient:
 @pytest.fixture
 def client(settings: Settings, topo, routeur) -> TestClient:
     return make_client(settings, topo, routeur)
+
+
+# -------------------------------------------------------- debit d'un lien
+CLE_LIEN = "router:pop-test|ether2|mac:DC:9F:DB:11:22:33"
+
+
+def test_le_debit_d_un_lien_est_expose_avec_son_historique(client: TestClient) -> None:
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/throughput").json()
+
+    assert body["link"]["tx_bps"] == 340_000_000.0
+    assert body["link"]["rx_bps"] == 12_000_000.0
+    assert len(body["series"]) == 1
+    assert body["measurement"]["source"] == "port"
+
+
+def test_un_port_partage_est_signale_comme_tel(client: TestClient, topo) -> None:
+    """Deux voisins sur le meme port : le chiffre est celui du PORT. Le
+    presenter comme le debit d'un seul voisin serait faux."""
+    topo.link_rows[0]["interface_links"] = 2
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/throughput").json()
+
+    assert body["measurement"]["source"] == "port-partage"
+    assert "2 voisins" in body["measurement"]["note"]
+
+
+def test_un_lien_sans_port_local_le_dit(client: TestClient, topo) -> None:
+    """Une adjacence declaree par UISP n'a pas de compteur d'octets cote
+    routeur : on l'annonce au lieu d'afficher zero."""
+    topo.link_rows[0]["interface"] = None
+    topo.link_rows[0]["interface_links"] = 0
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/throughput").json()
+
+    assert body["measurement"]["source"] == "aucune"
+    assert body["series"] == []
+
+
+def test_lien_inconnu_renvoie_404(client: TestClient) -> None:
+    reponse = client.get("/api/v1/topology/links/inexistant/throughput")
+    assert reponse.status_code == 404
+
+
+def test_mesure_instantanee_interroge_le_routeur(client: TestClient, routeur) -> None:
+    routeur.monitor_rates["ether2"] = (9_000_000, 250_000_000)
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/live").json()
+
+    assert body["source"] == "monitor-traffic"
+    assert body["tx_bps"] == 250_000_000
+    assert body["rx_bps"] == 9_000_000
+
+
+def test_mesure_instantanee_impossible_retombe_sur_les_compteurs(
+    client: TestClient, routeur
+) -> None:
+    """Version de RouterOS, droits, port virtuel : la commande peut echouer.
+    L'operateur voulait un chiffre, pas une erreur -- on lui rend le dernier
+    connu en disant pourquoi."""
+    routeur.raise_on_monitor = RuntimeError("no such command")
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/live").json()
+
+    assert body["source"] == "compteurs"
+    assert body["tx_bps"] == 340_000_000.0
+    assert "no such command" in body["detail"]
+
+
+def test_mesure_instantanee_sans_port_local(client: TestClient, topo) -> None:
+    topo.link_rows[0]["interface"] = None
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/live").json()
+
+    assert body["source"] == "aucune"
+    assert body["rx_bps"] is None
 
 
 # --------------------------------------------------------------- topologie

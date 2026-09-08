@@ -86,7 +86,7 @@ une saisie au clavier.
 
 ### Interface d'administration
 
-Quatre vues, thème sombre, à `http://localhost:8000/` :
+Cinq vues, thème sombre, à `http://localhost:8000/` :
 
 - **Tableau de bord** — débit global (download/upload en miroir, graphe live), abonnés en
   ligne, débit vendu et son taux d'utilisation, capacité backhaul, top consommateurs avec
@@ -95,10 +95,13 @@ Quatre vues, thème sombre, à `http://localhost:8000/` :
   repliable, reconstruite depuis `/ip/neighbor`. La découverte de voisinage étant
   **symétrique**, le sens amont/aval est déduit du rôle de chaque équipement : un PoP qui
   voit son gateway produirait sinon un gateway *sous* le PoP. Les abonnés sont regroupés
-  sous un nœud repliable, avec leurs totaux.
+  sous un nœud repliable, avec leurs totaux. **Chaque lien porte son débit mesuré** et sa
+  charge vs la capacité du port ; le bouton *Débit* ouvre son historique.
 - **Abonnés** — sessions filtrables **par PoP** et par login, avec débit vs plan, latence,
   boost en cours et son décompte. Un clic ouvre la série de l'abonné ; les boutons *Débit*
   et *Boost* agissent directement.
+- **Topologie** — le graphe par rôle, corrigeable à la main, et le tableau des liens avec
+  leur **débit mesuré**, leur charge et leur capacité.
 - **PoPs** — inventaire et connexion d'un routeur.
 
 Aucune dépendance externe : ni framework, ni CDN, ni chaîne de build. Les graphes sont du
@@ -119,6 +122,7 @@ backhaul un abonné traverse, donc quelle file doit être son parent.
 | `/ip/address` | segment L3 auquel appartient le lien |
 | UISP `/devices` | liens radio PtP/PtMP, capacité du moment, rattachement station → AP |
 | `/ppp/active` → `caller-id` | **la jointure clé** : la MAC du CPE de l'abonné |
+| `/interface` `rx-byte`/`tx-byte` | **le débit réellement mesuré** sur le port qui porte le lien |
 
 Ce dernier point mérite d'être souligné. Le champ `caller-id` de `/ppp/active` contient la
 **MAC du CPE**. UISP sait sur quel secteur radio chaque CPE est accroché, et connaît sa
@@ -140,6 +144,36 @@ mauvais backhaul serait pire que de ne rien faire.
 La classification automatique des rôles est une heuristique (d'après la plateforme
 annoncée) : elle est corrigeable d'un menu déroulant dans l'interface, et la correction
 prime sur la détection.
+
+### Voir le débit d'un lien
+
+Savoir *quel lien va où* ne dit pas *combien y passe*. Le débit d'un lien vient des
+compteurs du **port** qui le porte : `/interface` expose `rx-byte` / `tx-byte`, deux
+lectures successives donnent des bits/s. Même dérivation que pour les abonnés — mêmes
+garde-fous (compteur qui recule après un redémarrage, débit invraisemblable rejeté), et
+une valeur nulle plutôt qu'un chiffre faux.
+
+**RouterOS compte par interface, pas par adjacence.** C'est la nuance qui décide de tout le
+reste. Quand un switch se trouve entre le routeur et plusieurs équipements, `/ip/neighbor`
+voit plusieurs voisins sur le même port : attribuer le compteur à chacun tripleraient le
+total. Les mesures sont donc stockées par `(routeur, interface)`, et un lien hérite du
+débit de son port — avec `interface_links` qui dit combien d'adjacences le partagent.
+L'interface affiche alors un badge *partagé* plutôt que de faire passer un débit de port
+pour un débit de lien. Une adjacence déclarée par UISP, sans port local, l'annonce aussi :
+elle n'a pas de compteur.
+
+**Le sens.** `rx` et `tx` restent ceux du routeur : `→` ce qu'il émet vers l'équipement
+d'en face, `←` ce qu'il en reçoit. Selon que le voisin soit en amont (passerelle) ou en
+aval (secteur), le même `tx` est du montant ou du descendant. Le tableau des liens ne
+devine rien et montre les deux sens. L'arbre réseau, lui, applique au débit la même
+orientation qu'aux nœuds : `↓` y veut dire « vers l'enfant », donc descendant.
+
+**Deux échelles de temps.** L'historique vient de la collecte (`LINK_INTERVAL_S`, 10 s par
+défaut). Pour la question « combien passe *maintenant* », le bouton *Mesurer maintenant*
+interroge `/interface/monitor-traffic` — une commande de **lecture**, qui ne modifie aucune
+configuration et rend la mesure que le routeur tient déjà. Si elle échoue (version, droits,
+port virtuel), la dernière valeur collectée est renvoyée avec la raison, plutôt qu'une
+erreur : l'exploitant voulait un chiffre.
 
 ### Piloter les files
 
@@ -456,6 +490,8 @@ que la boucle centrale devra suivre, sans radio.
 | `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
 | `GET` | `/api/v1/topology` · `POST /topology/discover` | Graphe du réseau |
 | `PATCH` | `/api/v1/topology/nodes/{key}` | Corriger le rôle d'un équipement |
+| `GET` | `/api/v1/topology/links/{key}/throughput` | Débit mesuré d'un lien + historique |
+| `GET` | `/api/v1/topology/links/{key}/live` | Mesure instantanée (`/interface/monitor-traffic`) |
 | `GET` | `/api/v1/shaping/state` | Ce qui est **déjà** configuré sur les routeurs |
 | `PUT` · `DELETE` | `/api/v1/shaping/policies` | Fixer / retirer un débit imposé |
 | `POST` | `/api/v1/shaping/plan` | Commandes exactes, **sans rien envoyer** |
@@ -493,6 +529,7 @@ existante ne recevrait donc jamais les colonnes ajoutées après coup.
 |---|---|
 | `subscriber_metrics` | `ts`, `subscriber_id`, `rx_bps`, `tx_bps`, `rx_bytes`, `tx_bytes`, `rtt_ms` (si la sonde est active), `session_uptime_s` |
 | `backhaul_metrics` | `ts`, `backhaul_id`, capacité (globale/down/up), `signal_dbm`, `airtime_pct`, MCS, `online` |
+| `interface_metrics` | `ts`, `router_name`, `interface`, débits et compteurs du port, `running`, `capacity_mbps` — la source du débit des liens |
 | `qoe_scores` | `ts`, `subscriber_id`, `score`, `components` — phase 3 |
 
 Deux vues, `subscriber_latest` et `backhaul_latest`, donnent le dernier point par série.

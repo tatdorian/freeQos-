@@ -29,15 +29,47 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from app.collectors.parsing import (
+    parse_bitrate,
     parse_counter,
     parse_routeros_duration_ms,
     parse_routeros_uptime,
     pppoe_interface_name,
 )
+from app.collectors.topology import ethernet_capacity_mbps
 from app.config import RouterConfig
-from app.models import PppoeSession
+from app.models import InterfaceSample, PppoeSession
 
 logger = logging.getLogger(__name__)
+
+
+# Interfaces DYNAMIQUES : RouterOS en cree une par session PPPoE, nommee
+# <pppoe-LOGIN>. Elles sont deja suivies abonne par abonne dans
+# subscriber_metrics ; les reprendre ici dupliquerait chaque serie dans une
+# table censee ne porter que les liens physiques, et la ferait grossir au
+# rythme du parc plutot qu'au rythme des ports.
+DYNAMIC_INTERFACE_TYPES = ("pppoe-in", "pppoe-out", "ppp-in", "ppp-out")
+
+
+def is_physical_interface(row: dict[str, Any]) -> bool:
+    """Vrai pour un port qui porte un lien, faux pour une interface de session."""
+    name = str(row.get("name") or "")
+    if not name or name.startswith("<"):
+        return False
+    return not str(row.get("type") or "").startswith(DYNAMIC_INTERFACE_TYPES)
+
+
+def parse_flag(value: object) -> bool | None:
+    """RouterOS ecrit les booleens ``true``/``false`` en texte."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "yes", "1"}:
+        return True
+    if text in {"false", "no", "0"}:
+        return False
+    return None
 
 
 class RouterOsReadClient(Protocol):
@@ -57,6 +89,8 @@ class RouterOsReadClient(Protocol):
     def neighbors(self) -> list[dict[str, Any]]: ...
 
     def ethernet(self) -> list[dict[str, Any]]: ...
+
+    def monitor_traffic(self, interface: str) -> dict[str, Any]: ...
 
     def addresses(self) -> list[dict[str, Any]]: ...
 
@@ -179,6 +213,31 @@ class LibrouterosReadClient:
         """Ports ethernet : le debit negocie est le plafond physique du lien."""
         return self._query("/interface/ethernet")
 
+    def monitor_traffic(self, interface: str) -> dict[str, Any]:
+        """Debit INSTANTANE d'une interface, mesure par le routeur lui-meme.
+
+        Les compteurs cumulatifs ne donnent un debit qu'apres deux lectures :
+        pour repondre "combien passe MAINTENANT sur ce lien", il faut demander
+        au routeur, qui tient deja la mesure. ``once`` rend la commande
+        ponctuelle au lieu de streamer.
+
+        C'est une commande de LECTURE : elle ne modifie aucune configuration.
+        """
+        with self._lock:
+            try:
+                api = self._ensure()
+                rows = [
+                    dict(row)
+                    for row in api(
+                        "/interface/monitor-traffic",
+                        **{"interface": interface, "once": True},
+                    )
+                ]
+            except Exception:
+                self._drop()
+                raise
+        return rows[0] if rows else {}
+
     def addresses(self) -> list[dict[str, Any]]:
         return self._query("/ip/address")
 
@@ -246,6 +305,73 @@ class MikrotikCollector:
 
     def close(self) -> None:
         self._client.close()
+
+    # ------------------------------------------------------------------
+    # Debit des liens
+    # ------------------------------------------------------------------
+    async def collect_interfaces(self) -> list[InterfaceSample]:
+        timeout = max(self.config.timeout_s * 3, 5.0)
+        return await asyncio.wait_for(
+            asyncio.to_thread(self.collect_interfaces_sync), timeout=timeout
+        )
+
+    def collect_interfaces_sync(self) -> list[InterfaceSample]:
+        """Compteurs de chaque port physique, SANS les debits.
+
+        Le debit se derive de deux lectures successives, exactement comme pour
+        les abonnes : c'est le service de collecte qui le calcule, parce que
+        c'est lui qui garde l'etat entre deux cycles.
+        """
+        rows = self._client.interfaces()
+        try:
+            capacites = {
+                str(row.get("name") or ""): ethernet_capacity_mbps(row)
+                for row in self._client.ethernet()
+            }
+        except Exception:  # noqa: BLE001 - la capacite n'est qu'un plafond d'affichage
+            # Un CHR sans port physique refuse cet appel. Les compteurs restent
+            # exploitables ; seule la jauge de charge perd sa reference.
+            logger.debug("Capacites ethernet indisponibles sur %s", self.name)
+            capacites = {}
+
+        ts = utcnow()
+        echantillons: list[InterfaceSample] = []
+        for row in rows:
+            if not is_physical_interface(row):
+                continue
+            nom = str(row.get("name"))
+            echantillons.append(
+                InterfaceSample(
+                    ts=ts,
+                    router_name=self.name,
+                    interface=nom,
+                    kind=_as_str(row.get("type")),
+                    running=parse_flag(row.get("running")),
+                    capacity_mbps=capacites.get(nom),
+                    rx_bytes=parse_counter(row.get("rx-byte")),
+                    tx_bytes=parse_counter(row.get("tx-byte")),
+                )
+            )
+        return echantillons
+
+    async def measure_interface(self, interface: str) -> dict[str, Any]:
+        """Debit instantane d'une interface, a la demande.
+
+        Sert le "je veux voir le debit de ce lien MAINTENANT" : au lieu
+        d'attendre le prochain cycle de compteurs, on demande au routeur la
+        mesure qu'il tient deja.
+        """
+        timeout = max(self.config.timeout_s * 2, 4.0)
+        row = await asyncio.wait_for(
+            asyncio.to_thread(self._client.monitor_traffic, interface), timeout=timeout
+        )
+        return {
+            "interface": interface,
+            "rx_bps": parse_bitrate(row.get("rx-bits-per-second")),
+            "tx_bps": parse_bitrate(row.get("tx-bits-per-second")),
+            "rx_pps": parse_counter(row.get("rx-packets-per-second")),
+            "tx_pps": parse_counter(row.get("tx-packets-per-second")),
+        }
 
     async def ping(self, address: str, count: int = 1) -> float | None:
         """RTT du routeur vers l'abonne, en millisecondes.

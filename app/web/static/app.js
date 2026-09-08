@@ -144,7 +144,9 @@ function svgEl(name, attrs) {
  * Cette forme rend immediatement lisible l'asymetrie d'un reseau d'acces,
  * bien plus qu'une superposition de deux courbes.
  */
-function renderThroughput(container, points) {
+function renderThroughput(container, points, options) {
+  const opt = options || {};
+  const legende = opt.labels || { down: 'Download', up: 'Upload', extra: 'Abonnes' };
   container.innerHTML = '';
   if (!points || points.length === 0) {
     container.innerHTML = '<div class="empty">Aucune mesure sur la periode.</div>';
@@ -231,7 +233,7 @@ function renderThroughput(container, points) {
     hoverLine.setAttribute('x1', px); hoverLine.setAttribute('x2', px); hoverLine.setAttribute('opacity', 1);
     hoverDot1.setAttribute('cx', px); hoverDot1.setAttribute('cy', yDown(down[i])); hoverDot1.setAttribute('opacity', 1);
     hoverDot2.setAttribute('cx', px); hoverDot2.setAttribute('cy', yUp(up[i])); hoverDot2.setAttribute('opacity', 1);
-    showTooltip(event, points[i], down[i], up[i]);
+    showTooltip(event, points[i], down[i], up[i], legende);
   });
   overlay.addEventListener('mouseleave', () => {
     [hoverLine, hoverDot1, hoverDot2].forEach((n) => n.setAttribute('opacity', 0));
@@ -241,17 +243,20 @@ function renderThroughput(container, points) {
   container.appendChild(svg);
 }
 
-function showTooltip(event, point, down, up) {
+function showTooltip(event, point, down, up, legende) {
   if (!tooltipEl) {
     tooltipEl = document.createElement('div');
     tooltipEl.className = 'tooltip';
     document.body.appendChild(tooltipEl);
   }
+  const lib = legende || { down: 'Download', up: 'Upload', extra: 'Abonnes' };
   tooltipEl.innerHTML =
     '<div class="t">' + esc(new Date(point.bucket).toLocaleString('fr-FR')) + '</div>' +
-    '<div class="row"><span style="color:var(--down)">Download</span><span>' + esc(bpsText(down)) + '</span></div>' +
-    '<div class="row"><span style="color:var(--up)">Upload</span><span>' + esc(bpsText(up)) + '</span></div>' +
-    '<div class="row"><span style="color:var(--faint)">Abonnes</span><span>' + esc(point.subscribers || 0) + '</span></div>';
+    '<div class="row"><span style="color:var(--down)">' + esc(lib.down) + '</span><span>' + esc(bpsText(down)) + '</span></div>' +
+    '<div class="row"><span style="color:var(--up)">' + esc(lib.up) + '</span><span>' + esc(bpsText(up)) + '</span></div>' +
+    (lib.extra === null ? ''
+      : '<div class="row"><span style="color:var(--faint)">' + esc(lib.extra) + '</span><span>' +
+        esc(point.subscribers || 0) + '</span></div>');
   tooltipEl.style.display = 'block';
   const pad = 14;
   const x = Math.min(event.clientX + pad, window.innerWidth - tooltipEl.offsetWidth - 8);
@@ -266,6 +271,8 @@ function hideTooltip() { if (tooltipEl) tooltipEl.style.display = 'none'; }
 const state = {
   view: 'dashboard', rangeMinutes: 60, subSearch: '', subPop: '',
   routers: [], lastPoints: [], lastTree: [],
+  // Lien suivi dans le tiroir, et derniere mesure instantanee affichee.
+  link: null, linkLive: null,
 };
 
 function statCard(cls, label, value, unit, sub) {
@@ -477,8 +484,22 @@ function renderTreeNode(node, profondeur) {
       '<span class="d">&darr; ' + esc(bpsText(s.tx_bps)) + '</span>' +
       '<span class="u">&uarr; ' + esc(bpsText(s.rx_bps)) + '</span>';
     charge = '<div class="tree-load">' + meter(s.tx_bps, plan) + '</div>';
-  } else if (node.link && node.link.capacity_mbps) {
-    charge = '<span class="tree-meta">' + esc(mbps(node.link.capacity_mbps)) + '</span>';
+  } else if (node.link) {
+    // Dans l'arbre, "descendant" veut dire "vers l'enfant". Le lien a peut-etre
+    // ete retourne pour orienter la hierarchie : dans ce cas les compteurs du
+    // routeur le sont aussi, sinon la fleche mentirait sur le sens du trafic.
+    const l = node.link;
+    const bas = l.inverted ? l.rx_bps : l.tx_bps;
+    const haut = l.inverted ? l.tx_bps : l.rx_bps;
+    const plafond = (l.port_capacity_mbps || l.capacity_mbps || 0) * 1e6;
+    if (bas !== null && bas !== undefined) {
+      debits =
+        '<span class="d">&darr; ' + esc(bpsText(bas)) + '</span>' +
+        '<span class="u">&uarr; ' + esc(bpsText(haut || 0)) + '</span>';
+      charge = plafond ? '<div class="tree-load">' + meter(Math.max(bas, haut || 0), plafond) + '</div>' : '';
+    } else if (l.capacity_mbps) {
+      charge = '<span class="tree-meta">' + esc(mbps(l.capacity_mbps)) + '</span>';
+    }
   }
 
   let ligne =
@@ -498,7 +519,11 @@ function renderTreeNode(node, profondeur) {
       '<span class="tree-rates">' + debits + charge +
         (s ? '<span class="tree-actions">' +
               '<button class="sm" data-tree-boost="' + esc(s.pppoe_login) + '">Boost</button>' +
-             '</span>' : '') +
+             '</span>'
+           : node.link && !node.alias
+             ? '<span class="tree-actions">' +
+               '<button class="sm" data-tree-link="' + esc(node.link.key) + '">Debit</button>' +
+               '</span>' : '') +
       '</span>' +
     '</div>';
 
@@ -549,6 +574,9 @@ async function loadNetwork() {
   host.querySelectorAll('[data-tree-boost]').forEach((b) => {
     const ligne = abonnes.find((s) => s.pppoe_login === b.dataset.treeBoost);
     b.addEventListener('click', () => openBoostEditor(ligne));
+  });
+  host.querySelectorAll('[data-tree-link]').forEach((b) => {
+    b.addEventListener('click', () => openLink(b.dataset.treeLink));
   });
 }
 
@@ -707,7 +735,11 @@ async function openSubscriber(id) {
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
   }
 }
-function closeDrawer() { document.getElementById('drawer-root').innerHTML = ''; }
+function closeDrawer() {
+  state.link = null;
+  state.linkLive = null;
+  document.getElementById('drawer-root').innerHTML = '';
+}
 
 /* ------------------------------------------------------------------ PoPs */
 
@@ -992,6 +1024,32 @@ function renderTopologyGraph(data) {
   });
 }
 
+/** Debit mesure d'un lien, dans le sens du tableau : la fleche part de la
+ *  colonne "Depuis" et va vers la colonne "Vers". Aucune heuristique ici, on
+ *  montre les compteurs tels que le routeur les tient. */
+function linkRates(l) {
+  if (l.rx_bps === null && l.tx_bps === null) {
+    return '<span style="color:var(--faint)" title="Aucun compteur exploitable pour ce lien : ' +
+      'soit il vient d\'UISP et n\'a pas de port local, soit la premiere mesure ' +
+      'n\'a pas encore eu de seconde lecture.">pas de mesure</span>';
+  }
+  const perime = l.measure_fresh === false;
+  return '<span class="d" title="Le routeur emet vers ' + esc(l.target_name || '?') + '">&rarr; ' +
+      esc(bpsText(l.tx_bps || 0)) + '</span> ' +
+    '<span class="u" title="Le routeur recoit depuis ' + esc(l.target_name || '?') + '">&larr; ' +
+      esc(bpsText(l.rx_bps || 0)) + '</span>' +
+    (perime ? ' <span class="badge warn" title="Derniere mesure : ' +
+      esc(clock(l.measured_at)) + '">perime</span>' : '');
+}
+
+/** Charge du port dans sa direction la plus chargee : c'est celle-la qui sature
+ *  en premier, une moyenne des deux sens masquerait un lien deja plein. */
+function linkLoad(l) {
+  const plafond = (l.port_capacity_mbps || l.capacity_mbps || 0) * 1e6;
+  if (!plafond || (l.rx_bps === null && l.tx_bps === null)) return '';
+  return meter(Math.max(l.rx_bps || 0, l.tx_bps || 0), plafond);
+}
+
 function renderTopologyLinks(links) {
   const host = document.getElementById('topo-links');
   if (!links.length) {
@@ -1000,21 +1058,29 @@ function renderTopologyLinks(links) {
   }
   host.innerHTML =
     '<table><thead><tr><th>Depuis</th><th>Interface</th><th>Vers</th><th>Type</th>' +
+    '<th class="num">Debit mesure</th><th>Charge</th>' +
     '<th class="num">Capacite</th><th class="num">Debit impose</th><th></th></tr></thead><tbody>' +
     links.map((l) => {
       const impose = l.max_down_mbps || l.max_up_mbps;
+      const partage = (l.interface_links || 0) > 1;
       return '<tr>' +
         '<td>' + esc(l.source_name || l.source_key) + '</td>' +
-        '<td class="login">' + esc(l.interface || '-') + '</td>' +
+        '<td class="login">' + esc(l.interface || '-') +
+          (partage ? ' <span class="badge warn" title="' + esc(l.interface_links) +
+            ' voisins sur ce port : le debit est celui du port, pas de ce seul voisin.">' +
+            'partage</span>' : '') + '</td>' +
         '<td>' + esc(l.target_name || l.target_key) +
           ' <span class="badge">' + esc(KIND_LABEL[l.target_kind] || '?') + '</span></td>' +
         '<td>' + esc(l.kind) + '</td>' +
+        '<td class="num">' + linkRates(l) + '</td>' +
+        '<td style="min-width:120px">' + linkLoad(l) + '</td>' +
         '<td class="num">' + (l.capacity_mbps ? esc(mbps(l.capacity_mbps)) : '-') + '</td>' +
         '<td class="num">' + (impose
           ? '<span style="color:var(--warn)">' +
             esc(mbps(l.max_down_mbps || 0) + ' / ' + mbps(l.max_up_mbps || 0)) + '</span>'
           : '<span style="color:var(--faint)">auto</span>') + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' +
+          '<button class="sm" data-link-detail="' + esc(l.key) + '">Debit</button>' +
           '<button class="sm" data-edit-link="' + esc(l.key) + '">Bande passante</button>' +
         '</div></td></tr>';
     }).join('') + '</tbody></table>';
@@ -1023,6 +1089,119 @@ function renderTopologyLinks(links) {
     const lien = links.find((l) => l.key === b.dataset.editLink);
     b.addEventListener('click', () => openBandwidthEditor('link', lien));
   });
+  host.querySelectorAll('[data-link-detail]').forEach((b) => {
+    b.addEventListener('click', () => openLink(b.dataset.linkDetail));
+  });
+}
+
+/* --------------------------------------------------- debit d'un lien */
+
+const FENETRES = [[15, '15 min'], [60, '1 h'], [360, '6 h'], [1440, '24 h']];
+
+/** Tiroir "debit de ce lien" : l'historique collecte, plus un bouton qui va
+ *  chercher la mesure INSTANTANEE sur le routeur. Les deux repondent a la meme
+ *  question a deux echelles de temps, et l'origine du chiffre est toujours
+ *  affichee. */
+async function openLink(key, minutes, silencieux) {
+  const fenetre = minutes || 60;
+  const root = document.getElementById('drawer-root');
+  if (!silencieux) {
+    root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
+      '<div class="empty">Chargement...</div></div>';
+    root.querySelector('.drawer-backdrop').addEventListener('click', closeDrawer);
+  } else if (!root.querySelector('.drawer')) {
+    return;  // le tiroir a ete ferme entre-temps
+  }
+  state.link = { key: key, minutes: fenetre };
+
+  try {
+    const data = await api('/topology/links/' + encodeURIComponent(key) +
+      '/throughput?minutes=' + fenetre + '&bucket=' + (fenetre <= 60 ? 30 : 300));
+    const l = data.link;
+    const voisin = l.target_name || l.target_key;
+    const plafond = (l.port_capacity_mbps || l.capacity_mbps || 0) * 1e6;
+    const pointe = data.series.reduce(
+      (m, p) => Math.max(m, p.tx_peak_bps || 0, p.rx_peak_bps || 0), 0);
+
+    root.querySelector('.drawer').innerHTML =
+      '<div class="drawer-head"><h3>' + esc(l.source_name || l.source_key) +
+        ' <span style="color:var(--faint)">&rarr;</span> ' + esc(voisin) + '</h3>' +
+      '<button class="sm" id="drawer-close">Fermer</button></div>' +
+      '<div class="grid stats" style="margin-bottom:1rem">' +
+        statCard('', 'Vers ' + voisin, bpsText(l.tx_bps || 0), '',
+          esc(l.interface || '') + (l.running === false ? ' &middot; port down' : '')) +
+        statCard('', 'Depuis ' + voisin, bpsText(l.rx_bps || 0), '',
+          l.measured_at ? 'mesure ' + esc(clock(l.measured_at)) : 'jamais mesure') +
+        statCard('', 'Capacite du port', plafond ? bpsText(plafond) : '-', '',
+          plafond
+            ? 'charge ' + Math.round(pct(Math.max(l.rx_bps || 0, l.tx_bps || 0), plafond)) + ' %'
+            : 'capacite du port inconnue') +
+        statCard('', 'Pointe sur la fenetre', pointe ? bpsText(pointe) : '-', '',
+          data.series.length + ' point(s)') +
+      '</div>' +
+      '<div class="notice"><b>Origine du chiffre.</b> ' + esc(data.measurement.note) +
+        '<span class="hint">rx et tx sont ceux du routeur : &rarr; il emet vers ' +
+        esc(voisin) + ', &larr; il recoit depuis ' + esc(voisin) + '.</span></div>' +
+      '<div class="actions" style="margin:.8rem 0">' +
+        FENETRES.map(([m, libelle]) =>
+          '<button class="sm' + (m === fenetre ? ' primary' : '') +
+            '" data-link-window="' + m + '">' + libelle + '</button>').join('') +
+        '<button class="sm" id="link-live">Mesurer maintenant</button>' +
+        '<button class="sm" id="link-bw">Bande passante</button>' +
+      '</div>' +
+      '<div id="link-live-result"></div>' +
+      '<div class="card"><div id="link-chart"></div></div>';
+
+    // Une mesure instantanee reste affichee : elle porte son horodatage, la
+    // remplacer par du vide a chaque cycle serait la perdre sous les yeux.
+    if (state.linkLive && state.linkLive.key === key) {
+      document.getElementById('link-live-result').innerHTML = state.linkLive.html;
+    }
+
+    document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+    document.getElementById('link-bw').addEventListener('click', () => openBandwidthEditor('link', l));
+    document.getElementById('link-live').addEventListener('click', () => measureLink(key));
+    root.querySelectorAll('[data-link-window]').forEach((b) => {
+      b.addEventListener('click', () => openLink(key, Number(b.dataset.linkWindow)));
+    });
+
+    renderThroughput(
+      document.getElementById('link-chart'),
+      data.series.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_peak_bps, rx_bps: p.rx_peak_bps })),
+      { labels: { down: 'Vers ' + voisin, up: 'Depuis ' + voisin, extra: null } },
+    );
+  } catch (err) {
+    root.querySelector('.drawer').innerHTML =
+      '<div class="drawer-head"><h3>Erreur</h3><button class="sm" id="drawer-close">Fermer</button></div>' +
+      '<div class="notice err">' + esc(err.message) + '</div>';
+    document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+  }
+}
+
+/** Demande au routeur le debit qu'il mesure a l'instant. Lecture pure :
+ *  /interface/monitor-traffic ne modifie aucune configuration. */
+async function measureLink(key) {
+  const host = document.getElementById('link-live-result');
+  const bouton = document.getElementById('link-live');
+  if (bouton) { bouton.disabled = true; bouton.textContent = 'Mesure...'; }
+  try {
+    const m = await api('/topology/links/' + encodeURIComponent(key) + '/live');
+    const direct = m.source === 'monitor-traffic';
+    const html = '<div class="notice' + (direct ? ' ok' : '') + '">' +
+      '<b>' + (direct ? 'Mesure instantanee' : 'Derniere mesure collectee') + '</b> ' +
+      '<span style="color:var(--faint)">' + esc(clock(m.measured_at)) + '</span> &middot; ' +
+      '&rarr; ' + esc(bpsText(m.tx_bps || 0)) + ' &middot; &larr; ' + esc(bpsText(m.rx_bps || 0)) +
+      (direct ? '<span class="hint">Lue a l\'instant sur ' + esc(m.router_name || '?') + ' ' +
+        'via /interface/monitor-traffic (lecture seule).</span>'
+        : '<span class="hint">' + esc(m.detail || '') + '</span>') +
+      '</div>';
+    state.linkLive = { key: key, html: html };
+    host.innerHTML = html;
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  } finally {
+    if (bouton) { bouton.disabled = false; bouton.textContent = 'Mesurer maintenant'; }
+  }
 }
 
 /** Editeur de bande passante : c'est ici qu'on "clique pour modifier". Il
@@ -1633,6 +1812,18 @@ refreshHealth();
 // pendant qu'un administrateur le remplit.
 // Les vues d'edition ne se rafraichissent pas toutes seules : ce serait effacer
 // un formulaire en cours de saisie, ou un plan qu'on est en train de lire.
-const VUES_FIGEES = new Set(['pops', 'shaping', 'topology']);
-setInterval(() => { if (!VUES_FIGEES.has(state.view)) refresh(); }, 10000);
+const VUES_FIGEES = new Set(['pops', 'shaping']);
+setInterval(() => {
+  if (VUES_FIGEES.has(state.view)) return;
+  // La topologie etait figee elle aussi, a cause de ses menus de role. Elle
+  // porte desormais le debit des liens : la figer entierement reviendrait a
+  // afficher un debit perime. On ne suspend donc que pendant qu'un menu est
+  // reellement ouvert.
+  if (state.view === 'topology' && document.activeElement &&
+      document.activeElement.tagName === 'SELECT') return;
+  refresh();
+  // Le tiroir d'un lien suit le meme rythme : on regarde un debit justement
+  // quand il bouge.
+  if (state.link) openLink(state.link.key, state.link.minutes, true);
+}, 10000);
 setInterval(refreshHealth, 15000);

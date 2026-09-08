@@ -50,6 +50,9 @@ class FakeRouterOsClient:
         self.user_rows: list[dict[str, Any]] = [{"name": "qos-ro", "group": "qos-ro"}]
         self.group_rows: list[dict[str, Any]] = [{"name": "qos-ro", "policy": "read,api,test"}]
         self.raise_on_users: Exception | None = None
+        # Debit instantane rendu par /interface/monitor-traffic, par interface.
+        self.monitor_rates: dict[str, tuple[float, float]] = {}
+        self.raise_on_monitor: Exception | None = None
         self.ping_reply: str | None = "12ms"
         self.ping_error: Exception | None = None
 
@@ -82,6 +85,18 @@ class FakeRouterOsClient:
 
     def ethernet(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self.ethernet_rows]
+
+    def monitor_traffic(self, interface: str) -> dict[str, Any]:
+        if self.raise_on_monitor is not None:
+            raise self.raise_on_monitor
+        rx, tx = self.monitor_rates.get(interface, (0.0, 0.0))
+        return {
+            "name": interface,
+            "rx-bits-per-second": str(int(rx)),
+            "tx-bits-per-second": str(int(tx)),
+            "rx-packets-per-second": "1200",
+            "tx-packets-per-second": "9800",
+        }
 
     def addresses(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self.address_rows]
@@ -177,6 +192,36 @@ class FakeRouterOsClient:
             for row in self.active:
                 if row.get("name") == login:
                     row["uptime"] = uptime
+
+    def add_interface(
+        self,
+        name: str,
+        *,
+        kind: str = "ether",
+        rx_byte: int = 0,
+        tx_byte: int = 0,
+        speed: str | None = "1Gbps",
+        running: str = "true",
+    ) -> None:
+        """Ajoute un PORT physique : c'est lui qui porte le debit d'un lien."""
+        self.interfaces_rows.append(
+            {
+                ".id": f"*{len(self.interfaces_rows) + 200:X}",
+                "name": name,
+                "type": kind,
+                "running": running,
+                "rx-byte": str(rx_byte),
+                "tx-byte": str(tx_byte),
+            }
+        )
+        if speed is not None:
+            self.ethernet_rows.append({"name": name, "speed": speed})
+
+    def advance_interface(self, name: str, *, rx_delta: int, tx_delta: int) -> None:
+        for row in self.interfaces_rows:
+            if row.get("name") == name:
+                row["rx-byte"] = str(int(row["rx-byte"]) + rx_delta)
+                row["tx-byte"] = str(int(row["tx-byte"]) + tx_delta)
 
     def restart_session(self, login: str, *, uptime: str = "00:00:05") -> None:
         """Simule une reconnexion PPPoE : compteurs remis a zero."""

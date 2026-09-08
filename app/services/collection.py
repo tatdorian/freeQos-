@@ -15,6 +15,7 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
+from typing import Any
 
 from app.collectors.mikrotik import MikrotikCollector
 from app.collectors.radius import PlanProvider
@@ -22,7 +23,14 @@ from app.collectors.uisp import BackhaulCapacityProvider
 from app.config import BackhaulConfig, Settings
 from app.db.directory import Directory
 from app.db.writer import MetricsWriter
-from app.models import BackhaulSample, Plan, PppoeSession, RunResult, SubscriberSample
+from app.models import (
+    BackhaulSample,
+    InterfaceSample,
+    Plan,
+    PppoeSession,
+    RunResult,
+    SubscriberSample,
+)
 from app.services.rates import RateTracker
 from app.services.rtt import RttProber
 
@@ -30,6 +38,7 @@ logger = logging.getLogger(__name__)
 
 JOB_SUBSCRIBERS = "collect_subscribers"
 JOB_BACKHAULS = "collect_backhauls"
+JOB_LINKS = "collect_links"
 JOB_PLANS = "refresh_plans"
 JOB_INVENTORY = "reload_inventory"
 JOB_RTT = "probe_rtt"
@@ -63,6 +72,13 @@ class CollectionService:
         self._clock = clock
 
         self.rates = RateTracker(
+            max_plausible_bps=settings.max_plausible_bps,
+            min_interval_s=settings.min_rate_interval_s,
+        )
+        # Tracker distinct de celui des abonnes : memes garde-fous (reset de
+        # compteur au redemarrage du routeur, debit aberrant rejete), mais un
+        # etat separe pour que le prune des sessions n'efface pas les ports.
+        self.interface_rates = RateTracker(
             max_plausible_bps=settings.max_plausible_bps,
             min_interval_s=settings.min_rate_interval_s,
         )
@@ -212,6 +228,84 @@ class CollectionService:
             # Un plan manquant ne doit pas empecher d'ecrire les metriques.
             logger.exception("Recuperation des plans impossible pour %d login(s)", len(unknown))
             return {}
+
+    # ------------------------------------------------------------------
+    # Debit des liens (compteurs de ports)
+    # ------------------------------------------------------------------
+    async def collect_links(self) -> RunResult:
+        """Debit de chaque port physique, derive de deux lectures successives.
+
+        Un job separe de celui des abonnes, pour trois raisons : un routeur lent
+        sur /interface/ethernet ne doit pas retarder les metriques abonnes, la
+        cadence des ports peut etre plus lache que celle des sessions, et le job
+        se coupe seul (intervalle <= 0) sans toucher au reste.
+        """
+        started_at = _utcnow()
+        monotonic = self._clock()
+        errors: list[str] = []
+
+        gathered = await asyncio.gather(
+            *(collector.collect_interfaces() for collector in self.collectors),
+            return_exceptions=True,
+        )
+
+        rows: list[InterfaceSample] = []
+        active_keys: set[str] = set()
+        for collector, outcome in zip(self.collectors, gathered, strict=True):
+            if isinstance(outcome, BaseException):
+                errors.append(f"{collector.name}: {type(outcome).__name__}: {outcome}")
+                logger.error(
+                    "Lecture des interfaces impossible sur %s : %s", collector.name, outcome
+                )
+                continue
+
+            for sample in outcome:
+                key = f"{collector.name}/{sample.interface}"
+                active_keys.add(key)
+                rate = self.interface_rates.update(
+                    key,
+                    ts=monotonic,
+                    rx_bytes=sample.rx_bytes,
+                    tx_bytes=sample.tx_bytes,
+                )
+                sample.ts = started_at
+                sample.rx_bps = rate.rx_bps
+                sample.tx_bps = rate.tx_bps
+                rows.append(sample)
+
+        # Un port supprime ou un routeur retire ne doit pas garder son point de
+        # reference : sinon un ecart de plusieurs heures produirait un debit faux
+        # le jour ou le meme nom reapparait.
+        self.interface_rates.prune(active_keys)
+
+        written = 0
+        try:
+            written = await self.writer.write_interface_metrics(rows)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"ecriture: {exc}")
+            logger.exception("Ecriture des metriques d'interface impossible")
+
+        result = RunResult(
+            job=JOB_LINKS,
+            started_at=started_at,
+            duration_s=self._clock() - monotonic,
+            ok=not errors,
+            items=written,
+            errors=errors,
+        )
+        await self._finalize(result)
+        return result
+
+    async def measure_link(self, router_name: str, interface: str) -> dict[str, Any]:
+        """Mesure instantanee d'un port, a la demande.
+
+        Ne passe pas par la base : c'est une question posee au routeur au moment
+        ou l'operateur clique.
+        """
+        for collector in self.collectors:
+            if collector.name == router_name:
+                return await collector.measure_interface(interface)
+        raise KeyError(router_name)
 
     # ------------------------------------------------------------------
     # Backhauls

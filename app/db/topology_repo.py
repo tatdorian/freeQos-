@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import timedelta
 from typing import Any
 
 import asyncpg
@@ -133,6 +134,14 @@ class TopologyRepository:
         return [dict(row) for row in rows]
 
     async def links(self) -> list[dict[str, Any]]:
+        """Liens du graphe, avec le DEBIT MESURE de leur port.
+
+        La mesure vient de ``interface_latest``, donc de l'interface qui porte le
+        lien. ``interface_links`` dit combien d'adjacences partagent ce port :
+        a 1 le debit est bien celui du lien, au-dela c'est le debit cumule du
+        port (un switch entre le routeur et plusieurs voisins). On expose le
+        compte plutot que de laisser croire a une mesure par voisin.
+        """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -143,13 +152,80 @@ class TopologyRepository:
                        s.name AS source_name, t.name AS target_name,
                        COALESCE(t.kind_override, t.kind) AS target_kind,
                        p.max_down_mbps, p.max_up_mbps, p.enabled AS policy_enabled,
-                       p.note AS policy_note
+                       p.note AS policy_note,
+                       im.rx_bps, im.tx_bps, im.running,
+                       im.capacity_mbps AS port_capacity_mbps,
+                       im.ts AS measured_at,
+                       (im.ts > now() - INTERVAL '2 minutes') AS measure_fresh,
+                       count(*) FILTER (WHERE l.interface IS NOT NULL)
+                           OVER (PARTITION BY l.discovered_by, l.interface)
+                           AS interface_links
                   FROM topology_links l
                   LEFT JOIN topology_nodes s ON s.key = l.source_key
                   LEFT JOIN topology_nodes t ON t.key = l.target_key
                   LEFT JOIN shaping_policies p
                          ON p.scope = 'link' AND p.target_key = l.key
+                  LEFT JOIN interface_latest im
+                         ON im.router_name = l.discovered_by AND im.interface = l.interface
                  ORDER BY s.name NULLS LAST, l.interface
+                """
+            )
+        return [dict(row) for row in rows]
+
+    async def link(self, key: str) -> dict[str, Any] | None:
+        """Un lien precis. Passe par ``links()`` : une seule definition de ce
+        qu'est un lien enrichi, donc pas de divergence entre la liste et le
+        detail."""
+        for row in await self.links():
+            if row["key"] == key:
+                return row
+        return None
+
+    async def interface_series(
+        self,
+        *,
+        router_name: str,
+        interface: str,
+        minutes: int = 60,
+        bucket_seconds: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Historique de debit d'un port, agrege par pas de temps.
+
+        ``date_bin`` plutot que ``time_bucket`` : le controleur doit tourner sur
+        un PostgreSQL nu autant que sur TimescaleDB.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT date_bin($4::interval, ts, TIMESTAMPTZ 'epoch') AS bucket,
+                       avg(rx_bps) AS rx_bps,
+                       avg(tx_bps) AS tx_bps,
+                       max(rx_bps) AS rx_peak_bps,
+                       max(tx_bps) AS tx_peak_bps,
+                       max(capacity_mbps) AS capacity_mbps
+                  FROM interface_metrics
+                 WHERE router_name = $1 AND interface = $2
+                   AND ts > now() - $3::interval
+                 GROUP BY bucket
+                 ORDER BY bucket
+                """,
+                router_name,
+                interface,
+                timedelta(minutes=minutes),
+                timedelta(seconds=bucket_seconds),
+            )
+        return [dict(row) for row in rows]
+
+    async def interface_latest(self) -> list[dict[str, Any]]:
+        """Derniere mesure de chaque port, tous routeurs confondus."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT router_name, interface, ts, rx_bps, tx_bps,
+                       running, capacity_mbps,
+                       (ts > now() - INTERVAL '2 minutes') AS fresh
+                  FROM interface_latest
+                 ORDER BY router_name, interface
                 """
             )
         return [dict(row) for row in rows]
