@@ -46,6 +46,10 @@ class FakeRouterOsClient:
         self.queue_tree_rows: list[dict[str, Any]] = []
         self.raise_on_neighbors: Exception | None = None
         self.raise_on_queues: Exception | None = None
+        # Par defaut : compte de lecture seule, comme qos-ro.
+        self.user_rows: list[dict[str, Any]] = [{"name": "qos-ro", "group": "qos-ro"}]
+        self.group_rows: list[dict[str, Any]] = [{"name": "qos-ro", "policy": "read,api,test"}]
+        self.raise_on_users: Exception | None = None
         self.ping_reply: str | None = "12ms"
         self.ping_error: Exception | None = None
 
@@ -96,6 +100,22 @@ class FakeRouterOsClient:
         if self.raise_on_queues is not None:
             raise self.raise_on_queues
         return [dict(row) for row in self.queue_tree_rows]
+
+    def users(self) -> list[dict[str, Any]]:
+        if self.raise_on_users is not None:
+            raise self.raise_on_users
+        return [dict(row) for row in self.user_rows]
+
+    def user_groups(self) -> list[dict[str, Any]]:
+        if self.raise_on_users is not None:
+            raise self.raise_on_users
+        return [dict(row) for row in self.group_rows]
+
+    def grant_write(self, username: str = "qos-ro") -> None:
+        """Donne les droits d'ecriture a ce compte, comme le ferait un
+        exploitant qui se connecte deja avec un compte complet."""
+        self.user_rows = [{"name": username, "group": "full"}]
+        self.group_rows = [{"name": "full", "policy": "read,write,api,test,policy"}]
 
     def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]:
         self.pings.append((address, count))

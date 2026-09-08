@@ -212,6 +212,11 @@ class Settings(BaseSettings):
     # Interdit la bascule depuis l'interface : seul un redemarrage avec
     # ENFORCEMENT_ENABLED modifie peut alors autoriser l'ecriture.
     enforcement_locked: bool = False
+    # Exige un compte d'ecriture DISTINCT (rw_username). Desactive par defaut :
+    # beaucoup d'exploitants se connectent deja avec un compte qui possede la
+    # politique 'write', et refuser sur la seule absence de declaration
+    # reviendrait a ignorer les droits reels.
+    require_separate_write_account: bool = False
     # Verifie l'echeance des boosts et ramene les files a leur debit normal.
     boost_check_interval_s: float = 30.0
     topology_refresh_interval_s: float = 900.0

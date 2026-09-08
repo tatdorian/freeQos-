@@ -228,6 +228,23 @@ async def apply_shaping(
     return {"plan": plan.to_dict(), "result": resultat.to_dict()}
 
 
+@router.get("/shaping/capability", summary="Droits reels du compte sur un routeur")
+async def write_capability(
+    container: ContainerDep, router_name: Annotated[str, Query(alias="router")]
+) -> dict[str, Any]:
+    """Interroge le routeur : ce compte a-t-il vraiment le droit d'ecrire ?
+
+    Lit /user et /user/group plutot que de se fier a l'inventaire. Un verdict
+    ``null`` signifie indeterminable — la commande sera tentee et RouterOS aura
+    le dernier mot.
+    """
+    try:
+        verdict = await container.shaping.write_capability(router_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return verdict.to_dict()
+
+
 @router.get("/shaping/audit", summary="Journal des commandes envoyees")
 async def audit(
     container: ContainerDep, limit: Annotated[int, Query(ge=1, le=500)] = 100

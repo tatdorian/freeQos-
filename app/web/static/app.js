@@ -1272,11 +1272,32 @@ async function inspectShaping() {
   const host = document.getElementById('shaping-state');
   host.innerHTML = '<div class="notice">Lecture de ' + esc(routeur) + '...</div>';
   try {
-    const etats = await api('/shaping/state?router=' + encodeURIComponent(routeur));
+    const [etats, droits] = await Promise.all([
+      api('/shaping/state?router=' + encodeURIComponent(routeur)),
+      api('/shaping/capability?router=' + encodeURIComponent(routeur)).catch(() => null),
+    ]);
     host.innerHTML = etats.map((e) => {
       if (!e.reachable) {
         return '<div class="notice err"><strong>' + esc(e.router) + '</strong> injoignable : ' +
           esc(e.error || '') + '</div>';
+      }
+      let bandeauDroits = '';
+      if (droits) {
+        if (droits.can_write === true) {
+          bandeauDroits = '<div class="notice ok">Le compte <code>' +
+            esc(droits.username) + '</code> peut ecrire : ' + esc(droits.detail) + '</div>';
+        } else if (droits.can_write === false) {
+          bandeauDroits = '<div class="notice err"><strong>Le compte <code>' +
+            esc(droits.username) + '</code> ne peut pas ecrire.</strong> ' +
+            esc(droits.detail) +
+            '<span class="hint">Sur le routeur : <code>/user/group set ' +
+            '[find name=' + esc(droits.group || '&lt;groupe&gt;') +
+            '] policy=read,write,api,test</code></span></div>';
+        } else {
+          bandeauDroits = '<div class="notice warn">Droits du compte <code>' +
+            esc(droits.username) + '</code> non verifiables : ' + esc(droits.detail) +
+            '</div>';
+        }
       }
       return '<div class="card" style="margin-bottom:1rem">' +
         '<div class="node-head" style="margin-bottom:.8rem">' +
@@ -1295,6 +1316,7 @@ async function inspectShaping() {
             (e.foreign_queues.length > 8 ? '...' : '') + '</span></div>'
           : '<div class="notice ok">Aucune file tierce : le controleur est seul a shaper ' +
             'sur ce routeur.</div>') +
+        bandeauDroits +
         '</div>';
     }).join('');
   } catch (err) {

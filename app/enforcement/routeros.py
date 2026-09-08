@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from app.config import MissingSecretError, RouterConfig
+from app.enforcement.capability import permission_hint
 from app.enforcement.models import Plan, PlanAction
 
 logger = logging.getLogger(__name__)
@@ -37,37 +38,63 @@ class MissingWriteCredentialsError(RuntimeError):
     """Le routeur n'a pas d'identifiants d'ecriture : il est hors de portee."""
 
 
-def write_config(config: RouterConfig) -> RouterConfig:
-    """Derive la configuration d'ecriture d'un routeur a partir de sa config.
+def write_config(config: RouterConfig, *, require_separate: bool = False) -> RouterConfig:
+    """Configuration a utiliser pour ecrire sur ce routeur.
 
-    Refuse explicitement de retomber sur le compte de lecture : melanger les
-    deux annulerait la separation des privileges.
+    Un compte ``rw_*`` distinct, s'il est declare, est utilise : la separation
+    des privileges reste possible et recommandee.
+
+    Sinon on retombe sur le compte configure. Refuser ici reviendrait a se fier a
+    une DECLARATION plutot qu'aux droits reels : beaucoup d'exploitants se
+    connectent deja avec un compte qui possede la politique 'write'. C'est le
+    routeur qui tranche, pas l'inventaire.
+
+    ``require_separate`` (REQUIRE_SEPARATE_WRITE_ACCOUNT) retablit l'exigence
+    stricte pour qui tient a deux comptes distincts.
     """
-    if not config.rw_username:
-        raise MissingWriteCredentialsError(
-            f"routeur '{config.name}' : aucun compte d'ecriture (rw_username) declare"
+    if config.rw_username:
+        if not config.rw_password_env:
+            raise MissingWriteCredentialsError(
+                f"routeur '{config.name}' : rw_username est declare mais rw_password_env manque"
+            )
+        clone = config.model_copy(
+            update={
+                "username": config.rw_username,
+                "password": None,
+                "password_env": config.rw_password_env,
+            }
         )
-    if not config.rw_password_env:
-        raise MissingWriteCredentialsError(f"routeur '{config.name}' : rw_password_env manquant")
-    clone = config.model_copy(
-        update={
-            "username": config.rw_username,
-            "password": None,
-            "password_env": config.rw_password_env,
-        }
+        try:
+            clone.resolve_password()
+        except MissingSecretError as exc:
+            raise MissingWriteCredentialsError(str(exc)) from exc
+        return clone
+
+    if require_separate:
+        raise MissingWriteCredentialsError(
+            f"routeur '{config.name}' : REQUIRE_SEPARATE_WRITE_ACCOUNT=true exige "
+            "un compte d'ecriture distinct. Declarez rw_username et "
+            "rw_password_env, ou desactivez cette exigence."
+        )
+
+    # Repli sur le compte configure : ses droits reels feront foi.
+    logger.info(
+        "Routeur '%s' : pas de compte d'ecriture distinct, utilisation de '%s'",
+        config.name,
+        config.username,
     )
     try:
-        clone.resolve_password()
+        config.resolve_password()
     except MissingSecretError as exc:
         raise MissingWriteCredentialsError(str(exc)) from exc
-    return clone
+    return config
 
 
 class LibrouterosWriteClient:
     """Client d'ecriture reel (librouteros, API binaire)."""
 
-    def __init__(self, config: RouterConfig) -> None:
-        self._config = write_config(config)
+    def __init__(self, config: RouterConfig, *, require_separate: bool = False) -> None:
+        self._config = write_config(config, require_separate=require_separate)
         self._api: Any = None
         self._lock = threading.Lock()
 
@@ -198,6 +225,7 @@ async def apply_plan(
     perdue), et il vaut mieux s'arreter que de reecrire tout un PoP.
     """
     resultat = ApplyResult(router_name=plan.router_name, dry_run=dry_run)
+    username = getattr(getattr(client, "_config", None), "username", "?")
 
     if len(plan.actions) > max_actions:
         resultat.aborted_reason = (
@@ -219,6 +247,9 @@ async def apply_plan(
             logger.info("[%s] %s", plan.router_name, action.command)
         except Exception as exc:  # noqa: BLE001
             message = f"{type(exc).__name__}: {exc}"
+            indice = permission_hint(exc, username)
+            if indice:
+                message = f"{message} — {indice}"
             resultat.outcomes.append(ActionOutcome(action=action, ok=False, detail=message))
             logger.error("[%s] ECHEC %s -> %s", plan.router_name, action.command, message)
             if stop_on_error:

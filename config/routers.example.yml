@@ -26,11 +26,13 @@ routers:
     # utilise un autre nommage.
     pppoe_interface_pattern: "<pppoe-{login}>"
 
-    # Compte d'ecriture, utilise UNIQUEMENT par l'enforcement (phase 2).
-    # Ne pas le declarer met ce routeur hors de portee de toute ecriture :
-    # c'est un moyen sur de proteger un site sensible.
-    rw_username: qos-rw
-    rw_password_env: MT_POP_1_RW_PASSWORD
+    # OPTIONNEL. Compte d'ecriture distinct, si vous separez les privileges.
+    # Sans lui, le compte ci-dessus est utilise pour l'enforcement : ce sont ses
+    # droits REELS sur le routeur qui decident, pas cette declaration.
+    # Mettez REQUIRE_SEPARATE_WRITE_ACCOUNT=true pour rendre la separation
+    # obligatoire.
+    # rw_username: qos-rw
+    # rw_password_env: MT_POP_1_RW_PASSWORD
 
 # Backhauls radio. LECTURE SEULE : on ne pilote jamais la radio, on lit sa
 # capacite pour en faire le debit parent du shaping.

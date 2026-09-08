@@ -475,9 +475,9 @@ def test_activation_leve_le_verrou_global_mais_pas_les_autres(client: TestClient
         "/api/v1/shaping/apply",
         json={"router": "pop-test", "dry_run": False, "confirm": True},
     )
-    # Toujours refuse, mais pour une autre raison : le compte qos-rw manque.
-    assert apres.status_code == 409
-    assert "rw_username" in apres.json()["detail"]
+    # Le verrou global est leve : l'ecriture est tentee avec le compte
+    # configure, sans exiger de declaration rw_*.
+    assert apres.status_code == 200
 
 
 def test_coupure_immediate_sans_confirmation(client: TestClient) -> None:

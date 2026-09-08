@@ -64,11 +64,24 @@ def test_le_compte_d_ecriture_est_distinct_du_compte_de_lecture(monkeypatch) -> 
     assert config.username == "qos-ro"
 
 
-def test_sans_compte_d_ecriture_le_routeur_est_hors_de_portee() -> None:
-    """Ne PAS declarer rw_* est un moyen sur de proteger un PoP."""
-    config = RouterConfig(name="pop", host="10.0.0.1", password="lecture")
-    with pytest.raises(MissingWriteCredentialsError, match="rw_username"):
-        write_config(config)
+def test_sans_compte_distinct_on_retombe_sur_le_compte_configure() -> None:
+    """Beaucoup d'exploitants se connectent deja avec un compte qui a la
+    politique 'write'. Refuser sur la seule absence de declaration reviendrait a
+    ignorer les droits reels : c'est le routeur qui tranche."""
+    config = RouterConfig(name="pop", host="10.0.0.1", username="admin", password="secret")
+
+    ecriture = write_config(config)
+
+    assert ecriture.username == "admin"
+    assert ecriture.resolve_password() == "secret"
+
+
+def test_exigence_stricte_retablissable() -> None:
+    """Pour qui tient a deux comptes distincts."""
+    config = RouterConfig(name="pop", host="10.0.0.1", username="admin", password="secret")
+
+    with pytest.raises(MissingWriteCredentialsError, match="REQUIRE_SEPARATE"):
+        write_config(config, require_separate=True)
 
 
 def test_pas_de_repli_sur_le_compte_de_lecture(monkeypatch) -> None:
@@ -86,6 +99,7 @@ def test_pas_de_repli_sur_le_compte_de_lecture(monkeypatch) -> None:
 
 
 def test_rw_username_sans_variable_de_mot_de_passe() -> None:
+    """Declarer a moitie un compte distinct est une erreur, pas un repli."""
     config = RouterConfig(name="pop", host="10.0.0.1", password="x", rw_username="qos-rw")
     with pytest.raises(MissingWriteCredentialsError, match="rw_password_env"):
         write_config(config)

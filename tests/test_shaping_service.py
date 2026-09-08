@@ -71,11 +71,33 @@ async def test_dry_run_autorise_meme_enforcement_desactive(
     assert resultat.ok and resultat.dry_run is True
 
 
-async def test_application_reelle_sans_compte_ecriture(
+async def test_application_sans_compte_distinct_utilise_le_compte_configure(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Le compte configure fait l'affaire s'il a les droits : on ne bloque pas
+    sur l'absence d'une declaration rw_*."""
+    settings.enforcement_enabled = True
+    settings.routers = [RouterConfig(name="pop-test", host="192.0.2.11", password="secret")]
+    ecriture = FauxClientEcriture()
+    service = make_service(settings, routeur, write_client_factory=lambda config: ecriture)
+    await service.registry.reload()
+    plan = Plan(
+        router_name="pop-test",
+        actions=[PlanAction(verb="add", path="/queue/simple", fields={"name": "x"}, name="x")],
+    )
+
+    resultat = await service.apply(plan, dry_run=False)
+
+    assert resultat.ok
+    assert [a.name for a in ecriture.executed] == ["x"]
+
+
+async def test_exigence_stricte_bloque_sans_compte_distinct(
     settings: Settings, routeur: FakeRouterOsClient
 ) -> None:
     settings.enforcement_enabled = True
-    settings.routers = [RouterConfig(name="pop-test", host="192.0.2.11", password="lecture")]
+    settings.require_separate_write_account = True
+    settings.routers = [RouterConfig(name="pop-test", host="192.0.2.11", password="secret")]
     service = make_service(settings, routeur)
     await service.registry.reload()
     plan = Plan(
@@ -85,6 +107,43 @@ async def test_application_reelle_sans_compte_ecriture(
 
     with pytest.raises(MissingWriteCredentialsError):
         await service.apply(plan, dry_run=False)
+
+
+# ---------------------------------------------- droits reels du compte
+async def test_droits_lus_sur_le_routeur(settings: Settings, routeur: FakeRouterOsClient) -> None:
+    """On interroge /user et /user/group plutot que de se fier a l'inventaire."""
+    service = make_service(settings, routeur)
+    await service.registry.reload()
+
+    verdict = await service.write_capability("pop-test")
+
+    assert verdict.can_write is False
+    assert "write" in verdict.missing
+
+
+async def test_compte_complet_reconnu(settings: Settings, routeur: FakeRouterOsClient) -> None:
+    routeur.grant_write("qos-ro")
+    service = make_service(settings, routeur)
+    await service.registry.reload()
+
+    verdict = await service.write_capability("pop-test")
+
+    assert verdict.can_write is True
+    assert verdict.group == "full"
+
+
+async def test_droits_non_verifiables_ne_bloquent_pas(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Compte RADIUS, /user non lisible : on tente et RouterOS tranche."""
+    routeur.raise_on_users = PermissionError("no permission to read /user")
+    service = make_service(settings, routeur)
+    await service.registry.reload()
+
+    verdict = await service.write_capability("pop-test")
+
+    assert verdict.can_write is None
+    assert "tranchera" in verdict.detail
 
 
 async def test_application_reelle_aboutit(settings: Settings, routeur: FakeRouterOsClient) -> None:

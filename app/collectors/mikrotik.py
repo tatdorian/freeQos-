@@ -66,6 +66,10 @@ class RouterOsReadClient(Protocol):
 
     def queue_trees(self) -> list[dict[str, Any]]: ...
 
+    def users(self) -> list[dict[str, Any]]: ...
+
+    def user_groups(self) -> list[dict[str, Any]]: ...
+
     def close(self) -> None: ...
 
 
@@ -187,6 +191,14 @@ class LibrouterosReadClient:
     def queue_trees(self) -> list[dict[str, Any]]:
         return self._query("/queue/tree")
 
+    def users(self) -> list[dict[str, Any]]:
+        """Comptes declares. Sert a savoir de quoi le notre est capable."""
+        return self._query("/user")
+
+    def user_groups(self) -> list[dict[str, Any]]:
+        """Groupes et leurs politiques (read, write, api, test...)."""
+        return self._query("/user/group")
+
     def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]:
         """Sonde active depuis le routeur vers l'abonne.
 
@@ -267,7 +279,26 @@ class MikrotikCollector:
         resource = self._client.system_resource()
         sessions = self._client.ppp_active()
         interfaces = self._client.interfaces()
+
+        # Droits reels du compte : c'est ce qui determine si l'enforcement
+        # pourra fonctionner, pas ce qui est declare dans l'inventaire.
+        from app.enforcement.capability import inspect_write_capability
+
+        try:
+            capacite = inspect_write_capability(
+                self.config.rw_username or self.config.username,
+                self._client.users(),
+                self._client.user_groups(),
+            ).to_dict()
+        except Exception as exc:  # noqa: BLE001 - purement informatif
+            capacite = {
+                "username": self.config.rw_username or self.config.username,
+                "can_write": None,
+                "detail": f"droits non verifiables ({type(exc).__name__})",
+            }
+
         return {
+            "write_capability": capacite,
             "reachable": True,
             "identity": self._client.identity(),
             "version": _as_str(resource.get("version")),

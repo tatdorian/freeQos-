@@ -28,6 +28,7 @@ from app.collectors.topology import (
 )
 from app.config import Settings
 from app.db.topology_repo import TopologyRepository
+from app.enforcement.capability import WriteCapability, inspect_write_capability
 from app.enforcement.models import Plan
 from app.enforcement.planner import (
     LinkTarget,
@@ -39,7 +40,6 @@ from app.enforcement.planner import (
 from app.enforcement.routeros import (
     ApplyResult,
     LibrouterosWriteClient,
-    MissingWriteCredentialsError,
     RouterOsWriteClient,
     apply_plan,
 )
@@ -505,11 +505,43 @@ class ShapingService:
             return existant
         config = self._collector(router_name).config
         try:
+            client = self._write_client_factory(
+                config, require_separate=self.settings.require_separate_write_account
+            )
+        except TypeError:
+            # Fabrique de test qui n'accepte pas l'option.
             client = self._write_client_factory(config)
-        except MissingWriteCredentialsError:
-            raise
         self._write_clients[router_name] = client
         return client
+
+    async def write_capability(self, router_name: str) -> WriteCapability:
+        """Interroge le routeur sur les droits reels du compte utilise.
+
+        On lit /user et /user/group plutot que de se fier a l'inventaire. En cas
+        d'impossibilite de lecture, le verdict reste indetermine : on tentera la
+        commande et RouterOS aura le dernier mot.
+        """
+        collector = self._collector(router_name)
+        config = collector.config
+        utilisateur = config.rw_username or config.username
+        client = collector._client  # noqa: SLF001
+
+        def lire() -> tuple[list, list]:
+            return client.users(), client.user_groups()
+
+        try:
+            comptes, groupes = await asyncio.wait_for(
+                asyncio.to_thread(lire), timeout=max(config.timeout_s * 3, 8.0)
+            )
+        except Exception as exc:  # noqa: BLE001
+            return WriteCapability(
+                username=utilisateur,
+                detail=(
+                    f"droits non verifiables ({type(exc).__name__}) : la commande "
+                    "sera tentee et RouterOS tranchera"
+                ),
+            )
+        return inspect_write_capability(utilisateur, comptes, groupes)
 
     def close(self) -> None:
         for client in self._write_clients.values():

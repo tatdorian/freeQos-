@@ -199,8 +199,12 @@ déguisée qui ne s'effacerait jamais.
 3. **`dry_run` par défaut**, et l'application réelle exige `confirm: true`.
 4. **`ENFORCEMENT_ENABLED`**, le drapeau global : à `false`, aucune écriture ne part,
    quelle que soit la confirmation.
-5. **Comptes séparés.** L'écriture passe par `qos-rw`, jamais `qos-ro`, sans repli
-   possible. Ne pas déclarer `rw_username` met un PoP hors de portée de toute écriture.
+5. **Droits réels du compte.** Si un compte `rw_*` distinct est déclaré, il est utilisé.
+   Sinon le compte configuré sert à l'écriture — **ses droits réels décident, pas la
+   déclaration** : le contrôleur lit `/user` et `/user/group` sur le routeur pour savoir
+   si le compte possède bien `write` et `api`. Beaucoup d'exploitants se connectent déjà
+   avec un compte complet ; refuser sur la seule absence de `rw_username` reviendrait à
+   ignorer la réalité. `REQUIRE_SEPARATE_WRITE_ACCOUNT=true` rétablit l'exigence stricte.
 
 Plus un **coupe-circuit** : au-delà de `ENFORCEMENT_MAX_ACTIONS` (500), le plan est refusé —
 un plan anormalement gros signale presque toujours un état désiré mal calculé.
@@ -208,12 +212,25 @@ un plan anormalement gros signale presque toujours un état désiré mal calcul�
 Toute commande envoyée, y compris simulée, est journalisée dans `enforcement_audit` et
 visible dans l'interface.
 
-**Compte d'écriture RouterOS :**
+**Droits nécessaires sur RouterOS.** L'enforcement exige les politiques `write` et `api`.
+L'onglet Shaping → *Analyser l'existant* affiche le verdict lu sur le routeur : le compte
+peut écrire, ne peut pas (avec la politique manquante), ou c'est indéterminable.
+
+Si votre compte les a déjà, il n'y a **rien à faire**. Sinon :
 
 ```
+# soit ajouter les droits au groupe existant
+/user/group set [find name=<groupe>] policy=read,write,api,test
+
+# soit créer un compte d'écriture distinct, et le déclarer via rw_username
 /user group add name=qos-rw policy=read,write,api,test
 /user add name=qos-rw group=qos-rw password=…
 ```
+
+Trois verdicts possibles, et le troisième compte : quand `/user` n'est pas lisible — compte
+authentifié par RADIUS, par exemple — le contrôleur **ne bloque pas**. Il tente la commande
+et rapporte ce que RouterOS répond réellement, en traduisant
+`not enough permissions` en la correction à faire.
 
 ### Parité avec LibreQoS : ce qui est possible, ce qui ne l'est pas
 
@@ -474,7 +491,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 324 tests, dont 301 sans aucune infrastructure
+make test        # 343 tests, dont 319 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et
@@ -491,7 +508,8 @@ Côté enforcement, la couverture porte d'abord sur ce qui doit **empêcher** un
 refus quand `ENFORCEMENT_ENABLED` est faux, absence de repli sur le compte de lecture,
 files tierces jamais modifiées ni supprimées, coupe-circuit sur les gros plans, arrêt au
 premier échec, idempotence du plan (rejouer ne produit rien), refus d'un boost sans
-échéance, et retour automatique au plan après expiration.
+échéance, retour automatique au plan après expiration, et lecture des droits réels du
+compte (y compris le cas indéterminable, qui ne doit pas bloquer).
 
 ### Tests d'intégration (optionnels)
 
