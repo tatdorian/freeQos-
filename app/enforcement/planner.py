@@ -400,6 +400,19 @@ def build_plan(
     files_existantes = _index_by_name(actual_queues)
     noms_desires: set[str] = set()
 
+    # Files tierces indexees par cible. RouterOS n'evalue les files ``simple``
+    # qu'en liste : quand deux files visent la meme cible, seule la PREMIERE
+    # s'applique, l'autre est ignoree sans le moindre avertissement. Ajouter
+    # notre file a la suite d'une file tierce deja postee sur cette adresse
+    # produirait donc un debit purement decoratif, qu'on croirait applique.
+    etrangeres_par_cible: dict[str, dict[str, Any]] = {}
+    for row in actual_queues:
+        if _is_managed(row):
+            continue
+        cible = str(row.get("target") or "").strip()
+        if cible:
+            etrangeres_par_cible.setdefault(cible, row)
+
     # Les parents d'abord : RouterOS refuse un enfant dont le parent n'existe pas.
     for spec in sorted(desired_queues, key=lambda q: q.order):
         noms_desires.add(spec.name)
@@ -407,6 +420,22 @@ def build_plan(
         champs = spec.routeros_fields()
 
         if existante is None:
+            etrangere = etrangeres_par_cible.get(spec.target)
+            if etrangere is not None:
+                plan.conflicts.append(
+                    PlanConflict(
+                        name=spec.name,
+                        path="/queue/simple",
+                        detail=(
+                            f"la cible {spec.target} est deja visee par la file tierce "
+                            f"'{etrangere.get('name')}' (sans le marqueur "
+                            f"'{MANAGED_COMMENT}') : RouterOS n'appliquerait que la "
+                            "premiere des deux en silence, donc aucune file n'est ecrite "
+                            "tant que le conflit n'est pas resolu a la main"
+                        ),
+                    )
+                )
+                continue
             plan.actions.append(
                 PlanAction(
                     verb="add",

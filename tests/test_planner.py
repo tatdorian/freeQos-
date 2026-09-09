@@ -244,6 +244,31 @@ def test_une_file_tierce_n_est_jamais_supprimee() -> None:
     assert plan.actions[0].fields["name"] == "freeqos-parti"
 
 
+def test_cible_deja_visee_par_une_file_tierce_est_un_conflit() -> None:
+    """RouterOS n'applique que la premiere file d'une meme cible, en silence.
+
+    Ajouter notre file derriere une file tierce deja postee sur cette adresse
+    produirait un debit qui n'a jamais le moindre effet : on refuse d'ecrire,
+    au lieu de laisser croire que le shaping est actif."""
+    _, files, _ = desired_state(links=[], subscribers=[abonne()])
+    tierce = {
+        ".id": "*1",
+        "name": "sub-dupont",
+        "target": "10.20.0.10/32",
+        "max-limit": "5M/20M",
+        "comment": "dupont",
+    }
+    plan = build_plan(
+        "pop", desired_types=[], desired_queues=files, actual_types=[], actual_queues=[tierce]
+    )
+
+    assert plan.is_empty
+    assert len(plan.conflicts) == 1
+    assert plan.conflicts[0].name == "freeqos-dupont"
+    assert "sub-dupont" in plan.conflicts[0].detail
+    assert "10.20.0.10/32" in plan.conflicts[0].detail
+
+
 def test_prune_desactivable() -> None:
     plan = build_plan(
         "pop",
