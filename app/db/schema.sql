@@ -77,6 +77,33 @@ CREATE TABLE IF NOT EXISTS backhauls (
     UNIQUE (pop_id, name)
 );
 
+-- Antennes Ubiquiti ajoutees depuis l'interface, interrogees DIRECTEMENT sur
+-- leur API airOS locale (aucun UISP requis). Meme principe que la table routers :
+-- le mot de passe est chiffre au repos (cf. app/services/crypto.py), la cle vit
+-- dans l'environnement, jamais en base. Ajouter une antenne ici suffit a la
+-- collecter : rien a activer par variable d'environnement.
+CREATE TABLE IF NOT EXISTS airos_antennas (
+    id                     SERIAL PRIMARY KEY,
+    name                   TEXT NOT NULL UNIQUE,
+    pop_name               TEXT NOT NULL,
+    host                   TEXT NOT NULL,
+    username               TEXT NOT NULL DEFAULT 'ubnt',
+    password_enc           TEXT,
+    verify_tls             BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Cle stable du lien (souvent la MAC) : sert de cle en base metrique et a la
+    -- jointure de topologie. A defaut, le nom fait office de cle.
+    device_key             TEXT,
+    nominal_capacity_mbps  DOUBLE PRECISION,
+    enabled                BOOLEAN NOT NULL DEFAULT TRUE,
+    timeout_s              DOUBLE PRECISION NOT NULL DEFAULT 10.0,
+    -- Diagnostic de la derniere lecture, affiche dans l'interface.
+    last_ok_at             TIMESTAMPTZ,
+    last_error             TEXT,
+    last_capacity_mbps     DOUBLE PRECISION,
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- -----------------------------------------------------------------------------
 -- Topologie decouverte (phase 2)
 -- -----------------------------------------------------------------------------

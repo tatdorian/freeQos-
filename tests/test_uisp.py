@@ -355,3 +355,37 @@ async def test_airos_provider_ignore_une_antenne_muette() -> None:
     samples = await provider.get_capacities(["ok", "hs"])
     assert set(samples) == {"ok"}
     await provider.aclose()
+
+
+async def test_db_airos_provider_relit_ses_antennes_a_chaque_cycle() -> None:
+    """Ajouter une antenne dans la base la rend collectee, sans redemarrage."""
+    from app.collectors.uisp import DbAirOsProvider
+
+    antennes: list[AirOsTarget] = []
+
+    async def loader() -> list[AirOsTarget]:
+        return list(antennes)
+
+    def fake_client(target: AirOsTarget) -> AirOsClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"wireless": {"txcapacity": 100000}})
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url=f"https://{target.host}"
+        )
+        return AirOsClient(target, client=client)
+
+    provider = DbAirOsProvider(loader, client_factory=fake_client)
+
+    # Base vide au depart : rien a lire.
+    assert await provider.get_capacities(["bh"]) == {}
+
+    # L'operateur ajoute une antenne : le cycle suivant la voit.
+    antennes.append(AirOsTarget(key="bh", host="10.0.0.2"))
+    samples = await provider.get_capacities(["bh"])
+    assert samples["bh"].capacity_mbps == 100.0
+
+    # Il la retire : elle disparait de la collecte.
+    antennes.clear()
+    assert await provider.get_capacities(["bh"]) == {}
+    await provider.aclose()

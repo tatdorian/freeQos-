@@ -63,7 +63,8 @@ async def database():
         # Repartir d'une base propre a chaque test.
         await conn.execute(
             "TRUNCATE subscriber_metrics, backhaul_metrics, interface_metrics, "
-            "qoe_scores, collector_runs, subscribers, backhauls, routers, pops, "
+            "qoe_scores, collector_runs, subscribers, backhauls, routers, "
+            "airos_antennas, pops, "
             "topology_nodes, topology_links, subscriber_attachments, "
             "shaping_policies, enforcement_audit, runtime_flags "
             "RESTART IDENTITY CASCADE"

@@ -59,10 +59,14 @@ class CollectionService:
         backhauls: Sequence[BackhaulConfig] | None = None,
         clock: Callable[[], float] = time.monotonic,
         rtt_prober: RttProber | None = None,
+        antennas_provider: Any = None,
     ) -> None:
         self.settings = settings
         self.collectors = list(collectors)
         self.backhaul_provider = backhaul_provider
+        # Provider des antennes ajoutees depuis l'interface (airOS en base). Il
+        # relit sa liste tout seul a chaque cycle : rien a recharger ici.
+        self.antennas_provider = antennas_provider
         self.plan_provider = plan_provider
         self.directory = directory
         self.writer = writer
@@ -317,23 +321,41 @@ class CollectionService:
         errors: list[str] = []
         written = 0
 
-        configured = [b for b in self.backhauls if b.uisp_device_id]
-        if not configured:
+        # Deux sources, une seule logique : les backhauls du fichier (via le
+        # provider statique) et les antennes ajoutees depuis l'interface (via le
+        # provider airOS en base). Chacune apporte sa liste et son fournisseur.
+        file_backhauls = [b for b in self.backhauls if b.uisp_device_id]
+        db_antennas: list[BackhaulConfig] = []
+        if self.antennas_provider is not None:
+            try:
+                db_antennas = await self.antennas_provider.backhaul_configs()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"antennes (base): {exc}")
+                logger.exception("Liste des antennes airOS non lue")
+
+        if not file_backhauls and not db_antennas:
             result = RunResult(JOB_BACKHAULS, started_at, self._clock() - monotonic, True, 0)
             await self._finalize(result)
             return result
 
         samples: dict[str, BackhaulSample] = {}
-        try:
-            samples = await self.backhaul_provider.get_capacities(
-                [b.uisp_device_id for b in configured if b.uisp_device_id]
-            )
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"fournisseur de capacite: {exc}")
-            logger.exception("Lecture de la capacite backhaul impossible")
+        for provider, configs in (
+            (self.backhaul_provider, file_backhauls),
+            (self.antennas_provider, db_antennas),
+        ):
+            if provider is None or not configs:
+                continue
+            try:
+                lot = await provider.get_capacities(
+                    [c.uisp_device_id for c in configs if c.uisp_device_id]
+                )
+                samples.update(lot)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"fournisseur de capacite: {exc}")
+                logger.exception("Lecture de la capacite backhaul impossible")
 
         rows: list[tuple[int, BackhaulSample]] = []
-        for config in configured:
+        for config in [*file_backhauls, *db_antennas]:
             sample = samples.get(config.uisp_device_id or "")
             if sample is None:
                 continue
@@ -444,6 +466,11 @@ class CollectionService:
             except Exception:  # noqa: BLE001
                 pass
         await self.backhaul_provider.aclose()
+        if self.antennas_provider is not None:
+            try:
+                await self.antennas_provider.aclose()
+            except Exception:  # noqa: BLE001
+                pass
         await self.plan_provider.aclose()
 
 

@@ -226,6 +226,7 @@ def build_container(
     secrets: SecretBox | None = None,
     routers_repo: Any = None,
     topology_repo: Any = None,
+    antennas_repo: Any = None,
     client: FakeRouterOsClient | None = None,
 ) -> Container:
     client = client or FakeRouterOsClient()
@@ -272,6 +273,7 @@ def build_container(
         shaping=shaping,
         routers_repo=routers_repo,
         topology_repo=topology_repo,
+        antennas_repo=antennas_repo,
     )
 
 
