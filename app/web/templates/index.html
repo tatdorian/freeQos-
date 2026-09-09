@@ -209,6 +209,81 @@
           </div>
         </form>
       </div>
+
+      <h2>Antennes Ubiquiti (capacite radio)</h2>
+      <p class="help" style="margin:-.4rem 0 .8rem">
+        Interrogees directement sur leur API airOS locale, sans UISP. La capacite
+        lue devient le debit parent du shaping du lien. Ajouter une antenne ici
+        suffit&nbsp;: aucune variable d'environnement, aucun redemarrage.
+      </p>
+      <div id="antennas-notice"></div>
+      <div class="table-wrap" id="antennas-table"></div>
+
+      <h2>Ajouter une antenne</h2>
+      <div class="card">
+        <form class="stack" id="antenna-form" autocomplete="off">
+          <div class="row-3">
+            <div class="field">
+              <label for="a-name">Nom du lien</label>
+              <input id="a-name" name="name" required placeholder="bh-nord">
+              <span class="help">Identifiant unique du backhaul.</span>
+            </div>
+            <div class="field">
+              <label for="a-pop">PoP rattache</label>
+              <input id="a-pop" name="pop_name" required placeholder="PoP Nord">
+              <span class="help">Doit correspondre au libelle d'un site.</span>
+            </div>
+            <div class="field">
+              <label for="a-host">Adresse de l'antenne</label>
+              <input id="a-host" name="host" required placeholder="10.10.0.30">
+            </div>
+          </div>
+
+          <div class="row-3">
+            <div class="field">
+              <label for="a-username">Compte airOS</label>
+              <input id="a-username" name="username" value="ubnt">
+            </div>
+            <div class="field">
+              <label for="a-password">Mot de passe</label>
+              <input id="a-password" name="password" type="password"
+                     placeholder="laisser vide si lecture ouverte">
+            </div>
+            <div class="field">
+              <label for="a-nominal">Capacite nominale (Mbps)</label>
+              <input id="a-nominal" name="nominal_capacity_mbps" type="number"
+                     step="1" min="0" placeholder="optionnel">
+            </div>
+          </div>
+
+          <div class="row-3">
+            <div class="field">
+              <label for="a-key">Cle stable / MAC</label>
+              <input id="a-key" name="device_key" placeholder="DC:9F:DB:.. (optionnel)">
+              <span class="help">Sert a rattacher la radio dans le graphe.</span>
+            </div>
+            <div class="field">
+              <label for="a-timeout">Delai de garde (s)</label>
+              <input id="a-timeout" name="timeout_s" type="number" step="0.5" min="0.5" max="60" value="10">
+            </div>
+            <div class="field">
+              <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-top:1.6rem">
+                <input type="checkbox" id="a-tls" name="verify_tls"> Verifier le certificat TLS
+              </label>
+              <span class="help">A laisser decoche : airOS a un certificat auto-signe.</span>
+            </div>
+          </div>
+
+          <div id="antenna-result"></div>
+
+          <div class="actions">
+            <button type="button" id="a-btn-test">Tester l'antenne</button>
+            <button type="submit" class="primary" id="a-btn-save">Enregistrer</button>
+            <span class="spacer"></span>
+            <button type="reset">Reinitialiser</button>
+          </div>
+        </form>
+      </div>
     </section>
   </main>
 

@@ -784,6 +784,7 @@ async function loadPops() {
 
 async function loadRouters() {
   await loadPops();
+  await loadAntennas();
   const data = await api('/pops/routers');
   state.routers = data.routers;
 
@@ -953,6 +954,170 @@ async function toggleRouter(id) {
       method: 'PATCH', body: JSON.stringify({ enabled: !router.enabled }),
     });
     await loadRouters();
+  } catch (err) { alert(err.message); }
+}
+
+
+/* ---------------------------------------------------- antennes Ubiquiti */
+
+async function loadAntennas() {
+  const data = await api('/pops/antennas');
+  state.antennas = data.antennas;
+
+  const notice = document.getElementById('antennas-notice');
+  notice.innerHTML = !data.secrets_available
+    ? '<div class="notice warn"><strong>Mot de passe non stockable.</strong> ' +
+      esc(data.secrets_reason || '') + '<span class="hint">Vous pouvez tout de meme ' +
+      'ajouter une antenne dont le <code>/status.cgi</code> est ouvert en lecture ' +
+      '(sans mot de passe).</span></div>'
+    : '';
+  document.getElementById('a-btn-save').disabled = false;
+
+  const host = document.getElementById('antennas-table');
+  if (!state.antennas.length) {
+    host.innerHTML = '<div class="empty">Aucune antenne. Utilisez le formulaire ci-dessous.</div>';
+    return;
+  }
+  host.innerHTML =
+    '<table><thead><tr><th>Lien</th><th>Adresse</th><th>PoP</th>' +
+    '<th class="num">Capacite lue</th><th>Etat</th><th></th></tr></thead><tbody>' +
+    state.antennas.map((a) => {
+      let badge = '<span class="badge">jamais lue</span>';
+      if (a.last_error) badge = '<span class="badge crit" title="' + esc(a.last_error) + '">en echec</span>';
+      else if (a.last_ok_at) badge = '<span class="badge ok">joignable</span>';
+      if (a.enabled === false) badge = '<span class="badge">desactivee</span>';
+      return '<tr>' +
+        '<td><strong>' + esc(a.name) + '</strong>' +
+          (a.device_key ? '<br><span style="color:var(--faint);font-size:.72rem">' +
+            esc(a.device_key) + '</span>' : '') + '</td>' +
+        '<td class="login">' + esc(a.host) + '</td>' +
+        '<td>' + esc(a.pop_name) + '</td>' +
+        '<td class="num">' + (a.last_capacity_mbps != null ? esc(mbps(a.last_capacity_mbps)) :
+          '<span style="color:var(--faint)">-</span>') + '</td>' +
+        '<td>' + badge + '</td>' +
+        '<td><div class="actions" style="justify-content:flex-end">' +
+          '<button class="sm" data-a-probe="' + a.id + '">Tester</button>' +
+          '<button class="sm" data-a-toggle="' + a.id + '">' +
+            (a.enabled ? 'Desactiver' : 'Activer') + '</button>' +
+          '<button class="sm danger" data-a-del="' + a.id + '">Retirer</button>' +
+        '</div></td></tr>';
+    }).join('') + '</tbody></table>';
+
+  host.querySelectorAll('[data-a-probe]').forEach((b) =>
+    b.addEventListener('click', () => probeAntenna(b.dataset.aProbe, b)));
+  host.querySelectorAll('[data-a-del]').forEach((b) =>
+    b.addEventListener('click', () => deleteAntenna(b.dataset.aDel)));
+  host.querySelectorAll('[data-a-toggle]').forEach((b) =>
+    b.addEventListener('click', () => toggleAntenna(b.dataset.aToggle)));
+}
+
+function antennaPayload() {
+  const data = new FormData(document.getElementById('antenna-form'));
+  const nominal = data.get('nominal_capacity_mbps');
+  return {
+    name: (data.get('name') || '').trim(),
+    pop_name: (data.get('pop_name') || '').trim(),
+    host: (data.get('host') || '').trim(),
+    username: (data.get('username') || 'ubnt').trim(),
+    password: data.get('password') || null,
+    device_key: (data.get('device_key') || '').trim() || null,
+    nominal_capacity_mbps: nominal ? Number(nominal) : null,
+    verify_tls: document.getElementById('a-tls').checked,
+    timeout_s: Number(data.get('timeout_s') || 10),
+    enabled: true,
+  };
+}
+
+function showAntennaResult(html) {
+  document.getElementById('antenna-result').innerHTML = html;
+}
+
+function antennaCapacityLine(result) {
+  return '<div class="notice ok"><strong>Antenne joignable.</strong> Capacite lue : ' +
+    esc(mbps(result.capacity_mbps || 0)) +
+    (result.capacity_down_mbps != null
+      ? ' (down ' + esc(mbps(result.capacity_down_mbps)) + ' / up ' +
+        esc(mbps(result.capacity_up_mbps || 0)) + ')'
+      : '') +
+    '<span class="hint">' +
+    (result.signal_dbm != null ? 'Signal ' + esc(result.signal_dbm) + ' dBm. ' : '') +
+    (result.mac ? 'MAC ' + esc(result.mac) + '.' : '') + '</span></div>';
+}
+
+async function testAntenna() {
+  const button = document.getElementById('a-btn-test');
+  const payload = antennaPayload();
+  if (!payload.name || !payload.host) {
+    showAntennaResult('<div class="notice err">Nom et adresse sont requis pour tester.</div>');
+    return;
+  }
+  button.disabled = true;
+  showAntennaResult('<div class="notice">Lecture de ' + esc(payload.host) + '...</div>');
+  try {
+    const result = await api('/pops/antennas/test', { method: 'POST', body: JSON.stringify(payload) });
+    showAntennaResult(result.reachable
+      ? antennaCapacityLine(result)
+      : '<div class="notice err"><strong>Echec.</strong> <code>' + esc(result.error) + '</code>' +
+        '<span class="hint">' + esc(result.hint || '') + '</span></div>');
+  } catch (err) {
+    showAntennaResult('<div class="notice err">' + esc(err.message) + '</div>');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveAntenna(event) {
+  event.preventDefault();
+  const button = document.getElementById('a-btn-save');
+  button.disabled = true;
+  try {
+    const created = await api('/pops/antennas', { method: 'POST', body: JSON.stringify(antennaPayload()) });
+    showAntennaResult('<div class="notice ok"><strong>' + esc(created.name) +
+      ' enregistree.</strong><span class="hint">Sa capacite est lue des le prochain ' +
+      'cycle, sans redemarrage.</span></div>');
+    document.getElementById('antenna-form').reset();
+    document.getElementById('a-username').value = 'ubnt';
+    document.getElementById('a-timeout').value = '10';
+    await loadAntennas();
+  } catch (err) {
+    showAntennaResult('<div class="notice err">' + esc(err.message) + '</div>');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function probeAntenna(id, button) {
+  const original = button.textContent;
+  button.disabled = true; button.textContent = '...';
+  try {
+    const result = await api('/pops/antennas/' + id + '/probe', { method: 'POST' });
+    if (!result.reachable) alert('Echec : ' + result.error + '\n\n' + (result.hint || ''));
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    button.disabled = false; button.textContent = original;
+    await loadAntennas();
+  }
+}
+
+async function deleteAntenna(id) {
+  const antenna = state.antennas.find((a) => String(a.id) === String(id));
+  if (!confirm('Retirer "' + (antenna ? antenna.name : id) + '" ?\n\n' +
+    'Les metriques deja collectees sont conservees.')) return;
+  try {
+    await api('/pops/antennas/' + id, { method: 'DELETE' });
+    await loadAntennas();
+  } catch (err) { alert(err.message); }
+}
+
+async function toggleAntenna(id) {
+  const antenna = state.antennas.find((a) => String(a.id) === String(id));
+  if (!antenna) return;
+  try {
+    await api('/pops/antennas/' + id, {
+      method: 'PATCH', body: JSON.stringify({ enabled: !antenna.enabled }),
+    });
+    await loadAntennas();
   } catch (err) { alert(err.message); }
 }
 
@@ -1835,6 +2000,8 @@ document.getElementById('btn-discover').addEventListener('click', async (e) => {
   }
 });
 document.getElementById('router-form').addEventListener('submit', saveRouter);
+document.getElementById('a-btn-test').addEventListener('click', testAntenna);
+document.getElementById('antenna-form').addEventListener('submit', saveAntenna);
 
 document.getElementById('sub-pop').addEventListener('change', (e) => {
   state.subPop = e.target.value;

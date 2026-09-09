@@ -21,10 +21,12 @@ from app.collectors.uisp import (
     AirOsProvider,
     AirOsTarget,
     BackhaulCapacityProvider,
+    DbAirOsProvider,
     MockBackhaulProvider,
     UispProvider,
 )
 from app.config import Settings
+from app.db.antennas_repo import AntennasRepository
 from app.db.database import Database
 from app.db.directory import Directory, PgDirectory
 from app.db.repository import MetricsRepository
@@ -143,6 +145,7 @@ class Container:
     shaping: ShapingService
     routers_repo: RoutersRepository | None = None
     topology_repo: TopologyRepository | None = None
+    antennas_repo: AntennasRepository | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -196,6 +199,12 @@ async def build_container(settings: Settings) -> Container:
 
     routers_repo = RoutersRepository(database.pool, secrets)
     topology_repo = TopologyRepository(database.pool)
+    antennas_repo = AntennasRepository(database.pool, secrets)
+    # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
+    # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
+    antennas_provider = DbAirOsProvider(
+        antennas_repo.load_targets, timeout_s=settings.airos_timeout_s
+    )
     registry = RouterRegistry(settings, repository=routers_repo)
     shaping = ShapingService(
         settings, registry=registry, repository=topology_repo, metrics=repository
@@ -221,6 +230,7 @@ async def build_container(settings: Settings) -> Container:
         settings,
         collectors=await registry.reload(),
         backhaul_provider=backhaul_provider,
+        antennas_provider=antennas_provider,
         plan_provider=plan_provider,
         directory=directory,
         writer=writer,
@@ -266,6 +276,7 @@ async def build_container(settings: Settings) -> Container:
         shaping=shaping,
         routers_repo=routers_repo,
         topology_repo=topology_repo,
+        antennas_repo=antennas_repo,
     )
 
 

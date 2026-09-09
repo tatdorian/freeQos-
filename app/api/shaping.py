@@ -63,9 +63,15 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
 async def discover(container: ContainerDep) -> dict[str, Any]:
     """Lecture seule sur tous les PoPs, puis persistance du graphe."""
     devices: list[dict[str, Any]] = []
-    fournisseur = container.backhaul_provider
-    if hasattr(fournisseur, "raw_devices"):
-        devices = await fournisseur.raw_devices()  # type: ignore[attr-defined]
+    # Les deux sources de radios : le fournisseur statique (mock/UISP/env-airOS)
+    # et les antennes ajoutees depuis l'interface. Leurs fiches se rattachent au
+    # graphe par la MAC, exactement de la meme facon.
+    for fournisseur in (container.backhaul_provider, container.collection.antennas_provider):
+        if fournisseur is not None and hasattr(fournisseur, "raw_devices"):
+            try:
+                devices.extend(await fournisseur.raw_devices())  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001 - une source muette n'empeche pas l'autre
+                logger.warning("raw_devices indisponible pour %s", type(fournisseur).__name__)
 
     snapshot = await container.shaping.discover(uisp_devices=devices)
     return {

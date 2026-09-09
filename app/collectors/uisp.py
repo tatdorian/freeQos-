@@ -19,7 +19,7 @@ import hashlib
 import logging
 import math
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -339,6 +339,25 @@ class AirOsProvider:
             self._clients[target.key] = existing
         return existing
 
+    async def set_targets(self, targets: Sequence[AirOsTarget]) -> None:
+        """Remplace la liste des antennes (edition depuis l'interface).
+
+        Un client dont la cible a change de host ou d'identifiants -- ou qui a
+        disparu -- est ferme : la prochaine lecture le reconstruit avec les
+        nouvelles valeurs.
+        """
+        nouveaux = {t.key: t for t in targets if t.key}
+        for key, ancien in list(self._targets.items()):
+            if nouveaux.get(key) != ancien:
+                client = self._clients.pop(key, None)
+                if client is not None:
+                    try:
+                        await client.aclose()
+                    except Exception:  # noqa: BLE001
+                        pass
+                self._last_status.pop(key, None)
+        self._targets = nouveaux
+
     async def _read_one(self, target: AirOsTarget) -> tuple[str, BackhaulSample | None]:
         try:
             status = await self._client_for(target).fetch_status()
@@ -386,6 +405,42 @@ class AirOsProvider:
             except Exception:  # noqa: BLE001
                 pass
         self._clients.clear()
+
+
+class DbAirOsProvider(AirOsProvider):
+    """Provider airOS dont les antennes viennent de la BASE, relues a chaque cycle.
+
+    C'est ce qui rend l'ajout d'une antenne depuis l'interface immediat : aucune
+    variable d'environnement, aucun redemarrage. On recharge la liste avant
+    chaque lecture ; une base momentanement injoignable conserve la derniere
+    liste connue plutot que de tout perdre.
+    """
+
+    def __init__(
+        self,
+        target_loader: Callable[[], Awaitable[Sequence[AirOsTarget]]],
+        *,
+        timeout_s: float = 10.0,
+        client_factory: Callable[[AirOsTarget], AirOsClient] | None = None,
+    ) -> None:
+        super().__init__([], timeout_s=timeout_s, client_factory=client_factory)
+        self._loader = target_loader
+
+    async def _refresh(self) -> None:
+        try:
+            targets = await self._loader()
+        except Exception as exc:  # noqa: BLE001 - on garde la liste precedente
+            logger.warning("Antennes airOS non rechargees depuis la base : %s", exc)
+            return
+        await self.set_targets(targets)
+
+    async def get_capacities(self, device_ids: Sequence[str]) -> dict[str, BackhaulSample]:
+        await self._refresh()
+        return await super().get_capacities(device_ids)
+
+    async def raw_devices(self) -> list[dict[str, Any]]:
+        await self._refresh()
+        return await super().raw_devices()
 
 
 class MockBackhaulProvider:
