@@ -15,6 +15,7 @@ d'equipement qu'on ne maitrise pas.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from app.enforcement.models import (
     QueueSpec,
     QueueTypeSpec,
     address_target,
+    network_target,
     slugify,
 )
 
@@ -172,6 +174,8 @@ class LinkTarget:
 
     name: str
     interface: str
+    # Segment L3 porte par le lien, tel que lu dans /ip/address.
+    subnet: str | None = None
     # Capacite mesuree du moment (radio) ou negociee (ethernet).
     measured_capacity_mbps: float | None = None
     # Surcharge manuelle : l'operateur fixe lui-meme le plafond.
@@ -182,6 +186,26 @@ class LinkTarget:
     @property
     def queue_name(self) -> str:
         return f"{PREFIX}parent-{slugify(self.name)}"
+
+    @property
+    def queue_target(self) -> str:
+        """Ce que la file du lien doit viser.
+
+        LE SEGMENT L3 quand on le connait. Une file posee sur le nom de
+        l'interface ne peut pas servir de parent aux files d'abonnes, qui, elles,
+        visent des adresses : RouterOS ne rattache un enfant a un parent que si
+        le trafic de l'enfant tient dans la portee du parent. Viser
+        ``172.16.38.0/23`` donne au contraire la hierarchie attendue, celle que
+        tout le monde ecrit a la main.
+
+        A defaut -- lien purement L2, interface sans adresse -- on retombe sur
+        l'interface : mieux vaut un plafond de port qu'aucun plafond.
+        """
+        return self.network or self.interface
+
+    @property
+    def network(self) -> str | None:
+        return network_target(self.subnet)
 
 
 def shaped_capacity(
@@ -229,6 +253,7 @@ def desired_state(
     queue_types: Sequence[QueueTypeSpec] | None = None,
     now: datetime | None = None,
     target_mode: str = TARGET_ADDRESS,
+    queue_unmeasured_links: bool = True,
 ) -> tuple[list[QueueTypeSpec], list[QueueSpec], list[PlanSkip]]:
     """Construit l'etat desire complet pour un routeur.
 
@@ -238,6 +263,10 @@ def desired_state(
     types = list(queue_types) if queue_types is not None else desired_queue_types()
 
     files: list[QueueSpec] = []
+    # Cibles deja prises par une file de lien, et segments L3 de ces files : ce
+    # sont eux qui donneront leur parent aux abonnes dont on ignore le secteur.
+    cibles_liens: dict[str, str] = {}
+    reseaux_parents: list[tuple[Any, str]] = []
     for index, link in enumerate(links):
         if not link.enabled:
             continue
@@ -253,14 +282,31 @@ def desired_state(
             floor_mbps=floor_mbps,
             override_mbps=link.override_up_mbps,
         )
-        if down is None and up is None:
-            # Sans capacite connue, un parent poserait un plafond arbitraire :
-            # mieux vaut ne pas en creer.
+        if down is None and up is None and not queue_unmeasured_links:
             continue
+        cible = link.queue_target
+        if cible in cibles_liens:
+            # Plusieurs voisins sur le meme port, ou deux liens sur le meme
+            # segment : deux files de meme cible se masqueraient l'une l'autre,
+            # RouterOS n'appliquant que la premiere.
+            logger.info(
+                "Lien '%s' sans file : la cible %s est deja celle de '%s'",
+                link.name,
+                cible,
+                cibles_liens[cible],
+            )
+            continue
+        cibles_liens[cible] = link.name
+        # Sans capacite connue on ecrit tout de meme la file, en ILLIMITE
+        # (``0/0``) : elle ne bride rien tant que l'exploitant n'a pas fixe de
+        # debit, mais elle existe des la decouverte du lien, elle porte les
+        # files des abonnes qui passent par lui, et il n'a plus qu'a ajuster son
+        # max-limit. Ne rien creer laisserait au contraire un lien decouvert
+        # sans aucune prise dans l'interface.
         files.append(
             QueueSpec(
                 name=link.queue_name,
-                target=link.interface,
+                target=cible,
                 max_up_mbps=up,
                 max_down_mbps=down,
                 queue_up=QUEUE_TYPE_UP,
@@ -268,6 +314,9 @@ def desired_state(
                 order=index,
             )
         )
+        reseau = link.network
+        if reseau:
+            reseaux_parents.append((ipaddress.ip_network(reseau), link.queue_name))
 
     parents_connus = {file.name for file in files}
     ecartes: list[PlanSkip] = []
@@ -326,6 +375,13 @@ def desired_state(
             continue
 
         parent = subscriber.parent if subscriber.parent in parents_connus else None
+        if parent is None:
+            # A defaut de secteur radio connu, l'ADRESSE dit par ou l'abonne
+            # passe : sa file doit alors etre rattachee a la file du lien dont
+            # le segment la contient. Sans ce rattachement, RouterOS verrait
+            # deux files concurrentes -- celle du lien, plus large, puis celle de
+            # l'abonne -- et n'appliquerait que la premiere.
+            parent = _parent_par_adresse(cible, reseaux_parents)
         files.append(
             QueueSpec(
                 name=subscriber.queue_name,
@@ -339,6 +395,25 @@ def desired_state(
             )
         )
     return types, files, ecartes
+
+
+def _parent_par_adresse(target: str, reseaux: list[tuple[Any, str]]) -> str | None:
+    """File de lien dont le segment contient cette adresse, la plus precise.
+
+    Un abonne peut tenir dans plusieurs segments emboites (un /23 de PoP et un
+    /27 de secteur) : le parent utile est le plus SPECIFIQUE, celui qui decrit
+    le vrai goulot le plus proche de lui.
+    """
+    if not reseaux:
+        return None
+    try:
+        adresse = ipaddress.ip_interface(target).ip
+    except ValueError:
+        return None
+    candidats = [(reseau.prefixlen, nom) for reseau, nom in reseaux if adresse in reseau]
+    if not candidats:
+        return None
+    return max(candidats)[1]
 
 
 def _is_managed(row: dict[str, Any]) -> bool:

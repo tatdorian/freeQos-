@@ -83,10 +83,75 @@ def test_etat_desire_complet() -> None:
     assert enfant.queue == f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}"
 
 
-def test_lien_sans_capacite_ne_cree_pas_de_parent() -> None:
-    """Sans capacite connue, un parent poserait un plafond arbitraire."""
+def test_lien_decouvert_recoit_une_file_illimitee() -> None:
+    """Un lien decouvert doit avoir sa file tout de suite, meme sans mesure.
+
+    ``0/0`` ne bride rien : la file existe, elle porte les abonnes du lien, et
+    l'exploitant n'a plus qu'a lui fixer un debit. Ne rien creer laisserait au
+    contraire un lien sans aucune prise dans l'interface."""
     _, files, _ = desired_state(links=[lien(capacity=None)], subscribers=[abonne()])
+
+    assert [f.name for f in files] == ["freeqos-parent-bh-nord", "freeqos-dupont"]
+    assert files[0].max_limit == "0/0"
+
+
+def test_lien_sans_capacite_ignorable() -> None:
+    """Qui prefere l'ancien comportement le garde."""
+    _, files, _ = desired_state(
+        links=[lien(capacity=None)], subscribers=[abonne()], queue_unmeasured_links=False
+    )
     assert [f.name for f in files] == ["freeqos-dupont"]
+
+
+def test_la_file_d_un_lien_vise_son_segment_l3() -> None:
+    """Une file posee sur un NOM d'interface ne peut pas etre le parent d'une
+    file d'abonne, qui vise une adresse. Viser le segment donne la hierarchie
+    attendue -- celle que tout le monde ecrit a la main."""
+    _, files, _ = desired_state(
+        links=[lien(subnet="172.16.38.1/23")],
+        subscribers=[abonne(address="172.16.39.253")],
+    )
+
+    parent, enfant = files
+    # L'adresse du routeur devient le RESEAU : c'est ce que RouterOS relira.
+    assert parent.target == "172.16.38.0/23"
+    # Et l'abonne est rattache par son adresse, sans avoir besoin d'UISP.
+    assert enfant.parent == "freeqos-parent-bh-nord"
+
+
+def test_lien_sans_adresse_retombe_sur_l_interface() -> None:
+    """Un lien purement L2 n'a pas de segment : mieux vaut un plafond de port
+    qu'aucun plafond."""
+    _, files, _ = desired_state(links=[lien()], subscribers=[])
+    assert files[0].target == "ether1"
+
+
+def test_le_parent_le_plus_specifique_l_emporte() -> None:
+    """Un abonne tient souvent dans plusieurs segments emboites : le goulot
+    utile est le plus proche de lui."""
+    _, files, _ = desired_state(
+        links=[
+            lien(name="pop", subnet="172.16.38.1/23"),
+            lien(name="secteur", subnet="172.16.39.1/27", interface="ether2"),
+        ],
+        subscribers=[abonne(address="172.16.39.10")],
+    )
+
+    assert files[-1].parent == "freeqos-parent-secteur"
+
+
+def test_deux_liens_sur_la_meme_cible_ne_font_qu_une_file() -> None:
+    """Deux files de meme cible se masqueraient : RouterOS n'applique que la
+    premiere."""
+    _, files, _ = desired_state(
+        links=[
+            lien(name="voisin-a", subnet="172.16.38.1/23"),
+            lien(name="voisin-b", subnet="172.16.38.1/23", interface="ether2"),
+        ],
+        subscribers=[],
+    )
+
+    assert [f.name for f in files] == ["freeqos-parent-voisin-a"]
 
 
 def test_parent_inconnu_est_ignore() -> None:

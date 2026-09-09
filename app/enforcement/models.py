@@ -59,6 +59,29 @@ def address_target(value: Any) -> str | None:
     return f"{adresse}/{adresse.max_prefixlen}"
 
 
+def network_target(value: Any) -> str | None:
+    """Segment L3 d'un lien au format attendu par ``/queue/simple target``.
+
+    ``/ip/address`` rend l'adresse DU ROUTEUR sur le lien (``172.16.38.1/23``) ;
+    une file doit viser le RESEAU (``172.16.38.0/23``), sinon elle ne couvre que
+    le routeur lui-meme. RouterOS reecrit de toute facon la cible sous cette
+    forme : ecrire autre chose produirait un ecart a chaque cycle, donc un
+    ``set`` inutile a chaque plan.
+    """
+    if value is None:
+        return None
+    texte = str(value).strip()
+    if not texte:
+        return None
+    try:
+        interface = ipaddress.ip_interface(texte)
+    except ValueError:
+        return None
+    if interface.ip.is_unspecified or interface.ip.is_loopback:
+        return None
+    return str(interface.network)
+
+
 def format_rate(mbps: float | None) -> str:
     """Debit au format RouterOS.
 
