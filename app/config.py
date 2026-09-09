@@ -88,6 +88,38 @@ class BackhaulConfig(BaseModel):
     nominal_capacity_mbps: float | None = None
     enabled: bool = True
 
+    # --- Antenne interrogee DIRECTEMENT (provider airos, sans UISP) ---
+    # Adresse de management de la radio Ubiquiti. Quand elle est renseignee et que
+    # BACKHAUL_PROVIDER=airos, la capacite est lue sur /status.cgi de cette
+    # antenne. Les identifiants tombent sur les valeurs globales AIROS_* si on ne
+    # les precise pas ici (compte lecture commun a tout le parc).
+    api_host: str | None = None
+    api_username: str | None = None
+    api_password_env: str | None = None
+    api_verify_tls: bool | None = None
+
+    @property
+    def airos_key(self) -> str:
+        """Cle stable de la radio : son uisp_device_id, ou son nom a defaut."""
+        return self.uisp_device_id or self.name
+
+    def resolve_api_password(self, fallback: str | None = None) -> str | None:
+        """Mot de passe de l'antenne, depuis l'env en priorite.
+
+        Comme pour les routeurs, jamais de secret en clair dans l'inventaire : on
+        declare le NOM d'une variable d'environnement. A defaut, on retombe sur le
+        mot de passe global AIROS_PASSWORD.
+        """
+        if self.api_password_env:
+            value = os.environ.get(self.api_password_env)
+            if value is None or value == "":
+                raise MissingSecretError(
+                    f"antenne '{self.name}': variable d'environnement "
+                    f"'{self.api_password_env}' absente ou vide"
+                )
+            return value
+        return fallback
+
 
 class Inventory(BaseModel):
     """Contenu du fichier d'inventaire (YAML ou JSON)."""
@@ -170,11 +202,19 @@ class Settings(BaseSettings):
     routers_file: Path | None = None
 
     # --- Capacite backhaul ---
-    backhaul_provider: Literal["mock", "uisp"] = "mock"
+    # mock  = simulateur ; uisp = controleur UISP centralise ; airos = API locale
+    # de chaque antenne Ubiquiti (aucun UISP requis).
+    backhaul_provider: Literal["mock", "uisp", "airos"] = "mock"
     uisp_base_url: str | None = None
     uisp_token: SecretStr | None = None
     uisp_verify_tls: bool = True
     uisp_timeout_s: float = 10.0
+    # Identifiants par defaut des antennes airOS, si un backhaul ne les precise
+    # pas lui-meme. Un compte lecture commun a tout le parc suffit souvent.
+    airos_username: str | None = None
+    airos_password: SecretStr | None = None
+    airos_verify_tls: bool = False
+    airos_timeout_s: float = 10.0
     mock_backhaul_capacity_mbps: float = 450.0
     mock_backhaul_variation_pct: float = 35.0
     mock_backhaul_period_s: float = 600.0

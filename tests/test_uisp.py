@@ -6,9 +6,13 @@ import httpx
 import pytest
 
 from app.collectors.uisp import (
+    AirOsClient,
+    AirOsProvider,
+    AirOsTarget,
     MockBackhaulProvider,
     UispProvider,
     normalize_capacity_to_mbps,
+    parse_airos_status,
     parse_uisp_device,
 )
 
@@ -205,3 +209,149 @@ async def test_mock_respecte_la_capacite_nominale_de_chaque_lien() -> None:
     assert 700 <= samples["gros"].capacity_mbps <= 1300
     # Un device non declare retombe sur la valeur par defaut.
     assert 315 <= samples["inconnu"].capacity_mbps <= 585
+
+
+# ------------------------------------------------------------------- airOS
+def test_parse_airos_utilise_la_capacite_du_lien() -> None:
+    """airMAX expose txcapacity/rxcapacity en kbps : c'est la capacite estimee,
+    pas le debit instantane."""
+    sample = parse_airos_status(
+        {
+            "host": {"hostname": "BH-Nord", "hwaddr": "DC:9F:DB:11:22:33"},
+            "wireless": {
+                "mode": "sta",
+                "apmac": "AA:BB:CC:DD:EE:FF",
+                "signal": -58,
+                "txcapacity": 150000,  # kbps -> 150 Mbps
+                "rxcapacity": 130000,  # kbps -> 130 Mbps
+            },
+        },
+        key="bh-nord",
+    )
+
+    assert sample.device_id == "bh-nord"
+    assert sample.capacity_down_mbps == 150.0
+    assert sample.capacity_up_mbps == 130.0
+    # La capacite utile d'un PtP est bornee par son sens le plus faible.
+    assert sample.capacity_mbps == 130.0
+    assert sample.signal_dbm == -58.0
+    # La MAC de l'AP sert a rattacher la radio aux voisins MikroTik.
+    assert sample.raw["mac"] == "AA:BB:CC:DD:EE:FF"
+    assert sample.online is True
+
+
+def test_parse_airos_retombe_sur_les_debits_phy() -> None:
+    """Vieux firmware sans txcapacity : on prend txrate/rxrate (Mbps)."""
+    sample = parse_airos_status({"wireless": {"txrate": 300, "rxrate": 300}}, key="vieux")
+    assert sample.capacity_mbps == 300.0
+
+
+def test_parse_airos_sans_wireless_est_hors_ligne() -> None:
+    """Une antenne qui ne renvoie pas de bloc wireless est consideree muette."""
+    sample = parse_airos_status({"host": {"hostname": "x"}}, key="muet")
+    assert sample.online is False
+    assert sample.capacity_mbps is None
+
+
+async def test_airos_client_lit_le_status_sans_login_si_possible() -> None:
+    """Beaucoup de parcs laissent /status.cgi accessible : inutile de s'authentifier."""
+    appels: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        appels.append(request.url.path)
+        return httpx.Response(200, json={"wireless": {"txcapacity": 100000}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://10.0.0.2")
+    airos = AirOsClient(AirOsTarget(key="bh", host="10.0.0.2"), client=client)
+    status = await airos.fetch_status()
+
+    assert status["wireless"]["txcapacity"] == 100000
+    assert appels == ["/status.cgi"]  # aucun passage par /login.cgi
+    await airos.aclose()
+
+
+async def test_airos_client_s_authentifie_si_refuse() -> None:
+    """Si l'antenne refuse, on passe par /login.cgi puis on relit le status."""
+    appels: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        appels.append(request.url.path)
+        if request.url.path == "/status.cgi" and "/login.cgi" not in appels:
+            return httpx.Response(403, text="denied")
+        if request.url.path == "/login.cgi":
+            return httpx.Response(200, text="ok")
+        return httpx.Response(200, json={"wireless": {"txcapacity": 200000}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="https://10.0.0.3")
+    airos = AirOsClient(
+        AirOsTarget(key="bh", host="10.0.0.3", username="ro", password="s3cret"),
+        client=client,
+    )
+    status = await airos.fetch_status()
+
+    assert status["wireless"]["txcapacity"] == 200000
+    assert "/login.cgi" in appels
+    await airos.aclose()
+
+
+async def test_airos_provider_lit_plusieurs_antennes_et_filtre() -> None:
+    """Chaque radio est lue directement ; get_capacities filtre sur les cles."""
+
+    def fake_client(target: AirOsTarget) -> AirOsClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            capacite = 100000 if target.key == "bh-a" else 250000
+            return httpx.Response(
+                200,
+                json={
+                    "host": {"hwaddr": f"00:11:22:33:44:{target.key[-1]}0"},
+                    "wireless": {"txcapacity": capacite, "rxcapacity": capacite},
+                },
+            )
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url=f"https://{target.host}"
+        )
+        return AirOsClient(target, client=client)
+
+    provider = AirOsProvider(
+        [
+            AirOsTarget(key="bh-a", host="10.0.0.2"),
+            AirOsTarget(key="bh-b", host="10.0.0.3"),
+        ],
+        client_factory=fake_client,
+    )
+
+    samples = await provider.get_capacities(["bh-a", "bh-b", "inconnu"])
+    assert set(samples) == {"bh-a", "bh-b"}
+    assert samples["bh-a"].capacity_mbps == 100.0
+    assert samples["bh-b"].capacity_mbps == 250.0
+
+    # raw_devices renormalise vers la forme attendue par la topologie.
+    devices = await provider.raw_devices()
+    ids = {d["identification"]["id"] for d in devices}
+    assert ids == {"bh-a", "bh-b"}
+    assert all(d["identification"]["mac"] for d in devices)
+    await provider.aclose()
+
+
+async def test_airos_provider_ignore_une_antenne_muette() -> None:
+    """Une radio injoignable retire sa capacite mais n'entraine pas les autres."""
+
+    def fake_client(target: AirOsTarget) -> AirOsClient:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if target.key == "hs":
+                return httpx.Response(500, text="boom")
+            return httpx.Response(200, json={"wireless": {"txcapacity": 100000}})
+
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url=f"https://{target.host}"
+        )
+        return AirOsClient(target, client=client)
+
+    provider = AirOsProvider(
+        [AirOsTarget(key="ok", host="10.0.0.2"), AirOsTarget(key="hs", host="10.0.0.9")],
+        client_factory=fake_client,
+    )
+    samples = await provider.get_capacities(["ok", "hs"])
+    assert set(samples) == {"ok"}
+    await provider.aclose()
