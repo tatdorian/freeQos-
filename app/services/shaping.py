@@ -572,6 +572,7 @@ class ShapingService:
             actual_types=etat.queue_types,
             actual_queues=etat.simple_queues,
             prune=self.settings.shaping_prune if prune is None else prune,
+            adopt=self.settings.shaping_adopt_foreign_queues,
         )
         plan.skipped = ecartes
         return plan

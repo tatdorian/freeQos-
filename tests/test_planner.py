@@ -244,22 +244,95 @@ def test_une_file_tierce_n_est_jamais_supprimee() -> None:
     assert plan.actions[0].fields["name"] == "freeqos-parti"
 
 
-def test_cible_deja_visee_par_une_file_tierce_est_un_conflit() -> None:
-    """RouterOS n'applique que la premiere file d'une meme cible, en silence.
-
-    Ajouter notre file derriere une file tierce deja postee sur cette adresse
-    produirait un debit qui n'a jamais le moindre effet : on refuse d'ecrire,
-    au lieu de laisser croire que le shaping est actif."""
-    _, files, _ = desired_state(links=[], subscribers=[abonne()])
-    tierce = {
+def _tierce(**extra) -> dict:
+    """Une file heritee : posee a la main ou par un ancien outil."""
+    return {
         ".id": "*1",
         "name": "sub-dupont",
         "target": "10.20.0.10/32",
         "max-limit": "5M/20M",
         "comment": "dupont",
+        **extra,
     }
+
+
+def test_le_debit_d_une_file_tierce_est_aligne_sur_la_cible() -> None:
+    """RouterOS n'applique que la premiere file d'une meme cible, en silence.
+
+    Ajouter la notre derriere une file heritee ne briderait donc rien : on
+    envoie un set sur la file en place, exactement le debit et rien d'autre."""
+    _, files, _ = desired_state(links=[], subscribers=[abonne()])
     plan = build_plan(
-        "pop", desired_types=[], desired_queues=files, actual_types=[], actual_queues=[tierce]
+        "pop", desired_types=[], desired_queues=files, actual_types=[], actual_queues=[_tierce()]
+    )
+
+    assert plan.counts() == {"add": 0, "set": 1, "remove": 0}
+    action = plan.actions[0]
+    assert action.target_id == "*1"
+    assert action.command == "/queue/simple/set .id=*1 max-limit=20000000/100000000"
+    # Ni renommee, ni reparentee, ni marquee : elle reste la file de l'exploitant.
+    assert set(action.fields) == {"max-limit"}
+    assert action.changes["max-limit"] == ("5M/20M", "20000000/100000000")
+
+
+def test_file_tierce_deja_au_bon_debit_ne_produit_rien() -> None:
+    """Le debit voulu est deja en place : il n'y a plus rien a envoyer."""
+    _, files, _ = desired_state(links=[], subscribers=[abonne(down=100, up=20)])
+    plan = build_plan(
+        "pop",
+        desired_types=[],
+        desired_queues=files,
+        actual_types=[],
+        actual_queues=[_tierce(**{"max-limit": "20M/100M"})],
+    )
+
+    assert plan.is_empty
+    assert plan.unchanged == 1
+
+
+def test_file_tierce_desactivee_ne_masque_rien() -> None:
+    """Une file desactivee ne shape rien, donc elle ne cache pas la notre :
+    c'est bien une creation qu'il faut, pas une reprise."""
+    _, files, _ = desired_state(links=[], subscribers=[abonne()])
+    plan = build_plan(
+        "pop",
+        desired_types=[],
+        desired_queues=files,
+        actual_types=[],
+        actual_queues=[_tierce(disabled="true")],
+    )
+
+    assert plan.counts() == {"add": 1, "set": 0, "remove": 0}
+    assert plan.actions[0].fields["name"] == "freeqos-dupont"
+
+
+def test_plusieurs_files_tierces_sur_la_meme_cible_ne_sont_pas_touchees() -> None:
+    """Laquelle shape reellement ? On ne peut pas le deviner : on ne touche a
+    rien plutot que de modifier la mauvaise."""
+    _, files, _ = desired_state(links=[], subscribers=[abonne()])
+    plan = build_plan(
+        "pop",
+        desired_types=[],
+        desired_queues=files,
+        actual_types=[],
+        actual_queues=[_tierce(), _tierce(**{".id": "*2", "name": "vieux-dupont"})],
+    )
+
+    assert plan.is_empty
+    assert len(plan.conflicts) == 1
+    assert "sub-dupont, vieux-dupont" in plan.conflicts[0].detail
+
+
+def test_reprise_desactivable() -> None:
+    """Qui prefere ne rien ecrire hors de son perimetre garde le signalement."""
+    _, files, _ = desired_state(links=[], subscribers=[abonne()])
+    plan = build_plan(
+        "pop",
+        desired_types=[],
+        desired_queues=files,
+        actual_types=[],
+        actual_queues=[_tierce()],
+        adopt=False,
     )
 
     assert plan.is_empty

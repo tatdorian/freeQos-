@@ -357,12 +357,19 @@ def build_plan(
     actual_types: Sequence[dict[str, Any]],
     actual_queues: Sequence[dict[str, Any]],
     prune: bool = True,
+    adopt: bool = True,
 ) -> Plan:
     """Compare l'etat desire a l'etat lu sur le routeur.
 
-    Regle absolue : une ligne qui ne porte pas notre commentaire de propriete
-    n'est ni modifiee ni supprimee. Si son nom entre en collision avec un nom
-    desire, on signale un conflit et on ne touche a rien.
+    Regle de propriete : une ligne qui ne porte pas notre commentaire n'est
+    jamais SUPPRIMEE, et son nom reste celui que l'exploitant lui a donne.
+
+    ``adopt`` nuance la modification, et seulement elle. Une file tierce deja
+    posee sur la cible d'un abonne empeche la notre de servir a quoi que ce soit
+    (RouterOS n'applique que la premiere file d'une meme cible) : plutot que de
+    laisser l'abonne non bride, on aligne le debit de la file en place --
+    ``/queue/simple/set <id> max-limit=...`` -- et rien d'autre. A ``False``, le
+    conflit est signale et on ne touche a rien.
     """
     plan = Plan(router_name=router_name)
 
@@ -405,13 +412,16 @@ def build_plan(
     # s'applique, l'autre est ignoree sans le moindre avertissement. Ajouter
     # notre file a la suite d'une file tierce deja postee sur cette adresse
     # produirait donc un debit purement decoratif, qu'on croirait applique.
-    etrangeres_par_cible: dict[str, dict[str, Any]] = {}
+    #
+    # Une file DESACTIVEE ne compte pas : elle ne shape rien, donc elle ne masque
+    # rien non plus, et la notre peut etre creee normalement.
+    etrangeres_par_cible: dict[str, list[dict[str, Any]]] = {}
     for row in actual_queues:
-        if _is_managed(row):
+        if _is_managed(row) or _is_disabled(row):
             continue
         cible = str(row.get("target") or "").strip()
         if cible:
-            etrangeres_par_cible.setdefault(cible, row)
+            etrangeres_par_cible.setdefault(cible, []).append(row)
 
     # Les parents d'abord : RouterOS refuse un enfant dont le parent n'existe pas.
     for spec in sorted(desired_queues, key=lambda q: q.order):
@@ -420,21 +430,9 @@ def build_plan(
         champs = spec.routeros_fields()
 
         if existante is None:
-            etrangere = etrangeres_par_cible.get(spec.target)
-            if etrangere is not None:
-                plan.conflicts.append(
-                    PlanConflict(
-                        name=spec.name,
-                        path="/queue/simple",
-                        detail=(
-                            f"la cible {spec.target} est deja visee par la file tierce "
-                            f"'{etrangere.get('name')}' (sans le marqueur "
-                            f"'{MANAGED_COMMENT}') : RouterOS n'appliquerait que la "
-                            "premiere des deux en silence, donc aucune file n'est ecrite "
-                            "tant que le conflit n'est pas resolu a la main"
-                        ),
-                    )
-                )
+            etrangeres = etrangeres_par_cible.get(spec.target) or []
+            if etrangeres:
+                _traiter_file_tierce(plan, spec, etrangeres, adopt=adopt)
                 continue
             plan.actions.append(
                 PlanAction(
@@ -497,6 +495,79 @@ def build_plan(
             )
 
     return plan
+
+
+def _traiter_file_tierce(
+    plan: Plan,
+    spec: QueueSpec,
+    etrangeres: list[dict[str, Any]],
+    *,
+    adopt: bool,
+) -> None:
+    """Que faire quand une file tierce occupe deja la cible qu'on vise.
+
+    On ne peut pas simplement ajouter la notre a cote : RouterOS n'applique que
+    la premiere file d'une meme cible, et la seconde ne bride rien. Restent deux
+    conduites, et une seule est defendable par defaut -- aligner le DEBIT de la
+    file en place, sans la renommer, sans la reparenter, sans la marquer. Elle
+    reste la file de l'exploitant : on n'y touche que ce qu'il a demande de
+    changer, et rien de ce qui pourrait la lui rendre meconnaissable.
+    """
+    if len(etrangeres) > 1:
+        # Plusieurs files tierces sur la meme cible : laquelle est celle qui
+        # shape vraiment ? On ne peut pas le deviner, donc on ne touche a rien.
+        noms = ", ".join(str(e.get("name") or "?") for e in etrangeres)
+        plan.conflicts.append(
+            PlanConflict(
+                name=spec.name,
+                path="/queue/simple",
+                detail=(
+                    f"la cible {spec.target} est visee par plusieurs files tierces "
+                    f"({noms}) : impossible de savoir laquelle shape reellement, "
+                    "aucune n'est modifiee"
+                ),
+            )
+        )
+        return
+
+    etrangere = etrangeres[0]
+    nom = str(etrangere.get("name") or "?")
+
+    if not adopt:
+        plan.conflicts.append(
+            PlanConflict(
+                name=spec.name,
+                path="/queue/simple",
+                detail=(
+                    f"la cible {spec.target} est deja visee par la file tierce "
+                    f"'{nom}' (sans le marqueur '{MANAGED_COMMENT}') : RouterOS "
+                    "n'appliquerait que la premiere des deux en silence, donc aucune "
+                    "file n'est ecrite tant que le conflit n'est pas resolu a la main"
+                ),
+            )
+        )
+        return
+
+    changements = _diff_fields(etrangere, {"max-limit": spec.max_limit}, ignore=set())
+    if not changements:
+        plan.unchanged += 1
+        return
+
+    plan.actions.append(
+        PlanAction(
+            verb="set",
+            path="/queue/simple",
+            fields={"max-limit": spec.max_limit},
+            target_id=str(etrangere.get(".id") or etrangere.get("id") or ""),
+            name=nom,
+            reason=f"file tierce deja posee sur {spec.target} : son debit est aligne",
+            changes=changements,
+        )
+    )
+
+
+def _is_disabled(row: dict[str, Any]) -> bool:
+    return str(row.get("disabled") or "").strip().lower() in {"true", "yes"}
 
 
 def _diff_fields(

@@ -206,6 +206,14 @@ class Settings(BaseSettings):
     shaping_floor_mbps: float = 5.0
     # Supprimer nos files devenues inutiles. A desactiver pendant une migration.
     shaping_prune: bool = True
+    # Aligner le debit d'une file tierce deja posee sur la cible d'un abonne.
+    #
+    # RouterOS n'applique que la PREMIERE file d'une meme cible : creer la notre
+    # a cote d'une file heritee ne briderait rien du tout. On envoie donc un
+    # simple '/queue/simple/set <id> max-limit=...' sur la file en place. Elle
+    # n'est ni renommee, ni reparentee, ni marquee, ni supprimable par le
+    # controleur : seul son debit change.
+    shaping_adopt_foreign_queues: bool = True
     # Sur quoi accrocher la file d'un abonne.
     #
     # "address" (defaut) : target=10.20.0.10/32. L'adresse de la session en
