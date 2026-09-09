@@ -9,7 +9,11 @@ from app.enforcement.models import MANAGED_COMMENT, Plan, PlanAction
 from app.enforcement.planner import LinkTarget, SubscriberTarget
 from app.enforcement.routeros import MissingWriteCredentialsError
 from app.services.registry import RouterRegistry
-from app.services.shaping import EnforcementDisabledError, ShapingService
+from app.services.shaping import (
+    EnforcementDisabledError,
+    ShapingService,
+    _segment_du_lien,
+)
 from tests.conftest import FakeRouterOsClient
 from tests.test_enforcement import FauxClientEcriture
 
@@ -227,6 +231,22 @@ async def test_plan_complet_depuis_un_routeur_vierge(
     assert any("cake-overhead=22" in c for c in commandes)
     # 500 x 0,9 = 450 Mbps sur le parent.
     assert any("450000000" in c for c in commandes)
+
+
+def test_le_segment_du_lien_vient_de_ip_address() -> None:
+    """La cible d'une file de lien se lit dans /ip/address, sous forme reseau."""
+    assert _segment_du_lien({"attributes": '{"local_networks": ["172.16.38.1/23"]}'}) == (
+        "172.16.38.0/23"
+    )
+    # Plusieurs adresses sur le port : on retient le segment le PLUS LARGE, pas
+    # le /30 de gestion qui ne porte aucun abonne.
+    assert _segment_du_lien(
+        {"attributes": {"local_networks": ["10.0.0.1/30", "172.16.38.1/23"]}}
+    ) == ("172.16.38.0/23")
+    # Lien purement L2, ou attributs illisibles : pas de segment, pas de cible.
+    assert _segment_du_lien({"attributes": {"local_networks": []}}) is None
+    assert _segment_du_lien({"attributes": "pas du json"}) is None
+    assert _segment_du_lien({}) is None
 
 
 async def test_plan_sur_routeur_inconnu(settings: Settings, routeur: FakeRouterOsClient) -> None:

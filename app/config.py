@@ -214,6 +214,14 @@ class Settings(BaseSettings):
     # n'est ni renommee, ni reparentee, ni marquee, ni supprimable par le
     # controleur : seul son debit change.
     shaping_adopt_foreign_queues: bool = True
+    # Poser une file des la DECOUVERTE d'un lien, avant toute mesure.
+    #
+    # Elle vise le segment L3 du lien (172.16.38.0/23) et nait ILLIMITEE
+    # (max-limit=0/0) : elle ne bride rien, mais elle existe, elle porte les
+    # files des abonnes qui passent par ce lien, et l'exploitant n'a plus qu'a
+    # fixer son debit dans l'interface. A false, un lien sans capacite connue
+    # reste sans file.
+    shaping_queue_for_detected_links: bool = True
     # Sur quoi accrocher la file d'un abonne.
     #
     # "address" (defaut) : target=10.20.0.10/32. L'adresse de la session en

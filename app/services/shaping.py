@@ -12,6 +12,8 @@ Trois responsabilites, volontairement separees :
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -29,7 +31,7 @@ from app.collectors.topology import (
 from app.config import Settings
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.capability import WriteCapability, inspect_write_capability
-from app.enforcement.models import Plan
+from app.enforcement.models import Plan, network_target
 from app.enforcement.planner import (
     LinkTarget,
     SubscriberTarget,
@@ -330,6 +332,7 @@ class ShapingService:
             cible = LinkTarget(
                 name=str(lien.get("target_name") or lien["interface"]),
                 interface=str(lien["interface"]),
+                subnet=_segment_du_lien(lien),
                 measured_capacity_mbps=lien.get("capacity_mbps"),
                 override_down_mbps=surcharge.get("max_down_mbps"),
                 override_up_mbps=surcharge.get("max_up_mbps"),
@@ -564,6 +567,7 @@ class ShapingService:
                 rtt_ms=self.settings.cake_rtt_ms,
             ),
             target_mode=self.settings.subscriber_queue_target,
+            queue_unmeasured_links=self.settings.shaping_queue_for_detected_links,
         )
         plan = build_plan(
             router_name,
@@ -667,6 +671,33 @@ class ShapingService:
             except Exception:  # noqa: BLE001
                 pass
         self._write_clients.clear()
+
+
+def _segment_du_lien(lien: dict[str, Any]) -> str | None:
+    """Segment L3 porte par le port du lien, lu dans ``/ip/address``.
+
+    Une interface peut en porter plusieurs (un /30 de gestion et le /23 des
+    abonnes) : on retient le PLUS LARGE, celui qui couvre le trafic qu'on
+    cherche a shaper, pas le lien de service.
+    """
+    brut = lien.get("attributes")
+    if isinstance(brut, str):
+        try:
+            brut = json.loads(brut)
+        except ValueError:
+            return None
+    if not isinstance(brut, dict):
+        return None
+
+    reseaux = []
+    for valeur in brut.get("local_networks") or []:
+        normalise = network_target(valeur)
+        if normalise is None:
+            continue
+        reseaux.append((ipaddress.ip_network(normalise).prefixlen, normalise))
+    if not reseaux:
+        return None
+    return min(reseaux)[1]
 
 
 def sector_key_for(snapshot: TopologySnapshot, login: str) -> str | None:
