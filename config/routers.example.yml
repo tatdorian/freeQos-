@@ -37,7 +37,24 @@ routers:
 # Backhauls radio. LECTURE SEULE : on ne pilote jamais la radio, on lit sa
 # capacite pour en faire le debit parent du shaping.
 backhauls:
+  # --- Via le controleur UISP (BACKHAUL_PROVIDER=uisp) --------------------
   - name: bh-1
     pop_name: Site 1           # doit correspondre au pop_name ci-dessus
     uisp_device_id: 00000000-0000-0000-0000-000000000000
     nominal_capacity_mbps: 500
+
+  # --- Antenne Ubiquiti interrogee DIRECTEMENT (BACKHAUL_PROVIDER=airos) --
+  # Aucun UISP : le controleur lit /status.cgi sur l'adresse de management de
+  # la radio. uisp_device_id sert alors de cle stable (mettez-y la MAC si vous
+  # la connaissez, elle sert aussi a rattacher la radio dans le graphe).
+  - name: bh-2
+    pop_name: Site 1
+    uisp_device_id: DC:9F:DB:11:22:33
+    nominal_capacity_mbps: 300
+    api_host: 10.10.0.30       # IP de management de l'antenne airOS
+    # Identifiants : a defaut, AIROS_USERNAME / AIROS_PASSWORD s'appliquent.
+    # api_username: qos-ro
+    # SECURITE : jamais de mot de passe ici. On declare le NOM d'une variable
+    # d'environnement qui porte le secret (comme password_env pour un routeur).
+    # api_password_env: BH2_AIROS_PASSWORD
+    # api_verify_tls: false    # airOS a souvent un certificat auto-signe

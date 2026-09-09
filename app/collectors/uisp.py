@@ -4,19 +4,23 @@ LECTURE SEULE, TOUJOURS. On ne pilote jamais la radio : on lit sa capacite reell
 pour en faire le debit parent du shaping (goulot numero 2). Le pilotage de la
 radio appartient a l'equipement, pas au controleur.
 
-Deux implementations derriere la meme abstraction :
-  - UispProvider : API REST UISP (header X-Auth-Token) ;
+Trois implementations derriere la meme abstraction :
+  - UispProvider : API REST du CONTROLEUR UISP (un seul point, header X-Auth-Token) ;
+  - AirOsProvider : API LOCALE de chaque antenne Ubiquiti (airOS /status.cgi),
+    quand il n'y a pas de UISP -- on interroge directement la radio ;
   - MockBackhaulProvider : capacite simulee, variable dans le temps, deterministe.
     C'est elle qui permet de valider toute la logique en lab sans radio reelle.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import math
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -180,6 +184,208 @@ class UispProvider:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+@dataclass(frozen=True)
+class AirOsTarget:
+    """Une antenne Ubiquiti interrogee directement sur son API locale.
+
+    ``key`` est l'identifiant stable du backhaul (celui qui sert de cle en base
+    et a la jointure de topologie) ; ``host`` est l'adresse de management de la
+    radio. Les deux peuvent differer : on peut nommer un lien ``bh-nord`` et le
+    joindre en 10.0.0.2.
+    """
+
+    key: str
+    host: str
+    username: str = ""
+    password: str = ""
+    verify_tls: bool = False
+
+
+def parse_airos_status(
+    status: dict[str, Any], *, key: str, ts: datetime | None = None
+) -> BackhaulSample:
+    """Traduit un ``/status.cgi`` airOS en echantillon, de facon defensive.
+
+    airMAX expose ``wireless.txcapacity`` / ``wireless.rxcapacity`` en kbps : ce
+    sont les capacites estimees du lien, pas le debit instantane. A defaut (vieux
+    firmware), on retombe sur les debits PHY ``txrate`` / ``rxrate`` en Mbps. Les
+    noms de champs varient selon la version : on essaie plusieurs emplacements.
+    """
+    wireless = status.get("wireless") if isinstance(status.get("wireless"), dict) else {}
+
+    down = normalize_capacity_to_mbps(
+        _pluck(status, "wireless.txcapacity", "wireless.txrate", "wireless.throughput.tx")
+    )
+    up = normalize_capacity_to_mbps(
+        _pluck(status, "wireless.rxcapacity", "wireless.rxrate", "wireless.throughput.rx")
+    )
+
+    capacity = None
+    if down is not None and up is not None:
+        capacity = min(down, up) if min(down, up) > 0 else max(down, up)
+    elif down is not None or up is not None:
+        capacity = down if down is not None else up
+
+    # La MAC sert a rattacher la radio aux voisins MikroTik : sans elle, la
+    # capacite est lue mais le lien reste orphelin dans le graphe.
+    mac = _pluck(status, "wireless.apmac", "host.hwaddr", "host.mac")
+
+    signal = _as_float(_pluck(status, "wireless.signal", "wireless.rssi"))
+    return BackhaulSample(
+        ts=ts or datetime.now(tz=UTC),
+        device_id=key,
+        capacity_mbps=capacity,
+        capacity_down_mbps=down,
+        capacity_up_mbps=up,
+        signal_dbm=signal,
+        airtime_pct=_as_float(
+            _pluck(status, "wireless.airmax.quality", "wireless.polling.use", "wireless.ccq")
+        ),
+        online=bool(wireless) and capacity not in (None, 0.0),
+        raw={"mac": _as_str(mac)} if mac else {},
+    )
+
+
+class AirOsClient:
+    """Client de l'API locale d'UNE antenne airOS (lecture seule).
+
+    airOS protege ``/status.cgi`` par une session : on tente d'abord un GET
+    direct, et seulement si l'equipement refuse on passe par ``/login.cgi``. Bien
+    des parcs laissent un compte lecture sans mot de passe, ou une IP de
+    management deja de confiance : inutile de s'authentifier pour rien.
+    """
+
+    def __init__(
+        self,
+        target: AirOsTarget,
+        *,
+        timeout_s: float = 10.0,
+        client: httpx.AsyncClient | None = None,
+    ) -> None:
+        self._target = target
+        self._client = client or httpx.AsyncClient(
+            base_url=f"https://{target.host}",
+            verify=target.verify_tls,
+            timeout=timeout_s,
+            follow_redirects=False,
+        )
+
+    async def fetch_status(self) -> dict[str, Any]:
+        response = await self._client.get("/status.cgi")
+        if response.status_code in (401, 403) or _looks_like_login(response):
+            await self._login()
+            response = await self._client.get("/status.cgi")
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("reponse /status.cgi inattendue (pas un objet JSON)")
+        return payload
+
+    async def _login(self) -> None:
+        # Un premier GET pose le cookie de session que /login.cgi attend en
+        # retour ; certains firmwares refusent le POST sans lui.
+        await self._client.get("/login.cgi")
+        response = await self._client.post(
+            "/login.cgi",
+            data={
+                "username": self._target.username,
+                "password": self._target.password,
+                "uri": "/status.cgi",
+            },
+        )
+        # airOS repond 200 puis redirige ; l'echec d'auth renvoie a la mire.
+        if response.status_code >= 400:
+            response.raise_for_status()
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+
+def _looks_like_login(response: httpx.Response) -> bool:
+    """Une mire de login se reconnait a sa redirection ou a son HTML."""
+    if response.status_code in (301, 302, 303, 307, 308):
+        return True
+    kind = response.headers.get("content-type", "")
+    return "text/html" in kind.lower()
+
+
+class AirOsProvider:
+    """Interroge directement N antennes Ubiquiti, sans UISP.
+
+    Chaque radio est lue en parallele ; une antenne injoignable retire sa
+    capacite du resultat mais ne fait pas echouer les autres, exactement comme
+    un PoP absent lors de la decouverte.
+    """
+
+    def __init__(
+        self,
+        targets: Sequence[AirOsTarget],
+        *,
+        timeout_s: float = 10.0,
+        client_factory: Callable[[AirOsTarget], AirOsClient] | None = None,
+    ) -> None:
+        self._targets = {t.key: t for t in targets if t.key}
+        self._timeout_s = timeout_s
+        self._factory = client_factory or (lambda target: AirOsClient(target, timeout_s=timeout_s))
+        self._clients: dict[str, AirOsClient] = {}
+        self._last_status: dict[str, dict[str, Any]] = {}
+
+    def _client_for(self, target: AirOsTarget) -> AirOsClient:
+        existing = self._clients.get(target.key)
+        if existing is None:
+            existing = self._factory(target)
+            self._clients[target.key] = existing
+        return existing
+
+    async def _read_one(self, target: AirOsTarget) -> tuple[str, BackhaulSample | None]:
+        try:
+            status = await self._client_for(target).fetch_status()
+        except Exception as exc:  # noqa: BLE001 - une radio muette n'en coule pas d'autres
+            logger.warning("airOS %s (%s) injoignable : %s", target.key, target.host, exc)
+            return target.key, None
+        self._last_status[target.key] = status
+        return target.key, parse_airos_status(status, key=target.key)
+
+    async def get_capacities(self, device_ids: Sequence[str]) -> dict[str, BackhaulSample]:
+        wanted = [self._targets[d] for d in device_ids if d in self._targets]
+        if not wanted:
+            return {}
+        resultats = await asyncio.gather(*(self._read_one(t) for t in wanted))
+        return {key: sample for key, sample in resultats if sample is not None}
+
+    async def raw_devices(self) -> list[dict[str, Any]]:
+        """Fiches brutes pour la decouverte de topologie.
+
+        On refresh d'abord tous les status connus, puis on renormalise chacun
+        vers la forme que ``attach_uisp_devices`` attend : un ``identification``
+        portant l'id stable et la MAC.
+        """
+        if self._targets:
+            await self.get_capacities(list(self._targets))
+        devices: list[dict[str, Any]] = []
+        for key, status in self._last_status.items():
+            mac = _pluck(status, "wireless.apmac", "host.hwaddr", "host.mac")
+            devices.append(
+                {
+                    "identification": {
+                        "id": key,
+                        "mac": _as_str(mac),
+                        "name": _as_str(_pluck(status, "host.hostname", "host.devmodel")),
+                    },
+                    "airos": status,
+                }
+            )
+        return devices
+
+    async def aclose(self) -> None:
+        for client in self._clients.values():
+            try:
+                await client.aclose()
+            except Exception:  # noqa: BLE001
+                pass
+        self._clients.clear()
 
 
 class MockBackhaulProvider:

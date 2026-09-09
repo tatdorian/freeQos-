@@ -17,7 +17,13 @@ from app.collectors.radius import (
     MockPlanProvider,
     PlanProvider,
 )
-from app.collectors.uisp import BackhaulCapacityProvider, MockBackhaulProvider, UispProvider
+from app.collectors.uisp import (
+    AirOsProvider,
+    AirOsTarget,
+    BackhaulCapacityProvider,
+    MockBackhaulProvider,
+    UispProvider,
+)
 from app.config import Settings
 from app.db.database import Database
 from app.db.directory import Directory, PgDirectory
@@ -74,6 +80,8 @@ def build_backhaul_provider(settings: Settings) -> BackhaulCapacityProvider:
             verify_tls=settings.uisp_verify_tls,
             timeout_s=settings.uisp_timeout_s,
         )
+    if settings.backhaul_provider == "airos":
+        return _build_airos_provider(settings)
     logger.info("Capacite backhaul : simulateur (aucune radio requise)")
     return MockBackhaulProvider(
         base_capacity_mbps=settings.mock_backhaul_capacity_mbps,
@@ -86,6 +94,37 @@ def build_backhaul_provider(settings: Settings) -> BackhaulCapacityProvider:
             if backhaul.uisp_device_id and backhaul.nominal_capacity_mbps
         },
     )
+
+
+def _build_airos_provider(settings: Settings) -> AirOsProvider:
+    """Construit les cibles airOS a partir des backhauls qui portent une api_host."""
+    mot_de_passe_global = (
+        settings.airos_password.get_secret_value() if settings.airos_password else None
+    )
+    targets: list[AirOsTarget] = []
+    for backhaul in settings.enabled_backhauls:
+        if not backhaul.api_host:
+            continue
+        targets.append(
+            AirOsTarget(
+                key=backhaul.airos_key,
+                host=backhaul.api_host,
+                username=backhaul.api_username or settings.airos_username or "",
+                password=backhaul.resolve_api_password(mot_de_passe_global) or "",
+                verify_tls=(
+                    settings.airos_verify_tls
+                    if backhaul.api_verify_tls is None
+                    else backhaul.api_verify_tls
+                ),
+            )
+        )
+    if not targets:
+        raise ValueError(
+            "BACKHAUL_PROVIDER=airos exige au moins un backhaul avec 'api_host' "
+            "(l'adresse de management de l'antenne Ubiquiti)"
+        )
+    logger.info("Capacite backhaul : airOS direct sur %d antenne(s)", len(targets))
+    return AirOsProvider(targets, timeout_s=settings.airos_timeout_s)
 
 
 @dataclass

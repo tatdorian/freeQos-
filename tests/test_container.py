@@ -6,8 +6,8 @@ import pytest
 from pydantic import SecretStr
 
 from app.collectors.radius import FreeradiusSqlPlanProvider, MockPlanProvider
-from app.collectors.uisp import MockBackhaulProvider, UispProvider
-from app.config import RouterConfig, Settings
+from app.collectors.uisp import AirOsProvider, MockBackhaulProvider, UispProvider
+from app.config import BackhaulConfig, RouterConfig, Settings
 from app.container import build_backhaul_provider, build_plan_provider
 from app.services.registry import collectors_from_settings
 
@@ -51,6 +51,32 @@ def test_uisp_sans_jeton_est_refuse(settings: Settings) -> None:
     settings.uisp_base_url = "https://uisp.test"
     settings.uisp_token = None
     with pytest.raises(ValueError, match="UISP_TOKEN"):
+        build_backhaul_provider(settings)
+
+
+def test_choix_du_fournisseur_airos(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Provider airos : on interroge directement l'API locale des antennes."""
+    monkeypatch.setenv("BH_NORD_PASS", "s3cret")
+    settings.backhaul_provider = "airos"
+    settings.airos_username = "qos-ro"
+    settings.backhauls = [
+        BackhaulConfig(
+            name="bh-nord",
+            pop_name="Site 1",
+            uisp_device_id="bh-nord",
+            api_host="10.0.0.2",
+            api_password_env="BH_NORD_PASS",
+        )
+    ]
+    provider = build_backhaul_provider(settings)
+    assert isinstance(provider, AirOsProvider)
+
+
+def test_airos_sans_antenne_est_refuse(settings: Settings) -> None:
+    """Sans aucune api_host, le provider airos n'a rien a interroger."""
+    settings.backhaul_provider = "airos"
+    settings.backhauls = [BackhaulConfig(name="bh", pop_name="Site 1")]
+    with pytest.raises(ValueError, match="api_host"):
         build_backhaul_provider(settings)
 
 
