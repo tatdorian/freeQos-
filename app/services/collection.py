@@ -43,6 +43,7 @@ JOB_PLANS = "refresh_plans"
 JOB_INVENTORY = "reload_inventory"
 JOB_RTT = "probe_rtt"
 JOB_BOOSTS = "expire_boosts"
+JOB_RECONCILE = "reconcile_shaping"
 
 
 class CollectionService:

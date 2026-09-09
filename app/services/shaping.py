@@ -480,6 +480,57 @@ class ShapingService:
                 logger.exception("Retrait de boost impossible sur %s", router_name)
         return resultat
 
+    # --------------------------------------------------------- reconciliation
+    async def reconcile(self) -> dict[str, Any]:
+        """Reapplique l'etat desire sur tous les routeurs, sans intervention.
+
+        C'est ce qui fait qu'un debit saisi dans l'interface PLAFONNE vraiment :
+        sans cette boucle, la surcharge reste une intention en base tant que
+        personne n'a demande un plan puis ne l'a applique a la main. Elle
+        rattrape aussi les reconnexions -- une file posee sur l'adresse d'hier
+        ne bride plus rien apres un changement d'IP.
+
+        Deux garde-fous, volontairement les memes que pour les boosts :
+
+        - rien n'est ecrit tant que ``ENFORCEMENT_ENABLED`` est faux ;
+        - JAMAIS de purge. Ce job ecrit sans revue humaine, et un
+          ``/ppp/active`` vide -- API coupee, PoP qui redemarre -- ferait passer
+          tout le monde pour hors ligne : la purge supprimerait alors toutes les
+          files du PoP sans que personne ne l'ait vu passer.
+        """
+        resultat: dict[str, Any] = {
+            "enabled": self._enforcement_enabled,
+            "routers": [],
+            "applied": 0,
+            "errors": [],
+        }
+        if not self._enforcement_enabled:
+            return resultat
+
+        for collector in self.registry.collectors:
+            nom = collector.name
+            try:
+                plan = await self.plan_router(nom, prune=False)
+                if plan.is_empty:
+                    continue
+                applique = await self.apply(plan, dry_run=False)
+                resultat["routers"].append(nom)
+                resultat["applied"] += applique.applied
+                if plan.conflicts:
+                    # Un conflit ne bloque pas les autres files, mais il laisse
+                    # un abonne non bride : le taire le rendrait introuvable.
+                    for conflit in plan.conflicts:
+                        logger.warning(
+                            "Reconciliation %s : %s non ecrite -- %s",
+                            nom,
+                            conflit.name,
+                            conflit.detail,
+                        )
+            except Exception as exc:  # noqa: BLE001 - un routeur ne bloque pas les autres
+                resultat["errors"].append(f"{nom}: {type(exc).__name__}: {exc}")
+                logger.exception("Reconciliation impossible sur %s", nom)
+        return resultat
+
     async def _routers_for_logins(self, logins: set[str]) -> list[str]:
         """Quels routeurs portent ces abonnes. Evite de replanifier tout le parc."""
         if not logins or self.metrics is None:
@@ -521,6 +572,7 @@ class ShapingService:
             actual_types=etat.queue_types,
             actual_queues=etat.simple_queues,
             prune=self.settings.shaping_prune if prune is None else prune,
+            adopt=self.settings.shaping_adopt_foreign_queues,
         )
         plan.skipped = ecartes
         return plan
