@@ -541,6 +541,112 @@ async def test_une_lecture_de_sessions_en_echec_ne_produit_pas_de_plan(
         await service.build_targets("pop-test")
 
 
+async def test_reconciliation_applique_la_limite_saisie(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Une limite saisie dans l'interface doit PLAFONNER sans intervention.
+
+    Sans cette boucle elle reste une intention en base : elle n'atteint le
+    routeur que si quelqu'un pense a demander un plan puis a l'appliquer."""
+    settings.enforcement_enabled = True
+    settings.routers[0].rw_username = "qos-rw"
+    depot = DepotBoosts()
+    # Surcharge posee a la main : 100 kbps dans les deux sens.
+    depot.policy_map = lambda scope: _politiques(  # type: ignore[assignment]
+        scope, {"dupont": {"max_down_mbps": 0.1, "max_up_mbps": 0.1, "enabled": True}}
+    )
+    ecriture = FauxClientEcriture()
+    service = make_service(
+        settings, routeur, repository=depot, write_client_factory=lambda c: ecriture
+    )
+    service.metrics = MetriquesMinimales(
+        [{"pppoe_login": "dupont", "pop_name": "PoP Test", "plan_down_mbps": 100}]
+    )
+    await service.registry.reload()
+
+    resultat = await service.reconcile()
+
+    assert resultat["enabled"] is True
+    assert resultat["routers"] == ["pop-test"]
+    commandes = [a.command for a in ecriture.executed]
+    # 100 kbps = 100000 bits/s, dans l'ordre montant/descendant.
+    assert any("max-limit=100000/100000" in c for c in commandes)
+
+
+async def test_reconciliation_ne_purge_jamais(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Meme garde-fou que pour les boosts : ce job ecrit sans revue humaine, un
+    /ppp/active vide ne doit pas lui faire supprimer toutes les files du PoP."""
+    settings.enforcement_enabled = True
+    settings.routers[0].rw_username = "qos-rw"
+    routeur.active.clear()
+    routeur.simple_queue_rows = [
+        {
+            ".id": "*1",
+            "name": "freeqos-dupont",
+            "target": "10.20.0.10/32",
+            "max-limit": "20M/100M",
+            "comment": MANAGED_COMMENT,
+        }
+    ]
+    ecriture = FauxClientEcriture()
+    service = make_service(
+        settings,
+        routeur,
+        repository=DepotBoosts(),
+        metrics=MetriquesMinimales([]),
+        write_client_factory=lambda c: ecriture,
+    )
+    await service.registry.reload()
+
+    await service.reconcile()
+
+    assert not [a for a in ecriture.executed if a.verb == "remove"]
+
+
+async def test_reconciliation_n_ecrit_rien_en_lecture_seule(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """ENFORCEMENT_ENABLED reste le dernier rempart, boucle automatique ou pas."""
+    settings.enforcement_enabled = False
+    ecriture = FauxClientEcriture()
+    service = make_service(
+        settings,
+        routeur,
+        repository=DepotBoosts(),
+        metrics=MetriquesMinimales([]),
+        write_client_factory=lambda c: ecriture,
+    )
+    await service.registry.reload()
+
+    resultat = await service.reconcile()
+
+    assert resultat["enabled"] is False
+    assert resultat["routers"] == [] and not ecriture.executed
+
+
+async def test_un_routeur_injoignable_n_arrete_pas_la_reconciliation(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Un PoP en panne ne doit pas laisser les autres sans limite appliquee."""
+    settings.enforcement_enabled = True
+    service = make_service(
+        settings, routeur, repository=DepotBoosts(), metrics=MetriquesMinimales([])
+    )
+    await service.registry.reload()
+    routeur.raise_on_ppp = TimeoutError("routeur muet")
+
+    resultat = await service.reconcile()
+
+    assert resultat["routers"] == []
+    assert resultat["errors"] and "pop-test" in resultat["errors"][0]
+
+
+async def _politiques(scope: str, abonnes: dict) -> dict:
+    return abonnes if scope == "subscriber" else {}
+
+
 async def test_une_application_automatique_ne_purge_jamais(
     settings: Settings, routeur: FakeRouterOsClient
 ) -> None:

@@ -33,6 +33,7 @@ from app.services.collection import (
     JOB_INVENTORY,
     JOB_LINKS,
     JOB_PLANS,
+    JOB_RECONCILE,
     JOB_RTT,
     JOB_SUBSCRIBERS,
     CollectionService,
@@ -205,6 +206,11 @@ async def build_container(settings: Settings) -> Container:
         await shaping.expire_boosts()
 
     scheduler.add_job(JOB_BOOSTS, settings.boost_check_interval_s, expire_boosts)
+
+    async def reconcile_shaping() -> None:
+        await shaping.reconcile()
+
+    scheduler.add_job(JOB_RECONCILE, settings.shaping_reconcile_interval_s, reconcile_shaping)
 
     return Container(
         settings=settings,

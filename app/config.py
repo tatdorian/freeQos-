@@ -233,6 +233,16 @@ class Settings(BaseSettings):
     require_separate_write_account: bool = False
     # Verifie l'echeance des boosts et ramene les files a leur debit normal.
     boost_check_interval_s: float = 30.0
+    # Reapplique l'etat desire sur tous les routeurs, sans intervention.
+    #
+    # Sans cette boucle, un debit saisi dans l'interface reste une INTENTION :
+    # il n'atteint le routeur que si quelqu'un pense a demander un plan puis a
+    # l'appliquer. Et une file posee hier vise l'adresse d'hier, donc l'abonne
+    # qui s'est reconnecte depuis n'est plus bride du tout.
+    #
+    # Ne fait rien tant que ENFORCEMENT_ENABLED est faux : c'est ce drapeau, et
+    # lui seul, qui autorise une ecriture. Mettre 0 desactive la boucle.
+    shaping_reconcile_interval_s: float = 120.0
     topology_refresh_interval_s: float = 900.0
 
     # --- Garde-fous ---
