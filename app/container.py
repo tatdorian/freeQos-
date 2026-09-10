@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from app.collectors.radius import (
     FreeradiusSqlPlanProvider,
@@ -213,18 +214,14 @@ async def build_container(settings: Settings) -> Container:
     # l'interface ne doit pas demander un redemarrage.
     await shaping.load_flags()
 
-    rtt_prober = None
-    if settings.rtt_enabled:
-        logger.info(
-            "Sonde de latence active : %d abonne(s) toutes les %gs (/ping depuis le PoP)",
-            settings.rtt_batch_size,
-            settings.rtt_interval_s,
-        )
-        rtt_prober = RttProber(
-            batch_size=settings.rtt_batch_size,
-            max_age_s=settings.rtt_max_age_s,
-            count=settings.rtt_count,
-        )
+    # Sonde de latence : TOUJOURS instanciee et planifiee. Son execution est
+    # gouvernee par un drapeau basculable depuis l'interface (comme l'enforcement),
+    # amorce par RTT_ENABLED puis relu en base -- rien a mettre dans l'env.
+    rtt_prober = RttProber(
+        batch_size=settings.rtt_batch_size,
+        max_age_s=settings.rtt_max_age_s,
+        count=settings.rtt_count,
+    )
 
     collection = CollectionService(
         settings,
@@ -237,6 +234,10 @@ async def build_container(settings: Settings) -> Container:
         rtt_prober=rtt_prober,
     )
 
+    # Amorce le drapeau de la sonde RTT : la base fait foi une fois posee, sinon
+    # on l'y ecrit depuis RTT_ENABLED. Ensuite, l'interface le bascule a chaud.
+    await _bootstrap_rtt_flag(collection, topology_repo, settings)
+
     async def reload_inventory() -> None:
         collection.set_collectors(await registry.reload())
 
@@ -248,8 +249,7 @@ async def build_container(settings: Settings) -> Container:
     scheduler.add_job(JOB_LINKS, settings.link_interval_s, collection.collect_links)
     scheduler.add_job(JOB_PLANS, settings.plan_refresh_interval_s, collection.refresh_plans)
     scheduler.add_job(JOB_INVENTORY, settings.inventory_refresh_interval_s, reload_inventory)
-    if rtt_prober is not None:
-        scheduler.add_job(JOB_RTT, settings.rtt_interval_s, collection.probe_rtt)
+    scheduler.add_job(JOB_RTT, settings.rtt_interval_s, collection.probe_rtt)
 
     async def expire_boosts() -> None:
         await shaping.expire_boosts()
@@ -278,6 +278,37 @@ async def build_container(settings: Settings) -> Container:
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,
     )
+
+
+async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Settings) -> None:
+    """Amorce l'activation de la sonde RTT : base prioritaire, sinon RTT_ENABLED.
+
+    Meme logique que le drapeau d'enforcement : une fois pose en base, c'est lui
+    qui fait foi, et l'interface le bascule sans redemarrage.
+    """
+    from app.services.collection import FLAG_RTT
+
+    collection.rtt_enabled = settings.rtt_enabled
+    if topology_repo is None:
+        return
+    try:
+        stored = await topology_repo.get_flag(FLAG_RTT)
+    except Exception:  # noqa: BLE001 - table pas encore creee
+        return
+    if stored is None:
+        try:
+            await topology_repo.set_flag(
+                FLAG_RTT,
+                settings.rtt_enabled,
+                updated_by="bootstrap",
+                reason="valeur initiale issue de RTT_ENABLED",
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    collection.rtt_enabled = stored
+    if stored:
+        logger.info("Sonde RTT ACTIVE d'apres la base (/ping depuis le PoP).")
 
 
 async def _warn_if_secrets_orphaned(database: Database, key_file: Path | None) -> None:

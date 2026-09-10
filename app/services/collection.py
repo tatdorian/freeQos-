@@ -45,6 +45,10 @@ JOB_RTT = "probe_rtt"
 JOB_BOOSTS = "expire_boosts"
 JOB_RECONCILE = "reconcile_shaping"
 
+# Drapeau basculable a chaud (base + interface), amorce par RTT_ENABLED. La sonde
+# est toujours instanciee et planifiee ; ce drapeau decide juste si elle sonde.
+FLAG_RTT = "rtt_enabled"
+
 
 class CollectionService:
     def __init__(
@@ -92,6 +96,9 @@ class CollectionService:
         # Sonde de latence optionnelle. Sans elle, rtt_ms reste NULL : la colonne
         # existe depuis la phase 1, elle attendait juste une source.
         self.rtt_prober = rtt_prober
+        # Activation vivante de la sonde : amorcee par l'env, ensuite pilotee
+        # depuis l'interface (le container la relit en base au demarrage).
+        self.rtt_enabled = settings.rtt_enabled
         # Cibles du prochain tour de sonde, rafraichies a chaque cycle.
         self._rtt_targets: list[tuple[int, str, MikrotikCollector]] = []
 
@@ -399,7 +406,9 @@ class CollectionService:
         errors: list[str] = []
         answered = 0
 
-        if self.rtt_prober is not None:
+        # Coupee depuis l'interface : on ne sonde pas, mais le job reste planifie
+        # pour repartir des qu'on la reactive, sans redemarrage.
+        if self.rtt_prober is not None and self.rtt_enabled:
             try:
                 answered = await self.rtt_prober.probe(self._rtt_targets)
             except Exception as exc:  # noqa: BLE001
