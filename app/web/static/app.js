@@ -107,6 +107,20 @@ function rtt(value) {
   return '<span style="color:' + color + '">' + ms.toFixed(ms < 10 ? 1 : 0) + ' ms</span>';
 }
 
+/** Pastille de note de bufferbloat : couleur = severite, titre = le detail
+ *  (latence a vide -> sous charge). Une note absente veut dire "pas mesurable",
+ *  pas "bon" : on l'affiche en gris, jamais en vert. */
+function bloatBadge(v) {
+  if (!v || !v.grade) {
+    return '<span class="badge" title="Pas assez de charge sur la periode pour ' +
+      'mesurer le bufferbloat de cet abonne.">n/d</span>';
+  }
+  return '<span class="badge ' + esc(v.severity) + '" title="Latence a vide ' +
+    esc(v.idle_ms) + ' ms, sous charge ' + esc(v.loaded_ms) + ' ms, sur ' +
+    esc(v.samples) + ' echantillon(s)">' + esc(v.grade) + ' &middot; +' +
+    esc(v.bloat_ms) + ' ms</span>';
+}
+
 function uptime(seconds) {
   const s = Number(seconds);
   if (!s && s !== 0) return '-';
@@ -617,11 +631,18 @@ function limitCell(r) {
 async function loadSubscribers() {
   let query = state.subSearch ? '&search=' + encodeURIComponent(state.subSearch) : '';
   if (state.subPop) query += '&pop_id=' + encodeURIComponent(state.subPop);
-  const [rows, pops, boosts] = await Promise.all([
+  const bloatQuery = state.subPop ? '&pop_id=' + encodeURIComponent(state.subPop) : '';
+  const [rows, pops, boosts, bloat] = await Promise.all([
     api('/subscribers/latest?limit=200' + query),
     api('/pops'),
     api('/shaping/boosts').catch(() => []),
+    api('/bufferbloat?minutes=60' + bloatQuery).catch(() => null),
   ]);
+
+  // Note de bufferbloat par abonne : latence a vide vs sous charge, calculee en
+  // correlant RTT et debit deja collectes.
+  const bloatParId = {};
+  if (bloat) (bloat.subscribers || []).forEach((b) => { bloatParId[b.subscriber_id] = b; });
 
   // Le filtre PoP repond a "voir les connexions depuis un PoP".
   const select = document.getElementById('sub-pop');
@@ -636,8 +657,15 @@ async function loadSubscribers() {
   const parLogin = {};
   (boosts || []).forEach((b) => { if (b.scope === 'subscriber') parLogin[b.target_key] = b; });
 
-  document.getElementById('sub-count').textContent =
-    rows.length + ' session(s)' + (state.subPop ? ' sur ce PoP' : '');
+  let compte = rows.length + ' session(s)' + (state.subPop ? ' sur ce PoP' : '');
+  if (bloat && bloat.summary && bloat.summary.measured) {
+    const dist = bloat.summary.distribution || {};
+    const mauvais = (dist.D || 0) + (dist.F || 0);
+    compte += ' · bufferbloat : ' + bloat.summary.measured + ' mesure(s)' +
+      (mauvais ? ', ' + mauvais + ' degrade(s)' : ', tous bons') +
+      (bloat.summary.worst_bloat_ms ? ' (pire +' + bloat.summary.worst_bloat_ms + ' ms)' : '');
+  }
+  document.getElementById('sub-count').textContent = compte;
 
   const host = document.getElementById('subscribers-table');
   if (!rows.length) {
@@ -650,7 +678,9 @@ async function loadSubscribers() {
     '<table><thead><tr><th>Login PPPoE</th><th>PoP</th>' +
     '<th class="num" title="Debit reellement applique">Limite</th>' +
     '<th class="num">Download</th><th style="width:140px">vs limite</th>' +
-    '<th class="num">Upload</th><th class="num">Latence</th><th>Boost</th>' +
+    '<th class="num">Upload</th><th class="num">Latence</th>' +
+    '<th title="Latence ajoutee sous charge (A+ imperceptible, F injouable)">Bufferbloat</th>' +
+    '<th>Boost</th>' +
     '<th class="num">Session</th><th class="num">Mesure</th>' +
     '<th class="sticky-actions"></th>' +
     '</tr></thead><tbody>' +
@@ -666,6 +696,7 @@ async function loadSubscribers() {
         '<td>' + meter(r.tx_bps, limiteDown) + '</td>' +
         '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
         '<td class="num">' + rtt(r.rtt_ms) + '</td>' +
+        '<td>' + bloatBadge(bloatParId[r.subscriber_id]) + '</td>' +
         '<td>' + (parLogin[r.pppoe_login]
           ? '<span class="boost-pill" title="' +
             esc(parLogin[r.pppoe_login].boost_reason || '') + '">' +
@@ -727,14 +758,31 @@ async function openSubscriber(id) {
           s.last_ip
             ? 'adresse de la session'
             : '<span style="color:var(--warn)">hors ligne : aucune file</span>') +
+        statCard('', 'Bufferbloat',
+          data.bufferbloat ? esc(data.bufferbloat.grade) : 'n/d', '',
+          data.bufferbloat
+            ? 'a vide ' + esc(data.bufferbloat.idle_ms) + ' ms, sous charge ' +
+              esc(data.bufferbloat.loaded_ms) + ' ms'
+            : 'charge insuffisante pour mesurer') +
       '</div>' +
-      (data.points.some((p) => p.rtt_ms_avg !== null && p.rtt_ms_avg !== undefined)
-        ? '<div class="notice">Latence sur la fenetre : moyenne ' +
-          rtt(Math.max(...data.points.map((p) => p.rtt_ms_avg || 0))) +
-          ', pire ' + rtt(Math.max(...data.points.map((p) => p.rtt_ms_max || 0))) +
-          '<span class="hint">Sonde active depuis le PoP. Ce n\'est pas une latence ' +
-          'sous charge : la correler au debit est l\'objet de la phase 3.</span></div>'
-        : '') +
+      (data.bufferbloat
+        ? '<div class="notice"><b>Latence sous charge.</b> La latence passe de ' +
+          '<b>' + esc(data.bufferbloat.idle_ms) + ' ms</b> a vide a <b>' +
+          esc(data.bufferbloat.loaded_ms) + ' ms</b> quand le lien se remplit, ' +
+          'soit <b>+' + esc(data.bufferbloat.bloat_ms) + ' ms</b> de bufferbloat ' +
+          '(note ' + esc(data.bufferbloat.grade) + ').' +
+          '<span class="hint">Deduit en correlant RTT (sonde active) et debit du ' +
+          'meme echantillon, sur ' + esc(data.bufferbloat.samples) + ' point(s). ' +
+          'Shaper legerement sous la capacite du lien fait tomber ce chiffre : la ' +
+          'file se forme alors dans CAKE, ou elle est geree, pas dans le buffer radio.' +
+          '</span></div>'
+        : data.points.some((p) => p.rtt_ms_avg !== null && p.rtt_ms_avg !== undefined)
+          ? '<div class="notice">Latence sur la fenetre : moyenne ' +
+            rtt(Math.max(...data.points.map((p) => p.rtt_ms_avg || 0))) +
+            ', pire ' + rtt(Math.max(...data.points.map((p) => p.rtt_ms_max || 0))) +
+            '<span class="hint">Sonde active depuis le PoP. Pas encore assez de ' +
+            'charge sur la fenetre pour en deduire un bufferbloat.</span></div>'
+          : '') +
       '<h2>Derniere heure</h2><div class="card"><div id="sub-chart"></div></div>';
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
     renderThroughput(document.getElementById('sub-chart'),
