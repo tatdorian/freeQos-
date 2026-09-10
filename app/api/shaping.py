@@ -44,6 +44,12 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     repo = _require_topology(container)
     noeuds = await repo.nodes()
     liens = await repo.links()
+    # Reconciliation : un meme equipement vu plusieurs fois (PoP gere ET voisin
+    # du coeur, casses differentes, IPv4/IPv6) devient UNE case, ses adresses
+    # rassemblees. Sans elle, l'arbre dedouble les routeurs.
+    from app.collectors.topology import reconcile_topology
+
+    noeuds, liens = reconcile_topology(noeuds, liens)
     return {
         "nodes": noeuds,
         "links": liens,
