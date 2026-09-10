@@ -183,6 +183,89 @@ class MetricsRepository:
             )
         return _rows(records)
 
+    async def bufferbloat(
+        self,
+        *,
+        minutes: int = 60,
+        pop_id: int | None = None,
+        subscriber_id: int | None = None,
+    ) -> dict[str, Any]:
+        """Note de bufferbloat par abonne : latence a vide vs sous charge.
+
+        On lit les echantillons deja collectes — RTT (sonde ``/ping``) et debit
+        du meme point — puis on delegue la correlation a un module pur
+        (``app.services.bufferbloat``). Aucun test dedie n'est necessaire :
+        c'est la correlation RTT/debit annoncee comme la phase 3 du README.
+
+        Ne remontent que les abonnes pour lesquels on peut CONCLURE : ceux qui
+        n'ont jamais chargé le lien restent absents, avec leur compte a part —
+        afficher une note optimiste sur un abonne silencieux serait trompeur.
+        """
+        from app.services.bufferbloat import compute_bufferbloat, summarize
+
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                SELECT m.subscriber_id, s.pppoe_login, p.name AS pop_name,
+                       m.rtt_ms,
+                       COALESCE(m.rx_bps, 0) + COALESCE(m.tx_bps, 0) AS load_bps
+                  FROM subscriber_metrics m
+                  JOIN subscribers s ON s.id = m.subscriber_id
+                  LEFT JOIN pops p   ON p.id = s.pop_id
+                 WHERE m.ts > now() - $1::interval
+                   AND m.rtt_ms IS NOT NULL
+                   AND ($2::int IS NULL OR s.pop_id = $2)
+                   AND ($3::bigint IS NULL OR m.subscriber_id = $3)
+                 ORDER BY m.subscriber_id, m.ts
+                """,
+                timedelta(minutes=minutes),
+                pop_id,
+                subscriber_id,
+            )
+
+        par_abonne: dict[int, dict[str, Any]] = {}
+        for record in records:
+            entry = par_abonne.setdefault(
+                record["subscriber_id"],
+                {
+                    "subscriber_id": record["subscriber_id"],
+                    "pppoe_login": record["pppoe_login"],
+                    "pop_name": record["pop_name"],
+                    "samples": [],
+                },
+            )
+            entry["samples"].append((record["rtt_ms"], record["load_bps"]))
+
+        notes: list[dict[str, Any]] = []
+        verdicts = []
+        indetermines = 0
+        for entry in par_abonne.values():
+            verdict = compute_bufferbloat(entry["samples"])
+            if verdict is None:
+                indetermines += 1
+                continue
+            verdicts.append(verdict)
+            notes.append(
+                {
+                    "subscriber_id": entry["subscriber_id"],
+                    "pppoe_login": entry["pppoe_login"],
+                    "pop_name": entry["pop_name"],
+                    **verdict.as_dict(),
+                }
+            )
+
+        # Le pire bufferbloat en tete : c'est l'abonne dont l'experience se
+        # degrade le plus, donc celui a regarder d'abord.
+        notes.sort(key=lambda r: r["bloat_ms"], reverse=True)
+        synthese = summarize(verdicts)
+        synthese["indeterminate"] = indetermines
+        synthese["candidates"] = len(par_abonne)
+        return {
+            "window_minutes": minutes,
+            "summary": synthese,
+            "subscribers": notes,
+        }
+
     async def subscriber_latest(
         self,
         *,

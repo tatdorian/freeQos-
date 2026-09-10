@@ -301,6 +301,13 @@ ALTER TABLE subscriber_metrics ADD COLUMN IF NOT EXISTS rtt_ms           DOUBLE 
 ALTER TABLE subscriber_metrics ADD COLUMN IF NOT EXISTS session_uptime_s INTEGER;
 
 ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS kind_override TEXT;
+-- Position posee a la main dans l'editeur d'arbre, et parent force en glissant
+-- une case sous une autre. NULL = disposition/orientation automatique. Ces
+-- champs ne changent que l'arbre AFFICHE : ils ne pilotent aucun routeur.
+ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS pos_x           DOUBLE PRECISION;
+ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS pos_y           DOUBLE PRECISION;
+ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS parent_override TEXT;
+ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS hidden          BOOLEAN NOT NULL DEFAULT FALSE;
 
 ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS boost_down_mbps  DOUBLE PRECISION;
 ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS boost_up_mbps    DOUBLE PRECISION;

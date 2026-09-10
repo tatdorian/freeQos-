@@ -72,6 +72,26 @@ class FauxDepotTopologie:
     async def set_node_kind(self, key, kind):
         self.node_kinds[key] = kind
 
+    def _node_exists(self, key):
+        return any(n.get("key") == key for n in self.node_rows) or key in self.node_kinds
+
+    async def set_node_position(self, key, x, y):
+        self.node_positions = getattr(self, "node_positions", {})
+        self.node_positions[key] = (x, y)
+        return self._node_exists(key)
+
+    async def set_node_parent(self, key, parent_key):
+        if parent_key is not None and parent_key == key:
+            raise ValueError("un equipement ne peut pas etre son propre parent")
+        self.node_parents = getattr(self, "node_parents", {})
+        self.node_parents[key] = parent_key
+        return self._node_exists(key)
+
+    async def set_node_hidden(self, key, hidden):
+        self.node_hidden = getattr(self, "node_hidden", {})
+        self.node_hidden[key] = hidden
+        return self._node_exists(key)
+
     async def upsert_policy(self, **kwargs):
         cle = (kwargs["scope"], kwargs["target_key"])
         self._policies[cle] = {**kwargs}
@@ -354,6 +374,61 @@ def test_correction_manuelle_du_role(client: TestClient, topo: FauxDepotTopologi
     reponse = client.patch("/api/v1/topology/nodes/mac:AA:BB?kind=sector")
     assert reponse.status_code == 200
     assert topo.node_kinds["mac:AA:BB"] == "sector"
+
+
+def test_deplacer_une_case(client: TestClient, topo: FauxDepotTopologie) -> None:
+    """Ranger une case persiste sa position, sans toucher aucun routeur."""
+    cle = "router:pop-test"
+    topo.node_rows = [{"key": cle, "name": "PoP Test", "kind": "pop"}]
+    reponse = client.patch(
+        "/api/v1/topology/nodes/" + quote(cle, safe="") + "/layout",
+        json={"x": 120.5, "y": 40.0},
+    )
+    assert reponse.status_code == 200
+    assert topo.node_positions[cle] == (120.5, 40.0)
+
+
+def test_deplacer_une_case_inconnue_est_404(client: TestClient) -> None:
+    reponse = client.patch(
+        "/api/v1/topology/nodes/mac:INCONNU/layout", json={"x": 1, "y": 2}
+    )
+    assert reponse.status_code == 404
+
+
+def test_reparenter_une_case(client: TestClient, topo: FauxDepotTopologie) -> None:
+    """Glisser une case sous une autre force le parent dans l'arbre affiche."""
+    topo.node_rows = [
+        {"key": "mac:DC:9F:DB:11:22:33", "name": "bh-test", "kind": "radio"},
+        {"key": "router:pop-test", "name": "PoP Test", "kind": "pop"},
+    ]
+    reponse = client.patch(
+        "/api/v1/topology/nodes/" + quote("mac:DC:9F:DB:11:22:33", safe="") + "/parent",
+        json={"parent_key": "router:pop-test"},
+    )
+    assert reponse.status_code == 200
+    assert topo.node_parents["mac:DC:9F:DB:11:22:33"] == "router:pop-test"
+
+
+def test_une_case_ne_peut_pas_etre_son_propre_parent(
+    client: TestClient, topo: FauxDepotTopologie
+) -> None:
+    topo.node_rows = [{"key": "router:pop-test", "name": "PoP Test", "kind": "pop"}]
+    reponse = client.patch(
+        "/api/v1/topology/nodes/" + quote("router:pop-test", safe="") + "/parent",
+        json={"parent_key": "router:pop-test"},
+    )
+    assert reponse.status_code == 400
+
+
+def test_reparenter_reinitialise_avec_null(client: TestClient, topo: FauxDepotTopologie) -> None:
+    """parent_key null retablit l'orientation automatique."""
+    topo.node_rows = [{"key": "mac:DC:9F:DB:11:22:33", "name": "bh-test", "kind": "radio"}]
+    reponse = client.patch(
+        "/api/v1/topology/nodes/" + quote("mac:DC:9F:DB:11:22:33", safe="") + "/parent",
+        json={"parent_key": None},
+    )
+    assert reponse.status_code == 200
+    assert topo.node_parents["mac:DC:9F:DB:11:22:33"] is None
 
 
 # ------------------------------------------------- analyse de l'existant
