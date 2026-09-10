@@ -35,6 +35,14 @@ function bps(v) {
   return { v: n.toFixed(0), u: 'bps' };
 }
 function bpsText(v) { const b = bps(v); return b.v + ' ' + b.u; }
+/** Debit ultra-compact pour les etiquettes d'arete : 640M, 1.2G, 92M. */
+function bpsShort(v) {
+  const n = Number(v) || 0;
+  if (n >= 1e9) return (n / 1e9).toFixed(n >= 1e10 ? 0 : 1) + 'G';
+  if (n >= 1e6) return (n / 1e6).toFixed(0) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + 'k';
+  return n.toFixed(0);
+}
 /** Formate un debit exprime en Mbps, en choisissant l'unite lisible.
  *  Un lien de secours a 512 kbps ne doit pas s'afficher "0.5 Mbps". */
 function mbps(v) {
@@ -1133,63 +1141,419 @@ const KIND_COLOR = {
   radio: 'var(--up)', sector: 'var(--up)', cpe: 'var(--muted)', unknown: 'var(--faint)',
 };
 
+/* ------------------------------------------------- editeur d'arbre reseau */
+
+const KIND_ORDER = ['gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'unknown'];
+const NODE_W = 176;
+const NODE_H = 48;
+
+/** Etat de l'editeur, conserve entre deux rafraichissements : disposition,
+ *  case selectionnee, et si l'on montre les liens sans debit. */
+const topo = {
+  data: null, model: null, selected: null, dragging: false,
+  rateOnly: true,
+};
+
 async function loadTopology() {
   const data = await api('/topology');
+  topo.data = data;
   document.getElementById('topo-count').textContent =
     data.counts.nodes + ' equipement(s), ' + data.counts.links + ' lien(s)';
-
-  renderTopologyGraph(data);
+  renderTopoCanvas();
+  renderTopoPanel();
   renderTopologyLinks(data.links);
 }
 
-/** Graphe en colonnes par role. Un vrai layout de graphe serait plus joli mais
- *  moins lisible : sur un reseau WISP, la hierarchie EST l'information. */
-function renderTopologyGraph(data) {
-  const host = document.getElementById('topo-graph');
-  if (!data.nodes.length) {
-    host.innerHTML = '<div class="card"><div class="empty">Aucun equipement decouvert.<br>' +
-      'Lancez la decouverte : elle lit /ip/neighbor sur chaque PoP.</div></div>';
+/** Rang d'un role : plus petit = plus en amont. Sert a orienter un lien quand
+ *  aucun parent n'a ete force a la main (la decouverte de voisinage est
+ *  symetrique : elle dit "adjacents", pas "lequel est au-dessus"). */
+const TOPO_RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, unknown: 5 };
+
+/** Construit l'arbre : parent force (parent_override) prioritaire, sinon
+ *  orientation par role. Un seul parent par case, cycles coupes. */
+function topoBuildModel(data) {
+  const nodes = new Map();
+  data.nodes.forEach((n) => {
+    if (n.hidden) return;
+    nodes.set(n.key, { ...n, children: [], parentKey: null, edge: null, depth: 0 });
+  });
+
+  // Liens exploitables (les deux extremites visibles), orientes par role.
+  const oriented = [];
+  data.links.forEach((l) => {
+    if (!nodes.has(l.source_key) || !nodes.has(l.target_key)) return;
+    const ra = TOPO_RANG[nodes.get(l.source_key).kind] ?? 5;
+    const rb = TOPO_RANG[nodes.get(l.target_key).kind] ?? 5;
+    if (rb < ra) {
+      oriented.push({ parentKey: l.target_key, childKey: l.source_key, link: l, inverted: true });
+    } else {
+      oriented.push({ parentKey: l.source_key, childKey: l.target_key, link: l, inverted: false });
+    }
+  });
+
+  // Index des liens par paire, pour retrouver le debit d'un rattachement force.
+  const linkByPair = new Map();
+  oriented.forEach((e) => {
+    linkByPair.set(e.parentKey + '\u0000' + e.childKey, e);
+    linkByPair.set(e.childKey + '\u0000' + e.parentKey, { ...e, inverted: !e.inverted });
+  });
+
+  const wouldCycle = (childKey, parentKey) => {
+    let cur = parentKey;
+    const seen = new Set();
+    while (cur) {
+      if (cur === childKey) return true;
+      if (seen.has(cur)) return true;
+      seen.add(cur);
+      cur = nodes.get(cur)?.parentKey || null;
+    }
+    return false;
+  };
+
+  const attach = (childKey, parentKey, edge) => {
+    const child = nodes.get(childKey);
+    const parent = nodes.get(parentKey);
+    if (!child || !parent || childKey === parentKey || child.parentKey) return;
+    if (wouldCycle(childKey, parentKey)) return;
+    child.parentKey = parentKey;
+    child.edge = edge || null;
+    parent.children.push(child);
+  };
+
+  // 1) parents forces a la main.
+  nodes.forEach((n) => {
+    if (n.parent_override && nodes.has(n.parent_override)) {
+      const edge = linkByPair.get(n.parent_override + '\u0000' + n.key) || null;
+      attach(n.key, n.parent_override, edge);
+    }
+  });
+  // 2) le reste par role.
+  oriented.forEach((e) => attach(e.childKey, e.parentKey, e));
+
+  const roots = [...nodes.values()].filter((n) => !n.parentKey);
+  return { nodesByKey: nodes, roots };
+}
+
+/** Range les cases : position enregistree si elle existe, sinon disposition
+ *  automatique en arbre couche (parent a gauche, enfants a droite). */
+function topoAutoLayout(model) {
+  const COL = 268;   // large : laisse la place au debit sur l'arete
+  const ROWH = 74;
+  const MX = 26;
+  const MY = 22;
+  let leaf = 0;
+  const rowOf = new Map();
+  const place = (node, depth, guard) => {
+    if (guard.has(node.key)) return;   // securite anti-boucle
+    guard.add(node.key);
+    node.depth = depth;
+    if (!node.children.length) {
+      rowOf.set(node.key, leaf++);
+    } else {
+      node.children.forEach((c) => place(c, depth + 1, guard));
+      const rows = node.children.map((c) => rowOf.get(c.key)).filter((r) => r !== undefined);
+      rowOf.set(node.key, rows.length ? rows.reduce((a, b) => a + b, 0) / rows.length : leaf++);
+    }
+  };
+  const guard = new Set();
+  model.roots.forEach((r) => place(r, 0, guard));
+
+  model.nodesByKey.forEach((n) => {
+    const autoX = MX + n.depth * COL;
+    const autoY = MY + (rowOf.get(n.key) || 0) * ROWH;
+    n.x = n.pos_x != null ? Number(n.pos_x) : autoX;
+    n.y = n.pos_y != null ? Number(n.pos_y) : autoY;
+  });
+}
+
+/** Debit d'une arete, oriente vers l'enfant (descendant = vers le bas de l'arbre). */
+function topoEdgeRates(edge) {
+  if (!edge || !edge.link) return null;
+  const l = edge.link;
+  const down = edge.inverted ? l.rx_bps : l.tx_bps;
+  const up = edge.inverted ? l.tx_bps : l.rx_bps;
+  if ((down === null || down === undefined) && (up === null || up === undefined)) return null;
+  const cap = (l.port_capacity_mbps || l.capacity_mbps || 0) * 1e6;
+  return { down: down || 0, up: up || 0, cap };
+}
+
+function renderTopoCanvas() {
+  const host = document.getElementById('topo-canvas');
+  const data = topo.data;
+  if (!data || !data.nodes.length) {
+    host.innerHTML = '<div class="empty">Aucun equipement decouvert.<br>' +
+      'Lancez la decouverte : elle lit /ip/neighbor sur chaque PoP pour ' +
+      'construire l\'arbre.</div>';
     return;
   }
-  const ordre = ['gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'unknown'];
-  const parRole = {};
-  data.nodes.forEach((n) => { (parRole[n.kind] = parRole[n.kind] || []).push(n); });
+  const model = topoBuildModel(data);
+  topoAutoLayout(model);
+  topo.model = model;
 
-  const voisins = {};
-  data.links.forEach((l) => {
-    (voisins[l.source_key] = voisins[l.source_key] || []).push(l);
+  let maxX = 0;
+  let maxY = 0;
+  model.nodesByKey.forEach((n) => {
+    maxX = Math.max(maxX, n.x + NODE_W);
+    maxY = Math.max(maxY, n.y + NODE_H);
   });
+  const W = Math.max(host.clientWidth - 2, maxX + 30);
+  const H = Math.max(host.clientHeight - 2, maxY + 30);
 
-  host.innerHTML = '<div class="grid cols-2">' + ordre.filter((k) => parRole[k]).map((role) =>
-    '<div class="card"><div class="label" style="color:' + KIND_COLOR[role] +
-      ';font-size:.7rem;text-transform:uppercase;letter-spacing:.06em;margin-bottom:.6rem">' +
-      esc(KIND_LABEL[role]) + ' &middot; ' + parRole[role].length + '</div>' +
-    parRole[role].map((n) => {
-      const sortants = voisins[n.key] || [];
-      return '<div class="child">' +
-        '<span class="name">' + esc(n.name) +
-          (n.fresh ? '' : ' <span class="badge warn">non revu</span>') +
-          (n.platform ? '<span class="host">' + esc(n.platform) + '</span>' : '') +
-        '</span>' +
-        '<span style="display:flex;gap:.6rem;align-items:center">' +
-          (n.address ? '<span class="host">' + esc(n.address) + '</span>' : '') +
-          (sortants.length ? '<span class="badge">' + sortants.length + ' lien(s)</span>' : '') +
-          '<select data-node-kind="' + esc(n.key) + '" style="width:auto;font-size:.72rem;padding:.15rem .35rem">' +
-            ordre.map((k) => '<option value="' + k + '"' +
-              (k === n.kind ? ' selected' : '') + '>' + esc(KIND_LABEL[k]) + '</option>').join('') +
-          '</select>' +
-        '</span></div>';
-    }).join('') + '</div>').join('') + '</div>';
+  const parts = ['<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">'];
 
-  host.querySelectorAll('[data-node-kind]').forEach((select) => {
-    select.addEventListener('change', async () => {
-      try {
-        await api('/topology/nodes/' + encodeURIComponent(select.dataset.nodeKind) +
-          '?kind=' + select.value, { method: 'PATCH' });
-        await loadTopology();
-      } catch (err) { alert(err.message); }
+  // Aretes d'abord (derriere les cases).
+  parts.push('<g class="topo-edges">');
+  model.nodesByKey.forEach((n) => {
+    if (!n.parentKey) return;
+    const p = model.nodesByKey.get(n.parentKey);
+    if (!p) return;
+    const rates = topoEdgeRates(n.edge);
+    if (!rates && topo.rateOnly) return;   // "liens a debit seulement"
+
+    const x1 = p.x + NODE_W;
+    const y1 = p.y + NODE_H / 2;
+    const x2 = n.x;
+    const y2 = n.y + NODE_H / 2;
+    const dx = Math.max(28, Math.abs(x2 - x1) / 2);
+    const d = 'M ' + x1 + ' ' + y1 + ' C ' + (x1 + dx) + ' ' + y1 + ', ' +
+      (x2 - dx) + ' ' + y2 + ', ' + x2 + ' ' + y2;
+
+    let cls = 'topo-edge';
+    if (!rates) {
+      cls += ' faint';
+    } else if (rates.cap) {
+      cls += ' ' + severity(pct(Math.max(rates.down, rates.up), rates.cap));
+    }
+    parts.push('<path class="' + cls + '" d="' + d + '"></path>');
+
+    if (rates) {
+      const mx = (x1 + x2) / 2;
+      const my = (y1 + y2) / 2 - 4;
+      // Format compact (640M / 1.2G) pour tenir dans le court intervalle entre
+      // deux cases ; le tableau des liens plus bas donne la valeur complete.
+      const texte = '↓' + bpsShort(rates.down) + ' ↑' + bpsShort(rates.up);
+      const w = texte.length * 6.0 + 10;
+      parts.push('<rect x="' + (mx - w / 2) + '" y="' + (my - 11) + '" width="' + w +
+        '" height="15" rx="4" fill="var(--surface)" opacity="0.9"></rect>');
+      parts.push('<text class="topo-edge-label" x="' + mx + '" y="' + my +
+        '" text-anchor="middle"><tspan class="d">&#8595;' + esc(bpsShort(rates.down)) +
+        '</tspan> <tspan class="u">&#8593;' + esc(bpsShort(rates.up)) + '</tspan></text>');
+    }
+  });
+  parts.push('</g>');
+
+  // Cases.
+  parts.push('<g class="topo-nodes">');
+  model.nodesByKey.forEach((n) => {
+    const color = KIND_COLOR[n.kind] || 'var(--faint)';
+    let cls = 'topo-node';
+    if (topo.selected === n.key) cls += ' selected';
+    if (n.fresh === false) cls += ' stale';
+    const meta = n.address || n.platform || '';
+    parts.push(
+      '<g class="' + cls + '" data-node="' + esc(n.key) + '" transform="translate(' +
+        n.x + ',' + n.y + ')">' +
+        '<rect class="box" width="' + NODE_W + '" height="' + NODE_H + '" rx="8"></rect>' +
+        '<rect class="accent" x="0" y="0" width="5" height="' + NODE_H +
+          '" fill="' + color + '"></rect>' +
+        '<text class="role" x="13" y="18" fill="' + color + '">' +
+          esc(ICONE[n.kind] || '?') + '</text>' +
+        '<text class="title" x="13" y="31">' + esc(topoTrim(n.name, 20)) + '</text>' +
+        (meta ? '<text class="meta" x="13" y="42">' + esc(topoTrim(meta, 26)) + '</text>' : '') +
+      '</g>');
+  });
+  parts.push('</g></svg>');
+
+  host.innerHTML = parts.join('');
+  bindTopoDrag(host.querySelector('svg'), model);
+}
+
+function topoTrim(text, n) {
+  const s = String(text || '');
+  return s.length > n ? s.slice(0, n - 1) + '\u2026' : s;
+}
+
+/** Glisser une case la deplace ; la deposer sur une autre la rattache. Tout se
+ *  fait au pointeur (souris ou tactile), et on distingue un clic (selection)
+ *  d'un vrai deplacement par la distance parcourue. */
+function bindTopoDrag(svg, model) {
+  if (!svg) return;
+  svg.querySelectorAll('.topo-node').forEach((g) => {
+    g.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
+      ev.preventDefault();
+      const key = g.dataset.node;
+      const node = model.nodesByKey.get(key);
+      if (!node) return;
+
+      const rect = svg.getBoundingClientRect();
+      const start = { x: ev.clientX, y: ev.clientY };
+      const origin = { x: node.x, y: node.y };
+      let moved = false;
+      let dropTarget = null;
+      topo.dragging = true;
+      g.classList.add('dragging');
+      g.parentNode.appendChild(g);   // passe au premier plan
+
+      const descendants = topoDescendants(model, key);
+
+      const onMove = (e) => {
+        const nx = origin.x + (e.clientX - start.x);
+        const ny = origin.y + (e.clientY - start.y);
+        if (!moved && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4) moved = true;
+        node.x = nx;
+        node.y = ny;
+        g.setAttribute('transform', 'translate(' + nx + ',' + ny + ')');
+
+        // Cible de rattachement : la case survolee par le CENTRE de celle qu'on
+        // traine, hors elle-meme et hors ses descendants (cela ferait un cycle).
+        const cx = e.clientX - rect.left;
+        const cy = e.clientY - rect.top;
+        let cible = null;
+        model.nodesByKey.forEach((other) => {
+          if (other.key === key || descendants.has(other.key)) return;
+          if (cx >= other.x && cx <= other.x + NODE_W && cy >= other.y && cy <= other.y + NODE_H) {
+            cible = other.key;
+          }
+        });
+        if (cible !== dropTarget) {
+          if (dropTarget) svg.querySelector('[data-node="' + cssEsc(dropTarget) + '"]')
+            ?.classList.remove('drop-target');
+          dropTarget = cible;
+          if (dropTarget) svg.querySelector('[data-node="' + cssEsc(dropTarget) + '"]')
+            ?.classList.add('drop-target');
+        }
+      };
+
+      const onUp = async () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        g.classList.remove('dragging');
+        if (dropTarget) svg.querySelector('[data-node="' + cssEsc(dropTarget) + '"]')
+          ?.classList.remove('drop-target');
+        topo.dragging = false;
+
+        if (!moved) { topoSelect(key); return; }
+        try {
+          if (dropTarget && dropTarget !== node.parentKey) {
+            await api('/topology/nodes/' + encodeURIComponent(key) + '/parent',
+              { method: 'PATCH', body: JSON.stringify({ parent_key: dropTarget }) });
+            await api('/topology/nodes/' + encodeURIComponent(key) + '/layout',
+              { method: 'PATCH', body: JSON.stringify({ x: node.x, y: node.y }) });
+            await loadTopology();
+          } else {
+            await api('/topology/nodes/' + encodeURIComponent(key) + '/layout',
+              { method: 'PATCH', body: JSON.stringify({ x: node.x, y: node.y }) });
+            // Reporter la position dans les donnees en memoire, sinon le
+            // prochain rendu la recalculerait en automatique et la case
+            // reviendrait a sa place.
+            const brut = (topo.data.nodes || []).find((d) => d.key === key);
+            if (brut) { brut.pos_x = node.x; brut.pos_y = node.y; }
+            renderTopoCanvas();   // redessine les aretes vers la nouvelle position
+          }
+        } catch (err) { alert(err.message); await loadTopology(); }
+      };
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
     });
   });
+}
+
+/** Cle CSS sure pour un selecteur d'attribut (les cles contiennent des ':'). */
+function cssEsc(value) {
+  if (window.CSS && CSS.escape) return CSS.escape(value);
+  return String(value).replace(/["\\]/g, '\\$&');
+}
+
+function topoDescendants(model, key) {
+  const out = new Set();
+  const walk = (k) => {
+    const node = model.nodesByKey.get(k);
+    if (!node) return;
+    node.children.forEach((c) => { out.add(c.key); walk(c.key); });
+  };
+  walk(key);
+  return out;
+}
+
+function topoSelect(key) {
+  topo.selected = topo.selected === key ? null : key;
+  renderTopoCanvas();
+  renderTopoPanel();
+}
+
+/** Panneau de la case selectionnee : role, rattachement force, masquage, debit. */
+function renderTopoPanel() {
+  const host = document.getElementById('topo-panel');
+  if (!host) return;
+  const node = topo.selected && topo.model ? topo.model.nodesByKey.get(topo.selected) : null;
+  if (!node) {
+    host.innerHTML = '<div class="muted">Cliquez une case pour la corriger : role, ' +
+      'rattachement, visibilite. Glissez-la pour la ranger, deposez-la sur une ' +
+      'autre pour la rattacher.</div>';
+    return;
+  }
+  const parent = node.parentKey ? topo.model.nodesByKey.get(node.parentKey) : null;
+  host.innerHTML =
+    '<h4>' + esc(node.name) + '</h4>' +
+    '<div class="kv"><span>Role</span><span>' + esc(KIND_LABEL[node.kind] || '?') + '</span></div>' +
+    (node.address ? '<div class="kv"><span>Adresse</span><span>' + esc(node.address) + '</span></div>' : '') +
+    (node.platform ? '<div class="kv"><span>Plateforme</span><span>' + esc(topoTrim(node.platform, 18)) + '</span></div>' : '') +
+    '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'racine') +
+      (node.parent_override ? ' *' : '') + '</span></div>' +
+    '<div class="kv"><span>Vu</span><span>' + (node.fresh ? 'recemment' : 'ancien') + '</span></div>' +
+    '<div class="stack field"><label>Role</label>' +
+      '<select id="topo-kind">' + KIND_ORDER.map((k) =>
+        '<option value="' + k + '"' + (k === node.kind ? ' selected' : '') + '>' +
+        esc(KIND_LABEL[k]) + '</option>').join('') + '</select></div>' +
+    '<div class="actions" style="margin-top:.7rem">' +
+      (node.parent_override
+        ? '<button class="sm" id="topo-detach">Rattachement auto</button>' : '') +
+      '<button class="sm" id="topo-hide">Masquer</button>' +
+    '</div>';
+
+  document.getElementById('topo-kind').addEventListener('change', async (e) => {
+    try {
+      await api('/topology/nodes/' + encodeURIComponent(node.key) + '?kind=' + e.target.value,
+        { method: 'PATCH' });
+      await loadTopology();
+    } catch (err) { alert(err.message); }
+  });
+  const detach = document.getElementById('topo-detach');
+  if (detach) detach.addEventListener('click', async () => {
+    try {
+      await api('/topology/nodes/' + encodeURIComponent(node.key) + '/parent',
+        { method: 'PATCH', body: JSON.stringify({ parent_key: null }) });
+      await loadTopology();
+    } catch (err) { alert(err.message); }
+  });
+  document.getElementById('topo-hide').addEventListener('click', async () => {
+    try {
+      await api('/topology/nodes/' + encodeURIComponent(node.key) + '/visibility',
+        { method: 'PATCH', body: JSON.stringify({ hidden: true }) });
+      topo.selected = null;
+      await loadTopology();
+    } catch (err) { alert(err.message); }
+  });
+}
+
+/** Remet toute la disposition en automatique : efface positions ET
+ *  rattachements forces, sur chaque case. */
+async function resetTopoLayout() {
+  if (!topo.data || !confirm('Remettre la disposition automatique ?\n\n' +
+    'Les positions et rattachements poses a la main seront effaces.')) return;
+  try {
+    await Promise.all((topo.data.nodes || []).map((n) => Promise.all([
+      api('/topology/nodes/' + encodeURIComponent(n.key) + '/layout',
+        { method: 'PATCH', body: JSON.stringify({ x: null, y: null }) }),
+      n.parent_override
+        ? api('/topology/nodes/' + encodeURIComponent(n.key) + '/parent',
+            { method: 'PATCH', body: JSON.stringify({ parent_key: null }) })
+        : Promise.resolve(),
+    ])));
+    await loadTopology();
+  } catch (err) { alert(err.message); }
 }
 
 /** Debit mesure d'un lien, dans le sens du tableau : la fleche part de la
@@ -1218,10 +1582,18 @@ function linkLoad(l) {
   return meter(Math.max(l.rx_bps || 0, l.tx_bps || 0), plafond);
 }
 
-function renderTopologyLinks(links) {
+function renderTopologyLinks(allLinks) {
   const host = document.getElementById('topo-links');
+  // Meme filtre que le canvas : "liens a debit seulement" masque le bruit des
+  // adjacences sans compteur (radio UISP sans port, seconde lecture en attente).
+  const hasRate = (l) => l.rx_bps !== null || l.tx_bps !== null;
+  const links = topo.rateOnly ? allLinks.filter(hasRate) : allLinks;
   if (!links.length) {
-    host.innerHTML = '<div class="empty">Aucun lien.</div>';
+    host.innerHTML = '<div class="empty">' +
+      (allLinks.length && topo.rateOnly
+        ? 'Aucun lien avec un debit mesure. Decochez "Liens a debit seulement" ' +
+          'pour voir les adjacences sans compteur.'
+        : 'Aucun lien.') + '</div>';
     return;
   }
   host.innerHTML =
@@ -1999,6 +2371,11 @@ document.getElementById('btn-discover').addEventListener('click', async (e) => {
     e.target.disabled = false;
   }
 });
+document.getElementById('topo-rate-only').addEventListener('change', (e) => {
+  topo.rateOnly = e.target.checked;
+  if (topo.data) { renderTopoCanvas(); renderTopologyLinks(topo.data.links); }
+});
+document.getElementById('btn-topo-reset').addEventListener('click', resetTopoLayout);
 document.getElementById('router-form').addEventListener('submit', saveRouter);
 document.getElementById('a-btn-test').addEventListener('click', testAntenna);
 document.getElementById('antenna-form').addEventListener('submit', saveAntenna);
@@ -2023,12 +2400,12 @@ refreshHealth();
 const VUES_FIGEES = new Set(['pops', 'shaping']);
 setInterval(() => {
   if (VUES_FIGEES.has(state.view)) return;
-  // La topologie etait figee elle aussi, a cause de ses menus de role. Elle
-  // porte desormais le debit des liens : la figer entierement reviendrait a
-  // afficher un debit perime. On ne suspend donc que pendant qu'un menu est
-  // reellement ouvert.
-  if (state.view === 'topology' && document.activeElement &&
-      document.activeElement.tagName === 'SELECT') return;
+  // La topologie porte le debit des liens : la laisser vivre pour ne pas
+  // afficher un debit perime. Mais on ne rafraichit PAS pendant qu'on deplace
+  // une case, qu'une case est selectionnee (panneau ouvert), ou qu'un menu est
+  // ouvert : ce serait annuler le geste en cours.
+  if (state.view === 'topology' && (topo.dragging || topo.selected ||
+      (document.activeElement && document.activeElement.tagName === 'SELECT'))) return;
   refresh();
   // Le tiroir d'un lien suit le meme rythme : on regarde un debit justement
   // quand il bouge.

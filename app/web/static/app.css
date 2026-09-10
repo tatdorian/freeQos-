@@ -327,6 +327,64 @@ button.sm { padding: .25rem .55rem; font-size: .74rem; }
 .switch .label { font-size: .8rem; }
 
 
+/* --------------------------------------------- editeur d'arbre (topologie) */
+/* Un vrai arbre manipulable : chaque equipement est une case qu'on deplace, et
+   qu'on depose sur une autre pour la rattacher. SVG fait main, sans dependance :
+   le controleur doit rester utilisable sur une VM coupee d'internet. */
+.chk {
+  display: inline-flex; align-items: center; gap: .4rem; cursor: pointer;
+  font-size: .8rem; color: var(--muted);
+}
+.chk input { width: auto; }
+
+.topo-editor { display: flex; gap: .85rem; align-items: stretch; }
+.topo-canvas {
+  flex: 1; min-width: 0; height: 560px; overflow: auto;
+  background: var(--surface);
+  background-image:
+    linear-gradient(var(--border) 1px, transparent 1px),
+    linear-gradient(90deg, var(--border) 1px, transparent 1px);
+  background-size: 26px 26px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  position: relative;
+}
+.topo-canvas svg { display: block; touch-action: none; }
+.topo-canvas .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+
+.topo-panel {
+  flex: 0 0 250px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: .9rem; font-size: .82rem;
+  align-self: flex-start;
+}
+.topo-panel .muted { color: var(--faint); }
+.topo-panel h4 { margin: 0 0 .5rem; font-size: .9rem; font-family: var(--mono); word-break: break-all; }
+.topo-panel .kv { display: flex; justify-content: space-between; gap: .6rem; padding: .2rem 0; border-bottom: 1px solid var(--border); }
+.topo-panel .kv span:last-child { font-family: var(--mono); color: var(--muted); text-align: right; }
+.topo-panel .stack { margin-top: .7rem; }
+
+/* Noeuds et liens SVG */
+.topo-edge { fill: none; stroke: var(--border-strong); stroke-width: 1.6; }
+.topo-edge.ok   { stroke: var(--ok); }
+.topo-edge.warn { stroke: var(--warn); }
+.topo-edge.crit { stroke: var(--crit); }
+.topo-edge.faint { stroke: var(--border); stroke-width: 1.2; stroke-dasharray: 4 4; }
+.topo-edge-label { fill: var(--muted); font-size: 10px; font-family: var(--mono); }
+.topo-edge-label .d { fill: var(--down); }
+.topo-edge-label .u { fill: var(--up); }
+
+.topo-node { cursor: grab; }
+.topo-node.dragging { cursor: grabbing; }
+.topo-node .box {
+  fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.5; rx: 8;
+}
+.topo-node.selected .box { stroke: var(--accent); stroke-width: 2; }
+.topo-node.drop-target .box { stroke: var(--ok); stroke-width: 2.5; }
+.topo-node.stale .box { stroke-dasharray: 5 4; opacity: .8; }
+.topo-node .accent { rx: 3; }
+.topo-node .title { fill: var(--text); font-size: 12px; font-weight: 600; }
+.topo-node .role  { font-size: 9px; font-weight: 700; letter-spacing: .04em; }
+.topo-node .meta  { fill: var(--faint); font-size: 9.5px; font-family: var(--mono); }
+
 /* Les actions doivent rester atteignables sans defiler horizontalement :
    sur un ecran etroit la table deborde, et Debit/Boost sont justement ce
    pourquoi on ouvre cette vue. */
