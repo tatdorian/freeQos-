@@ -126,6 +126,17 @@ async def bufferbloat(
     return await repo.bufferbloat(minutes=minutes, pop_id=pop_id)
 
 
+@router.get("/heatmap", summary="Heatmap executif : QoE / RTT / utilisation dans le temps")
+async def heatmap(
+    repo: RepositoryDep,
+    minutes: Annotated[int, Query(ge=5, le=60 * 24, description="Fenetre d'observation")] = 15,
+    buckets: Annotated[int, Query(ge=5, le=120, description="Nombre de colonnes")] = 20,
+) -> dict[str, Any]:
+    """Bandes de cellules colorees facon LibreQoS. La ligne des retransmissions
+    TCP est presente mais marquee indisponible : hors-bande, on ne l'invente pas."""
+    return await repo.heatmap(minutes=minutes, buckets=buckets)
+
+
 @router.get("/backhauls", summary="Liste des backhauls radio")
 async def list_backhauls(
     repo: RepositoryDep,

@@ -113,6 +113,21 @@ class FakeRepository:
             ],
         }
 
+    async def heatmap(self, **kwargs: Any) -> dict[str, Any]:
+        cells = [{"ts": NOW.isoformat(), "value": 12.0, "severity": "ok"}]
+        return {
+            "minutes": kwargs.get("minutes", 15),
+            "bucket_seconds": 60,
+            "generated_at": NOW,
+            "rows": [
+                {"key": "qoe", "label": "QoE", "unit": "", "cells": cells},
+                {"key": "rtt", "label": "RTT p90", "unit": "ms", "cells": cells},
+                {"key": "utilisation", "label": "Utilisation", "unit": "%", "cells": cells},
+                {"key": "retransmits", "label": "Retransmissions TCP", "unit": "%",
+                 "unavailable": True, "reason": "Hors-bande.", "cells": []},
+            ],
+        }
+
     async def subscriber_latest(self, **kwargs: Any) -> list[dict[str, Any]]:
         return [
             {
@@ -404,6 +419,14 @@ def test_bufferbloat_reseau(client: TestClient) -> None:
     assert body["summary"]["measured"] == 1
     assert body["subscribers"][0]["grade"] == "A+"
     assert "distribution" in body["summary"]
+
+
+def test_heatmap_executif(client: TestClient) -> None:
+    body = client.get("/api/v1/heatmap?minutes=15&buckets=15").json()
+    cles = {r["key"] for r in body["rows"]}
+    assert {"qoe", "rtt", "utilisation", "retransmits"} <= cles
+    retr = next(r for r in body["rows"] if r["key"] == "retransmits")
+    assert retr["unavailable"] is True
 
 
 def test_serie_fenetre_incoherente(client: TestClient) -> None:

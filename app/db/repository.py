@@ -266,6 +266,59 @@ class MetricsRepository:
             "subscribers": notes,
         }
 
+    async def heatmap(self, *, minutes: int = 15, buckets: int = 15) -> dict[str, Any]:
+        """Heatmap executif facon LibreQoS : QoE, RTT et utilisation dans le temps.
+
+        Chaque ligne est une bande de cellules colorees (une par pas de temps).
+        Tout vient des series deja collectees. La ligne des retransmissions TCP
+        est presente mais marquee INDISPONIBLE : hors-bande, on ne voit pas les
+        paquets, donc on ne l'invente pas.
+        """
+        bucket_s = max(60, (minutes * 60) // max(1, buckets))
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                WITH par_bucket AS (
+                    SELECT date_bin($2::interval, ts, TIMESTAMPTZ 'epoch') AS bucket,
+                           subscriber_id,
+                           avg(rtt_ms) AS rtt,
+                           avg(COALESCE(tx_bps, 0)) AS tx
+                      FROM subscriber_metrics
+                     WHERE ts > now() - $1::interval
+                     GROUP BY bucket, subscriber_id
+                )
+                SELECT bucket,
+                       percentile_cont(0.5) WITHIN GROUP (ORDER BY rtt)
+                           FILTER (WHERE rtt IS NOT NULL) AS rtt_p50,
+                       percentile_cont(0.9) WITHIN GROUP (ORDER BY rtt)
+                           FILTER (WHERE rtt IS NOT NULL) AS rtt_p90,
+                       sum(tx) AS tx_sum
+                  FROM par_bucket
+                 GROUP BY bucket
+                 ORDER BY bucket
+                """,
+                timedelta(minutes=minutes),
+                timedelta(seconds=bucket_s),
+            )
+            sold_down = await conn.fetchval(
+                "SELECT coalesce(sum(plan_down_mbps), 0) FROM subscribers"
+            )
+            if not sold_down:
+                sold_down = await conn.fetchval(
+                    "SELECT coalesce(sum(capacity_mbps), 0) FROM backhaul_latest "
+                    "WHERE ts > now() - INTERVAL '5 minutes'"
+                )
+
+        from app.services.heatmap import build_heatmap
+
+        return build_heatmap(
+            [dict(r) for r in rows],
+            minutes=minutes,
+            buckets=buckets,
+            bucket_seconds=bucket_s,
+            reference_down_bps=(float(sold_down) * 1e6) if sold_down else 0.0,
+        )
+
     async def subscriber_latest(
         self,
         *,
