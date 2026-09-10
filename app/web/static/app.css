@@ -263,14 +263,31 @@ button.sm { padding: .25rem .55rem; font-size: .74rem; }
 .heat-now { flex: 0 0 auto; font-size: .72rem; color: var(--faint); font-family: var(--mono); }
 .heat-unavail { flex: 1; font-size: .74rem; color: var(--faint); font-style: italic; }
 
-/* Cellule de tableau avec mini-barre coloree, facon LibreQoS. */
-.cellbar { display: inline-flex; align-items: center; gap: .4rem; justify-content: flex-end; }
-.cellbar .bar { width: 42px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; flex: 0 0 42px; }
-.cellbar .bar > i { display: block; height: 100%; border-radius: 3px; }
-.cellbar .bar > i.ok { background: var(--ok); }
-.cellbar .bar > i.warn { background: var(--warn); }
-.cellbar .bar > i.crit { background: var(--crit); }
-.cellbar .v { font-family: var(--mono); font-size: .76rem; }
+/* Trois panneaux facon LibreQoS : Live Queue State | Node Snapshot | Node Details. */
+.lq-panels { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: .85rem; margin-bottom: 1rem; }
+.lq-panel { min-height: 210px; }
+.lq-panel h3 { margin: 0 0 .7rem; font-size: .9rem; display: flex; align-items: center; gap: .4rem; }
+.lq-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.lq-table th { text-align: right; font-size: .66rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: .3rem .4rem; }
+.lq-table th:first-child { text-align: left; }
+.lq-table td { padding: .32rem .4rem; border-top: 1px solid var(--border); }
+.lq-table td:first-child { color: var(--muted); }
+.lq-table td.num { text-align: right; font-family: var(--mono); }
+
+/* Petit carre colore devant une valeur (severite), signature de LibreQoS. */
+.sq { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: .4rem; vertical-align: baseline; background: var(--surface-2); }
+.sq.ok { background: var(--ok); } .sq.warn { background: var(--warn); } .sq.crit { background: var(--crit); }
+.sq.none { background: #30363d; }
+
+.lq-kv { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; font-size: .8rem; }
+.lq-kv .k { color: var(--muted); }
+.lq-kv .v { font-family: var(--mono); text-align: right; }
+.lq-rate { display: flex; align-items: center; gap: .4rem; margin-top: .8rem; flex-wrap: wrap; }
+.lq-rate input { width: 84px; }
+.lq-note { font-size: .72rem; color: var(--faint); margin-top: .6rem; }
+
+@media (max-width: 980px) { .lq-panels { grid-template-columns: 1fr; } }
+
 .na { color: var(--faint); }
 tr.node-row { cursor: pointer; }
 tr.node-row:hover { background: var(--surface-2); }
