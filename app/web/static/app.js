@@ -454,14 +454,23 @@ function selectionExists(sel) {
 async function loadExec() {
   const minutes = state.execRange || 60;
   const buckets = minutes <= 15 ? 15 : minutes <= 60 ? 30 : 36;
-  const [heat, subs, bloat, topoData] = await Promise.all([
+  const [heat, subs, bloat, topoData, tree] = await Promise.all([
     api('/heatmap?minutes=' + minutes + '&buckets=' + buckets),
     api('/subscribers/latest?limit=1000&order_by=login'),
     api('/bufferbloat?minutes=' + minutes).catch(() => null),
     api('/topology').catch(() => null),
+    api('/network/tree').catch(() => []),
   ]);
   exec.bloatById = {};
   if (bloat) (bloat.subscribers || []).forEach((b) => { exec.bloatById[b.subscriber_id] = b; });
+  // Enveloppe partagee par PoP : capacite du backhaul (le vrai goulot commun).
+  // C'est sous cette limite que les circuits se disputent la bande passante.
+  exec.envByPop = {};
+  (tree || []).forEach((p) => {
+    const cap = (p.backhauls || []).reduce((a, b) => a + (Number(b.capacity_mbps) || 0), 0);
+    const nom = (p.backhauls || []).reduce((a, b) => a + (Number(b.nominal_capacity_mbps) || 0), 0);
+    exec.envByPop[p.name] = { capacity: cap || null, nominal: nom || null };
+  });
   exec.subsById = {};
   subs.forEach((s) => { exec.subsById[s.subscriber_id] = s; });
   exec.nodes = aggregateNodes(subs, childCountsFromTopo(topoData));
@@ -756,11 +765,13 @@ function renderQueuePanels() {
         '<div class="actions" style="margin-top:.6rem">' +
           '<button class="sm" id="lq-open">Ouvrir dans l\'arbre</button></div>' +
         '<div id="lq-result"></div>'
-      : '<div class="lq-note"><b>' + node.circuits + ' circuit(s).</b> Un noeud est un ' +
-          'agregat : depliez-le et selectionnez un client pour imposer un debit. Retr / ' +
-          'marks / drops sont hors de portee du hors-bande.</div>' +
+      : sharedCapacityBlock(node) +
+        '<div class="lq-note"><b>' + node.circuits + ' circuit(s).</b> Un noeud est un ' +
+          'agregat : depliez-le et selectionnez un client pour imposer un debit. Le debit ' +
+          'du parent (l\'enveloppe partagee) se regle sur son lien, bouton <b>Bande ' +
+          'passante</b> dans l\'arbre. Retr / marks / drops : hors-bande, indisponibles.</div>' +
         '<div class="actions" style="margin-top:.6rem">' +
-          '<button class="sm" id="lq-open">Ouvrir dans l\'arbre</button></div>');
+          '<button class="sm" id="lq-open">Regler l\'enveloppe dans l\'arbre</button></div>');
 
   const open = document.getElementById('lq-open');
   if (open) open.addEventListener('click', () => { location.hash = '#/network'; });
@@ -768,6 +779,34 @@ function renderQueuePanels() {
   if (save) save.addEventListener('click', () => saveClientRate(client));
   const clear = document.getElementById('lq-clear');
   if (clear) clear.addEventListener('click', () => clearClientRate(client));
+}
+
+/** Bloc "capacite partagee" d'un noeud : l'enveloppe du parent (backhaul), le
+ *  debit vendu (somme des plans) et la sur-souscription. C'est le coeur du
+ *  topology-aware shaping : les circuits se disputent CETTE enveloppe, meme si
+ *  la somme de leurs plans la depasse. */
+function sharedCapacityBlock(node) {
+  const env = (exec.envByPop || {})[node.name] || {};
+  const envDown = env.capacity || env.nominal || null;   // Mbps
+  const soldDown = node.confDown / 1e6;                   // somme des plans
+  const measured = node.tx / 1e6;
+  if (!envDown) {
+    return '<div class="lq-note">Enveloppe partagee inconnue : aucun backhaul mesure ' +
+      'pour ce PoP. Ajoutez son antenne (onglet Equipements) ou fixez la sur son lien.</div>';
+  }
+  const ratio = soldDown / envDown;
+  const sev = ratio <= 1 ? 'ok' : ratio <= 2 ? 'warn' : 'crit';
+  return '<div class="lq-kv" style="margin-top:.6rem">' +
+    '<span class="k">Capacite partagee</span><span class="v">' + esc(mbps(envDown)) + '</span>' +
+    '<span class="k">Vendu (&Sigma; plans)</span><span class="v">' + esc(mbps(soldDown)) + '</span>' +
+    '<span class="k">Ecoule (mesure)</span><span class="v">' + esc(mbps(measured)) + '</span>' +
+    '<span class="k">Sur-souscription</span><span class="v">' +
+      '<span class="sq ' + sev + '"></span>' + ratio.toFixed(1) + '&times;</span>' +
+    '</div>' +
+    '<div class="lq-note">' + (ratio > 1
+      ? 'Les plans vendus totalisent <b>' + ratio.toFixed(1) + '&times;</b> l\'enveloppe : ' +
+        'les circuits se partagent le parent sous charge (c\'est voulu, CAKE arbitre).'
+      : 'Sous l\'enveloppe : pas de sur-souscription sur ce parent.') + '</div>';
 }
 
 /** Valeur Mbps pre-remplie dans un champ (nombre propre, sans zeros inutiles). */
