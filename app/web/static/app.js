@@ -408,198 +408,30 @@ const ICONE = {
   sector: 'SECT', cpe: 'CPE', unknown: '?', subscriber: 'ABO',
 };
 
-/** Etat de repli, conserve entre deux rafraichissements pour ne pas refermer
- *  une branche que l'operateur vient d'ouvrir. */
-const treeCollapsed = new Set();
-let treeInitialise = false;
-
-/** Rang d'un role dans la hierarchie. Plus petit = plus en amont. */
-const RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, unknown: 5 };
-
-/**
- * Construit la hierarchie reelle a partir des noeuds, des liens et des abonnes.
- *
- * La decouverte de voisinage est SYMETRIQUE : /ip/neighbor dit "ces deux
- * equipements sont adjacents", pas lequel est en amont. Un PoP qui voit son
- * gateway produit un lien PoP -> gateway, ce qui mettrait la passerelle sous
- * le PoP. On oriente donc chaque lien par le role de ses extremites.
- */
-function buildTree(nodes, links, subscribers) {
-  const parNoeud = new Map(nodes.map((n) => [n.key, { ...n, children: [], link: null }]));
-  const cibles = new Set();
-
-  const oriente = links.map((l) => {
-    const a = parNoeud.get(l.source_key);
-    const b = parNoeud.get(l.target_key);
-    if (!a || !b) return l;
-    const rangA = RANG[a.kind] === undefined ? 5 : RANG[a.kind];
-    const rangB = RANG[b.kind] === undefined ? 5 : RANG[b.kind];
-    // La cible est plus en amont que la source : on retourne le lien.
-    if (rangB < rangA) {
-      return { ...l, source_key: l.target_key, target_key: l.source_key, inverted: true };
-    }
-    return l;
-  });
-
-  oriente.forEach((l) => {
-    const parent = parNoeud.get(l.source_key);
-    const enfant = parNoeud.get(l.target_key);
-    if (!parent || !enfant || parent === enfant) return;
-    // Un equipement vu par deux PoPs ne doit pas etre duplique : on garde le
-    // premier rattachement et on note l'autre comme lien secondaire.
-    if (cibles.has(l.target_key)) {
-      parent.children.push({ ...enfant, key: enfant.key + '@' + parent.key,
-                             children: [], link: l, alias: true });
-      return;
-    }
-    cibles.add(l.target_key);
-    enfant.link = l;
-    parent.children.push(enfant);
-  });
-
-  // Les abonnes sont regroupes sous un noeud repliable : les lister a plat sous
-  // le PoP noierait la structure des que le parc depasse quelques dizaines.
-  const parPop = new Map();
-  (subscribers || []).forEach((s) => {
-    if (!s.pop_name) return;
-    if (!parPop.has(s.pop_name)) parPop.set(s.pop_name, []);
-    parPop.get(s.pop_name).push(s);
-  });
-  parNoeud.forEach((n) => {
-    const abonnes = parPop.get(n.name);
-    if (!abonnes || !abonnes.length) return;
-    const total = abonnes.reduce(
-      (acc, s) => ({ tx: acc.tx + (s.tx_bps || 0), rx: acc.rx + (s.rx_bps || 0) }),
-      { tx: 0, rx: 0 },
-    );
-    n.children.push({
-      key: 'abos:' + n.key,
-      name: abonnes.length + ' abonne(s)',
-      kind: 'subscriber',
-      group: true,
-      totals: total,
-      children: abonnes.map((s) => ({
-        key: 'sub:' + s.pppoe_login, name: s.pppoe_login, kind: 'subscriber',
-        children: [], subscriber: s,
-      })),
-    });
-  });
-
-  const racines = [...parNoeud.values()].filter((n) => !cibles.has(n.key));
-  return racines.length ? racines : [...parNoeud.values()];
-}
-
-function renderTreeNode(node, profondeur) {
-  const estFeuille = node.children.length === 0;
-  const replie = treeCollapsed.has(node.key);
-  const s = node.subscriber;
-
-  let charge = '';
-  let debits = '';
-  if (node.group) {
-    debits =
-      '<span class="d">&darr; ' + esc(bpsText(node.totals.tx)) + '</span>' +
-      '<span class="u">&uarr; ' + esc(bpsText(node.totals.rx)) + '</span>';
-  } else if (s) {
-    const plan = (s.effective_down_mbps || s.plan_down_mbps || 0) * 1e6;
-    debits =
-      '<span class="d">&darr; ' + esc(bpsText(s.tx_bps)) + '</span>' +
-      '<span class="u">&uarr; ' + esc(bpsText(s.rx_bps)) + '</span>';
-    charge = '<div class="tree-load">' + meter(s.tx_bps, plan) + '</div>';
-  } else if (node.link) {
-    // Dans l'arbre, "descendant" veut dire "vers l'enfant". Le lien a peut-etre
-    // ete retourne pour orienter la hierarchie : dans ce cas les compteurs du
-    // routeur le sont aussi, sinon la fleche mentirait sur le sens du trafic.
-    const l = node.link;
-    const bas = l.inverted ? l.rx_bps : l.tx_bps;
-    const haut = l.inverted ? l.tx_bps : l.rx_bps;
-    const plafond = (l.port_capacity_mbps || l.capacity_mbps || 0) * 1e6;
-    if (bas !== null && bas !== undefined) {
-      debits =
-        '<span class="d">&darr; ' + esc(bpsText(bas)) + '</span>' +
-        '<span class="u">&uarr; ' + esc(bpsText(haut || 0)) + '</span>';
-      charge = plafond ? '<div class="tree-load">' + meter(Math.max(bas, haut || 0), plafond) + '</div>' : '';
-    } else if (l.capacity_mbps) {
-      charge = '<span class="tree-meta">' + esc(mbps(l.capacity_mbps)) + '</span>';
-    }
-  }
-
-  let ligne =
-    '<div class="tree-row">' +
-      '<button class="tree-toggle' + (estFeuille ? ' leaf' : '') + '"' +
-        (estFeuille ? ' disabled' : ' data-toggle-node="' + esc(node.key) + '"') + '>' +
-        (estFeuille ? '&middot;' : replie ? '+' : '\u2212') + '</button>' +
-      '<span class="tree-icon" style="color:' + (KIND_COLOR[node.kind] || 'var(--faint)') + '">' +
-        esc(ICONE[node.kind] || '?') + '</span>' +
-      '<span class="tree-name">' + esc(node.name) + '</span>' +
-      (node.alias ? '<span class="badge">lien secondaire</span>' : '') +
-      (node.link && node.link.interface
-        ? '<span class="tree-meta">' + esc(node.link.interface) + '</span>' : '') +
-      (s && s.rtt_ms !== null && s.rtt_ms !== undefined
-        ? '<span class="tree-meta">' + rtt(s.rtt_ms) + '</span>' : '') +
-      (s && s.boost_expires_at ? '<span class="boost-pill">boost</span>' : '') +
-      '<span class="tree-rates">' + debits + charge +
-        (s ? '<span class="tree-actions">' +
-              '<button class="sm" data-tree-boost="' + esc(s.pppoe_login) + '">Boost</button>' +
-             '</span>'
-           : node.link && !node.alias
-             ? '<span class="tree-actions">' +
-               '<button class="sm" data-tree-link="' + esc(node.link.key) + '">Debit</button>' +
-               '</span>' : '') +
-      '</span>' +
-    '</div>';
-
-  let enfants = '';
-  if (!estFeuille && !replie) {
-    enfants = '<div class="tree-children">' +
-      node.children.map((c) => renderTreeNode(c, profondeur + 1)).join('') + '</div>';
-  }
-  return '<div class="tree-node">' + ligne + enfants + '</div>';
-}
-
-async function loadNetwork() {
-  const [topo, abonnes] = await Promise.all([
+/** Charge le graphe et les abonnes une seule fois, partage entre l'arbre
+ *  editable (onglet Arbre reseau) et le tableau des liens (onglet Topologie). */
+async function fetchTopo() {
+  const [data, subs] = await Promise.all([
     api('/topology'),
-    api('/subscribers/latest?limit=500&order_by=login'),
+    // Les abonnes, pour les rattacher a leur PoP dans l'arbre.
+    api('/subscribers/latest?limit=1000&order_by=login').catch(() => []),
   ]);
-  const host = document.getElementById('network-tree');
+  topo.data = data;
+  topo.subs = subs || [];
+  return data;
+}
 
-  if (!topo.nodes.length) {
-    host.innerHTML = '<div class="card"><div class="empty">' +
-      'Aucun equipement decouvert.<br>Lancez la decouverte dans l\'onglet Topologie : ' +
-      'elle lit /ip/neighbor sur chaque PoP pour reconstruire la hierarchie.</div></div>';
-    return;
+/** Onglet Arbre reseau : le vrai arbre editable au glisser-deposer. C'est la
+ *  meme vue que construisait l'onglet Topologie ; elle vit desormais ici, et
+ *  Topologie ne garde que le tableau des liens. */
+async function loadNetwork() {
+  const data = await fetchTopo();
+  const compte = document.getElementById('net-count');
+  if (compte) {
+    compte.textContent = data.counts.nodes + ' equipement(s), ' + data.counts.links + ' lien(s)';
   }
-
-  const racines = buildTree(topo.nodes, topo.links, abonnes);
-  state.lastTree = racines;
-  if (!treeInitialise) {
-    // Au premier affichage on montre la structure reseau, pas 500 abonnes.
-    const replier = (n) => {
-      if (n.group) treeCollapsed.add(n.key);
-      n.children.forEach(replier);
-    };
-    racines.forEach(replier);
-    treeInitialise = true;
-  }
-  host.innerHTML = '<div class="card"><div class="tree">' +
-    racines.map((n) => renderTreeNode(n, 0)).join('') + '</div></div>';
-
-  host.querySelectorAll('[data-toggle-node]').forEach((b) => {
-    b.addEventListener('click', () => {
-      const cle = b.dataset.toggleNode;
-      if (treeCollapsed.has(cle)) treeCollapsed.delete(cle);
-      else treeCollapsed.add(cle);
-      loadNetwork();
-    });
-  });
-  host.querySelectorAll('[data-tree-boost]').forEach((b) => {
-    const ligne = abonnes.find((s) => s.pppoe_login === b.dataset.treeBoost);
-    b.addEventListener('click', () => openBoostEditor(ligne));
-  });
-  host.querySelectorAll('[data-tree-link]').forEach((b) => {
-    b.addEventListener('click', () => openLink(b.dataset.treeLink));
-  });
+  renderTopoCanvas();
+  renderTopoPanel();
 }
 
 /* --------------------------------------------------------------- abonnes */
@@ -1311,17 +1143,9 @@ const topo = {
 };
 
 async function loadTopology() {
-  const [data, subs] = await Promise.all([
-    api('/topology'),
-    // Les abonnes, pour les rattacher a leur PoP dans l'arbre.
-    api('/subscribers/latest?limit=1000&order_by=login').catch(() => []),
-  ]);
-  topo.data = data;
-  topo.subs = subs || [];
-  document.getElementById('topo-count').textContent =
-    data.counts.nodes + ' equipement(s), ' + data.counts.links + ' lien(s)';
-  renderTopoCanvas();
-  renderTopoPanel();
+  // Onglet Topologie : le tableau technique des liens. L'arbre visuel, lui, vit
+  // dans l'onglet Arbre reseau (meme donnees, partagees via fetchTopo).
+  const data = await fetchTopo();
   renderTopologyLinks(data.links);
 }
 
@@ -1787,6 +1611,8 @@ function renderTopologyLinks(allLinks) {
   // adjacences sans compteur (radio UISP sans port, seconde lecture en attente).
   const hasRate = (l) => l.rx_bps !== null || l.tx_bps !== null;
   const links = topo.rateOnly ? allLinks.filter(hasRate) : allLinks;
+  const compte = document.getElementById('topo-links-count');
+  if (compte) compte.textContent = links.length + ' lien(s)';
   if (!links.length) {
     host.innerHTML = '<div class="empty">' +
       (allLinks.length && topo.rateOnly
@@ -2540,15 +2366,6 @@ document.getElementById('range-select').addEventListener('change', (e) => {
   loadThroughput();
 });
 document.getElementById('btn-test').addEventListener('click', testConnection);
-document.getElementById('btn-tree-expand').addEventListener('click', () => {
-  treeCollapsed.clear();
-  loadNetwork();
-});
-document.getElementById('btn-tree-collapse').addEventListener('click', () => {
-  const replier = (n) => { treeCollapsed.add(n.key); n.children.forEach(replier); };
-  (state.lastTree || []).forEach(replier);
-  loadNetwork();
-});
 document.getElementById('btn-inspect').addEventListener('click', inspectShaping);
 document.getElementById('enforcement-toggle').addEventListener('change', (e) => {
   toggleEnforcement(e.target.checked);
@@ -2564,7 +2381,7 @@ document.getElementById('btn-discover').addEventListener('click', async (e) => {
       r.links + ' lien(s) decouvert(s).' +
       (r.warnings.length ? '<span class="hint">' + r.warnings.map(esc).join('<br>') + '</span>' : '') +
       '</div>';
-    await loadTopology();
+    await loadNetwork();
   } catch (err) {
     notice.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
   } finally {
@@ -2602,11 +2419,11 @@ refreshHealth();
 const VUES_FIGEES = new Set(['pops', 'shaping']);
 setInterval(() => {
   if (VUES_FIGEES.has(state.view)) return;
-  // La topologie porte le debit des liens : la laisser vivre pour ne pas
-  // afficher un debit perime. Mais on ne rafraichit PAS pendant qu'on deplace
-  // une case, qu'une case est selectionnee (panneau ouvert), ou qu'un menu est
-  // ouvert : ce serait annuler le geste en cours.
-  if (state.view === 'topology' && (topo.dragging || topo.selected ||
+  // L'arbre porte le debit des liens : le laisser vivre pour ne pas afficher un
+  // debit perime. Mais on ne rafraichit PAS pendant qu'on deplace une case,
+  // qu'une case est selectionnee (panneau ouvert), ou qu'un menu est ouvert :
+  // ce serait annuler le geste en cours.
+  if (state.view === 'network' && (topo.dragging || topo.selected ||
       (document.activeElement && document.activeElement.tagName === 'SELECT'))) return;
   refresh();
   // Le tiroir d'un lien suit le meme rythme : on regarde un debit justement

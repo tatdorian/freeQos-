@@ -248,56 +248,6 @@ button.sm { padding: .25rem .55rem; font-size: .74rem; }
 }
 
 
-/* ------------------------------------------------- arbre reseau (vrai arbre) */
-/* Hierarchie dessinee avec des connecteurs en CSS plutot qu'un graphe SVG :
-   sur un reseau WISP l'arbre est profond mais peu ramifie, et un rendu en liste
-   indentee reste lisible a 500 abonnes la ou un graphe force devient illisible. */
-.tree { font-size: .85rem; }
-.tree-node { position: relative; }
-.tree-children {
-  margin-left: 1.15rem;
-  padding-left: 1.15rem;
-  border-left: 1px solid var(--border);
-}
-.tree-row {
-  display: flex; align-items: center; gap: .6rem;
-  padding: .45rem .6rem; border-radius: 7px;
-  position: relative;
-}
-.tree-row:hover { background: var(--surface-2); }
-/* Connecteur horizontal vers la barre verticale du parent. */
-.tree-children > .tree-node > .tree-row::before {
-  content: ""; position: absolute; left: -1.15rem; top: 50%;
-  width: .85rem; height: 1px; background: var(--border);
-}
-.tree-toggle {
-  width: 18px; height: 18px; flex: 0 0 18px; padding: 0;
-  display: flex; align-items: center; justify-content: center;
-  background: transparent; border: 1px solid var(--border);
-  border-radius: 4px; color: var(--muted); font-size: .7rem; line-height: 1;
-}
-.tree-toggle:hover { color: var(--text); border-color: var(--faint); background: var(--surface); }
-.tree-toggle.leaf { border-color: transparent; cursor: default; opacity: .35; }
-.tree-icon {
-  width: 22px; text-align: center; font-size: .62rem; font-weight: 700;
-  letter-spacing: .02em; flex: 0 0 22px;
-}
-.tree-name { font-weight: 550; }
-.tree-meta {
-  color: var(--faint); font-size: .74rem; font-family: var(--mono);
-  white-space: nowrap;
-}
-.tree-rates {
-  margin-left: auto; display: flex; gap: .9rem; align-items: center;
-  flex: 0 0 auto;  /* sinon la jauge et son pourcentage se font rogner */
-}
-.tree-rates .d { color: var(--down); }
-.tree-rates .u { color: var(--up); }
-.tree-rates span { font-family: var(--mono); font-size: .76rem; }
-.tree-load { width: 150px; flex: 0 0 150px; }
-.tree-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tree-actions { display: flex; gap: .35rem; }
-
 /* ------------------------------------------------------------------ boost */
 .boost-pill {
   display: inline-flex; align-items: center; gap: .3rem;
