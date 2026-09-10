@@ -91,6 +91,12 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
 - **Tableau de bord** — débit global (download/upload en miroir, graphe live), abonnés en
   ligne, débit vendu et son taux d'utilisation, capacité backhaul, top consommateurs avec
   barre d'usage vs plan, cartes backhaul (capacité vs nominal, charge vs capacité).
+- **Exécutif** — vue d'ensemble façon LibreQoS : *heatmap* (bandes de cellules colorées
+  QoE / RTT p90 / utilisation dans le temps), *Sankey* du trafic descendant, et un tableau
+  des files par nœud (circuits, effective/configuré, débit ↓/↑, RTT, QoE). Un clic sur un
+  nœud ouvre une jauge (utilisation + QoE), l'état de file live et les détails. Les colonnes
+  RETR / MARKS / DROPS et la ligne *Retransmissions TCP* sont marquées **« n/d »** : ces
+  compteurs de qdisc n'existent que dans le chemin des paquets, hors de portée du hors-bande.
 - **Arbre réseau** — un **vrai arbre éditable** au glisser-déposer : chaque équipement est
   une case qu'on déplace, qu'on dépose sur une autre pour la rattacher. Chaque lien porte
   son **débit mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le
@@ -534,6 +540,7 @@ que la boucle centrale devra suivre, sans radio.
 | `GET` | `/api/v1/overview` | Chiffres de tête du tableau de bord |
 | `GET` | `/api/v1/throughput` | Débit agrégé du réseau dans le temps |
 | `GET` | `/api/v1/bufferbloat` | Note de bufferbloat par abonné (latence à vide vs sous charge) |
+| `GET` | `/api/v1/heatmap` | Heatmap exécutif : QoE / RTT / utilisation dans le temps |
 | `GET` | `/api/v1/network/tree` | Arbre PoP → backhauls, capacité et charge |
 | `GET` | `/api/v1/remote/status` | État des connexions distantes par intégration (RouterOS, airOS, UISP, RADIUS) |
 | `GET` | `/api/v1/pops/routers` | Inventaire des routeurs (fichier + base) |
