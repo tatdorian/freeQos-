@@ -91,12 +91,17 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
 - **Tableau de bord** — débit global (download/upload en miroir, graphe live), abonnés en
   ligne, débit vendu et son taux d'utilisation, capacité backhaul, top consommateurs avec
   barre d'usage vs plan, cartes backhaul (capacité vs nominal, charge vs capacité).
-- **Exécutif** — vue d'ensemble façon LibreQoS : *heatmap* (bandes de cellules colorées
-  QoE / RTT p90 / utilisation dans le temps), *Sankey* du trafic descendant, et un tableau
-  des files par nœud (circuits, effective/configuré, débit ↓/↑, RTT, QoE). Un clic sur un
-  nœud ouvre une jauge (utilisation + QoE), l'état de file live et les détails. Les colonnes
-  RETR / MARKS / DROPS et la ligne *Retransmissions TCP* sont marquées **« n/d »** : ces
-  compteurs de qdisc n'existent que dans le chemin des paquets, hors de portée du hors-bande.
+- **Exécutif** — écran *Files live* façon LibreQoS : trois panneaux (Live Queue State,
+  Node Snapshot avec jauge + QoO, Node Details) pilotés par la ligne sélectionnée, puis un
+  tableau des files par nœud (Circuits, Nodes, Effective, Configured, ↓/↑, RTT, QoO) avec
+  cellules colorées et lignes dépliables vers les clients, plus un *heatmap* et un *Sankey*.
+  Sélectionner un **client** ouvre son override éditable (Save / Clear). Le panneau d'un
+  **nœud** montre la **capacité partagée** du parent (backhaul), le **vendu** (Σ plans) et
+  la **sur-souscription** : c'est sous cette enveloppe que les circuits se disputent la
+  bande passante (le planner pose la file parent et CAKE arbitre par circuit — *topology-aware
+  shaping*). Les colonnes RETR / MARKS / DROPS et la ligne *Retransmissions TCP* sont
+  marquées **« n/d »** : ces compteurs de qdisc n'existent que dans le chemin des paquets,
+  hors de portée du hors-bande.
 - **Arbre réseau** — un **vrai arbre éditable** au glisser-déposer : chaque équipement est
   une case qu'on déplace, qu'on dépose sur une autre pour la rattacher. Chaque lien porte
   son **débit mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le
