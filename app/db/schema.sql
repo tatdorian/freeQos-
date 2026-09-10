@@ -319,6 +319,11 @@ ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS pos_x           DOUBLE PRECI
 ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS pos_y           DOUBLE PRECISION;
 ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS parent_override TEXT;
 ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS hidden          BOOLEAN NOT NULL DEFAULT FALSE;
+-- Lien retire a la main (adjacence erronee de la decouverte) ou, a l'inverse,
+-- lien cree a la main quand la decouverte l'a manque. hidden ecarte un lien de
+-- l'affichage sans le supprimer, discovered_by='manual' marque les liens poses
+-- a la main. Purement affichage : aucun equipement n'est reconfigure.
+ALTER TABLE topology_links ADD COLUMN IF NOT EXISTS hidden          BOOLEAN NOT NULL DEFAULT FALSE;
 
 ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS boost_down_mbps  DOUBLE PRECISION;
 ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS boost_up_mbps    DOUBLE PRECISION;

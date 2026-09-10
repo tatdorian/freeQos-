@@ -168,10 +168,44 @@ class TopologyRepository:
                          ON p.scope = 'link' AND p.target_key = l.key
                   LEFT JOIN interface_latest im
                          ON im.router_name = l.discovered_by AND im.interface = l.interface
+                 WHERE NOT COALESCE(l.hidden, FALSE)
                  ORDER BY s.name NULLS LAST, l.interface
                 """
             )
         return [dict(row) for row in rows]
+
+    async def add_manual_link(self, source_key: str, target_key: str) -> str:
+        """Cree (ou reaffiche) un lien pose a la main entre deux noeuds.
+
+        La decouverte n'ecrase jamais ces liens : ils portent ``discovered_by
+        = 'manual'`` et une cle prefixee ``manual:``. Aucune capacite : c'est une
+        adjacence declaree par l'operateur, pas un port mesure.
+        """
+        if source_key == target_key:
+            raise ValueError("un lien ne peut pas relier un noeud a lui-meme")
+        key = f"manual:{source_key}|{target_key}"
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO topology_links
+                       (key, source_key, target_key, kind, discovered_by, hidden, attributes)
+                VALUES ($1, $2, $3, 'manual', 'manual', FALSE, '{"manual": true}'::jsonb)
+                ON CONFLICT (key) DO UPDATE SET
+                    hidden = FALSE, last_seen = now()
+                """,
+                key,
+                source_key,
+                target_key,
+            )
+        return key
+
+    async def hide_link(self, key: str) -> bool:
+        """Ecarte un lien de l'affichage (adjacence erronee). Reversible."""
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                "UPDATE topology_links SET hidden = TRUE WHERE key = $1", key
+            )
+        return not resultat.endswith(" 0")
 
     async def link(self, key: str) -> dict[str, Any] | None:
         """Un lien precis. Passe par ``links()`` : une seule definition de ce

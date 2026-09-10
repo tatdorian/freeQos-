@@ -103,12 +103,14 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   marquées **« n/d »** : ces compteurs de qdisc n'existent que dans le chemin des paquets,
   hors de portée du hors-bande.
 - **Arbre réseau** — un **vrai arbre éditable** au glisser-déposer : chaque équipement est
-  une case qu'on déplace, qu'on dépose sur une autre pour la rattacher. Chaque lien porte
-  son **débit mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le
-  débit total). L'option *Liens à débit seulement* ne garde que les liens réellement
-  mesurés. Les doublons sont **réconciliés** : un même routeur vu plusieurs fois (PoP géré
-  *et* voisin du cœur, casses ou IPv4/IPv6 différentes) devient une seule case, ses adresses
-  rassemblées. Position et rattachements sont enregistrés, mais ne changent que l'arbre
+  une case qu'on déplace, qu'on dépose sur une autre pour la rattacher. On peut **corriger
+  son rôle** (dont *Client*), **créer un lien** manquant (*Créer un lien* → clic parent puis
+  enfant) et **retirer un lien** erroné (clic sur l'arête). Chaque lien porte son **débit
+  mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le débit total).
+  L'option *Liens à débit seulement* ne garde que les liens réellement mesurés. Les doublons
+  sont **réconciliés** : un même routeur vu plusieurs fois (PoP géré *et* voisin du cœur,
+  casses ou IPv4/IPv6 différentes) devient une seule case, ses adresses rassemblées. Rôles,
+  position, rattachements et liens manuels sont enregistrés, mais ne changent que l'arbre
   **affiché** — aucun équipement n'est reconfiguré.
 - **Abonnés** — sessions filtrables **par PoP** et par login, avec débit vs plan, latence,
   **note de bufferbloat** (latence sous charge), boost en cours et son décompte. Un clic
@@ -563,6 +565,7 @@ que la boucle centrale devra suivre, sans radio.
 | `GET` | `/api/v1/topology` · `POST /topology/discover` | Graphe du réseau |
 | `PATCH` | `/api/v1/topology/nodes/{key}` | Corriger le rôle d'un équipement |
 | `PATCH` | `/api/v1/topology/nodes/{key}/layout` · `/parent` · `/visibility` | Position, rattachement forcé, masquage — arbre affiché seulement |
+| `POST` · `DELETE` | `/api/v1/topology/links` · `/topology/links/{key}` | Créer / retirer un lien à la main (arbre affiché) |
 | `GET` | `/api/v1/topology/links/{key}/throughput` | Débit mesuré d'un lien + historique |
 | `GET` | `/api/v1/topology/links/{key}/live` | Mesure instantanée (`/interface/monitor-traffic`) |
 | `GET` | `/api/v1/shaping/state` | Ce qui est **déjà** configuré sur les routeurs |

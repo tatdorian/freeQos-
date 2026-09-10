@@ -92,6 +92,21 @@ class FauxDepotTopologie:
         self.node_hidden[key] = hidden
         return self._node_exists(key)
 
+    async def add_manual_link(self, source_key, target_key):
+        if source_key == target_key:
+            raise ValueError("un lien ne peut pas relier un noeud a lui-meme")
+        self.manual_links = getattr(self, "manual_links", [])
+        key = f"manual:{source_key}|{target_key}"
+        self.manual_links.append(key)
+        return key
+
+    async def hide_link(self, key):
+        self.hidden_links = getattr(self, "hidden_links", set())
+        exists = any(row["key"] == key for row in self.link_rows) or \
+            key in getattr(self, "manual_links", [])
+        self.hidden_links.add(key)
+        return exists
+
     async def upsert_policy(self, **kwargs):
         cle = (kwargs["scope"], kwargs["target_key"])
         self._policies[cle] = {**kwargs}
@@ -418,6 +433,32 @@ def test_une_case_ne_peut_pas_etre_son_propre_parent(
         json={"parent_key": "router:pop-test"},
     )
     assert reponse.status_code == 400
+
+
+def test_creer_un_lien_a_la_main(client: TestClient, topo: FauxDepotTopologie) -> None:
+    """L'operateur peut ajouter une adjacence que la decouverte a manquee."""
+    reponse = client.post("/api/v1/topology/links", json={
+        "source_key": "router:pop-test", "target_key": "mac:DC:9F:DB:11:22:33"})
+    assert reponse.status_code == 200
+    assert reponse.json()["key"] == "manual:router:pop-test|mac:DC:9F:DB:11:22:33"
+    assert "manual:router:pop-test|mac:DC:9F:DB:11:22:33" in topo.manual_links
+
+
+def test_un_lien_ne_relie_pas_un_noeud_a_lui_meme(client: TestClient) -> None:
+    reponse = client.post("/api/v1/topology/links", json={
+        "source_key": "router:pop-test", "target_key": "router:pop-test"})
+    assert reponse.status_code == 400
+
+
+def test_retirer_un_lien(client: TestClient, topo: FauxDepotTopologie) -> None:
+    from urllib.parse import quote
+    reponse = client.delete("/api/v1/topology/links/" + quote(CLE_LIEN, safe=""))
+    assert reponse.status_code == 200
+    assert CLE_LIEN in topo.hidden_links
+
+
+def test_retirer_un_lien_inconnu_est_404(client: TestClient) -> None:
+    assert client.delete("/api/v1/topology/links/inexistant").status_code == 404
 
 
 def test_reparenter_reinitialise_avec_null(client: TestClient, topo: FauxDepotTopologie) -> None:
