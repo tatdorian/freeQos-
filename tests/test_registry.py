@@ -10,12 +10,17 @@ from tests.conftest import FakeRouterOsClient
 class FakeRoutersRepository:
     """Double memoire du depot base."""
 
-    def __init__(self, configs: list[RouterConfig] | None = None) -> None:
+    def __init__(self, configs: list[RouterConfig] | None = None,
+                 hidden: set[str] | None = None) -> None:
         self.configs = configs or []
         self.failures: list[tuple[int, str]] = []
+        self.hidden = hidden or set()
 
     async def load_configs(self, *, enabled_only: bool = True) -> list[RouterConfig]:
         return [c for c in self.configs if c.enabled or not enabled_only]
+
+    async def hidden_file_routers(self) -> set[str]:
+        return set(self.hidden)
 
     async def find_id_by_name(self, name: str) -> int | None:
         for index, config in enumerate(self.configs, start=1):
@@ -122,7 +127,25 @@ async def test_secret_manquant_ecarte_le_routeur_sans_bloquer(settings: Settings
 
     assert [c.name for c in collectors] == ["ok"]
     assert len(registry.skipped) == 1
-    assert "VARIABLE_ABSENTE" in registry.skipped[0]
+    assert registry.skipped[0]["name"] == "ko"
+    assert "VARIABLE_ABSENTE" in registry.skipped[0]["reason"]
+
+
+async def test_un_routeur_fichier_masque_disparait_sans_avertissement(settings: Settings) -> None:
+    """Retirer un routeur fichier depuis l'interface l'ecarte de l'inventaire ET
+    de la liste des ignores, sans editer le YAML."""
+    settings.routers = [
+        RouterConfig(name="garde", host="192.0.2.11", password="present"),
+        RouterConfig(name="pop-nord", host="192.0.2.12", password_env="MT_POP_NORD_PASSWORD"),
+    ]
+    repository = FakeRoutersRepository(hidden={"pop-nord"})
+    registry = make_registry(settings, repository)
+
+    collectors = await registry.reload()
+
+    assert [c.name for c in collectors] == ["garde"]
+    # Masque : ni actif, ni dans les avertissements.
+    assert registry.skipped == []
 
 
 async def test_base_indisponible_conserve_l_inventaire_fichier(settings: Settings) -> None:

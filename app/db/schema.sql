@@ -77,6 +77,17 @@ CREATE TABLE IF NOT EXISTS backhauls (
     UNIQUE (pop_id, name)
 );
 
+-- Routeurs de l'inventaire FICHIER masques a la main depuis l'interface. Le
+-- fichier reste la source de verite, mais un routeur qu'on ne veut plus voir
+-- (secret retire, PoP demantele) peut etre ecarte sans editer le YAML ni
+-- redemarrer : le registre ignore les noms presents ici. C'est le seul moyen,
+-- cote base, de passer outre la regle "le fichier gagne", et il est reversible.
+CREATE TABLE IF NOT EXISTS hidden_file_routers (
+    name        TEXT PRIMARY KEY,
+    reason      TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Antennes Ubiquiti ajoutees depuis l'interface, interrogees DIRECTEMENT sur
 -- leur API airOS locale (aucun UISP requis). Meme principe que la table routers :
 -- le mot de passe est chiffre au repos (cf. app/services/crypto.py), la cle vit

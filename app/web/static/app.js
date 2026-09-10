@@ -993,10 +993,30 @@ async function loadRouters() {
       '<code>/app/data</code>). Sinon, renseignez <code>APP_SECRET_KEY</code> ' +
       'puis redemarrez.</span></div>';
   }
-  (data.skipped || []).forEach((message) => {
-    html += '<div class="notice err">' + esc(message) + '</div>';
+  (data.skipped || []).forEach((skip) => {
+    // Ancien format (chaine) ou nouveau ({name, reason}) : on gere les deux.
+    const nom = typeof skip === 'string' ? null : skip.name;
+    const raison = typeof skip === 'string' ? skip : skip.reason;
+    html += '<div class="notice err"><strong>Routeur ignore.</strong> ' + esc(raison) +
+      (nom ? '<div class="actions" style="margin-top:.5rem">' +
+        '<button class="sm danger" data-hide-file="' + esc(nom) + '">Retirer definitivement</button>' +
+        '</div><span class="hint">« Retirer » ecarte ce routeur de l\'inventaire ' +
+        'sans toucher au fichier, et l\'avertissement disparait.</span>' : '') +
+      '</div>';
+  });
+  // Routeurs fichier retires a la main : proposer de les restaurer.
+  (data.hidden || []).forEach((h) => {
+    html += '<div class="notice"><strong>' + esc(h.name) + '</strong> est retire de ' +
+      'l\'inventaire fichier.' +
+      '<div class="actions" style="margin-top:.5rem">' +
+      '<button class="sm" data-restore-file="' + esc(h.name) + '">Restaurer</button>' +
+      '</div></div>';
   });
   notice.innerHTML = html;
+  notice.querySelectorAll('[data-hide-file]').forEach((b) =>
+    b.addEventListener('click', () => hideFileRouter(b.dataset.hideFile)));
+  notice.querySelectorAll('[data-restore-file]').forEach((b) =>
+    b.addEventListener('click', () => restoreFileRouter(b.dataset.restoreFile)));
   document.getElementById('btn-save').disabled = !data.secrets_available;
 
   const host = document.getElementById('routers-table');
@@ -1030,7 +1050,9 @@ async function loadRouters() {
             ? '<button class="sm" data-probe="' + r.id + '">Tester</button>' +
               '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Desactiver' : 'Activer') + '</button>' +
               '<button class="sm danger" data-del="' + r.id + '">Retirer</button>'
-            : '<span style="font-size:.72rem;color:var(--faint)">edite dans routers.yml</span>') +
+            : '<span style="font-size:.72rem;color:var(--faint);margin-right:.4rem">routers.yml</span>' +
+              '<button class="sm danger" data-hide-file="' + esc(r.name) +
+              '" title="Ecarter ce routeur fichier sans editer le YAML">Retirer</button>') +
         '</div></td></tr>';
     }).join('') + '</tbody></table>';
 
@@ -1040,6 +1062,28 @@ async function loadRouters() {
     b.addEventListener('click', () => deleteRouter(b.dataset.del)));
   host.querySelectorAll('[data-toggle]').forEach((b) =>
     b.addEventListener('click', () => toggleRouter(b.dataset.toggle)));
+  host.querySelectorAll('[data-hide-file]').forEach((b) =>
+    b.addEventListener('click', () => hideFileRouter(b.dataset.hideFile)));
+}
+
+/** Ecarte un routeur de l'inventaire fichier (source de verite intacte).
+ *  Le fichier gagne par defaut ; ce masquage explicite est la seule facon,
+ *  cote interface, de retirer un routeur fichier — et il est reversible. */
+async function hideFileRouter(name) {
+  if (!confirm('Retirer "' + name + '" de l\'inventaire ?\n\n' +
+    'Le routeur est ecarte (interrogation et avertissements), sans modifier ' +
+    'config/routers.yml. Vous pourrez le restaurer.')) return;
+  try {
+    await api('/pops/routers/file/' + encodeURIComponent(name), { method: 'DELETE' });
+    await loadRouters();
+  } catch (err) { alert(err.message); }
+}
+
+async function restoreFileRouter(name) {
+  try {
+    await api('/pops/routers/file/' + encodeURIComponent(name) + '/restore', { method: 'POST' });
+    await loadRouters();
+  } catch (err) { alert(err.message); }
 }
 
 /** Analyse la config des equipements et (re)construit l'arbre reseau.

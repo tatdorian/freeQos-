@@ -28,6 +28,7 @@ class InMemoryRoutersRepository:
         self._secrets = secrets
         self.rows: dict[int, dict[str, Any]] = {}
         self._next_id = 1
+        self.hidden: dict[str, str | None] = {}
 
     def _public(self, row: dict[str, Any]) -> dict[str, Any]:
         return {k: v for k, v in row.items() if k != "password_enc"}
@@ -90,6 +91,18 @@ class InMemoryRoutersRepository:
             if row["name"] == name:
                 return router_id
         return None
+
+    async def hidden_file_routers(self) -> set[str]:
+        return set(self.hidden)
+
+    async def list_hidden_file_routers(self) -> list[dict[str, Any]]:
+        return [{"name": n, "reason": r, "updated_at": "now"} for n, r in self.hidden.items()]
+
+    async def hide_file_router(self, name: str, reason: str | None = None) -> None:
+        self.hidden[name] = reason
+
+    async def unhide_file_router(self, name: str) -> bool:
+        return self.hidden.pop(name, "__absent__") != "__absent__"
 
     async def load_configs(self, *, enabled_only: bool = True) -> list[RouterConfig]:
         configs = []
@@ -170,6 +183,26 @@ def test_inventaire_expose_les_deux_sources(
     assert par_nom["pop-sud"]["source"] == "db"
     assert par_nom["pop-sud"]["editable"] is True
     assert body["secrets_available"] is True
+
+
+def test_retirer_puis_restaurer_un_routeur_fichier(
+    client: TestClient, repo: InMemoryRoutersRepository
+) -> None:
+    """Un routeur fichier peut etre ecarte depuis l'interface, puis restaure,
+    sans toucher au YAML."""
+    # 'pop-test' vient de l'inventaire fichier (conftest).
+    assert "pop-test" in {c.name for c in client.container.collection.collectors}
+
+    r = client.delete("/api/v1/pops/routers/file/pop-test")
+    assert r.status_code == 204
+    assert "pop-test" in repo.hidden
+    assert "pop-test" not in {c.name for c in client.container.collection.collectors}
+    body = client.get("/api/v1/pops/routers").json()
+    assert any(h["name"] == "pop-test" for h in body["hidden"])
+
+    client.post("/api/v1/pops/routers/file/pop-test/restore")
+    assert "pop-test" not in repo.hidden
+    assert "pop-test" in {c.name for c in client.container.collection.collectors}
 
 
 # --------------------------------------------------------------- creation
