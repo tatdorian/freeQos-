@@ -925,7 +925,7 @@ function renderExecSankey(host, subs) {
 
 const ICONE = {
   gateway: 'GW', core: 'CORE', pop: 'POP', radio: 'RF',
-  sector: 'SECT', cpe: 'CPE', unknown: '?', subscriber: 'ABO',
+  sector: 'SECT', cpe: 'CPE', client: 'CLI', unknown: '?', subscriber: 'ABO',
 };
 
 /** Charge le graphe et les abonnes une seule fois, partage entre l'arbre
@@ -1685,17 +1685,17 @@ async function toggleAntenna(id) {
 
 const KIND_LABEL = {
   gateway: 'Gateway', core: 'Coeur', pop: 'PoP', radio: 'Radio',
-  sector: 'Secteur', cpe: 'CPE', unknown: 'Inconnu', subscriber: 'Abonnes',
+  sector: 'Secteur', cpe: 'CPE', client: 'Client', unknown: 'Inconnu', subscriber: 'Abonnes',
 };
 const KIND_COLOR = {
   gateway: 'var(--accent)', core: 'var(--accent)', pop: 'var(--down)',
-  radio: 'var(--up)', sector: 'var(--up)', cpe: 'var(--muted)', unknown: 'var(--faint)',
-  subscriber: '#a78bfa',
+  radio: 'var(--up)', sector: 'var(--up)', cpe: 'var(--muted)', client: '#a78bfa',
+  unknown: 'var(--faint)', subscriber: '#a78bfa',
 };
 
 /* ------------------------------------------------- editeur d'arbre reseau */
 
-const KIND_ORDER = ['gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'unknown'];
+const KIND_ORDER = ['gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'client', 'unknown'];
 const NODE_W = 176;
 const NODE_H = 48;
 
@@ -1703,7 +1703,7 @@ const NODE_H = 48;
  *  case selectionnee, et si l'on montre les liens sans debit. */
 const topo = {
   data: null, subs: [], model: null, selected: null, dragging: false,
-  rateOnly: true,
+  rateOnly: true, linkMode: false, linkSource: null,
 };
 
 async function loadTopology() {
@@ -1716,7 +1716,7 @@ async function loadTopology() {
 /** Rang d'un role : plus petit = plus en amont. Sert a orienter un lien quand
  *  aucun parent n'a ete force a la main (la decouverte de voisinage est
  *  symetrique : elle dit "adjacents", pas "lequel est au-dessus"). */
-const TOPO_RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, unknown: 5 };
+const TOPO_RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, client: 4, unknown: 5 };
 
 /** Construit l'arbre : parent force (parent_override) prioritaire, sinon
  *  orientation par role. Un seul parent par case, cycles coupes. */
@@ -1882,7 +1882,12 @@ function renderTopoCanvas() {
     const p = model.nodesByKey.get(n.parentKey);
     if (!p) return;
     const rates = n.synthRates || topoEdgeRates(n.edge);
-    if (!rates && topo.rateOnly) return;   // "liens a debit seulement"
+    // Un lien FORCE (parent pose a la main) ou MANUEL est toujours dessine :
+    // sinon un lien qu'on vient de creer disparaitrait sous "debit seulement".
+    const linkKey = (n.edge && n.edge.link && n.edge.link.key) || null;
+    const manual = !!linkKey && String(linkKey).indexOf('manual:') === 0;
+    const forced = n.parent_override && n.parent_override === p.key;
+    if (!rates && topo.rateOnly && !forced && !manual) return;
 
     const x1 = p.x + NODE_W;
     const y1 = p.y + NODE_H / 2;
@@ -1894,9 +1899,16 @@ function renderTopoCanvas() {
 
     let cls = 'topo-edge';
     if (!rates) {
-      cls += ' faint';
+      cls += (forced || manual) ? ' forced' : ' faint';
     } else if (rates.cap) {
       cls += ' ' + severity(pct(Math.max(rates.down, rates.up), rates.cap));
+    }
+    // Zone de clic large et transparente derriere le trait : un lien se
+    // supprime en cliquant dessus (les abonnes agreges n'ont pas de lien reel).
+    if (!n.synthetic) {
+      parts.push('<path class="topo-edge-hit" d="' + d + '" data-edge-child="' + esc(n.key) +
+        '" data-edge-link="' + esc(linkKey || '') + '"><title>Cliquer pour retirer ce lien' +
+        '</title></path>');
     }
     parts.push('<path class="' + cls + '" d="' + d + '"></path>');
 
@@ -1923,6 +1935,7 @@ function renderTopoCanvas() {
     let cls = 'topo-node';
     if (n.synthetic) cls += ' synthetic';
     if (topo.selected === n.key) cls += ' selected';
+    if (topo.linkSource === n.key) cls += ' linksrc';
     if (n.fresh === false) cls += ' stale';
     // Rassemble toutes les adresses de l'equipement plutot que d'en montrer une.
     const meta = n.synthetic
@@ -1946,6 +1959,84 @@ function renderTopoCanvas() {
 
   host.innerHTML = parts.join('');
   bindTopoDrag(host.querySelector('svg'), model);
+  bindTopoEdges(host.querySelector('svg'));
+}
+
+/** Clic sur une arete : retirer le lien. Un lien decouvert ou manuel porte une
+ *  cle (on le masque) ; un simple rattachement force sans lien reel se detache
+ *  en effacant le parent force. */
+function bindTopoEdges(svg) {
+  if (!svg) return;
+  svg.querySelectorAll('[data-edge-child]').forEach((el) => {
+    el.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const child = el.dataset.edgeChild;
+      const linkKey = el.dataset.edgeLink;
+      const node = topo.model && topo.model.nodesByKey.get(child);
+      if (!confirm('Retirer ce lien de l\'arbre ?')) return;
+      try {
+        if (linkKey) {
+          await api('/topology/links/' + encodeURIComponent(linkKey), { method: 'DELETE' });
+        }
+        // Detache aussi le rattachement force, sinon la case resterait sous ce
+        // parent alors qu'on vient d'en couper le lien.
+        if (node && node.parent_override) {
+          await api('/topology/nodes/' + encodeURIComponent(child) + '/parent',
+            { method: 'PATCH', body: JSON.stringify({ parent_key: null }) });
+        }
+        await loadNetwork();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+/** Clic sur une case : selection normale, ou choix d'extremite en mode lien. */
+function topoNodeClick(key) {
+  if (topo.linkMode) { topoLinkPick(key); return; }
+  topoSelect(key);
+}
+
+/** Mode "creer un lien" : premier clic = parent, second = enfant. Le lien est
+ *  pose (adjacence manuelle) ET l'enfant est rattache sous le parent, pour que
+ *  l'arbre le montre tout de suite. */
+async function topoLinkPick(key) {
+  if (!topo.linkSource) {
+    topo.linkSource = key;
+    renderTopoCanvas();
+    setTopoLinkNotice();
+    return;
+  }
+  const source = topo.linkSource;
+  const target = key;
+  topo.linkSource = null;
+  if (source === target) { renderTopoCanvas(); setTopoLinkNotice(); return; }
+  // Anti-boucle : l'enfant ne peut pas etre un ancetre du parent.
+  if (topo.model && topoDescendants(topo.model, target).has(source)) {
+    alert('Impossible : cela creerait une boucle (l\'enfant est deja au-dessus du parent).');
+    renderTopoCanvas();
+    setTopoLinkNotice();
+    return;
+  }
+  try {
+    await api('/topology/links',
+      { method: 'POST', body: JSON.stringify({ source_key: source, target_key: target }) });
+    await api('/topology/nodes/' + encodeURIComponent(target) + '/parent',
+      { method: 'PATCH', body: JSON.stringify({ parent_key: source }) });
+    await loadNetwork();
+    setTopoLinkNotice();
+  } catch (err) { alert(err.message); }
+}
+
+/** Bandeau d'aide du mode lien. */
+function setTopoLinkNotice() {
+  const notice = document.getElementById('topo-notice');
+  if (!notice) return;
+  if (!topo.linkMode) { notice.innerHTML = ''; return; }
+  notice.innerHTML = '<div class="notice"><b>Mode lien.</b> ' +
+    (topo.linkSource
+      ? 'Cliquez la case <b>enfant</b> a rattacher (ou re-cliquez pour annuler).'
+      : 'Cliquez la case <b>parent</b>, puis la case <b>enfant</b>.') +
+    ' Cliquez « Creer un lien » pour quitter ce mode.</div>';
 }
 
 function topoTrim(text, n) {
@@ -1967,6 +2058,13 @@ function bindTopoDrag(svg, model) {
       // Le noeud "abonnes" est un agregat synthetique : ni deplacable ni
       // rattachable, il suit son PoP.
       if (!node || node.synthetic) return;
+
+      // En mode "creer un lien", un clic choisit une extremite : pas de drag.
+      if (topo.linkMode) {
+        const pick = () => { window.removeEventListener('pointerup', pick); topoNodeClick(key); };
+        window.addEventListener('pointerup', pick);
+        return;
+      }
 
       const rect = svg.getBoundingClientRect();
       const start = { x: ev.clientX, y: ev.clientY };
@@ -2015,7 +2113,7 @@ function bindTopoDrag(svg, model) {
           ?.classList.remove('drop-target');
         topo.dragging = false;
 
-        if (!moved) { topoSelect(key); return; }
+        if (!moved) { topoNodeClick(key); return; }
         try {
           if (dropTarget && dropTarget !== node.parentKey) {
             await api('/topology/nodes/' + encodeURIComponent(key) + '/parent',
@@ -2958,6 +3056,14 @@ document.getElementById('topo-rate-only').addEventListener('change', (e) => {
   if (topo.data) { renderTopoCanvas(); renderTopologyLinks(topo.data.links); }
 });
 document.getElementById('btn-topo-reset').addEventListener('click', resetTopoLayout);
+document.getElementById('btn-topo-link').addEventListener('click', (e) => {
+  topo.linkMode = !topo.linkMode;
+  topo.linkSource = null;
+  e.target.classList.toggle('primary', topo.linkMode);
+  e.target.textContent = topo.linkMode ? 'Terminer' : 'Creer un lien';
+  if (topo.data) renderTopoCanvas();
+  setTopoLinkNotice();
+});
 document.getElementById('btn-build-tree').addEventListener('click', () => buildTreeFromConfig(false));
 document.getElementById('btn-remote-refresh').addEventListener('click', loadRemote);
 document.getElementById('exec-range').addEventListener('change', (e) => {
@@ -2993,7 +3099,7 @@ setInterval(() => {
   // debit perime. Mais on ne rafraichit PAS pendant qu'on deplace une case,
   // qu'une case est selectionnee (panneau ouvert), ou qu'un menu est ouvert :
   // ce serait annuler le geste en cours.
-  if (state.view === 'network' && (topo.dragging || topo.selected ||
+  if (state.view === 'network' && (topo.dragging || topo.selected || topo.linkMode ||
       (document.activeElement && document.activeElement.tagName === 'SELECT'))) return;
   // Vue Files live : ne pas ecraser un champ de debit en cours de saisie.
   if (state.view === 'exec' && document.activeElement &&

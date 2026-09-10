@@ -255,12 +255,40 @@ async def set_node_visibility(
     return {"key": key, "hidden": payload.hidden}
 
 
+class LinkInput(BaseModel):
+    source_key: str
+    target_key: str
+
+
+@router.post("/topology/links", summary="Creer un lien a la main entre deux noeuds")
+async def create_link(payload: LinkInput, container: ContainerDep) -> dict[str, Any]:
+    """Ajoute une adjacence que la decouverte a manquee. Purement affichage :
+    aucun equipement n'est reconfigure. Retirable ensuite via DELETE."""
+    repo = _require_topology(container)
+    try:
+        key = await repo.add_manual_link(payload.source_key, payload.target_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"key": key, "source_key": payload.source_key, "target_key": payload.target_key}
+
+
+@router.delete("/topology/links/{key:path}", summary="Retirer un lien de l'arbre")
+async def delete_link(key: str, container: ContainerDep) -> dict[str, Any]:
+    """Ecarte un lien (adjacence erronee de la decouverte, ou lien manuel).
+    Reversible : la decouverte ne le recree pas tant qu'il est masque."""
+    repo = _require_topology(container)
+    trouve = await repo.hide_link(key)
+    if not trouve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lien inconnu : {key}")
+    return {"key": key, "hidden": True}
+
+
 @router.patch("/topology/nodes/{key:path}", summary="Corriger le role d'un equipement")
 async def set_node_kind(
     key: str,
     container: ContainerDep,
     kind: Annotated[
-        Literal["gateway", "core", "pop", "radio", "sector", "cpe", "unknown"] | None,
+        Literal["gateway", "core", "pop", "radio", "sector", "cpe", "client", "unknown"] | None,
         Query(description="Role force ; omettre pour revenir a la detection"),
     ] = None,
 ) -> dict[str, Any]:
