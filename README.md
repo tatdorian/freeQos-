@@ -34,8 +34,8 @@ En phase 1 les trois sont **observés**, aucun n'est encore piloté.
 |---|---|---|
 | **1** | Collecte `/ppp active` multi-routeurs, capacité backhaul, plans, TimescaleDB, boucle périodique, API de lecture, `/health` | **fait** |
 | **1.5** | Interface d'administration, connexion d'un PoP depuis l'UI, inventaire à chaud, sonde de latence | **fait** |
-| **2** | Topologie, analyse de l'existant, files CAKE par abonné et parent backhaul | **fait** |
-| 3 | Score QoE (latence **sous charge**) | RTT collecté, corrélation au débit à faire |
+| **2** | Topologie (arbre éditable), analyse de l'existant, files CAKE par abonné et parent backhaul | **fait** |
+| **3** | Latence **sous charge** (bufferbloat) : corrélation RTT ↔ débit, note A+…F | **fait** ; score QoE composite à venir |
 | 4 | Boucle fermée (ajustement selon QoE + capacité radio) | à venir |
 
 L'enforcement existe désormais, mais reste **désactivé par défaut** : `ENFORCEMENT_ENABLED`
@@ -98,11 +98,20 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   sous un nœud repliable, avec leurs totaux. **Chaque lien porte son débit mesuré** et sa
   charge vs la capacité du port ; le bouton *Débit* ouvre son historique.
 - **Abonnés** — sessions filtrables **par PoP** et par login, avec débit vs plan, latence,
-  boost en cours et son décompte. Un clic ouvre la série de l'abonné ; les boutons *Débit*
-  et *Boost* agissent directement.
-- **Topologie** — le graphe par rôle, corrigeable à la main, et le tableau des liens avec
-  leur **débit mesuré**, leur charge et leur capacité.
-- **PoPs** — inventaire et connexion d'un routeur.
+  **note de bufferbloat** (latence sous charge), boost en cours et son décompte. Un clic
+  ouvre la série de l'abonné ; les boutons *Débit* et *Boost* agissent directement.
+- **Topologie** — un **vrai arbre réseau éditable** : chaque équipement est une case qu'on
+  déplace au glisser-déposer, qu'on dépose sur une autre pour la rattacher. Chaque lien
+  porte son **débit mesuré** (avec une couleur de charge) ; l'option *Liens à débit
+  seulement* ne garde que les liens réellement mesurés. Position et rattachements sont
+  enregistrés, mais ne changent que l'arbre **affiché** — aucun équipement n'est
+  reconfiguré. En dessous, le tableau des liens avec débit, charge et capacité.
+- **Équipements** — ajout d'un routeur ou d'une antenne **via leur API** ; chaque ajout
+  **analyse la configuration et (re)construit l'arbre tout seul**. Inventaire des sites et
+  routeurs en bas de page.
+- **Connexion à distance** — vue façon LibreQoS de toutes les intégrations distantes
+  (RouterOS, airOS Ubiquiti, UISP, FreeRADIUS) : joignabilité par famille d'API et détail
+  par équipement. En lecture seule.
 
 Aucune dépendance externe : ni framework, ni CDN, ni chaîne de build. Les graphes sont du
 SVG généré à la main, pour que le contrôleur reste utilisable sur une VM de management
@@ -340,7 +349,7 @@ différence de fond qu'il vaut mieux connaître avant de comparer les deux :
 | Shaping hiérarchique | HTB + CAKE, arbre du shaper | files simples RouterOS + CAKE, arbre issu de la topologie — **équivalent** |
 | **RTT par abonné** | **passif**, horodatages TCP de chaque flux | **sonde active** `/ping` depuis le PoP, par lots |
 | **Retransmissions TCP** | passif, eBPF | **impossible** — exige de voir les paquets |
-| Latence **sous charge** | mesurée en continu sur le trafic réel | à dériver en corrélant RTT et débit (phase 3) |
+| Latence **sous charge** (bufferbloat) | mesurée en continu sur le trafic réel | **dérivée** en corrélant RTT (sonde active) et débit du même échantillon — note A+…F par abonné |
 
 Autrement dit : tout ce qui se lit dans des compteurs est à parité. Tout ce qui exige
 d'inspecter les paquets ne l'est pas, et ne le sera jamais depuis une VM de management —
@@ -365,7 +374,7 @@ plus bas).
 
 ```bash
 pip install -e ".[dev]"
-make test      # 129 tests, ni base ni routeur requis
+make test      # 437 tests, ni base ni routeur requis
 make lint
 make dev       # uvicorn en rechargement à chaud
 ```
@@ -525,7 +534,9 @@ que la boucle centrale devra suivre, sans radio.
 | `GET` | `/api/v1/backhauls` · `/latest` · `/{id}/metrics` | Idem côté radio |
 | `GET` | `/api/v1/overview` | Chiffres de tête du tableau de bord |
 | `GET` | `/api/v1/throughput` | Débit agrégé du réseau dans le temps |
+| `GET` | `/api/v1/bufferbloat` | Note de bufferbloat par abonné (latence à vide vs sous charge) |
 | `GET` | `/api/v1/network/tree` | Arbre PoP → backhauls, capacité et charge |
+| `GET` | `/api/v1/remote/status` | État des connexions distantes par intégration (RouterOS, airOS, UISP, RADIUS) |
 | `GET` | `/api/v1/pops/routers` | Inventaire des routeurs (fichier + base) |
 | `POST` | `/api/v1/pops/routers/test` | Teste une connexion **sans rien enregistrer** |
 | `POST` | `/api/v1/pops/routers` | Enregistre un routeur |
@@ -533,6 +544,7 @@ que la boucle centrale devra suivre, sans radio.
 | `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
 | `GET` | `/api/v1/topology` · `POST /topology/discover` | Graphe du réseau |
 | `PATCH` | `/api/v1/topology/nodes/{key}` | Corriger le rôle d'un équipement |
+| `PATCH` | `/api/v1/topology/nodes/{key}/layout` · `/parent` · `/visibility` | Position, rattachement forcé, masquage — arbre affiché seulement |
 | `GET` | `/api/v1/topology/links/{key}/throughput` | Débit mesuré d'un lien + historique |
 | `GET` | `/api/v1/topology/links/{key}/live` | Mesure instantanée (`/interface/monitor-traffic`) |
 | `GET` | `/api/v1/shaping/state` | Ce qui est **déjà** configuré sur les routeurs |
@@ -557,7 +569,9 @@ Documentation interactive : `/docs`.
 **Référentiel** — `pops`, `subscribers` (login PPPoE unique, plan, PoP, `last_seen`),
 `backhauls` (PoP, `uisp_device_id`, capacité nominale), `routers` (PoPs ajoutés depuis
 l'interface, mot de passe chiffré, diagnostic de la dernière connexion),
-`topology_nodes` / `topology_links` (graphe découvert), `subscriber_attachments`
+`topology_nodes` / `topology_links` (graphe découvert ; `pos_x`/`pos_y`, `parent_override`
+et `hidden` portent la disposition posée à la main dans l'éditeur d'arbre),
+`subscriber_attachments`
 (abonné → secteur radio), `shaping_policies` (débits imposés à la main),
 `enforcement_audit` (journal des commandes envoyées), `runtime_flags` (drapeaux
 basculables à chaud, dont l'autorisation d'écriture).
@@ -589,7 +603,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 363 tests, dont 339 sans aucune infrastructure
+make test        # 469 tests, dont 437 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et
