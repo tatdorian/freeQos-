@@ -15,6 +15,7 @@ from app.collectors.topology import (
     map_subscribers_to_sectors,
     neighbor_node_key,
     normalize_mac,
+    reconcile_topology,
 )
 
 VOISINS = [
@@ -267,3 +268,90 @@ def test_aucun_rattachement_produit_un_avertissement() -> None:
 def test_session_sans_caller_id_ignoree() -> None:
     snapshot = TopologySnapshot()
     assert map_subscribers_to_sectors(snapshot, [{"login": "x"}], {"AA": "y"}) == 0
+
+
+# ------------------------------------------ reconciliation des doublons
+def _noeud(key, name, **extra):
+    base = {
+        "key": key, "name": name, "kind": KIND_POP, "mac": None, "address": None,
+        "platform": None, "version": None, "uisp_device_id": None,
+        "pos_x": None, "pos_y": None, "parent_override": None, "hidden": False,
+        "fresh": True,
+    }
+    base.update(extra)
+    return base
+
+
+def test_reconciliation_fusionne_le_meme_routeur_vu_plusieurs_fois() -> None:
+    """Le PoP gere et son apparition comme voisin du coeur sont UN routeur.
+
+    Casses differentes (NAS-FRANCOPHONIE / NAS-francophonie), IP differentes
+    (management vs lien amont) : une seule case, ses adresses rassemblees."""
+    noeuds = [
+        _noeud("router:NAS-FRANCOPHONIE", "NAS-FRANCOPHONIE", address="100.100.101.82"),
+        _noeud("identity:NAS-francophonie", "NAS-francophonie", address="11.11.11.84"),
+        _noeud("mac:AA:BB:CC:00:00:01", "NAS-FRANCOPHONIE",
+               mac="AA:BB:CC:00:00:01", address="11.11.11.84"),
+        _noeud("router:NAS-FRNACOPHONIE", "NAS-FRNACOPHONIE", address="11.11.11.81"),
+    ]
+    liens = [
+        {"key": "core|e1|identity:NAS-francophonie", "source_key": "router:core",
+         "target_key": "identity:NAS-francophonie", "source_name": "CORE",
+         "target_name": "NAS-francophonie", "target_kind": KIND_POP,
+         "interface": "ether1", "rx_bps": 1.0, "tx_bps": 2.0},
+    ]
+    noeuds.append(_noeud("router:core", "CORE", kind="core"))
+
+    fusion_noeuds, fusion_liens = reconcile_topology(noeuds, liens)
+    par_cle = {n["key"]: n for n in fusion_noeuds}
+
+    # Les trois representations de NAS-FRANCOPHONIE ont fusionne ; le typo reste.
+    assert "router:NAS-FRANCOPHONIE" in par_cle
+    assert "identity:NAS-francophonie" not in par_cle
+    assert "mac:AA:BB:CC:00:00:01" not in par_cle
+    assert "router:NAS-FRNACOPHONIE" in par_cle
+    # La case canonique rassemble ses deux adresses, sans dedoubler.
+    canon = par_cle["router:NAS-FRANCOPHONIE"]
+    assert set(canon["addresses"]) == {"100.100.101.82", "11.11.11.84"}
+    assert canon["merged_count"] == 3
+    # Le lien du coeur pointe desormais sur la case canonique.
+    assert fusion_liens[0]["target_key"] == "router:NAS-FRANCOPHONIE"
+    # La cle du lien est conservee (la mesure de debit doit la retrouver).
+    assert fusion_liens[0]["key"] == "core|e1|identity:NAS-francophonie"
+
+
+def test_reconciliation_ne_fusionne_pas_sur_un_nom_generique() -> None:
+    """Deux equipements nommes 'MikroTik' par defaut ne sont pas le meme."""
+    noeuds = [
+        _noeud("mac:AA:00:00:00:00:06", "MikroTik", mac="AA:00:00:00:00:06"),
+        _noeud("mac:AA:00:00:00:00:08", "MikroTik", mac="AA:00:00:00:00:08"),
+    ]
+    fusion, _ = reconcile_topology(noeuds, [])
+    assert len(fusion) == 2
+
+
+def test_reconciliation_fusionne_sur_le_mac_meme_si_le_nom_manque() -> None:
+    noeuds = [
+        _noeud("router:pop", "PoP Nord", address="10.0.0.1"),
+        _noeud("mac:DC:9F:DB:11:22:33", "PoP Nord", mac="DC:9F:DB:11:22:33"),
+        _noeud("address:fe80", "MikroTik", mac="DC:9F:DB:11:22:33", address="fe80::1"),
+    ]
+    fusion, _ = reconcile_topology(noeuds, [])
+    # Le nom rassemble les deux premiers, le MAC y agrege le troisieme (generique).
+    assert len(fusion) == 1
+    assert fusion[0]["key"] == "router:pop"
+    assert fusion[0]["merged_count"] == 3
+
+
+def test_reconciliation_supprime_un_lien_devenu_interne() -> None:
+    noeuds = [
+        _noeud("router:pop", "PoP Nord"),
+        _noeud("mac:DC:9F:DB:11:22:33", "PoP Nord", mac="DC:9F:DB:11:22:33"),
+    ]
+    liens = [
+        {"key": "k", "source_key": "router:pop", "target_key": "mac:DC:9F:DB:11:22:33",
+         "source_name": "PoP Nord", "target_name": "PoP Nord", "target_kind": KIND_POP,
+         "interface": "e1"},
+    ]
+    _, fusion_liens = reconcile_topology(noeuds, liens)
+    assert fusion_liens == []

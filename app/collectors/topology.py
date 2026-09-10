@@ -49,6 +49,137 @@ LINK_ETHERNET = "ethernet"
 LINK_RADIO = "radio"
 LINK_PPPOE = "pppoe"
 
+# Identites trop generiques pour prouver que deux noeuds sont le meme equipement :
+# beaucoup de MikroTik gardent l'identite par defaut "MikroTik". On ne fusionne
+# jamais deux equipements sur un nom pareil -- seul un MAC commun le peut alors.
+GENERIC_NAMES = {"", "?", "mikrotik", "routeros", "routerboard"}
+
+
+def _merge_signatures(node: dict[str, Any]) -> set[str]:
+    """Signaux qui prouvent une IDENTITE d'equipement (pas une simple adjacence).
+
+    Le MAC est le plus sur. Le nom (identite RouterOS) l'est presque autant, une
+    fois insensibilise a la casse -- ``NAS-FRANCOPHONIE`` et ``NAS-francophonie``
+    sont le meme routeur -- SAUF s'il est generique. On NE fusionne PAS sur
+    l'adresse IP : un meme equipement porte plusieurs IP (management, lien amont),
+    et surtout deux equipements distincts peuvent partager une IP de segment.
+    C'est justement pour ca qu'on RASSEMBLE les adresses sur un seul noeud au lieu
+    de dedoubler.
+    """
+    signatures: set[str] = set()
+    mac = normalize_mac(node.get("mac"))
+    if mac:
+        signatures.add("mac:" + mac)
+    nom = str(node.get("name") or "").strip().lower()
+    if nom and nom not in GENERIC_NAMES:
+        signatures.add("name:" + nom)
+    return signatures
+
+
+def _pick_canonical(members: list[dict[str, Any]]) -> dict[str, Any]:
+    """Choisit la case qui represente le groupe.
+
+    On garde en priorite le noeud du routeur GERE (cle ``router:``) : il est
+    stable et porte deja la disposition sauvegardee. A defaut, celui qui a une
+    position ou un parent pose a la main, puis un MAC, puis le premier venu.
+    """
+
+    def rang(node: dict[str, Any]) -> tuple:
+        key = node.get("key", "")
+        return (
+            0 if key.startswith("router:") else 1,
+            0 if (node.get("pos_x") is not None or node.get("parent_override")) else 1,
+            0 if key.startswith("mac:") else 1,
+        )
+
+    return sorted(members, key=rang)[0]
+
+
+def reconcile_topology(
+    nodes: list[dict[str, Any]], links: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Fusionne les doublons : un meme equipement, une seule case.
+
+    La decouverte voit le meme routeur plusieurs fois -- comme PoP gere ET comme
+    voisin du coeur, via plusieurs protocoles, sous des casses differentes. Sans
+    reconciliation, l'arbre montre dix cases pour cinq routeurs. On regroupe donc
+    par identite (MAC ou nom non generique), on garde une case canonique, on y
+    RASSEMBLE toutes les adresses, et on recable les liens vers elle. Un lien
+    devenu interne a un equipement fusionne (source == cible) disparait.
+
+    Purement de lecture : ne touche ni la base ni les equipements. La cle des
+    liens est conservee telle quelle, pour que la mesure de debit continue de la
+    retrouver.
+    """
+    parent: dict[str, str] = {n["key"]: n["key"] for n in nodes}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    par_signature: dict[str, str] = {}
+    for node in nodes:
+        for signature in _merge_signatures(node):
+            if signature in par_signature:
+                union(node["key"], par_signature[signature])
+            else:
+                par_signature[signature] = node["key"]
+
+    groupes: dict[str, list[dict[str, Any]]] = {}
+    for node in nodes:
+        groupes.setdefault(find(node["key"]), []).append(node)
+
+    canonique_de: dict[str, str] = {}
+    fusionnes: list[dict[str, Any]] = []
+    for membres in groupes.values():
+        canon = dict(_pick_canonical(membres))
+        # Toutes les adresses de l'equipement, rassemblees plutot que dedoublees.
+        adresses = sorted({str(m.get("address")) for m in membres if m.get("address")})
+        for champ in ("mac", "platform", "version", "uisp_device_id"):
+            if not canon.get(champ):
+                for m in membres:
+                    if m.get(champ):
+                        canon[champ] = m[champ]
+                        break
+        # Un role connu prime sur "unknown", meme si le canonique est indetermine.
+        if canon.get("kind") in (None, KIND_UNKNOWN):
+            for m in membres:
+                if m.get("kind") and m["kind"] != KIND_UNKNOWN:
+                    canon["kind"] = m["kind"]
+                    break
+        canon["addresses"] = adresses
+        if adresses and not canon.get("address"):
+            canon["address"] = adresses[0]
+        canon["merged_count"] = len(membres)
+        canon["fresh"] = any(m.get("fresh") for m in membres)
+        for m in membres:
+            canonique_de[m["key"]] = canon["key"]
+        fusionnes.append(canon)
+
+    par_cle = {n["key"]: n for n in fusionnes}
+    liens_sortie: list[dict[str, Any]] = []
+    for lien in links:
+        source = canonique_de.get(lien["source_key"], lien["source_key"])
+        cible = canonique_de.get(lien["target_key"], lien["target_key"])
+        if source == cible:
+            continue  # lien interne a un equipement fusionne : rien a montrer
+        nouveau = {**lien, "source_key": source, "target_key": cible}
+        if source in par_cle:
+            nouveau["source_name"] = par_cle[source].get("name", nouveau.get("source_name"))
+        if cible in par_cle:
+            nouveau["target_name"] = par_cle[cible].get("name", nouveau.get("target_name"))
+            nouveau["target_kind"] = par_cle[cible].get("kind", nouveau.get("target_kind"))
+        liens_sortie.append(nouveau)
+
+    return fusionnes, liens_sortie
+
 
 def normalize_mac(value: Any) -> str | None:
     """Ramene une MAC a la forme canonique AA:BB:CC:DD:EE:FF.

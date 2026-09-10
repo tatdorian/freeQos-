@@ -1289,11 +1289,12 @@ async function toggleAntenna(id) {
 
 const KIND_LABEL = {
   gateway: 'Gateway', core: 'Coeur', pop: 'PoP', radio: 'Radio',
-  sector: 'Secteur', cpe: 'CPE', unknown: 'Inconnu',
+  sector: 'Secteur', cpe: 'CPE', unknown: 'Inconnu', subscriber: 'Abonnes',
 };
 const KIND_COLOR = {
   gateway: 'var(--accent)', core: 'var(--accent)', pop: 'var(--down)',
   radio: 'var(--up)', sector: 'var(--up)', cpe: 'var(--muted)', unknown: 'var(--faint)',
+  subscriber: '#a78bfa',
 };
 
 /* ------------------------------------------------- editeur d'arbre reseau */
@@ -1305,13 +1306,18 @@ const NODE_H = 48;
 /** Etat de l'editeur, conserve entre deux rafraichissements : disposition,
  *  case selectionnee, et si l'on montre les liens sans debit. */
 const topo = {
-  data: null, model: null, selected: null, dragging: false,
+  data: null, subs: [], model: null, selected: null, dragging: false,
   rateOnly: true,
 };
 
 async function loadTopology() {
-  const data = await api('/topology');
+  const [data, subs] = await Promise.all([
+    api('/topology'),
+    // Les abonnes, pour les rattacher a leur PoP dans l'arbre.
+    api('/subscribers/latest?limit=1000&order_by=login').catch(() => []),
+  ]);
   topo.data = data;
+  topo.subs = subs || [];
   document.getElementById('topo-count').textContent =
     data.counts.nodes + ' equipement(s), ' + data.counts.links + ' lien(s)';
   renderTopoCanvas();
@@ -1384,6 +1390,31 @@ function topoBuildModel(data) {
   });
   // 2) le reste par role.
   oriented.forEach((e) => attach(e.childKey, e.parentKey, e));
+
+  // Rattache les abonnes a leur PoP : un noeud agrege repliable par PoP plutot
+  // que 500 cases. Le debit de l'arete est la somme du trafic des abonnes.
+  const parPop = new Map();
+  (topo.subs || []).forEach((s) => {
+    if (!s.pop_name) return;
+    if (!parPop.has(s.pop_name)) parPop.set(s.pop_name, []);
+    parPop.get(s.pop_name).push(s);
+  });
+  if (parPop.size) {
+    [...nodes.values()].forEach((n) => {
+      const abonnes = parPop.get(n.name);
+      if (!abonnes || !abonnes.length) return;
+      const tx = abonnes.reduce((a, s) => a + (Number(s.tx_bps) || 0), 0);
+      const rx = abonnes.reduce((a, s) => a + (Number(s.rx_bps) || 0), 0);
+      const synth = {
+        key: 'abos:' + n.key, name: abonnes.length + ' abonne(s)', kind: 'subscriber',
+        synthetic: true, parentKey: n.key, children: [], edge: null,
+        synthRates: (tx || rx) ? { down: tx, up: rx, cap: 0 } : null,
+        count: abonnes.length, addresses: [], fresh: true,
+      };
+      nodes.set(synth.key, synth);
+      n.children.push(synth);
+    });
+  }
 
   const roots = [...nodes.values()].filter((n) => !n.parentKey);
   return { nodesByKey: nodes, roots };
@@ -1462,7 +1493,7 @@ function renderTopoCanvas() {
     if (!n.parentKey) return;
     const p = model.nodesByKey.get(n.parentKey);
     if (!p) return;
-    const rates = topoEdgeRates(n.edge);
+    const rates = n.synthRates || topoEdgeRates(n.edge);
     if (!rates && topo.rateOnly) return;   // "liens a debit seulement"
 
     const x1 = p.x + NODE_W;
@@ -1502,11 +1533,17 @@ function renderTopoCanvas() {
   model.nodesByKey.forEach((n) => {
     const color = KIND_COLOR[n.kind] || 'var(--faint)';
     let cls = 'topo-node';
+    if (n.synthetic) cls += ' synthetic';
     if (topo.selected === n.key) cls += ' selected';
     if (n.fresh === false) cls += ' stale';
-    const meta = n.address || n.platform || '';
+    // Rassemble toutes les adresses de l'equipement plutot que d'en montrer une.
+    const meta = n.synthetic
+      ? (n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : 'abonnes')
+      : (n.addresses && n.addresses.length ? n.addresses.join(', ')
+        : (n.address || n.platform || ''));
     parts.push(
-      '<g class="' + cls + '" data-node="' + esc(n.key) + '" transform="translate(' +
+      '<g class="' + cls + '" data-node="' + esc(n.key) +
+        (n.synthetic ? '" data-synthetic="1' : '') + '" transform="translate(' +
         n.x + ',' + n.y + ')">' +
         '<rect class="box" width="' + NODE_W + '" height="' + NODE_H + '" rx="8"></rect>' +
         '<rect class="accent" x="0" y="0" width="5" height="' + NODE_H +
@@ -1539,7 +1576,9 @@ function bindTopoDrag(svg, model) {
       ev.preventDefault();
       const key = g.dataset.node;
       const node = model.nodesByKey.get(key);
-      if (!node) return;
+      // Le noeud "abonnes" est un agregat synthetique : ni deplacable ni
+      // rattachable, il suit son PoP.
+      if (!node || node.synthetic) return;
 
       const rect = svg.getBoundingClientRect();
       const start = { x: ev.clientX, y: ev.clientY };
@@ -1653,7 +1692,12 @@ function renderTopoPanel() {
   host.innerHTML =
     '<h4>' + esc(node.name) + '</h4>' +
     '<div class="kv"><span>Role</span><span>' + esc(KIND_LABEL[node.kind] || '?') + '</span></div>' +
-    (node.address ? '<div class="kv"><span>Adresse</span><span>' + esc(node.address) + '</span></div>' : '') +
+    ((node.addresses && node.addresses.length)
+      ? '<div class="kv"><span>Adresse(s)</span><span>' + esc(node.addresses.join(', ')) + '</span></div>'
+      : (node.address ? '<div class="kv"><span>Adresse</span><span>' + esc(node.address) + '</span></div>' : '')) +
+    (node.merged_count > 1
+      ? '<div class="kv"><span>Fusion</span><span>' + esc(node.merged_count) +
+        ' vues reconciliees</span></div>' : '') +
     (node.platform ? '<div class="kv"><span>Plateforme</span><span>' + esc(topoTrim(node.platform, 18)) + '</span></div>' : '') +
     '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'racine') +
       (node.parent_override ? ' *' : '') + '</span></div>' +
