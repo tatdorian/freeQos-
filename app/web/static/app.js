@@ -291,7 +291,7 @@ function hideTooltip() { if (tooltipEl) tooltipEl.style.display = 'none'; }
 /* ------------------------------------------------------- tableau de bord */
 
 const state = {
-  view: 'dashboard', rangeMinutes: 60, subSearch: '', subPop: '',
+  view: 'dashboard', rangeMinutes: 60, execRange: 60, subSearch: '', subPop: '',
   routers: [], lastPoints: [], lastTree: [],
   // Lien suivi dans le tiroir, et derniere mesure instantanee affichee.
   link: null, linkLive: null,
@@ -399,6 +399,311 @@ function renderBackhaulCards(tree) {
         '<span>' + esc(clock(b.ts)) + '</span>' +
       '</div></div>';
   }).join('');
+}
+
+/* -------------------------------------------------------------- executif */
+
+/** QoE 0..100 derivee du RTT, meme formule que le backend (proxy latence). */
+function qoeScore(ms) {
+  if (ms === null || ms === undefined) return null;
+  return Math.max(0, Math.min(100, Math.round(100 - Math.max(0, ms - 10) * 0.6)));
+}
+function qoeSev(score) {
+  if (score === null) return 'none';
+  return score >= 80 ? 'ok' : score >= 50 ? 'warn' : 'crit';
+}
+
+async function loadExec() {
+  const minutes = state.execRange || 60;
+  const buckets = minutes <= 15 ? 15 : minutes <= 60 ? 30 : 36;
+  const [heat, subs, bloat] = await Promise.all([
+    api('/heatmap?minutes=' + minutes + '&buckets=' + buckets),
+    api('/subscribers/latest?limit=1000&order_by=login'),
+    api('/bufferbloat?minutes=' + minutes).catch(() => null),
+  ]);
+  const bloatById = {};
+  if (bloat) (bloat.subscribers || []).forEach((b) => { bloatById[b.subscriber_id] = b; });
+
+  renderHeatmap(document.getElementById('exec-heatmap'), heat);
+  renderExecSankey(document.getElementById('exec-sankey'), subs);
+  renderNodeTable(document.getElementById('exec-nodes'), subs, bloatById);
+
+  const pops = new Set(subs.map((s) => s.pop_name).filter(Boolean));
+  document.getElementById('exec-count').textContent =
+    pops.size + ' noeud(s), ' + subs.length + ' circuit(s)';
+}
+
+function renderHeatmap(host, heat) {
+  host.innerHTML = heat.rows.map((row) => {
+    if (row.unavailable) {
+      return '<div class="heat-row"><span class="heat-label">' + esc(row.label) + '</span>' +
+        '<span class="heat-unavail" title="' + esc(row.reason || '') + '">n/d &mdash; ' +
+        esc(row.reason || 'indisponible hors-bande') + '</span></div>';
+    }
+    const last = [...row.cells].reverse().find((c) => c.value !== null && c.value !== undefined);
+    const cells = row.cells.map((c) => {
+      const t = c.value !== null && c.value !== undefined
+        ? new Date(c.ts).toLocaleTimeString('fr-FR', { hour12: false }) + ' : ' +
+          c.value + (row.unit ? ' ' + row.unit : '')
+        : 'pas de mesure';
+      return '<span class="heat-cell ' + esc(c.severity) + '" title="' + esc(t) + '"></span>';
+    }).join('');
+    const now = last ? (last.value + (row.unit ? ' ' + row.unit : '')) : '-';
+    return '<div class="heat-row">' +
+      '<span class="heat-label">' + esc(row.label) +
+        (row.unit ? ' <span class="u">(' + esc(row.unit) + ')</span>' : '') + '</span>' +
+      '<span class="heat-cells">' + cells + '</span>' +
+      '<span class="heat-now">' + esc(now) + '</span></div>';
+  }).join('');
+}
+
+/** Cellule "valeur + mini-barre coloree", facon LibreQoS. */
+function nodeCellBar(text, pctValue, forcedSev) {
+  const p = pctValue === null ? null : Math.max(0, Math.min(100, pctValue));
+  const sev = forcedSev || severity(p);
+  const bar = p === null ? '' :
+    '<span class="bar"><i class="' + sev + '" style="width:' + p.toFixed(0) + '%"></i></span>';
+  return '<span class="cellbar">' + bar + '<span class="v">' + esc(text) + '</span></span>';
+}
+
+const NA_CELL = '<span class="na" title="Compteur de qdisc : hors-bande, indisponible">n/d</span>';
+
+/** Agrege les abonnes par PoP en lignes de "files", facon LibreQoS. */
+function aggregateNodes(subs, bloatById) {
+  const parPop = new Map();
+  subs.forEach((s) => {
+    const nom = s.pop_name || '(sans PoP)';
+    if (!parPop.has(nom)) {
+      parPop.set(nom, { name: nom, circuits: 0, tx: 0, rx: 0, effDown: 0, effUp: 0,
+        confDown: 0, confUp: 0, rttMax: null, subs: [] });
+    }
+    const n = parPop.get(nom);
+    n.circuits += 1;
+    n.tx += Number(s.tx_bps) || 0;
+    n.rx += Number(s.rx_bps) || 0;
+    n.effDown += (Number(s.effective_down_mbps) || 0) * 1e6;
+    n.effUp += (Number(s.effective_up_mbps) || 0) * 1e6;
+    n.confDown += (Number(s.plan_down_mbps) || 0) * 1e6;
+    n.confUp += (Number(s.plan_up_mbps) || 0) * 1e6;
+    if (s.rtt_ms !== null && s.rtt_ms !== undefined) {
+      n.rttMax = n.rttMax === null ? s.rtt_ms : Math.max(n.rttMax, s.rtt_ms);
+    }
+    n.subs.push(s);
+  });
+  return [...parPop.values()].sort((a, b) => (b.tx + b.rx) - (a.tx + a.rx));
+}
+
+function renderNodeTable(host, subs, bloatById) {
+  const nodes = aggregateNodes(subs, bloatById);
+  if (!nodes.length) {
+    host.innerHTML = '<div class="empty">Aucun circuit actif.</div>';
+    return;
+  }
+  const head =
+    '<table><thead><tr><th></th><th>Noeud</th><th class="num">Circuits</th>' +
+    '<th class="num">Effective</th><th class="num">Configure</th>' +
+    '<th class="num">Download</th><th class="num">Upload</th>' +
+    '<th class="num">RTT</th><th class="num">QoE</th>' +
+    '<th class="num" title="Retransmissions TCP (hors-bande)">Retr</th>' +
+    '<th class="num" title="Marquages qdisc (hors-bande)">Marks</th>' +
+    '<th class="num" title="Rejets qdisc (hors-bande)">Drops</th></tr></thead><tbody>';
+
+  const body = nodes.map((n, i) => {
+    const qoe = qoeScore(n.rttMax);
+    const nodeRow =
+      '<tr class="node-row" data-node-idx="' + i + '">' +
+      '<td><span class="expand" data-expand="' + i + '">+</span></td>' +
+      '<td><strong>' + esc(n.name) + '</strong></td>' +
+      '<td class="num">' + n.circuits + '</td>' +
+      '<td class="num">' + esc(mbps(n.effDown / 1e6) + ' / ' + mbps(n.effUp / 1e6)) + '</td>' +
+      '<td class="num na">' + esc(mbps(n.confDown / 1e6) + ' / ' + mbps(n.confUp / 1e6)) + '</td>' +
+      '<td class="num">' + nodeCellBar(bpsText(n.tx), pct(n.tx, n.effDown), null) + '</td>' +
+      '<td class="num">' + nodeCellBar(bpsText(n.rx), pct(n.rx, n.effUp), null) + '</td>' +
+      '<td class="num">' + rtt(n.rttMax) + '</td>' +
+      '<td class="num">' + (qoe === null ? NA_CELL
+        : nodeCellBar(String(qoe), qoe, qoeSev(qoe))) + '</td>' +
+      '<td class="num">' + NA_CELL + '</td><td class="num">' + NA_CELL +
+      '</td><td class="num">' + NA_CELL + '</td></tr>';
+
+    const subRows = n.subs.map((s) => {
+      const b = bloatById[s.subscriber_id];
+      const eff = (Number(s.effective_down_mbps) || 0) * 1e6;
+      return '<tr class="sub-row" data-parent="' + i + '" hidden>' +
+        '<td></td><td class="login">' + esc(s.pppoe_login) + '</td>' +
+        '<td class="num"></td>' +
+        '<td class="num">' + esc(mbps(s.effective_down_mbps || 0)) + '</td>' +
+        '<td class="num na">' + esc(mbps(s.plan_down_mbps || 0)) + '</td>' +
+        '<td class="num">' + nodeCellBar(bpsText(s.tx_bps), pct(s.tx_bps, eff), null) + '</td>' +
+        '<td class="num">' + esc(bpsText(s.rx_bps)) + '</td>' +
+        '<td class="num">' + rtt(s.rtt_ms) + '</td>' +
+        '<td class="num">' + (b ? '<span class="badge ' + esc(b.severity) + '">' +
+          esc(b.grade) + '</span>' : NA_CELL) + '</td>' +
+        '<td class="num">' + NA_CELL + '</td><td class="num">' + NA_CELL +
+        '</td><td class="num">' + NA_CELL + '</td></tr>';
+    }).join('');
+    return nodeRow + subRows;
+  }).join('');
+
+  host.innerHTML = head + body + '</tbody></table>';
+
+  host.querySelectorAll('[data-expand]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const idx = el.dataset.expand;
+      const open = el.textContent === '+';
+      el.textContent = open ? '−' : '+';
+      host.querySelectorAll('tr.sub-row[data-parent="' + idx + '"]').forEach((r) => {
+        r.hidden = !open;
+      });
+    });
+  });
+  host.querySelectorAll('tr.node-row').forEach((tr) => {
+    tr.addEventListener('click', (e) => {
+      if (e.target.closest('[data-expand]')) return;
+      openNodeDrawer(nodes[Number(tr.dataset.nodeIdx)]);
+    });
+  });
+}
+
+/* --------------------------------------------- jauge + live queue + details */
+
+/** Arc SVG de startAngle a endAngle (degres, 0 = droite, sens trigo). */
+function arcPath(cx, cy, r, startAngle, endAngle) {
+  const rad = (a) => (a * Math.PI) / 180;
+  const x1 = cx + r * Math.cos(rad(startAngle));
+  const y1 = cy - r * Math.sin(rad(startAngle));
+  const x2 = cx + r * Math.cos(rad(endAngle));
+  const y2 = cy - r * Math.sin(rad(endAngle));
+  const large = Math.abs(endAngle - startAngle) > 180 ? 1 : 0;
+  const sweep = endAngle < startAngle ? 1 : 0;
+  return 'M ' + x1.toFixed(1) + ' ' + y1.toFixed(1) + ' A ' + r + ' ' + r + ' 0 ' +
+    large + ' ' + sweep + ' ' + x2.toFixed(1) + ' ' + y2.toFixed(1);
+}
+
+/** Compteur de vitesse : demi-cercle d'utilisation + une barre QoE. */
+function gaugeSvg(downBps, upBps, maxBps, qoe) {
+  const cx = 92;
+  const cy = 96;
+  const r = 72;
+  const util = maxBps > 0 ? Math.min(1, Math.max(downBps, upBps) / maxBps) : 0;
+  const sev = severity(util * 100);
+  const col = sev === 'crit' ? 'var(--crit)' : sev === 'warn' ? 'var(--warn)' : 'var(--ok)';
+  const end = 180 - util * 180;
+  const qCol = qoe === null ? 'var(--faint)'
+    : qoeSev(qoe) === 'crit' ? 'var(--crit)' : qoeSev(qoe) === 'warn' ? 'var(--warn)' : 'var(--ok)';
+  const qh = qoe === null ? 0 : (qoe / 100) * 120;
+
+  return '<div class="gauge-wrap"><svg class="gauge" width="200" height="120" viewBox="0 0 200 120">' +
+    '<path class="track" d="' + arcPath(cx, cy, r, 180, 0) + '" fill="none" stroke-width="12"></path>' +
+    '<path d="' + arcPath(cx, cy, r, 180, end) + '" fill="none" stroke="' + col +
+      '" stroke-width="12" stroke-linecap="round"></path>' +
+    '<text x="' + cx + '" y="80" text-anchor="middle" font-size="20" font-weight="700">' +
+      (util * 100).toFixed(0) + '%</text>' +
+    '<text class="lbl" x="' + cx + '" y="96" text-anchor="middle">utilisation</text>' +
+    '<text x="34" y="114" text-anchor="middle" font-size="10" fill="var(--down)">&darr;' +
+      esc(bpsShort(downBps)) + '</text>' +
+    '<text x="150" y="114" text-anchor="middle" font-size="10" fill="var(--up)">&uarr;' +
+      esc(bpsShort(upBps)) + '</text>' +
+    '</svg>' +
+    '<svg width="46" height="128" viewBox="0 0 46 128"><text class="lbl" x="23" y="10" ' +
+      'text-anchor="middle">QoE</text>' +
+    '<rect x="14" y="14" width="18" height="120" rx="3" fill="var(--surface-2)"></rect>' +
+    '<rect x="14" y="' + (14 + 120 - qh) + '" width="18" height="' + qh + '" rx="3" fill="' +
+      qCol + '"></rect>' +
+    '<text x="23" y="' + (10 + 120) + '" text-anchor="middle" font-size="11" font-weight="700" ' +
+      'fill="' + qCol + '">' + (qoe === null ? '-' : qoe) + '</text></svg></div>';
+}
+
+/** Tiroir d'un noeud : jauge, etat de file live, details et override. */
+function openNodeDrawer(node) {
+  if (!node) return;
+  const qoe = qoeScore(node.rttMax);
+  const root = document.getElementById('drawer-root');
+  root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
+    '<div class="drawer-head"><h3>' + esc(node.name) + '</h3>' +
+    '<button class="sm" id="drawer-close">Fermer</button></div>' +
+
+    '<h2>Node Snapshot</h2><div class="card">' + gaugeSvg(node.tx, node.rx, node.effDown, qoe) + '</div>' +
+
+    '<h2>Live Queue State</h2>' +
+    '<div class="table-wrap"><table><thead><tr><th></th><th class="num">Download</th>' +
+    '<th class="num">Upload</th></tr></thead><tbody>' +
+      '<tr><td>Effective</td><td class="num">' + esc(mbps(node.effDown / 1e6)) +
+        '</td><td class="num">' + esc(mbps(node.effUp / 1e6)) + '</td></tr>' +
+      '<tr><td>Configure</td><td class="num na">' + esc(mbps(node.confDown / 1e6)) +
+        '</td><td class="num na">' + esc(mbps(node.confUp / 1e6)) + '</td></tr>' +
+      '<tr><td>Debit</td><td class="num" style="color:var(--down)">' + esc(bpsText(node.tx)) +
+        '</td><td class="num" style="color:var(--up)">' + esc(bpsText(node.rx)) + '</td></tr>' +
+      '<tr><td>RTT (pire)</td><td class="num" colspan="2">' + rtt(node.rttMax) + '</td></tr>' +
+      '<tr><td>QoE</td><td class="num" colspan="2">' + (qoe === null ? NA_CELL : qoe) + '</td></tr>' +
+      '<tr><td>Retransmissions</td><td class="num" colspan="2">' + NA_CELL + '</td></tr>' +
+    '</tbody></table></div>' +
+
+    '<h2>Node Details</h2>' +
+    '<div class="notice"><b>' + node.circuits + ' circuit(s)</b> sur ce noeud.' +
+      '<span class="hint">Effective = somme des limites appliquees, Configure = somme des ' +
+      'plans. Retransmissions / marks / drops sont hors de portee du hors-bande.</span></div>' +
+    '<p class="empty" style="text-align:left;padding:.4rem 0 0">Pour ajuster un debit, ouvrez ' +
+    'un abonne (onglet Abonnes) ou un lien (onglet Topologie) : l\'edition d\'override y est ' +
+    'directe, avec Save / Clear.</p>' +
+    '</div>';
+  root.querySelector('.drawer-backdrop').addEventListener('click', closeDrawer);
+  document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+}
+
+/* ------------------------------------------------------- flux (sankey) */
+
+/** Sankey maison : une colonne "reseau" -> une colonne par PoP, largeur des
+ *  bandes proportionnelle au debit descendant. Sans dependance, comme le reste. */
+function renderExecSankey(host, subs) {
+  const nodes = aggregateNodes(subs, {});
+  const total = nodes.reduce((a, n) => a + n.tx, 0);
+  if (!total) {
+    host.innerHTML = '<div class="empty">Aucun trafic descendant a representer.</div>';
+    return;
+  }
+  const W = Math.max(360, host.clientWidth - 4);
+  const H = Math.max(160, Math.min(520, nodes.length * 46 + 20));
+  const M = 12;
+  const srcX = M;
+  const srcW = 16;
+  const dstX = W - 190;
+  const dstW = 16;
+  const scale = (H - 2 * M) / total;
+
+  let y = M;
+  const bands = [];
+  const parts = ['<div class="sankey"><svg width="' + W + '" height="' + H +
+    '" viewBox="0 0 ' + W + ' ' + H + '">'];
+  // Noeud source (tout le reseau).
+  parts.push('<rect class="node" x="' + srcX + '" y="' + M + '" width="' + srcW +
+    '" height="' + (H - 2 * M) + '" fill="var(--accent)"></rect>');
+  parts.push('<text class="nlabel" x="' + (srcX + srcW + 4) + '" y="' + (M + 12) +
+    '" transform="rotate(90 ' + (srcX + srcW + 4) + ' ' + (M + 12) + ')">Reseau</text>');
+
+  let sy = M;
+  nodes.forEach((n) => {
+    const h = Math.max(2, n.tx * scale);
+    const col = severity(pct(n.tx, n.effDown || total));
+    const colVar = col === 'crit' ? 'var(--crit)' : col === 'warn' ? 'var(--warn)' : 'var(--down)';
+    const y0 = sy;
+    const y1 = y;
+    const d = 'M ' + (srcX + srcW) + ' ' + y0 + ' C ' + ((srcX + srcW + dstX) / 2) + ' ' + y0 +
+      ', ' + ((srcX + srcW + dstX) / 2) + ' ' + y1 + ', ' + dstX + ' ' + y1 +
+      ' L ' + dstX + ' ' + (y1 + h) + ' C ' + ((srcX + srcW + dstX) / 2) + ' ' + (y1 + h) +
+      ', ' + ((srcX + srcW + dstX) / 2) + ' ' + (y0 + h) + ', ' + (srcX + srcW) + ' ' + (y0 + h) + ' Z';
+    parts.push('<path class="flow" d="' + d + '" fill="' + colVar + '"><title>' + esc(n.name) +
+      ' : ' + esc(bpsText(n.tx)) + '</title></path>');
+    parts.push('<rect class="node" x="' + dstX + '" y="' + y1 + '" width="' + dstW +
+      '" height="' + h + '" fill="' + colVar + '"></rect>');
+    parts.push('<text class="nlabel" x="' + (dstX + dstW + 6) + '" y="' + (y1 + Math.min(h, 12)) +
+      '">' + esc(topoTrim(n.name, 22)) + ' &middot; ' + esc(bpsText(n.tx)) + '</text>');
+    sy += h;
+    y += h;
+    bands.push(n);
+  });
+  parts.push('</svg></div>');
+  host.innerHTML = parts.join('');
 }
 
 /* ---------------------------------------------------------- arbre reseau */
@@ -2321,6 +2626,7 @@ async function refreshHealth() {
 
 const LOADERS = {
   dashboard: loadDashboard,
+  exec: loadExec,
   network: loadNetwork,
   subscribers: loadSubscribers,
   topology: loadTopology,
@@ -2395,6 +2701,10 @@ document.getElementById('topo-rate-only').addEventListener('change', (e) => {
 document.getElementById('btn-topo-reset').addEventListener('click', resetTopoLayout);
 document.getElementById('btn-build-tree').addEventListener('click', () => buildTreeFromConfig(false));
 document.getElementById('btn-remote-refresh').addEventListener('click', loadRemote);
+document.getElementById('exec-range').addEventListener('change', (e) => {
+  state.execRange = Number(e.target.value);
+  loadExec();
+});
 document.getElementById('router-form').addEventListener('submit', saveRouter);
 document.getElementById('a-btn-test').addEventListener('click', testAntenna);
 document.getElementById('antenna-form').addEventListener('submit', saveAntenna);

@@ -248,6 +248,48 @@ button.sm { padding: .25rem .55rem; font-size: .74rem; }
 }
 
 
+/* --------------------------------------------------------- vue executive */
+/* Heatmap : une ligne par metrique, une cellule par pas de temps. */
+.heat-row { display: flex; align-items: center; gap: .8rem; padding: .28rem 0; }
+.heat-row + .heat-row { border-top: 1px solid var(--border); }
+.heat-label { flex: 0 0 130px; font-size: .78rem; color: var(--muted); }
+.heat-label .u { color: var(--faint); font-size: .72rem; }
+.heat-cells { display: flex; gap: 2px; flex: 1; min-width: 0; }
+.heat-cell { flex: 1; height: 20px; border-radius: 3px; background: var(--surface-2); min-width: 4px; }
+.heat-cell.ok { background: var(--ok); }
+.heat-cell.warn { background: var(--warn); }
+.heat-cell.crit { background: var(--crit); }
+.heat-cell.none { background: #22272e; }
+.heat-now { flex: 0 0 auto; font-size: .72rem; color: var(--faint); font-family: var(--mono); }
+.heat-unavail { flex: 1; font-size: .74rem; color: var(--faint); font-style: italic; }
+
+/* Cellule de tableau avec mini-barre coloree, facon LibreQoS. */
+.cellbar { display: inline-flex; align-items: center; gap: .4rem; justify-content: flex-end; }
+.cellbar .bar { width: 42px; height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; flex: 0 0 42px; }
+.cellbar .bar > i { display: block; height: 100%; border-radius: 3px; }
+.cellbar .bar > i.ok { background: var(--ok); }
+.cellbar .bar > i.warn { background: var(--warn); }
+.cellbar .bar > i.crit { background: var(--crit); }
+.cellbar .v { font-family: var(--mono); font-size: .76rem; }
+.na { color: var(--faint); }
+tr.node-row { cursor: pointer; }
+tr.node-row:hover { background: var(--surface-2); }
+tr.sub-row td { background: rgba(88,166,255,.04); font-size: .78rem; }
+.expand { cursor: pointer; user-select: none; color: var(--muted); width: 1rem; display: inline-block; }
+
+/* Jauge (compteur de vitesse) du tiroir de noeud. */
+.gauge-wrap { display: flex; gap: 1rem; align-items: center; justify-content: center; }
+.gauge text { fill: var(--text); font-family: var(--mono); }
+.gauge .track { stroke: var(--surface-2); }
+.gauge .lbl { fill: var(--faint); font-size: 9px; }
+
+/* Sankey : bandes de flux dessinees main. */
+.sankey svg { width: 100%; display: block; }
+.sankey .node rect { rx: 2; }
+.sankey .flow { fill-opacity: .38; }
+.sankey .flow:hover { fill-opacity: .6; }
+.sankey .nlabel { fill: var(--text); font-size: 10px; }
+
 /* ------------------------------------------------------------------ boost */
 .boost-pill {
   display: inline-flex; align-items: center; gap: .3rem;
