@@ -1051,6 +1051,75 @@ async function toggleRouter(id) {
 }
 
 
+/* ------------------------------------------------- connexion a distance */
+
+const REMOTE_STATUS = {
+  ok: '<span class="badge ok">joignable</span>',
+  error: '<span class="badge crit">en echec</span>',
+  disabled: '<span class="badge">desactive</span>',
+  unknown: '<span class="badge">jamais teste</span>',
+};
+
+/** Page facon LibreQoS : la joignabilite de chaque integration distante en un
+ *  coup d'oeil (RouterOS, airOS, UISP, RADIUS), plus le detail par equipement. */
+async function loadRemote() {
+  const data = await api('/remote/status');
+  const integrations = data.integrations || [];
+
+  const totalOk = integrations.reduce((a, i) => a + (i.summary.ok || 0), 0);
+  const totalDev = integrations.reduce((a, i) => a + (i.summary.total || 0), 0);
+  document.getElementById('remote-count').textContent =
+    totalDev + ' equipement(s) distant(s), ' + totalOk + ' joignable(s)';
+
+  document.getElementById('remote-integrations').innerHTML = integrations.map((i) => {
+    const s = i.summary || { total: 0, ok: 0, error: 0 };
+    const etat = !i.configured
+      ? '<span class="badge">non configure</span>'
+      : s.error
+        ? '<span class="badge crit">' + s.error + ' en echec</span>'
+        : s.total
+          ? '<span class="badge ok">' + s.ok + '/' + s.total + ' joignable(s)</span>'
+          : '<span class="badge ok">actif</span>';
+    return '<div class="card">' +
+      '<div class="node-head" style="margin-bottom:.5rem">' +
+        '<div class="node-title">' + esc(i.label) + '</div>' + etat + '</div>' +
+      '<div class="child" style="border:0;padding:.2rem 0;font-size:.76rem;color:var(--muted)">' +
+        esc(i.transport) + '</div>' +
+      (i.endpoint ? '<div class="child" style="border:0;padding:.2rem 0;font-size:.76rem">' +
+        '<span class="name" style="color:var(--faint)">Endpoint</span>' +
+        '<span class="host">' + esc(i.endpoint) + '</span></div>' : '') +
+      (i.provider ? '<div class="child" style="border:0;padding:.2rem 0;font-size:.76rem">' +
+        '<span class="name" style="color:var(--faint)">Fournisseur</span>' +
+        '<span class="host">' + esc(i.provider) + '</span></div>' : '') +
+      (i.note ? '<div class="child" style="border:0;padding:.2rem 0;font-size:.74rem;color:var(--faint)">' +
+        esc(i.note) + '</div>' : '') +
+      '</div>';
+  }).join('');
+
+  const devices = [];
+  integrations.forEach((i) => (i.devices || []).forEach((d) => devices.push({ ...d, kind: i.label })));
+  const host = document.getElementById('remote-devices');
+  if (!devices.length) {
+    host.innerHTML = '<div class="empty">Aucun equipement distant enregistre. ' +
+      'Ajoutez-en dans l\'onglet Equipements.</div>';
+    return;
+  }
+  host.innerHTML =
+    '<table><thead><tr><th>Equipement</th><th>Integration</th><th>Adresse</th>' +
+    '<th>Etat</th><th>Detail</th><th class="num">Derniere connexion OK</th>' +
+    '</tr></thead><tbody>' +
+    devices.map((d) => '<tr>' +
+      '<td><strong>' + esc(d.name) + '</strong></td>' +
+      '<td>' + esc(d.kind) + (d.source === 'file'
+        ? ' <span class="badge file">fichier</span>' : '') + '</td>' +
+      '<td class="login">' + esc(d.host) + '</td>' +
+      '<td>' + (REMOTE_STATUS[d.status] || esc(d.status)) + '</td>' +
+      '<td style="font-size:.76rem;color:var(--muted)">' + esc(d.detail || '') + '</td>' +
+      '<td class="num" style="color:var(--faint)">' +
+        (d.last_ok_at ? esc(clock(d.last_ok_at)) : '-') + '</td>' +
+      '</tr>').join('') + '</tbody></table>';
+}
+
 /* ---------------------------------------------------- antennes Ubiquiti */
 
 async function loadAntennas() {
@@ -2387,6 +2456,7 @@ const LOADERS = {
   topology: loadTopology,
   shaping: loadShaping,
   pops: loadRouters,
+  remote: loadRemote,
 };
 
 async function show(view) {
@@ -2463,6 +2533,7 @@ document.getElementById('topo-rate-only').addEventListener('change', (e) => {
 });
 document.getElementById('btn-topo-reset').addEventListener('click', resetTopoLayout);
 document.getElementById('btn-build-tree').addEventListener('click', () => buildTreeFromConfig(false));
+document.getElementById('btn-remote-refresh').addEventListener('click', loadRemote);
 document.getElementById('router-form').addEventListener('submit', saveRouter);
 document.getElementById('a-btn-test').addEventListener('click', testAntenna);
 document.getElementById('antenna-form').addEventListener('submit', saveAntenna);

@@ -17,6 +17,7 @@
       <a href="#/topology" data-view="topology">Topologie</a>
       <a href="#/shaping"  data-view="shaping">Shaping</a>
       <a href="#/pops"      data-view="pops">Equipements</a>
+      <a href="#/remote"    data-view="remote">Connexion a distance</a>
     </nav>
     <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
   </header>
@@ -307,6 +308,24 @@
       <div class="table-wrap" id="pops-table"></div>
       <h2 style="text-transform:none;font-size:.75rem">Routeurs interroges</h2>
       <div class="table-wrap" id="routers-table"></div>
+    </section>
+
+    <!-- ---------------------------------------------- connexion a distance -->
+    <section id="view-remote">
+      <div class="toolbar">
+        <button id="btn-remote-refresh">Rafraichir</button>
+        <span class="spacer"></span>
+        <span class="mode" id="remote-count"></span>
+      </div>
+      <p class="empty" style="text-align:left;padding:0 0 .8rem">
+        Etat des connexions distantes, par famille d'API. Tout est en
+        <b>lecture</b> : cette page n'ouvre aucune session d'ecriture, elle donne
+        la joignabilite de chaque integration. Ajouter demain une antenne d'un
+        autre fabricant ajoutera une famille ici.
+      </p>
+      <div id="remote-integrations" class="grid cols-2"></div>
+      <h2>Equipements distants</h2>
+      <div class="table-wrap" id="remote-devices"></div>
     </section>
   </main>
 
