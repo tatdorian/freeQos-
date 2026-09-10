@@ -905,6 +905,39 @@ async function loadRouters() {
     b.addEventListener('click', () => toggleRouter(b.dataset.toggle)));
 }
 
+/** Analyse la config des equipements et (re)construit l'arbre reseau.
+ *  C'est l'action centrale de l'onglet : ajouter un routeur ou une antenne,
+ *  puis lire sa conf via l'API pour en deduire l'arbre — sans le dessiner a la
+ *  main. Chaque ajout la relance automatiquement. */
+async function buildTreeFromConfig(silencieux) {
+  const notice = document.getElementById('build-notice');
+  const bouton = document.getElementById('btn-build-tree');
+  if (bouton) bouton.disabled = true;
+  if (!silencieux && notice) {
+    notice.innerHTML = '<div class="notice">Analyse de la configuration sur chaque equipement ' +
+      '(/ip/neighbor, /interface, capacite radio)...</div>';
+  }
+  try {
+    const r = await api('/topology/discover', { method: 'POST' });
+    const compte = document.getElementById('build-count');
+    if (compte) compte.textContent = r.nodes + ' equipement(s), ' + r.links + ' lien(s)';
+    if (notice) {
+      notice.innerHTML = '<div class="notice ok"><strong>Arbre construit.</strong> ' +
+        r.nodes + ' equipement(s) et ' + r.links + ' lien(s) deduits de la configuration.' +
+        (r.warnings && r.warnings.length
+          ? '<span class="hint">' + r.warnings.map(esc).join('<br>') + '</span>' : '') +
+        '<span class="hint">Ouvrez l\'onglet Topologie pour voir et reorganiser ' +
+        'l\'arbre au glisser-deposer.</span></div>';
+    }
+    return r;
+  } catch (err) {
+    if (notice) notice.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return null;
+  } finally {
+    if (bouton) bouton.disabled = false;
+  }
+}
+
 function formPayload() {
   const form = document.getElementById('router-form');
   const data = new FormData(form);
@@ -963,12 +996,16 @@ async function saveRouter(event) {
   try {
     const created = await api('/pops/routers', { method: 'POST', body: JSON.stringify(formPayload()) });
     showFormResult('<div class="notice ok"><strong>' + esc(created.name) +
-      ' enregistre.</strong><span class="hint">Il est interroge des le prochain cycle, ' +
-      'sans redemarrage.</span></div>');
+      ' enregistre.</strong><span class="hint">Sa configuration est analysee tout de ' +
+      'suite pour construire l\'arbre ; il est ensuite interroge a chaque cycle, sans ' +
+      'redemarrage.</span></div>');
     document.getElementById('router-form').reset();
     document.getElementById('f-username').value = 'qos-ro';
     document.getElementById('f-port').value = '8728';
     await loadRouters();
+    // Ajouter un routeur, c'est vouloir le voir dans l'arbre : on analyse sa
+    // conf dans la foulee plutot que d'attendre un clic ou le prochain cycle.
+    await buildTreeFromConfig(false);
   } catch (err) {
     showFormResult('<div class="notice err">' + esc(err.message) + '</div>');
   } finally {
@@ -1129,12 +1166,13 @@ async function saveAntenna(event) {
   try {
     const created = await api('/pops/antennas', { method: 'POST', body: JSON.stringify(antennaPayload()) });
     showAntennaResult('<div class="notice ok"><strong>' + esc(created.name) +
-      ' enregistree.</strong><span class="hint">Sa capacite est lue des le prochain ' +
-      'cycle, sans redemarrage.</span></div>');
+      ' enregistree.</strong><span class="hint">Sa capacite est lue et rattachee a ' +
+      'l\'arbre tout de suite, puis a chaque cycle, sans redemarrage.</span></div>');
     document.getElementById('antenna-form').reset();
     document.getElementById('a-username').value = 'ubnt';
     document.getElementById('a-timeout').value = '10';
     await loadAntennas();
+    await buildTreeFromConfig(false);
   } catch (err) {
     showAntennaResult('<div class="notice err">' + esc(err.message) + '</div>');
   } finally {
@@ -2424,6 +2462,7 @@ document.getElementById('topo-rate-only').addEventListener('change', (e) => {
   if (topo.data) { renderTopoCanvas(); renderTopologyLinks(topo.data.links); }
 });
 document.getElementById('btn-topo-reset').addEventListener('click', resetTopoLayout);
+document.getElementById('btn-build-tree').addEventListener('click', () => buildTreeFromConfig(false));
 document.getElementById('router-form').addEventListener('submit', saveRouter);
 document.getElementById('a-btn-test').addEventListener('click', testAntenna);
 document.getElementById('antenna-form').addEventListener('submit', saveAntenna);

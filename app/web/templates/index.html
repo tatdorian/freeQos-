@@ -16,7 +16,7 @@
       <a href="#/subscribers" data-view="subscribers">Abonnes</a>
       <a href="#/topology" data-view="topology">Topologie</a>
       <a href="#/shaping"  data-view="shaping">Shaping</a>
-      <a href="#/pops"      data-view="pops">PoPs</a>
+      <a href="#/pops"      data-view="pops">Equipements</a>
     </nav>
     <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
   </header>
@@ -135,17 +135,23 @@
       <div class="table-wrap" id="shaping-audit"></div>
     </section>
 
-    <!-- ----------------------------------------------------------- PoPs -->
+    <!-- --------------------------------------------------- equipements -->
     <section id="view-pops">
+      <div class="toolbar">
+        <button id="btn-build-tree" class="primary">Analyser la configuration et construire l'arbre</button>
+        <span class="spacer"></span>
+        <span class="mode" id="build-count"></span>
+      </div>
+      <p class="empty" style="text-align:left;padding:0 0 .8rem">
+        Ajoutez un routeur ou une antenne <b>via son API</b> : le controleur lit
+        sa configuration (<code>/ip/neighbor</code>, <code>/interface</code>,
+        capacite radio) et <b>construit l'arbre reseau tout seul</b>. Chaque ajout
+        relance l'analyse ; l'arbre se voit dans l'onglet Topologie.
+      </p>
+      <div id="build-notice"></div>
       <div id="pops-notice"></div>
 
-      <h2>Sites connus</h2>
-      <div class="table-wrap" id="pops-table"></div>
-
-      <h2>Routeurs interroges</h2>
-      <div class="table-wrap" id="routers-table"></div>
-
-      <h2>Connecter un PoP</h2>
+      <h2>Connecter un routeur (PoP)</h2>
       <div class="card">
         <form class="stack" id="router-form" autocomplete="off">
           <div class="row-3">
@@ -291,6 +297,16 @@
           </div>
         </form>
       </div>
+
+      <h2>Inventaire</h2>
+      <p class="help" style="margin:-.4rem 0 .8rem">
+        Ce qui est deja interroge. La <b>Connexion a distance</b> en donne l'etat
+        de joignabilite en un coup d'oeil.
+      </p>
+      <h2 style="text-transform:none;font-size:.75rem">Sites connus</h2>
+      <div class="table-wrap" id="pops-table"></div>
+      <h2 style="text-transform:none;font-size:.75rem">Routeurs interroges</h2>
+      <div class="table-wrap" id="routers-table"></div>
     </section>
   </main>
 
