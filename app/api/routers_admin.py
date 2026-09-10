@@ -109,12 +109,46 @@ async def list_routers(container: ContainerDep) -> dict[str, Any]:
     depuis_base = [
         {**row, "source": "db", "editable": True, "active": row["name"] in actifs} for row in stored
     ]
+    hidden: list[dict[str, Any]] = []
+    if container.routers_repo is not None:
+        try:
+            hidden = await container.routers_repo.list_hidden_file_routers()
+        except Exception:  # noqa: BLE001 - une base cassee ne doit pas vider la liste
+            hidden = []
     return {
         "routers": depuis_fichier + depuis_base,
         "secrets_available": container.secrets.available,
         "secrets_reason": container.secrets.unavailable_reason,
         "skipped": registry.skipped,
+        "hidden": hidden,
     }
+
+
+@router.delete(
+    "/pops/routers/file/{name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Retirer un routeur de l'inventaire fichier",
+)
+async def hide_file_router(container: ContainerDep, name: str) -> None:
+    """Ecarte un routeur declare dans le fichier (ou ignore faute de secret).
+
+    Le fichier reste la source de verite, mais ce nom est desormais ignore par
+    le registre — sans editer le YAML ni redemarrer. Reversible via /restore.
+    """
+    repository = _require_repository(container)
+    await repository.hide_file_router(name, reason="retire depuis l'interface")
+    await _apply(container)
+
+
+@router.post(
+    "/pops/routers/file/{name}/restore",
+    summary="Reafficher un routeur fichier precedemment retire",
+)
+async def restore_file_router(container: ContainerDep, name: str) -> dict[str, Any]:
+    repository = _require_repository(container)
+    restored = await repository.unhide_file_router(name)
+    await _apply(container)
+    return {"name": name, "restored": restored}
 
 
 @router.post("/pops/routers/test", summary="Tester une connexion sans l'enregistrer")

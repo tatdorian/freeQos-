@@ -60,7 +60,7 @@
     <!-- ----------------------------------------------------- executif -->
     <section id="view-exec">
       <div class="toolbar">
-        <span class="mode">Vue executive &middot; QoE / RTT / utilisation, files par noeud</span>
+        <span class="mode">Files live &middot; noeuds et clients (topology-aware shaping)</span>
         <select id="exec-range" style="width:auto">
           <option value="15">15 minutes</option>
           <option value="60" selected>1 heure</option>
@@ -70,24 +70,31 @@
         <span class="mode" id="exec-count"></span>
       </div>
 
+      <!-- Trois panneaux facon LibreQoS : etat live, jauge, details, du noeud
+           ou du client selectionne dans le tableau ci-dessous. -->
+      <div class="lq-panels">
+        <div class="card lq-panel" id="lq-live"></div>
+        <div class="card lq-panel" id="lq-snapshot"></div>
+        <div class="card lq-panel" id="lq-details"></div>
+      </div>
+
+      <h2>Files par noeud</h2>
+      <p class="empty" style="text-align:left;padding:0 0 .6rem">
+        Cliquez un noeud (ou depliez vers ses clients) pour l'ouvrir dans les
+        panneaux ci-dessus. <b>RETR / MARKS / DROPS</b> restent en
+        &laquo;&nbsp;n/d&nbsp;&raquo; : ces compteurs de qdisc n'existent que dans
+        le chemin des paquets, hors de portee d'un controleur hors-bande.
+      </p>
+      <div class="table-wrap" id="exec-nodes"></div>
+
       <h2>Heatmap global</h2>
       <div class="card" id="exec-heatmap"></div>
 
       <h2>Flux du reseau (Sankey)</h2>
       <p class="empty" style="text-align:left;padding:0 0 .6rem">
         La largeur d'un flux est proportionnelle a son debit descendant mesure.
-        Meme donnees que l'arbre, vues en flux.
       </p>
       <div class="card" id="exec-sankey"></div>
-
-      <h2>Files par noeud</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .6rem">
-        Debit, RTT et QoE agreges par PoP ; depliez pour voir les abonnes.
-        <b>RETR / MARKS / DROPS</b> restent en &laquo;&nbsp;n/d&nbsp;&raquo; :
-        ces compteurs de qdisc n'existent que dans le chemin des paquets, hors
-        de portee d'un controleur hors-bande.
-      </p>
-      <div class="table-wrap" id="exec-nodes"></div>
     </section>
 
     <!-- --------------------------------------------------- arbre reseau -->

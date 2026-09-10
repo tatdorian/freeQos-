@@ -412,25 +412,70 @@ function qoeSev(score) {
   if (score === null) return 'none';
   return score >= 80 ? 'ok' : score >= 50 ? 'warn' : 'crit';
 }
+/** Severite RTT (memes seuils que le backend), en chaine pour la coloration. */
+function rttSevJs(ms) {
+  if (ms === null || ms === undefined) return 'none';
+  return ms < 30 ? 'ok' : ms < 100 ? 'warn' : 'crit';
+}
+
+/** Etat de la vue Files live : noeuds agreges, index abonnes, selection et
+ *  branches depliees (conservees entre deux rafraichissements). */
+const exec = { nodes: [], subsById: {}, bloatById: {}, selected: null, expanded: new Set() };
+
+/** Petit carre colore devant une valeur, signature visuelle de LibreQoS. */
+function sqCell(text, sev) {
+  return '<span class="sq ' + (sev || 'none') + '"></span>' + esc(text);
+}
+
+/** Nombre d'equipements sous un noeud, deduit du graphe (degre - lien amont).
+ *  Approximatif mais honnete : "-" quand le noeud n'est pas dans la topologie. */
+function childCountsFromTopo(topoData) {
+  const counts = {};
+  if (!topoData || !topoData.links) return counts;
+  const nameByKey = {};
+  (topoData.nodes || []).forEach((n) => { nameByKey[n.key] = (n.name || '').toLowerCase(); });
+  const deg = {};
+  topoData.links.forEach((l) => {
+    const s = nameByKey[l.source_key];
+    const t = nameByKey[l.target_key];
+    if (s) deg[s] = (deg[s] || 0) + 1;
+    if (t) deg[t] = (deg[t] || 0) + 1;
+  });
+  Object.keys(deg).forEach((name) => { counts[name] = Math.max(0, deg[name] - 1); });
+  return counts;
+}
+
+function selectionExists(sel) {
+  if (!sel) return false;
+  if (sel.type === 'node') return exec.nodes.some((n) => n.name === sel.name);
+  return !!exec.subsById[sel.id];
+}
 
 async function loadExec() {
   const minutes = state.execRange || 60;
   const buckets = minutes <= 15 ? 15 : minutes <= 60 ? 30 : 36;
-  const [heat, subs, bloat] = await Promise.all([
+  const [heat, subs, bloat, topoData] = await Promise.all([
     api('/heatmap?minutes=' + minutes + '&buckets=' + buckets),
     api('/subscribers/latest?limit=1000&order_by=login'),
     api('/bufferbloat?minutes=' + minutes).catch(() => null),
+    api('/topology').catch(() => null),
   ]);
-  const bloatById = {};
-  if (bloat) (bloat.subscribers || []).forEach((b) => { bloatById[b.subscriber_id] = b; });
+  exec.bloatById = {};
+  if (bloat) (bloat.subscribers || []).forEach((b) => { exec.bloatById[b.subscriber_id] = b; });
+  exec.subsById = {};
+  subs.forEach((s) => { exec.subsById[s.subscriber_id] = s; });
+  exec.nodes = aggregateNodes(subs, childCountsFromTopo(topoData));
+  // Selection par defaut : le noeud le plus charge, tant que rien n'est choisi.
+  if (!selectionExists(exec.selected)) {
+    exec.selected = exec.nodes.length ? { type: 'node', name: exec.nodes[0].name } : null;
+  }
 
+  renderQueuePanels();
+  renderNodeTable(document.getElementById('exec-nodes'));
   renderHeatmap(document.getElementById('exec-heatmap'), heat);
   renderExecSankey(document.getElementById('exec-sankey'), subs);
-  renderNodeTable(document.getElementById('exec-nodes'), subs, bloatById);
-
-  const pops = new Set(subs.map((s) => s.pop_name).filter(Boolean));
   document.getElementById('exec-count').textContent =
-    pops.size + ' noeud(s), ' + subs.length + ' circuit(s)';
+    exec.nodes.length + ' noeud(s), ' + subs.length + ' circuit(s)';
 }
 
 function renderHeatmap(host, heat) {
@@ -457,19 +502,9 @@ function renderHeatmap(host, heat) {
   }).join('');
 }
 
-/** Cellule "valeur + mini-barre coloree", facon LibreQoS. */
-function nodeCellBar(text, pctValue, forcedSev) {
-  const p = pctValue === null ? null : Math.max(0, Math.min(100, pctValue));
-  const sev = forcedSev || severity(p);
-  const bar = p === null ? '' :
-    '<span class="bar"><i class="' + sev + '" style="width:' + p.toFixed(0) + '%"></i></span>';
-  return '<span class="cellbar">' + bar + '<span class="v">' + esc(text) + '</span></span>';
-}
-
-const NA_CELL = '<span class="na" title="Compteur de qdisc : hors-bande, indisponible">n/d</span>';
-
 /** Agrege les abonnes par PoP en lignes de "files", facon LibreQoS. */
-function aggregateNodes(subs, bloatById) {
+function aggregateNodes(subs, childCounts) {
+  const counts = childCounts || {};
   const parPop = new Map();
   subs.forEach((s) => {
     const nom = s.pop_name || '(sans PoP)';
@@ -490,56 +525,67 @@ function aggregateNodes(subs, bloatById) {
     }
     n.subs.push(s);
   });
-  return [...parPop.values()].sort((a, b) => (b.tx + b.rx) - (a.tx + a.rx));
+  const nodes = [...parPop.values()];
+  nodes.forEach((n) => {
+    const c = counts[n.name.toLowerCase()];
+    n.nodesCount = c === undefined ? null : c;
+  });
+  return nodes.sort((a, b) => (b.tx + b.rx) - (a.tx + a.rx));
 }
 
-function renderNodeTable(host, subs, bloatById) {
-  const nodes = aggregateNodes(subs, bloatById);
+function renderNodeTable(host) {
+  const nodes = exec.nodes;
   if (!nodes.length) {
     host.innerHTML = '<div class="empty">Aucun circuit actif.</div>';
     return;
   }
+  const rttSq = (ms) => (ms === null || ms === undefined)
+    ? sqCell('-', 'none') : sqCell(Math.round(ms) + 'ms', rttSevJs(ms));
+  const naSq = sqCell('n/d', 'none');
   const head =
-    '<table><thead><tr><th></th><th>Noeud</th><th class="num">Circuits</th>' +
-    '<th class="num">Effective</th><th class="num">Configure</th>' +
-    '<th class="num">Download</th><th class="num">Upload</th>' +
-    '<th class="num">RTT</th><th class="num">QoE</th>' +
-    '<th class="num" title="Retransmissions TCP (hors-bande)">Retr</th>' +
-    '<th class="num" title="Marquages qdisc (hors-bande)">Marks</th>' +
-    '<th class="num" title="Rejets qdisc (hors-bande)">Drops</th></tr></thead><tbody>';
+    '<table><thead><tr><th></th><th>Node</th><th class="num">Circuits</th>' +
+    '<th class="num">Nodes</th><th class="num">Effective</th><th class="num">Configured</th>' +
+    '<th class="num">&darr;</th><th class="num">&uarr;</th>' +
+    '<th class="num">RTT</th><th class="num">QoO</th>' +
+    '<th class="num" title="Retransmissions TCP — hors-bande">Retr</th>' +
+    '<th class="num" title="Marks qdisc — hors-bande">Marks</th>' +
+    '<th class="num" title="Drops qdisc — hors-bande">Drops</th></tr></thead><tbody>';
 
-  const body = nodes.map((n, i) => {
+  const body = nodes.map((n) => {
     const qoe = qoeScore(n.rttMax);
+    const open = exec.expanded.has(n.name);
+    const sel = exec.selected && exec.selected.type === 'node' && exec.selected.name === n.name;
     const nodeRow =
-      '<tr class="node-row" data-node-idx="' + i + '">' +
-      '<td><span class="expand" data-expand="' + i + '">+</span></td>' +
+      '<tr class="node-row' + (sel ? ' selected' : '') + '" data-node="' + esc(n.name) + '">' +
+      '<td><span class="expand" data-expand="' + esc(n.name) + '">' + (open ? '−' : '+') + '</span></td>' +
       '<td><strong>' + esc(n.name) + '</strong></td>' +
       '<td class="num">' + n.circuits + '</td>' +
+      '<td class="num">' + (n.nodesCount == null ? '<span class="na">-</span>' : n.nodesCount) + '</td>' +
       '<td class="num">' + esc(mbps(n.effDown / 1e6) + ' / ' + mbps(n.effUp / 1e6)) + '</td>' +
       '<td class="num na">' + esc(mbps(n.confDown / 1e6) + ' / ' + mbps(n.confUp / 1e6)) + '</td>' +
-      '<td class="num">' + nodeCellBar(bpsText(n.tx), pct(n.tx, n.effDown), null) + '</td>' +
-      '<td class="num">' + nodeCellBar(bpsText(n.rx), pct(n.rx, n.effUp), null) + '</td>' +
-      '<td class="num">' + rtt(n.rttMax) + '</td>' +
-      '<td class="num">' + (qoe === null ? NA_CELL
-        : nodeCellBar(String(qoe), qoe, qoeSev(qoe))) + '</td>' +
-      '<td class="num">' + NA_CELL + '</td><td class="num">' + NA_CELL +
-      '</td><td class="num">' + NA_CELL + '</td></tr>';
+      '<td class="num">' + sqCell(bpsText(n.tx), severity(pct(n.tx, n.effDown))) + '</td>' +
+      '<td class="num">' + sqCell(bpsText(n.rx), severity(pct(n.rx, n.effUp))) + '</td>' +
+      '<td class="num">' + rttSq(n.rttMax) + '</td>' +
+      '<td class="num">' + (qoe == null ? sqCell('-', 'none') : sqCell(String(qoe), qoeSev(qoe))) + '</td>' +
+      '<td class="num">' + naSq + '</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>';
 
-    const subRows = n.subs.map((s) => {
-      const b = bloatById[s.subscriber_id];
+    const subRows = !open ? '' : n.subs.map((s) => {
+      const b = exec.bloatById[s.subscriber_id];
       const eff = (Number(s.effective_down_mbps) || 0) * 1e6;
-      return '<tr class="sub-row" data-parent="' + i + '" hidden>' +
+      const effU = (Number(s.effective_up_mbps) || 0) * 1e6;
+      const cq = qoeScore(s.rtt_ms);
+      const csel = exec.selected && exec.selected.type === 'client' && exec.selected.id === s.subscriber_id;
+      return '<tr class="sub-row' + (csel ? ' selected' : '') + '" data-client="' + s.subscriber_id + '">' +
         '<td></td><td class="login">' + esc(s.pppoe_login) + '</td>' +
-        '<td class="num"></td>' +
-        '<td class="num">' + esc(mbps(s.effective_down_mbps || 0)) + '</td>' +
-        '<td class="num na">' + esc(mbps(s.plan_down_mbps || 0)) + '</td>' +
-        '<td class="num">' + nodeCellBar(bpsText(s.tx_bps), pct(s.tx_bps, eff), null) + '</td>' +
-        '<td class="num">' + esc(bpsText(s.rx_bps)) + '</td>' +
-        '<td class="num">' + rtt(s.rtt_ms) + '</td>' +
-        '<td class="num">' + (b ? '<span class="badge ' + esc(b.severity) + '">' +
-          esc(b.grade) + '</span>' : NA_CELL) + '</td>' +
-        '<td class="num">' + NA_CELL + '</td><td class="num">' + NA_CELL +
-        '</td><td class="num">' + NA_CELL + '</td></tr>';
+        '<td class="num"></td><td class="num"></td>' +
+        '<td class="num">' + esc(mbps(s.effective_down_mbps || 0) + ' / ' + mbps(s.effective_up_mbps || 0)) + '</td>' +
+        '<td class="num na">' + esc(mbps(s.plan_down_mbps || 0) + ' / ' + mbps(s.plan_up_mbps || 0)) + '</td>' +
+        '<td class="num">' + sqCell(bpsText(s.tx_bps), severity(pct(s.tx_bps, eff))) + '</td>' +
+        '<td class="num">' + sqCell(bpsText(s.rx_bps), severity(pct(s.rx_bps, effU))) + '</td>' +
+        '<td class="num">' + rttSq(s.rtt_ms) + '</td>' +
+        '<td class="num">' + (b ? sqCell(b.grade, b.severity)
+          : (cq == null ? sqCell('-', 'none') : sqCell(String(cq), qoeSev(cq)))) + '</td>' +
+        '<td class="num">' + naSq + '</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>';
     }).join('');
     return nodeRow + subRows;
   }).join('');
@@ -549,18 +595,25 @@ function renderNodeTable(host, subs, bloatById) {
   host.querySelectorAll('[data-expand]').forEach((el) => {
     el.addEventListener('click', (e) => {
       e.stopPropagation();
-      const idx = el.dataset.expand;
-      const open = el.textContent === '+';
-      el.textContent = open ? '−' : '+';
-      host.querySelectorAll('tr.sub-row[data-parent="' + idx + '"]').forEach((r) => {
-        r.hidden = !open;
-      });
+      const name = el.dataset.expand;
+      if (exec.expanded.has(name)) exec.expanded.delete(name);
+      else exec.expanded.add(name);
+      renderNodeTable(host);
     });
   });
   host.querySelectorAll('tr.node-row').forEach((tr) => {
     tr.addEventListener('click', (e) => {
       if (e.target.closest('[data-expand]')) return;
-      openNodeDrawer(nodes[Number(tr.dataset.nodeIdx)]);
+      exec.selected = { type: 'node', name: tr.dataset.node };
+      renderQueuePanels();
+      renderNodeTable(host);
+    });
+  });
+  host.querySelectorAll('tr.sub-row').forEach((tr) => {
+    tr.addEventListener('click', () => {
+      exec.selected = { type: 'client', id: Number(tr.dataset.client) };
+      renderQueuePanels();
+      renderNodeTable(host);
     });
   });
 }
@@ -606,7 +659,7 @@ function gaugeSvg(downBps, upBps, maxBps, qoe) {
       esc(bpsShort(upBps)) + '</text>' +
     '</svg>' +
     '<svg width="46" height="128" viewBox="0 0 46 128"><text class="lbl" x="23" y="10" ' +
-      'text-anchor="middle">QoE</text>' +
+      'text-anchor="middle">QoO</text>' +
     '<rect x="14" y="14" width="18" height="120" rx="3" fill="var(--surface-2)"></rect>' +
     '<rect x="14" y="' + (14 + 120 - qh) + '" width="18" height="' + qh + '" rx="3" fill="' +
       qCol + '"></rect>' +
@@ -614,41 +667,141 @@ function gaugeSvg(downBps, upBps, maxBps, qoe) {
       'fill="' + qCol + '">' + (qoe === null ? '-' : qoe) + '</text></svg></div>';
 }
 
-/** Tiroir d'un noeud : jauge, etat de file live, details et override. */
-function openNodeDrawer(node) {
-  if (!node) return;
-  const qoe = qoeScore(node.rttMax);
-  const root = document.getElementById('drawer-root');
-  root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
-    '<div class="drawer-head"><h3>' + esc(node.name) + '</h3>' +
-    '<button class="sm" id="drawer-close">Fermer</button></div>' +
+/** Les trois panneaux (Live Queue State | Node Snapshot | Node Details) pour le
+ *  noeud ou le client selectionne dans le tableau. Reproduit l'ecran LibreQoS :
+ *  un noeud est un agregat (lecture seule), un client peut recevoir un override. */
+function renderQueuePanels() {
+  const live = document.getElementById('lq-live');
+  const snap = document.getElementById('lq-snapshot');
+  const det = document.getElementById('lq-details');
+  if (!live || !snap || !det) return;
 
-    '<h2>Node Snapshot</h2><div class="card">' + gaugeSvg(node.tx, node.rx, node.effDown, qoe) + '</div>' +
+  const sel = exec.selected;
+  if (!selectionExists(sel)) {
+    const vide = '<div class="empty">Selectionnez un noeud ou un client dans le tableau.</div>';
+    live.innerHTML = snap.innerHTML = det.innerHTML = vide;
+    return;
+  }
 
-    '<h2>Live Queue State</h2>' +
-    '<div class="table-wrap"><table><thead><tr><th></th><th class="num">Download</th>' +
-    '<th class="num">Upload</th></tr></thead><tbody>' +
-      '<tr><td>Effective</td><td class="num">' + esc(mbps(node.effDown / 1e6)) +
-        '</td><td class="num">' + esc(mbps(node.effUp / 1e6)) + '</td></tr>' +
-      '<tr><td>Configure</td><td class="num na">' + esc(mbps(node.confDown / 1e6)) +
-        '</td><td class="num na">' + esc(mbps(node.confUp / 1e6)) + '</td></tr>' +
-      '<tr><td>Debit</td><td class="num" style="color:var(--down)">' + esc(bpsText(node.tx)) +
-        '</td><td class="num" style="color:var(--up)">' + esc(bpsText(node.rx)) + '</td></tr>' +
-      '<tr><td>RTT (pire)</td><td class="num" colspan="2">' + rtt(node.rttMax) + '</td></tr>' +
-      '<tr><td>QoE</td><td class="num" colspan="2">' + (qoe === null ? NA_CELL : qoe) + '</td></tr>' +
-      '<tr><td>Retransmissions</td><td class="num" colspan="2">' + NA_CELL + '</td></tr>' +
-    '</tbody></table></div>' +
+  const isClient = sel.type === 'client';
+  const client = isClient ? exec.subsById[sel.id] : null;
+  const node = isClient ? null : exec.nodes.find((n) => n.name === sel.name);
+  const title = isClient ? client.pppoe_login : node.name;
+  const down = isClient ? (Number(client.tx_bps) || 0) : node.tx;
+  const up = isClient ? (Number(client.rx_bps) || 0) : node.rx;
+  const effDown = isClient ? (Number(client.effective_down_mbps) || 0) * 1e6 : node.effDown;
+  const effUp = isClient ? (Number(client.effective_up_mbps) || 0) * 1e6 : node.effUp;
+  const confDown = isClient ? (Number(client.plan_down_mbps) || 0) * 1e6 : node.confDown;
+  const confUp = isClient ? (Number(client.plan_up_mbps) || 0) * 1e6 : node.confUp;
+  const rttMs = isClient ? client.rtt_ms : node.rttMax;
+  const qoe = qoeScore(rttMs);
+  const b = isClient ? exec.bloatById[client.subscriber_id] : null;
 
-    '<h2>Node Details</h2>' +
-    '<div class="notice"><b>' + node.circuits + ' circuit(s)</b> sur ce noeud.' +
-      '<span class="hint">Effective = somme des limites appliquees, Configure = somme des ' +
-      'plans. Retransmissions / marks / drops sont hors de portee du hors-bande.</span></div>' +
-    '<p class="empty" style="text-align:left;padding:.4rem 0 0">Pour ajuster un debit, ouvrez ' +
-    'un abonne (onglet Abonnes) ou un lien (onglet Topologie) : l\'edition d\'override y est ' +
-    'directe, avec Save / Clear.</p>' +
-    '</div>';
-  root.querySelector('.drawer-backdrop').addEventListener('click', closeDrawer);
-  document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+  const rttSq = (ms) => (ms === null || ms === undefined)
+    ? sqCell('-', 'none') : sqCell(Math.round(ms) + 'ms', rttSevJs(ms));
+  const qooSq = b ? sqCell(b.grade + ' (+' + b.bloat_ms + 'ms)', b.severity)
+    : (qoe == null ? sqCell('-', 'none') : sqCell(String(qoe), qoeSev(qoe)));
+  const naSq = sqCell('n/d', 'none');
+
+  // ---- Live Queue State
+  const dwn = (t, s) => '<td class="num">' + sqCell(t, s) + '</td>';
+  live.innerHTML =
+    '<h3>&#9881; Live Queue State</h3>' +
+    '<table class="lq-table"><thead><tr><th></th><th>Download</th><th>Upload</th></tr></thead><tbody>' +
+    '<tr><td>Effective Limit</td>' + dwn(mbps(effDown / 1e6), 'ok') + dwn(mbps(effUp / 1e6), 'ok') + '</tr>' +
+    '<tr><td>Configured Limit</td><td class="num na">' + sqCell(mbps(confDown / 1e6), 'none') +
+      '</td><td class="num na">' + sqCell(mbps(confUp / 1e6), 'none') + '</td></tr>' +
+    '<tr><td>Throughput</td>' + dwn(bpsText(down), severity(pct(down, effDown))) +
+      dwn(bpsText(up), severity(pct(up, effUp))) + '</tr>' +
+    '<tr><td>RTT</td><td class="num">' + rttSq(rttMs) + '</td><td class="num">' + rttSq(rttMs) + '</td></tr>' +
+    '<tr><td>QoO</td><td class="num">' + qooSq + '</td><td class="num">' + qooSq + '</td></tr>' +
+    '<tr><td>TCP Retransmits</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>' +
+    '</tbody></table>';
+
+  // ---- Node Snapshot (jauge)
+  snap.innerHTML = '<h3>&#128200; Node Snapshot</h3>' +
+    gaugeSvg(down, up, Math.max(effDown, down, 1), qoe);
+
+  // ---- Node Details
+  const limitedBy = isClient
+    ? ({ plan: 'Plan', override: 'Override', boost: 'Boost' }[client.limit_source] || client.limit_source || '-')
+    : 'Agregat';
+  const override = isClient
+    ? (client.limit_source === 'override' || client.limit_source === 'boost'
+        ? mbps(client.effective_down_mbps || 0) + ' / ' + mbps(client.effective_up_mbps || 0)
+        : 'None')
+    : '—';
+  const dPre = isClient ? bestUnitMbps(client.effective_down_mbps) : '';
+  const uPre = isClient ? bestUnitMbps(client.effective_up_mbps) : '';
+  det.innerHTML =
+    '<h3>&#9432; Node Details</h3>' +
+    '<div class="lq-kv">' +
+      '<span class="k">Base Configured Rate</span><span class="v">' +
+        esc(mbps(confDown / 1e6) + ' / ' + mbps(confUp / 1e6)) + '</span>' +
+      '<span class="k">Effective Now</span><span class="v">' +
+        esc(mbps(effDown / 1e6) + ' / ' + mbps(effUp / 1e6)) + '</span>' +
+      '<span class="k">Rate Override</span><span class="v">' + esc(override) + '</span>' +
+      '<span class="k">Limited By</span><span class="v">' + esc(limitedBy) + '</span>' +
+      '<span class="k">Topology Override</span><span class="v">None</span>' +
+      '<span class="k">Active Attachment</span><span class="v">' +
+        esc(isClient ? (client.pop_name || '-') : title) + '</span>' +
+    '</div>' +
+    (isClient
+      ? '<div class="lq-rate">D <input id="lq-d" type="number" min="0" step="any" value="' + esc(dPre) +
+          '"> U <input id="lq-u" type="number" min="0" step="any" value="' + esc(uPre) + '">' +
+          '<button class="sm primary" id="lq-save">Save</button>' +
+          '<button class="sm" id="lq-clear">Clear</button></div>' +
+        '<div class="lq-note">Debit en Mbps. Enregistrer pose un override sur cet abonne ' +
+          '(vu ensuite dans le plan Shaping). Retr / marks / drops : hors-bande, indisponibles.</div>' +
+        '<div class="actions" style="margin-top:.6rem">' +
+          '<button class="sm" id="lq-open">Ouvrir dans l\'arbre</button></div>' +
+        '<div id="lq-result"></div>'
+      : '<div class="lq-note"><b>' + node.circuits + ' circuit(s).</b> Un noeud est un ' +
+          'agregat : depliez-le et selectionnez un client pour imposer un debit. Retr / ' +
+          'marks / drops sont hors de portee du hors-bande.</div>' +
+        '<div class="actions" style="margin-top:.6rem">' +
+          '<button class="sm" id="lq-open">Ouvrir dans l\'arbre</button></div>');
+
+  const open = document.getElementById('lq-open');
+  if (open) open.addEventListener('click', () => { location.hash = '#/network'; });
+  const save = document.getElementById('lq-save');
+  if (save) save.addEventListener('click', () => saveClientRate(client));
+  const clear = document.getElementById('lq-clear');
+  if (clear) clear.addEventListener('click', () => clearClientRate(client));
+}
+
+/** Valeur Mbps pre-remplie dans un champ (nombre propre, sans zeros inutiles). */
+function bestUnitMbps(mbpsValue) {
+  const n = Number(mbpsValue);
+  return n ? +n.toFixed(3) : '';
+}
+
+async function saveClientRate(client) {
+  const host = document.getElementById('lq-result');
+  const down = document.getElementById('lq-d').value;
+  const up = document.getElementById('lq-u').value;
+  try {
+    await api('/shaping/policies', {
+      method: 'PUT',
+      body: JSON.stringify({
+        scope: 'subscriber', target_key: client.pppoe_login,
+        max_down_mbps: down === '' ? null : Number(down),
+        max_up_mbps: up === '' ? null : Number(up),
+        enabled: true, note: 'impose depuis Files live',
+      }),
+    });
+    if (host) host.innerHTML = '<div class="notice ok">Override enregistre. Visible dans le plan Shaping.</div>';
+    await loadExec();
+  } catch (err) {
+    if (host) host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+}
+
+async function clearClientRate(client) {
+  try {
+    await api('/shaping/policies/subscriber/' + encodeURIComponent(client.pppoe_login), { method: 'DELETE' });
+    await loadExec();
+  } catch (err) { alert(err.message); }
 }
 
 /* ------------------------------------------------------- flux (sankey) */
@@ -993,10 +1146,30 @@ async function loadRouters() {
       '<code>/app/data</code>). Sinon, renseignez <code>APP_SECRET_KEY</code> ' +
       'puis redemarrez.</span></div>';
   }
-  (data.skipped || []).forEach((message) => {
-    html += '<div class="notice err">' + esc(message) + '</div>';
+  (data.skipped || []).forEach((skip) => {
+    // Ancien format (chaine) ou nouveau ({name, reason}) : on gere les deux.
+    const nom = typeof skip === 'string' ? null : skip.name;
+    const raison = typeof skip === 'string' ? skip : skip.reason;
+    html += '<div class="notice err"><strong>Routeur ignore.</strong> ' + esc(raison) +
+      (nom ? '<div class="actions" style="margin-top:.5rem">' +
+        '<button class="sm danger" data-hide-file="' + esc(nom) + '">Retirer definitivement</button>' +
+        '</div><span class="hint">« Retirer » ecarte ce routeur de l\'inventaire ' +
+        'sans toucher au fichier, et l\'avertissement disparait.</span>' : '') +
+      '</div>';
+  });
+  // Routeurs fichier retires a la main : proposer de les restaurer.
+  (data.hidden || []).forEach((h) => {
+    html += '<div class="notice"><strong>' + esc(h.name) + '</strong> est retire de ' +
+      'l\'inventaire fichier.' +
+      '<div class="actions" style="margin-top:.5rem">' +
+      '<button class="sm" data-restore-file="' + esc(h.name) + '">Restaurer</button>' +
+      '</div></div>';
   });
   notice.innerHTML = html;
+  notice.querySelectorAll('[data-hide-file]').forEach((b) =>
+    b.addEventListener('click', () => hideFileRouter(b.dataset.hideFile)));
+  notice.querySelectorAll('[data-restore-file]').forEach((b) =>
+    b.addEventListener('click', () => restoreFileRouter(b.dataset.restoreFile)));
   document.getElementById('btn-save').disabled = !data.secrets_available;
 
   const host = document.getElementById('routers-table');
@@ -1030,7 +1203,9 @@ async function loadRouters() {
             ? '<button class="sm" data-probe="' + r.id + '">Tester</button>' +
               '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Desactiver' : 'Activer') + '</button>' +
               '<button class="sm danger" data-del="' + r.id + '">Retirer</button>'
-            : '<span style="font-size:.72rem;color:var(--faint)">edite dans routers.yml</span>') +
+            : '<span style="font-size:.72rem;color:var(--faint);margin-right:.4rem">routers.yml</span>' +
+              '<button class="sm danger" data-hide-file="' + esc(r.name) +
+              '" title="Ecarter ce routeur fichier sans editer le YAML">Retirer</button>') +
         '</div></td></tr>';
     }).join('') + '</tbody></table>';
 
@@ -1040,6 +1215,28 @@ async function loadRouters() {
     b.addEventListener('click', () => deleteRouter(b.dataset.del)));
   host.querySelectorAll('[data-toggle]').forEach((b) =>
     b.addEventListener('click', () => toggleRouter(b.dataset.toggle)));
+  host.querySelectorAll('[data-hide-file]').forEach((b) =>
+    b.addEventListener('click', () => hideFileRouter(b.dataset.hideFile)));
+}
+
+/** Ecarte un routeur de l'inventaire fichier (source de verite intacte).
+ *  Le fichier gagne par defaut ; ce masquage explicite est la seule facon,
+ *  cote interface, de retirer un routeur fichier — et il est reversible. */
+async function hideFileRouter(name) {
+  if (!confirm('Retirer "' + name + '" de l\'inventaire ?\n\n' +
+    'Le routeur est ecarte (interrogation et avertissements), sans modifier ' +
+    'config/routers.yml. Vous pourrez le restaurer.')) return;
+  try {
+    await api('/pops/routers/file/' + encodeURIComponent(name), { method: 'DELETE' });
+    await loadRouters();
+  } catch (err) { alert(err.message); }
+}
+
+async function restoreFileRouter(name) {
+  try {
+    await api('/pops/routers/file/' + encodeURIComponent(name) + '/restore', { method: 'POST' });
+    await loadRouters();
+  } catch (err) { alert(err.message); }
 }
 
 /** Analyse la config des equipements et (re)construit l'arbre reseau.
@@ -2735,6 +2932,9 @@ setInterval(() => {
   // ce serait annuler le geste en cours.
   if (state.view === 'network' && (topo.dragging || topo.selected ||
       (document.activeElement && document.activeElement.tagName === 'SELECT'))) return;
+  // Vue Files live : ne pas ecraser un champ de debit en cours de saisie.
+  if (state.view === 'exec' && document.activeElement &&
+      document.activeElement.tagName === 'INPUT') return;
   refresh();
   // Le tiroir d'un lien suit le meme rythme : on regarde un debit justement
   // quand il bouge.

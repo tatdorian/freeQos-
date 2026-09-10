@@ -67,7 +67,9 @@ class RouterRegistry:
         self._fingerprints: dict[str, tuple] = {}
         self._sources: dict[str, str] = {}
         self._ids: dict[str, int | None] = {}
-        self.skipped: list[str] = []
+        # Routeurs ecartes, chacun {name, reason} : garder le nom permet de
+        # proposer "Retirer" dans l'interface plutot qu'un simple message.
+        self.skipped: list[dict[str, str]] = []
 
     @property
     def collectors(self) -> list[MikrotikCollector]:
@@ -93,13 +95,30 @@ class RouterRegistry:
         ]
 
     # ------------------------------------------------------------------
+    async def _hidden_names(self) -> set[str]:
+        """Routeurs ecartes a la main depuis l'interface (persistes en base).
+
+        Une base absente ou un depot sans cette capacite ne doit rien casser :
+        on retombe alors sur un ensemble vide.
+        """
+        if self._repository is None or not hasattr(self._repository, "hidden_file_routers"):
+            return set()
+        try:
+            return await self._repository.hidden_file_routers()
+        except Exception:  # noqa: BLE001
+            logger.warning("Liste des routeurs masques illisible")
+            return set()
+
     async def resolve_entries(self) -> list[RouterEntry]:
         entries: dict[str, RouterEntry] = {}
-        skipped: list[str] = []
+        skipped: list[dict[str, str]] = []
+        hidden = await self._hidden_names()
 
         if self._repository is not None:
             try:
                 for config in await self._repository.load_configs():
+                    if config.name in hidden:
+                        continue
                     router_id = await self._repository.find_id_by_name(config.name)
                     entries[config.name] = RouterEntry(config, SOURCE_DB, router_id)
             except Exception:  # noqa: BLE001
@@ -108,11 +127,16 @@ class RouterRegistry:
                 logger.exception("Chargement des routeurs en base impossible")
 
         for config in self._settings.enabled_routers:
+            # Un routeur masque a la main disparait de l'inventaire ET des
+            # avertissements : c'est le "Retirer" demande depuis l'interface.
+            if config.name in hidden:
+                entries.pop(config.name, None)
+                continue
             try:
                 config.resolve_password()
             except MissingSecretError as exc:
                 logger.error("Routeur ignore : %s", exc)
-                skipped.append(str(exc))
+                skipped.append({"name": config.name, "reason": str(exc)})
                 continue
             # Le fichier prime sur la base en cas d'homonymie.
             entries[config.name] = RouterEntry(config, SOURCE_FILE)

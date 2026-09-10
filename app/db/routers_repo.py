@@ -208,3 +208,34 @@ class RoutersRepository:
     async def find_id_by_name(self, name: str) -> int | None:
         async with self._pool.acquire() as conn:
             return await conn.fetchval("SELECT id FROM routers WHERE name = $1", name)
+
+    # --------------------------------------------- routeurs fichier masques
+    async def hidden_file_routers(self) -> set[str]:
+        """Noms de routeurs fichier a ecarter de l'inventaire."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("SELECT name FROM hidden_file_routers")
+        return {row["name"] for row in rows}
+
+    async def list_hidden_file_routers(self) -> list[dict[str, Any]]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT name, reason, updated_at FROM hidden_file_routers ORDER BY name"
+            )
+        return [dict(row) for row in rows]
+
+    async def hide_file_router(self, name: str, reason: str | None = None) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO hidden_file_routers (name, reason)
+                VALUES ($1, $2)
+                ON CONFLICT (name) DO UPDATE SET reason = EXCLUDED.reason, updated_at = now()
+                """,
+                name,
+                reason,
+            )
+
+    async def unhide_file_router(self, name: str) -> bool:
+        async with self._pool.acquire() as conn:
+            result = await conn.execute("DELETE FROM hidden_file_routers WHERE name = $1", name)
+        return not result.endswith(" 0")
