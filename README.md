@@ -91,21 +91,20 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
 - **Tableau de bord** — débit global (download/upload en miroir, graphe live), abonnés en
   ligne, débit vendu et son taux d'utilisation, capacité backhaul, top consommateurs avec
   barre d'usage vs plan, cartes backhaul (capacité vs nominal, charge vs capacité).
-- **Arbre réseau** — la vraie hiérarchie `gateway → cœur → PoP → radio → abonnés`,
-  repliable, reconstruite depuis `/ip/neighbor`. La découverte de voisinage étant
-  **symétrique**, le sens amont/aval est déduit du rôle de chaque équipement : un PoP qui
-  voit son gateway produirait sinon un gateway *sous* le PoP. Les abonnés sont regroupés
-  sous un nœud repliable, avec leurs totaux. **Chaque lien porte son débit mesuré** et sa
-  charge vs la capacité du port ; le bouton *Débit* ouvre son historique.
+- **Arbre réseau** — un **vrai arbre éditable** au glisser-déposer : chaque équipement est
+  une case qu'on déplace, qu'on dépose sur une autre pour la rattacher. Chaque lien porte
+  son **débit mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le
+  débit total). L'option *Liens à débit seulement* ne garde que les liens réellement
+  mesurés. Les doublons sont **réconciliés** : un même routeur vu plusieurs fois (PoP géré
+  *et* voisin du cœur, casses ou IPv4/IPv6 différentes) devient une seule case, ses adresses
+  rassemblées. Position et rattachements sont enregistrés, mais ne changent que l'arbre
+  **affiché** — aucun équipement n'est reconfiguré.
 - **Abonnés** — sessions filtrables **par PoP** et par login, avec débit vs plan, latence,
   **note de bufferbloat** (latence sous charge), boost en cours et son décompte. Un clic
   ouvre la série de l'abonné ; les boutons *Débit* et *Boost* agissent directement.
-- **Topologie** — un **vrai arbre réseau éditable** : chaque équipement est une case qu'on
-  déplace au glisser-déposer, qu'on dépose sur une autre pour la rattacher. Chaque lien
-  porte son **débit mesuré** (avec une couleur de charge) ; l'option *Liens à débit
-  seulement* ne garde que les liens réellement mesurés. Position et rattachements sont
-  enregistrés, mais ne changent que l'arbre **affiché** — aucun équipement n'est
-  reconfiguré. En dessous, le tableau des liens avec débit, charge et capacité.
+- **Topologie** — le tableau technique des liens : **débit mesuré**, charge vs capacité du
+  port, capacité négociée et débit imposé. Le bouton *Débit* ouvre l'historique d'un lien
+  et permet une mesure instantanée ; *Bande passante* enregistre une intention de shaping.
 - **Équipements** — ajout d'un routeur ou d'une antenne **via leur API** ; chaque ajout
   **analyse la configuration et (re)construit l'arbre tout seul**. Inventaire des sites et
   routeurs en bas de page.

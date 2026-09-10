@@ -59,17 +59,26 @@
     <!-- --------------------------------------------------- arbre reseau -->
     <section id="view-network">
       <div class="toolbar">
-        <button id="btn-tree-expand">Tout deplier</button>
-        <button id="btn-tree-collapse">Tout replier</button>
+        <button id="btn-discover">Relancer la decouverte</button>
+        <label class="chk" title="N'afficher que les liens dont le debit est mesure">
+          <input type="checkbox" id="topo-rate-only" checked> Liens a debit seulement
+        </label>
+        <button id="btn-topo-reset" class="sm">Reinitialiser la disposition</button>
         <span class="spacer"></span>
-        <span class="mode">gateway &rarr; coeur &rarr; PoP &rarr; radio &rarr; abonnes</span>
+        <span class="mode" id="net-count"></span>
       </div>
+      <div id="topo-notice"></div>
       <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Hierarchie reconstruite depuis <code>/ip/neighbor</code>. La decouverte de
-        voisinage etant symetrique, le sens amont/aval est deduit du role de chaque
-        equipement — corrigez-le dans l'onglet Topologie s'il est mal devine.
+        Vrai arbre reseau, editable : <b>glissez une case</b> pour la deplacer,
+        <b>deposez-la sur une autre</b> pour la rattacher. Chaque lien porte son
+        debit mesure, chaque PoP ses abonnes. La disposition et les rattachements
+        sont enregistres — ils ne changent que l'arbre AFFICHE, aucun equipement
+        n'est reconfigure.
       </p>
-      <div id="network-tree"></div>
+      <div class="topo-editor">
+        <div id="topo-canvas" class="topo-canvas"></div>
+        <aside id="topo-panel" class="topo-panel"></aside>
+      </div>
     </section>
 
     <!-- -------------------------------------------------------- abonnes -->
@@ -86,26 +95,10 @@
     <!-- ------------------------------------------------------- topologie -->
     <section id="view-topology">
       <div class="toolbar">
-        <button id="btn-discover">Relancer la decouverte</button>
-        <label class="chk" title="N'afficher que les liens dont le debit est mesure">
-          <input type="checkbox" id="topo-rate-only" checked> Liens a debit seulement
-        </label>
-        <button id="btn-topo-reset" class="sm">Reinitialiser la disposition</button>
+        <span class="mode">Tableau des liens &middot; l'arbre est dans l'onglet Arbre reseau</span>
         <span class="spacer"></span>
-        <span class="mode" id="topo-count"></span>
+        <span class="mode" id="topo-links-count"></span>
       </div>
-      <div id="topo-notice"></div>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Vrai arbre reseau, editable : <b>glissez une case</b> pour la deplacer,
-        <b>deposez-la sur une autre</b> pour la rattacher. Chaque lien porte son
-        debit mesure. La disposition et les rattachements sont enregistres — ils
-        ne changent que l'arbre AFFICHE, aucun equipement n'est reconfigure.
-      </p>
-      <div class="topo-editor">
-        <div id="topo-canvas" class="topo-canvas"></div>
-        <aside id="topo-panel" class="topo-panel"></aside>
-      </div>
-      <h2>Liens</h2>
       <p class="empty" style="text-align:left;padding:0 0 .8rem">
         Le debit vient des compteurs du PORT qui porte le lien
         (<code>/interface</code>, deux lectures successives) :
