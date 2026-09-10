@@ -66,9 +66,13 @@
           <option value="60" selected>1 heure</option>
           <option value="360">6 heures</option>
         </select>
+        <label class="chk" title="Active RTT, QoO et bufferbloat (/ping depuis le PoP). Se pilote ici, sans variable d'environnement.">
+          <input type="checkbox" id="rtt-toggle"> Sonde RTT
+        </label>
         <span class="spacer"></span>
         <span class="mode" id="exec-count"></span>
       </div>
+      <div id="exec-notice"></div>
 
       <!-- Trois panneaux facon LibreQoS : etat live, jauge, details, du noeud
            ou du client selectionne dans le tableau ci-dessous. -->

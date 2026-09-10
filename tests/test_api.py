@@ -421,6 +421,16 @@ def test_bufferbloat_reseau(client: TestClient) -> None:
     assert "distribution" in body["summary"]
 
 
+def test_sonde_rtt_pilotable_depuis_l_interface(client: TestClient) -> None:
+    """La sonde RTT se bascule via l'API, sans variable d'environnement."""
+    etat = client.get("/api/v1/rtt").json()
+    assert etat["enabled"] is False
+    reponse = client.put("/api/v1/rtt", json={"enabled": True})
+    assert reponse.status_code == 200
+    assert reponse.json()["enabled"] is True
+    assert client.get("/api/v1/rtt").json()["enabled"] is True
+
+
 def test_heatmap_executif(client: TestClient) -> None:
     body = client.get("/api/v1/heatmap?minutes=15&buckets=15").json()
     cles = {r["key"] for r in body["rows"]}

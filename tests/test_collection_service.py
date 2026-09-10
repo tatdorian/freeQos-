@@ -232,6 +232,7 @@ async def test_le_rtt_est_rattache_a_l_echantillon(settings: Settings) -> None:
         clock=clock,
         rtt_prober=prober,
     )
+    service.rtt_enabled = True  # sonde pilotee par un drapeau ; on l'active ici
 
     # Premier cycle : aucune sonde n'a encore tourne.
     await service.collect_subscribers()
@@ -276,6 +277,7 @@ async def test_abonne_sans_adresse_n_est_pas_sonde(settings: Settings) -> None:
         clock=clock,
         rtt_prober=RttProber(clock=clock),
     )
+    service.rtt_enabled = True
 
     await service.collect_subscribers()
     await service.probe_rtt()

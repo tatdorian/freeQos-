@@ -365,13 +365,19 @@ Autrement dit : tout ce qui se lit dans des compteurs est à parité. Tout ce qu
 d'inspecter les paquets ne l'est pas, et ne le sera jamais depuis une VM de management —
 c'est le prix du hors-bande, pas une lacune d'implémentation.
 
-La sonde RTT est **désactivée par défaut** (`RTT_ENABLED=false`) : elle consomme du CPU
-routeur, contrairement à la mesure passive. Une fois activée, elle sonde un lot d'abonnés
-par cycle en tourniquet, et la mesure est rattachée à l'échantillon de débit suivant —
-une seule ligne par abonné et par cycle, pas de lignes ne portant qu'un RTT. Un abonné
-qui bloque l'ICMP reste à `NULL` : pas de valeur inventée.
+La sonde RTT est **désactivée par défaut** : elle consomme du CPU routeur, contrairement à
+la mesure passive. Une fois activée, elle sonde un lot d'abonnés par cycle en tourniquet, et
+la mesure est rattachée à l'échantillon de débit suivant — une seule ligne par abonné et par
+cycle, pas de lignes ne portant qu'un RTT. Un abonné qui bloque l'ICMP reste à `NULL` : pas
+de valeur inventée.
+
+**Elle se pilote depuis l'interface**, sans variable d'environnement : case *Sonde RTT* de
+l'onglet **Exécutif**. Comme l'enforcement, c'est un drapeau persistant en base (`rtt_enabled`),
+amorcé par `RTT_ENABLED` au premier démarrage puis basculable à chaud (la base fait foi). Le
+job de sonde est toujours planifié ; le drapeau décide seulement s'il sonde.
 
 ```bash
+# Amorçage initial uniquement (ensuite, tout se fait dans l'interface) :
 RTT_ENABLED=true
 RTT_INTERVAL_S=30      # période de sondage
 RTT_BATCH_SIZE=20      # abonnés sondés par cycle
@@ -546,6 +552,7 @@ que la boucle centrale devra suivre, sans radio.
 | `GET` | `/api/v1/throughput` | Débit agrégé du réseau dans le temps |
 | `GET` | `/api/v1/bufferbloat` | Note de bufferbloat par abonné (latence à vide vs sous charge) |
 | `GET` | `/api/v1/heatmap` | Heatmap exécutif : QoE / RTT / utilisation dans le temps |
+| `GET` · `PUT` | `/api/v1/rtt` | Lire / basculer la sonde de latence (sans variable d'environnement) |
 | `GET` | `/api/v1/network/tree` | Arbre PoP → backhauls, capacité et charge |
 | `GET` | `/api/v1/remote/status` | État des connexions distantes par intégration (RouterOS, airOS, UISP, RADIUS) |
 | `GET` | `/api/v1/pops/routers` | Inventaire des routeurs (fichier + base) |

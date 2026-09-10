@@ -9,10 +9,47 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Path, status
+from pydantic import BaseModel
 
 from app.api.deps import CollectionDep, ContainerDep, RepositoryDep, SchedulerDep
 
 router = APIRouter(tags=["exploitation"])
+
+
+class RttToggle(BaseModel):
+    enabled: bool
+
+
+@router.get("/rtt", summary="Etat de la sonde de latence (RTT)")
+async def rtt_state(container: ContainerDep, collection: CollectionDep) -> dict[str, Any]:
+    """La sonde RTT alimente RTT, QoO et bufferbloat de l'onglet Executif.
+
+    Elle se pilote ici, depuis l'interface : plus besoin de RTT_ENABLED dans
+    l'environnement une fois le drapeau amorce en base.
+    """
+    return {
+        "enabled": collection.rtt_enabled,
+        "env_default": container.settings.rtt_enabled,
+        "interval_s": container.settings.rtt_interval_s,
+        "batch_size": container.settings.rtt_batch_size,
+    }
+
+
+@router.put("/rtt", summary="Activer ou couper la sonde de latence (RTT)")
+async def set_rtt(
+    payload: RttToggle, container: ContainerDep, collection: CollectionDep
+) -> dict[str, Any]:
+    """Bascule la sonde sans redemarrage. Le job reste planifie : couper la sonde
+    l'endort, la reactiver la relance au cycle suivant. Le compte de lecture doit
+    posseder la policy ``test`` sur RouterOS pour que ``/ping`` reponde."""
+    collection.rtt_enabled = payload.enabled
+    if container.topology_repo is not None:
+        from app.services.collection import FLAG_RTT
+
+        await container.topology_repo.set_flag(
+            FLAG_RTT, payload.enabled, updated_by="ui", reason="bascule depuis l'interface"
+        )
+    return {"enabled": collection.rtt_enabled}
 
 
 @router.get("/status", summary="Etat du controleur et de ses cycles")

@@ -445,6 +445,27 @@ function childCountsFromTopo(topoData) {
   return counts;
 }
 
+/** Etat de la sonde RTT dans la barre d'outils : la case reflete le drapeau
+ *  (base), et un encart rappelle que sans elle QoO/RTT/bufferbloat restent vides. */
+function renderRttControl(state) {
+  const box = document.getElementById('rtt-toggle');
+  const notice = document.getElementById('exec-notice');
+  if (box && state) box.checked = !!state.enabled;
+  if (!notice) return;
+  notice.innerHTML = (state && state.enabled) ? '' :
+    '<div class="notice"><b>Sonde RTT coupee.</b> RTT, QoO et bufferbloat resteront ' +
+    'vides tant qu\'elle n\'est pas activee (case <b>Sonde RTT</b> ci-dessus). Elle ' +
+    'envoie des <code>/ping</code> depuis le PoP ; le compte de lecture doit avoir la ' +
+    'policy <code>test</code>. Aucune variable d\'environnement necessaire.</div>';
+}
+
+async function toggleRtt(enabled) {
+  try {
+    await api('/rtt', { method: 'PUT', body: JSON.stringify({ enabled: enabled }) });
+    await loadExec();
+  } catch (err) { alert(err.message); }
+}
+
 function selectionExists(sel) {
   if (!sel) return false;
   if (sel.type === 'node') return exec.nodes.some((n) => n.name === sel.name);
@@ -454,13 +475,15 @@ function selectionExists(sel) {
 async function loadExec() {
   const minutes = state.execRange || 60;
   const buckets = minutes <= 15 ? 15 : minutes <= 60 ? 30 : 36;
-  const [heat, subs, bloat, topoData, tree] = await Promise.all([
+  const [heat, subs, bloat, topoData, tree, rttState] = await Promise.all([
     api('/heatmap?minutes=' + minutes + '&buckets=' + buckets),
     api('/subscribers/latest?limit=1000&order_by=login'),
     api('/bufferbloat?minutes=' + minutes).catch(() => null),
     api('/topology').catch(() => null),
     api('/network/tree').catch(() => []),
+    api('/rtt').catch(() => null),
   ]);
+  renderRttControl(rttState);
   exec.bloatById = {};
   if (bloat) (bloat.subscribers || []).forEach((b) => { exec.bloatById[b.subscriber_id] = b; });
   // Enveloppe partagee par PoP : capacite du backhaul (le vrai goulot commun).
@@ -2941,6 +2964,7 @@ document.getElementById('exec-range').addEventListener('change', (e) => {
   state.execRange = Number(e.target.value);
   loadExec();
 });
+document.getElementById('rtt-toggle').addEventListener('change', (e) => toggleRtt(e.target.checked));
 document.getElementById('router-form').addEventListener('submit', saveRouter);
 document.getElementById('a-btn-test').addEventListener('click', testAntenna);
 document.getElementById('antenna-form').addEventListener('submit', saveAntenna);
