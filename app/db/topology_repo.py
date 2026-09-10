@@ -126,6 +126,7 @@ class TopologyRepository:
                 SELECT key, name, COALESCE(kind_override, kind) AS kind, kind AS kind_detected,
                        kind_override, mac, address, platform, version, router_name,
                        uisp_device_id, attributes, first_seen, last_seen,
+                       pos_x, pos_y, parent_override, hidden,
                        (last_seen > now() - INTERVAL '10 minutes') AS fresh
                   FROM topology_nodes
                  ORDER BY kind, name
@@ -248,6 +249,39 @@ class TopologyRepository:
             await conn.execute(
                 "UPDATE topology_nodes SET kind_override = $2 WHERE key = $1", key, kind
             )
+
+    async def set_node_position(self, key: str, x: float | None, y: float | None) -> bool:
+        """Range une case a l'endroit ou l'operateur l'a laissee tomber.
+
+        Purement cosmetique : deplacer une case ne touche aucun equipement.
+        """
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                "UPDATE topology_nodes SET pos_x = $2, pos_y = $3 WHERE key = $1", key, x, y
+            )
+        return not resultat.endswith(" 0")
+
+    async def set_node_parent(self, key: str, parent_key: str | None) -> bool:
+        """Force le parent d'une case (glisser-deposer un lien).
+
+        NULL retablit l'orientation automatique par role. On refuse qu'une case
+        soit son propre parent : ce serait un cycle immediat. Les cycles plus
+        longs sont evites cote lecture, en coupant la boucle a l'affichage.
+        """
+        if parent_key is not None and parent_key == key:
+            raise ValueError("un equipement ne peut pas etre son propre parent")
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                "UPDATE topology_nodes SET parent_override = $2 WHERE key = $1", key, parent_key
+            )
+        return not resultat.endswith(" 0")
+
+    async def set_node_hidden(self, key: str, hidden: bool) -> bool:
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                "UPDATE topology_nodes SET hidden = $2 WHERE key = $1", key, hidden
+            )
+        return not resultat.endswith(" 0")
 
     # ------------------------------------------------------------ politique
     async def upsert_policy(

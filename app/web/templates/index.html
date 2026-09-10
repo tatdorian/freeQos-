@@ -16,7 +16,8 @@
       <a href="#/subscribers" data-view="subscribers">Abonnes</a>
       <a href="#/topology" data-view="topology">Topologie</a>
       <a href="#/shaping"  data-view="shaping">Shaping</a>
-      <a href="#/pops"      data-view="pops">PoPs</a>
+      <a href="#/pops"      data-view="pops">Equipements</a>
+      <a href="#/remote"    data-view="remote">Connexion a distance</a>
     </nav>
     <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
   </header>
@@ -86,17 +87,24 @@
     <section id="view-topology">
       <div class="toolbar">
         <button id="btn-discover">Relancer la decouverte</button>
+        <label class="chk" title="N'afficher que les liens dont le debit est mesure">
+          <input type="checkbox" id="topo-rate-only" checked> Liens a debit seulement
+        </label>
+        <button id="btn-topo-reset" class="sm">Reinitialiser la disposition</button>
         <span class="spacer"></span>
         <span class="mode" id="topo-count"></span>
       </div>
       <div id="topo-notice"></div>
       <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Construite a partir de <code>/ip/neighbor</code> (MNDP, LLDP, CDP) pour
-        l'adjacence, <code>/interface/ethernet</code> pour le debit negocie,
-        UISP pour les liens radio, et du <code>caller-id</code> PPPoE pour
-        rattacher chaque abonne a son secteur.
+        Vrai arbre reseau, editable : <b>glissez une case</b> pour la deplacer,
+        <b>deposez-la sur une autre</b> pour la rattacher. Chaque lien porte son
+        debit mesure. La disposition et les rattachements sont enregistres — ils
+        ne changent que l'arbre AFFICHE, aucun equipement n'est reconfigure.
       </p>
-      <div id="topo-graph"></div>
+      <div class="topo-editor">
+        <div id="topo-canvas" class="topo-canvas"></div>
+        <aside id="topo-panel" class="topo-panel"></aside>
+      </div>
       <h2>Liens</h2>
       <p class="empty" style="text-align:left;padding:0 0 .8rem">
         Le debit vient des compteurs du PORT qui porte le lien
@@ -128,17 +136,23 @@
       <div class="table-wrap" id="shaping-audit"></div>
     </section>
 
-    <!-- ----------------------------------------------------------- PoPs -->
+    <!-- --------------------------------------------------- equipements -->
     <section id="view-pops">
+      <div class="toolbar">
+        <button id="btn-build-tree" class="primary">Analyser la configuration et construire l'arbre</button>
+        <span class="spacer"></span>
+        <span class="mode" id="build-count"></span>
+      </div>
+      <p class="empty" style="text-align:left;padding:0 0 .8rem">
+        Ajoutez un routeur ou une antenne <b>via son API</b> : le controleur lit
+        sa configuration (<code>/ip/neighbor</code>, <code>/interface</code>,
+        capacite radio) et <b>construit l'arbre reseau tout seul</b>. Chaque ajout
+        relance l'analyse ; l'arbre se voit dans l'onglet Topologie.
+      </p>
+      <div id="build-notice"></div>
       <div id="pops-notice"></div>
 
-      <h2>Sites connus</h2>
-      <div class="table-wrap" id="pops-table"></div>
-
-      <h2>Routeurs interroges</h2>
-      <div class="table-wrap" id="routers-table"></div>
-
-      <h2>Connecter un PoP</h2>
+      <h2>Connecter un routeur (PoP)</h2>
       <div class="card">
         <form class="stack" id="router-form" autocomplete="off">
           <div class="row-3">
@@ -284,6 +298,34 @@
           </div>
         </form>
       </div>
+
+      <h2>Inventaire</h2>
+      <p class="help" style="margin:-.4rem 0 .8rem">
+        Ce qui est deja interroge. La <b>Connexion a distance</b> en donne l'etat
+        de joignabilite en un coup d'oeil.
+      </p>
+      <h2 style="text-transform:none;font-size:.75rem">Sites connus</h2>
+      <div class="table-wrap" id="pops-table"></div>
+      <h2 style="text-transform:none;font-size:.75rem">Routeurs interroges</h2>
+      <div class="table-wrap" id="routers-table"></div>
+    </section>
+
+    <!-- ---------------------------------------------- connexion a distance -->
+    <section id="view-remote">
+      <div class="toolbar">
+        <button id="btn-remote-refresh">Rafraichir</button>
+        <span class="spacer"></span>
+        <span class="mode" id="remote-count"></span>
+      </div>
+      <p class="empty" style="text-align:left;padding:0 0 .8rem">
+        Etat des connexions distantes, par famille d'API. Tout est en
+        <b>lecture</b> : cette page n'ouvre aucune session d'ecriture, elle donne
+        la joignabilite de chaque integration. Ajouter demain une antenne d'un
+        autre fabricant ajoutera une famille ici.
+      </p>
+      <div id="remote-integrations" class="grid cols-2"></div>
+      <h2>Equipements distants</h2>
+      <div class="table-wrap" id="remote-devices"></div>
     </section>
   </main>
 

@@ -94,6 +94,11 @@ async def subscriber_metrics(
         end=window.end,
         bucket_seconds=window.bucket_seconds,
     )
+    # Bufferbloat de CET abonne sur la meme fenetre : latence a vide vs sous
+    # charge. Calcule sur les echantillons bruts, pas sur les points agreges,
+    # pour que la note reste juste quel que soit le bucket demande.
+    minutes = max(5, round((window.end - window.start).total_seconds() / 60))
+    bloat = await repo.bufferbloat(minutes=minutes, subscriber_id=subscriber_id)
     return {
         "subscriber": subscriber,
         "start": window.start,
@@ -102,7 +107,23 @@ async def subscriber_metrics(
         # Rappel de convention : rx = upload abonne, tx = download abonne.
         "orientation": "rx=upload abonne, tx=download abonne (point de vue routeur)",
         "points": points,
+        "bufferbloat": bloat["subscribers"][0] if bloat["subscribers"] else None,
     }
+
+
+@router.get("/bufferbloat", summary="Note de bufferbloat (latence sous charge) par abonne")
+async def bufferbloat(
+    repo: RepositoryDep,
+    minutes: Annotated[int, Query(ge=5, le=60 * 24 * 7, description="Fenetre d'observation")] = 60,
+    pop_id: Annotated[int | None, Query()] = None,
+) -> dict[str, Any]:
+    """Le bufferbloat est la latence AJOUTEE quand le lien se remplit.
+
+    Il se lit en correlant RTT et debit deja collectes : rien de nouveau a
+    mesurer, juste a rapprocher. Un abonne sans charge sur la fenetre reste sans
+    note (compte dans ``indeterminate``) plutot que d'en recevoir une flatteuse.
+    """
+    return await repo.bufferbloat(minutes=minutes, pop_id=pop_id)
 
 
 @router.get("/backhauls", summary="Liste des backhauls radio")

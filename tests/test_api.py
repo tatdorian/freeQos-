@@ -86,6 +86,33 @@ class FakeRepository:
             }
         ]
 
+    async def bufferbloat(self, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "window_minutes": kwargs.get("minutes", 60),
+            "summary": {
+                "measured": 1,
+                "distribution": {"A+": 1, "A": 0, "B": 0, "C": 0, "D": 0, "F": 0},
+                "worst_bloat_ms": 3.0,
+                "indeterminate": 0,
+                "candidates": 1,
+            },
+            "subscribers": [
+                {
+                    "subscriber_id": 1,
+                    "pppoe_login": "dupont",
+                    "pop_name": "PoP Test",
+                    "grade": "A+",
+                    "severity": "ok",
+                    "idle_ms": 9.0,
+                    "loaded_ms": 12.0,
+                    "bloat_ms": 3.0,
+                    "samples": 12,
+                    "loaded_samples": 4,
+                    "load_max_bps": 90_000_000.0,
+                }
+            ],
+        }
+
     async def subscriber_latest(self, **kwargs: Any) -> list[dict[str, Any]]:
         return [
             {
@@ -352,6 +379,31 @@ def test_serie_d_un_abonne(client: TestClient) -> None:
     assert body["points"][0]["tx_bps_avg"] == 40_000_000.0
     # La convention de sens est rappelee dans la reponse.
     assert "upload abonne" in body["orientation"]
+
+
+def test_serie_porte_la_note_de_bufferbloat(client: TestClient) -> None:
+    """La fiche abonne rapproche RTT et debit : sa note de bufferbloat y figure."""
+    body = client.get("/api/v1/subscribers/1/metrics?minutes=60").json()
+    assert body["bufferbloat"]["grade"] == "A+"
+    assert body["bufferbloat"]["bloat_ms"] == 3.0
+
+
+def test_connexion_a_distance(client: TestClient) -> None:
+    """Vue unique de toutes les integrations distantes et de leur joignabilite."""
+    body = client.get("/api/v1/remote/status").json()
+    kinds = {i["kind"] for i in body["integrations"]}
+    assert {"routeros", "airos", "uisp", "radius"} <= kinds
+    routeros = next(i for i in body["integrations"] if i["kind"] == "routeros")
+    # L'inventaire fichier de test porte au moins un routeur.
+    assert routeros["summary"]["total"] >= 1
+    assert body["mode"].startswith("out-of-band")
+
+
+def test_bufferbloat_reseau(client: TestClient) -> None:
+    body = client.get("/api/v1/bufferbloat?minutes=60").json()
+    assert body["summary"]["measured"] == 1
+    assert body["subscribers"][0]["grade"] == "A+"
+    assert "distribution" in body["summary"]
 
 
 def test_serie_fenetre_incoherente(client: TestClient) -> None:

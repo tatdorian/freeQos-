@@ -190,6 +190,65 @@ def _origine_mesure(lien: dict[str, Any]) -> dict[str, Any]:
     return {"source": origine, "interface_links": partage, "note": note}
 
 
+class NodePosition(BaseModel):
+    x: float | None = None
+    y: float | None = None
+
+
+class NodeParent(BaseModel):
+    # Cle du parent force ; null retablit l'orientation automatique par role.
+    parent_key: str | None = None
+
+
+class NodeVisibility(BaseModel):
+    hidden: bool = False
+
+
+# Les routes a suffixe sont declarees AVANT la route "role" en {key:path} : cette
+# derniere est gloutonne (le convertisseur path avale les slashs), donc sans cet
+# ordre elle capterait "mac:AA/layout" avant la route dediee.
+@router.patch("/topology/nodes/{key:path}/layout", summary="Deplacer une case de l'arbre")
+async def set_node_layout(
+    key: str, payload: NodePosition, container: ContainerDep
+) -> dict[str, Any]:
+    """Range une case a l'endroit choisi. Purement cosmetique : aucun routeur
+    n'est touche par un deplacement."""
+    repo = _require_topology(container)
+    trouve = await repo.set_node_position(key, payload.x, payload.y)
+    if not trouve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Noeud inconnu : {key}")
+    return {"key": key, "pos_x": payload.x, "pos_y": payload.y}
+
+
+@router.patch("/topology/nodes/{key:path}/parent", summary="Re-parenter une case (glisser un lien)")
+async def set_node_parent(key: str, payload: NodeParent, container: ContainerDep) -> dict[str, Any]:
+    """Force le parent d'un equipement dans l'arbre affiche.
+
+    Glisser une case sous une autre exprime la vraie hierarchie quand la
+    detection automatique se trompe. C'est un reglage d'AFFICHAGE : il ne
+    reconfigure pas le routage, il corrige l'arbre que le controleur montre.
+    """
+    repo = _require_topology(container)
+    try:
+        trouve = await repo.set_node_parent(key, payload.parent_key or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not trouve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Noeud inconnu : {key}")
+    return {"key": key, "parent_override": payload.parent_key or None}
+
+
+@router.patch("/topology/nodes/{key:path}/visibility", summary="Masquer ou reafficher une case")
+async def set_node_visibility(
+    key: str, payload: NodeVisibility, container: ContainerDep
+) -> dict[str, Any]:
+    repo = _require_topology(container)
+    trouve = await repo.set_node_hidden(key, payload.hidden)
+    if not trouve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Noeud inconnu : {key}")
+    return {"key": key, "hidden": payload.hidden}
+
+
 @router.patch("/topology/nodes/{key:path}", summary="Corriger le role d'un equipement")
 async def set_node_kind(
     key: str,
