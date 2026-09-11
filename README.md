@@ -126,7 +126,10 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   *injoignable*) plutôt que de disparaître silencieusement. Quand l'automatique ne peut pas
   *prouver* l'identité (nom générique « MikroTik », pas de MAC commune), l'opérateur tranche
   à la main : *Même équipement que…* replie une case sur une autre, *Séparer* défait la
-  fusion. Rôles, position, rattachements, liens et fusions manuels sont enregistrés, mais ne
+  fusion. L'arbre **signale aussi les doublons probables** — deux cases aux mêmes mots-clés
+  dans un ordre différent (« CCR DS » / « DS-CCR ») — avec un bouton *Fusionner* en un clic ;
+  il ne les fusionne pas d'office, car deux bouts d'un même lien peuvent être deux vrais
+  routeurs. Rôles, position, rattachements, liens et fusions manuels sont enregistrés, mais ne
   changent que l'arbre **affiché** — aucun équipement n'est reconfiguré.
 - **Abonnés** — sessions filtrables **par PoP** et par login, avec débit vs plan, latence,
   **note de bufferbloat** (latence sous charge), boost en cours et son décompte. Un clic

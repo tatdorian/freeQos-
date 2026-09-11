@@ -2322,6 +2322,34 @@ function topoAttrs(node) {
   return a && typeof a === 'object' ? a : {};
 }
 
+// Mots trop generiques pour caracteriser un equipement (identite par defaut).
+const TOPO_GENERIC_TOKENS = new Set(['', 'mikrotik', 'routeros', 'routerboard', 'chr']);
+
+/** Jeu de mots-cles normalise d'un noeud (nom + identite), trie, sans les mots
+ *  generiques. "CCR DS" et "DS-CCR" donnent la MEME signature : c'est ce qui
+ *  permet de REPERER un doublon probable meme quand l'ordre des mots differe. */
+function topoNameTokens(node) {
+  const brut = ((node.name || '') + ' ' + (topoAttrs(node).identity || '')).toLowerCase();
+  const toks = brut.split(/[^a-z0-9]+/).filter((t) => t && !TOPO_GENERIC_TOKENS.has(t));
+  return [...new Set(toks)].sort();
+}
+
+/** Doublons PROBABLES du noeud : d'autres cases dont les mots-cles sont les memes
+ *  (ordre indifferent). On ne fusionne PAS tout seul -- deux extremites d'un lien
+ *  ("CCR-DS" / "DS-CCR") peuvent etre deux vrais routeurs -- mais on le SIGNALE
+ *  pour une fusion en un clic si c'est bien le meme materiel. */
+function topoDuplicateSuggestions(node) {
+  const mine = topoNameTokens(node);
+  if (mine.length < 2 || !topo.model) return [];
+  const sig = mine.join(' ');
+  const out = [];
+  topo.model.nodesByKey.forEach((n) => {
+    if (n.key === node.key || n.synthetic) return;
+    if (topoNameTokens(n).join(' ') === sig) out.push({ key: n.key, name: n.name });
+  });
+  return out;
+}
+
 /** Les autres cases de l'arbre, pour proposer une cible de fusion manuelle.
  *  Triees par nom, la case courante exclue. */
 function topoOtherNodes(selfKey) {
@@ -2343,10 +2371,21 @@ function renderTopoPanel() {
   }
   const parent = node.parentKey ? topo.model.nodesByKey.get(node.parentKey) : null;
   const attrs = topoAttrs(node);
+  const dups = topoDuplicateSuggestions(node);
   host.innerHTML =
     '<h4>' + esc(node.name) +
       (attrs.unreachable ? ' <span class="badge warn" title="' + esc(attrs.error || '') +
         '">injoignable</span>' : '') + '</h4>' +
+    // Doublon probable (memes mots-cles, ordre different) : signale, pas fusionne
+    // d'office. Un clic replie l'autre case dans celle-ci si c'est le meme materiel.
+    (dups.length
+      ? '<div class="notice" style="margin:.5rem 0"><b>Doublon probable</b> — mêmes ' +
+        'mots-clés que : ' +
+        dups.map((d) => '<button class="sm primary" data-merge-into="' + esc(d.key) + '">' +
+          'Fusionner ' + esc(topoTrim(d.name, 18)) + '</button>').join(' ') +
+        '<span class="hint">Même équipement ? Fusionnez. Sinon (deux bouts d\'un lien, ' +
+        'p.ex. CCR↔DS), laissez : ce sont deux vrais routeurs.</span></div>'
+      : '') +
     '<div class="kv"><span>Role</span><span>' + esc(KIND_LABEL[node.kind] || '?') + '</span></div>' +
     ((node.addresses && node.addresses.length)
       ? '<div class="kv"><span>Adresse(s)</span><span>' + esc(node.addresses.join(', ')) + '</span></div>'
@@ -2431,6 +2470,14 @@ function renderTopoPanel() {
     try {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '/parent',
         { method: 'PATCH', body: JSON.stringify({ parent_key: b.dataset.attach }) });
+      await loadTopology();
+    } catch (err) { alert(err.message); }
+  }));
+  host.querySelectorAll('[data-merge-into]').forEach((b) => b.addEventListener('click', async () => {
+    // On replie l'autre case (alias) dans celle que l'operateur regarde (canonique).
+    try {
+      await api('/topology/merge', { method: 'POST',
+        body: JSON.stringify({ alias_key: b.dataset.mergeInto, canonical_key: node.key }) });
       await loadTopology();
     } catch (err) { alert(err.message); }
   }));
