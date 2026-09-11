@@ -317,6 +317,55 @@ class TopologyRepository:
             )
         return not resultat.endswith(" 0")
 
+    # ------------------------------------------------ fusions manuelles
+    async def aliases(self) -> dict[str, str]:
+        """Fusions declarees par l'operateur : alias_key -> canonical_key."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("SELECT alias_key, canonical_key FROM topology_aliases")
+        return {row["alias_key"]: row["canonical_key"] for row in rows}
+
+    async def merge_nodes(self, alias_key: str, canonical_key: str) -> None:
+        """Declare que deux cases sont le meme equipement.
+
+        On garde ``canonical_key`` et on replie ``alias_key`` dessus. Refuse une
+        case sur elle-meme, et rechaine toute fusion qui pointait deja vers
+        l'alias pour eviter une chaine alias -> alias -> canonique."""
+        if alias_key == canonical_key:
+            raise ValueError("un noeud ne peut pas etre fusionne avec lui-meme")
+        async with self._pool.acquire() as conn, conn.transaction():
+            # Si le canonique choisi etait lui-meme un alias, on remonte a SA cible.
+            cible = await conn.fetchval(
+                "SELECT canonical_key FROM topology_aliases WHERE alias_key = $1", canonical_key
+            )
+            canonical_key = cible or canonical_key
+            if alias_key == canonical_key:
+                raise ValueError("fusion circulaire refusee")
+            await conn.execute(
+                """
+                INSERT INTO topology_aliases (alias_key, canonical_key)
+                VALUES ($1, $2)
+                ON CONFLICT (alias_key) DO UPDATE SET
+                    canonical_key = EXCLUDED.canonical_key, updated_at = now()
+                """,
+                alias_key,
+                canonical_key,
+            )
+            # Les cases repliees sur l'alias suivent desormais le meme canonique.
+            await conn.execute(
+                "UPDATE topology_aliases SET canonical_key = $2, updated_at = now() "
+                "WHERE canonical_key = $1",
+                alias_key,
+                canonical_key,
+            )
+
+    async def unmerge_node(self, alias_key: str) -> bool:
+        """Annule une fusion manuelle : la case redevient distincte."""
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                "DELETE FROM topology_aliases WHERE alias_key = $1", alias_key
+            )
+        return not resultat.endswith(" 0")
+
     # ------------------------------------------------------------ politique
     async def upsert_policy(
         self,

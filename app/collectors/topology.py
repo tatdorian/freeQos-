@@ -26,6 +26,7 @@ Ce module est en LECTURE SEULE. Il produit un graphe ; ce qu'on en fait
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
@@ -55,38 +56,65 @@ LINK_PPPOE = "pppoe"
 GENERIC_NAMES = {"", "?", "mikrotik", "routeros", "routerboard"}
 
 
+def _as_attributes(value: Any) -> dict[str, Any]:
+    """``attributes`` revient tantot en dict, tantot en JSON brut (asyncpg)."""
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return {}
+    return value if isinstance(value, dict) else {}
+
+
 def _merge_signatures(node: dict[str, Any]) -> set[str]:
     """Signaux qui prouvent une IDENTITE d'equipement (pas une simple adjacence).
 
-    Le MAC est le plus sur. Le nom (identite RouterOS) l'est presque autant, une
-    fois insensibilise a la casse -- ``NAS-FRANCOPHONIE`` et ``NAS-francophonie``
-    sont le meme routeur -- SAUF s'il est generique. On NE fusionne PAS sur
-    l'adresse IP : un meme equipement porte plusieurs IP (management, lien amont),
-    et surtout deux equipements distincts peuvent partager une IP de segment.
+    Le MAC est le plus sur. Un routeur gere porte PLUSIEURS MAC (une par
+    interface) : quand un autre routeur le voit en voisin, il ne connait que la
+    MAC de l'interface en face. On expose donc TOUTES ses MAC (``attributes.macs``)
+    pour que la fusion aboutisse quelle que soit l'interface observee. Le nom
+    (identite RouterOS) sert aussi, une fois insensibilise a la casse --
+    ``NAS-FRANCOPHONIE`` et ``NAS-francophonie`` sont le meme routeur -- SAUF s'il
+    est generique. On NE fusionne PAS sur l'adresse IP : un meme equipement porte
+    plusieurs IP, et deux equipements distincts peuvent partager une IP de segment.
     C'est justement pour ca qu'on RASSEMBLE les adresses sur un seul noeud au lieu
     de dedoubler.
     """
     signatures: set[str] = set()
-    mac = normalize_mac(node.get("mac"))
-    if mac:
-        signatures.add("mac:" + mac)
-    nom = str(node.get("name") or "").strip().lower()
-    if nom and nom not in GENERIC_NAMES:
-        signatures.add("name:" + nom)
+    attrs = _as_attributes(node.get("attributes"))
+    # Toutes les MAC connues de l'equipement : le champ principal + celles de ses
+    # interfaces (routeur gere) + une eventuelle MAC de gestion.
+    macs = [node.get("mac"), attrs.get("mgmt_mac")]
+    macs.extend(attrs.get("macs") or [])
+    for brut in macs:
+        mac = normalize_mac(brut)
+        if mac:
+            signatures.add("mac:" + mac)
+    # Nom affiche ET identite RouterOS reelle (le nom d'un PoP gere est souvent
+    # un libelle "PoP Nord", alors que ses voisins le voient sous son identite).
+    for source in (node.get("name"), attrs.get("identity")):
+        nom = str(source or "").strip().lower()
+        if nom and nom not in GENERIC_NAMES:
+            signatures.add("name:" + nom)
     return signatures
 
 
-def _pick_canonical(members: list[dict[str, Any]]) -> dict[str, Any]:
+def _pick_canonical(
+    members: list[dict[str, Any]], preferred: set[str] | None = None
+) -> dict[str, Any]:
     """Choisit la case qui represente le groupe.
 
-    On garde en priorite le noeud du routeur GERE (cle ``router:``) : il est
-    stable et porte deja la disposition sauvegardee. A defaut, celui qui a une
-    position ou un parent pose a la main, puis un MAC, puis le premier venu.
+    On respecte d'abord le canonique DECLARE par l'operateur (``preferred``),
+    puis le noeud du routeur GERE (cle ``router:``), stable et porteur de la
+    disposition sauvegardee ; a defaut celui qui a une position ou un parent pose
+    a la main, puis un MAC, puis le premier venu.
     """
+    prefs = preferred or set()
 
     def rang(node: dict[str, Any]) -> tuple:
         key = node.get("key", "")
         return (
+            0 if key in prefs else 1,
             0 if key.startswith("router:") else 1,
             0 if (node.get("pos_x") is not None or node.get("parent_override")) else 1,
             0 if key.startswith("mac:") else 1,
@@ -96,7 +124,9 @@ def _pick_canonical(members: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def reconcile_topology(
-    nodes: list[dict[str, Any]], links: list[dict[str, Any]]
+    nodes: list[dict[str, Any]],
+    links: list[dict[str, Any]],
+    forced_merges: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Fusionne les doublons : un meme equipement, une seule case.
 
@@ -106,6 +136,11 @@ def reconcile_topology(
     par identite (MAC ou nom non generique), on garde une case canonique, on y
     RASSEMBLE toutes les adresses, et on recable les liens vers elle. Un lien
     devenu interne a un equipement fusionne (source == cible) disparait.
+
+    ``forced_merges`` porte les fusions DECLAREES par l'operateur (alias_key ->
+    canonical_key) : le dernier mot, quand l'automatique ne peut pas prouver
+    l'identite (nom generique, pas de MAC commune). C'est le levier de precision
+    maximale de l'arbre.
 
     Purement de lecture : ne touche ni la base ni les equipements. La cle des
     liens est conservee telle quelle, pour que la mesure de debit continue de la
@@ -132,14 +167,22 @@ def reconcile_topology(
             else:
                 par_signature[signature] = node["key"]
 
+    # Fusions manuelles : appliquees APRES les signatures, elles ne peuvent que
+    # rapprocher davantage (jamais separer ce que la signature a uni). On ignore
+    # une regle dont un cote a disparu du graphe.
+    for alias_key, canonical_key in (forced_merges or {}).items():
+        if alias_key in parent and canonical_key in parent:
+            union(alias_key, canonical_key)
+
     groupes: dict[str, list[dict[str, Any]]] = {}
     for node in nodes:
         groupes.setdefault(find(node["key"]), []).append(node)
 
+    canoniques_forces = set((forced_merges or {}).values())
     canonique_de: dict[str, str] = {}
     fusionnes: list[dict[str, Any]] = []
     for membres in groupes.values():
-        canon = dict(_pick_canonical(membres))
+        canon = dict(_pick_canonical(membres, canoniques_forces))
         # Toutes les adresses de l'equipement, rassemblees plutot que dedoublees.
         adresses = sorted({str(m.get("address")) for m in membres if m.get("address")})
         for champ in ("mac", "platform", "version", "uisp_device_id"):
@@ -158,6 +201,7 @@ def reconcile_topology(
         if adresses and not canon.get("address"):
             canon["address"] = adresses[0]
         canon["merged_count"] = len(membres)
+        canon["members"] = [m["key"] for m in membres]
         canon["fresh"] = any(m.get("fresh") for m in membres)
         for m in membres:
             canonique_de[m["key"]] = canon["key"]
@@ -332,6 +376,24 @@ def ethernet_capacity_mbps(row: dict[str, Any]) -> float | None:
     return None
 
 
+def _router_macs(
+    interfaces: list[dict[str, Any]], ethernet: list[dict[str, Any]]
+) -> list[str]:
+    """Toutes les MAC propres au routeur, normalisees et dedupliquees.
+
+    Ce sont ces MAC qui permettent de reconnaitre le routeur quand un AUTRE
+    routeur le voit en voisin : le voisinage ne revele que la MAC de l'interface
+    en face, donc il faut les connaitre toutes pour garantir la fusion.
+    """
+    vues: list[str] = []
+    for rangee in (*interfaces, *ethernet):
+        for champ in ("mac-address", "orig-mac-address"):
+            mac = normalize_mac(rangee.get(champ))
+            if mac and mac not in vues:
+                vues.append(mac)
+    return vues
+
+
 def build_from_router(
     snapshot: TopologySnapshot,
     *,
@@ -342,17 +404,30 @@ def build_from_router(
     interfaces: list[dict[str, Any]],
     ethernet: list[dict[str, Any]],
     addresses: list[dict[str, Any]],
+    identity: str | None = None,
 ) -> None:
-    """Ajoute au graphe ce qu'un routeur voit autour de lui."""
+    """Ajoute au graphe ce qu'un routeur voit autour de lui.
+
+    Le noeud du routeur gere porte desormais son identite RouterOS et TOUTES ses
+    MAC d'interface : c'est ce qui permet a la reconciliation de le reconnaitre
+    quand un autre PoP le voit en voisin, au lieu de le dedoubler.
+    """
     router_key = router_node_key(router_name)
+    macs = _router_macs(interfaces, ethernet)
+    attributs: dict[str, Any] = {"managed": True}
+    if identity:
+        attributs["identity"] = str(identity)
+    if macs:
+        attributs["macs"] = macs
     snapshot.add_node(
         TopologyNode(
             key=router_key,
             name=pop_name or router_name,
             kind=KIND_POP,
+            mac=macs[0] if macs else None,
             address=host,
             router_name=router_name,
-            attributes={"managed": True},
+            attributes=attributs,
         )
     )
 

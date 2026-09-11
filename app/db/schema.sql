@@ -158,6 +158,17 @@ CREATE TABLE IF NOT EXISTS topology_links (
 CREATE INDEX IF NOT EXISTS idx_topology_links_source ON topology_links (source_key);
 CREATE INDEX IF NOT EXISTS idx_topology_links_target ON topology_links (target_key);
 
+-- Fusions declarees par l'operateur : quand la reconciliation automatique ne
+-- peut PAS prouver que deux cases sont le meme equipement (identite generique
+-- "MikroTik", pas de MAC commune), l'operateur tranche a la main. alias_key
+-- devient canonical_key. C'est le dernier mot : la precision maximale de l'arbre
+-- passe par ce levier. Reversible (on efface la ligne pour re-separer).
+CREATE TABLE IF NOT EXISTS topology_aliases (
+    alias_key     TEXT PRIMARY KEY,
+    canonical_key TEXT NOT NULL,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Rattachement abonne -> secteur radio, issu de la jointure caller-id / UISP.
 CREATE TABLE IF NOT EXISTS subscriber_attachments (
     subscriber_id  BIGINT PRIMARY KEY REFERENCES subscribers(id) ON DELETE CASCADE,

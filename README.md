@@ -109,9 +109,14 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le débit total).
   L'option *Liens à débit seulement* ne garde que les liens réellement mesurés. Les doublons
   sont **réconciliés** : un même routeur vu plusieurs fois (PoP géré *et* voisin du cœur,
-  casses ou IPv4/IPv6 différentes) devient une seule case, ses adresses rassemblées. Rôles,
-  position, rattachements et liens manuels sont enregistrés, mais ne changent que l'arbre
-  **affiché** — aucun équipement n'est reconfiguré.
+  casses ou IPv4/IPv6 différentes) devient une seule case, ses adresses rassemblées. La
+  réconciliation reconnaît un routeur géré par son **identité RouterOS et *toutes* ses MAC
+  d'interface** — c'est ce qui empêche qu'il se dédouble quand un autre PoP le voit en voisin
+  (le voisinage ne révèle que la MAC de l'interface en face). Quand l'automatique ne peut pas
+  *prouver* l'identité (nom générique « MikroTik », pas de MAC commune), l'opérateur tranche
+  à la main : *Même équipement que…* replie une case sur une autre, *Séparer* défait la
+  fusion. Rôles, position, rattachements, liens et fusions manuels sont enregistrés, mais ne
+  changent que l'arbre **affiché** — aucun équipement n'est reconfiguré.
 - **Abonnés** — sessions filtrables **par PoP** et par login, avec débit vs plan, latence,
   **note de bufferbloat** (latence sous charge), boost en cours et son décompte. Un clic
   ouvre la série de l'abonné ; les boutons *Débit* et *Boost* agissent directement.
@@ -566,6 +571,7 @@ que la boucle centrale devra suivre, sans radio.
 | `PATCH` | `/api/v1/topology/nodes/{key}` | Corriger le rôle d'un équipement |
 | `PATCH` | `/api/v1/topology/nodes/{key}/layout` · `/parent` · `/visibility` | Position, rattachement forcé, masquage — arbre affiché seulement |
 | `POST` · `DELETE` | `/api/v1/topology/links` · `/topology/links/{key}` | Créer / retirer un lien à la main (arbre affiché) |
+| `POST` · `DELETE` | `/api/v1/topology/merge` · `/topology/merge/{alias_key}` | Fusion manuelle de deux cases (même équipement) / annulation |
 | `GET` | `/api/v1/topology/links/{key}/throughput` | Débit mesuré d'un lien + historique |
 | `GET` | `/api/v1/topology/links/{key}/live` | Mesure instantanée (`/interface/monitor-traffic`) |
 | `GET` | `/api/v1/shaping/state` | Ce qui est **déjà** configuré sur les routeurs |

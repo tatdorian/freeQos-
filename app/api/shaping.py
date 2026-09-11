@@ -44,12 +44,21 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     repo = _require_topology(container)
     noeuds = await repo.nodes()
     liens = await repo.links()
+    aliases = await repo.aliases()
     # Reconciliation : un meme equipement vu plusieurs fois (PoP gere ET voisin
     # du coeur, casses differentes, IPv4/IPv6) devient UNE case, ses adresses
-    # rassemblees. Sans elle, l'arbre dedouble les routeurs.
+    # rassemblees. Sans elle, l'arbre dedouble les routeurs. ``aliases`` ajoute les
+    # fusions tranchees a la main par l'operateur.
     from app.collectors.topology import reconcile_topology
 
-    noeuds, liens = reconcile_topology(noeuds, liens)
+    noeuds, liens = reconcile_topology(noeuds, liens, aliases)
+    # Marque, sur chaque case canonique, les fusions MANUELLES qu'elle porte : la
+    # seule sorte qu'on puisse defaire (la fusion automatique, elle, se refait au
+    # chargement suivant).
+    for noeud in noeuds:
+        manuelles = [k for k in noeud.get("members", []) if k in aliases]
+        if manuelles:
+            noeud["manual_aliases"] = manuelles
     return {
         "nodes": noeuds,
         "links": liens,
@@ -281,6 +290,38 @@ async def delete_link(key: str, container: ContainerDep) -> dict[str, Any]:
     if not trouve:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lien inconnu : {key}")
     return {"key": key, "hidden": True}
+
+
+class MergeInput(BaseModel):
+    # alias_key est replie sur canonical_key : ces deux cases sont le meme materiel.
+    alias_key: str
+    canonical_key: str
+
+
+@router.post("/topology/merge", summary="Declarer que deux cases sont le meme equipement")
+async def merge_nodes(payload: MergeInput, container: ContainerDep) -> dict[str, Any]:
+    """Fusion tranchee par l'operateur, quand l'automatique n'a pas pu prouver
+    l'identite (nom generique, pas de MAC commune). C'est le levier de precision
+    maximale : l'arbre montre alors UNE case la ou la detection en laissait deux.
+    Reversible via DELETE. Purement affichage : aucun equipement n'est touche."""
+    repo = _require_topology(container)
+    try:
+        await repo.merge_nodes(payload.alias_key, payload.canonical_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"alias_key": payload.alias_key, "canonical_key": payload.canonical_key}
+
+
+@router.delete("/topology/merge/{alias_key:path}", summary="Annuler une fusion manuelle")
+async def unmerge_node(alias_key: str, container: ContainerDep) -> dict[str, Any]:
+    """Defait une fusion posee a la main : la case redevient distincte."""
+    repo = _require_topology(container)
+    trouve = await repo.unmerge_node(alias_key)
+    if not trouve:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Fusion inconnue : {alias_key}"
+        )
+    return {"alias_key": alias_key, "unmerged": True}
 
 
 @router.patch("/topology/nodes/{key:path}", summary="Corriger le role d'un equipement")
