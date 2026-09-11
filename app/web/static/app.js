@@ -1895,12 +1895,22 @@ function topoBuildModel(data) {
       attach(n.key, n.parent_override, edge);
     }
   });
-  // 2) le reste par role, mais UNIQUEMENT sur des liens surs (point-a-point,
-  // UISP, ou manuels). Un lien vu sur un segment PARTAGE (plusieurs voisins sur
-  // le meme port : VLAN de gestion, switch) ne prouve aucune adjacence directe :
-  // l'y dessiner fabriquait un maillage de liens qui n'existent pas. On ne devine
-  // plus ces aretes ; l'operateur peut toujours les poser a la main.
+  // 2) par role, en DEUX passes pour ne perdre aucune vraie adjacence :
+  //   a) d'abord les liens SURS (point-a-point, UISP, manuels) : ils priment
+  //      toujours et forment l'ossature fiable de l'arbre.
+  //   b) puis, pour un noeud encore SANS parent, on retombe sur son meilleur
+  //      lien de segment partage plutot que de le laisser orphelin -- on prefere
+  //      un rattachement probable, marque INCERTAIN (trait pointille), a un trou.
+  // Un noeud n'a jamais qu'UN parent (attach ne l'ecrit qu'une fois) : pas de
+  // maillage, mais plus de routeur detache a tort non plus.
+  const rang = (k) => TOPO_RANG[nodes.get(k)?.kind] ?? 5;
   oriented.filter((e) => e.confident).forEach((e) => attach(e.childKey, e.parentKey, e));
+  oriented
+    .filter((e) => !e.confident && !nodes.get(e.childKey)?.parentKey)
+    // Meilleur parent d'abord : le plus haut dans la hierarchie (coeur/gateway
+    // avant un PoP voisin), pour eviter de rattacher a un frere par hasard.
+    .sort((a, b) => rang(a.parentKey) - rang(b.parentKey))
+    .forEach((e) => attach(e.childKey, e.parentKey, { ...e, uncertain: true }));
 
   // Rattache les abonnes a leur PoP : un noeud agrege repliable par PoP plutot
   // que 500 cases. Le debit de l'arete est la somme du trafic des abonnes.
@@ -2042,6 +2052,8 @@ function renderTopoCanvas() {
     } else if (rates.cap) {
       cls += ' ' + severity(pct(Math.max(rates.down, rates.up), rates.cap));
     }
+    // Adjacence probable (segment partage), pas prouvee point-a-point : pointille.
+    if (n.edge && n.edge.uncertain && !forced && !manual) cls += ' uncertain';
     // Zone de clic large et transparente derriere le trait : un lien se
     // supprime en cliquant dessus (les abonnes agreges n'ont pas de lien reel).
     if (!n.synthetic) {
@@ -2348,16 +2360,24 @@ function renderTopoPanel() {
     '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'racine') +
       (node.parent_override ? ' *' : '') + '</span></div>' +
     '<div class="kv"><span>Vu</span><span>' + (node.fresh ? 'recemment' : 'ancien') + '</span></div>' +
-    // Noeud orphelin faute de lien SUR : on explique et on propose le(s)
-    // rattachement(s) probable(s) vus sur un segment partage.
+    // Rattachement INCERTAIN (vu via un segment partage, pas prouve
+    // point-a-point) : on le signale et on offre de le confirmer/verrouiller.
+    (node.edge && node.edge.uncertain && parent
+      ? '<div class="notice" style="margin:.5rem 0">Rattachement <b>probable</b> à <b>' +
+        esc(topoTrim(parent.name, 18)) + '</b>, vu via un segment partagé (switch / VLAN ' +
+        'de gestion) — pas une adjacence directe prouvée. ' +
+        '<button class="sm ghost" data-attach="' + esc(parent.key) + '">Confirmer</button>' +
+        '<span class="hint">Confirmer verrouille ce parent ; ou glissez la case sous le bon ' +
+        'parent. Trait pointillé = lien incertain.</span></div>'
+      : '') +
+    // Noeud vraiment orphelin (aucun lien) : propose ses candidats de segment.
     (!node.parentKey && node.unsureParents && node.unsureParents.length
       ? '<div class="notice" style="margin:.5rem 0">Aucun lien direct sûr. Vu via un ' +
-        'segment partagé (switch / VLAN de gestion) vers : ' +
+        'segment partagé vers : ' +
         node.unsureParents.map((c) =>
           '<button class="sm ghost" data-attach="' + esc(c.key) + '">' +
           esc(topoTrim(c.name, 18)) + '</button>').join(' ') +
-        '<span class="hint">Cliquez pour rattacher à la main (l\'app ne devine plus ' +
-        'ces liens : ils ne sont pas des adjacences directes prouvées).</span></div>'
+        '<span class="hint">Cliquez pour rattacher à la main.</span></div>'
       : '') +
     '<div class="stack field"><label>Role</label>' +
       '<select id="topo-kind">' + KIND_ORDER.map((k) =>

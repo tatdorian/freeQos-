@@ -107,12 +107,14 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   son rôle** (dont *Client*), **créer un lien** manquant (*Créer un lien* → clic parent puis
   enfant) et **retirer un lien** erroné (clic sur l'arête). Chaque lien porte son **débit
   mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le débit total).
-  L'arbre ne trace **que les adjacences sûres** : un lien point-à-point (un seul voisin sur
-  le port), un lien UISP/radio déclaré, ou un lien posé à la main. Un voisin vu sur un
-  **segment partagé** (plusieurs voisins sur le même port — switch, VLAN de gestion, où
-  MNDP/LLDP montre tout le monde) ne prouve aucune connexion directe : l'app ne fabrique plus
-  ce maillage de liens qui n'existent pas. Un nœud resté sans lien sûr est signalé et propose
-  son (ses) rattachement(s) probable(s) à poser en un clic.
+  L'ossature de l'arbre est bâtie en deux temps pour rester juste sans perdre de nœud :
+  d'abord les **adjacences sûres** (lien point-à-point — un seul voisin sur le port —, lien
+  UISP/radio déclaré, ou lien posé à la main) ; puis, pour un nœud encore sans parent, son
+  **meilleur lien probable** vu sur un segment partagé (switch, VLAN de gestion, où MNDP/LLDP
+  montre tout le monde), tracé en **pointillé** et marqué *incertain* — jamais un maillage
+  (un nœud n'a qu'un parent), et jamais un routeur détaché à tort. Le panneau signale un
+  rattachement incertain et offre de le **confirmer** ou de le corriger d'un clic ; un forçage
+  manuel et les liens manuels priment toujours.
   L'option *Liens à débit seulement* ne garde que les liens réellement mesurés. Les doublons
   sont **réconciliés** : un même routeur vu plusieurs fois (PoP géré *et* voisin du cœur,
   casses ou IPv4/IPv6 différentes, ou joignable sous plusieurs adresses de gestion) devient
