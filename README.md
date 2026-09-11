@@ -115,6 +115,10 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   (lien routé, overlay, switch muet). Ces liens déduits de la config sont fiables et ne
   doublent jamais un lien déjà trouvé. Le bouton **Config** (onglet Équipements) montre le
   `/export` brut d'un routeur et ce que le contrôleur en tire (adresses, tunnels, commentaires).
+  **Les routeurs sont uniquement ceux ajoutés par API.** Quand un PoP en voit un autre en
+  voisin, on ne crée pas une seconde case : le routeur géré est reconnu par son IP, sa MAC ou
+  son identité, et le lien pointe vers sa case API. Ce qui ne correspond à aucun routeur géré
+  reste une feuille — ce sont les **clients** (PPPoE, VLAN), qui ne sont pas sous API.
   L'ossature de l'arbre est bâtie en deux temps pour rester juste sans perdre de nœud :
   d'abord les **adjacences sûres** (lien point-à-point — un seul voisin sur le port —, lien
   UISP/radio déclaré, ou lien posé à la main) ; puis, pour un nœud encore sans parent, son
