@@ -445,6 +445,34 @@ function childCountsFromTopo(topoData) {
   return counts;
 }
 
+// Roles "feuille" (cote client) qu'on n'affiche PAS comme noeud d'infrastructure
+// dans l'Executif : un noeud est un site/routeur, pas un abonne.
+const LEAF_KINDS = new Set(['client', 'subscriber', 'cpe']);
+
+/** Construit des lignes de noeud a partir de la TOPOLOGIE quand aucun abonne
+ *  n'est encore mesure. Le tableau reste vide sinon : ici on montre le reseau
+ *  reel (les routeurs / PoPs connectes) meme sans trafic, avec debit / RTT / QoO
+ *  en n/d — jamais des zeros inventes. */
+function nodesFromTopology(topoData, childCounts) {
+  const counts = childCounts || {};
+  const list = (topoData && Array.isArray(topoData.nodes)) ? topoData.nodes : [];
+  const nodes = list
+    .filter((n) => !LEAF_KINDS.has(n.kind))
+    .map((n) => ({
+      name: n.name || n.key, kind: n.kind || 'unknown', synthetic: true,
+      circuits: 0, tx: 0, rx: 0, effDown: 0, effUp: 0, confDown: 0, confUp: 0,
+      rttMax: null, subs: [],
+      nodesCount: counts[(n.name || '').toLowerCase()] ?? null,
+    }));
+  nodes.sort((a, b) => {
+    const ra = KIND_ORDER.indexOf(a.kind);
+    const rb = KIND_ORDER.indexOf(b.kind);
+    if (ra !== rb) return (ra < 0 ? 99 : ra) - (rb < 0 ? 99 : rb);
+    return a.name.localeCompare(b.name);
+  });
+  return nodes;
+}
+
 /** Etat de la sonde RTT dans la barre d'outils : la case reflete le drapeau
  *  (base), et un encart rappelle que sans elle QoO/RTT/bufferbloat restent vides. */
 function renderRttControl(state) {
@@ -496,7 +524,12 @@ async function loadExec() {
   });
   exec.subsById = {};
   subs.forEach((s) => { exec.subsById[s.subscriber_id] = s; });
-  exec.nodes = aggregateNodes(subs, childCountsFromTopo(topoData));
+  const cc = childCountsFromTopo(topoData);
+  exec.nodes = aggregateNodes(subs, cc);
+  // Aucun abonne mesure mais des routeurs connectes : on montre quand meme le
+  // reseau reel (topologie), sinon l'onglet reste desesperement vide.
+  const fromTopo = exec.nodes.length === 0;
+  if (fromTopo) exec.nodes = nodesFromTopology(topoData, cc);
   // Selection par defaut : le noeud le plus charge, tant que rien n'est choisi.
   if (!selectionExists(exec.selected)) {
     exec.selected = exec.nodes.length ? { type: 'node', name: exec.nodes[0].name } : null;
@@ -508,25 +541,35 @@ async function loadExec() {
   renderExecSankey(document.getElementById('exec-sankey'), subs);
   document.getElementById('exec-count').textContent =
     exec.nodes.length + ' noeud(s), ' + subs.length + ' circuit(s)';
-  renderExecNotice(rttState, firstError, exec.nodes.length === 0);
+  renderExecNotice(rttState, firstError, {
+    noNodes: exec.nodes.length === 0,
+    topoOnly: fromTopo && exec.nodes.length > 0,
+  });
 }
 
 /** Bandeau d'etat de l'onglet : erreur de chargement, sonde coupee, ou reseau
  *  vide. Il y a TOUJOURS quelque chose a l'ecran, jamais un blanc silencieux. */
-function renderExecNotice(rttState, error, empty) {
+function renderExecNotice(rttState, error, st) {
   const notice = document.getElementById('exec-notice');
   if (!notice) return;
+  const state = st || {};
   let html = '';
   if (error) {
     html += '<div class="notice err"><b>Chargement partiel.</b> ' + esc(error.message) +
       '<span class="hint">Une source n\'a pas repondu (base indisponible, ou endpoint ' +
       'absent d\'un deploiement plus ancien). Le reste de l\'onglet reste affiche.</span></div>';
   }
-  if (empty && !error) {
-    html += '<div class="notice"><b>Aucun circuit actif.</b> Connectez un PoP dans l\'onglet ' +
-      '<b>Equipements</b> : les abonnes et leurs files apparaitront ici au cycle suivant. ' +
+  if (state.noNodes && !error) {
+    html += '<div class="notice"><b>Aucun noeud.</b> Connectez un routeur dans l\'onglet ' +
+      '<b>Equipements</b> : ses PoPs et leurs files apparaitront ici. ' +
       'Ajoutez une antenne pour la capacite partagee, et activez la <b>Sonde RTT</b> ' +
       'ci-dessus pour RTT / QoO / bufferbloat.</div>';
+  }
+  if (state.topoOnly && !error) {
+    html += '<div class="notice"><b>Reseau affiche d\'apres la topologie.</b> Les routeurs ' +
+      'connectes sont la, mais aucun abonne n\'est encore mesure : debit, RTT et QoO restent ' +
+      'en <code>n/d</code> tant qu\'aucun circuit ne passe (et que la <b>Sonde RTT</b> ci-dessus ' +
+      'n\'est pas activee). Ils se rempliront au prochain cycle de collecte.</div>';
   }
   if (rttState && !rttState.enabled) {
     html += '<div class="notice"><b>Sonde RTT coupee.</b> RTT, QoO et bufferbloat resteront ' +
@@ -618,16 +661,26 @@ function renderNodeTable(host) {
     const qoe = qoeScore(n.rttMax);
     const open = exec.expanded.has(n.name);
     const sel = exec.selected && exec.selected.type === 'node' && exec.selected.name === n.name;
+    // Noeud synthetique (issu de la topologie, sans abonne mesure) : debit /
+    // effectif / RTT / QoO en n/d, jamais des zeros inventes.
+    const effCell = n.synthetic ? '<td class="num na">-</td>'
+      : '<td class="num">' + esc(mbps(n.effDown / 1e6) + ' / ' + mbps(n.effUp / 1e6)) + '</td>';
+    const confCell = n.synthetic ? '<td class="num na">-</td>'
+      : '<td class="num na">' + esc(mbps(n.confDown / 1e6) + ' / ' + mbps(n.confUp / 1e6)) + '</td>';
+    const txCell = n.synthetic ? '<td class="num">' + naSq + '</td>'
+      : '<td class="num">' + sqCell(bpsText(n.tx), severity(pct(n.tx, n.effDown))) + '</td>';
+    const rxCell = n.synthetic ? '<td class="num">' + naSq + '</td>'
+      : '<td class="num">' + sqCell(bpsText(n.rx), severity(pct(n.rx, n.effUp))) + '</td>';
     const nodeRow =
       '<tr class="node-row' + (sel ? ' selected' : '') + '" data-node="' + esc(n.name) + '">' +
-      '<td><span class="expand" data-expand="' + esc(n.name) + '">' + (open ? '−' : '+') + '</span></td>' +
-      '<td><strong>' + esc(n.name) + '</strong></td>' +
+      '<td>' + (n.synthetic ? ''
+        : '<span class="expand" data-expand="' + esc(n.name) + '">' + (open ? '−' : '+') + '</span>') + '</td>' +
+      '<td><strong>' + esc(n.name) + '</strong>' +
+        (n.synthetic && n.kind ? ' <span class="badge">' + esc(KIND_LABEL[n.kind] || n.kind) +
+          '</span>' : '') + '</td>' +
       '<td class="num">' + n.circuits + '</td>' +
       '<td class="num">' + (n.nodesCount == null ? '<span class="na">-</span>' : n.nodesCount) + '</td>' +
-      '<td class="num">' + esc(mbps(n.effDown / 1e6) + ' / ' + mbps(n.effUp / 1e6)) + '</td>' +
-      '<td class="num na">' + esc(mbps(n.confDown / 1e6) + ' / ' + mbps(n.confUp / 1e6)) + '</td>' +
-      '<td class="num">' + sqCell(bpsText(n.tx), severity(pct(n.tx, n.effDown))) + '</td>' +
-      '<td class="num">' + sqCell(bpsText(n.rx), severity(pct(n.rx, n.effUp))) + '</td>' +
+      effCell + confCell + txCell + rxCell +
       '<td class="num">' + rttSq(n.rttMax) + '</td>' +
       '<td class="num">' + (qoe == null ? sqCell('-', 'none') : sqCell(String(qoe), qoeSev(qoe))) + '</td>' +
       '<td class="num">' + naSq + '</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>';
@@ -760,30 +813,40 @@ function renderQueuePanels() {
   const qoe = qoeScore(rttMs);
   const b = isClient ? exec.bloatById[client.subscriber_id] : null;
 
+  // Noeud issu de la seule topologie (aucun abonne mesure) : tout ce qui est
+  // "live" reste en n/d — on ne fabrique pas de zeros.
+  const synth = !isClient && !!node.synthetic;
   const rttSq = (ms) => (ms === null || ms === undefined)
     ? sqCell('-', 'none') : sqCell(Math.round(ms) + 'ms', rttSevJs(ms));
   const qooSq = b ? sqCell(b.grade + ' (+' + b.bloat_ms + 'ms)', b.severity)
     : (qoe == null ? sqCell('-', 'none') : sqCell(String(qoe), qoeSev(qoe)));
   const naSq = sqCell('n/d', 'none');
+  const naCell = '<td class="num na">' + naSq + '</td>';
 
   // ---- Live Queue State
   const dwn = (t, s) => '<td class="num">' + sqCell(t, s) + '</td>';
   live.innerHTML =
     '<h3>&#9881; Live Queue State</h3>' +
     '<table class="lq-table"><thead><tr><th></th><th>Download</th><th>Upload</th></tr></thead><tbody>' +
-    '<tr><td>Effective Limit</td>' + dwn(mbps(effDown / 1e6), 'ok') + dwn(mbps(effUp / 1e6), 'ok') + '</tr>' +
-    '<tr><td>Configured Limit</td><td class="num na">' + sqCell(mbps(confDown / 1e6), 'none') +
-      '</td><td class="num na">' + sqCell(mbps(confUp / 1e6), 'none') + '</td></tr>' +
-    '<tr><td>Throughput</td>' + dwn(bpsText(down), severity(pct(down, effDown))) +
-      dwn(bpsText(up), severity(pct(up, effUp))) + '</tr>' +
+    '<tr><td>Effective Limit</td>' + (synth ? naCell + naCell
+      : dwn(mbps(effDown / 1e6), 'ok') + dwn(mbps(effUp / 1e6), 'ok')) + '</tr>' +
+    '<tr><td>Configured Limit</td>' + (synth ? naCell + naCell
+      : '<td class="num na">' + sqCell(mbps(confDown / 1e6), 'none') +
+        '</td><td class="num na">' + sqCell(mbps(confUp / 1e6), 'none') + '</td>') + '</tr>' +
+    '<tr><td>Throughput</td>' + (synth ? naCell + naCell
+      : dwn(bpsText(down), severity(pct(down, effDown))) +
+        dwn(bpsText(up), severity(pct(up, effUp)))) + '</tr>' +
     '<tr><td>RTT</td><td class="num">' + rttSq(rttMs) + '</td><td class="num">' + rttSq(rttMs) + '</td></tr>' +
     '<tr><td>QoO</td><td class="num">' + qooSq + '</td><td class="num">' + qooSq + '</td></tr>' +
     '<tr><td>TCP Retransmits</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>' +
     '</tbody></table>';
 
-  // ---- Node Snapshot (jauge)
+  // ---- Node Snapshot (jauge, ou n/d si aucune mesure)
   snap.innerHTML = '<h3>&#128200; Node Snapshot</h3>' +
-    gaugeSvg(down, up, Math.max(effDown, down, 1), qoe);
+    (synth
+      ? '<div class="empty">Aucune mesure pour ce noeud pour le moment ' +
+        '(affiche d\'apres la topologie).</div>'
+      : gaugeSvg(down, up, Math.max(effDown, down, 1), qoe));
 
   // ---- Node Details
   const limitedBy = isClient
@@ -800,9 +863,9 @@ function renderQueuePanels() {
     '<h3>&#9432; Node Details</h3>' +
     '<div class="lq-kv">' +
       '<span class="k">Base Configured Rate</span><span class="v">' +
-        esc(mbps(confDown / 1e6) + ' / ' + mbps(confUp / 1e6)) + '</span>' +
+        (synth ? 'n/d' : esc(mbps(confDown / 1e6) + ' / ' + mbps(confUp / 1e6))) + '</span>' +
       '<span class="k">Effective Now</span><span class="v">' +
-        esc(mbps(effDown / 1e6) + ' / ' + mbps(effUp / 1e6)) + '</span>' +
+        (synth ? 'n/d' : esc(mbps(effDown / 1e6) + ' / ' + mbps(effUp / 1e6))) + '</span>' +
       '<span class="k">Rate Override</span><span class="v">' + esc(override) + '</span>' +
       '<span class="k">Limited By</span><span class="v">' + esc(limitedBy) + '</span>' +
       '<span class="k">Topology Override</span><span class="v">None</span>' +
@@ -820,10 +883,15 @@ function renderQueuePanels() {
           '<button class="sm" id="lq-open">Ouvrir dans l\'arbre</button></div>' +
         '<div id="lq-result"></div>'
       : sharedCapacityBlock(node) +
-        '<div class="lq-note"><b>' + node.circuits + ' circuit(s).</b> Un noeud est un ' +
-          'agregat : depliez-le et selectionnez un client pour imposer un debit. Le debit ' +
-          'du parent (l\'enveloppe partagee) se regle sur son lien, bouton <b>Bande ' +
-          'passante</b> dans l\'arbre. Retr / marks / drops : hors-bande, indisponibles.</div>' +
+        '<div class="lq-note">' + (synth
+          ? '<b>Noeud issu de la topologie.</b> Aucun abonne mesure ici pour le moment : ' +
+            'ses files apparaitront au prochain cycle de collecte. Le debit du parent ' +
+            '(l\'enveloppe partagee) se regle deja sur son lien, bouton <b>Bande passante</b> ' +
+            'dans l\'arbre.'
+          : '<b>' + node.circuits + ' circuit(s).</b> Un noeud est un ' +
+            'agregat : depliez-le et selectionnez un client pour imposer un debit. Le debit ' +
+            'du parent (l\'enveloppe partagee) se regle sur son lien, bouton <b>Bande ' +
+            'passante</b> dans l\'arbre. Retr / marks / drops : hors-bande, indisponibles.') + '</div>' +
         '<div class="actions" style="margin-top:.6rem">' +
           '<button class="sm" id="lq-open">Regler l\'enveloppe dans l\'arbre</button></div>');
 
