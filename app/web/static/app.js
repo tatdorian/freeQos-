@@ -2263,6 +2263,15 @@ function topoSelect(key) {
 }
 
 /** Panneau de la case selectionnee : role, rattachement force, masquage, debit. */
+/** Les autres cases de l'arbre, pour proposer une cible de fusion manuelle.
+ *  Triees par nom, la case courante exclue. */
+function topoOtherNodes(selfKey) {
+  if (!topo.model) return [];
+  return [...topo.model.nodesByKey.values()]
+    .filter((n) => n.key !== selfKey)
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+
 function renderTopoPanel() {
   const host = document.getElementById('topo-panel');
   if (!host) return;
@@ -2291,7 +2300,22 @@ function renderTopoPanel() {
       '<select id="topo-kind">' + KIND_ORDER.map((k) =>
         '<option value="' + k + '"' + (k === node.kind ? ' selected' : '') + '>' +
         esc(KIND_LABEL[k]) + '</option>').join('') + '</select></div>' +
+    // Fusion manuelle : le dernier mot quand l'app n'a pas pu prouver que deux
+    // cases sont le meme routeur (nom generique, pas de MAC commune).
+    '<div class="stack field"><label>Meme equipement que…</label>' +
+      '<select id="topo-merge-target"><option value="">— fusionner cette case dans —</option>' +
+      topoOtherNodes(node.key).map((o) =>
+        '<option value="' + esc(o.key) + '">' + esc(topoTrim(o.name, 24)) +
+        ' · ' + esc(KIND_LABEL[o.kind] || '?') + '</option>').join('') +
+      '</select></div>' +
+    (node.manual_aliases && node.manual_aliases.length
+      ? '<div class="kv"><span>Fusions manuelles</span><span class="topo-unmerge">' +
+        node.manual_aliases.map((a) =>
+          '<button class="sm ghost" data-unmerge="' + esc(a) + '" title="' + esc(a) +
+          '">Separer ' + esc(topoTrim(a, 16)) + '</button>').join(' ') + '</span></div>'
+      : '') +
     '<div class="actions" style="margin-top:.7rem">' +
+      '<button class="sm" id="topo-merge">Fusionner</button>' +
       (node.parent_override
         ? '<button class="sm" id="topo-detach">Rattachement auto</button>' : '') +
       '<button class="sm" id="topo-hide">Masquer</button>' +
@@ -2304,6 +2328,22 @@ function renderTopoPanel() {
       await loadTopology();
     } catch (err) { alert(err.message); }
   });
+  document.getElementById('topo-merge').addEventListener('click', async () => {
+    const cible = document.getElementById('topo-merge-target').value;
+    if (!cible) { alert('Choisissez la case dans laquelle fusionner celle-ci.'); return; }
+    try {
+      await api('/topology/merge', { method: 'POST',
+        body: JSON.stringify({ alias_key: node.key, canonical_key: cible }) });
+      topo.selected = cible;  // la case fusionnee disparait : on suit la canonique
+      await loadTopology();
+    } catch (err) { alert(err.message); }
+  });
+  host.querySelectorAll('[data-unmerge]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await api('/topology/merge/' + encodeURIComponent(b.dataset.unmerge), { method: 'DELETE' });
+      await loadTopology();
+    } catch (err) { alert(err.message); }
+  }));
   const detach = document.getElementById('topo-detach');
   if (detach) detach.addEventListener('click', async () => {
     try {

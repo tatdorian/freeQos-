@@ -233,6 +233,7 @@ class ShapingService:
                 "interfaces": client.interfaces(),
                 "ethernet": client.ethernet(),
                 "addresses": client.addresses(),
+                "identity": client.identity(),
             }
 
         return await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)

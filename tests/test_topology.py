@@ -320,6 +320,63 @@ def test_reconciliation_fusionne_le_meme_routeur_vu_plusieurs_fois() -> None:
     assert fusion_liens[0]["key"] == "core|e1|identity:NAS-francophonie"
 
 
+def test_le_routeur_gere_porte_son_identite_et_ses_mac() -> None:
+    """Un routeur gere expose son identite RouterOS et ses MAC d'interface :
+    c'est ce qui permet de le reconnaitre quand un autre PoP le voit en voisin."""
+    snapshot = TopologySnapshot()
+    build_from_router(
+        snapshot,
+        router_name="pop-nord",
+        pop_name="PoP Nord",
+        host="10.10.0.11",
+        neighbors=[],
+        interfaces=[{"name": "ether1", "mac-address": "48:8F:5A:00:00:11"}],
+        ethernet=[{"name": "ether1", "orig-mac-address": "48:8F:5A:00:00:12"}],
+        addresses=[],
+        identity="NAS-nord",
+    )
+    noeud = snapshot.nodes["router:pop-nord"]
+    assert noeud.attributes["identity"] == "NAS-nord"
+    assert noeud.attributes["macs"] == ["48:8F:5A:00:00:11", "48:8F:5A:00:00:12"]
+    assert noeud.mac == "48:8F:5A:00:00:11"
+
+
+def test_reconciliation_fusionne_le_pop_gere_avec_sa_vue_voisin() -> None:
+    """LE bug de doublon : le PoP gere (nom d'affichage 'PoP Nord') et son
+    apparition comme voisin du coeur (keye par la MAC de l'interface en face,
+    nomme par son identite RouterOS) sont UN seul routeur.
+
+    Le coeur ne voit que la MAC de l'interface tournee vers lui (``...12``), qui
+    n'est pas la MAC principale du PoP (``...11``) : la fusion ne peut aboutir que
+    parce que le noeud gere expose TOUTES ses MAC."""
+    noeuds = [
+        _noeud(
+            "router:pop-nord", "PoP Nord", mac="48:8F:5A:00:00:11",
+            attributes={"managed": True, "identity": "NAS-nord",
+                        "macs": ["48:8F:5A:00:00:11", "48:8F:5A:00:00:12"]},
+        ),
+        _noeud("mac:48:8F:5A:00:00:12", "NAS-nord", mac="48:8F:5A:00:00:12"),
+    ]
+    fusion, _ = reconcile_topology(noeuds, [])
+    assert len(fusion) == 1
+    assert fusion[0]["key"] == "router:pop-nord"
+    assert fusion[0]["name"] == "PoP Nord"
+
+
+def test_reconciliation_lit_les_attributs_en_json_brut() -> None:
+    """``attributes`` revient parfois en JSON brut (asyncpg) : la fusion doit
+    quand meme lire les MAC et l'identite qui y sont rangees."""
+    noeuds = [
+        _noeud(
+            "router:pop", "PoP Nord",
+            attributes='{"macs": ["48:8F:5A:00:00:12"], "identity": "NAS-nord"}',
+        ),
+        _noeud("mac:48:8F:5A:00:00:12", "NAS-nord", mac="48:8F:5A:00:00:12"),
+    ]
+    fusion, _ = reconcile_topology(noeuds, [])
+    assert len(fusion) == 1
+
+
 def test_reconciliation_ne_fusionne_pas_sur_un_nom_generique() -> None:
     """Deux equipements nommes 'MikroTik' par defaut ne sont pas le meme."""
     noeuds = [

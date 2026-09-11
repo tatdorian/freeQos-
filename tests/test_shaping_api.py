@@ -107,6 +107,25 @@ class FauxDepotTopologie:
         self.hidden_links.add(key)
         return exists
 
+    async def aliases(self):
+        return dict(getattr(self, "_aliases", {}))
+
+    async def merge_nodes(self, alias_key, canonical_key):
+        if alias_key == canonical_key:
+            raise ValueError("un noeud ne peut pas etre fusionne avec lui-meme")
+        self._aliases = getattr(self, "_aliases", {})
+        canonical_key = self._aliases.get(canonical_key, canonical_key)
+        if alias_key == canonical_key:
+            raise ValueError("fusion circulaire refusee")
+        self._aliases[alias_key] = canonical_key
+        for a, c in list(self._aliases.items()):
+            if c == alias_key:
+                self._aliases[a] = canonical_key
+
+    async def unmerge_node(self, alias_key):
+        self._aliases = getattr(self, "_aliases", {})
+        return self._aliases.pop(alias_key, None) is not None
+
     async def upsert_policy(self, **kwargs):
         cle = (kwargs["scope"], kwargs["target_key"])
         self._policies[cle] = {**kwargs}
@@ -459,6 +478,47 @@ def test_retirer_un_lien(client: TestClient, topo: FauxDepotTopologie) -> None:
 
 def test_retirer_un_lien_inconnu_est_404(client: TestClient) -> None:
     assert client.delete("/api/v1/topology/links/inexistant").status_code == 404
+
+
+def test_fusion_manuelle_replie_une_case_sur_une_autre(
+    client: TestClient, topo: FauxDepotTopologie
+) -> None:
+    """Quand l'automatique n'a pas pu prouver l'identite, l'operateur tranche :
+    les deux cases n'en font plus qu'une dans l'arbre."""
+    topo.node_rows = [
+        {"key": "mac:AA:00:00:00:00:06", "name": "MikroTik", "kind": "pop"},
+        {"key": "router:pop-nord", "name": "PoP Nord", "kind": "pop"},
+    ]
+    reponse = client.post("/api/v1/topology/merge", json={
+        "alias_key": "mac:AA:00:00:00:00:06", "canonical_key": "router:pop-nord"})
+    assert reponse.status_code == 200
+    assert topo._aliases["mac:AA:00:00:00:00:06"] == "router:pop-nord"
+
+    # /topology ne montre plus qu'UNE case, marquee comme fusion manuelle.
+    body = client.get("/api/v1/topology").json()
+    cles = [n["key"] for n in body["nodes"]]
+    assert "mac:AA:00:00:00:00:06" not in cles
+    canon = next(n for n in body["nodes"] if n["key"] == "router:pop-nord")
+    assert canon["manual_aliases"] == ["mac:AA:00:00:00:00:06"]
+
+
+def test_fusion_manuelle_sur_soi_meme_refusee(client: TestClient) -> None:
+    reponse = client.post("/api/v1/topology/merge", json={
+        "alias_key": "router:x", "canonical_key": "router:x"})
+    assert reponse.status_code == 400
+
+
+def test_annuler_une_fusion_manuelle(client: TestClient, topo: FauxDepotTopologie) -> None:
+    topo._aliases = {"mac:AA:00:00:00:00:06": "router:pop-nord"}
+    from urllib.parse import quote
+    reponse = client.delete(
+        "/api/v1/topology/merge/" + quote("mac:AA:00:00:00:00:06", safe=""))
+    assert reponse.status_code == 200
+    assert "mac:AA:00:00:00:00:06" not in topo._aliases
+
+
+def test_annuler_une_fusion_inconnue_est_404(client: TestClient) -> None:
+    assert client.delete("/api/v1/topology/merge/inexistant").status_code == 404
 
 
 def test_reparenter_reinitialise_avec_null(client: TestClient, topo: FauxDepotTopologie) -> None:
