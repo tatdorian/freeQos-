@@ -1819,6 +1819,23 @@ const TOPO_RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, cl
 
 /** Construit l'arbre : parent force (parent_override) prioritaire, sinon
  *  orientation par role. Un seul parent par case, cycles coupes. */
+/** Un lien est-il assez SUR pour dessiner une adjacence directe dans l'arbre ?
+ *
+ *  - manuel (pose par l'operateur) ou UISP/radio declare : oui.
+ *  - lien porte par un port local vu par UN SEUL voisin (point-a-point) : oui,
+ *    c'est un vrai cable/lien radio.
+ *  - port vu par PLUSIEURS voisins (interface_links > 1) : NON. C'est un segment
+ *    partage (switch, VLAN de gestion) ou MNDP/LLDP montre tout le monde : rien
+ *    ne prouve qui est relie a qui. On ne fabrique pas ce maillage.
+ */
+function topoLinkConfident(l) {
+  const key = String(l.key || '');
+  if (key.indexOf('manual:') === 0 || l.discovered_by === 'manual') return true;
+  if (!l.interface) return true;               // UISP / radio declare, sans port
+  const peers = Number(l.interface_links) || 0;
+  return peers <= 1;                            // point-a-point seulement
+}
+
 function topoBuildModel(data) {
   const nodes = new Map();
   data.nodes.forEach((n) => {
@@ -1832,10 +1849,13 @@ function topoBuildModel(data) {
     if (!nodes.has(l.source_key) || !nodes.has(l.target_key)) return;
     const ra = TOPO_RANG[nodes.get(l.source_key).kind] ?? 5;
     const rb = TOPO_RANG[nodes.get(l.target_key).kind] ?? 5;
+    const conf = topoLinkConfident(l);
     if (rb < ra) {
-      oriented.push({ parentKey: l.target_key, childKey: l.source_key, link: l, inverted: true });
+      oriented.push({ parentKey: l.target_key, childKey: l.source_key, link: l,
+        inverted: true, confident: conf });
     } else {
-      oriented.push({ parentKey: l.source_key, childKey: l.target_key, link: l, inverted: false });
+      oriented.push({ parentKey: l.source_key, childKey: l.target_key, link: l,
+        inverted: false, confident: conf });
     }
   });
 
@@ -1875,8 +1895,12 @@ function topoBuildModel(data) {
       attach(n.key, n.parent_override, edge);
     }
   });
-  // 2) le reste par role.
-  oriented.forEach((e) => attach(e.childKey, e.parentKey, e));
+  // 2) le reste par role, mais UNIQUEMENT sur des liens surs (point-a-point,
+  // UISP, ou manuels). Un lien vu sur un segment PARTAGE (plusieurs voisins sur
+  // le meme port : VLAN de gestion, switch) ne prouve aucune adjacence directe :
+  // l'y dessiner fabriquait un maillage de liens qui n'existent pas. On ne devine
+  // plus ces aretes ; l'operateur peut toujours les poser a la main.
+  oriented.filter((e) => e.confident).forEach((e) => attach(e.childKey, e.parentKey, e));
 
   // Rattache les abonnes a leur PoP : un noeud agrege repliable par PoP plutot
   // que 500 cases. Le debit de l'arete est la somme du trafic des abonnes.
@@ -1902,6 +1926,22 @@ function topoBuildModel(data) {
       n.children.push(synth);
     });
   }
+
+  // Pour un noeud reste SANS parent, on retient les liens de segment partage
+  // qu'on a refuse d'auto-tracer : le panneau proposera de le rattacher a la
+  // main a ces candidats probables, plutot que de le laisser orphelin sans
+  // explication.
+  nodes.forEach((n) => {
+    if (n.parentKey || n.synthetic) return;
+    const cands = [];
+    const vus = new Set();
+    oriented.forEach((e) => {
+      if (e.childKey !== n.key || e.confident) return;
+      const p = nodes.get(e.parentKey);
+      if (p && !vus.has(p.key)) { vus.add(p.key); cands.push({ key: p.key, name: p.name }); }
+    });
+    if (cands.length) n.unsureParents = cands;
+  });
 
   const roots = [...nodes.values()].filter((n) => !n.parentKey);
   return { nodesByKey: nodes, roots };
@@ -2308,6 +2348,17 @@ function renderTopoPanel() {
     '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'racine') +
       (node.parent_override ? ' *' : '') + '</span></div>' +
     '<div class="kv"><span>Vu</span><span>' + (node.fresh ? 'recemment' : 'ancien') + '</span></div>' +
+    // Noeud orphelin faute de lien SUR : on explique et on propose le(s)
+    // rattachement(s) probable(s) vus sur un segment partage.
+    (!node.parentKey && node.unsureParents && node.unsureParents.length
+      ? '<div class="notice" style="margin:.5rem 0">Aucun lien direct sûr. Vu via un ' +
+        'segment partagé (switch / VLAN de gestion) vers : ' +
+        node.unsureParents.map((c) =>
+          '<button class="sm ghost" data-attach="' + esc(c.key) + '">' +
+          esc(topoTrim(c.name, 18)) + '</button>').join(' ') +
+        '<span class="hint">Cliquez pour rattacher à la main (l\'app ne devine plus ' +
+        'ces liens : ils ne sont pas des adjacences directes prouvées).</span></div>'
+      : '') +
     '<div class="stack field"><label>Role</label>' +
       '<select id="topo-kind">' + KIND_ORDER.map((k) =>
         '<option value="' + k + '"' + (k === node.kind ? ' selected' : '') + '>' +
@@ -2353,6 +2404,13 @@ function renderTopoPanel() {
   host.querySelectorAll('[data-unmerge]').forEach((b) => b.addEventListener('click', async () => {
     try {
       await api('/topology/merge/' + encodeURIComponent(b.dataset.unmerge), { method: 'DELETE' });
+      await loadTopology();
+    } catch (err) { alert(err.message); }
+  }));
+  host.querySelectorAll('[data-attach]').forEach((b) => b.addEventListener('click', async () => {
+    try {
+      await api('/topology/nodes/' + encodeURIComponent(node.key) + '/parent',
+        { method: 'PATCH', body: JSON.stringify({ parent_key: b.dataset.attach }) });
       await loadTopology();
     } catch (err) { alert(err.message); }
   }));
