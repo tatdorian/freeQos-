@@ -449,14 +449,9 @@ function childCountsFromTopo(topoData) {
  *  (base), et un encart rappelle que sans elle QoO/RTT/bufferbloat restent vides. */
 function renderRttControl(state) {
   const box = document.getElementById('rtt-toggle');
-  const notice = document.getElementById('exec-notice');
+  // La case reflete le drapeau ; le bandeau explicatif est pose par
+  // renderExecNotice (un seul endroit qui compose tous les messages).
   if (box && state) box.checked = !!state.enabled;
-  if (!notice) return;
-  notice.innerHTML = (state && state.enabled) ? '' :
-    '<div class="notice"><b>Sonde RTT coupee.</b> RTT, QoO et bufferbloat resteront ' +
-    'vides tant qu\'elle n\'est pas activee (case <b>Sonde RTT</b> ci-dessus). Elle ' +
-    'envoie des <code>/ping</code> depuis le PoP ; le compte de lecture doit avoir la ' +
-    'policy <code>test</code>. Aucune variable d\'environnement necessaire.</div>';
 }
 
 async function toggleRtt(enabled) {
@@ -475,14 +470,19 @@ function selectionExists(sel) {
 async function loadExec() {
   const minutes = state.execRange || 60;
   const buckets = minutes <= 15 ? 15 : minutes <= 60 ? 30 : 36;
-  const [heat, subs, bloat, topoData, tree, rttState] = await Promise.all([
-    api('/heatmap?minutes=' + minutes + '&buckets=' + buckets),
-    api('/subscribers/latest?limit=1000&order_by=login'),
+  // Chaque source est isolee : une seule qui echoue ne doit pas laisser l'onglet
+  // BLANC. On garde une trace de l'echec pour l'expliquer, plutot que rien.
+  let firstError = null;
+  const grab = (p) => p.catch((err) => { firstError = firstError || err; return undefined; });
+  const [heat, subsRaw, bloat, topoData, tree, rttState] = await Promise.all([
+    grab(api('/heatmap?minutes=' + minutes + '&buckets=' + buckets)),
+    grab(api('/subscribers/latest?limit=1000&order_by=login')),
     api('/bufferbloat?minutes=' + minutes).catch(() => null),
     api('/topology').catch(() => null),
     api('/network/tree').catch(() => []),
     api('/rtt').catch(() => null),
   ]);
+  const subs = Array.isArray(subsRaw) ? subsRaw : [];
   renderRttControl(rttState);
   exec.bloatById = {};
   if (bloat) (bloat.subscribers || []).forEach((b) => { exec.bloatById[b.subscriber_id] = b; });
@@ -508,9 +508,40 @@ async function loadExec() {
   renderExecSankey(document.getElementById('exec-sankey'), subs);
   document.getElementById('exec-count').textContent =
     exec.nodes.length + ' noeud(s), ' + subs.length + ' circuit(s)';
+  renderExecNotice(rttState, firstError, exec.nodes.length === 0);
+}
+
+/** Bandeau d'etat de l'onglet : erreur de chargement, sonde coupee, ou reseau
+ *  vide. Il y a TOUJOURS quelque chose a l'ecran, jamais un blanc silencieux. */
+function renderExecNotice(rttState, error, empty) {
+  const notice = document.getElementById('exec-notice');
+  if (!notice) return;
+  let html = '';
+  if (error) {
+    html += '<div class="notice err"><b>Chargement partiel.</b> ' + esc(error.message) +
+      '<span class="hint">Une source n\'a pas repondu (base indisponible, ou endpoint ' +
+      'absent d\'un deploiement plus ancien). Le reste de l\'onglet reste affiche.</span></div>';
+  }
+  if (empty && !error) {
+    html += '<div class="notice"><b>Aucun circuit actif.</b> Connectez un PoP dans l\'onglet ' +
+      '<b>Equipements</b> : les abonnes et leurs files apparaitront ici au cycle suivant. ' +
+      'Ajoutez une antenne pour la capacite partagee, et activez la <b>Sonde RTT</b> ' +
+      'ci-dessus pour RTT / QoO / bufferbloat.</div>';
+  }
+  if (rttState && !rttState.enabled) {
+    html += '<div class="notice"><b>Sonde RTT coupee.</b> RTT, QoO et bufferbloat resteront ' +
+      'vides tant qu\'elle n\'est pas activee (case <b>Sonde RTT</b> ci-dessus). Elle envoie ' +
+      'des <code>/ping</code> depuis le PoP ; le compte de lecture doit avoir la policy ' +
+      '<code>test</code>. Aucune variable d\'environnement necessaire.</div>';
+  }
+  notice.innerHTML = html;
 }
 
 function renderHeatmap(host, heat) {
+  if (!heat || !Array.isArray(heat.rows)) {
+    host.innerHTML = '<div class="empty">Heatmap indisponible pour le moment.</div>';
+    return;
+  }
   host.innerHTML = heat.rows.map((row) => {
     if (row.unavailable) {
       return '<div class="heat-row"><span class="heat-label">' + esc(row.label) + '</span>' +
