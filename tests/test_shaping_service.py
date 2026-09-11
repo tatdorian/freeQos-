@@ -281,7 +281,11 @@ async def test_un_pop_injoignable_n_annule_pas_la_decouverte(
 
     snapshot = await service.discover()
 
-    assert snapshot.nodes == {}
+    # Le PoP injoignable ne DISPARAIT pas : sa case reste, marquee injoignable,
+    # pour que l'operateur ne croie pas l'avoir perdu.
+    assert "router:pop-test" in snapshot.nodes
+    noeud = snapshot.nodes["router:pop-test"]
+    assert noeud.attributes["unreachable"] is True
     assert len(snapshot.warnings) == 1
     assert "TimeoutError" in snapshot.warnings[0]
 

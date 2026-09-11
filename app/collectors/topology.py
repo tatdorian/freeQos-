@@ -82,6 +82,11 @@ def _merge_signatures(node: dict[str, Any]) -> set[str]:
     """
     signatures: set[str] = set()
     attrs = _as_attributes(node.get("attributes"))
+    # Numero de serie : l'identifiant qui ne bouge JAMAIS. Deux cases qui le
+    # partagent sont le meme routeur, quelles que soient ses adresses ou son nom.
+    serial = str(attrs.get("serial") or "").strip().lower()
+    if serial:
+        signatures.add("serial:" + serial)
     # Toutes les MAC connues de l'equipement : le champ principal + celles de ses
     # interfaces (routeur gere) + une eventuelle MAC de gestion.
     macs = [node.get("mac"), attrs.get("mgmt_mac")]
@@ -405,18 +410,23 @@ def build_from_router(
     ethernet: list[dict[str, Any]],
     addresses: list[dict[str, Any]],
     identity: str | None = None,
+    serial: str | None = None,
 ) -> None:
     """Ajoute au graphe ce qu'un routeur voit autour de lui.
 
-    Le noeud du routeur gere porte desormais son identite RouterOS et TOUTES ses
-    MAC d'interface : c'est ce qui permet a la reconciliation de le reconnaitre
-    quand un autre PoP le voit en voisin, au lieu de le dedoubler.
+    Le noeud du routeur gere porte desormais son numero de serie, son identite
+    RouterOS et TOUTES ses MAC d'interface : c'est ce qui permet a la
+    reconciliation de le reconnaitre quand un autre PoP le voit en voisin, ou
+    quand le meme routeur est joignable sous plusieurs adresses, au lieu de le
+    dedoubler.
     """
     router_key = router_node_key(router_name)
     macs = _router_macs(interfaces, ethernet)
     attributs: dict[str, Any] = {"managed": True}
     if identity:
         attributs["identity"] = str(identity)
+    if serial:
+        attributs["serial"] = str(serial)
     if macs:
         attributs["macs"] = macs
     snapshot.add_node(
