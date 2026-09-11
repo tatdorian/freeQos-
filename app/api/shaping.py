@@ -65,6 +65,7 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
         "counts": {"nodes": len(noeuds), "links": len(liens)},
         "sources": {
             "neighbors": "/ip/neighbor (MNDP, LLDP, CDP) - adjacence physique",
+            "config_subnets": "/ip/address - liens routeur<->routeur par /30 partage",
             "ethernet": "/interface/ethernet - debit negocie du port",
             "addresses": "/ip/address - segment L3 du lien",
             "uisp": "UISP /devices - liens radio et capacite du moment",

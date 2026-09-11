@@ -26,6 +26,7 @@ from app.collectors.topology import (
     TopologySnapshot,
     attach_uisp_devices,
     build_from_router,
+    link_by_shared_subnets,
     map_subscribers_to_sectors,
     normalize_mac,
     router_node_key,
@@ -201,6 +202,9 @@ class ShapingService:
         resultats = await asyncio.gather(
             *(self._read_router_topology(c) for c in collectors), return_exceptions=True
         )
+        # Adresses par PoP gere, pour deduire les liens routeur<->routeur de la
+        # config (sous-reseaux point-a-point partages), la ou MNDP peut manquer.
+        router_addresses: list[tuple[str, str, list[dict[str, Any]]]] = []
         for collector, resultat in zip(collectors, resultats, strict=True):
             if isinstance(resultat, BaseException):
                 message = f"{collector.name}: {type(resultat).__name__}: {resultat}"
@@ -227,6 +231,19 @@ class ShapingService:
                 host=collector.config.host,
                 **resultat,
             )
+            router_addresses.append(
+                (
+                    router_node_key(collector.config.name),
+                    collector.config.name,
+                    resultat.get("addresses") or [],
+                )
+            )
+
+        # Liens deduits de la config (sous-reseaux point-a-point) : ajoutes APRES
+        # les liens MNDP, ils ne comblent que les adjacences manquantes.
+        ajoutes = link_by_shared_subnets(snapshot, router_addresses)
+        if ajoutes:
+            logger.info("Topologie : %d lien(s) routeur<->routeur deduits de la config", ajoutes)
 
         if uisp_devices:
             attach_uisp_devices(snapshot, uisp_devices)

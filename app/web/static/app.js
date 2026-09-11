@@ -1831,6 +1831,10 @@ const TOPO_RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, cl
 function topoLinkConfident(l) {
   const key = String(l.key || '');
   if (key.indexOf('manual:') === 0 || l.discovered_by === 'manual') return true;
+  // Lien deduit de la config (sous-reseau /30 point-a-point) : preuve directe.
+  let a = l.attributes;
+  if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = null; } }
+  if (a && a.config_link) return true;
   if (!l.interface) return true;               // UISP / radio declare, sans port
   const peers = Number(l.interface_links) || 0;
   return peers <= 1;                            // point-a-point seulement

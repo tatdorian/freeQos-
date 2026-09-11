@@ -107,6 +107,11 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   son rôle** (dont *Client*), **créer un lien** manquant (*Créer un lien* → clic parent puis
   enfant) et **retirer un lien** erroné (clic sur l'arête). Chaque lien porte son **débit
   mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le débit total).
+  Les liens **routeur↔routeur** sont découverts de deux façons complémentaires : `/ip/neighbor`
+  (MNDP/LLDP/CDP), **et surtout la configuration** — deux PoP portant chacun une adresse sur
+  le **même /30** (point-à-point) sont directement reliés, même quand MNDP ne voit rien (lien
+  routé, tunnel, switch muet). Ces liens déduits de la config sont fiables et ne doublent
+  jamais un lien déjà trouvé.
   L'ossature de l'arbre est bâtie en deux temps pour rester juste sans perdre de nœud :
   d'abord les **adjacences sûres** (lien point-à-point — un seul voisin sur le port —, lien
   UISP/radio déclaré, ou lien posé à la main) ; puis, pour un nœud encore sans parent, son

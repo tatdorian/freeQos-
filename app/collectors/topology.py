@@ -26,6 +26,7 @@ Ce module est en LECTURE SEULE. Il produit un graphe ; ce qu'on en fait
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
@@ -498,6 +499,70 @@ def build_from_router(
                 },
             )
         )
+
+
+def link_by_shared_subnets(
+    snapshot: TopologySnapshot,
+    router_addresses: list[tuple[str, str, list[dict[str, Any]]]],
+) -> int:
+    """Déduit les liens routeur↔routeur de la CONFIG, par sous-réseau point-à-point.
+
+    C'est la découverte la plus fiable entre PoP : deux routeurs gérés qui portent
+    chacun une adresse sur le MÊME /30 ou /31 (v4) — /127, /126 (v6) — sont
+    directement reliés. Leur ``/ip/address`` le prouve, là où ``/ip/neighbor``
+    (MNDP/LLDP) peut manquer le lien : lien routé, tunnel, ou passage par un switch
+    qui n'annonce rien.
+
+    ``router_addresses`` : pour chaque PoP géré, ``(cle_noeud, nom_routeur,
+    lignes /ip/address)``. On n'ajoute QUE les paires pas déjà reliées (jamais un
+    doublon d'un lien MNDP), et seulement le point-à-point STRICT (exactement deux
+    extrémités sur le sous-réseau), pour ne pas transformer un /29 partagé en
+    maillage. ``discovered_by`` = nom du routeur source : le débit du port se
+    rattache alors comme pour un lien MNDP. Renvoie le nombre de liens ajoutés.
+    """
+    deja: set[frozenset[str]] = set()
+    for lien in snapshot.links.values():
+        deja.add(frozenset((lien.source_key, lien.target_key)))
+
+    par_reseau: dict[Any, dict[str, tuple[str, str | None]]] = {}
+    for cle, nom, lignes in router_addresses:
+        for ligne in lignes or []:
+            brut = str(ligne.get("address") or "")
+            interface = str(ligne.get("interface") or "") or None
+            try:
+                itf = ipaddress.ip_interface(brut)
+            except ValueError:
+                continue
+            reseau = itf.network
+            # Point-à-point STRICT seulement : un plus grand sous-réseau (un /24 de
+            # LAN) relierait à tort tous ses hôtes entre eux.
+            if reseau.version == 4 and reseau.prefixlen < 30:
+                continue
+            if reseau.version == 6 and reseau.prefixlen < 126:
+                continue
+            # Première interface vue par routeur sur ce réseau (le /30 n'en a qu'une).
+            par_reseau.setdefault(reseau, {}).setdefault(cle, (nom, interface))
+
+    ajoutes = 0
+    for reseau, membres in par_reseau.items():
+        if len(membres) != 2:
+            continue  # exactement deux extrémités = vrai point-à-point
+        (ka, (noma, ia)), (kb, (_nomb, _ib)) = sorted(membres.items())
+        if ka == kb or frozenset((ka, kb)) in deja:
+            continue
+        snapshot.add_link(
+            TopologyLink(
+                source_key=ka,
+                target_key=kb,
+                kind=LINK_ETHERNET,
+                interface=ia,
+                discovered_by=noma,
+                attributes={"config_link": True, "subnet": str(reseau)},
+            )
+        )
+        deja.add(frozenset((ka, kb)))
+        ajoutes += 1
+    return ajoutes
 
 
 def attach_uisp_devices(snapshot: TopologySnapshot, devices: list[dict[str, Any]]) -> int:

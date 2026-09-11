@@ -7,11 +7,14 @@ from app.collectors.topology import (
     KIND_RADIO,
     KIND_SECTOR,
     KIND_UNKNOWN,
+    TopologyLink,
+    TopologyNode,
     TopologySnapshot,
     attach_uisp_devices,
     build_from_router,
     classify_platform,
     ethernet_capacity_mbps,
+    link_by_shared_subnets,
     map_subscribers_to_sectors,
     neighbor_node_key,
     normalize_mac,
@@ -161,6 +164,76 @@ def test_deux_pops_partagent_le_meme_voisin() -> None:
     # Mais deux liens distincts y menent, un par PoP.
     vers_gw = [lk for lk in snapshot.links.values() if lk.target_key == "mac:AA:BB:CC:00:00:01"]
     assert {lk.discovered_by for lk in vers_gw} == {"pop-nord", "pop-sud"}
+
+
+# ------------------------------------------- liens deduits de la config
+def test_liens_deduits_des_sous_reseaux_point_a_point() -> None:
+    """Deux PoP avec une adresse sur le meme /30 sont directement relies : la
+    config le prouve, meme si MNDP n'a rien vu entre eux."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:pop-a", name="PoP A", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="router:pop-b", name="PoP B", kind=KIND_POP))
+    ajoutes = link_by_shared_subnets(
+        snapshot,
+        [
+            ("router:pop-a", "pop-a", [{"interface": "ether5", "address": "10.50.0.1/30"}]),
+            ("router:pop-b", "pop-b", [{"interface": "ether3", "address": "10.50.0.2/30"}]),
+        ],
+    )
+    assert ajoutes == 1
+    lien = next(iter(snapshot.links.values()))
+    assert {lien.source_key, lien.target_key} == {"router:pop-a", "router:pop-b"}
+    assert lien.attributes["config_link"] is True
+    assert lien.discovered_by == "pop-a"  # debit du port rattachable
+
+
+def test_config_ne_double_pas_un_lien_deja_trouve() -> None:
+    """Si MNDP a deja relie les deux, on n'ajoute pas un second lien parallele."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:pop-a", name="PoP A", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="router:pop-b", name="PoP B", kind=KIND_POP))
+    snapshot.add_link(TopologyLink(source_key="router:pop-a", target_key="router:pop-b",
+                                   kind="ethernet", interface="ether5"))
+    ajoutes = link_by_shared_subnets(
+        snapshot,
+        [
+            ("router:pop-a", "pop-a", [{"interface": "ether5", "address": "10.50.0.1/30"}]),
+            ("router:pop-b", "pop-b", [{"interface": "ether3", "address": "10.50.0.2/30"}]),
+        ],
+    )
+    assert ajoutes == 0
+
+
+def test_un_grand_sous_reseau_ne_relie_pas_les_routeurs() -> None:
+    """Un /24 de LAN n'est pas un lien point-a-point : on ne relie pas ses hotes."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:a", name="A", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="router:b", name="B", kind=KIND_POP))
+    ajoutes = link_by_shared_subnets(
+        snapshot,
+        [
+            ("router:a", "a", [{"interface": "bridge", "address": "192.168.1.1/24"}]),
+            ("router:b", "b", [{"interface": "bridge", "address": "192.168.1.2/24"}]),
+        ],
+    )
+    assert ajoutes == 0
+
+
+def test_un_reseau_moins_strict_qu_un_p2p_est_ignore() -> None:
+    """Seul le point-a-point STRICT (/30, /31) prouve un lien direct. Un /29
+    (segment de plusieurs equipements) n'est pas retenu : on ne devine pas."""
+    snapshot = TopologySnapshot()
+    for k in ("router:a", "router:b", "router:c"):
+        snapshot.add_node(TopologyNode(key=k, name=k, kind=KIND_POP))
+    ajoutes = link_by_shared_subnets(
+        snapshot,
+        [
+            ("router:a", "a", [{"interface": "e1", "address": "10.0.0.1/29"}]),
+            ("router:b", "b", [{"interface": "e1", "address": "10.0.0.2/29"}]),
+            ("router:c", "c", [{"interface": "e1", "address": "10.0.0.3/29"}]),
+        ],
+    )
+    assert ajoutes == 0
 
 
 # ------------------------------------------------------------------- UISP
