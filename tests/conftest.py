@@ -55,6 +55,8 @@ class FakeRouterOsClient:
         self.raise_on_monitor: Exception | None = None
         self.ping_reply: str | None = "12ms"
         self.ping_error: Exception | None = None
+        # Config complete facon /export (texte). Vide par defaut.
+        self.export_text: str = ""
 
     def ppp_active(self) -> list[dict[str, Any]]:
         self.calls += 1
@@ -100,6 +102,9 @@ class FakeRouterOsClient:
 
     def addresses(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self.address_rows]
+
+    def export_config(self) -> str:
+        return self.export_text
 
     def simple_queues(self) -> list[dict[str, Any]]:
         if self.raise_on_queues is not None:

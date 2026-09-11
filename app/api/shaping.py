@@ -65,6 +65,7 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
         "counts": {"nodes": len(noeuds), "links": len(liens)},
         "sources": {
             "neighbors": "/ip/neighbor (MNDP, LLDP, CDP) - adjacence physique",
+            "config_subnets": "/ip/address - liens routeur<->routeur par /30 partage",
             "ethernet": "/interface/ethernet - debit negocie du port",
             "addresses": "/ip/address - segment L3 du lien",
             "uisp": "UISP /devices - liens radio et capacite du moment",
@@ -72,6 +73,20 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
             "counters": "/interface rx-byte,tx-byte - debit mesure du port qui porte le lien",
         },
     }
+
+
+@router.get("/topology/routers/{router_name}/export", summary="Config complete d'un PoP")
+async def router_export(router_name: str, container: ContainerDep) -> dict[str, Any]:
+    """Renvoie le ``/export`` brut d'un routeur et son analyse (adresses, tunnels,
+    commentaires) : de quoi VOIR tout ce que le controleur percoit de sa config.
+    Lecture seule ; ``/export`` ne modifie rien sur l'equipement."""
+    try:
+        return await container.shaping.export_router(router_name)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Routeur '{router_name}' absent de l'inventaire actif",
+        ) from exc
 
 
 @router.post("/topology/discover", summary="Relance la decouverte de topologie")

@@ -272,6 +272,30 @@ async def test_decouverte_construit_le_graphe(
     assert lien.capacity_mbps == 1000.0
 
 
+async def test_export_expose_la_config_et_son_analyse(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    routeur.export_text = (
+        "/interface eoip\nadd name=eoip1 remote-address=10.9.9.9\n"
+        "/ip address\nadd address=10.50.0.1/30 interface=ether5\n"
+    )
+    service = make_service(settings, routeur)
+    await service.registry.reload()
+
+    resultat = await service.export_router("pop-test")
+
+    assert "eoip1" in resultat["export"]
+    assert resultat["parsed"]["tunnels"][0]["remote_address"] == "10.9.9.9"
+    assert resultat["parsed"]["addresses"][0]["address"] == "10.50.0.1/30"
+
+
+async def test_export_routeur_inconnu(settings: Settings, routeur: FakeRouterOsClient) -> None:
+    service = make_service(settings, routeur)
+    await service.registry.reload()
+    with pytest.raises(KeyError):
+        await service.export_router("pop-inexistant")
+
+
 async def test_un_pop_injoignable_n_annule_pas_la_decouverte(
     settings: Settings, routeur: FakeRouterOsClient
 ) -> None:

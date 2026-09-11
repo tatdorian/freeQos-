@@ -26,8 +26,11 @@ from app.collectors.topology import (
     TopologySnapshot,
     attach_uisp_devices,
     build_from_router,
+    link_by_shared_subnets,
+    link_by_tunnels,
     map_subscribers_to_sectors,
     normalize_mac,
+    parse_export,
     router_node_key,
 )
 from app.config import Settings
@@ -201,6 +204,12 @@ class ShapingService:
         resultats = await asyncio.gather(
             *(self._read_router_topology(c) for c in collectors), return_exceptions=True
         )
+        # Adresses et tunnels par PoP gere, pour deduire les liens routeur<->routeur
+        # de la CONFIG (sous-reseaux /30 partages ET tunnels), la ou MNDP peut
+        # manquer le lien. ip_owner : chaque IP d'un routeur -> sa case.
+        router_addresses: list[tuple[str, str, list[dict[str, Any]]]] = []
+        router_tunnels: list[tuple[str, str, list[dict[str, Any]]]] = []
+        ip_owner: dict[str, str] = {}
         for collector, resultat in zip(collectors, resultats, strict=True):
             if isinstance(resultat, BaseException):
                 message = f"{collector.name}: {type(resultat).__name__}: {resultat}"
@@ -220,6 +229,9 @@ class ShapingService:
                     )
                 )
                 continue
+            # L'export n'est pas un parametre de build_from_router : on le retire
+            # avant de deballer, puis on l'analyse a part.
+            export = resultat.pop("export", "") or ""
             build_from_router(
                 snapshot,
                 router_name=collector.config.name,
@@ -227,6 +239,34 @@ class ShapingService:
                 host=collector.config.host,
                 **resultat,
             )
+            cle = router_node_key(collector.config.name)
+            router_addresses.append((cle, collector.config.name, resultat.get("addresses") or []))
+            # Toute IP portee par ce routeur pointe vers sa case (pour resoudre le
+            # remote-address d'un tunnel vers le bon routeur).
+            for ligne in resultat.get("addresses") or []:
+                brut = str(ligne.get("address") or "").split("/")[0].strip()
+                if brut:
+                    ip_owner.setdefault(brut, cle)
+            if collector.config.host:
+                ip_owner.setdefault(str(collector.config.host), cle)
+            if export:
+                analyse = parse_export(export)
+                router_tunnels.append((cle, collector.config.name, analyse.get("tunnels") or []))
+                # L'export peut reveler des adresses absentes du /ip/address structure.
+                for ligne in analyse.get("addresses") or []:
+                    brut = str(ligne.get("address") or "").split("/")[0].strip()
+                    if brut:
+                        ip_owner.setdefault(brut, cle)
+                router_addresses.append(
+                    (cle, collector.config.name, analyse.get("addresses") or [])
+                )
+
+        # Liens deduits de la config, ajoutes APRES MNDP (ils ne comblent que les
+        # adjacences manquantes) : d'abord les /30 point-a-point, puis les tunnels.
+        ajoutes = link_by_shared_subnets(snapshot, router_addresses)
+        ajoutes += link_by_tunnels(snapshot, ip_owner, router_tunnels)
+        if ajoutes:
+            logger.info("Topologie : %d lien(s) routeur<->routeur deduits de la config", ajoutes)
 
         if uisp_devices:
             attach_uisp_devices(snapshot, uisp_devices)
@@ -247,6 +287,10 @@ class ShapingService:
             lire_rb = getattr(client, "routerboard", None)
             if callable(lire_rb):
                 serial = (lire_rb() or {}).get("serial-number")
+            export = ""
+            lire_exp = getattr(client, "export_config", None)
+            if callable(lire_exp):
+                export = lire_exp() or ""
             return {
                 "neighbors": client.neighbors(),
                 "interfaces": client.interfaces(),
@@ -254,9 +298,30 @@ class ShapingService:
                 "addresses": client.addresses(),
                 "identity": client.identity(),
                 "serial": serial,
+                "export": export,
             }
 
         return await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
+
+    async def export_router(self, router_name: str) -> dict[str, Any]:
+        """Config complete d'un PoP (``/export``) + son analyse.
+
+        Sert a VOIR ce que le controleur percoit du routeur : le texte brut et ce
+        qu'on en tire (adresses, tunnels, commentaires). Lecture seule."""
+        collector = next(
+            (c for c in self.registry.collectors if c.name == router_name), None
+        )
+        if collector is None:
+            raise KeyError(router_name)
+        client = collector._client  # noqa: SLF001 - lecture interne assumee
+        timeout = max(collector.config.timeout_s * 4, 15.0)
+
+        def lire() -> str:
+            lire_exp = getattr(client, "export_config", None)
+            return (lire_exp() or "") if callable(lire_exp) else ""
+
+        texte = await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
+        return {"router_name": router_name, "export": texte, "parsed": parse_export(texte)}
 
     async def map_sectors(
         self, sessions: list[dict[str, Any]], uisp_devices: list[dict[str, Any]]

@@ -85,6 +85,8 @@ class RouterOsReadClient(Protocol):
 
     def routerboard(self) -> dict[str, Any]: ...
 
+    def export_config(self) -> str: ...
+
     def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]: ...
 
     # --- Topologie et etat du shaping (lecture seule) ---
@@ -200,6 +202,31 @@ class LibrouterosReadClient:
     def system_resource(self) -> dict[str, Any]:
         rows = self._query("/system/resource")
         return dict(rows[0]) if rows else {}
+
+    def export_config(self) -> str:
+        """Config complete du routeur, facon ``/export`` (texte).
+
+        C'est la vue la plus complete de ce que fait le routeur : adresses,
+        tunnels, commentaires d'interface, routage. On l'analyse pour deduire des
+        liens que ni MNDP ni les /30 ne revelent (tunnels EoIP/GRE, backhauls
+        commentes). Best-effort : selon la version, l'API peut refuser ``/export``
+        -- on renvoie alors une chaine vide et la decouverte se rabat sur le
+        structure. LECTURE SEULE (``/export`` n'ecrit rien)."""
+        with self._lock:
+            try:
+                api = self._ensure()
+                lignes: list[str] = []
+                for reponse in api("/export"):
+                    if isinstance(reponse, dict):
+                        section = reponse.get("section")
+                        if section:
+                            lignes.append(str(section))
+                    else:
+                        lignes.append(str(reponse))
+                return "\n".join(lignes)
+            except Exception:  # noqa: BLE001 - best-effort, on degrade proprement
+                self._drop()
+                return ""
 
     def routerboard(self) -> dict[str, Any]:
         """``/system/routerboard`` : numero de serie et modele materiel.

@@ -1360,6 +1360,8 @@ async function loadRouters() {
         '<td style="font-size:.76rem;color:var(--muted)">' +
           esc(r.board_name || '-') + (r.routeros_version ? ' &middot; ' + esc(r.routeros_version) : '') + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' +
+          '<button class="sm" data-config="' + esc(r.name) +
+            '" title="Voir la config complete (/export) que le controleur lit">Config</button>' +
           (r.editable
             ? '<button class="sm" data-probe="' + r.id + '">Tester</button>' +
               '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Desactiver' : 'Activer') + '</button>' +
@@ -1368,8 +1370,11 @@ async function loadRouters() {
               '<button class="sm danger" data-hide-file="' + esc(r.name) +
               '" title="Ecarter ce routeur fichier sans editer le YAML">Retirer</button>') +
         '</div></td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('') + '</tbody></table>' +
+    '<div id="router-export"></div>';
 
+  host.querySelectorAll('[data-config]').forEach((b) =>
+    b.addEventListener('click', () => showRouterExport(b.dataset.config)));
   host.querySelectorAll('[data-probe]').forEach((b) =>
     b.addEventListener('click', () => probeRouter(b.dataset.probe, b)));
   host.querySelectorAll('[data-del]').forEach((b) =>
@@ -1378,6 +1383,34 @@ async function loadRouters() {
     b.addEventListener('click', () => toggleRouter(b.dataset.toggle)));
   host.querySelectorAll('[data-hide-file]').forEach((b) =>
     b.addEventListener('click', () => hideFileRouter(b.dataset.hideFile)));
+}
+
+/** Affiche le /export complet d'un routeur + ce que le controleur en tire
+ *  (adresses, tunnels, commentaires). C'est la vue "tout percevoir" de la config. */
+async function showRouterExport(name) {
+  const host = document.getElementById('router-export');
+  if (!host) return;
+  host.innerHTML = '<div class="muted">Lecture de la config de ' + esc(name) + '…</div>';
+  try {
+    const r = await api('/topology/routers/' + encodeURIComponent(name) + '/export');
+    const p = r.parsed || {};
+    const tuns = (p.tunnels || []).map((t) =>
+      esc(t.type + ' ' + (t.name || '') + ' → ' + t.remote_address)).join(', ') || '—';
+    const adrs = (p.addresses || []).length;
+    const coms = Object.keys(p.comments || {}).length;
+    host.innerHTML =
+      '<div class="notice" style="margin-top:.6rem"><b>Config de ' + esc(name) + '</b> — ' +
+        adrs + ' adresse(s), ' + (p.tunnels || []).length + ' tunnel(s), ' + coms +
+        ' commentaire(s). <b>Tunnels :</b> ' + tuns +
+        (r.export ? '' : '<span class="hint">L\'API n\'a pas renvoyé d\'export sur cette ' +
+          'version : la découverte se rabat sur le structuré (/ip/address, voisins).</span>') +
+      '</div>' +
+      (r.export
+        ? '<pre class="export-pre">' + esc(r.export) + '</pre>'
+        : '');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
 }
 
 /** Ecarte un routeur de l'inventaire fichier (source de verite intacte).
@@ -1831,6 +1864,10 @@ const TOPO_RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, cl
 function topoLinkConfident(l) {
   const key = String(l.key || '');
   if (key.indexOf('manual:') === 0 || l.discovered_by === 'manual') return true;
+  // Lien deduit de la config (sous-reseau /30 point-a-point) : preuve directe.
+  let a = l.attributes;
+  if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = null; } }
+  if (a && a.config_link) return true;
   if (!l.interface) return true;               // UISP / radio declare, sans port
   const peers = Number(l.interface_links) || 0;
   return peers <= 1;                            // point-a-point seulement
