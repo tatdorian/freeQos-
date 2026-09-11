@@ -20,7 +20,9 @@ from typing import Any
 
 from app.collectors.mikrotik import MikrotikCollector
 from app.collectors.topology import (
+    KIND_POP,
     KIND_SECTOR,
+    TopologyNode,
     TopologySnapshot,
     attach_uisp_devices,
     build_from_router,
@@ -204,6 +206,19 @@ class ShapingService:
                 message = f"{collector.name}: {type(resultat).__name__}: {resultat}"
                 snapshot.warnings.append(message)
                 logger.warning("Topologie non lue sur %s : %s", collector.name, resultat)
+                # Un PoP injoignable ne doit pas DISPARAITRE de l'arbre : on pose
+                # quand meme sa case (marquee injoignable), sinon l'operateur croit
+                # l'avoir perdu alors que c'est juste la lecture qui a echoue.
+                snapshot.add_node(
+                    TopologyNode(
+                        key=router_node_key(collector.config.name),
+                        name=collector.config.effective_pop_name or collector.config.name,
+                        kind=KIND_POP,
+                        address=collector.config.host,
+                        router_name=collector.config.name,
+                        attributes={"managed": True, "unreachable": True, "error": str(resultat)},
+                    )
+                )
                 continue
             build_from_router(
                 snapshot,
@@ -228,12 +243,17 @@ class ShapingService:
         timeout = max(collector.config.timeout_s * 4, 10.0)
 
         def lire() -> dict[str, Any]:
+            serial = None
+            lire_rb = getattr(client, "routerboard", None)
+            if callable(lire_rb):
+                serial = (lire_rb() or {}).get("serial-number")
             return {
                 "neighbors": client.neighbors(),
                 "interfaces": client.interfaces(),
                 "ethernet": client.ethernet(),
                 "addresses": client.addresses(),
                 "identity": client.identity(),
+                "serial": serial,
             }
 
         return await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)

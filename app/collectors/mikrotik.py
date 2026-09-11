@@ -83,6 +83,8 @@ class RouterOsReadClient(Protocol):
 
     def system_resource(self) -> dict[str, Any]: ...
 
+    def routerboard(self) -> dict[str, Any]: ...
+
     def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]: ...
 
     # --- Topologie et etat du shaping (lecture seule) ---
@@ -197,6 +199,20 @@ class LibrouterosReadClient:
 
     def system_resource(self) -> dict[str, Any]:
         rows = self._query("/system/resource")
+        return dict(rows[0]) if rows else {}
+
+    def routerboard(self) -> dict[str, Any]:
+        """``/system/routerboard`` : numero de serie et modele materiel.
+
+        Le numero de serie est le SEUL identifiant qui ne change jamais, quel que
+        soit le nom, l'adresse de gestion ou l'interface par laquelle on joint le
+        routeur. C'est la meilleure cle anti-doublon quand un meme routeur est
+        joignable sous plusieurs IP. Purement informatif : muet si absent (CHR,
+        machine virtuelle sans RouterBOARD)."""
+        try:
+            rows = self._query("/system/routerboard")
+        except Exception:  # noqa: BLE001 - purement informatif
+            return {}
         return dict(rows[0]) if rows else {}
 
     # --- Topologie et etat du shaping (lecture seule) ---

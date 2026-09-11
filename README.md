@@ -109,10 +109,13 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le débit total).
   L'option *Liens à débit seulement* ne garde que les liens réellement mesurés. Les doublons
   sont **réconciliés** : un même routeur vu plusieurs fois (PoP géré *et* voisin du cœur,
-  casses ou IPv4/IPv6 différentes) devient une seule case, ses adresses rassemblées. La
-  réconciliation reconnaît un routeur géré par son **identité RouterOS et *toutes* ses MAC
-  d'interface** — c'est ce qui empêche qu'il se dédouble quand un autre PoP le voit en voisin
-  (le voisinage ne révèle que la MAC de l'interface en face). Quand l'automatique ne peut pas
+  casses ou IPv4/IPv6 différentes, ou joignable sous plusieurs adresses de gestion) devient
+  une seule case, ses adresses rassemblées. La réconciliation reconnaît un routeur géré par
+  son **numéro de série** (`/system/routerboard`, l'identifiant qui ne bouge jamais), son
+  **identité RouterOS** et *toutes* ses **MAC d'interface** — c'est ce qui empêche qu'il se
+  dédouble, que ce soit sous une autre IP ou vu en voisin par un autre PoP (le voisinage ne
+  révèle que la MAC de l'interface en face). Un PoP **injoignable** reste affiché (badge
+  *injoignable*) plutôt que de disparaître silencieusement. Quand l'automatique ne peut pas
   *prouver* l'identité (nom générique « MikroTik », pas de MAC commune), l'opérateur tranche
   à la main : *Même équipement que…* replie une case sur une autre, *Séparer* défait la
   fusion. Rôles, position, rattachements, liens et fusions manuels sont enregistrés, mais ne

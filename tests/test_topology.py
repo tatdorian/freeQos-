@@ -341,6 +341,31 @@ def test_le_routeur_gere_porte_son_identite_et_ses_mac() -> None:
     assert noeud.mac == "48:8F:5A:00:00:11"
 
 
+def test_reconciliation_fusionne_sur_le_numero_de_serie() -> None:
+    """Un meme routeur joignable sous deux adresses de gestion (donc configure en
+    double par l'operateur) : le numero de serie prouve que c'est le meme materiel,
+    ses adresses sont rassemblees dans UNE case."""
+    noeuds = [
+        _noeud("router:pop-a", "PoP A", address="10.0.0.1",
+               attributes={"serial": "HFX0ABCDEF"}),
+        _noeud("router:pop-b", "PoP A (bis)", address="192.168.0.1",
+               attributes={"serial": "hfx0abcdef"}),  # meme serie, casse differente
+    ]
+    fusion, _ = reconcile_topology(noeuds, [])
+    assert len(fusion) == 1
+    assert set(fusion[0]["addresses"]) == {"10.0.0.1", "192.168.0.1"}
+
+
+def test_le_routeur_gere_porte_son_numero_de_serie() -> None:
+    snapshot = TopologySnapshot()
+    build_from_router(
+        snapshot, router_name="pop-a", pop_name="PoP A", host="10.0.0.1",
+        neighbors=[], interfaces=[], ethernet=[], addresses=[],
+        identity="NAS-a", serial="HFX0ABCDEF",
+    )
+    assert snapshot.nodes["router:pop-a"].attributes["serial"] == "HFX0ABCDEF"
+
+
 def test_reconciliation_fusionne_le_pop_gere_avec_sa_vue_voisin() -> None:
     """LE bug de doublon : le PoP gere (nom d'affichage 'PoP Nord') et son
     apparition comme voisin du coeur (keye par la MAC de l'interface en face,

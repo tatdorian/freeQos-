@@ -2263,6 +2263,13 @@ function topoSelect(key) {
 }
 
 /** Panneau de la case selectionnee : role, rattachement force, masquage, debit. */
+/** attributes d'un noeud, que /topology le rende en objet ou en JSON brut. */
+function topoAttrs(node) {
+  let a = node && node.attributes;
+  if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = null; } }
+  return a && typeof a === 'object' ? a : {};
+}
+
 /** Les autres cases de l'arbre, pour proposer une cible de fusion manuelle.
  *  Triees par nom, la case courante exclue. */
 function topoOtherNodes(selfKey) {
@@ -2283,12 +2290,17 @@ function renderTopoPanel() {
     return;
   }
   const parent = node.parentKey ? topo.model.nodesByKey.get(node.parentKey) : null;
+  const attrs = topoAttrs(node);
   host.innerHTML =
-    '<h4>' + esc(node.name) + '</h4>' +
+    '<h4>' + esc(node.name) +
+      (attrs.unreachable ? ' <span class="badge warn" title="' + esc(attrs.error || '') +
+        '">injoignable</span>' : '') + '</h4>' +
     '<div class="kv"><span>Role</span><span>' + esc(KIND_LABEL[node.kind] || '?') + '</span></div>' +
     ((node.addresses && node.addresses.length)
       ? '<div class="kv"><span>Adresse(s)</span><span>' + esc(node.addresses.join(', ')) + '</span></div>'
       : (node.address ? '<div class="kv"><span>Adresse</span><span>' + esc(node.address) + '</span></div>' : '')) +
+    (attrs.serial
+      ? '<div class="kv"><span>N° serie</span><span>' + esc(attrs.serial) + '</span></div>' : '') +
     (node.merged_count > 1
       ? '<div class="kv"><span>Fusion</span><span>' + esc(node.merged_count) +
         ' vues reconciliees</span></div>' : '') +
