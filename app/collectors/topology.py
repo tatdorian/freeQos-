@@ -501,6 +501,124 @@ def build_from_router(
         )
 
 
+def _parse_export_kv(reste: str) -> dict[str, str]:
+    """Découpe une ligne ``add …`` / ``set …`` d'un export en paires clé=valeur.
+
+    Gère les valeurs entre guillemets (``comment="Lien vers PoP Nord"``) et les
+    drapeaux nus (``disabled`` sans ``=``, ignorés)."""
+    paires: dict[str, str] = {}
+    for cle, val_q, val_nu in re.findall(
+        r'([\w.-]+)=(?:"((?:[^"\\]|\\.)*)"|(\S+))', reste
+    ):
+        # Une seule alternative capture : entre guillemets -> val_q (branche prise
+        # meme si vide, ex. comment=""), sinon la valeur nue val_nu.
+        paires[cle] = val_q if val_nu == "" else val_nu
+    return paires
+
+
+# Menus de tunnel dont le champ remote-address nomme le routeur d'en face.
+_TUNNEL_SECTIONS = {
+    "/interface eoip": "eoip",
+    "/interface gre": "gre",
+    "/interface ipip": "ipip",
+    "/interface vpls": "vpls",
+    "/interface l2tp-client": "l2tp",
+}
+
+
+def parse_export(text: str) -> dict[str, Any]:
+    """Analyse un ``/export`` RouterOS (texte) en structures exploitables.
+
+    Renvoie ``{"addresses": [...], "tunnels": [...], "comments": {...}}`` :
+      - ``addresses`` : ``{address, interface, comment}`` de ``/ip address`` ;
+      - ``tunnels``   : ``{type, name, remote_address, local_address}`` des tunnels
+        (leur ``remote-address`` identifie le routeur pair) ;
+      - ``comments``  : interface -> commentaire (souvent le nom du bout d'en face).
+
+    Purement textuel et sans effet de bord : on peut donc l'appliquer aussi bien à
+    l'export lu par l'API qu'à un export collé à la main. Tolérant : une ligne
+    incomprise est ignorée, jamais une exception.
+    """
+    addresses: list[dict[str, str]] = []
+    tunnels: list[dict[str, str]] = []
+    comments: dict[str, str] = {}
+    section = ""
+    for ligne_brute in (text or "").splitlines():
+        ligne = ligne_brute.strip()
+        if not ligne or ligne.startswith("#"):
+            continue
+        if ligne.startswith("/"):
+            section = ligne
+            continue
+        if not (ligne.startswith("add ") or ligne.startswith("set ")):
+            continue
+        kv = _parse_export_kv(ligne)
+        if section == "/ip address" and kv.get("address"):
+            addresses.append(
+                {
+                    "address": kv["address"],
+                    "interface": kv.get("interface", ""),
+                    "comment": kv.get("comment", ""),
+                }
+            )
+        elif section in _TUNNEL_SECTIONS and kv.get("remote-address"):
+            tunnels.append(
+                {
+                    "type": _TUNNEL_SECTIONS[section],
+                    "name": kv.get("name", ""),
+                    "remote_address": kv["remote-address"],
+                    "local_address": kv.get("local-address", ""),
+                }
+            )
+        if kv.get("comment") and kv.get("name"):
+            comments[kv["name"]] = kv["comment"]
+    return {"addresses": addresses, "tunnels": tunnels, "comments": comments}
+
+
+def link_by_tunnels(
+    snapshot: TopologySnapshot,
+    ip_owner: dict[str, str],
+    router_tunnels: list[tuple[str, str, list[dict[str, Any]]]],
+) -> int:
+    """Relie deux routeurs par un tunnel dont le ``remote-address`` appartient à
+    l'autre.
+
+    ``ip_owner`` : IP (sans préfixe) -> clé de nœud du routeur qui la porte.
+    ``router_tunnels`` : ``(cle_source, nom_source, [tunnels parsés])``.
+    On n'ajoute que les paires pas déjà reliées (jamais un doublon). Ces liens
+    d'overlay sont ce que MNDP et les /30 physiques ne voient pas."""
+    deja: set[frozenset[str]] = set()
+    for lien in snapshot.links.values():
+        deja.add(frozenset((lien.source_key, lien.target_key)))
+
+    ajoutes = 0
+    for cle_src, _nom_src, tunnels in router_tunnels:
+        for tunnel in tunnels or []:
+            distant = str(tunnel.get("remote_address") or "").strip()
+            cible = ip_owner.get(distant)
+            if not cible or cible == cle_src:
+                continue
+            if frozenset((cle_src, cible)) in deja:
+                continue
+            snapshot.add_link(
+                TopologyLink(
+                    source_key=cle_src,
+                    target_key=cible,
+                    kind=LINK_ETHERNET,
+                    interface=str(tunnel.get("name") or "") or None,
+                    discovered_by=_nom_src,
+                    attributes={
+                        "config_link": True,
+                        "tunnel": str(tunnel.get("type") or "tunnel"),
+                        "remote_address": distant,
+                    },
+                )
+            )
+            deja.add(frozenset((cle_src, cible)))
+            ajoutes += 1
+    return ajoutes
+
+
 def link_by_shared_subnets(
     snapshot: TopologySnapshot,
     router_addresses: list[tuple[str, str, list[dict[str, Any]]]],

@@ -107,11 +107,14 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   son rôle** (dont *Client*), **créer un lien** manquant (*Créer un lien* → clic parent puis
   enfant) et **retirer un lien** erroné (clic sur l'arête). Chaque lien porte son **débit
   mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le débit total).
-  Les liens **routeur↔routeur** sont découverts de deux façons complémentaires : `/ip/neighbor`
-  (MNDP/LLDP/CDP), **et surtout la configuration** — deux PoP portant chacun une adresse sur
-  le **même /30** (point-à-point) sont directement reliés, même quand MNDP ne voit rien (lien
-  routé, tunnel, switch muet). Ces liens déduits de la config sont fiables et ne doublent
-  jamais un lien déjà trouvé.
+  Les liens **routeur↔routeur** sont découverts de plusieurs façons complémentaires :
+  `/ip/neighbor` (MNDP/LLDP/CDP), **et surtout la configuration complète** lue par API. La
+  découverte analyse chaque `/export` : deux PoP portant chacun une adresse sur le **même /30**
+  (point-à-point) sont directement reliés, et un **tunnel** (EoIP/GRE/IPIP/VPLS) dont le
+  `remote-address` appartient à un autre PoP relie les deux — même quand MNDP ne voit rien
+  (lien routé, overlay, switch muet). Ces liens déduits de la config sont fiables et ne
+  doublent jamais un lien déjà trouvé. Le bouton **Config** (onglet Équipements) montre le
+  `/export` brut d'un routeur et ce que le contrôleur en tire (adresses, tunnels, commentaires).
   L'ossature de l'arbre est bâtie en deux temps pour rester juste sans perdre de nœud :
   d'abord les **adjacences sûres** (lien point-à-point — un seul voisin sur le port —, lien
   UISP/radio déclaré, ou lien posé à la main) ; puis, pour un nœud encore sans parent, son
@@ -593,6 +596,7 @@ que la boucle centrale devra suivre, sans radio.
 | `POST` · `DELETE` | `/api/v1/topology/merge` · `/topology/merge/{alias_key}` | Fusion manuelle de deux cases (même équipement) / annulation |
 | `GET` | `/api/v1/topology/links/{key}/throughput` | Débit mesuré d'un lien + historique |
 | `GET` | `/api/v1/topology/links/{key}/live` | Mesure instantanée (`/interface/monitor-traffic`) |
+| `GET` | `/api/v1/topology/routers/{name}/export` | Config complète (`/export`) + son analyse |
 | `GET` | `/api/v1/shaping/state` | Ce qui est **déjà** configuré sur les routeurs |
 | `PUT` · `DELETE` | `/api/v1/shaping/policies` | Fixer / retirer un débit imposé |
 | `POST` | `/api/v1/shaping/plan` | Commandes exactes, **sans rien envoyer** |

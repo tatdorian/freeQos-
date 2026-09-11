@@ -15,9 +15,11 @@ from app.collectors.topology import (
     classify_platform,
     ethernet_capacity_mbps,
     link_by_shared_subnets,
+    link_by_tunnels,
     map_subscribers_to_sectors,
     neighbor_node_key,
     normalize_mac,
+    parse_export,
     reconcile_topology,
 )
 
@@ -232,6 +234,71 @@ def test_un_reseau_moins_strict_qu_un_p2p_est_ignore() -> None:
             ("router:b", "b", [{"interface": "e1", "address": "10.0.0.2/29"}]),
             ("router:c", "c", [{"interface": "e1", "address": "10.0.0.3/29"}]),
         ],
+    )
+    assert ajoutes == 0
+
+
+EXPORT = """# oct/02/2025 12:00:00 by RouterOS 7.21
+# software id = ABCD-1234
+#
+/interface eoip
+add name=eoip-sud remote-address=100.100.101.113 local-address=100.100.100.254 tunnel-id=7
+/interface gre
+add name=gre-nord remote-address=203.0.113.9
+/ip address
+add address=10.50.0.1/30 interface=ether5 network=10.50.0.0
+add address=100.100.100.254/24 comment="LAN gestion" interface=bridge network=100.100.100.0
+/interface ethernet
+set [ find default-name=ether5 ] comment="Backhaul vers PoP Sud" name=ether5
+"""
+
+
+def test_parse_export_extrait_adresses_tunnels_et_commentaires() -> None:
+    """L'export est LA vue complete : on en tire adresses, tunnels et libelles."""
+    analyse = parse_export(EXPORT)
+
+    adresses = {a["address"]: a for a in analyse["addresses"]}
+    assert adresses["10.50.0.1/30"]["interface"] == "ether5"
+    assert adresses["100.100.100.254/24"]["comment"] == "LAN gestion"
+
+    tunnels = {t["name"]: t for t in analyse["tunnels"]}
+    assert tunnels["eoip-sud"]["remote_address"] == "100.100.101.113"
+    assert tunnels["eoip-sud"]["type"] == "eoip"
+    assert tunnels["gre-nord"]["remote_address"] == "203.0.113.9"
+
+    assert analyse["comments"]["ether5"] == "Backhaul vers PoP Sud"
+
+
+def test_parse_export_tolere_le_vide_et_le_bruit() -> None:
+    assert parse_export("") == {"addresses": [], "tunnels": [], "comments": {}}
+    assert parse_export("nimporte quoi\n# commentaire\n/truc\nset x")["tunnels"] == []
+
+
+def test_liens_par_tunnel_relient_les_deux_bouts() -> None:
+    """Un tunnel dont le remote-address appartient a un autre PoP les relie, meme
+    sans /30 partage ni voisinage MNDP (overlay pur)."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:a", name="A", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="router:b", name="B", kind=KIND_POP))
+    ip_owner = {"100.100.101.113": "router:b"}
+    ajoutes = link_by_tunnels(
+        snapshot,
+        ip_owner,
+        [("router:a", "a", [{"type": "eoip", "name": "eoip-sud",
+                             "remote_address": "100.100.101.113"}])],
+    )
+    assert ajoutes == 1
+    lien = next(iter(snapshot.links.values()))
+    assert {lien.source_key, lien.target_key} == {"router:a", "router:b"}
+    assert lien.attributes["tunnel"] == "eoip"
+
+
+def test_tunnel_vers_ip_inconnue_est_ignore() -> None:
+    """remote-address hors du parc (transit, Internet) : pas de lien fantome."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:a", name="A", kind=KIND_POP))
+    ajoutes = link_by_tunnels(
+        snapshot, {}, [("router:a", "a", [{"remote_address": "8.8.8.8"}])]
     )
     assert ajoutes == 0
 

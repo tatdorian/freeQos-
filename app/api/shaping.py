@@ -75,6 +75,20 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     }
 
 
+@router.get("/topology/routers/{router_name}/export", summary="Config complete d'un PoP")
+async def router_export(router_name: str, container: ContainerDep) -> dict[str, Any]:
+    """Renvoie le ``/export`` brut d'un routeur et son analyse (adresses, tunnels,
+    commentaires) : de quoi VOIR tout ce que le controleur percoit de sa config.
+    Lecture seule ; ``/export`` ne modifie rien sur l'equipement."""
+    try:
+        return await container.shaping.export_router(router_name)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Routeur '{router_name}' absent de l'inventaire actif",
+        ) from exc
+
+
 @router.post("/topology/discover", summary="Relance la decouverte de topologie")
 async def discover(container: ContainerDep) -> dict[str, Any]:
     """Lecture seule sur tous les PoPs, puis persistance du graphe."""
