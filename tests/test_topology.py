@@ -21,6 +21,7 @@ from app.collectors.topology import (
     normalize_mac,
     parse_export,
     reconcile_topology,
+    resolve_to_managed,
 )
 
 VOISINS = [
@@ -166,6 +167,61 @@ def test_deux_pops_partagent_le_meme_voisin() -> None:
     # Mais deux liens distincts y menent, un par PoP.
     vers_gw = [lk for lk in snapshot.links.values() if lk.target_key == "mac:AA:BB:CC:00:00:01"]
     assert {lk.discovered_by for lk in vers_gw} == {"pop-nord", "pop-sud"}
+
+
+# ----------------------------- un routeur gere vu en voisin n'est pas double
+def test_un_voisin_qui_est_un_routeur_gere_ne_fait_pas_de_doublon() -> None:
+    """CCR DS (vu en voisin, IP 11.11.11.1) EST le routeur gere DS-CCR : on ne
+    cree pas une case a cote, le lien pointe vers la case API."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:main-gw", name="MAIN GATEWAY", kind="gateway"))
+    snapshot.add_node(TopologyNode(key="router:ds-ccr", name="DS-CCR", kind=KIND_POP))
+    # Le voisin decouvert par la gateway : nom different, mais IP du routeur gere.
+    snapshot.add_node(TopologyNode(key="mac:AA:BB:CC:00:00:09", name="CCR DS",
+                                   kind=KIND_POP, address="11.11.11.1"))
+    snapshot.add_link(TopologyLink(source_key="router:main-gw",
+                                   target_key="mac:AA:BB:CC:00:00:09",
+                                   kind="ethernet", interface="ether2"))
+
+    replies = resolve_to_managed(
+        snapshot,
+        ip_owner={"11.11.11.1": "router:ds-ccr", "100.100.101.113": "router:ds-ccr"},
+        mac_owner={},
+        name_owner={},
+    )
+    assert replies == 1
+    assert "mac:AA:BB:CC:00:00:09" not in snapshot.nodes
+    lien = next(iter(snapshot.links.values()))
+    assert {lien.source_key, lien.target_key} == {"router:main-gw", "router:ds-ccr"}
+
+
+def test_un_client_non_gere_reste_une_feuille() -> None:
+    """Un CPE / client (aucune IP de routeur gere) n'est PAS replie : il reste."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:pop", name="PoP", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="mac:DE:AD:BE:EF:00:01", name="CPE-dupont",
+                                   kind="cpe", address="192.168.88.2"))
+    replies = resolve_to_managed(
+        snapshot, ip_owner={"10.0.0.1": "router:pop"}, mac_owner={}, name_owner={}
+    )
+    assert replies == 0
+    assert "mac:DE:AD:BE:EF:00:01" in snapshot.nodes
+
+
+def test_resolution_par_mac_et_identite() -> None:
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:a", name="A", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="mac:48:8F:5A:00:00:11", name="quelque-chose",
+                                   kind=KIND_POP, mac="48:8F:5A:00:00:11"))
+    snapshot.add_node(TopologyNode(key="identity:routeur-a", name="Routeur-A", kind=KIND_POP))
+    replies = resolve_to_managed(
+        snapshot,
+        ip_owner={},
+        mac_owner={"48:8F:5A:00:00:11": "router:a"},
+        name_owner={"routeur-a": "router:a"},
+    )
+    assert replies == 2
+    assert list(snapshot.nodes) == ["router:a"]
 
 
 # ------------------------------------------- liens deduits de la config

@@ -619,6 +619,60 @@ def link_by_tunnels(
     return ajoutes
 
 
+def resolve_to_managed(
+    snapshot: TopologySnapshot,
+    ip_owner: dict[str, str],
+    mac_owner: dict[str, str],
+    name_owner: dict[str, str],
+) -> int:
+    """Replie tout nœud DÉCOUVERT qui est en réalité un routeur GÉRÉ (ajouté par
+    API) dans ce routeur — au lieu d'en créer un doublon à côté.
+
+    Les routeurs, ce sont ceux que l'opérateur a connectés par API. Quand un PoP
+    en voit un autre en voisin (``/ip/neighbor``), on ne crée pas une seconde case :
+    on reconnaît le routeur géré par son IP, sa MAC ou son identité, et on fait
+    pointer le lien vers SA case. Ce qui ne correspond à aucun routeur géré reste
+    (ce sont les clients / équipements non gérés). Renvoie le nombre de nœuds
+    repliés.
+    """
+    remap: dict[str, str] = {}
+    for cle, node in list(snapshot.nodes.items()):
+        if cle.startswith("router:"):
+            continue  # deja un routeur gere
+        cible: str | None = None
+        mac = normalize_mac(node.mac)
+        if mac and mac in mac_owner:
+            cible = mac_owner[mac]
+        if cible is None:
+            adresses = [node.address, *(node.attributes.get("addresses") or [])]
+            for adr in adresses:
+                ip = str(adr or "").split("/")[0].strip()
+                if ip and ip in ip_owner:
+                    cible = ip_owner[ip]
+                    break
+        if cible is None:
+            nom = str(node.name or "").strip().lower()
+            if nom and nom not in GENERIC_NAMES and nom in name_owner:
+                cible = name_owner[nom]
+        if cible and cible != cle and cible in snapshot.nodes:
+            remap[cle] = cible
+
+    if not remap:
+        return 0
+    # Recable les liens vers la case gérée, jette les boucles internes, dedup par clé.
+    nouveaux: dict[str, TopologyLink] = {}
+    for lien in snapshot.links.values():
+        lien.source_key = remap.get(lien.source_key, lien.source_key)
+        lien.target_key = remap.get(lien.target_key, lien.target_key)
+        if lien.source_key == lien.target_key:
+            continue
+        nouveaux[lien.key] = lien
+    snapshot.links = nouveaux
+    for cle in remap:
+        snapshot.nodes.pop(cle, None)
+    return len(remap)
+
+
 def link_by_shared_subnets(
     snapshot: TopologySnapshot,
     router_addresses: list[tuple[str, str, list[dict[str, Any]]]],

@@ -31,6 +31,7 @@ from app.collectors.topology import (
     map_subscribers_to_sectors,
     normalize_mac,
     parse_export,
+    resolve_to_managed,
     router_node_key,
 )
 from app.config import Settings
@@ -206,10 +207,14 @@ class ShapingService:
         )
         # Adresses et tunnels par PoP gere, pour deduire les liens routeur<->routeur
         # de la CONFIG (sous-reseaux /30 partages ET tunnels), la ou MNDP peut
-        # manquer le lien. ip_owner : chaque IP d'un routeur -> sa case.
+        # manquer le lien. Les trois index (IP / MAC / identite -> case du routeur
+        # gere) servent aussi a RECONNAITRE un routeur gere vu en voisin, pour ne
+        # pas le dedoubler.
         router_addresses: list[tuple[str, str, list[dict[str, Any]]]] = []
         router_tunnels: list[tuple[str, str, list[dict[str, Any]]]] = []
         ip_owner: dict[str, str] = {}
+        mac_owner: dict[str, str] = {}
+        name_owner: dict[str, str] = {}
         for collector, resultat in zip(collectors, resultats, strict=True):
             if isinstance(resultat, BaseException):
                 message = f"{collector.name}: {type(resultat).__name__}: {resultat}"
@@ -249,6 +254,16 @@ class ShapingService:
                     ip_owner.setdefault(brut, cle)
             if collector.config.host:
                 ip_owner.setdefault(str(collector.config.host), cle)
+            # MAC et identite du routeur gere -> sa case (pour le reconnaitre en voisin).
+            noeud_gere = snapshot.nodes.get(cle)
+            if noeud_gere is not None:
+                for mac in noeud_gere.attributes.get("macs") or []:
+                    normalisee = normalize_mac(mac)
+                    if normalisee:
+                        mac_owner.setdefault(normalisee, cle)
+            identite = str(resultat.get("identity") or "").strip().lower()
+            if identite:
+                name_owner.setdefault(identite, cle)
             if export:
                 analyse = parse_export(export)
                 router_tunnels.append((cle, collector.config.name, analyse.get("tunnels") or []))
@@ -261,7 +276,14 @@ class ShapingService:
                     (cle, collector.config.name, analyse.get("addresses") or [])
                 )
 
-        # Liens deduits de la config, ajoutes APRES MNDP (ils ne comblent que les
+        # Un routeur gere vu en voisin par un autre ne doit PAS faire un doublon :
+        # on replie ces cases decouvertes dans le routeur gere correspondant, les
+        # liens pointent alors vers la case API. Ce qui reste = clients / non geres.
+        replies = resolve_to_managed(snapshot, ip_owner, mac_owner, name_owner)
+        if replies:
+            logger.info("Topologie : %d voisin(s) reconnus comme routeurs geres", replies)
+
+        # Liens deduits de la config, ajoutes APRES (ils ne comblent que les
         # adjacences manquantes) : d'abord les /30 point-a-point, puis les tunnels.
         ajoutes = link_by_shared_subnets(snapshot, router_addresses)
         ajoutes += link_by_tunnels(snapshot, ip_owner, router_tunnels)
