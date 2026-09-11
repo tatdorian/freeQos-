@@ -504,7 +504,7 @@ async function loadExec() {
   const grab = (p) => p.catch((err) => { firstError = firstError || err; return undefined; });
   const [heat, subsRaw, bloat, topoData, tree, rttState] = await Promise.all([
     grab(api('/heatmap?minutes=' + minutes + '&buckets=' + buckets)),
-    grab(api('/subscribers/latest?limit=1000&order_by=login')),
+    grab(api('/subscribers/latest?limit=500&order_by=login')),
     api('/bufferbloat?minutes=' + minutes).catch(() => null),
     api('/topology').catch(() => null),
     api('/network/tree').catch(() => []),
@@ -1033,7 +1033,7 @@ async function fetchTopo() {
   const [data, subs] = await Promise.all([
     api('/topology'),
     // Les abonnes, pour les rattacher a leur PoP dans l'arbre.
-    api('/subscribers/latest?limit=1000&order_by=login').catch(() => []),
+    api('/subscribers/latest?limit=500&order_by=login').catch(() => []),
   ]);
   topo.data = data;
   topo.subs = subs || [];
