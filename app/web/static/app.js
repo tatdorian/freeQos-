@@ -1895,12 +1895,22 @@ function topoBuildModel(data) {
       attach(n.key, n.parent_override, edge);
     }
   });
-  // 2) le reste par role, mais UNIQUEMENT sur des liens surs (point-a-point,
-  // UISP, ou manuels). Un lien vu sur un segment PARTAGE (plusieurs voisins sur
-  // le meme port : VLAN de gestion, switch) ne prouve aucune adjacence directe :
-  // l'y dessiner fabriquait un maillage de liens qui n'existent pas. On ne devine
-  // plus ces aretes ; l'operateur peut toujours les poser a la main.
+  // 2) par role, en DEUX passes pour ne perdre aucune vraie adjacence :
+  //   a) d'abord les liens SURS (point-a-point, UISP, manuels) : ils priment
+  //      toujours et forment l'ossature fiable de l'arbre.
+  //   b) puis, pour un noeud encore SANS parent, on retombe sur son meilleur
+  //      lien de segment partage plutot que de le laisser orphelin -- on prefere
+  //      un rattachement probable, marque INCERTAIN (trait pointille), a un trou.
+  // Un noeud n'a jamais qu'UN parent (attach ne l'ecrit qu'une fois) : pas de
+  // maillage, mais plus de routeur detache a tort non plus.
+  const rang = (k) => TOPO_RANG[nodes.get(k)?.kind] ?? 5;
   oriented.filter((e) => e.confident).forEach((e) => attach(e.childKey, e.parentKey, e));
+  oriented
+    .filter((e) => !e.confident && !nodes.get(e.childKey)?.parentKey)
+    // Meilleur parent d'abord : le plus haut dans la hierarchie (coeur/gateway
+    // avant un PoP voisin), pour eviter de rattacher a un frere par hasard.
+    .sort((a, b) => rang(a.parentKey) - rang(b.parentKey))
+    .forEach((e) => attach(e.childKey, e.parentKey, { ...e, uncertain: true }));
 
   // Rattache les abonnes a leur PoP : un noeud agrege repliable par PoP plutot
   // que 500 cases. Le debit de l'arete est la somme du trafic des abonnes.
@@ -2042,6 +2052,8 @@ function renderTopoCanvas() {
     } else if (rates.cap) {
       cls += ' ' + severity(pct(Math.max(rates.down, rates.up), rates.cap));
     }
+    // Adjacence probable (segment partage), pas prouvee point-a-point : pointille.
+    if (n.edge && n.edge.uncertain && !forced && !manual) cls += ' uncertain';
     // Zone de clic large et transparente derriere le trait : un lien se
     // supprime en cliquant dessus (les abonnes agreges n'ont pas de lien reel).
     if (!n.synthetic) {
@@ -2310,6 +2322,34 @@ function topoAttrs(node) {
   return a && typeof a === 'object' ? a : {};
 }
 
+// Mots trop generiques pour caracteriser un equipement (identite par defaut).
+const TOPO_GENERIC_TOKENS = new Set(['', 'mikrotik', 'routeros', 'routerboard', 'chr']);
+
+/** Jeu de mots-cles normalise d'un noeud (nom + identite), trie, sans les mots
+ *  generiques. "CCR DS" et "DS-CCR" donnent la MEME signature : c'est ce qui
+ *  permet de REPERER un doublon probable meme quand l'ordre des mots differe. */
+function topoNameTokens(node) {
+  const brut = ((node.name || '') + ' ' + (topoAttrs(node).identity || '')).toLowerCase();
+  const toks = brut.split(/[^a-z0-9]+/).filter((t) => t && !TOPO_GENERIC_TOKENS.has(t));
+  return [...new Set(toks)].sort();
+}
+
+/** Doublons PROBABLES du noeud : d'autres cases dont les mots-cles sont les memes
+ *  (ordre indifferent). On ne fusionne PAS tout seul -- deux extremites d'un lien
+ *  ("CCR-DS" / "DS-CCR") peuvent etre deux vrais routeurs -- mais on le SIGNALE
+ *  pour une fusion en un clic si c'est bien le meme materiel. */
+function topoDuplicateSuggestions(node) {
+  const mine = topoNameTokens(node);
+  if (mine.length < 2 || !topo.model) return [];
+  const sig = mine.join(' ');
+  const out = [];
+  topo.model.nodesByKey.forEach((n) => {
+    if (n.key === node.key || n.synthetic) return;
+    if (topoNameTokens(n).join(' ') === sig) out.push({ key: n.key, name: n.name });
+  });
+  return out;
+}
+
 /** Les autres cases de l'arbre, pour proposer une cible de fusion manuelle.
  *  Triees par nom, la case courante exclue. */
 function topoOtherNodes(selfKey) {
@@ -2331,10 +2371,21 @@ function renderTopoPanel() {
   }
   const parent = node.parentKey ? topo.model.nodesByKey.get(node.parentKey) : null;
   const attrs = topoAttrs(node);
+  const dups = topoDuplicateSuggestions(node);
   host.innerHTML =
     '<h4>' + esc(node.name) +
       (attrs.unreachable ? ' <span class="badge warn" title="' + esc(attrs.error || '') +
         '">injoignable</span>' : '') + '</h4>' +
+    // Doublon probable (memes mots-cles, ordre different) : signale, pas fusionne
+    // d'office. Un clic replie l'autre case dans celle-ci si c'est le meme materiel.
+    (dups.length
+      ? '<div class="notice" style="margin:.5rem 0"><b>Doublon probable</b> — mêmes ' +
+        'mots-clés que : ' +
+        dups.map((d) => '<button class="sm primary" data-merge-into="' + esc(d.key) + '">' +
+          'Fusionner ' + esc(topoTrim(d.name, 18)) + '</button>').join(' ') +
+        '<span class="hint">Même équipement ? Fusionnez. Sinon (deux bouts d\'un lien, ' +
+        'p.ex. CCR↔DS), laissez : ce sont deux vrais routeurs.</span></div>'
+      : '') +
     '<div class="kv"><span>Role</span><span>' + esc(KIND_LABEL[node.kind] || '?') + '</span></div>' +
     ((node.addresses && node.addresses.length)
       ? '<div class="kv"><span>Adresse(s)</span><span>' + esc(node.addresses.join(', ')) + '</span></div>'
@@ -2348,16 +2399,24 @@ function renderTopoPanel() {
     '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'racine') +
       (node.parent_override ? ' *' : '') + '</span></div>' +
     '<div class="kv"><span>Vu</span><span>' + (node.fresh ? 'recemment' : 'ancien') + '</span></div>' +
-    // Noeud orphelin faute de lien SUR : on explique et on propose le(s)
-    // rattachement(s) probable(s) vus sur un segment partage.
+    // Rattachement INCERTAIN (vu via un segment partage, pas prouve
+    // point-a-point) : on le signale et on offre de le confirmer/verrouiller.
+    (node.edge && node.edge.uncertain && parent
+      ? '<div class="notice" style="margin:.5rem 0">Rattachement <b>probable</b> à <b>' +
+        esc(topoTrim(parent.name, 18)) + '</b>, vu via un segment partagé (switch / VLAN ' +
+        'de gestion) — pas une adjacence directe prouvée. ' +
+        '<button class="sm ghost" data-attach="' + esc(parent.key) + '">Confirmer</button>' +
+        '<span class="hint">Confirmer verrouille ce parent ; ou glissez la case sous le bon ' +
+        'parent. Trait pointillé = lien incertain.</span></div>'
+      : '') +
+    // Noeud vraiment orphelin (aucun lien) : propose ses candidats de segment.
     (!node.parentKey && node.unsureParents && node.unsureParents.length
       ? '<div class="notice" style="margin:.5rem 0">Aucun lien direct sûr. Vu via un ' +
-        'segment partagé (switch / VLAN de gestion) vers : ' +
+        'segment partagé vers : ' +
         node.unsureParents.map((c) =>
           '<button class="sm ghost" data-attach="' + esc(c.key) + '">' +
           esc(topoTrim(c.name, 18)) + '</button>').join(' ') +
-        '<span class="hint">Cliquez pour rattacher à la main (l\'app ne devine plus ' +
-        'ces liens : ils ne sont pas des adjacences directes prouvées).</span></div>'
+        '<span class="hint">Cliquez pour rattacher à la main.</span></div>'
       : '') +
     '<div class="stack field"><label>Role</label>' +
       '<select id="topo-kind">' + KIND_ORDER.map((k) =>
@@ -2411,6 +2470,14 @@ function renderTopoPanel() {
     try {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '/parent',
         { method: 'PATCH', body: JSON.stringify({ parent_key: b.dataset.attach }) });
+      await loadTopology();
+    } catch (err) { alert(err.message); }
+  }));
+  host.querySelectorAll('[data-merge-into]').forEach((b) => b.addEventListener('click', async () => {
+    // On replie l'autre case (alias) dans celle que l'operateur regarde (canonique).
+    try {
+      await api('/topology/merge', { method: 'POST',
+        body: JSON.stringify({ alias_key: b.dataset.mergeInto, canonical_key: node.key }) });
       await loadTopology();
     } catch (err) { alert(err.message); }
   }));
