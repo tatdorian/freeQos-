@@ -351,6 +351,9 @@ class DepotBoosts:
         self.purges = 0
         self.flags: dict[str, bool] = {}
         self.audit_rows: list = []
+        # Resserrages de la boucle fermee QoE : vide = aucun, donc les liens
+        # sortent du planificateur exactement comme avant la phase 4.
+        self.qoe_states: dict[str, dict] = {}
 
     async def expired_boosts(self):
         return self.echus
@@ -368,6 +371,19 @@ class DepotBoosts:
 
     async def links(self):
         return []
+
+    async def qoe_link_states(self):
+        return dict(self.qoe_states)
+
+    async def qoe_trims(self):
+        return {
+            cle: float(etat["trim_factor"])
+            for cle, etat in self.qoe_states.items()
+            if float(etat["trim_factor"]) < 1.0
+        }
+
+    async def save_qoe_link_state(self, *, link_key, **kwargs):
+        self.qoe_states[link_key] = {"link_key": link_key, **kwargs}
 
     async def get_flag(self, name):
         return self.flags.get(name)

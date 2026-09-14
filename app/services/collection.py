@@ -48,6 +48,7 @@ JOB_INVENTORY = "reload_inventory"
 JOB_RTT = "probe_rtt"
 JOB_BOOSTS = "expire_boosts"
 JOB_RECONCILE = "reconcile_shaping"
+JOB_QOE_LOOP = "qoe_closed_loop"
 
 # Origine du plan d'un client a IP fixe. Ce n'est pas RADIUS et ca ne doit pas
 # en avoir l'air : le debit vient de la fiche saisie par l'operateur.

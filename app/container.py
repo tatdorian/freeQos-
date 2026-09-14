@@ -44,6 +44,7 @@ from app.services.collection import (
     JOB_INVENTORY,
     JOB_LINKS,
     JOB_PLANS,
+    JOB_QOE_LOOP,
     JOB_RECONCILE,
     JOB_RTT,
     JOB_SUBSCRIBERS,
@@ -302,6 +303,11 @@ async def build_container(settings: Settings) -> Container:
         await shaping.reconcile()
 
     scheduler.add_job(JOB_RECONCILE, settings.shaping_reconcile_interval_s, reconcile_shaping)
+
+    async def qoe_closed_loop() -> None:
+        await shaping.adjust_for_qoe()
+
+    scheduler.add_job(JOB_QOE_LOOP, settings.qoe_loop_interval_s, qoe_closed_loop)
 
     # Changer une cadence depuis l'interface doit reprogrammer la boucle, pas
     # seulement l'affichage : le scheduler relit interval_s a chaque tour.

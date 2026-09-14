@@ -64,6 +64,12 @@ le meme chemin de planification :
   source automatique n'existe pour lui (ni session, ni attribut RADIUS) : l'inventaire
   saisi par l'operateur est la seule verite, et son debit se lit sur les compteurs de
   la file qui le vise.
+
+**Boucle fermee QoE** : un job periodique lit le score de QoE composite
+(bufferbloat + latence a vide) et resserre l'enveloppe PARTAGEE d'un secteur qui
+decroche -- jamais le plan souscrit d'un abonne. Meme garde-fous que les autres
+boucles automatiques : soumise a ``ENFORCEMENT_ENABLED``, jamais de purge, et le
+plan passe par le meme planificateur, donc reste diffable et auditable.
 """
 
 

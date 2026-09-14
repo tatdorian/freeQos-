@@ -437,6 +437,84 @@ class TopologyRepository:
     async def policy_map(self, scope: str) -> dict[str, dict[str, Any]]:
         return {row["target_key"]: row for row in await self.policies(scope)}
 
+    # ------------------------------------------------- boucle fermee QoE
+    async def qoe_link_states(self) -> dict[str, dict[str, Any]]:
+        """Etat de la boucle fermee, par lien de secteur."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM qoe_link_states ORDER BY link_key",
+            )
+        return {row["link_key"]: dict(row) for row in rows}
+
+    async def qoe_trims(self) -> dict[str, float]:
+        """Resserrages en cours, lus par ``build_targets``.
+
+        Seuls les liens REELLEMENT resserres remontent : un facteur a 1.0 est
+        l'absence de decision, il n'a pas a occuper une entree ni a laisser
+        croire que la boucle agit sur ce lien.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT link_key, trim_factor FROM qoe_link_states WHERE trim_factor < 1.0",
+            )
+        return {row["link_key"]: float(row["trim_factor"]) for row in rows}
+
+    async def save_qoe_link_state(
+        self,
+        *,
+        link_key: str,
+        sector_key: str | None,
+        trim_factor: float,
+        healthy_cycles: int,
+        scored_count: int,
+        degraded_count: int,
+        worst_score: float | None,
+        last_action: str,
+        last_reason: str,
+        triggered: bool,
+    ) -> None:
+        """Ecrit l'etat d'un secteur apres un cycle de la boucle.
+
+        ``triggered`` dit si le resserrage a REELLEMENT bouge : seul ce cas
+        horodate ``last_trigger_at``, sinon un secteur stable verrait sa date de
+        declenchement avancer a chaque cycle et le journal ne voudrait plus rien
+        dire.
+        """
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO qoe_link_states
+                       (link_key, sector_key, trim_factor, healthy_cycles,
+                        scored_count, degraded_count, worst_score,
+                        last_action, last_reason, last_trigger_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
+                        CASE WHEN $10 THEN now() ELSE NULL END)
+                ON CONFLICT (link_key) DO UPDATE SET
+                    sector_key      = EXCLUDED.sector_key,
+                    trim_factor     = EXCLUDED.trim_factor,
+                    healthy_cycles  = EXCLUDED.healthy_cycles,
+                    scored_count    = EXCLUDED.scored_count,
+                    degraded_count  = EXCLUDED.degraded_count,
+                    worst_score     = EXCLUDED.worst_score,
+                    last_action     = EXCLUDED.last_action,
+                    last_reason     = EXCLUDED.last_reason,
+                    last_trigger_at = COALESCE(
+                        EXCLUDED.last_trigger_at, qoe_link_states.last_trigger_at
+                    ),
+                    updated_at      = now()
+                """,
+                link_key,
+                sector_key,
+                trim_factor,
+                healthy_cycles,
+                scored_count,
+                degraded_count,
+                worst_score,
+                last_action,
+                last_reason,
+                triggered,
+            )
+
     # -------------------------------------------------------------- boost
     async def set_boost(
         self,

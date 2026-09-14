@@ -135,9 +135,31 @@ class FakeRepository:
                     "samples": 12,
                     "loaded_samples": 4,
                     "load_max_bps": 90_000_000.0,
+                    # Score composite, calcule par le vrai depot a partir du meme
+                    # verdict : c'est lui que lit la boucle fermee.
+                    "qoe": {
+                        "score": 97.0,
+                        "severity": "ok",
+                        "basis": "composite",
+                        "grade": "A+",
+                        "rtt_ms": 9.0,
+                        "bloat_ms": 3.0,
+                    },
                 }
             ],
         }
+
+    async def qoe_subscribers(self, **kwargs: Any) -> list[dict[str, Any]]:
+        detail = await self.bufferbloat(**kwargs)
+        return [
+            {
+                "subscriber_id": row["subscriber_id"],
+                "login": row["login"],
+                "pop_name": row["pop_name"],
+                **row["qoe"],
+            }
+            for row in detail["subscribers"]
+        ]
 
     async def heatmap(self, **kwargs: Any) -> dict[str, Any]:
         cells = [{"ts": NOW.isoformat(), "value": 12.0, "severity": "ok"}]

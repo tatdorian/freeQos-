@@ -205,6 +205,7 @@ class MetricsRepository:
         afficher une note optimiste sur un abonne silencieux serait trompeur.
         """
         from app.services.bufferbloat import compute_bufferbloat, summarize
+        from app.services.qoe import compute_qoe
 
         async with self._pool.acquire() as conn:
             records = await conn.fetch(
@@ -249,6 +250,10 @@ class MetricsRepository:
                 indetermines += 1
                 continue
             verdicts.append(verdict)
+            # Score de QoE composite du meme abonne. C'est la MEME fonction que
+            # la heatmap Executif et que la boucle fermee de la phase 4 : un seul
+            # bareme, sinon l'ecran et le declencheur finissent par diverger.
+            note = compute_qoe(rtt_ms=verdict.idle_ms, bloat_ms=verdict.bloat_ms)
             notes.append(
                 {
                     "subscriber_id": entry["subscriber_id"],
@@ -256,6 +261,7 @@ class MetricsRepository:
                     "kind": entry["kind"],
                     "pop_name": entry["pop_name"],
                     **verdict.as_dict(),
+                    "qoe": note.as_dict() if note else None,
                 }
             )
 
@@ -270,6 +276,41 @@ class MetricsRepository:
             "summary": synthese,
             "subscribers": notes,
         }
+
+    async def qoe_subscribers(
+        self, *, minutes: int = 15, pop_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Score de QoE composite par abonne, pour la boucle fermee (phase 4).
+
+        Projection de ``bufferbloat()`` : meme fenetre, memes echantillons, meme
+        fonction de score que la heatmap Executif. Il n'y a volontairement PAS de
+        second chemin de calcul — un declencheur qui reagirait a un score
+        different de celui affiche a l'ecran serait indefendable.
+
+        Ne remontent que les abonnes pour lesquels on a pu CONCLURE : un abonne
+        silencieux, ou jamais sonde, n'a pas de note et ne doit peser sur aucune
+        decision.
+        """
+        detail = await self.bufferbloat(minutes=minutes, pop_id=pop_id)
+        lignes: list[dict[str, Any]] = []
+        for row in detail["subscribers"]:
+            note = row.get("qoe")
+            if not note:
+                continue
+            lignes.append(
+                {
+                    "subscriber_id": row["subscriber_id"],
+                    "login": row["login"],
+                    "pop_name": row["pop_name"],
+                    "score": note["score"],
+                    "severity": note["severity"],
+                    "basis": note["basis"],
+                    "grade": note["grade"],
+                    "bloat_ms": note["bloat_ms"],
+                    "rtt_ms": note["rtt_ms"],
+                }
+            )
+        return lignes
 
     async def heatmap(self, *, minutes: int = 15, buckets: int = 15) -> dict[str, Any]:
         """Heatmap executif facon LibreQoS : QoE, RTT et utilisation dans le temps.
@@ -287,7 +328,8 @@ class MetricsRepository:
                     SELECT date_bin($2::interval, ts, TIMESTAMPTZ 'epoch') AS bucket,
                            subscriber_id,
                            avg(rtt_ms) AS rtt,
-                           avg(COALESCE(tx_bps, 0)) AS tx
+                           avg(COALESCE(tx_bps, 0)) AS tx,
+                           avg(COALESCE(rx_bps, 0) + COALESCE(tx_bps, 0)) AS charge
                       FROM subscriber_metrics
                      WHERE ts > now() - $1::interval
                      GROUP BY bucket, subscriber_id
@@ -297,7 +339,15 @@ class MetricsRepository:
                            FILTER (WHERE rtt IS NOT NULL) AS rtt_p50,
                        percentile_cont(0.9) WITHIN GROUP (ORDER BY rtt)
                            FILTER (WHERE rtt IS NOT NULL) AS rtt_p90,
-                       sum(tx) AS tx_sum
+                       sum(tx) AS tx_sum,
+                       -- Deux tableaux PARALLELES (meme FILTER, meme ORDER BY) :
+                       -- un abonne = un indice. C'est ce qui permet de calculer la
+                       -- latence SOUS CHARGE du pas avec la meme fonction que la
+                       -- note A+..F par abonne, plutot qu'un proxy sur le RTT seul.
+                       array_agg(rtt ORDER BY subscriber_id)
+                           FILTER (WHERE rtt IS NOT NULL) AS rtt_samples,
+                       array_agg(charge ORDER BY subscriber_id)
+                           FILTER (WHERE rtt IS NOT NULL) AS load_samples
                   FROM par_bucket
                  GROUP BY bucket
                  ORDER BY bucket

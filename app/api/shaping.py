@@ -462,6 +462,42 @@ async def delete_policy(
     return {"deleted": True}
 
 
+# ------------------------------------------------- boucle fermee QoE (phase 4)
+@router.get("/shaping/qoe", summary="Ce que la boucle fermee QoE a decide, par secteur")
+async def qoe_loop_state(container: ContainerDep) -> dict[str, Any]:
+    """Etat de la boucle fermee : quel secteur est resserre, de combien, pourquoi.
+
+    Lecture seule. C'est la contrepartie lisible du job automatique : une boucle
+    qui resserre sans qu'on puisse voir ce qu'elle a decide, ni quand, est une
+    boucle que personne ne laissera active. Les commandes reellement envoyees,
+    elles, restent dans le journal d'enforcement.
+    """
+    etats = await _require_topology(container).qoe_link_states()
+    settings = container.settings
+    return {
+        "enabled": container.shaping.enforcement_enabled,
+        "interval_s": settings.qoe_loop_interval_s,
+        "window_minutes": settings.qoe_window_minutes,
+        "score_threshold": settings.qoe_score_threshold,
+        "min_degraded_subscribers": settings.qoe_min_degraded_subscribers,
+        "trim_step": settings.qoe_trim_step,
+        "trim_floor": settings.qoe_trim_floor,
+        "recovery_cycles": settings.qoe_recovery_cycles,
+        "sectors": list(etats.values()),
+    }
+
+
+@router.post("/shaping/qoe/run", summary="Declencher un cycle de la boucle fermee QoE")
+async def qoe_loop_run(container: ContainerDep) -> dict[str, Any]:
+    """Un cycle hors cadence : lecture des scores, decision, plan, application.
+
+    Rien n'est ecrit tant que l'enforcement est desactive -- la decision est
+    quand meme prise et le plan calcule, ce qui permet de LIRE ce que la boucle
+    ferait avant de lui donner la main.
+    """
+    return await container.shaping.adjust_for_qoe()
+
+
 # --------------------------------------------------------------------- plan
 class PlanRequest(BaseModel):
     router: str = Field(min_length=1)
