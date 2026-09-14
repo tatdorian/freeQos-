@@ -117,7 +117,7 @@ def _pick_canonical(
     """
     prefs = preferred or set()
 
-    def rang(node: dict[str, Any]) -> tuple:
+    def rang(node: dict[str, Any]) -> tuple[Any, ...]:
         key = node.get("key", "")
         return (
             0 if key in prefs else 1,
@@ -382,9 +382,7 @@ def ethernet_capacity_mbps(row: dict[str, Any]) -> float | None:
     return None
 
 
-def _router_macs(
-    interfaces: list[dict[str, Any]], ethernet: list[dict[str, Any]]
-) -> list[str]:
+def _router_macs(interfaces: list[dict[str, Any]], ethernet: list[dict[str, Any]]) -> list[str]:
     """Toutes les MAC propres au routeur, normalisees et dedupliquees.
 
     Ce sont ces MAC qui permettent de reconnaitre le routeur quand un AUTRE
@@ -448,7 +446,7 @@ def build_from_router(
         if nom:
             capacites[nom] = ethernet_capacity_mbps(row)
 
-    reseaux = {}
+    reseaux: dict[str, list[str]] = {}
     for row in addresses:
         interface = str(row.get("interface") or "")
         if interface:
@@ -507,9 +505,7 @@ def _parse_export_kv(reste: str) -> dict[str, str]:
     Gère les valeurs entre guillemets (``comment="Lien vers PoP Nord"``) et les
     drapeaux nus (``disabled`` sans ``=``, ignorés)."""
     paires: dict[str, str] = {}
-    for cle, val_q, val_nu in re.findall(
-        r'([\w.-]+)=(?:"((?:[^"\\]|\\.)*)"|(\S+))', reste
-    ):
+    for cle, val_q, val_nu in re.findall(r'([\w.-]+)=(?:"((?:[^"\\]|\\.)*)"|(\S+))', reste):
         # Une seule alternative capture : entre guillemets -> val_q (branche prise
         # meme si vide, ex. comment=""), sinon la valeur nue val_nu.
         paires[cle] = val_q if val_nu == "" else val_nu

@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from app.collectors.mikrotik import MikrotikCollector, RouterOsReadClient
 from app.config import MissingSecretError, RouterConfig, Settings
@@ -39,7 +40,7 @@ class RouterEntry:
     router_id: int | None = None
 
 
-def _fingerprint(config: RouterConfig) -> tuple:
+def _fingerprint(config: RouterConfig) -> tuple[Any, ...]:
     """Ce qui, en changeant, impose de reconstruire le collecteur."""
     return (
         config.host,
@@ -64,7 +65,7 @@ class RouterRegistry:
         self._repository = repository
         self._client_factory = client_factory
         self._collectors: dict[str, MikrotikCollector] = {}
-        self._fingerprints: dict[str, tuple] = {}
+        self._fingerprints: dict[str, tuple[Any, ...]] = {}
         self._sources: dict[str, str] = {}
         self._ids: dict[str, int | None] = {}
         # Routeurs ecartes, chacun {name, reason} : garder le nom permet de

@@ -18,7 +18,7 @@ from app.services.collection import CollectionService
 
 
 def get_container(request: Request) -> Container:
-    container = getattr(request.app.state, "container", None)
+    container: Container | None = getattr(request.app.state, "container", None)
     if container is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

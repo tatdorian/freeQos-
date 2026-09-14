@@ -15,6 +15,7 @@ import logging
 from typing import Any
 
 import asyncpg
+from pydantic import SecretStr
 
 from app.config import RouterConfig, RouterRole
 from app.services.crypto import SecretBox
@@ -23,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Colonnes renvoyees a l'interface. password_enc en est volontairement absente.
 PUBLIC_COLUMNS = """
-    id, name, host, port, username, role, pop_name, enabled, use_ssl, timeout_s,
+    id, name, host, port, username, role, pop_name, enabled, use_ssl,
+    tls_verify, tls_fingerprint, timeout_s,
     pppoe_interface_pattern, last_ok_at, last_error, identity, board_name,
     routeros_version, created_at, updated_at
 """
@@ -87,11 +89,13 @@ class RoutersRepository:
                     host=row["host"],
                     port=row["port"],
                     username=row["username"],
-                    password=password,
+                    password=SecretStr(password),
                     role=RouterRole(row["role"]),
                     pop_name=row["pop_name"],
                     enabled=row["enabled"],
                     use_ssl=row["use_ssl"],
+                    tls_verify=row["tls_verify"],
+                    tls_fingerprint=row["tls_fingerprint"],
                     timeout_s=row["timeout_s"],
                     pppoe_interface_pattern=row["pppoe_interface_pattern"],
                 )
@@ -106,9 +110,10 @@ class RoutersRepository:
                 row = await conn.fetchrow(
                     f"""
                     INSERT INTO routers (name, host, port, username, password_enc, role,
-                                         pop_name, enabled, use_ssl, timeout_s,
+                                         pop_name, enabled, use_ssl, tls_verify,
+                                         tls_fingerprint, timeout_s,
                                          pppoe_interface_pattern)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                     RETURNING {PUBLIC_COLUMNS}
                     """,  # noqa: S608
                     payload["name"],
@@ -120,6 +125,8 @@ class RoutersRepository:
                     payload.get("pop_name"),
                     payload.get("enabled", True),
                     payload.get("use_ssl", False),
+                    payload.get("tls_verify", "strict"),
+                    payload.get("tls_fingerprint"),
                     payload.get("timeout_s", 5.0),
                     payload.get("pppoe_interface_pattern", "<pppoe-{login}>"),
                 )
@@ -147,6 +154,8 @@ class RoutersRepository:
                 "pop_name",
                 "enabled",
                 "use_ssl",
+                "tls_verify",
+                "tls_fingerprint",
                 "timeout_s",
                 "pppoe_interface_pattern",
             }
@@ -207,7 +216,8 @@ class RoutersRepository:
 
     async def find_id_by_name(self, name: str) -> int | None:
         async with self._pool.acquire() as conn:
-            return await conn.fetchval("SELECT id FROM routers WHERE name = $1", name)
+            value = await conn.fetchval("SELECT id FROM routers WHERE name = $1", name)
+        return None if value is None else int(value)
 
     # --------------------------------------------- routeurs fichier masques
     async def hidden_file_routers(self) -> set[str]:

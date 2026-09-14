@@ -15,7 +15,7 @@ import logging
 import time
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 
 from app.collectors.mikrotik import MikrotikCollector
 from app.collectors.radius import PlanProvider
@@ -50,6 +50,27 @@ JOB_RECONCILE = "reconcile_shaping"
 FLAG_RTT = "rtt_enabled"
 
 
+class AntennasProvider(Protocol):
+    """Contrat du provider des antennes ajoutees depuis l'interface (airOS en base).
+
+    Deux responsabilites, volontairement reunies dans UN seul objet : lister les
+    antennes de la base et les rattacher a leur PoP (``backhaul_configs``), et
+    lire leur capacite du moment (``get_capacities``). Ce contrat explicite est
+    ce qui manquait : le parametre etait annote ``Any``, ce qui laissait injecter
+    un objet ne portant que la moitie du contrat (le provider de capacite sans
+    ``backhaul_configs``), et le cycle backhaul echouait en boucle sans que rien
+    ne l'attrape au montage.
+    """
+
+    async def backhaul_configs(self) -> list[BackhaulConfig]: ...
+
+    async def get_capacities(self, device_ids: Sequence[str]) -> dict[str, BackhaulSample]: ...
+
+    async def raw_devices(self) -> list[dict[str, Any]]: ...
+
+    async def aclose(self) -> None: ...
+
+
 class CollectionService:
     def __init__(
         self,
@@ -63,7 +84,7 @@ class CollectionService:
         backhauls: Sequence[BackhaulConfig] | None = None,
         clock: Callable[[], float] = time.monotonic,
         rtt_prober: RttProber | None = None,
-        antennas_provider: Any = None,
+        antennas_provider: AntennasProvider | None = None,
     ) -> None:
         self.settings = settings
         self.collectors = list(collectors)
@@ -138,7 +159,10 @@ class CollectionService:
             sessions_by_router.append((collector, outcome))
 
         rows: list[tuple[int, SubscriberSample]] = []
-        seen: dict[int, tuple[str | None, datetime]] = {}
+        # tuple[str | None, object] : le second membre est un datetime, mais le
+        # contrat Directory.touch_subscribers l'accepte en ``object`` (invariance
+        # des dict), on aligne donc l'annotation dessus.
+        seen: dict[int, tuple[str | None, object]] = {}
         active_keys: set[str] = set()
         rtt_targets: list[tuple[int, str, MikrotikCollector]] = []
 

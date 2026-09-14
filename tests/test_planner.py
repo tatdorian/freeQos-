@@ -441,6 +441,42 @@ def test_type_cake_avec_overhead_pppoe() -> None:
     assert champs["cake-rtt"] == "50ms"
 
 
+def test_type_cake_options_avancees_rendues() -> None:
+    """P1-2 : les six options CAKE, une fois transmises, se rendent en champs
+    RouterOS."""
+    types = desired_queue_types(
+        overhead=22,
+        rtt_ms=50,
+        diffserv="diffserv4",
+        flowmode="triple-isolate",
+        nat=True,
+        ack_filter="filter",
+        wash=True,
+        mpu=64,
+    )
+    champs = types[0].routeros_fields()
+    assert champs["cake-diffserv"] == "diffserv4"
+    assert champs["cake-flowmode"] == "triple-isolate"
+    assert champs["cake-nat"] == "yes"
+    assert champs["cake-ack-filter"] == "filter"
+    assert champs["cake-wash"] == "yes"
+    assert champs["cake-mpu"] == "64"
+
+
+def test_options_cake_absentes_par_defaut() -> None:
+    """None = champ non pose : le defaut RouterOS est conserve."""
+    champs = desired_queue_types(overhead=22)[0].routeros_fields()
+    for cle in (
+        "cake-diffserv",
+        "cake-flowmode",
+        "cake-nat",
+        "cake-ack-filter",
+        "cake-wash",
+        "cake-mpu",
+    ):
+        assert cle not in champs
+
+
 def test_type_cake_existant_mais_different() -> None:
     types = desired_queue_types(overhead=22)
     plan = build_plan(
@@ -457,6 +493,105 @@ def test_type_cake_existant_mais_different() -> None:
     assert plan.counts() == {"add": 0, "set": 1, "remove": 0}
     assert plan.unchanged == 1
     assert plan.actions[0].changes["cake-overhead"] == ("0", "22")
+
+
+# ------------------------------------- P0-4 : idempotence des champs LISTE
+def _capture_queue_simple_print(target: str) -> dict:
+    """Une ligne telle que ``/queue/simple/print`` la renvoie vraiment.
+
+    On garde les champs annexes que RouterOS ajoute (compteurs, bornes) : le
+    diff ne doit s'interesser qu'aux champs desires, pas s'affoler sur le reste.
+    """
+    return {
+        ".id": "*3",
+        "name": "freeqos-parent-bh-nord",
+        "target": target,
+        "parent": "none",
+        "packet-marks": "",
+        "priority": "8/8",
+        "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
+        "limit-at": "0/0",
+        "max-limit": "0/0",
+        "burst-limit": "0/0",
+        "bytes": "123456/789012",
+        "comment": MANAGED_COMMENT,
+        "disabled": "false",
+    }
+
+
+def test_cible_liste_reordonnee_ne_produit_aucune_action() -> None:
+    """Regression P0-4 : ``target`` est une liste RouterOS. Des qu'elle a
+    plusieurs membres, RouterOS la relit dans SON ordre / espacement / casse.
+    Comparer les chaines brutes produisait un ``set`` a chaque cycle, pour
+    toujours. On compare l'ENSEMBLE : ordre et forme ne comptent pas."""
+    # L'etat desire vise deux interfaces (lien L2 sans segment L3).
+    _, files, _ = desired_state(
+        links=[lien(name="bh-nord", capacity=None, subnet=None, interface="ether3,lan-bridge")],
+        subscribers=[],
+    )
+    assert files[0].target == "ether3,lan-bridge"
+
+    # RouterOS renvoie la meme liste, dans un autre ordre et un autre espacement.
+    actual = _capture_queue_simple_print(target="lan-bridge, ether3")
+
+    plan = build_plan(
+        "pop-nord",
+        desired_types=[],
+        desired_queues=files,
+        actual_types=[],
+        actual_queues=[actual],
+    )
+    assert plan.is_empty, [a.command for a in plan.actions]
+    assert plan.unchanged == 1
+
+    # Critere de sortie : deux cycles consecutifs sans changement reel n'ecrivent
+    # rien. Le second cycle relit exactement la meme capture.
+    plan2 = build_plan(
+        "pop-nord",
+        desired_types=[],
+        desired_queues=files,
+        actual_types=[],
+        actual_queues=[actual],
+    )
+    assert plan2.is_empty
+
+
+def test_cible_liste_casse_et_espaces_ignores() -> None:
+    """Casse et espaces autour des virgules ne sont pas des changements."""
+    _, files, _ = desired_state(
+        links=[lien(name="bh-nord", capacity=None, subnet=None, interface="ether3,lan-bridge")],
+        subscribers=[],
+    )
+    actual = _capture_queue_simple_print(target="LAN-BRIDGE ,   Ether3")
+    plan = build_plan(
+        "pop-nord", desired_types=[], desired_queues=files, actual_types=[], actual_queues=[actual]
+    )
+    assert plan.is_empty
+
+
+def test_cible_liste_reellement_differente_produit_un_set() -> None:
+    """La normalisation ne doit PAS masquer un vrai changement de membres :
+    retirer un membre reste un ecart, donc un set."""
+    _, files, _ = desired_state(
+        links=[lien(name="bh-nord", capacity=None, subnet=None, interface="ether3,lan-bridge")],
+        subscribers=[],
+    )
+    actual = _capture_queue_simple_print(target="ether3")  # un membre en moins
+    plan = build_plan(
+        "pop-nord", desired_types=[], desired_queues=files, actual_types=[], actual_queues=[actual]
+    )
+    assert plan.counts() == {"add": 0, "set": 1, "remove": 0}
+    assert "target" in plan.actions[0].changes
+
+
+def test_normalise_des_listes_est_insensible_a_l_ordre() -> None:
+    """Test direct de la brique : l'ensemble compte, pas l'ecriture."""
+    from app.enforcement.planner import _normalise
+
+    assert _normalise("ether3,lan-bridge") == _normalise("lan-bridge,ether3")
+    assert _normalise("A, B ,c") == _normalise("c,b,a")
+    # Un debit compose (slash) reste traite comme tel, pas comme une liste.
+    assert _normalise("20M/100M") == "20000000/100000000"
 
 
 def test_serialisation_du_plan() -> None:

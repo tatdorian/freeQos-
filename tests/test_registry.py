@@ -10,8 +10,9 @@ from tests.conftest import FakeRouterOsClient
 class FakeRoutersRepository:
     """Double memoire du depot base."""
 
-    def __init__(self, configs: list[RouterConfig] | None = None,
-                 hidden: set[str] | None = None) -> None:
+    def __init__(
+        self, configs: list[RouterConfig] | None = None, hidden: set[str] | None = None
+    ) -> None:
         self.configs = configs or []
         self.failures: list[tuple[int, str]] = []
         self.hidden = hidden or set()

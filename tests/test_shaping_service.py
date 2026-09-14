@@ -233,6 +233,30 @@ async def test_plan_complet_depuis_un_routeur_vierge(
     assert any("450000000" in c for c in commandes)
 
 
+async def test_les_options_cake_de_la_config_atteignent_le_plan(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """P1-2 : ce qui est saisi dans Settings (cake_nat, cake_diffserv, ...) doit
+    se retrouver dans les commandes /queue/type du plan."""
+    settings.cake_nat = True
+    settings.cake_diffserv = "diffserv4"
+    settings.cake_wash = True
+    service = make_service(settings, routeur)
+    await service.registry.reload()
+
+    plan = await service.plan(
+        "pop-test",
+        links=[LinkTarget(name="bh-nord", interface="ether2", measured_capacity_mbps=500)],
+        subscribers=[],
+    )
+
+    commandes = [a.command for a in plan.actions if a.path == "/queue/type"]
+    assert commandes, "aucun type CAKE dans le plan"
+    assert any("cake-nat=yes" in c for c in commandes)
+    assert any("cake-diffserv=diffserv4" in c for c in commandes)
+    assert any("cake-wash=yes" in c for c in commandes)
+
+
 def test_le_segment_du_lien_vient_de_ip_address() -> None:
     """La cible d'une file de lien se lit dans /ip/address, sous forme reseau."""
     assert _segment_du_lien({"attributes": '{"local_networks": ["172.16.38.1/23"]}'}) == (
@@ -351,8 +375,8 @@ class DepotBoosts:
     async def set_flag(self, name, value, *, updated_by=None, reason=None):
         self.flags[name] = value
 
-    async def record_audit(self, router_name, *, dry_run, outcomes):
-        self.audit_rows.extend(outcomes)
+    async def record_audit(self, router_name, *, dry_run, outcomes, author=None):
+        self.audit_rows.extend((outcome, author) for outcome in outcomes)
         return len(outcomes)
 
 
@@ -619,6 +643,33 @@ async def test_reconciliation_applique_la_limite_saisie(
     commandes = [a.command for a in ecriture.executed]
     # 100 kbps = 100000 bits/s, dans l'ordre montant/descendant.
     assert any("max-limit=100000/100000" in c for c in commandes)
+
+
+async def test_reconciliation_journalise_son_auteur(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """P0-1 : chaque commande porte son auteur. La boucle automatique s'identifie
+    comme "system:reconcile" -- sinon le journal dit ce qui a ete fait, pas par
+    qui."""
+    settings.enforcement_enabled = True
+    settings.routers[0].rw_username = "qos-rw"
+    depot = DepotBoosts()
+    depot.policy_map = lambda scope: _politiques(  # type: ignore[assignment]
+        scope, {"dupont": {"max_down_mbps": 0.1, "max_up_mbps": 0.1, "enabled": True}}
+    )
+    ecriture = FauxClientEcriture()
+    service = make_service(
+        settings, routeur, repository=depot, write_client_factory=lambda c: ecriture
+    )
+    service.metrics = MetriquesMinimales(
+        [{"pppoe_login": "dupont", "pop_name": "PoP Test", "plan_down_mbps": 100}]
+    )
+    await service.registry.reload()
+
+    await service.reconcile()
+
+    assert depot.audit_rows
+    assert all(author == "system:reconcile" for _, author in depot.audit_rows)
 
 
 async def test_reconciliation_ne_purge_jamais(

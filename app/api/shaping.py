@@ -20,7 +20,9 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 
+from app.api.auth import IdentityDep
 from app.api.deps import ContainerDep, RepositoryDep
+from app.db.topology_repo import TopologyRepository
 from app.enforcement.routeros import MissingWriteCredentialsError
 from app.services.shaping import EnforcementDisabledError, EnforcementLockedError
 
@@ -29,7 +31,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["shaping"])
 
 
-def _require_topology(container: ContainerDep):
+def _require_topology(container: ContainerDep) -> TopologyRepository:
     if container.topology_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -99,7 +101,7 @@ async def discover(container: ContainerDep) -> dict[str, Any]:
     for fournisseur in (container.backhaul_provider, container.collection.antennas_provider):
         if fournisseur is not None and hasattr(fournisseur, "raw_devices"):
             try:
-                devices.extend(await fournisseur.raw_devices())  # type: ignore[attr-defined]
+                devices.extend(await fournisseur.raw_devices())
             except Exception:  # noqa: BLE001 - une source muette n'empeche pas l'autre
                 logger.warning("raw_devices indisponible pour %s", type(fournisseur).__name__)
 
@@ -431,7 +433,9 @@ async def list_policies(
 
 
 @router.put("/shaping/policies", summary="Fixer le debit d'un lien ou d'un abonne")
-async def set_policy(payload: PolicyInput, container: ContainerDep) -> dict[str, Any]:
+async def set_policy(
+    payload: PolicyInput, container: ContainerDep, identity: IdentityDep
+) -> dict[str, Any]:
     """Enregistre la surcharge. N'ecrit RIEN sur le routeur : il faut ensuite
     demander un plan puis l'appliquer."""
     repo = _require_topology(container)
@@ -442,7 +446,7 @@ async def set_policy(payload: PolicyInput, container: ContainerDep) -> dict[str,
         max_up_mbps=payload.max_up_mbps,
         enabled=payload.enabled,
         note=payload.note,
-        updated_by="ui",
+        updated_by=identity.name,
     )
     return {
         "policy": enregistre,
@@ -504,7 +508,7 @@ class ApplyRequest(BaseModel):
 
 @router.post("/shaping/apply", summary="Appliquer un plan (ecriture sur le routeur)")
 async def apply_shaping(
-    payload: ApplyRequest, container: ContainerDep, metrics: RepositoryDep
+    payload: ApplyRequest, container: ContainerDep, metrics: RepositoryDep, identity: IdentityDep
 ) -> dict[str, Any]:
     """Recalcule le plan puis l'execute.
 
@@ -520,7 +524,9 @@ async def apply_shaping(
     try:
         liens, abonnes = await container.shaping.build_targets(payload.router)
         plan = await container.shaping.plan(payload.router, links=liens, subscribers=abonnes)
-        resultat = await container.shaping.apply(plan, dry_run=payload.dry_run)
+        resultat = await container.shaping.apply(
+            plan, dry_run=payload.dry_run, author=identity.name
+        )
     except EnforcementDisabledError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except MissingWriteCredentialsError as exc:
@@ -584,7 +590,9 @@ async def enforcement_state(container: ContainerDep) -> dict[str, Any]:
 
 
 @router.put("/shaping/enforcement", summary="Activer ou couper l'ecriture sur les routeurs")
-async def set_enforcement(payload: EnforcementInput, container: ContainerDep) -> dict[str, Any]:
+async def set_enforcement(
+    payload: EnforcementInput, container: ContainerDep, identity: IdentityDep
+) -> dict[str, Any]:
     """Bascule sans redemarrage.
 
     Activer exige une confirmation ; couper n'en demande pas — revenir en
@@ -599,7 +607,9 @@ async def set_enforcement(payload: EnforcementInput, container: ContainerDep) ->
             ),
         )
     try:
-        return await container.shaping.set_enforcement(payload.enabled, reason=payload.reason)
+        return await container.shaping.set_enforcement(
+            payload.enabled, reason=payload.reason, actor=identity.name
+        )
     except EnforcementLockedError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -635,7 +645,7 @@ async def list_boosts(container: ContainerDep) -> list[dict[str, Any]]:
 
 @router.post("/shaping/boosts", summary="Donner un coup de debit temporaire")
 async def create_boost(
-    payload: BoostInput, container: ContainerDep, metrics: RepositoryDep
+    payload: BoostInput, container: ContainerDep, metrics: RepositoryDep, identity: IdentityDep
 ) -> dict[str, Any]:
     """Pose un boost puis, si demande, l'applique immediatement.
 
@@ -680,7 +690,7 @@ async def create_boost(
         up_mbps=up,
         expires_at=expire_le,
         reason=payload.reason,
-        updated_by="ui",
+        updated_by=identity.name,
     )
 
     resultat: dict[str, Any] = {
@@ -695,22 +705,31 @@ async def create_boost(
     }
 
     if payload.apply_now:
-        resultat["applied"] = await _apply_for_subscriber(container, payload.login)
+        resultat["applied"] = await _apply_for_subscriber(
+            container, payload.login, author=identity.name
+        )
     return resultat
 
 
 @router.delete("/shaping/boosts/{login}", summary="Retirer un boost avant son echeance")
 async def clear_boost(
-    login: str, container: ContainerDep, apply_now: Annotated[bool, Query()] = True
+    login: str,
+    container: ContainerDep,
+    identity: IdentityDep,
+    apply_now: Annotated[bool, Query()] = True,
 ) -> dict[str, Any]:
     retire = await _require_topology(container).clear_boost("subscriber", login)
     if not retire:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Aucun boost en cours")
-    applique = await _apply_for_subscriber(container, login) if apply_now else None
+    applique = (
+        await _apply_for_subscriber(container, login, author=identity.name) if apply_now else None
+    )
     return {"cleared": True, "applied": applique}
 
 
-async def _apply_for_subscriber(container: ContainerDep, login: str) -> dict[str, Any] | None:
+async def _apply_for_subscriber(
+    container: ContainerDep, login: str, *, author: str | None = None
+) -> dict[str, Any] | None:
     """Applique le plan du routeur qui porte cet abonne, si l'ecriture est permise.
 
     Ne leve pas : poser un boost doit reussir meme quand l'enforcement est
@@ -732,7 +751,7 @@ async def _apply_for_subscriber(container: ContainerDep, login: str) -> dict[str
         # relue. Elle doit poser le nouveau debit de cet abonne, pas decider de
         # supprimer les files des autres.
         plan = await container.shaping.plan_router(routeurs[0], prune=False)
-        applique = await container.shaping.apply(plan, dry_run=False)
+        applique = await container.shaping.apply(plan, dry_run=False, author=author)
         return applique.to_dict()
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}

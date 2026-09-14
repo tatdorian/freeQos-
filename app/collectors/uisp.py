@@ -22,11 +22,14 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
 from app.models import BackhaulSample
+
+if TYPE_CHECKING:
+    from app.config import BackhaulConfig
 
 logger = logging.getLogger(__name__)
 
@@ -414,17 +417,25 @@ class DbAirOsProvider(AirOsProvider):
     variable d'environnement, aucun redemarrage. On recharge la liste avant
     chaque lecture ; une base momentanement injoignable conserve la derniere
     liste connue plutot que de tout perdre.
+
+    Deux responsabilites reunies pour combler le contrat ``AntennasProvider`` de
+    la collecte : lister les antennes en base (``backhaul_configs``, qui rattache
+    chaque radio a son PoP) ET lire leur capacite (``get_capacities``). C'est ce
+    couplage qui manquait : le conteneur injectait un provider sans
+    ``backhaul_configs``, et le cycle backhaul echouait a chaque tour.
     """
 
     def __init__(
         self,
         target_loader: Callable[[], Awaitable[Sequence[AirOsTarget]]],
         *,
+        config_loader: Callable[[], Awaitable[Sequence[BackhaulConfig]]] | None = None,
         timeout_s: float = 10.0,
         client_factory: Callable[[AirOsTarget], AirOsClient] | None = None,
     ) -> None:
         super().__init__([], timeout_s=timeout_s, client_factory=client_factory)
         self._loader = target_loader
+        self._config_loader = config_loader
 
     async def _refresh(self) -> None:
         try:
@@ -433,6 +444,16 @@ class DbAirOsProvider(AirOsProvider):
             logger.warning("Antennes airOS non rechargees depuis la base : %s", exc)
             return
         await self.set_targets(targets)
+
+    async def backhaul_configs(self) -> list[BackhaulConfig]:
+        """Antennes de la base traduites en BackhaulConfig (nom, PoP, cle stable).
+
+        Sans ce chemin, la collecte ne sait pas a quel PoP rattacher la capacite
+        lue, ni quelle cle demander a ``get_capacities``.
+        """
+        if self._config_loader is None:
+            return []
+        return list(await self._config_loader())
 
     async def get_capacities(self, device_ids: Sequence[str]) -> dict[str, BackhaulSample]:
         await self._refresh()

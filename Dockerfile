@@ -6,15 +6,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Dependances d'abord : couche de cache stable
-COPY pyproject.toml README.md ./
+# Dependances d'abord : couche de cache stable, versions EPINGLEES par le
+# fichier de verrou (genere depuis pyproject.toml). Plus de liste recopiee a la
+# main qui derive de pyproject.
+COPY requirements.lock ./
 RUN pip install --upgrade pip && \
-    pip install "fastapi>=0.115" "uvicorn[standard]>=0.30" "pydantic>=2.7" \
-                "pydantic-settings>=2.3" "asyncpg>=0.29" "httpx>=0.27" \
-                "librouteros>=3.2" "jinja2>=3.1" "pyyaml>=6.0" \
-                "cryptography>=42.0"
+    pip install --no-cache-dir -r requirements.lock
 
+# Puis l'application elle-meme, installee DEPUIS pyproject (--no-deps : les
+# dependances viennent du verrou ci-dessus, pas d'une resolution non reproductible).
+COPY pyproject.toml README.md ./
 COPY app ./app
+RUN pip install --no-cache-dir --no-deps .
 
 # L'app est hors-bande et purement cliente : aucun privilege requis.
 # /app/data recoit la cle de chiffrement generee au premier demarrage.

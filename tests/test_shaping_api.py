@@ -18,7 +18,7 @@ from app.api.deps import get_container
 from app.config import Settings
 from app.enforcement.models import MANAGED_COMMENT
 from app.main import register_routes
-from tests.conftest import FakeRouterOsClient
+from tests.conftest import AUTH_HEADERS, FakeRouterOsClient
 from tests.test_api import build_container
 from tests.test_enforcement import FauxClientEcriture
 
@@ -102,8 +102,9 @@ class FauxDepotTopologie:
 
     async def hide_link(self, key):
         self.hidden_links = getattr(self, "hidden_links", set())
-        exists = any(row["key"] == key for row in self.link_rows) or \
-            key in getattr(self, "manual_links", [])
+        exists = any(row["key"] == key for row in self.link_rows) or key in getattr(
+            self, "manual_links", []
+        )
         self.hidden_links.add(key)
         return exists
 
@@ -218,7 +219,7 @@ class FauxDepotTopologie:
     async def policy_map(self, scope):
         return {p["target_key"]: p for p in await self.policies(scope)}
 
-    async def record_audit(self, router_name, *, dry_run, outcomes):
+    async def record_audit(self, router_name, *, dry_run, outcomes, author=None):
         for action, ok, detail in outcomes:
             self.audit_rows.append(
                 {
@@ -230,6 +231,10 @@ class FauxDepotTopologie:
                     "dry_run": dry_run,
                     "ok": ok,
                     "detail": detail,
+                    "author": author,
+                    "changes": {k: list(v) for k, v in action.changes.items()}
+                    if action.changes
+                    else None,
                 }
             )
         return len(outcomes)
@@ -302,7 +307,7 @@ def make_client(settings, topo, routeur, *, ecriture=None) -> TestClient:
     app.state.settings = settings
     register_routes(app, settings)
     app.dependency_overrides[get_container] = lambda: container
-    tc = TestClient(app)
+    tc = TestClient(app, headers=AUTH_HEADERS)
     tc.container = container  # type: ignore[attr-defined]
     return tc
 
@@ -423,9 +428,7 @@ def test_deplacer_une_case(client: TestClient, topo: FauxDepotTopologie) -> None
 
 
 def test_deplacer_une_case_inconnue_est_404(client: TestClient) -> None:
-    reponse = client.patch(
-        "/api/v1/topology/nodes/mac:INCONNU/layout", json={"x": 1, "y": 2}
-    )
+    reponse = client.patch("/api/v1/topology/nodes/mac:INCONNU/layout", json={"x": 1, "y": 2})
     assert reponse.status_code == 404
 
 
@@ -456,21 +459,26 @@ def test_une_case_ne_peut_pas_etre_son_propre_parent(
 
 def test_creer_un_lien_a_la_main(client: TestClient, topo: FauxDepotTopologie) -> None:
     """L'operateur peut ajouter une adjacence que la decouverte a manquee."""
-    reponse = client.post("/api/v1/topology/links", json={
-        "source_key": "router:pop-test", "target_key": "mac:DC:9F:DB:11:22:33"})
+    reponse = client.post(
+        "/api/v1/topology/links",
+        json={"source_key": "router:pop-test", "target_key": "mac:DC:9F:DB:11:22:33"},
+    )
     assert reponse.status_code == 200
     assert reponse.json()["key"] == "manual:router:pop-test|mac:DC:9F:DB:11:22:33"
     assert "manual:router:pop-test|mac:DC:9F:DB:11:22:33" in topo.manual_links
 
 
 def test_un_lien_ne_relie_pas_un_noeud_a_lui_meme(client: TestClient) -> None:
-    reponse = client.post("/api/v1/topology/links", json={
-        "source_key": "router:pop-test", "target_key": "router:pop-test"})
+    reponse = client.post(
+        "/api/v1/topology/links",
+        json={"source_key": "router:pop-test", "target_key": "router:pop-test"},
+    )
     assert reponse.status_code == 400
 
 
 def test_retirer_un_lien(client: TestClient, topo: FauxDepotTopologie) -> None:
     from urllib.parse import quote
+
     reponse = client.delete("/api/v1/topology/links/" + quote(CLE_LIEN, safe=""))
     assert reponse.status_code == 200
     assert CLE_LIEN in topo.hidden_links
@@ -489,8 +497,10 @@ def test_fusion_manuelle_replie_une_case_sur_une_autre(
         {"key": "mac:AA:00:00:00:00:06", "name": "MikroTik", "kind": "pop"},
         {"key": "router:pop-nord", "name": "PoP Nord", "kind": "pop"},
     ]
-    reponse = client.post("/api/v1/topology/merge", json={
-        "alias_key": "mac:AA:00:00:00:00:06", "canonical_key": "router:pop-nord"})
+    reponse = client.post(
+        "/api/v1/topology/merge",
+        json={"alias_key": "mac:AA:00:00:00:00:06", "canonical_key": "router:pop-nord"},
+    )
     assert reponse.status_code == 200
     assert topo._aliases["mac:AA:00:00:00:00:06"] == "router:pop-nord"
 
@@ -503,16 +513,17 @@ def test_fusion_manuelle_replie_une_case_sur_une_autre(
 
 
 def test_fusion_manuelle_sur_soi_meme_refusee(client: TestClient) -> None:
-    reponse = client.post("/api/v1/topology/merge", json={
-        "alias_key": "router:x", "canonical_key": "router:x"})
+    reponse = client.post(
+        "/api/v1/topology/merge", json={"alias_key": "router:x", "canonical_key": "router:x"}
+    )
     assert reponse.status_code == 400
 
 
 def test_annuler_une_fusion_manuelle(client: TestClient, topo: FauxDepotTopologie) -> None:
     topo._aliases = {"mac:AA:00:00:00:00:06": "router:pop-nord"}
     from urllib.parse import quote
-    reponse = client.delete(
-        "/api/v1/topology/merge/" + quote("mac:AA:00:00:00:00:06", safe=""))
+
+    reponse = client.delete("/api/v1/topology/merge/" + quote("mac:AA:00:00:00:00:06", safe=""))
     assert reponse.status_code == 200
     assert "mac:AA:00:00:00:00:06" not in topo._aliases
 

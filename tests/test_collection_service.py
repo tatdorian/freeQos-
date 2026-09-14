@@ -175,6 +175,114 @@ async def test_collecte_backhaul_sans_inventaire(settings: Settings) -> None:
     assert writer.backhaul_rows == []
 
 
+class _FakeAntennaConn:
+    """Connexion asyncpg minimale : rend les lignes airos_antennas fournies."""
+
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    async def fetch(self, query: str, *args: object) -> list[dict]:
+        return [dict(row) for row in self._rows]
+
+    async def fetchrow(self, query: str, *args: object) -> dict | None:
+        return None
+
+    async def execute(self, query: str, *args: object) -> str:
+        return "UPDATE 1"
+
+
+class _FakeAntennaPool:
+    def __init__(self, rows: list[dict]) -> None:
+        self._rows = rows
+
+    def acquire(self) -> object:
+        conn = _FakeAntennaConn(self._rows)
+
+        class _Ctx:
+            async def __aenter__(self) -> _FakeAntennaConn:
+                return conn
+
+            async def __aexit__(self, *exc: object) -> bool:
+                return False
+
+        return _Ctx()
+
+
+class _FakeAirOsClient:
+    """Antenne airOS jouee : /status.cgi renvoie une capacite exploitable."""
+
+    async def fetch_status(self) -> dict:
+        return {
+            "wireless": {
+                "txcapacity": 200_000,  # kbps -> 200 Mbps
+                "rxcapacity": 100_000,  # kbps -> 100 Mbps
+                "apmac": "AA:BB:CC:DD:EE:01",
+                "signal": -50,
+            }
+        }
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_collecte_backhaul_via_le_provider_de_base(settings: Settings) -> None:
+    """Regression P0-3 : le provider des antennes de la base doit porter le
+    contrat COMPLET (backhaul_configs + get_capacities).
+
+    On monte les VRAIES classes exactement comme le conteneur les cable :
+    AntennasRepository -> DbAirOsProvider(config_loader=repo.backhaul_configs).
+    Avant le correctif, ``collect_backhauls`` appelait ``backhaul_configs`` sur un
+    provider qui ne l'avait pas, et le cycle echouait a chaque tour sans que rien
+    ne l'attrape au montage.
+    """
+    from app.collectors.uisp import DbAirOsProvider
+    from app.db.antennas_repo import AntennasRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    rows = [
+        {
+            "id": 1,
+            "name": "bh-toit",
+            "pop_name": "PoP Test",
+            "host": "10.0.0.9",
+            "username": "ubnt",
+            "password_enc": None,
+            "verify_tls": False,
+            "device_key": "device-toit",
+            "nominal_capacity_mbps": 300.0,
+            "enabled": True,
+            "timeout_s": 10.0,
+        }
+    ]
+    repo = AntennasRepository(_FakeAntennaPool(rows), SecretBox(generate_key()))
+    provider = DbAirOsProvider(
+        repo.load_targets,
+        config_loader=repo.backhaul_configs,
+        client_factory=lambda target: _FakeAirOsClient(),
+    )
+
+    writer = InMemoryMetricsWriter()
+    service = CollectionService(
+        settings,
+        collectors=[],
+        backhaul_provider=MockBackhaulProvider(),
+        plan_provider=MockPlanProvider(),
+        directory=InMemoryDirectory(),
+        writer=writer,
+        backhauls=[],  # aucun backhaul fichier : seule la voie "base" est exercee
+        antennas_provider=provider,
+    )
+
+    result = await service.collect_backhauls()
+
+    assert result.ok is True, result.errors
+    assert result.items == 1
+    _, sample = writer.backhaul_rows[0]
+    assert sample.device_id == "device-toit"
+    assert sample.capacity_mbps == 100.0  # min(down 200, up 100)
+    await service.aclose()
+
+
 async def test_refresh_plans_met_a_jour_le_referentiel(settings: Settings) -> None:
     client = FakeRouterOsClient()
     client.add_session("dupont", rx_byte=0, tx_byte=0)

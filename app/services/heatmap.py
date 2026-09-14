@@ -91,17 +91,19 @@ def build_heatmap(
 
     axis = _axis(minutes, buckets, bucket_seconds, now=now)
 
-    qoe_cells, rtt_cells, util_cells = [], [], []
+    qoe_cells: list[dict[str, Any]] = []
+    rtt_cells: list[dict[str, Any]] = []
+    util_cells: list[dict[str, Any]] = []
     for epoch in axis:
         ts = datetime.fromtimestamp(epoch, tz=UTC).isoformat()
-        point = par_epoch.get(epoch)
-        if point is None:
+        cell = par_epoch.get(epoch)
+        if cell is None:
             qoe_cells.append({"ts": ts, "value": None, "severity": "none"})
             rtt_cells.append({"ts": ts, "value": None, "severity": "none"})
             util_cells.append({"ts": ts, "value": None, "severity": "none"})
             continue
 
-        rtt_p90 = point.get("rtt_p90")
+        rtt_p90 = cell.get("rtt_p90")
         rtt_p90 = float(rtt_p90) if rtt_p90 is not None else None
         score = qoe_from_rtt(rtt_p90)
         qoe_cells.append({"ts": ts, "value": score, "severity": qoe_severity(score)})
@@ -113,7 +115,7 @@ def build_heatmap(
             }
         )
 
-        tx = float(point.get("tx_sum") or 0.0)
+        tx = float(cell.get("tx_sum") or 0.0)
         pct = (tx / reference_down_bps * 100.0) if reference_down_bps > 0 else None
         util_cells.append(
             {

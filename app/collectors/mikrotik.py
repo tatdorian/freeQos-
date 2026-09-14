@@ -142,14 +142,12 @@ class LibrouterosReadClient:
             "login_method": plain,
         }
         if self._config.use_ssl:
-            import ssl
+            # Posture TLS configurable PAR ROUTEUR (strict / empreinte / assumee
+            # insecure), partagee avec le canal d'ecriture : plus de desactivation
+            # codee en dur.
+            from app.services.tls import ssl_wrapper_for
 
-            context = ssl.create_default_context()
-            # Les CHR de lab utilisent un certificat auto-signe ; la confidentialite
-            # du transport reste assuree, l'authentification du pair non.
-            context.check_hostname = False
-            context.verify_mode = ssl.CERT_NONE
-            kwargs["ssl_wrapper"] = context.wrap_socket
+            kwargs["ssl_wrapper"] = ssl_wrapper_for(self._config)
         return connect(**kwargs)
 
     def _ensure(self) -> Any:

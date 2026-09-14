@@ -1,0 +1,47 @@
+"""Coherence entre la documentation OpenAPI et l'etat reel des fonctionnalites.
+
+P2-7 : la description de ``/docs`` affirmait encore "Phase 1 : lecture uniquement,
+aucun endpoint n'ecrit" alors que l'ecriture (enforcement) est active et tracee.
+Ce test verrouille la coherence : si un endpoint d'ecriture existe, la description
+ne doit pas pretendre le contraire, et inversement.
+"""
+
+from __future__ import annotations
+
+from app.config import Settings
+from app.main import create_app
+
+
+def _schema() -> dict:
+    return create_app(Settings(_env_file=None)).openapi()
+
+
+def test_description_ne_pretend_plus_la_lecture_seule() -> None:
+    description = _schema()["info"]["description"].lower()
+    # Les anciennes affirmations, devenues fausses, ne doivent plus figurer.
+    assert "aucun endpoint n'ecrit" not in description
+    assert "lecture uniquement" not in description
+    assert "phase 1 : collecte et lecture" not in description
+
+
+def test_description_coherente_avec_les_endpoints_d_ecriture() -> None:
+    schema = _schema()
+    description = schema["info"]["description"].lower()
+    paths = schema["paths"]
+
+    # Un endpoint qui ECRIT sur un routeur existe reellement...
+    apply_path = "/api/v1/shaping/apply"
+    assert apply_path in paths
+    assert "post" in paths[apply_path]
+
+    # ... donc la description doit reconnaitre l'ecriture, et son garde-fou.
+    assert "ecriture" in description or "enforcement" in description
+    assert "enforcement_enabled" in description
+    # ... et la tracabilite (audit) promise par P0-1/P0-4.
+    assert "enforcement_audit" in description
+
+
+def test_description_mentionne_l_authentification() -> None:
+    description = _schema()["info"]["description"].lower()
+    # L'API n'est plus anonyme : la doc doit le dire.
+    assert "authentification" in description or "identite" in description

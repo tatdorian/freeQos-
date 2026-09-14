@@ -112,12 +112,11 @@ class LibrouterosWriteClient:
                 "login_method": plain,
             }
             if self._config.use_ssl:
-                import ssl
+                # Meme posture TLS que le canal de lecture, choisie par routeur :
+                # le module qui ECRIT n'impose plus une desactivation en dur.
+                from app.services.tls import ssl_wrapper_for
 
-                context = ssl.create_default_context()
-                context.check_hostname = False
-                context.verify_mode = ssl.CERT_NONE
-                kwargs["ssl_wrapper"] = context.wrap_socket
+                kwargs["ssl_wrapper"] = ssl_wrapper_for(self._config)
             self._api = connect(**kwargs)
             logger.warning(
                 "Connexion en ECRITURE ouverte sur %s (%s) avec le compte %s",

@@ -16,7 +16,11 @@ from pydantic import BaseModel, Field, SecretStr
 
 from app.api.deps import ContainerDep
 from app.collectors.uisp import AirOsClient, AirOsTarget, parse_airos_status
-from app.db.antennas_repo import AntennaNotFoundError, DuplicateAntennaError
+from app.db.antennas_repo import (
+    AntennaNotFoundError,
+    AntennasRepository,
+    DuplicateAntennaError,
+)
 from app.services.crypto import SecretUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -53,7 +57,7 @@ class AntennaUpdate(BaseModel):
     timeout_s: float | None = Field(default=None, ge=0.5, le=60.0)
 
 
-def _require_repository(container: ContainerDep):
+def _require_repository(container: ContainerDep) -> AntennasRepository:
     if container.antennas_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
