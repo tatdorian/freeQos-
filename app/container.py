@@ -43,6 +43,7 @@ from app.services.collection import (
     JOB_INVENTORY,
     JOB_LINKS,
     JOB_PLANS,
+    JOB_QOE_LOOP,
     JOB_RECONCILE,
     JOB_RTT,
     JOB_SUBSCRIBERS,

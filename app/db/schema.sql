@@ -207,6 +207,38 @@ CREATE TABLE IF NOT EXISTS shaping_policies (
     UNIQUE (scope, target_key)
 );
 
+-- Etat de la BOUCLE FERMEE QoE (phase 4), un enregistrement par lien de secteur.
+--
+-- Le controleur ne garde ici QUE ce qu'il ne peut pas recalculer : de combien un
+-- secteur est resserre en ce moment (trim_factor) et depuis combien de cycles sa
+-- QoE est revenue a la normale (healthy_cycles, le delai de garde avant de rendre
+-- un cran). Les scores, eux, se relisent a la demande depuis subscriber_metrics :
+-- les dupliquer ici aurait cree une seconde verite.
+--
+-- Volontairement SEPAREE de shaping_policies : une surcharge est une decision
+-- d'exploitant, un resserrage est une decision de la boucle. Les melanger ferait
+-- qu'un cycle automatique ecraserait un debit saisi a la main -- exactement ce
+-- qu'il ne faut pas. Les deux se composent dans le planificateur (cf.
+-- shaped_capacity), elles ne se marchent jamais dessus.
+--
+-- last_action / last_reason / last_trigger_at sont la trace : une boucle qui
+-- resserre sans dire pourquoi est une boucle que personne ne laissera active.
+CREATE TABLE IF NOT EXISTS qoe_link_states (
+    link_key         TEXT PRIMARY KEY,
+    sector_key       TEXT,
+    -- Fraction du debit qu'on appliquerait sans la boucle. 1.0 = rien de resserre.
+    trim_factor      DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    healthy_cycles   INTEGER NOT NULL DEFAULT 0,
+    scored_count     INTEGER NOT NULL DEFAULT 0,
+    degraded_count   INTEGER NOT NULL DEFAULT 0,
+    worst_score      DOUBLE PRECISION,
+    last_action      TEXT,
+    last_reason      TEXT,
+    -- Dernier cycle ou le resserrage a REELLEMENT bouge (resserre ou relache).
+    last_trigger_at  TIMESTAMPTZ,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- Drapeaux modifiables a chaud depuis l'interface. Ils sont amorces par les
 -- variables d'environnement au premier demarrage, puis c'est la base qui fait
 -- foi : basculer l'enforcement ne doit pas demander un redemarrage.

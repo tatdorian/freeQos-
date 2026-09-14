@@ -343,6 +343,43 @@ class Settings(BaseSettings):
     shaping_reconcile_interval_s: float = 120.0
     topology_refresh_interval_s: float = 900.0
 
+    # --- Boucle fermee QoE (phase 4) ---
+    #
+    # Jusqu'ici la seule grandeur qui refermait une boucle etait la capacite
+    # backhaul mesuree : le planificateur pose la file parent a
+    # mesure * SHAPING_SAFETY_FACTOR. Elle ne voit pas un secteur dont la latence
+    # GONFLE sous charge alors que la radio annonce toujours sa capacite.
+    #
+    # Ce job lit le score de QoE composite (bufferbloat + latence a vide, la MEME
+    # fonction que la heatmap Executif) et, quand un secteur decroche, resserre
+    # l'enveloppe PARTAGEE de ce secteur -- jamais le plan souscrit d'un abonne.
+    #
+    # Trois verrous, les memes que pour la reconciliation : rien n'est ecrit tant
+    # que ENFORCEMENT_ENABLED est faux, JAMAIS de purge, et le job est inerte
+    # tant que la sonde RTT ne fournit pas de latence a correler. Mettre 0
+    # desactive la boucle.
+    qoe_loop_interval_s: float = 300.0
+    # Fenetre d'observation. Trop courte, on reagit a un pic ; trop longue, on
+    # reagit a de l'histoire ancienne. Doit couvrir plusieurs tours de sonde RTT.
+    qoe_window_minutes: int = 15
+    # En dessous de ce score (0..100), l'abonne est considere degrade. 55 tombe
+    # dans la bande "warn" : en pratique, un bufferbloat de note C ou pire.
+    qoe_score_threshold: float = 55.0
+    # Combien d'abonnes degrades il faut dans un secteur pour incriminer LE
+    # SECTEUR. Un seul abonne qui gonfle, c'est son propre dernier km (CPE, wifi
+    # domestique) : c'est la correlation entre plusieurs abonnes qui accuse le
+    # partage. Mettre 1 rend la boucle sensible a un abonne isole.
+    qoe_min_degraded_subscribers: int = 2
+    # Un cran de resserrage, en fraction de la capacite du lien.
+    qoe_trim_step: float = 0.10
+    # Jamais en dessous de cette fraction : au-dela, le goulot n'est plus le
+    # buffer radio mais bien la capacite, et resserrer encore ne ferait que
+    # brider un secteur deja a genoux.
+    qoe_trim_floor: float = 0.50
+    # Cycles consecutifs de QoE saine avant de rendre UN cran. On resserre vite,
+    # on relache lentement : sans cette asymetrie la boucle oscille.
+    qoe_recovery_cycles: int = 3
+
     # --- Garde-fous ---
     # Phase 2 uniquement : aucune ecriture n'est implementee aujourd'hui.
     enforcement_enabled: bool = False
@@ -360,6 +397,26 @@ class Settings(BaseSettings):
                 return []
             return json.loads(value)
         return value
+
+    @model_validator(mode="after")
+    def _check_qoe_loop(self) -> Settings:
+        """Garde-fous de la boucle fermee.
+
+        Un pas nul ne resserrerait jamais rien, un plancher a zero autoriserait a
+        couper un secteur : mieux vaut refuser au chargement qu'a la premiere
+        degradation, quand plus personne ne regarde la configuration.
+        """
+        if not 0.0 < self.qoe_trim_step <= 0.5:
+            raise ValueError("QOE_TRIM_STEP doit etre dans ]0, 0.5] (un cran de resserrage)")
+        if not 0.1 <= self.qoe_trim_floor <= 1.0:
+            raise ValueError(
+                "QOE_TRIM_FLOOR doit etre dans [0.1, 1.0] : la boucle ne coupe jamais un secteur"
+            )
+        if self.qoe_recovery_cycles < 1:
+            raise ValueError("QOE_RECOVERY_CYCLES doit valoir au moins 1")
+        if self.qoe_min_degraded_subscribers < 1:
+            raise ValueError("QOE_MIN_DEGRADED_SUBSCRIBERS doit valoir au moins 1")
+        return self
 
     @field_validator("log_level", mode="before")
     @classmethod

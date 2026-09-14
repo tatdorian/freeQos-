@@ -66,6 +66,47 @@ def test_capacite_inconnue() -> None:
     assert shaped_capacity(None, safety_factor=0.9, floor_mbps=5) is None
 
 
+# ----------------------------------- resserrage de la boucle fermee (phase 4)
+def test_le_resserrage_qoe_s_applique_apres_le_facteur_de_securite() -> None:
+    """Les deux se composent : la securite eloigne du plafond physique, le
+    resserrage QoE eloigne encore, le temps que la latence redescende."""
+    assert shaped_capacity(500, safety_factor=0.9, floor_mbps=5, trim_factor=0.8) == 360.0
+
+
+def test_un_resserrage_neutre_ne_change_rien() -> None:
+    """1.0 est l'absence de decision : tout lien non touche par la boucle doit
+    sortir EXACTEMENT comme avant la phase 4."""
+    assert shaped_capacity(500, safety_factor=0.9, floor_mbps=5, trim_factor=1.0) == 450.0
+
+
+def test_le_resserrage_s_applique_aussi_a_une_surcharge_manuelle() -> None:
+    """La surcharge dit OU est le plafond du lien, la boucle de combien il faut
+    s'en ecarter pour que la file se reforme dans CAKE. Les deux se composent."""
+    assert (
+        shaped_capacity(500, safety_factor=0.9, floor_mbps=5, override_mbps=300, trim_factor=0.5)
+        == 150.0
+    )
+
+
+def test_le_resserrage_ne_descend_jamais_sous_le_plancher() -> None:
+    """Meme garde-fou qu'un fade profond : la boucle ne coupe pas un secteur."""
+    assert shaped_capacity(10, safety_factor=0.9, floor_mbps=5, trim_factor=0.1) == 5.0
+
+
+def test_le_resserrage_atteint_la_file_du_lien() -> None:
+    """Bout en bout : c'est bien le max-limit de la file PARENT qui bouge."""
+    _, files, _ = desired_state(
+        links=[
+            LinkTarget(
+                name="bh-nord", interface="ether2", measured_capacity_mbps=200, trim_factor=0.9
+            )
+        ],
+        subscribers=[],
+    )
+
+    assert files[0].max_limit == "162000000/162000000"
+
+
 # ---------------------------------------------------------------- etat desire
 def test_etat_desire_complet() -> None:
     types, files, _ = desired_state(

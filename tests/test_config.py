@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.config import MissingSecretError, RouterConfig, Settings
 
@@ -112,3 +113,36 @@ def test_dsn_asyncpg_normalise_le_schema_sqlalchemy() -> None:
 def test_enforcement_desactive_par_defaut() -> None:
     """Phase 1 : le controleur doit rester strictement observateur."""
     assert Settings(_env_file=None).enforcement_enabled is False
+
+
+# ------------------------------------- boucle fermee QoE (phase 4)
+def test_reglages_par_defaut_de_la_boucle_qoe() -> None:
+    """La boucle est planifiee mais prudente : elle resserre par crans de 10 %,
+    ne descend jamais sous 50 % et rend un cran apres 3 cycles sains."""
+    settings = Settings(_env_file=None)
+
+    assert settings.qoe_loop_interval_s > 0
+    assert settings.qoe_trim_step == 0.10
+    assert settings.qoe_trim_floor == 0.50
+    assert settings.qoe_recovery_cycles == 3
+    # Un abonne isole n'accuse pas son secteur : il faut une correlation.
+    assert settings.qoe_min_degraded_subscribers == 2
+
+
+@pytest.mark.parametrize(
+    ("champ", "valeur", "motif"),
+    [
+        ("qoe_trim_step", 0.0, "QOE_TRIM_STEP"),
+        ("qoe_trim_step", 0.9, "QOE_TRIM_STEP"),
+        ("qoe_trim_floor", 0.0, "QOE_TRIM_FLOOR"),
+        ("qoe_trim_floor", 1.5, "QOE_TRIM_FLOOR"),
+        ("qoe_recovery_cycles", 0, "QOE_RECOVERY_CYCLES"),
+        ("qoe_min_degraded_subscribers", 0, "QOE_MIN_DEGRADED_SUBSCRIBERS"),
+    ],
+)
+def test_un_reglage_absurde_est_refuse_au_chargement(champ: str, valeur: float, motif: str) -> None:
+    """Mieux vaut echouer au demarrage qu'a la premiere degradation, quand plus
+    personne ne regarde la configuration : un pas nul ne resserrerait jamais
+    rien, un plancher a zero autoriserait a couper un secteur."""
+    with pytest.raises(ValidationError, match=motif):
+        Settings(_env_file=None, **{champ: valeur})

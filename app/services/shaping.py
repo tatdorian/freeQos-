@@ -52,6 +52,7 @@ from app.enforcement.routeros import (
     RouterOsWriteClient,
     apply_plan,
 )
+from app.services.qoe_loop import ACTION_UNKNOWN, SectorState, decide_sector
 from app.services.registry import RouterRegistry
 
 logger = logging.getLogger(__name__)
@@ -422,6 +423,12 @@ class ShapingService:
         surcharges_liens = await self.repository.policy_map("link")
         surcharges_abonnes = await self.repository.policy_map("subscriber")
         rattachements = await self.repository.attachments()
+        # Resserrages decides par la boucle fermee QoE (phase 4). Ils vivent dans
+        # leur propre table, pas dans les surcharges : une surcharge est une
+        # decision d'exploitant, un resserrage une decision de la boucle, et les
+        # confondre ferait qu'un cycle automatique ecraserait un debit saisi a la
+        # main. Les deux se composent dans ``shaped_capacity``.
+        resserrages = await self.repository.qoe_trims()
 
         collector = self._collector(router_name)
         pop_name = collector.config.effective_pop_name
@@ -443,6 +450,7 @@ class ShapingService:
                 measured_capacity_mbps=lien.get("capacity_mbps"),
                 override_down_mbps=surcharge.get("max_down_mbps"),
                 override_up_mbps=surcharge.get("max_up_mbps"),
+                trim_factor=resserrages.get(str(lien["key"]), 1.0),
             )
             liens.append(cible)
             if lien.get("target_key"):
@@ -639,6 +647,147 @@ class ShapingService:
             except Exception as exc:  # noqa: BLE001 - un routeur ne bloque pas les autres
                 resultat["errors"].append(f"{nom}: {type(exc).__name__}: {exc}")
                 logger.exception("Reconciliation impossible sur %s", nom)
+        return resultat
+
+    # ------------------------------------------------- boucle fermee QoE
+    async def adjust_for_qoe(self) -> dict[str, Any]:
+        """Ajuste le partage d'un SECTEUR selon la QoE de ses abonnes (phase 4).
+
+        Le meme enchainement que ``reconcile()`` -- lecture, decision, plan,
+        application -- mais declenche par un signal qui, jusqu'ici, n'alimentait
+        qu'un tableau de bord : le score de QoE composite (bufferbloat + latence
+        a vide, ``app.services.qoe``). C'est LA MEME fonction de score que la
+        heatmap Executif : le declencheur et l'ecran ne peuvent pas diverger.
+
+        Ce qui bouge quand un secteur decroche, c'est l'enveloppe PARTAGEE de ce
+        secteur -- la file du lien qui le dessert -- et rien d'autre. Le plan
+        souscrit d'un abonne n'est jamais touche : un abonne n'est pas
+        responsable du bufferbloat de son secteur, et lui retirer le debit qu'il
+        paie serait la mauvaise reponse. CAKE arbitre ensuite entre les circuits,
+        comme d'habitude.
+
+        Memes garde-fous que les autres boucles automatiques :
+
+        - le resserrage est BORNE (``QOE_TRIM_FLOOR``) : la boucle ne coupe
+          jamais un secteur, elle le ramene au plus bas sous son goulot ;
+        - rien n'est ecrit tant que ``ENFORCEMENT_ENABLED`` est faux -- la
+          decision est quand meme prise et journalisee, pour qu'on puisse LIRE ce
+          que la boucle ferait avant de lui donner la main ;
+        - JAMAIS de purge (``prune=False``), pour la meme raison que
+          ``reconcile()`` : un ``/ppp/active`` momentanement vide ne doit pas
+          faire disparaitre les files d'un PoP ;
+        - le plan passe par ``build_plan`` comme tous les autres, donc il est
+          diffable, journalise dans ``enforcement_audit``, et visible dans
+          l'interface. Aucun chemin d'ecriture parallele.
+        """
+        resultat: dict[str, Any] = {
+            "enabled": self._enforcement_enabled,
+            "window_minutes": self.settings.qoe_window_minutes,
+            "threshold": self.settings.qoe_score_threshold,
+            "scored": 0,
+            "sectors": [],
+            "routers": [],
+            "applied": 0,
+            "plans": [],
+            "errors": [],
+        }
+        if self.repository is None or self.metrics is None:
+            return resultat
+
+        notes = await self.metrics.qoe_subscribers(minutes=self.settings.qoe_window_minutes)
+        resultat["scored"] = len(notes)
+        rattachements = await self.repository.attachments()
+        etats = await self.repository.qoe_link_states()
+
+        # Le lien qui DESSERT un secteur est celui dont le secteur est la cible :
+        # c'est deja la convention de ``build_targets`` pour rattacher un abonne
+        # a sa file parente.
+        lien_par_secteur: dict[str, dict[str, Any]] = {}
+        for ligne in await self.repository.links():
+            cle_secteur = ligne.get("target_key")
+            if cle_secteur and ligne.get("interface"):
+                lien_par_secteur.setdefault(str(cle_secteur), ligne)
+
+        par_secteur: dict[str, list[dict[str, Any]]] = {}
+        for note in notes:
+            secteur = rattachements.get(str(note["pppoe_login"]))
+            if secteur is None:
+                # Abonne dont on ignore le secteur : il ne peut incriminer
+                # personne. On ne devine pas un rattachement.
+                continue
+            par_secteur.setdefault(secteur, []).append(note)
+
+        routeurs: dict[str, list[str]] = {}
+        for secteur in sorted(par_secteur):
+            mesures = par_secteur[secteur]
+            lien = lien_par_secteur.get(secteur)
+            if lien is None:
+                resultat["errors"].append(
+                    f"secteur {secteur} : aucun lien connu ne le dessert, rien a resserrer"
+                )
+                continue
+
+            verdict = decide_sector(
+                sector_key=secteur,
+                link_key=str(lien["key"]),
+                scores=[float(m["score"]) for m in mesures],
+                state=SectorState.from_row(etats.get(str(lien["key"]))),
+                threshold=self.settings.qoe_score_threshold,
+                min_degraded=self.settings.qoe_min_degraded_subscribers,
+                step=self.settings.qoe_trim_step,
+                floor=self.settings.qoe_trim_floor,
+                recovery_cycles=self.settings.qoe_recovery_cycles,
+                logins=[str(m["pppoe_login"]) for m in mesures],
+            )
+            resultat["sectors"].append(verdict.as_dict())
+            if verdict.action == ACTION_UNKNOWN:
+                continue
+
+            await self.repository.save_qoe_link_state(
+                link_key=verdict.link_key,
+                sector_key=verdict.sector_key,
+                trim_factor=verdict.trim_after,
+                healthy_cycles=verdict.healthy_cycles,
+                scored_count=verdict.scored,
+                degraded_count=verdict.degraded,
+                worst_score=verdict.worst_score,
+                last_action=verdict.action,
+                last_reason=verdict.reason,
+                triggered=verdict.changed,
+            )
+            if verdict.changed:
+                logger.warning("Boucle QoE : %s -- %s", verdict.sector_key, verdict.reason)
+                nom = str(lien.get("discovered_by") or "")
+                if nom:
+                    routeurs.setdefault(nom, []).append(verdict.sector_key)
+                else:
+                    resultat["errors"].append(
+                        f"secteur {verdict.sector_key} : lien sans routeur d'origine, "
+                        "resserrage enregistre mais non applicable"
+                    )
+
+        # Seuls les routeurs dont un secteur a REELLEMENT bouge sont replanifies :
+        # replanifier tout le parc a chaque cycle serait le travail de
+        # ``reconcile()``, pas celui-ci.
+        for nom in sorted(routeurs):
+            try:
+                # JAMAIS de purge, meme raison que reconcile() et expire_boosts().
+                plan = await self.plan_router(nom, prune=False)
+                resultat["plans"].append(plan.to_dict())
+                if plan.is_empty:
+                    continue
+                if not self._enforcement_enabled:
+                    resultat["errors"].append(
+                        f"{nom}: enforcement desactive, le resserrage est enregistre "
+                        "et le plan calcule mais rien n'est ecrit sur le routeur"
+                    )
+                    continue
+                applique = await self.apply(plan, dry_run=False, author="system:qoe-loop")
+                resultat["routers"].append(nom)
+                resultat["applied"] += applique.applied
+            except Exception as exc:  # noqa: BLE001 - un routeur ne bloque pas les autres
+                resultat["errors"].append(f"{nom}: {type(exc).__name__}: {exc}")
+                logger.exception("Ajustement QoE impossible sur %s", nom)
         return resultat
 
     async def _routers_for_logins(self, logins: set[str]) -> list[str]:
