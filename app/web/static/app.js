@@ -291,7 +291,7 @@ function hideTooltip() { if (tooltipEl) tooltipEl.style.display = 'none'; }
 /* ------------------------------------------------------- tableau de bord */
 
 const state = {
-  view: 'dashboard', rangeMinutes: 60, execRange: 60, subSearch: '', subPop: '',
+  view: 'dashboard', rangeMinutes: 60, execRange: 60, subSearch: '', subPop: '', subKind: '',
   routers: [], lastPoints: [], lastTree: [],
   // Lien suivi dans le tiroir, et derniere mesure instantanee affichee.
   link: null, linkLive: null,
@@ -350,7 +350,7 @@ async function loadTopTalkers() {
     rows.map((r) => {
       const limiteDown = (r.effective_down_mbps || 0) * 1e6;
       return '<tr class="clickable" data-sub="' + r.subscriber_id + '">' +
-        '<td class="login">' + esc(r.pppoe_login) + '</td>' +
+        '<td class="login">' + esc(r.login) + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td>' +
         '<td class="num" style="color:var(--down)">' + esc(bpsText(r.tx_bps)) + '</td>' +
         '<td>' + meter(r.tx_bps, limiteDown) + '</td>' +
@@ -473,7 +473,7 @@ function childCountsFromTopo(topoData) {
 
 // Roles "feuille" (cote client) qu'on n'affiche PAS comme noeud d'infrastructure
 // dans l'Executif : un noeud est un site/routeur, pas un abonne.
-const LEAF_KINDS = new Set(['client', 'subscriber', 'cpe']);
+const LEAF_KINDS = new Set(['client', 'subscriber', 'cpe', 'static']);
 
 /** Construit des lignes de noeud a partir de la TOPOLOGIE quand aucun abonne
  *  n'est encore mesure. Le tableau reste vide sinon : ici on montre le reseau
@@ -725,7 +725,7 @@ function renderNodeTable(host) {
       const effU = (Number(s.effective_up_mbps) || 0) * 1e6;
       const csel = exec.selected && exec.selected.type === 'client' && exec.selected.id === s.subscriber_id;
       return '<tr class="sub-row' + (csel ? ' selected' : '') + '" data-client="' + s.subscriber_id + '">' +
-        '<td></td><td class="login">' + esc(s.pppoe_login) + '</td>' +
+        '<td></td><td class="login">' + esc(s.login) + '</td>' +
         '<td class="num"></td><td class="num"></td>' +
         '<td class="num">' + esc(mbps(s.effective_down_mbps || 0) + ' / ' + mbps(s.effective_up_mbps || 0)) + '</td>' +
         '<td class="num na">' + esc(mbps(s.plan_down_mbps || 0) + ' / ' + mbps(s.plan_up_mbps || 0)) + '</td>' +
@@ -834,7 +834,7 @@ function renderQueuePanels() {
   const isClient = sel.type === 'client';
   const client = isClient ? exec.subsById[sel.id] : null;
   const node = isClient ? null : exec.nodes.find((n) => n.name === sel.name);
-  const title = isClient ? client.pppoe_login : node.name;
+  const title = isClient ? client.login : node.name;
   const down = isClient ? (Number(client.tx_bps) || 0) : node.tx;
   const up = isClient ? (Number(client.rx_bps) || 0) : node.rx;
   const effDown = isClient ? (Number(client.effective_down_mbps) || 0) * 1e6 : node.effDown;
@@ -978,7 +978,7 @@ async function saveClientRate(client) {
     await api('/shaping/policies', {
       method: 'PUT',
       body: JSON.stringify({
-        scope: 'subscriber', target_key: client.pppoe_login,
+        scope: 'subscriber', target_key: client.login,
         max_down_mbps: down === '' ? null : Number(down),
         max_up_mbps: up === '' ? null : Number(up),
         enabled: true, note: 'impose depuis Files live',
@@ -993,7 +993,7 @@ async function saveClientRate(client) {
 
 async function clearClientRate(client) {
   try {
-    await api('/shaping/policies/subscriber/' + encodeURIComponent(client.pppoe_login), { method: 'DELETE' });
+    await api('/shaping/policies/subscriber/' + encodeURIComponent(client.login), { method: 'DELETE' });
     await loadExec();
   } catch (err) { alert(err.message); }
 }
@@ -1058,6 +1058,7 @@ function renderExecSankey(host, subs) {
 const ICONE = {
   gateway: 'GW', core: 'CORE', pop: 'POP', radio: 'RF',
   sector: 'SECT', cpe: 'CPE', client: 'CLI', unknown: '?', subscriber: 'ABO',
+  static: 'FIXE',
 };
 
 /** Charge le graphe et les abonnes une seule fois, partage entre l'arbre
@@ -1115,6 +1116,7 @@ function limitCell(r) {
 async function loadSubscribers() {
   let query = state.subSearch ? '&search=' + encodeURIComponent(state.subSearch) : '';
   if (state.subPop) query += '&pop_id=' + encodeURIComponent(state.subPop);
+  if (state.subKind) query += '&kind=' + encodeURIComponent(state.subKind);
   const bloatQuery = state.subPop ? '&pop_id=' + encodeURIComponent(state.subPop) : '';
   const [rows, pops, boosts, bloat] = await Promise.all([
     api('/subscribers/latest?limit=200' + query),
@@ -1141,7 +1143,10 @@ async function loadSubscribers() {
   const parLogin = {};
   (boosts || []).forEach((b) => { if (b.scope === 'subscriber') parLogin[b.target_key] = b; });
 
-  let compte = rows.length + ' session(s)' + (state.subPop ? ' sur ce PoP' : '');
+  const statiques = rows.filter((r) => r.kind === 'static').length;
+  let compte = rows.length + ' abonne(s)' +
+    (statiques ? ' dont ' + statiques + ' a IP fixe' : '') +
+    (state.subPop ? ' sur ce PoP' : '');
   if (bloat && bloat.summary && bloat.summary.measured) {
     const dist = bloat.summary.distribution || {};
     const mauvais = (dist.D || 0) + (dist.F || 0);
@@ -1154,12 +1159,14 @@ async function loadSubscribers() {
   const host = document.getElementById('subscribers-table');
   if (!rows.length) {
     host.innerHTML = '<div class="empty">' +
-      (state.subSearch || state.subPop ? 'Aucune session ne correspond au filtre.' :
-        'Aucune mesure. Connectez un PoP et ouvrez une session PPPoE.') + '</div>';
+      (state.subSearch || state.subPop || state.subKind
+        ? 'Aucun abonne ne correspond au filtre.'
+        : 'Aucune mesure. Connectez un PoP, ouvrez une session PPPoE ou ' +
+          'declarez un client a IP fixe.') + '</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Login PPPoE</th><th>PoP</th>' +
+    '<table><thead><tr><th>Abonne</th><th>Nature</th><th>PoP</th>' +
     '<th class="num" title="Debit reellement applique">Limite</th>' +
     '<th class="num">Download</th><th style="width:140px">vs limite</th>' +
     '<th class="num">Upload</th><th class="num">Latence</th>' +
@@ -1173,7 +1180,8 @@ async function loadSubscribers() {
       // un abonne bride a 512 kbps qui en consomme 400 est a 78 %, pas a 0,08 %.
       const limiteDown = (r.effective_down_mbps || 0) * 1e6;
       return '<tr class="clickable" data-sub="' + r.subscriber_id + '">' +
-        '<td class="login">' + esc(r.pppoe_login) + '</td>' +
+        '<td class="login">' + esc(r.login) + '</td>' +
+        '<td>' + kindBadge(r.kind) + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td>' +
         '<td class="num">' + limitCell(r) + '</td>' +
         '<td class="num" style="color:var(--down)">' + esc(bpsText(r.tx_bps)) + '</td>' +
@@ -1181,17 +1189,17 @@ async function loadSubscribers() {
         '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
         '<td class="num">' + rtt(r.rtt_ms) + '</td>' +
         '<td>' + bloatBadge(bloatParId[r.subscriber_id]) + '</td>' +
-        '<td>' + (parLogin[r.pppoe_login]
+        '<td>' + (parLogin[r.login]
           ? '<span class="boost-pill" title="' +
-            esc(parLogin[r.pppoe_login].boost_reason || '') + '">' +
-            esc(Math.max(0, Math.round(parLogin[r.pppoe_login].seconds_left / 60))) +
+            esc(parLogin[r.login].boost_reason || '') + '">' +
+            esc(Math.max(0, Math.round(parLogin[r.login].seconds_left / 60))) +
             ' min</span>'
           : '<span style="color:var(--faint)">-</span>') + '</td>' +
         '<td class="num">' + esc(uptime(r.session_uptime_s)) + '</td>' +
         '<td class="num" style="color:var(--faint)">' + esc(clock(r.ts)) + '</td>' +
         '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
-          '<button class="sm" data-bw="' + esc(r.pppoe_login) + '">Debit</button>' +
-          '<button class="sm" data-boost="' + esc(r.pppoe_login) + '">Boost</button>' +
+          '<button class="sm" data-bw="' + esc(r.login) + '">Debit</button>' +
+          '<button class="sm" data-boost="' + esc(r.login) + '">Boost</button>' +
         '</div></td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
@@ -1204,13 +1212,188 @@ async function loadSubscribers() {
     });
   });
   host.querySelectorAll('[data-bw]').forEach((b) => {
-    const ligne = rows.find((r) => r.pppoe_login === b.dataset.bw);
+    const ligne = rows.find((r) => r.login === b.dataset.bw);
     b.addEventListener('click', () => openBandwidthEditor('subscriber', ligne));
   });
   host.querySelectorAll('[data-boost]').forEach((b) => {
-    const ligne = rows.find((r) => r.pppoe_login === b.dataset.boost);
+    const ligne = rows.find((r) => r.login === b.dataset.boost);
     b.addEventListener('click', () => openBoostEditor(ligne));
   });
+}
+
+/* ---------------------------------------------------------------- nature
+   Un coup d'oeil doit suffire a savoir de quel type est un abonne : le
+   diagnostic n'est pas le meme. Un PPPoE absent s'est deconnecte ; un client
+   a IP fixe sans mesure n'a simplement pas encore de file posee. */
+function kindBadge(kind) {
+  if (kind === 'static') {
+    return '<span class="badge" title="Client a IP fixe, declare a la main. ' +
+      'Pas de session : son adresse vient de sa fiche.">IP fixe</span>';
+  }
+  return '<span class="badge ok" title="Session PPPoE decouverte sur le routeur">PPPoE</span>';
+}
+
+/* =====================================================================
+   Inventaire des clients a IP fixe
+   ===================================================================== */
+
+/** Fiche en cours d'edition. null = le formulaire cree une nouvelle fiche. */
+let scEdition = null;
+
+function scNotice(html) {
+  document.getElementById('sc-notice').innerHTML = html;
+}
+
+function scRemplirFormulaire(fiche) {
+  scEdition = fiche;
+  const v = (id, valeur) => { document.getElementById(id).value = valeur === null || valeur === undefined ? '' : valeur; };
+  v('sc-reference', fiche ? fiche.reference : '');
+  v('sc-label', fiche ? fiche.label : '');
+  v('sc-pop', fiche ? fiche.pop_name : '');
+  v('sc-address', fiche ? fiche.address : '');
+  v('sc-vlan', fiche ? fiche.vlan : '');
+  v('sc-sector', fiche ? fiche.sector_key : '');
+  v('sc-down', fiche ? fiche.plan_down_mbps : '');
+  v('sc-up', fiche ? fiche.plan_up_mbps : '');
+  v('sc-note', fiche ? fiche.note : '');
+  document.getElementById('sc-enabled').checked = fiche ? !!fiche.enabled : true;
+  document.getElementById('sc-submit').textContent = fiche ? 'Enregistrer' : 'Declarer';
+  document.getElementById('sc-cancel').hidden = !fiche;
+  scNotice('');
+}
+
+/** Lit le formulaire. Les champs vides deviennent null plutot que "" : une
+ *  chaine vide se lirait comme une valeur posee, un null comme une absence. */
+function scPayload() {
+  const txt = (id) => {
+    const brut = (document.getElementById(id).value || '').trim();
+    return brut === '' ? null : brut;
+  };
+  const nb = (id) => {
+    const brut = txt(id);
+    return brut === null ? null : Number(brut);
+  };
+  return {
+    reference: txt('sc-reference'),
+    label: txt('sc-label'),
+    pop_name: txt('sc-pop'),
+    address: txt('sc-address'),
+    vlan: nb('sc-vlan'),
+    sector_key: txt('sc-sector'),
+    plan_down_mbps: nb('sc-down'),
+    plan_up_mbps: nb('sc-up'),
+    note: txt('sc-note'),
+    enabled: document.getElementById('sc-enabled').checked,
+  };
+}
+
+async function loadStaticClients() {
+  const host = document.getElementById('sc-table');
+  let fiches;
+  try {
+    fiches = await api('/static-clients');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+
+  // Listes de suggestion : saisir une cle de secteur de memoire est le meilleur
+  // moyen de rattacher un client a un noeud qui n'existe pas.
+  try {
+    const pops = await api('/pops');
+    document.getElementById('sc-pop-list').innerHTML =
+      pops.map((p) => '<option value="' + esc(p.name) + '">').join('');
+  } catch (err) { /* la saisie libre reste possible */ }
+  try {
+    const graphe = await api('/topology');
+    document.getElementById('sc-sector-list').innerHTML = ((graphe && graphe.nodes) || [])
+      .filter((n) => n.kind === 'sector' || n.kind === 'radio' || n.kind === 'pop')
+      .map((n) => '<option value="' + esc(n.key) + '">' + esc(n.name || '') + '</option>')
+      .join('');
+  } catch (err) { /* le champ reste libre */ }
+
+  if (!fiches.length) {
+    host.innerHTML = '<div class="empty">Aucun client a IP fixe declare.</div>';
+    return;
+  }
+  host.innerHTML =
+    '<table><thead><tr><th>Reference</th><th>Nom</th><th>PoP</th>' +
+    '<th>Adresse</th><th class="num">VLAN</th><th>Secteur</th>' +
+    '<th class="num">Plan</th><th>Etat</th><th class="sticky-actions"></th>' +
+    '</tr></thead><tbody>' +
+    fiches.map((f) =>
+      '<tr>' +
+      '<td class="login">' + esc(f.reference) + '</td>' +
+      '<td>' + esc(f.label || '-') + '</td>' +
+      '<td>' + esc(f.pop_name) + '</td>' +
+      '<td><code>' + esc(f.address) + '</code></td>' +
+      '<td class="num">' + esc(f.vlan === null || f.vlan === undefined ? '-' : f.vlan) + '</td>' +
+      '<td>' + esc(f.sector_key || '-') + '</td>' +
+      '<td class="num">' + esc(
+        f.plan_down_mbps || f.plan_up_mbps
+          ? mbps(f.plan_down_mbps || 0) + ' / ' + mbps(f.plan_up_mbps || 0)
+          : '-') + '</td>' +
+      '<td>' + (f.enabled
+        ? '<span class="badge ok">actif</span>'
+        : '<span class="badge warn" title="Fiche conservee, file retiree au plan suivant">suspendu</span>') + '</td>' +
+      '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
+        '<button class="sm" data-sc-edit="' + esc(f.id) + '">Modifier</button>' +
+        '<button class="sm" data-sc-del="' + esc(f.id) + '">Retirer</button>' +
+      '</div></td>' +
+      '</tr>').join('') + '</tbody></table>';
+
+  host.querySelectorAll('[data-sc-edit]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const fiche = fiches.find((f) => String(f.id) === b.dataset.scEdit);
+      scRemplirFormulaire(fiche);
+      document.getElementById('sc-reference').focus();
+    });
+  });
+  host.querySelectorAll('[data-sc-del]').forEach((b) => {
+    b.addEventListener('click', () => scSupprimer(b.dataset.scDel, fiches));
+  });
+}
+
+async function scEnregistrer(event) {
+  event.preventDefault();
+  const bouton = document.getElementById('sc-submit');
+  bouton.disabled = true;
+  try {
+    const payload = scPayload();
+    if (scEdition) {
+      await api('/static-clients/' + encodeURIComponent(scEdition.id), {
+        method: 'PATCH', body: JSON.stringify(payload),
+      });
+      scNotice('<span class="badge ok">Fiche mise a jour</span>');
+    } else {
+      await api('/static-clients', { method: 'POST', body: JSON.stringify(payload) });
+      scNotice('<span class="badge ok">Client declare</span>');
+    }
+    scRemplirFormulaire(null);
+    await loadStaticClients();
+    // La fiche modifiee change le plan : le tableau des abonnes doit suivre.
+    await loadSubscribers();
+  } catch (err) {
+    scNotice('<span class="badge crit">' + esc(err.message) + '</span>');
+  } finally {
+    bouton.disabled = false;
+  }
+}
+
+async function scSupprimer(id, fiches) {
+  const fiche = (fiches || []).find((f) => String(f.id) === String(id));
+  const nom = fiche ? (fiche.label || fiche.reference) : id;
+  if (!confirm('Retirer "' + nom + '" de l\'inventaire ?\n\n' +
+      'Son historique de mesures est conserve. Sa file sera retiree du routeur ' +
+      'au prochain plan, faute de cible declaree.')) return;
+  try {
+    await api('/static-clients/' + encodeURIComponent(id), { method: 'DELETE' });
+    if (scEdition && String(scEdition.id) === String(id)) scRemplirFormulaire(null);
+    await loadStaticClients();
+    await loadSubscribers();
+  } catch (err) {
+    scNotice('<span class="badge crit">' + esc(err.message) + '</span>');
+  }
 }
 
 async function openSubscriber(id) {
@@ -1223,7 +1406,7 @@ async function openSubscriber(id) {
     const data = await api('/subscribers/' + id + '/metrics?minutes=60&bucket_seconds=30');
     const s = data.subscriber;
     root.querySelector('.drawer').innerHTML =
-      '<div class="drawer-head"><h3>' + esc(s.pppoe_login) + '</h3>' +
+      '<div class="drawer-head"><h3>' + esc(s.login) + '</h3>' +
       '<button class="sm" id="drawer-close">Fermer</button></div>' +
       '<div class="grid stats" style="margin-bottom:1rem">' +
         statCard('', 'PoP', esc(s.pop_name || '-'), '', '') +
@@ -1851,16 +2034,18 @@ async function toggleAntenna(id) {
 const KIND_LABEL = {
   gateway: 'Gateway', core: 'Coeur', pop: 'PoP', radio: 'Radio',
   sector: 'Secteur', cpe: 'CPE', client: 'Client', unknown: 'Inconnu', subscriber: 'Abonnes',
+  // Nature a part entiere : ce noeud est DECLARE, pas decouvert.
+  static: 'Client a IP fixe',
 };
 const KIND_COLOR = {
   gateway: 'var(--accent)', core: 'var(--accent)', pop: 'var(--down)',
   radio: 'var(--up)', sector: 'var(--up)', cpe: 'var(--muted)', client: '#a78bfa',
-  unknown: 'var(--faint)', subscriber: '#a78bfa',
+  unknown: 'var(--faint)', subscriber: '#a78bfa', static: '#f0abfc',
 };
 
 /* ------------------------------------------------- editeur d'arbre reseau */
 
-const KIND_ORDER = ['gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'client', 'unknown'];
+const KIND_ORDER = ['gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'static', 'client', 'unknown'];
 const NODE_W = 176;
 const NODE_H = 48;
 
@@ -1881,7 +2066,12 @@ async function loadTopology() {
 /** Rang d'un role : plus petit = plus en amont. Sert a choisir par ou entrer
  *  dans le graphe et a departager deux parents possibles (la decouverte de
  *  voisinage est symetrique : elle dit "adjacents", pas "lequel est au-dessus"). */
-const TOPO_RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, client: 4, unknown: 5 };
+// Un client a IP fixe pend au meme niveau qu'un CPE : c'est une feuille du
+// reseau, sous un secteur ou, a defaut de secteur declare, sous son PoP.
+const TOPO_RANG = {
+  gateway: 0, core: 1, pop: 2, radio: 3, sector: 3,
+  cpe: 4, static: 4, client: 4, unknown: 5,
+};
 
 /** Un lien est-il assez SUR pour dessiner une adjacence directe dans l'arbre ?
  *
@@ -2900,8 +3090,8 @@ async function measureLink(key) {
 async function openBandwidthEditor(scope, cible) {
   if (!cible) return;
   const nom = scope === 'link'
-    ? (cible.target_name || cible.interface) : cible.pppoe_login;
-  const cle = scope === 'link' ? cible.key : cible.pppoe_login;
+    ? (cible.target_name || cible.interface) : cible.login;
+  const cle = scope === 'link' ? cible.key : cible.login;
   const capacite = cible.capacity_mbps;
 
   // Relire la surcharge en place : ouvrir sur des champs vides laisserait
@@ -3024,7 +3214,7 @@ function openBoostEditor(abonne) {
 
   const root = document.getElementById('drawer-root');
   root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
-    '<div class="drawer-head"><h3>Boost &middot; ' + esc(abonne.pppoe_login) + '</h3>' +
+    '<div class="drawer-head"><h3>Boost &middot; ' + esc(abonne.login) + '</h3>' +
     '<button class="sm" id="drawer-close">Fermer</button></div>' +
 
     '<div class="notice">Plan actuel : <strong>' +
@@ -3110,7 +3300,7 @@ function openBoostEditor(abonne) {
       const r = await api('/shaping/boosts', {
         method: 'POST',
         body: JSON.stringify({
-          login: abonne.pppoe_login,
+          login: abonne.login,
           duration_minutes: Number(champMinutes.value) || 60,
           down_mbps: down,
           up_mbps: up,
@@ -3137,7 +3327,7 @@ function openBoostEditor(abonne) {
 
   document.getElementById('boost-clear').addEventListener('click', async () => {
     try {
-      await api('/shaping/boosts/' + encodeURIComponent(abonne.pppoe_login), { method: 'DELETE' });
+      await api('/shaping/boosts/' + encodeURIComponent(abonne.login), { method: 'DELETE' });
       closeDrawer();
       await refresh();
     } catch (err) {
@@ -3675,6 +3865,22 @@ document.getElementById('sub-pop').addEventListener('change', (e) => {
   state.subPop = e.target.value;
   loadSubscribers();
 });
+
+document.getElementById('sub-kind').addEventListener('change', (e) => {
+  state.subKind = e.target.value;
+  loadSubscribers();
+});
+
+document.getElementById('sc-toggle').addEventListener('click', async () => {
+  const panneau = document.getElementById('sc-panel');
+  panneau.hidden = !panneau.hidden;
+  if (!panneau.hidden) {
+    scRemplirFormulaire(null);
+    await loadStaticClients();
+  }
+});
+document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
+document.getElementById('sc-cancel').addEventListener('click', () => scRemplirFormulaire(null));
 
 let searchTimer = null;
 document.getElementById('sub-search').addEventListener('input', (e) => {

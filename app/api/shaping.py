@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, model_validator
 from app.api.deps import ContainerDep, RepositoryDep
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.routeros import MissingWriteCredentialsError
+from app.models import KIND_STATIC
 from app.services.shaping import EnforcementDisabledError, EnforcementLockedError
 
 logger = logging.getLogger(__name__)
@@ -665,6 +666,24 @@ class BoostInput(BaseModel):
         return self
 
 
+async def _fiche_statique(container: Any, reference: str) -> dict[str, Any] | None:
+    """Retrouve un client a IP fixe dans l'inventaire, sous la forme d'une
+    ligne de metriques (memes cles) pour que l'appelant n'ait pas a distinguer."""
+    repo = getattr(container, "static_clients_repo", None)
+    if repo is None:
+        return None
+    for client in await repo.load_enabled():
+        if client.reference == reference:
+            return {
+                "login": client.reference,
+                "kind": KIND_STATIC,
+                "pop_name": client.pop_name,
+                "plan_down_mbps": client.plan_down_mbps,
+                "plan_up_mbps": client.plan_up_mbps,
+            }
+    return None
+
+
 @router.get("/shaping/boosts", summary="Boosts en cours")
 async def list_boosts(container: ContainerDep) -> list[dict[str, Any]]:
     return await _require_topology(container).active_boosts()
@@ -686,14 +705,18 @@ async def create_boost(
         (
             row
             for row in await metrics.subscriber_latest(limit=5000, order_by="login")
-            if row["pppoe_login"] == payload.login
+            if row["login"] == payload.login
         ),
         None,
     )
     if abonne is None:
+        # Un client a IP fixe declare a l'instant n'a pas encore d'echantillon :
+        # sa fiche suffit a le booster, il est joignable en permanence.
+        abonne = await _fiche_statique(container, payload.login)
+    if abonne is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Aucune session active pour '{payload.login}'",
+            detail=f"Aucun abonne actif ni client declare pour '{payload.login}'",
         )
 
     down, up = payload.down_mbps, payload.up_mbps

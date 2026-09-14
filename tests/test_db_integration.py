@@ -16,11 +16,17 @@ from __future__ import annotations
 import os
 from datetime import UTC, datetime, timedelta
 
+import asyncpg
 import pytest
 
 from app.db.database import Database
 from app.db.directory import PgDirectory
 from app.db.repository import MetricsRepository
+from app.db.static_clients_repo import (
+    DuplicateStaticClientError,
+    StaticClientNotFoundError,
+    StaticClientsRepository,
+)
 from app.db.writer import PgMetricsWriter
 from app.models import (
     BackhaulSample,
@@ -86,7 +92,8 @@ async def database():
             "qoe_scores, collector_runs, subscribers, backhauls, routers, "
             "airos_antennas, pops, "
             "topology_nodes, topology_links, subscriber_attachments, "
-            "shaping_policies, enforcement_audit, runtime_flags, runtime_settings "
+            "shaping_policies, enforcement_audit, runtime_flags, runtime_settings, "
+            "static_clients "
             "RESTART IDENTITY CASCADE"
         )
     yield db
@@ -211,7 +218,7 @@ async def test_vue_dernier_echantillon(database: Database, now: datetime) -> Non
     )
 
     latest = await repo.subscriber_latest(limit=10)
-    assert [row["pppoe_login"] for row in latest] == ["gros", "petit"]
+    assert [row["login"] for row in latest] == ["gros", "petit"]
     # Seul le dernier point de chaque abonne remonte.
     assert latest[0]["tx_bps"] == 95e6
     assert latest[0]["ts"] == now
@@ -395,12 +402,12 @@ async def test_bout_en_bout_routeur_vers_api(database: Database) -> None:
     repo = MetricsRepository(database.pool)
 
     latest = await repo.subscriber_latest(limit=10)
-    par_login = {row["pppoe_login"]: row for row in latest}
+    par_login = {row["login"]: row for row in latest}
     assert par_login["dupont"]["rx_bps"] == 10_000_000.0  # upload abonne
     assert par_login["dupont"]["tx_bps"] == 20_000_000.0  # download abonne
     assert par_login["martin"]["rx_bps"] == 0.0  # en ligne mais inactif
     # Le classement top talkers place le plus consommateur en tete.
-    assert latest[0]["pppoe_login"] == "dupont"
+    assert latest[0]["login"] == "dupont"
 
     # Le plan a bien ete resolu et rattache a l'abonne.
     assert par_login["dupont"]["plan_down_mbps"] > 0
@@ -1135,7 +1142,7 @@ async def test_la_limite_appliquee_remonte_avec_sa_source(
         reason="geste commercial",
     )
 
-    par_login = {r["pppoe_login"]: r for r in await repo.subscriber_latest(limit=10)}
+    par_login = {r["login"]: r for r in await repo.subscriber_latest(limit=10)}
 
     # Sans surcharge : le plan fait foi.
     assert par_login["normal"]["effective_down_mbps"] == 500
@@ -1384,6 +1391,231 @@ async def test_la_vue_expose_l_adresse_qui_portera_la_file(
 
 
 # =========================================================================
+# Clients a IP fixe : migration du schema et depot d'inventaire
+# =========================================================================
+
+
+async def test_migration_depuis_une_base_avec_pppoe_login(database: Database) -> None:
+    """Une installation existante doit garder ses abonnes a travers le renommage.
+
+    La colonne s'appelait 'pppoe_login' ; elle devenait un mensonge des qu'un
+    client a IP fixe entrait dans la table. Le renommage ne doit ni perdre une
+    ligne, ni casser les cles etrangeres qui pointent sur subscribers.
+    """
+    async with database.pool.acquire() as conn:
+        # On remet la table dans son etat d'AVANT. La vue depend des deux
+        # colonnes touchees, on la retire d'abord : le schema la reconstruit.
+        await conn.execute("DROP VIEW IF EXISTS subscriber_latest")
+        await conn.execute("ALTER TABLE subscribers DROP COLUMN kind")
+        await conn.execute("ALTER TABLE subscribers RENAME COLUMN login TO pppoe_login")
+        await conn.execute(
+            "INSERT INTO subscribers (pppoe_login, plan_down_mbps) VALUES ('ancien', 100)"
+        )
+
+    await database.migrate()
+
+    async with database.pool.acquire() as conn:
+        colonnes = {
+            r["column_name"]
+            for r in await conn.fetch(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'subscribers'"
+            )
+        }
+        assert "login" in colonnes
+        assert "pppoe_login" not in colonnes
+
+        ligne = await conn.fetchrow("SELECT login, kind, plan_down_mbps FROM subscribers")
+        assert ligne["login"] == "ancien"
+        assert ligne["plan_down_mbps"] == 100
+        # Les abonnes existants sont tous du PPPoE : c'est le defaut.
+        assert ligne["kind"] == "pppoe"
+
+    # Et le schema reste rejouable une fois la migration passee.
+    await database.migrate()
+
+
+async def test_la_contrainte_de_nature_est_posee(database: Database) -> None:
+    async with database.pool.acquire() as conn:
+        with pytest.raises(asyncpg.CheckViolationError):
+            await conn.execute("INSERT INTO subscribers (login, kind) VALUES ('x', 'chimere')")
+
+
+async def test_un_client_statique_et_un_abonne_partagent_l_espace_de_noms(
+    database: Database,
+) -> None:
+    """L'argument central du modele : RouterOS n'a qu'un espace de noms de
+    files, donc la base doit interdire deux abonnes homonymes."""
+    async with database.pool.acquire() as conn:
+        await conn.execute("INSERT INTO subscribers (login, kind) VALUES ('dupont', 'pppoe')")
+        with pytest.raises(asyncpg.UniqueViolationError):
+            await conn.execute("INSERT INTO subscribers (login, kind) VALUES ('dupont', 'static')")
+
+
+async def test_depot_inventaire_cycle_complet(database: Database) -> None:
+    repo = StaticClientsRepository(database.pool)
+
+    cree = await repo.create(
+        {
+            "reference": "mairie-vitre",
+            "label": "Mairie de Vitre",
+            "pop_name": "PoP Nord",
+            "address": "10.0.0.5",
+            "vlan": 120,
+            "plan_down_mbps": 200.0,
+            "plan_up_mbps": 50.0,
+        }
+    )
+    # L'adresse ressort sous forme canonique, prete a servir de cible de file.
+    assert cree["address"] == "10.0.0.5/32"
+    assert cree["vlan"] == 120
+
+    # Un sous-reseau garde son prefixe : le bloc entier du client est plafonne.
+    modifie = await repo.update(cree["id"], {"address": "10.0.0.0/29"})
+    assert modifie["address"] == "10.0.0.0/29"
+
+    actifs = await repo.load_enabled()
+    assert [c.reference for c in actifs] == ["mairie-vitre"]
+    assert actifs[0].address == "10.0.0.0/29"
+    assert actifs[0].display_name == "Mairie de Vitre"
+
+    # Suspendre garde la fiche mais la retire du cycle.
+    await repo.update(cree["id"], {"enabled": False})
+    assert await repo.load_enabled() == []
+    assert len(await repo.list_all()) == 1
+
+    with pytest.raises(DuplicateStaticClientError):
+        await repo.create(
+            {"reference": "mairie-vitre", "pop_name": "PoP Nord", "address": "10.0.0.9"}
+        )
+
+    await repo.delete(cree["id"])
+    assert await repo.list_all() == []
+    with pytest.raises(StaticClientNotFoundError):
+        await repo.delete(cree["id"])
+
+
+async def test_la_vue_expose_la_nature(database: Database, now: datetime) -> None:
+    """L'interface doit pouvoir distinguer les deux natures sans requete de plus."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("PoP Nord")
+    ppp = await directory.ensure_subscriber("dupont", pop_id=pop_id)
+    fixe = await directory.ensure_subscriber(
+        "mairie-vitre",
+        pop_id=pop_id,
+        plan=Plan(down_mbps=200, up_mbps=50, source="static-inventory"),
+        kind="static",
+    )
+    await writer.write_subscriber_metrics(
+        [
+            (ppp, SubscriberSample(ts=now, login="dupont", router_name="r", pop_name="PoP Nord")),
+            (
+                fixe,
+                SubscriberSample(
+                    ts=now, login="mairie-vitre", router_name="r", pop_name="PoP Nord"
+                ),
+            ),
+        ]
+    )
+
+    par_login = {r["login"]: r for r in await repo.subscriber_latest(limit=10)}
+    assert par_login["dupont"]["kind"] == "pppoe"
+    assert par_login["mairie-vitre"]["kind"] == "static"
+    assert par_login["mairie-vitre"]["plan_down_mbps"] == 200
+
+    # Et le filtre par nature ne rend que ce qu'on demande.
+    statiques = await repo.subscriber_latest(limit=10, kind="static")
+    assert [r["login"] for r in statiques] == ["mairie-vitre"]
+    listes = await repo.list_subscribers(kind="pppoe")
+    assert [r["login"] for r in listes] == ["dupont"]
+
+
+async def test_l_inventaire_fait_autorite_sur_le_plan_d_un_statique(
+    database: Database,
+) -> None:
+    """Retirer un debit de la fiche doit le retirer en base.
+
+    Un plan PPPoE absent veut dire "RADIUS n'a rien dit ce cycle-ci" et ne doit
+    rien ecraser ; pour un client statique, la fiche est la seule source, et son
+    silence est une decision.
+    """
+    directory = PgDirectory(database.pool)
+    await directory.ensure_subscriber(
+        "mairie", plan=Plan(down_mbps=200, up_mbps=50, source="static-inventory"), kind="static"
+    )
+    await directory.ensure_subscriber("mairie", plan=None, kind="static")
+
+    async with database.pool.acquire() as conn:
+        ligne = await conn.fetchrow("SELECT plan_down_mbps FROM subscribers WHERE login = 'mairie'")
+    assert ligne["plan_down_mbps"] is None
+
+    # Le chemin PPPoE, lui, garde son plan quand la source se tait.
+    await directory.ensure_subscriber(
+        "dupont", plan=Plan(down_mbps=100, up_mbps=20, source="radius")
+    )
+    await directory.ensure_subscriber("dupont", plan=None)
+    async with database.pool.acquire() as conn:
+        ligne = await conn.fetchrow("SELECT plan_down_mbps FROM subscribers WHERE login = 'dupont'")
+    assert ligne["plan_down_mbps"] == 100
+
+
+async def test_conteneur_reel_cable_les_clients_statiques(database: Database) -> None:
+    """Le montage complet, pas seulement les pieces.
+
+    Un client declare dans la base doit, sans rien d'autre, ressortir en abonne
+    materialise apres un cycle de collecte : c'est ce que ``build_container``
+    doit avoir cable de bout en bout (depot -> service de collecte -> shaping).
+    """
+    from app.config import Settings
+    from app.container import build_container, shutdown_container
+    from app.services.crypto import generate_key
+
+    settings = Settings(
+        _env_file=None,
+        database_url=DSN,
+        routers=[],
+        backhauls=[],
+        backhaul_provider="mock",
+        plan_provider="mock",
+        scheduler_enabled=False,
+        db_auto_migrate=True,
+        app_secret_key=generate_key(),
+    )
+
+    container = await build_container(settings)
+    try:
+        assert container.static_clients_repo is not None
+        await container.static_clients_repo.create(
+            {
+                "reference": "mairie-vitre",
+                "pop_name": "PoP Nord",
+                "address": "10.0.0.0/29",
+                "plan_down_mbps": 200.0,
+                "plan_up_mbps": 50.0,
+            }
+        )
+
+        resultat = await container.collection.collect_subscribers()
+        assert resultat.ok, resultat.errors
+
+        lignes = await container.repository.list_subscribers(kind="static")
+        assert [ligne["login"] for ligne in lignes] == ["mairie-vitre"]
+        assert lignes[0]["plan_down_mbps"] == 200.0
+        assert lignes[0]["plan_source"] == "static-inventory"
+        # L'adresse declaree est bien redescendue sur la fiche d'abonne.
+        assert str(lignes[0]["last_ip"]).startswith("10.0.0.0")
+
+        # Et le service de shaping voit le meme inventaire.
+        actifs = await container.shaping.static_clients.load_enabled()
+        assert [c.reference for c in actifs] == ["mairie-vitre"]
+    finally:
+        await shutdown_container(container)
+
+
+# =========================================================================
 # Boucle fermee QoE (phase 4)
 # =========================================================================
 async def test_score_de_qoe_composite_par_abonne(database: Database, now: datetime) -> None:
@@ -1421,7 +1653,7 @@ async def test_score_de_qoe_composite_par_abonne(database: Database, now: dateti
         lignes.append((gonfle, echantillon(ts, 12.0 if index < 5 else 320.0, charge)))
     await writer.write_subscriber_metrics(lignes)
 
-    notes = {r["pppoe_login"]: r for r in await repo.qoe_subscribers(minutes=30)}
+    notes = {r["login"]: r for r in await repo.qoe_subscribers(minutes=30)}
 
     assert notes["sain"]["severity"] == "ok"
     assert notes["sain"]["score"] >= 80
@@ -1430,7 +1662,7 @@ async def test_score_de_qoe_composite_par_abonne(database: Database, now: dateti
     assert notes["gonfle"]["score"] < 55  # sous le seuil par defaut de la boucle
     # Meme fonction de score que la heatmap : le detail est aussi dans /bufferbloat.
     detail = await repo.bufferbloat(minutes=30)
-    par_login = {r["pppoe_login"]: r for r in detail["subscribers"]}
+    par_login = {r["login"]: r for r in detail["subscribers"]}
     assert par_login["gonfle"]["qoe"]["score"] == notes["gonfle"]["score"]
 
 

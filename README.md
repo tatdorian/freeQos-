@@ -379,6 +379,67 @@ authentifié par RADIUS, par exemple — le contrôleur **ne bloque pas**. Il te
 et rapporte ce que RouterOS répond réellement, en traduisant
 `not enough permissions` en la correction à faire.
 
+### Clients à IP fixe (non PPPoE)
+
+Tous les WISP n'ont pas que du PPPoE. Les clients professionnels, les collectivités et
+les liaisons dédiées sont souvent en **IP fixe sur un VLAN**, sans session à observer.
+Ils sont pris en charge au même titre que les abonnés PPPoE, avec une différence
+importante à comprendre.
+
+**C'est une déclaration, pas une découverte — et c'est assumé.** Un abonné PPPoE
+s'annonce tout seul : il ouvre une session, `/ppp/active` le nomme, RADIUS donne son
+plan. Un client à IP fixe ne fait rien de tout cela. Rien sur le réseau ne dit qu'une
+adresse lui appartient, ni quel débit il a souscrit. L'inventaire saisi depuis
+l'interface (onglet **Abonnés → Inventaire des clients à IP fixe**) est donc la
+**seule source possible**, et le contrôleur la traite comme une vérité — exactement
+comme l'inventaire de routeurs.
+
+**Une seule notion d'abonné, un discriminant explicite.** Les deux types vivent dans
+la même table `subscribers`, distingués par `kind` (`pppoe` / `static`). Deux raisons :
+
+- RouterOS n'a **qu'un seul espace de noms de files** (`freeqos-<référence>`). Un seul
+  `UNIQUE (login)` rend impossible que deux abonnés produisent la même file et se
+  battent à chaque cycle de réconciliation.
+- une fois la ligne posée, plan, surcharges, boosts, planification et journal d'audit
+  suivent **rigoureusement le même chemin**. Il n'y a pas de second pipeline à maintenir.
+
+**La référence ne doit pas encoder l'adresse.** La clé de réconciliation de la file en
+dérive, et elle doit survivre à un déménagement : `mairie-vitre`, pas `static:120:10.0.0.5`.
+Une référence qui contient l'IP ferait détruire puis recréer la file au moindre
+changement d'adresse, en perdant au passage surcharges et historique.
+
+**Un sous-réseau reste un sous-réseau.** Un client à qui on a vendu un `/29` voit son
+bloc entier plafonné. C'est la seule différence de traitement à l'écriture : une
+session PPPoE est toujours ramenée à un `/32` (élargir shaperait les voisins de
+l'abonné), un client déclaré garde le préfixe de sa fiche.
+
+**Rattachement topologique déclaré.** Aucun `caller-id` n'existe pour ces clients : la
+jointure MAC ↔ station UISP ne peut pas les rattacher. Le secteur se saisit dans la
+fiche. Ils apparaissent alors dans l'arbre avec leur propre nature (`static`, pas
+`cpe` : ce n'est pas un équipement observé), ce qui les fait **compter dans le partage
+d'un lien congestionné** — sans quoi les abonnés PPPoE du même secteur se feraient
+rogner à leur place.
+
+**Limite à connaître : la mesure dépend de la file.** Sans session PPPoE, aucune
+interface ne porte le trafic de ce client ; le seul compteur par client dont on dispose
+est celui de la file qui le vise (`/queue/simple`). Tant qu'aucune file n'existe sur
+son adresse — enforcement désactivé, ou premier cycle — le client apparaît avec son
+plan et son état, mais **sans débit**. Un trou est plus honnête qu'un zéro, qui se
+lirait comme une absence de trafic. Une file posée à la main par l'opérateur est lue
+aussi, si elle vise la même adresse.
+
+```bash
+# Déclarer un client à IP fixe
+curl -X POST localhost:8000/api/v1/static-clients -H 'content-type: application/json' -d '{
+  "reference": "mairie-vitre", "label": "Mairie de Vitré",
+  "pop_name": "PoP Nord", "address": "10.0.0.0/29", "vlan": 120,
+  "sector_key": "uisp:ap-nord", "plan_down_mbps": 200, "plan_up_mbps": 50
+}'
+
+# Il devient un abonné comme un autre au cycle suivant
+curl 'localhost:8000/api/v1/subscribers/latest?kind=static'
+```
+
 ### Parité avec LibreQoS : ce qui est possible, ce qui ne l'est pas
 
 L'interface reprend la lecture de LibreQoS, mais la contrainte hors-bande impose une
@@ -706,8 +767,8 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `GET` | `/health` | Liveness (le processus répond ; ne dépend ni de la base ni des collecteurs) |
 | `GET` | `/health/ready` | Readiness : base + **fraîcheur de la donnée** (503 dès qu'un collecteur échoue durablement) |
 | `GET` | `/api/v1/pops` | Liste des PoPs |
-| `GET` | `/api/v1/subscribers` | Abonnés (filtres `pop_id`, `search`) |
-| `GET` | `/api/v1/subscribers/latest` | Dernier échantillon par abonné (top talkers) |
+| `GET` | `/api/v1/subscribers` | Abonnés (filtres `pop_id`, `search`, `kind`) |
+| `GET` | `/api/v1/subscribers/latest` | Dernier échantillon par abonné (top talkers ; filtre `kind`) |
 | `GET` | `/api/v1/subscribers/{id}` | Fiche abonné |
 | `GET` | `/api/v1/subscribers/{id}/metrics` | Série agrégée (`minutes`, `bucket_seconds`) |
 | `GET` | `/api/v1/backhauls` · `/latest` · `/{id}/metrics` | Idem côté radio |
@@ -723,6 +784,8 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `POST` | `/api/v1/pops/routers` | Enregistre un routeur |
 | `PATCH` · `DELETE` | `/api/v1/pops/routers/{id}` | Modifie / retire un routeur |
 | `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
+| `GET` · `POST` | `/api/v1/static-clients` | Inventaire déclaratif des clients à IP fixe |
+| `PATCH` · `DELETE` | `/api/v1/static-clients/{id}` | Modifie / retire une fiche (l'historique de mesures est conservé) |
 | `GET` | `/api/v1/topology` · `POST /topology/discover` | Graphe du réseau |
 | `PATCH` | `/api/v1/topology/nodes/{key}` | Corriger le rôle d'un équipement |
 | `PATCH` | `/api/v1/topology/nodes/{key}/layout` · `/parent` · `/visibility` | Position, rattachement forcé, masquage — arbre affiché seulement |
@@ -750,7 +813,8 @@ Documentation interactive : `/docs`.
 
 ## Modèle de données
 
-**Référentiel** — `pops`, `subscribers` (login PPPoE unique, plan, PoP, `last_seen`),
+**Référentiel** — `pops`, `subscribers` (identité unique `login`, `kind`, plan, PoP,
+`last_seen`), `static_clients` (inventaire déclaratif des clients à IP fixe),
 `backhauls` (PoP, `uisp_device_id`, capacité nominale), `routers` (PoPs ajoutés depuis
 l'interface, mot de passe chiffré, diagnostic de la dernière connexion),
 `topology_nodes` / `topology_links` (graphe découvert ; `pos_x`/`pos_y`, `parent_override`
@@ -762,13 +826,16 @@ basculables à chaud, dont l'autorisation d'écriture).
 
 Le schéma comporte une section de **migrations de colonnes** (`ADD COLUMN IF NOT EXISTS`) :
 `CREATE TABLE IF NOT EXISTS` ne touche pas une table déjà présente, une installation
-existante ne recevrait donc jamais les colonnes ajoutées après coup.
+existante ne recevrait donc jamais les colonnes ajoutées après coup. La colonne
+`subscribers.pppoe_login` y est renommée en `login` (renommage gardé par une double
+condition, donc rejouable) : elle devenait un mensonge dès qu'un client à IP fixe
+entrait dans la table.
 
 **Séries temporelles** (hypertables) :
 
 | Table | Contenu |
 |---|---|
-| `subscriber_metrics` | `ts`, `subscriber_id`, `rx_bps`, `tx_bps`, `rx_bytes`, `tx_bytes`, `rtt_ms` (si la sonde est active), `session_uptime_s` |
+| `subscriber_metrics` | `ts`, `subscriber_id`, `rx_bps`, `tx_bps`, `rx_bytes`, `tx_bytes`, `rtt_ms` (si la sonde est active), `session_uptime_s` — alimentée par `/ppp/active` pour un abonné PPPoE, par les compteurs de sa file pour un client à IP fixe |
 | `backhaul_metrics` | `ts`, `backhaul_id`, capacité (globale/down/up), `signal_dbm`, `airtime_pct`, MCS, `online` |
 | `interface_metrics` | `ts`, `router_name`, `interface`, débits et compteurs du port, `running`, `capacity_mbps` — la source du débit des liens |
 | `qoe_scores` | `ts`, `subscriber_id`, `score`, `components` — phase 3 |
@@ -787,7 +854,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 592 tests, dont 556 sans aucune infrastructure
+make test        # 662 tests, dont 617 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

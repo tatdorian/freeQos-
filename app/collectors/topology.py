@@ -30,6 +30,7 @@ import ipaddress
 import json
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -44,12 +45,21 @@ KIND_POP = "pop"
 KIND_RADIO = "radio"
 KIND_SECTOR = "sector"
 KIND_CPE = "cpe"
+# Client a IP fixe. Sa propre nature, et surtout PAS KIND_CPE : un CPE est un
+# equipement observe (il a une MAC, il apparait dans UISP, sa presence se
+# verifie). Un client statique est une DECLARATION -- il n'y a rien a voir sur
+# le reseau qui le distingue de son voisin. Les confondre ferait croire a une
+# decouverte la ou il n'y a qu'une saisie.
+KIND_STATIC = "static"
 KIND_UNKNOWN = "unknown"
 
 # Un lien est physique (cable/radio) ou logique (session PPPoE).
 LINK_ETHERNET = "ethernet"
 LINK_RADIO = "radio"
 LINK_PPPOE = "pppoe"
+# Rattachement declare d'un client a IP fixe. Le nommer a part evite de le
+# confondre avec une adjacence observee : personne ne l'a mesure.
+LINK_STATIC = "static"
 
 # Identites trop generiques pour prouver que deux noeuds sont le meme equipement :
 # beaucoup de MikroTik gardent l'identite par defaut "MikroTik". On ne fusionne
@@ -788,6 +798,77 @@ def attach_uisp_devices(snapshot: TopologySnapshot, devices: list[dict[str, Any]
                 )
             )
     return rattaches
+
+
+def static_client_node_key(reference: str) -> str:
+    return f"static:{reference}"
+
+
+def attach_static_clients(
+    snapshot: TopologySnapshot,
+    clients: Sequence[Any],
+    *,
+    pop_keys: dict[str, str] | None = None,
+) -> int:
+    """Pose les clients a IP fixe dans le graphe, sous leur secteur declare.
+
+    POURQUOI ILS DOIVENT Y FIGURER. Le partage equitable d'un lien congestionne
+    se calcule a partir de ce qui pend dessous. Un client statique absent du
+    graphe est un client dont la consommation n'est comptee nulle part : le
+    secteur parait moins charge qu'il ne l'est, et les abonnes PPPoE du meme
+    secteur se font rogner a sa place. L'oubli n'est donc pas cosmetique.
+
+    Le rattachement vient de la fiche, pas d'une observation : ces clients n'ont
+    pas de caller-id a joindre a une station UISP. A defaut de secteur declare,
+    le client est pose sous son PoP -- moins precis, mais jamais faux.
+    """
+    poses = 0
+    for client in clients:
+        reference = str(getattr(client, "reference", "") or "")
+        if not reference:
+            continue
+        cle = static_client_node_key(reference)
+        snapshot.add_node(
+            TopologyNode(
+                key=cle,
+                name=str(getattr(client, "display_name", None) or reference),
+                kind=KIND_STATIC,
+                address=str(getattr(client, "address", "") or "") or None,
+                attributes={
+                    "declared": True,
+                    "reference": reference,
+                    "vlan": getattr(client, "vlan", None),
+                    "pop_name": getattr(client, "pop_name", None),
+                    "plan_down_mbps": getattr(client, "plan_down_mbps", None),
+                    "plan_up_mbps": getattr(client, "plan_up_mbps", None),
+                },
+            )
+        )
+        poses += 1
+
+        secteur = str(getattr(client, "sector_key", "") or "")
+        parent = secteur or (pop_keys or {}).get(str(getattr(client, "pop_name", "") or ""), "")
+        if not parent or parent not in snapshot.nodes:
+            # Secteur declare mais inconnu du graphe : le noeud existe quand
+            # meme (l'operateur doit VOIR son client), simplement detache.
+            if secteur:
+                snapshot.warnings.append(
+                    f"Client statique '{reference}' rattache a un secteur inconnu "
+                    f"'{secteur}' : verifiez la cle dans sa fiche."
+                )
+            continue
+        snapshot.add_link(
+            TopologyLink(
+                source_key=parent,
+                target_key=cle,
+                kind=LINK_STATIC,
+                discovered_by="inventory",
+                attributes={"declared": True},
+            )
+        )
+        if secteur:
+            snapshot.subscriber_sectors[reference] = secteur
+    return poses
 
 
 def map_subscribers_to_sectors(

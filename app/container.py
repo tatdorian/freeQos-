@@ -33,6 +33,7 @@ from app.db.directory import Directory, PgDirectory
 from app.db.repository import MetricsRepository
 from app.db.routers_repo import RoutersRepository
 from app.db.settings_repo import SettingsRepository
+from app.db.static_clients_repo import StaticClientsRepository
 from app.db.topology_repo import TopologyRepository
 from app.db.writer import MetricsWriter, PgMetricsWriter
 from app.models import Plan
@@ -152,6 +153,7 @@ class Container:
     routers_repo: RoutersRepository | None = None
     topology_repo: TopologyRepository | None = None
     antennas_repo: AntennasRepository | None = None
+    static_clients_repo: StaticClientsRepository | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -225,6 +227,9 @@ async def build_container(settings: Settings) -> Container:
 
     routers_repo = RoutersRepository(database.pool, secrets)
     topology_repo = TopologyRepository(database.pool)
+    # Inventaire declaratif des clients a IP fixe. Aucun secret : ce sont des
+    # adresses et des plans, pas des identifiants d'acces.
+    static_clients_repo = StaticClientsRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
@@ -241,7 +246,11 @@ async def build_container(settings: Settings) -> Container:
     )
     registry = RouterRegistry(settings, repository=routers_repo)
     shaping = ShapingService(
-        settings, registry=registry, repository=topology_repo, metrics=repository
+        settings,
+        registry=registry,
+        repository=topology_repo,
+        metrics=repository,
+        static_clients=static_clients_repo,
     )
     # Le drapeau d'ecriture vient de la base une fois amorce : le basculer depuis
     # l'interface ne doit pas demander un redemarrage.
@@ -265,6 +274,7 @@ async def build_container(settings: Settings) -> Container:
         directory=directory,
         writer=writer,
         rtt_prober=rtt_prober,
+        static_clients=static_clients_repo,
     )
 
     # Amorce le drapeau de la sonde RTT : la base fait foi une fois posee, sinon
@@ -294,6 +304,11 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_RECONCILE, settings.shaping_reconcile_interval_s, reconcile_shaping)
 
+    async def qoe_closed_loop() -> None:
+        await shaping.adjust_for_qoe()
+
+    scheduler.add_job(JOB_QOE_LOOP, settings.qoe_loop_interval_s, qoe_closed_loop)
+
     # Changer une cadence depuis l'interface doit reprogrammer la boucle, pas
     # seulement l'affichage : le scheduler relit interval_s a chaque tour.
     runtime_config.on_interval_change = scheduler.set_interval
@@ -316,6 +331,7 @@ async def build_container(settings: Settings) -> Container:
         routers_repo=routers_repo,
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,
+        static_clients_repo=static_clients_repo,
     )
 
 

@@ -82,7 +82,7 @@ class FakeRepository:
         return [
             {
                 "id": 1,
-                "pppoe_login": "dupont",
+                "login": "dupont",
                 "pop_id": 1,
                 "pop_name": "PoP Test",
                 "plan_down_mbps": 100.0,
@@ -125,7 +125,7 @@ class FakeRepository:
             "subscribers": [
                 {
                     "subscriber_id": 1,
-                    "pppoe_login": "dupont",
+                    "login": "dupont",
                     "pop_name": "PoP Test",
                     "grade": "A+",
                     "severity": "ok",
@@ -154,7 +154,7 @@ class FakeRepository:
         return [
             {
                 "subscriber_id": row["subscriber_id"],
-                "pppoe_login": row["pppoe_login"],
+                "login": row["login"],
                 "pop_name": row["pop_name"],
                 **row["qoe"],
             }
@@ -186,7 +186,7 @@ class FakeRepository:
         return [
             {
                 "subscriber_id": 1,
-                "pppoe_login": "dupont",
+                "login": "dupont",
                 "pop_id": 1,
                 "pop_name": "PoP Test",
                 "plan_down_mbps": 100.0,
@@ -324,6 +324,7 @@ def build_container(
     routers_repo: Any = None,
     topology_repo: Any = None,
     antennas_repo: Any = None,
+    static_clients_repo: Any = None,
     client: FakeRouterOsClient | None = None,
 ) -> Container:
     client = client or FakeRouterOsClient()
@@ -353,7 +354,11 @@ def build_container(
     registry.adopt(collectors)
     metrics_repo = FakeRepository()
     shaping = ShapingService(
-        settings, registry=registry, repository=topology_repo, metrics=metrics_repo
+        settings,
+        registry=registry,
+        repository=topology_repo,
+        metrics=metrics_repo,
+        static_clients=static_clients_repo,
     )
     return Container(
         settings=settings,
@@ -373,6 +378,7 @@ def build_container(
         routers_repo=routers_repo,
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,
+        static_clients_repo=static_clients_repo,
     )
 
 
@@ -482,14 +488,14 @@ def test_liste_des_pops(client: TestClient) -> None:
 
 def test_liste_des_abonnes(client: TestClient) -> None:
     body = client.get("/api/v1/subscribers").json()
-    assert body[0]["pppoe_login"] == "dupont"
+    assert body[0]["login"] == "dupont"
 
 
 def test_top_talkers(client: TestClient) -> None:
     """La route /subscribers/latest doit primer sur /subscribers/{id}."""
     response = client.get("/api/v1/subscribers/latest")
     assert response.status_code == 200
-    assert response.json()[0]["pppoe_login"] == "dupont"
+    assert response.json()[0]["login"] == "dupont"
 
 
 def test_fiche_abonne_inconnu(client: TestClient) -> None:

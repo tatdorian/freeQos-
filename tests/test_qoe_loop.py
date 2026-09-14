@@ -209,7 +209,7 @@ class MetriquesQoe:
     async def subscriber_latest(self, **kwargs: Any) -> list[dict[str, Any]]:
         return [
             {
-                "pppoe_login": login,
+                "login": login,
                 "pop_name": "PoP Test",
                 "plan_down_mbps": 100.0,
                 "plan_up_mbps": 20.0,
@@ -224,7 +224,7 @@ class MetriquesQoe:
         return [
             {
                 "subscriber_id": index,
-                "pppoe_login": login,
+                "login": login,
                 "pop_name": "PoP Test",
                 "score": score,
                 "severity": "crit" if score < 50 else "ok",

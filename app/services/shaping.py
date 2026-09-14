@@ -25,6 +25,7 @@ from app.collectors.topology import (
     KIND_SECTOR,
     TopologyNode,
     TopologySnapshot,
+    attach_static_clients,
     attach_uisp_devices,
     build_from_router,
     link_by_shared_subnets,
@@ -52,6 +53,7 @@ from app.enforcement.routeros import (
     RouterOsWriteClient,
     apply_plan,
 )
+from app.models import KIND_STATIC, StaticClient
 from app.services.qoe_loop import ACTION_UNKNOWN, SectorState, decide_sector
 from app.services.registry import RouterRegistry
 
@@ -120,6 +122,7 @@ class ShapingService:
         repository: TopologyRepository | None = None,
         metrics: Any = None,
         write_client_factory: Callable[..., RouterOsWriteClient] | None = None,
+        static_clients: Any = None,
     ) -> None:
         self.settings = settings
         self.registry = registry
@@ -127,6 +130,10 @@ class ShapingService:
         # Depot de metriques : donne les abonnes actifs et leur plan. Optionnel
         # pour que le service reste testable sans base.
         self.metrics = metrics
+        # Inventaire des clients a IP fixe. Il fait AUTORITE sur leur adresse,
+        # a l'inverse des abonnes PPPoE dont l'adresse doit venir du routeur :
+        # ici il n'y a pas de pool qui reattribue, il y a un contrat.
+        self.static_clients = static_clients
         self._write_clients: dict[str, RouterOsWriteClient] = {}
         self._write_client_factory = write_client_factory or LibrouterosWriteClient
         self.last_snapshot: TopologySnapshot | None = None
@@ -294,6 +301,16 @@ class ShapingService:
 
         if uisp_devices:
             attach_uisp_devices(snapshot, uisp_devices)
+
+        # En dernier : les clients a IP fixe se raccrochent a des secteurs qui
+        # viennent d'etre poses, UISP compris.
+        clients = await self._static_clients_all()
+        if clients:
+            pop_keys = {
+                c.config.effective_pop_name: router_node_key(c.config.name) for c in collectors
+            }
+            poses = attach_static_clients(snapshot, clients, pop_keys=pop_keys)
+            logger.info("Topologie : %d client(s) a IP fixe declares", poses)
 
         self.last_snapshot = snapshot
         if self.repository is not None:
@@ -478,7 +495,12 @@ class ShapingService:
         for ligne in await self.metrics.subscriber_latest(limit=5000, order_by="login"):
             if ligne.get("pop_name") != pop_name:
                 continue
-            login = str(ligne["pppoe_login"])
+            # Les clients a IP fixe sont traites plus bas, a partir de leur
+            # fiche : la ligne de metriques dirait 'pas de session' et les
+            # rendrait non shapables, alors qu'ils sont joignables en permanence.
+            if ligne.get("kind") == KIND_STATIC:
+                continue
+            login = str(ligne["login"])
             surcharge = surcharges_abonnes.get(login, {})
             secteur = rattachements.get(login)
             session = sessions.pop(login, None)
@@ -514,7 +536,70 @@ class ShapingService:
                 )
             )
 
+        # Clients a IP fixe du meme PoP. Ils rejoignent la MEME liste : a partir
+        # d'ici, plan(), le diff de reconciliation et apply() ne font plus
+        # aucune difference entre les deux natures.
+        for client in await self._static_clients_for(pop_name):
+            surcharge = surcharges_abonnes.get(client.reference, {})
+            secteur = client.sector_key or rattachements.get(client.reference)
+            abonnes.append(
+                self._cible_statique(
+                    client,
+                    surcharge=surcharge,
+                    parent=parent_par_noeud.get(secteur) if secteur else None,
+                )
+            )
+
         return liens, abonnes
+
+    async def _static_clients_all(self) -> list[StaticClient]:
+        """Toutes les fiches actives, tous PoPs confondus."""
+        if self.static_clients is None:
+            return []
+        try:
+            clients: list[StaticClient] = await self.static_clients.load_enabled()
+        except Exception:  # noqa: BLE001
+            logger.exception("Inventaire des clients statiques illisible, topologie sans eux")
+            return []
+        return clients
+
+    async def _static_clients_for(self, pop_name: str) -> list[StaticClient]:
+        """Fiches actives de ce PoP, ou liste vide si l'inventaire est absent.
+
+        Un inventaire illisible ne doit pas faire echouer le plan des abonnes
+        PPPoE : on journalise et on continue avec ce qu'on a.
+        """
+        return [c for c in await self._static_clients_all() if c.pop_name == pop_name]
+
+    def _cible_statique(
+        self,
+        client: StaticClient,
+        *,
+        surcharge: dict[str, Any],
+        parent: str | None,
+    ) -> SubscriberTarget:
+        """Traduit une fiche d'inventaire en cible de shaping.
+
+        Meme objet et meme hierarchie de debits que pour un abonne PPPoE : le
+        boost prime sur la surcharge, qui prime sur le plan. Seule l'origine du
+        plan change -- la fiche au lieu de RADIUS -- et l'interface reste vide,
+        parce que ce client n'en a pas a lui.
+        """
+        return SubscriberTarget(
+            login=client.reference,
+            interface="",
+            kind=KIND_STATIC,
+            address=client.address,
+            plan_down_mbps=client.plan_down_mbps,
+            plan_up_mbps=client.plan_up_mbps,
+            override_down_mbps=surcharge.get("max_down_mbps"),
+            override_up_mbps=surcharge.get("max_up_mbps"),
+            boost_down_mbps=surcharge.get("boost_down_mbps"),
+            boost_up_mbps=surcharge.get("boost_up_mbps"),
+            boost_expires_at=surcharge.get("boost_expires_at"),
+            enabled=surcharge.get("enabled", True),
+            parent=parent,
+        )
 
     def _cible_abonne(
         self,
@@ -710,7 +795,7 @@ class ShapingService:
 
         par_secteur: dict[str, list[dict[str, Any]]] = {}
         for note in notes:
-            secteur = rattachements.get(str(note["pppoe_login"]))
+            secteur = rattachements.get(str(note["login"]))
             if secteur is None:
                 # Abonne dont on ignore le secteur : il ne peut incriminer
                 # personne. On ne devine pas un rattachement.
@@ -737,7 +822,7 @@ class ShapingService:
                 step=self.settings.qoe_trim_step,
                 floor=self.settings.qoe_trim_floor,
                 recovery_cycles=self.settings.qoe_recovery_cycles,
-                logins=[str(m["pppoe_login"]) for m in mesures],
+                logins=[str(m["login"]) for m in mesures],
             )
             resultat["sectors"].append(verdict.as_dict())
             if verdict.action == ACTION_UNKNOWN:
@@ -792,12 +877,23 @@ class ShapingService:
 
     async def _routers_for_logins(self, logins: set[str]) -> list[str]:
         """Quels routeurs portent ces abonnes. Evite de replanifier tout le parc."""
-        if not logins or self.metrics is None:
+        if not logins:
             return []
         pops = set()
-        for ligne in await self.metrics.subscriber_latest(limit=5000, order_by="login"):
-            if ligne["pppoe_login"] in logins and ligne.get("pop_name"):
-                pops.add(ligne["pop_name"])
+        if self.metrics is not None:
+            for ligne in await self.metrics.subscriber_latest(limit=5000, order_by="login"):
+                if ligne["login"] in logins and ligne.get("pop_name"):
+                    pops.add(ligne["pop_name"])
+        # L'inventaire complete les metriques : un client statique boostee le
+        # jour meme de sa saisie n'a pas encore d'echantillon, et son PoP ne
+        # serait pas retrouve.
+        if self.static_clients is not None:
+            try:
+                for client in await self.static_clients.load_enabled():
+                    if client.reference in logins:
+                        pops.add(client.pop_name)
+            except Exception:  # noqa: BLE001
+                logger.exception("Inventaire statique illisible, PoPs deduits des metriques seules")
         return [c.name for c in self.registry.collectors if c.config.effective_pop_name in pops]
 
     # ----------------------------------------------------------------- plan
