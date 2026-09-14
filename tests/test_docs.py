@@ -37,11 +37,5 @@ def test_description_coherente_avec_les_endpoints_d_ecriture() -> None:
     # ... donc la description doit reconnaitre l'ecriture, et son garde-fou.
     assert "ecriture" in description or "enforcement" in description
     assert "enforcement_enabled" in description
-    # ... et la tracabilite (audit) promise par P0-1/P0-4.
+    # ... et la tracabilite (audit) promise par P0-4.
     assert "enforcement_audit" in description
-
-
-def test_description_mentionne_l_authentification() -> None:
-    description = _schema()["info"]["description"].lower()
-    # L'API n'est plus anonyme : la doc doit le dire.
-    assert "authentification" in description or "identite" in description

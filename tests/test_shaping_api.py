@@ -18,7 +18,7 @@ from app.api.deps import get_container
 from app.config import Settings
 from app.enforcement.models import MANAGED_COMMENT
 from app.main import register_routes
-from tests.conftest import AUTH_HEADERS, FakeRouterOsClient
+from tests.conftest import FakeRouterOsClient
 from tests.test_api import build_container
 from tests.test_enforcement import FauxClientEcriture
 
@@ -307,7 +307,7 @@ def make_client(settings, topo, routeur, *, ecriture=None) -> TestClient:
     app.state.settings = settings
     register_routes(app, settings)
     app.dependency_overrides[get_container] = lambda: container
-    tc = TestClient(app, headers=AUTH_HEADERS)
+    tc = TestClient(app)
     tc.container = container  # type: ignore[attr-defined]
     return tc
 

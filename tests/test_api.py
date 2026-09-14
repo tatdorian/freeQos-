@@ -23,7 +23,7 @@ from app.services.collection import JOB_SUBSCRIBERS, CollectionService
 from app.services.crypto import SecretBox, generate_key
 from app.services.registry import RouterRegistry
 from app.services.shaping import ShapingService
-from tests.conftest import AUTH_HEADERS, FakeRouterOsClient, make_test_auth
+from tests.conftest import FakeRouterOsClient
 
 NOW = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
 
@@ -319,7 +319,6 @@ def build_container(
         secrets=secrets if secrets is not None else SecretBox(generate_key()),
         registry=registry,
         shaping=shaping,
-        auth=make_test_auth(),
         routers_repo=routers_repo,
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,
@@ -337,9 +336,7 @@ def client(settings: Settings, container: Container) -> TestClient:
     app.state.settings = settings
     register_routes(app, settings)
     app.dependency_overrides[get_container] = lambda: container
-    # Tous les endpoints exigent une identite : le client de test presente une
-    # cle d'API. Les tests d'absence d'identite montent leur propre client.
-    return TestClient(app, headers=AUTH_HEADERS)
+    return TestClient(app)
 
 
 # ------------------------------------------------------------------- sante
