@@ -1,0 +1,56 @@
+# Contexte de build Docker.
+#
+# Sans ce fichier, `docker build` envoie TOUT le repertoire au demon : l'historique
+# git complet, les caches Python, les environnements virtuels, les donnees de la
+# base de lab. C'est lent, et surtout deux de ces entrees n'ont rien a faire dans
+# une image : `data/` porte la cle de chiffrement des mots de passe de routeurs et
+# `.env` les secrets d'execution.
+#
+# L'image installe le paquet depuis pyproject.toml / requirements.lock : elle n'a
+# besoin que du code source et des fichiers de projet.
+
+# --- Historique et outillage git ---
+.git
+.gitignore
+.github
+.pre-commit-config.yaml
+
+# --- Caches et artefacts Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Environnements virtuels ---
+.venv/
+venv/
+env/
+
+# --- Secrets et etat local (JAMAIS dans une image) ---
+.env
+.env.*
+!.env.example
+data/
+*.key
+pgdata/
+config/routers.yml
+config/routers.json
+
+# --- Tests : inutiles a l'execution ---
+# (README.md reste inclus : le Dockerfile le copie, pyproject.toml le declare
+# comme readme du paquet et l'installation echouerait sans lui.)
+tests/
+
+# --- Divers ---
+.idea/
+.vscode/
+*.log
+docker-compose.yml
+Makefile

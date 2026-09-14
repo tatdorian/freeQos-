@@ -43,6 +43,12 @@ des files ``/queue/simple`` sur les routeurs. Toute ecriture est gouvernee par l
 drapeau ``ENFORCEMENT_ENABLED`` (lecture seule tant qu'il est faux), ne touche que
 les files marquees ``freeqos:managed``, et est journalisee dans
 ``enforcement_audit`` avec son auteur.
+
+**Boucle fermee QoE** : un job periodique lit le score de QoE composite
+(bufferbloat + latence a vide) et resserre l'enveloppe PARTAGEE d'un secteur qui
+decroche -- jamais le plan souscrit d'un abonne. Meme garde-fous que les autres
+boucles automatiques : soumise a ``ENFORCEMENT_ENABLED``, jamais de purge, et le
+plan passe par le meme planificateur, donc reste diffable et auditable.
 """
 
 

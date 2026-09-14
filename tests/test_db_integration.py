@@ -66,7 +66,7 @@ async def database():
             "qoe_scores, collector_runs, subscribers, backhauls, routers, "
             "airos_antennas, pops, "
             "topology_nodes, topology_links, subscriber_attachments, "
-            "shaping_policies, enforcement_audit, runtime_flags "
+            "shaping_policies, enforcement_audit, runtime_flags, qoe_link_states "
             "RESTART IDENTITY CASCADE"
         )
     yield db
@@ -94,6 +94,7 @@ async def test_le_schema_s_applique_et_est_rejouable(database: Database) -> None
         "backhaul_metrics",
         "interface_metrics",
         "qoe_scores",
+        "qoe_link_states",
         "collector_runs",
     } <= tables
 
@@ -1275,3 +1276,209 @@ async def test_la_vue_expose_l_adresse_qui_portera_la_file(
     ligne = (await repo.subscriber_latest(limit=5))[0]
 
     assert str(ligne["last_ip"]) == "10.20.0.42"
+
+
+# =========================================================================
+# Boucle fermee QoE (phase 4)
+# =========================================================================
+async def test_score_de_qoe_composite_par_abonne(database: Database, now: datetime) -> None:
+    """Le signal qui declenche la boucle fermee, lu sur du vrai SQL.
+
+    Deux abonnes, memes debits, latences opposees : celui dont le RTT GONFLE
+    quand le lien se remplit doit decrocher, celui qui reste plat doit rester
+    dans les clous. C'est exactement ce qu'une moyenne de RTT ne montrerait pas.
+    """
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    sain = await directory.ensure_subscriber("sain", pop_id=pop_id, plan=Plan(100, 20, "mock"))
+    gonfle = await directory.ensure_subscriber("gonfle", pop_id=pop_id, plan=Plan(100, 20, "mock"))
+
+    def echantillon(ts: datetime, rtt: float, charge: float) -> SubscriberSample:
+        return SubscriberSample(
+            ts=ts,
+            login="x",
+            router_name="r",
+            pop_name="PoP Nord",
+            rx_bps=0.0,
+            tx_bps=charge,
+            rtt_ms=rtt,
+        )
+
+    lignes = []
+    for index in range(10):
+        ts = now - timedelta(seconds=30 * (10 - index))
+        charge = 0.0 if index < 5 else 90e6  # la charge arrive a mi-fenetre
+        lignes.append((sain, echantillon(ts, 12.0, charge)))
+        # Le meme profil de charge, mais la latence passe de 12 a 320 ms.
+        lignes.append((gonfle, echantillon(ts, 12.0 if index < 5 else 320.0, charge)))
+    await writer.write_subscriber_metrics(lignes)
+
+    notes = {r["pppoe_login"]: r for r in await repo.qoe_subscribers(minutes=30)}
+
+    assert notes["sain"]["severity"] == "ok"
+    assert notes["sain"]["score"] >= 80
+    assert notes["gonfle"]["severity"] == "crit"
+    assert notes["gonfle"]["grade"] == "F"
+    assert notes["gonfle"]["score"] < 55  # sous le seuil par defaut de la boucle
+    # Meme fonction de score que la heatmap : le detail est aussi dans /bufferbloat.
+    detail = await repo.bufferbloat(minutes=30)
+    par_login = {r["pppoe_login"]: r for r in detail["subscribers"]}
+    assert par_login["gonfle"]["qoe"]["score"] == notes["gonfle"]["score"]
+
+
+async def test_la_heatmap_porte_les_echantillons_de_chaque_pas(
+    database: Database, now: datetime
+) -> None:
+    """La ligne QoE n'est plus un proxy latence : chaque pas remonte ses couples
+    (rtt, charge), pour que la latence SOUS CHARGE soit calculable par pas."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    lignes = []
+    for index in range(6):
+        abonne = await directory.ensure_subscriber(
+            f"abonne-{index}", pop_id=pop_id, plan=Plan(100, 20, "mock")
+        )
+        charge = 0.0 if index < 4 else 90e6
+        lignes.append(
+            (
+                abonne,
+                SubscriberSample(
+                    ts=now,
+                    login=f"abonne-{index}",
+                    router_name="r",
+                    pop_name="PoP Nord",
+                    rx_bps=0.0,
+                    tx_bps=charge,
+                    rtt_ms=10.0 if index < 4 else 280.0,
+                ),
+            )
+        )
+    await writer.write_subscriber_metrics(lignes)
+
+    heat = await repo.heatmap(minutes=15, buckets=15)
+
+    qoe = next(r for r in heat["rows"] if r["key"] == "qoe")
+    remplies = [c for c in qoe["cells"] if c["severity"] != "none"]
+    assert remplies, "le pas contenant les mesures doit etre colore"
+    cellule = remplies[-1]
+    # Les abonnes charges pinguent a 280 ms, les autres a 10 : la cellule le voit.
+    assert cellule["basis"] == "composite"
+    assert cellule["severity"] == "crit"
+    assert cellule["bloat_ms"] is not None and cellule["bloat_ms"] > 200
+
+
+async def test_cycle_de_vie_d_un_resserrage_qoe(database: Database) -> None:
+    """L'etat de la boucle fermee : resserrage, delai de garde, retour a la normale.
+
+    Seuls les liens REELLEMENT resserres remontent dans ``qoe_trims`` : un
+    facteur a 1.0 est l'absence de decision, il n'a pas a laisser croire que la
+    boucle agit sur ce lien.
+    """
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+
+    await repo.save_qoe_link_state(
+        link_key="lien-secteur-1",
+        sector_key="mac:AA:BB:CC:DD:EE:FF",
+        trim_factor=0.9,
+        healthy_cycles=0,
+        scored_count=4,
+        degraded_count=2,
+        worst_score=18.0,
+        last_action="tighten",
+        last_reason="2/4 abonne(s) sous 55",
+        triggered=True,
+    )
+
+    assert await repo.qoe_trims() == {"lien-secteur-1": 0.9}
+    etat = (await repo.qoe_link_states())["lien-secteur-1"]
+    assert etat["last_action"] == "tighten"
+    assert etat["degraded_count"] == 2
+    declenche_a = etat["last_trigger_at"]
+    assert declenche_a is not None
+
+    # Cycle sain sans changement de resserrage : la date de declenchement ne doit
+    # PAS avancer, sinon le journal ne voudrait plus rien dire.
+    await repo.save_qoe_link_state(
+        link_key="lien-secteur-1",
+        sector_key="mac:AA:BB:CC:DD:EE:FF",
+        trim_factor=0.9,
+        healthy_cycles=1,
+        scored_count=4,
+        degraded_count=0,
+        worst_score=88.0,
+        last_action="hold",
+        last_reason="QoE retablie depuis 1/3 cycle(s)",
+        triggered=False,
+    )
+
+    etat = (await repo.qoe_link_states())["lien-secteur-1"]
+    assert etat["healthy_cycles"] == 1
+    assert etat["last_trigger_at"] == declenche_a
+    assert await repo.qoe_trims() == {"lien-secteur-1": 0.9}
+
+    # Retour a 1.0 : la boucle ne tient plus ce lien.
+    await repo.save_qoe_link_state(
+        link_key="lien-secteur-1",
+        sector_key="mac:AA:BB:CC:DD:EE:FF",
+        trim_factor=1.0,
+        healthy_cycles=0,
+        scored_count=4,
+        degraded_count=0,
+        worst_score=91.0,
+        last_action="relax",
+        last_reason="QoE retablie depuis 3 cycles",
+        triggered=True,
+    )
+
+    assert await repo.qoe_trims() == {}
+    assert (await repo.qoe_link_states())["lien-secteur-1"]["trim_factor"] == 1.0
+
+
+async def test_le_conteneur_reel_planifie_la_boucle_fermee_qoe(database: Database) -> None:
+    """Le job de la phase 4 doit etre CABLE, pas seulement ecrit.
+
+    Meme esprit que la regression P0-3 : la suite peut tester la decision, le
+    plan et le depot sans jamais verifier que le scheduler declenche quoi que ce
+    soit. Ici on monte le conteneur reel et on fait tourner un cycle complet.
+    """
+    from app.config import Settings
+    from app.container import build_container, shutdown_container
+    from app.services.collection import JOB_QOE_LOOP
+    from app.services.crypto import generate_key
+
+    settings = Settings(
+        _env_file=None,
+        database_url=DSN,
+        routers=[],
+        backhauls=[],
+        backhaul_provider="mock",
+        plan_provider="mock",
+        scheduler_enabled=False,
+        db_auto_migrate=True,
+        app_secret_key=generate_key(),
+    )
+
+    container = await build_container(settings)
+    try:
+        assert JOB_QOE_LOOP in container.scheduler.job_names()
+
+        # Un cycle complet sur une base vide : aucun abonne note, donc aucune
+        # decision. La boucle est INERTE tant que la sonde RTT ne donne rien --
+        # elle n'invente pas de degradation.
+        await container.scheduler.run_once(JOB_QOE_LOOP)
+        resultat = await container.shaping.adjust_for_qoe()
+
+        assert resultat["scored"] == 0
+        assert resultat["sectors"] == []
+        assert resultat["routers"] == []
+        assert await container.topology_repo.qoe_trims() == {}
+    finally:
+        await shutdown_container(container)
