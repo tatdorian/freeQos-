@@ -3411,6 +3411,138 @@ async function refreshHealth() {
 
 /* -------------------------------------------------------------- routage */
 
+
+/* -------------------------------------------------------------- reglages */
+
+const GROUPE_TITRE = {
+  shaping: 'Shaping', cake: 'CAKE (AQM)', enforcement: 'Garde-fous d\'ecriture',
+  cadences: 'Cadences de collecte',
+};
+
+/** Controle de saisie adapte au type du reglage. Un reglage "nullable" recoit
+ *  une option VIDE explicite : pour CAKE, vide ne veut pas dire "pas de valeur"
+ *  mais "ne pose pas ce champ", ce qui laisse le defaut de RouterOS. */
+function settingControl(r) {
+  const id = 'set-' + r.name;
+  const vide = r.value === null || r.value === undefined;
+  if (r.kind === 'bool') {
+    const opts = (r.nullable ? [['', '— (defaut RouterOS)']] : [])
+      .concat([['true', 'Oui'], ['false', 'Non']]);
+    return '<select id="' + id + '">' + opts.map(([v, t]) =>
+      '<option value="' + v + '"' +
+      ((vide ? '' : String(r.value)) === v ? ' selected' : '') + '>' + t + '</option>').join('') +
+      '</select>';
+  }
+  if (r.kind === 'choix') {
+    const opts = (r.nullable ? [['', '— (defaut RouterOS)']] : [])
+      .concat(r.choices.map((c) => [c, c]));
+    return '<select id="' + id + '">' + opts.map(([v, t]) =>
+      '<option value="' + esc(v) + '"' +
+      ((vide ? '' : String(r.value)) === v ? ' selected' : '') + '>' + esc(t) + '</option>')
+      .join('') + '</select>';
+  }
+  const pas = r.kind === 'int' ? '1' : 'any';
+  return '<input type="number" id="' + id + '" step="' + pas + '"' +
+    (r.minimum !== null ? ' min="' + r.minimum + '"' : '') +
+    (r.maximum !== null ? ' max="' + r.maximum + '"' : '') +
+    ' value="' + (vide ? '' : esc(r.value)) + '">';
+}
+
+function settingRow(r) {
+  const pose = r.source === 'db';
+  const badge = pose
+    ? '<span class="badge ok" title="Valeur posee ici, stockee en base">base</span>'
+    : 'PLACEHOLDER';
+  const defaut = r.default === null || r.default === undefined ? '—' : String(r.default);
+  return '<tr>' +
+    '<td><code>' + esc(r.name) + '</code>' +
+      '<span class="hint">' + esc(r.help) + '</span></td>' +
+    '<td style="min-width:190px">' + settingControl(r) + '</td>' +
+    '<td>' + badge + '<span class="hint">defaut : ' + esc(defaut) + '</span></td>' +
+    '<td class="sticky-actions">' +
+      '<button class="sm" data-set-save="' + esc(r.name) + '">Appliquer</button> ' +
+      (pose ? '<button class="sm" data-set-reset="' + esc(r.name) +
+        '">Defaut</button>' : '') +
+    '</td></tr>';
+}
+
+async function loadSettings() {
+  const body = await api('/settings');
+  const host = document.getElementById('settings-groups');
+  const compte = document.getElementById('settings-count');
+  if (compte) {
+    compte.textContent = body.from_db.length + ' reglage(s) pose(s) en base sur ' +
+      body.settings.length;
+  }
+
+  const ordre = ['shaping', 'cake', 'enforcement', 'cadences'];
+  const groupes = Object.keys(body.groups)
+    .sort((a, b) => ordre.indexOf(a) - ordre.indexOf(b));
+  host.innerHTML = groupes.map((g) =>
+    '<h2>' + esc(GROUPE_TITRE[g] || g) + '</h2>' +
+    '<div class="table-wrap"><table><thead><tr>' +
+      '<th>Reglage</th><th>Valeur</th><th>Source</th><th></th>' +
+    '</tr></thead><tbody>' +
+    body.groups[g].map(settingRow).join('') +
+    '</tbody></table></div>').join('');
+
+  host.querySelectorAll('[data-set-save]').forEach((b) => {
+    b.addEventListener('click', () => saveSetting(b.dataset.setSave));
+  });
+  host.querySelectorAll('[data-set-reset]').forEach((b) => {
+    b.addEventListener('click', () => resetSetting(b.dataset.setReset));
+  });
+
+  document.getElementById('settings-bootstrap').innerHTML =
+    '<table><thead><tr><th>Variable</th><th>Pourquoi elle reste dans l\'environnement</th>' +
+    '</tr></thead><tbody>' + body.bootstrap_only.map((e) =>
+      '<tr><td><code>' + esc(e.name) + '</code></td><td>' + esc(e.why) + '</td></tr>')
+      .join('') + '</tbody></table>';
+}
+
+function settingNotice(html) {
+  document.getElementById('settings-notice').innerHTML = html;
+}
+
+/** Lit le controle et renvoie la valeur au bon type. Une chaine vide sur un
+ *  reglage nullable devient null : "ne pose pas ce champ". */
+function readSetting(name) {
+  const el = document.getElementById('set-' + name);
+  const brut = (el.value || '').trim();
+  if (brut === '') return null;
+  if (el.tagName === 'SELECT') {
+    if (brut === 'true') return true;
+    if (brut === 'false') return false;
+    return brut;
+  }
+  return Number(brut);
+}
+
+async function saveSetting(name) {
+  try {
+    const r = await api('/settings/' + encodeURIComponent(name), {
+      method: 'PUT', body: JSON.stringify({ value: readSetting(name) }),
+    });
+    settingNotice('<div class="notice ok"><code>' + esc(name) + '</code> = ' +
+      esc(String(r.value)) + ' — applique immediatement, sans redemarrage.</div>');
+    await loadSettings();
+  } catch (err) {
+    settingNotice('<div class="notice err">' + esc(err.message) + '</div>');
+  }
+}
+
+async function resetSetting(name) {
+  try {
+    const r = await api('/settings/' + encodeURIComponent(name), { method: 'DELETE' });
+    settingNotice('<div class="notice ok"><code>' + esc(name) +
+      '</code> revenu a son defaut (' + esc(String(r.value)) + ').</div>');
+    await loadSettings();
+  } catch (err) {
+    settingNotice('<div class="notice err">' + esc(err.message) + '</div>');
+  }
+}
+
+
 const LOADERS = {
   dashboard: loadDashboard,
   exec: loadExec,
@@ -3420,6 +3552,7 @@ const LOADERS = {
   shaping: loadShaping,
   pops: loadRouters,
   remote: loadRemote,
+  settings: loadSettings,
 };
 
 async function show(view) {
@@ -3522,7 +3655,7 @@ refreshHealth();
 // pendant qu'un administrateur le remplit.
 // Les vues d'edition ne se rafraichissent pas toutes seules : ce serait effacer
 // un formulaire en cours de saisie, ou un plan qu'on est en train de lire.
-const VUES_FIGEES = new Set(['pops', 'shaping']);
+const VUES_FIGEES = new Set(['pops', 'shaping', 'settings']);
 setInterval(() => {
   if (VUES_FIGEES.has(state.view)) return;
   // L'arbre porte le debit des liens : le laisser vivre pour ne pas afficher un

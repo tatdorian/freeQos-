@@ -66,7 +66,7 @@ async def database():
             "qoe_scores, collector_runs, subscribers, backhauls, routers, "
             "airos_antennas, pops, "
             "topology_nodes, topology_links, subscriber_attachments, "
-            "shaping_policies, enforcement_audit, runtime_flags "
+            "shaping_policies, enforcement_audit, runtime_flags, runtime_settings "
             "RESTART IDENTITY CASCADE"
         )
     yield db
@@ -452,6 +452,85 @@ async def test_conteneur_reel_cable_la_collecte_des_antennes(database: Database)
         assert result.ok is True, result.errors
         assert all("backhaul_configs" not in err for err in result.errors)
         assert all("has no attribute" not in err for err in result.errors)
+    finally:
+        await shutdown_container(container)
+
+
+async def test_reglages_persistes_en_base(database: Database) -> None:
+    """Les reglages d'exploitation vivent en base, avec leur vrai type.
+
+    Le stockage est en JSONB precisement pour distinguer un reglage
+    volontairement VIDE (JSON null : "ne pose pas ce champ CAKE") d'un reglage
+    non surcharge (pas de ligne du tout) -- distinction qu'un TEXT perdrait.
+    """
+    from app.db.settings_repo import SettingsRepository
+
+    repo = SettingsRepository(database.pool)
+    assert await repo.load() == {}
+
+    await repo.set("cake_nat", True, updated_by="ui", reason="CGNAT")
+    await repo.set("cake_overhead", 38)
+    await repo.set("shaping_safety_factor", 0.85)
+    await repo.set("cake_diffserv", None, reason="on laisse RouterOS decider")
+
+    valeurs = await repo.load()
+    # Les types survivent a l'aller-retour : pas de "True" ni de "38" en chaine.
+    assert valeurs["cake_nat"] is True
+    assert valeurs["cake_overhead"] == 38
+    assert valeurs["shaping_safety_factor"] == 0.85
+    # Present, et volontairement vide.
+    assert "cake_diffserv" in valeurs
+    assert valeurs["cake_diffserv"] is None
+
+    # Reecrire met a jour, ne duplique pas.
+    await repo.set("cake_overhead", 44)
+    assert (await repo.load())["cake_overhead"] == 44
+
+    journal = await repo.history()
+    ligne = next(x for x in journal if x["name"] == "cake_nat")
+    assert ligne["updated_by"] == "ui"
+    assert ligne["reason"] == "CGNAT"
+
+    assert await repo.delete("cake_overhead") is True
+    assert await repo.delete("cake_overhead") is False
+    assert "cake_overhead" not in await repo.load()
+
+
+async def test_les_reglages_de_la_base_pilotent_le_conteneur(database: Database) -> None:
+    """Bout en bout : une valeur posee en base doit gouverner le controleur au
+    demarrage, sans aucune variable d'environnement."""
+    from app.config import Settings
+    from app.container import build_container, shutdown_container
+    from app.db.settings_repo import SettingsRepository
+    from app.services.crypto import generate_key
+
+    await SettingsRepository(database.pool).set("cake_overhead", 44)
+    await SettingsRepository(database.pool).set("shaping_reconcile_interval_s", 300.0)
+
+    settings = Settings(
+        _env_file=None,
+        database_url=DSN,
+        routers=[],
+        backhauls=[],
+        scheduler_enabled=False,
+        db_auto_migrate=True,
+        app_secret_key=generate_key(),
+        cake_overhead=22,  # ce que dirait l'environnement
+        shaping_reconcile_interval_s=120.0,  # idem
+    )
+
+    container = await build_container(settings)
+    try:
+        # La base a gagne, sur la valeur ET sur la cadence du job.
+        assert container.settings.cake_overhead == 44
+        job = next(j for j in container.scheduler.status() if j["job"] == "reconcile_shaping")
+        assert job["interval_s"] == 300.0
+
+        # Et un changement a chaud reprogramme la boucle sans redemarrage.
+        assert container.runtime_config is not None
+        container.runtime_config.set("shaping_reconcile_interval_s", 600.0)
+        job = next(j for j in container.scheduler.status() if j["job"] == "reconcile_shaping")
+        assert job["interval_s"] == 600.0
     finally:
         await shutdown_container(container)
 

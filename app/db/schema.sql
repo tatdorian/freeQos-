@@ -242,6 +242,20 @@ CREATE TABLE IF NOT EXISTS enforcement_audit (
     changes      JSONB
 );
 
+-- Reglages d'exploitation pilotes depuis l'interface. Meme regle que les
+-- drapeaux ci-dessus, generalisee : l'environnement ne sert qu'a AMORCER une
+-- valeur au premier demarrage ; des qu'une ligne existe ici, c'est elle qui fait
+-- foi, et la changer ne demande pas de redemarrage. Absence de ligne = on garde
+-- le defaut. La valeur est en JSONB pour distinguer un reglage volontairement
+-- VIDE (JSON null, "ne pose pas ce champ") d'un reglage non surcharge.
+CREATE TABLE IF NOT EXISTS runtime_settings (
+    name        TEXT PRIMARY KEY,
+    value       JSONB NOT NULL,
+    updated_by  TEXT,
+    reason      TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_enforcement_audit_ts ON enforcement_audit (ts DESC);
 
 
