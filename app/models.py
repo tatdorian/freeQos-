@@ -23,6 +23,50 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+# -----------------------------------------------------------------------------
+# Nature d'un abonne
+#
+# Les deux types coexistent dans la meme table et suivent le meme chemin de
+# planification : seule la maniere de connaitre leur adresse change.
+#
+#   pppoe  : decouvert dans /ppp/active. L'adresse vient de la session en cours
+#            et peut changer a chaque reconnexion ; la file la suit.
+#   static : declare a la main dans l'inventaire static_clients. L'adresse est
+#            fixe, et peut etre un sous-reseau entier (client pro en /29).
+#
+# Le discriminant voyage jusqu'a l'enforcement parce qu'il a une consequence
+# CONCRETE : une session PPPoE est toujours ramenee a un /32, un client statique
+# garde le prefixe qu'on lui a declare.
+# -----------------------------------------------------------------------------
+KIND_PPPOE = "pppoe"
+KIND_STATIC = "static"
+SUBSCRIBER_KINDS = (KIND_PPPOE, KIND_STATIC)
+
+
+@dataclass(slots=True)
+class StaticClient:
+    """Un client a IP fixe, tel que l'operateur l'a DECLARE.
+
+    Il n'y a pas de source automatique derriere cet objet, et c'est assume :
+    aucune session a observer, aucun attribut RADIUS a lire. L'inventaire est
+    la verite, au meme titre que l'inventaire de routeurs.
+    """
+
+    reference: str
+    pop_name: str
+    address: str
+    label: str | None = None
+    vlan: int | None = None
+    sector_key: str | None = None
+    plan_down_mbps: float | None = None
+    plan_up_mbps: float | None = None
+    enabled: bool = True
+    note: str | None = None
+
+    @property
+    def display_name(self) -> str:
+        return self.label or self.reference
+
 
 @dataclass(slots=True)
 class PppoeSession:
@@ -105,10 +149,16 @@ class BackhaulSample:
 
 @dataclass(slots=True)
 class Plan:
-    """Plan commercial d'un abonne, en Mbps."""
+    """Plan commercial d'un abonne, en Mbps.
 
-    down_mbps: float
-    up_mbps: float
+    Les deux sens sont optionnels : beaucoup d'offres ne plafonnent que la
+    descente, et un client a IP fixe peut n'avoir qu'un debit declare. Un sens
+    a None veut dire "pas de plafond contractuel connu", ce qui n'est pas la
+    meme chose que zero -- zero serait une coupure.
+    """
+
+    down_mbps: float | None
+    up_mbps: float | None
     source: str = "unknown"
 
 

@@ -48,23 +48,33 @@ async def delete_pop(
 async def list_subscribers(
     repo: RepositoryDep,
     pop_id: Annotated[int | None, Query(description="Filtre par PoP")] = None,
-    search: Annotated[str | None, Query(description="Filtre sur le login PPPoE")] = None,
+    search: Annotated[str | None, Query(description="Filtre sur l'identifiant d'abonne")] = None,
+    kind: Annotated[
+        Literal["pppoe", "static"] | None,
+        Query(description="Filtre par nature : abonne PPPoE ou client a IP fixe"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[dict[str, Any]]:
-    return await repo.list_subscribers(pop_id=pop_id, search=search, limit=limit, offset=offset)
+    return await repo.list_subscribers(
+        pop_id=pop_id, search=search, kind=kind, limit=limit, offset=offset
+    )
 
 
 @router.get("/subscribers/latest", summary="Dernier echantillon par abonne (top talkers)")
 async def subscribers_latest(
     repo: RepositoryDep,
     pop_id: Annotated[int | None, Query()] = None,
-    search: Annotated[str | None, Query(description="Filtre sur le login PPPoE")] = None,
+    search: Annotated[str | None, Query(description="Filtre sur l'identifiant d'abonne")] = None,
+    kind: Annotated[
+        Literal["pppoe", "static"] | None,
+        Query(description="Filtre par nature : abonne PPPoE ou client a IP fixe"),
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     order_by: Annotated[Literal["total", "down", "up", "login"], Query()] = "total",
 ) -> list[dict[str, Any]]:
     return await repo.subscriber_latest(
-        pop_id=pop_id, search=search, limit=limit, order_by=order_by
+        pop_id=pop_id, search=search, kind=kind, limit=limit, order_by=order_by
     )
 
 

@@ -25,7 +25,16 @@ CREATE TABLE IF NOT EXISTS pops (
 
 CREATE TABLE IF NOT EXISTS subscribers (
     id              BIGSERIAL PRIMARY KEY,
-    pppoe_login     TEXT NOT NULL UNIQUE,
+    -- Identite STABLE de l'abonne, tous types confondus. Pour un abonne PPPoE
+    -- c'est son login ; pour un client statique, la reference choisie par
+    -- l'operateur dans static_clients. Un seul espace de noms, parce que
+    -- RouterOS n'en a qu'un seul pour les files : 'freeqos-<slug(login)>'.
+    -- Deux abonnes homonymes produiraient la meme file et se battraient a
+    -- chaque cycle de reconciliation ; l'unicite l'interdit ici.
+    login           TEXT NOT NULL UNIQUE,
+    -- 'pppoe'  : decouvert dans /ppp/active, adresse donnee par la session.
+    -- 'static' : declare a la main dans static_clients, adresse fixe.
+    kind            TEXT NOT NULL DEFAULT 'pppoe' CHECK (kind IN ('pppoe', 'static')),
     pop_id          INTEGER REFERENCES pops(id) ON DELETE SET NULL,
     plan_down_mbps  DOUBLE PRECISION,
     plan_up_mbps    DOUBLE PRECISION,
@@ -35,6 +44,46 @@ CREATE TABLE IF NOT EXISTS subscribers (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- -----------------------------------------------------------------------------
+-- Inventaire DECLARATIF des clients a IP fixe (non PPPoE)
+--
+-- Il n'existe aucune source automatique pour ces clients : ils n'ouvrent pas de
+-- session, RADIUS ne les connait pas, et rien dans RouterOS ne dit "cette IP
+-- appartient a tel client avec tel plan". C'est donc une SAISIE MANUELLE
+-- assumee, dans le meme esprit que l'inventaire de routeurs : l'operateur
+-- declare ce qu'il a vendu, le controleur s'en sert comme d'une verite.
+--
+-- Cette table porte l'INTENTION. Les lignes 'subscribers' de kind='static' en
+-- sont materialisees a chaque cycle de collecte, exactement comme les lignes
+-- PPPoE sont materialisees depuis /ppp/active.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS static_clients (
+    id              BIGSERIAL PRIMARY KEY,
+    -- Reference stable, reprise telle quelle dans subscribers.login. Elle ne
+    -- doit PAS encoder l'IP ni le VLAN : ce sont des faits mutables, et la cle
+    -- de reconciliation de la file doit survivre a un changement d'adresse.
+    reference       TEXT NOT NULL UNIQUE,
+    label           TEXT,
+    pop_name        TEXT NOT NULL,
+    -- IP fixe (10.0.0.5) ou sous-reseau attribue au client (10.0.0.0/29).
+    -- Le prefixe est CONSERVE tel quel dans la cible de file, a la difference
+    -- d'une session PPPoE qui est toujours ramenee a un /32.
+    address         INET NOT NULL,
+    vlan            INTEGER CHECK (vlan IS NULL OR (vlan BETWEEN 1 AND 4094)),
+    -- Rattachement topologique declare : aucun caller-id n'existe pour ces
+    -- clients, l'operateur dit lui-meme sous quel secteur ils sont.
+    sector_key      TEXT,
+    plan_down_mbps  DOUBLE PRECISION,
+    plan_up_mbps    DOUBLE PRECISION,
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    note            TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_static_clients_pop ON static_clients (pop_name);
+
 
 CREATE INDEX IF NOT EXISTS idx_subscribers_pop      ON subscribers (pop_id);
 CREATE INDEX IF NOT EXISTS idx_subscribers_lastseen ON subscribers (last_seen DESC);
@@ -347,6 +396,34 @@ CREATE INDEX IF NOT EXISTS idx_collector_runs_job_ts ON collector_runs (job, sta
 -- apres coup. Chaque ligne est idempotente et peut etre rejouee sans risque.
 -- -----------------------------------------------------------------------------
 
+-- Identite d'abonne neutralisee : la colonne s'appelait 'pppoe_login', ce qui
+-- devenait un mensonge des qu'un client a IP fixe entre dans la table. Le
+-- renommage est garde par une double condition pour rester rejouable.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'subscribers' AND column_name = 'pppoe_login')
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'subscribers' AND column_name = 'login')
+    THEN
+        ALTER TABLE subscribers RENAME COLUMN pppoe_login TO login;
+    END IF;
+END
+$$;
+
+ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'pppoe';
+
+-- La contrainte est posee en ligne sur une base neuve ; ce bloc ne sert qu'aux
+-- installations existantes, ou ADD CONSTRAINT n'a pas de IF NOT EXISTS.
+DO $$
+BEGIN
+    ALTER TABLE subscribers ADD CONSTRAINT subscribers_kind_check
+        CHECK (kind IN ('pppoe', 'static'));
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END
+$$;
+
 ALTER TABLE subscriber_metrics ADD COLUMN IF NOT EXISTS rtt_ms           DOUBLE PRECISION;
 ALTER TABLE subscriber_metrics ADD COLUMN IF NOT EXISTS session_uptime_s INTEGER;
 
@@ -473,10 +550,14 @@ END
 $$;
 
 -- Vue pratique : dernier echantillon connu par abonne (utilisee par l'API et l'UI).
-CREATE OR REPLACE VIEW subscriber_latest AS
+-- DROP puis CREATE : la vue a gagne des colonnes en cours de route, et
+-- CREATE OR REPLACE n'autorise que l'ajout en fin de liste.
+DROP VIEW IF EXISTS subscriber_latest;
+CREATE VIEW subscriber_latest AS
 SELECT DISTINCT ON (m.subscriber_id)
        m.subscriber_id,
-       s.pppoe_login,
+       s.login,
+       s.kind,
        s.pop_id,
        p.name AS pop_name,
        s.plan_down_mbps,

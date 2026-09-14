@@ -315,6 +315,20 @@ class LibrouterosReadClient:
                 raise
 
 
+def _split_pair(value: Any) -> tuple[int | None, int | None] | None:
+    """Decoupe un couple RouterOS ``"<upload>/<download>"``.
+
+    Renvoie None si la valeur est absente ou illisible : une file qui n'a pas
+    encore de compteur ne doit pas produire un faux zero, qui se lirait comme
+    "ce client ne consomme rien".
+    """
+    texte = str(value or "").strip()
+    if "/" not in texte:
+        return None
+    gauche, _, droite = texte.partition("/")
+    return parse_counter(gauche), parse_counter(droite)
+
+
 class MikrotikCollector:
     """Lit les sessions PPPoE d'un routeur et les normalise en PppoeSession."""
 
@@ -394,6 +408,48 @@ class MikrotikCollector:
                 )
             )
         return echantillons
+
+    # ------------------------------------------------------------------
+    # Compteurs des files simples
+    # ------------------------------------------------------------------
+    async def queue_counters(self) -> dict[str, tuple[int | None, int | None]]:
+        timeout = max(self.config.timeout_s * 3, 5.0)
+        return await asyncio.wait_for(asyncio.to_thread(self.queue_counters_sync), timeout=timeout)
+
+    def queue_counters_sync(self) -> dict[str, tuple[int | None, int | None]]:
+        """Octets cumules par cible de file simple : ``cible -> (rx, tx)``.
+
+        POURQUOI CETTE LECTURE EXISTE
+        -----------------------------
+        Un abonne PPPoE a une interface dynamique a son nom, et c'est elle qui
+        compte son trafic. Un client a IP fixe n'a rien de tel : son trafic se
+        fond dans celui d'un VLAN ou d'un port partage. La seule chose qui
+        compte SES octets a lui est la file qui le vise.
+
+        Ce n'est donc pas une source inventee, c'est le compteur que RouterOS
+        tient deja sur une file qui existe. Corollaire assume : sans file posee,
+        il n'y a pas de mesure -- un client statique n'est mesurable qu'a partir
+        du moment ou l'enforcement lui a construit sa file.
+
+        Les files etrangeres sont lues aussi : si l'operateur brid(e) deja le
+        client a la main, autant s'en servir plutot que de n'afficher rien.
+        """
+        compteurs: dict[str, tuple[int | None, int | None]] = {}
+        for row in self._client.simple_queues():
+            octets = _split_pair(row.get("bytes"))
+            if octets is None:
+                continue
+            # RouterOS exprime la paire DU POINT DE VUE DE LA CIBLE :
+            # <upload>/<download>. L'upload de la cible est ce que le routeur
+            # RECOIT d'elle, donc rx ; son download est ce qu'il lui EMET, tx.
+            # Meme convention que pour les sessions PPPoE (cf. app/models.py).
+            rx, tx = octets
+            # 'target' peut lister plusieurs adresses separees par des virgules.
+            for cible in str(row.get("target") or "").split(","):
+                cible = cible.strip()
+                if cible:
+                    compteurs[cible] = (rx, tx)
+        return compteurs
 
     async def measure_interface(self, interface: str) -> dict[str, Any]:
         """Debit instantane d'une interface, a la demande.

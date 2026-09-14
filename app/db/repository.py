@@ -100,24 +100,27 @@ class MetricsRepository:
         *,
         pop_id: int | None = None,
         search: str | None = None,
+        kind: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
         async with self._pool.acquire() as conn:
             records = await conn.fetch(
                 """
-                SELECT s.id, s.pppoe_login, s.pop_id, p.name AS pop_name,
+                SELECT s.id, s.login, s.kind, s.pop_id, p.name AS pop_name,
                        s.plan_down_mbps, s.plan_up_mbps, s.plan_source,
                        host(s.last_ip) AS last_ip, s.last_seen
                   FROM subscribers s
                   LEFT JOIN pops p ON p.id = s.pop_id
                  WHERE ($1::int IS NULL OR s.pop_id = $1)
-                   AND ($2::text IS NULL OR s.pppoe_login ILIKE '%' || $2 || '%')
-                 ORDER BY s.pppoe_login
-                 LIMIT $3 OFFSET $4
+                   AND ($2::text IS NULL OR s.login ILIKE '%' || $2 || '%')
+                   AND ($3::text IS NULL OR s.kind = $3)
+                 ORDER BY s.login
+                 LIMIT $4 OFFSET $5
                 """,
                 pop_id,
                 search,
+                kind,
                 limit,
                 offset,
             )
@@ -127,7 +130,7 @@ class MetricsRepository:
         async with self._pool.acquire() as conn:
             record = await conn.fetchrow(
                 """
-                SELECT s.id, s.pppoe_login, s.pop_id, p.name AS pop_name,
+                SELECT s.id, s.login, s.kind, s.pop_id, p.name AS pop_name,
                        s.plan_down_mbps, s.plan_up_mbps, s.plan_source,
                        host(s.last_ip) AS last_ip, s.last_seen, s.created_at,
                        pol.max_down_mbps AS override_down_mbps,
@@ -137,7 +140,7 @@ class MetricsRepository:
                   FROM subscribers s
                   LEFT JOIN pops p ON p.id = s.pop_id
                   LEFT JOIN shaping_policies pol
-                         ON pol.scope = 'subscriber' AND pol.target_key = s.pppoe_login
+                         ON pol.scope = 'subscriber' AND pol.target_key = s.login
                  WHERE s.id = $1
                 """,
                 subscriber_id,
@@ -146,7 +149,7 @@ class MetricsRepository:
 
     async def get_subscriber_by_login(self, login: str) -> dict[str, Any] | None:
         async with self._pool.acquire() as conn:
-            record = await conn.fetchrow("SELECT id FROM subscribers WHERE pppoe_login = $1", login)
+            record = await conn.fetchrow("SELECT id, kind FROM subscribers WHERE login = $1", login)
         return dict(record) if record else None
 
     async def subscriber_metrics(
@@ -206,7 +209,7 @@ class MetricsRepository:
         async with self._pool.acquire() as conn:
             records = await conn.fetch(
                 """
-                SELECT m.subscriber_id, s.pppoe_login, p.name AS pop_name,
+                SELECT m.subscriber_id, s.login, s.kind, p.name AS pop_name,
                        m.rtt_ms,
                        COALESCE(m.rx_bps, 0) + COALESCE(m.tx_bps, 0) AS load_bps
                   FROM subscriber_metrics m
@@ -229,7 +232,8 @@ class MetricsRepository:
                 record["subscriber_id"],
                 {
                     "subscriber_id": record["subscriber_id"],
-                    "pppoe_login": record["pppoe_login"],
+                    "login": record["login"],
+                    "kind": record["kind"],
                     "pop_name": record["pop_name"],
                     "samples": [],
                 },
@@ -248,7 +252,8 @@ class MetricsRepository:
             notes.append(
                 {
                     "subscriber_id": entry["subscriber_id"],
-                    "pppoe_login": entry["pppoe_login"],
+                    "login": entry["login"],
+                    "kind": entry["kind"],
                     "pop_name": entry["pop_name"],
                     **verdict.as_dict(),
                 }
@@ -324,6 +329,7 @@ class MetricsRepository:
         *,
         pop_id: int | None = None,
         search: str | None = None,
+        kind: str | None = None,
         limit: int = 50,
         order_by: str = "total",
     ) -> list[dict[str, Any]]:
@@ -332,7 +338,7 @@ class MetricsRepository:
             "total": "COALESCE(rx_bps, 0) + COALESCE(tx_bps, 0) DESC",
             "down": "COALESCE(tx_bps, 0) DESC",
             "up": "COALESCE(rx_bps, 0) DESC",
-            "login": "pppoe_login ASC",
+            "login": "login ASC",
         }.get(order_by, "COALESCE(rx_bps, 0) + COALESCE(tx_bps, 0) DESC")
         async with self._pool.acquire() as conn:
             records = await conn.fetch(
@@ -347,14 +353,16 @@ class MetricsRepository:
                        p.note           AS policy_note
                   FROM subscriber_latest l
                   LEFT JOIN shaping_policies p
-                         ON p.scope = 'subscriber' AND p.target_key = l.pppoe_login
+                         ON p.scope = 'subscriber' AND p.target_key = l.login
                  WHERE ($1::int IS NULL OR l.pop_id = $1)
-                   AND ($2::text IS NULL OR l.pppoe_login ILIKE '%' || $2 || '%')
+                   AND ($2::text IS NULL OR l.login ILIKE '%' || $2 || '%')
+                   AND ($3::text IS NULL OR l.kind = $3)
                  ORDER BY {order_sql}
-                 LIMIT $3
+                 LIMIT $4
                 """,  # noqa: S608 - order_sql provient d'une liste blanche
                 pop_id,
                 search,
+                kind,
                 limit,
             )
         return [_with_effective_limits(dict(record)) for record in records]

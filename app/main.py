@@ -26,6 +26,7 @@ from app.api import (
     remote,
     routers_admin,
     shaping,
+    static_clients,
 )
 from app.api import (
     settings as settings_api,
@@ -54,6 +55,15 @@ des files ``/queue/simple`` sur les routeurs. Toute ecriture est gouvernee par l
 drapeau ``ENFORCEMENT_ENABLED`` (lecture seule tant qu'il est faux), ne touche que
 les files marquees ``freeqos:managed``, et est journalisee dans
 ``enforcement_audit`` avec son auteur.
+
+**Deux natures d'abonnes**, distinguees par le champ ``kind`` et traitees ensuite par
+le meme chemin de planification :
+
+- ``pppoe``  : decouvert dans ``/ppp/active``, adresse donnee par la session en cours ;
+- ``static`` : client a IP fixe, **declare a la main** dans ``/static-clients``. Aucune
+  source automatique n'existe pour lui (ni session, ni attribut RADIUS) : l'inventaire
+  saisi par l'operateur est la seule verite, et son debit se lit sur les compteurs de
+  la file qui le vise.
 """
 
 
@@ -92,6 +102,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     app.include_router(antennas_admin.router, prefix=settings.api_prefix)
     app.include_router(remote.router, prefix=settings.api_prefix)
     app.include_router(shaping.router, prefix=settings.api_prefix)
+    app.include_router(static_clients.router, prefix=settings.api_prefix)
     app.include_router(settings_api.router, prefix=settings.api_prefix)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(ui_router)

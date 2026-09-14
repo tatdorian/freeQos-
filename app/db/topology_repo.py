@@ -99,8 +99,12 @@ class TopologyRepository:
             )
         return {"nodes": len(noeuds), "links": len(liens)}
 
-    async def save_attachments(self, attachments: dict[int, tuple[str, str]]) -> int:
-        """Rattachements abonne -> secteur radio (subscriber_id -> (secteur, mac))."""
+    async def save_attachments(self, attachments: dict[int, tuple[str, str | None]]) -> int:
+        """Rattachements abonne -> secteur radio (subscriber_id -> (secteur, mac)).
+
+        La MAC est absente pour un client statique : il n'a pas de CPE observe,
+        son rattachement vient d'une declaration.
+        """
         if not attachments:
             return 0
         lignes = [(sid, secteur, mac) for sid, (secteur, mac) in attachments.items()]
@@ -266,17 +270,23 @@ class TopologyRepository:
         return [dict(row) for row in rows]
 
     async def attachments(self) -> dict[str, str]:
-        """login PPPoE -> cle du secteur radio, issu de la jointure caller-id."""
+        """Identite d'abonne -> cle du secteur radio.
+
+        Deux origines se melangent ici sans distinction, et c'est voulu : la
+        jointure caller-id pour les abonnes PPPoE, la declaration manuelle de
+        l'inventaire pour les clients statiques. Le consommateur n'a besoin que
+        du rattachement, pas de savoir comment on l'a obtenu.
+        """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT s.pppoe_login, a.sector_key
+                SELECT s.login, a.sector_key
                   FROM subscriber_attachments a
                   JOIN subscribers s ON s.id = a.subscriber_id
                  WHERE a.sector_key IS NOT NULL
                 """
             )
-        return {row["pppoe_login"]: row["sector_key"] for row in rows}
+        return {row["login"]: row["sector_key"] for row in rows}
 
     async def set_node_kind(self, key: str, kind: str | None) -> None:
         async with self._pool.acquire() as conn:

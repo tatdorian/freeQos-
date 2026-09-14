@@ -419,7 +419,7 @@ async def test_boost_echu_purge_et_file_ramenee(
     service.metrics = MetriquesMinimales(
         [
             {
-                "pppoe_login": "dupont",
+                "login": "dupont",
                 "pop_name": "PoP Test",
                 "plan_down_mbps": 100,
                 "plan_up_mbps": 20,
@@ -460,8 +460,8 @@ async def test_seuls_les_routeurs_concernes_sont_replanifies(
     service = make_service(settings, routeur, repository=depot)
     service.metrics = MetriquesMinimales(
         [
-            {"pppoe_login": "dupont", "pop_name": "PoP Test"},
-            {"pppoe_login": "autre", "pop_name": "PoP Lointain"},
+            {"login": "dupont", "pop_name": "PoP Test"},
+            {"login": "autre", "pop_name": "PoP Lointain"},
         ]
     )
     await service.registry.reload()
@@ -531,7 +531,7 @@ async def test_l_adresse_vient_du_routeur_pas_de_la_base(
     metriques = MetriquesMinimales(
         [
             {
-                "pppoe_login": "dupont",
+                "login": "dupont",
                 "pop_name": "PoP Test",
                 "plan_down_mbps": 100,
                 "plan_up_mbps": 20,
@@ -556,7 +556,7 @@ async def test_un_abonne_sans_session_n_est_pas_shape(
     metriques = MetriquesMinimales(
         [
             {
-                "pppoe_login": "parti",
+                "login": "parti",
                 "pop_name": "PoP Test",
                 "plan_down_mbps": 100,
                 "plan_up_mbps": 20,
@@ -632,7 +632,7 @@ async def test_reconciliation_applique_la_limite_saisie(
         settings, routeur, repository=depot, write_client_factory=lambda c: ecriture
     )
     service.metrics = MetriquesMinimales(
-        [{"pppoe_login": "dupont", "pop_name": "PoP Test", "plan_down_mbps": 100}]
+        [{"login": "dupont", "pop_name": "PoP Test", "plan_down_mbps": 100}]
     )
     await service.registry.reload()
 
@@ -662,7 +662,7 @@ async def test_reconciliation_journalise_son_auteur(
         settings, routeur, repository=depot, write_client_factory=lambda c: ecriture
     )
     service.metrics = MetriquesMinimales(
-        [{"pppoe_login": "dupont", "pop_name": "PoP Test", "plan_down_mbps": 100}]
+        [{"login": "dupont", "pop_name": "PoP Test", "plan_down_mbps": 100}]
     )
     await service.registry.reload()
 

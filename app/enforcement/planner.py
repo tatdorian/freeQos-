@@ -35,6 +35,7 @@ from app.enforcement.models import (
     network_target,
     slugify,
 )
+from app.models import KIND_PPPOE, KIND_STATIC
 
 logger = logging.getLogger(__name__)
 
@@ -96,19 +97,28 @@ def effective_rate(
 
 @dataclass(slots=True)
 class SubscriberTarget:
-    """Un abonne a shaper.
+    """Un abonne a shaper, PPPoE ou a IP fixe.
 
     Trois niveaux de debit, du plus fort au plus faible :
       1. le BOOST, tant qu'il n'a pas expire ;
       2. la surcharge manuelle permanente ;
-      3. le plan commercial venu de RADIUS.
+      3. le plan souscrit -- venu de RADIUS pour un abonne PPPoE, de
+         l'inventaire saisi a la main pour un client statique.
+
+    Les deux natures partagent volontairement cet objet : a partir d'ici, la
+    planification, la reconciliation et l'ecriture sont rigoureusement les
+    memes. Seule la facon d'obtenir l'adresse differait, et c'est deja fini.
     """
 
     login: str
     interface: str
     plan_down_mbps: float | None
     plan_up_mbps: float | None
-    # Adresse de la session en cours. C'est elle qui porte la file : sans elle,
+    # 'pppoe' ou 'static'. Le discriminant ne sert pas qu'a l'affichage : il
+    # decide de la forme de la cible de file (cf. queue_target).
+    kind: str = KIND_PPPOE
+    # Adresse de la session en cours pour un abonne PPPoE, adresse declaree
+    # pour un client statique. C'est elle qui porte la file : sans elle,
     # l'abonne est hors ligne et il n'y a rien a brider.
     address: str | None = None
     parent: str | None = None
@@ -128,7 +138,22 @@ class SubscriberTarget:
         return f"{PREFIX}{slugify(self.login)}"
 
     def queue_target(self, mode: str = TARGET_ADDRESS) -> str | None:
-        """Ce que la file doit viser, ou None si l'abonne n'est pas shapable."""
+        """Ce que la file doit viser, ou None si l'abonne n'est pas shapable.
+
+        Le client statique ne suit PAS le mode global, pour deux raisons de
+        fond et non de commodite :
+
+        - il n'a pas d'interface a lui. Son trafic transite par un VLAN ou un
+          port partage avec d'autres clients ; viser cette interface briderait
+          les voisins. Seule l'adresse le designe.
+        - son prefixe est une donnee du contrat. Un professionnel a qui on a
+          vendu un /29 doit voir son bloc entier plafonne, pas seulement sa
+          premiere adresse. On garde donc le reseau declare, la ou une session
+          PPPoE est toujours ramenee a un /32 (une session ne porte qu'une
+          adresse, et elargir serait shaper les voisins de l'abonne).
+        """
+        if self.kind == KIND_STATIC:
+            return network_target(self.address)
         if mode == TARGET_INTERFACE:
             return self.interface or None
         return address_target(self.address)

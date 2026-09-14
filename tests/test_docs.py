@@ -39,3 +39,20 @@ def test_description_coherente_avec_les_endpoints_d_ecriture() -> None:
     assert "enforcement_enabled" in description
     # ... et la tracabilite (audit) promise par P0-4.
     assert "enforcement_audit" in description
+
+
+def test_description_annonce_les_deux_natures_d_abonnes() -> None:
+    """Un lecteur de /docs doit savoir que les clients a IP fixe existent, et
+    surtout qu'ils sont DECLARES : croire a une decouverte automatique ferait
+    chercher longtemps pourquoi un client n'apparait pas tout seul."""
+    schema = _schema()
+    description = schema["info"]["description"].lower()
+    paths = schema["paths"]
+
+    assert "/api/v1/static-clients" in paths
+    assert "post" in paths["/api/v1/static-clients"]
+
+    assert "static" in description
+    assert "pppoe" in description
+    # L'origine manuelle doit etre dite, pas sous-entendue.
+    assert "declare a la main" in description or "declare" in description
