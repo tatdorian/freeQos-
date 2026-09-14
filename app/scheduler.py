@@ -145,6 +145,21 @@ class Scheduler:
     def status(self) -> list[dict[str, Any]]:
         return [job.snapshot() for job in self._jobs.values()]
 
+    def set_interval(self, name: str, interval_s: float) -> bool:
+        """Change la cadence d'un job SANS redemarrage.
+
+        La boucle relit ``interval_s`` a chaque tour : la nouvelle cadence prend
+        donc effet au cycle suivant. On refuse une valeur nulle ou negative, qui
+        ferait tourner la boucle a vide sans jamais dormir.
+        """
+        job = self._jobs.get(name)
+        if job is None or interval_s <= 0:
+            return False
+        if job.interval_s != interval_s:
+            logger.info("Cadence de '%s' : %gs -> %gs", name, job.interval_s, interval_s)
+            job.interval_s = interval_s
+        return True
+
     def job_names(self) -> list[str]:
         return list(self._jobs)
 

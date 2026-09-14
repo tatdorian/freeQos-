@@ -32,6 +32,7 @@ from app.db.database import Database
 from app.db.directory import Directory, PgDirectory
 from app.db.repository import MetricsRepository
 from app.db.routers_repo import RoutersRepository
+from app.db.settings_repo import SettingsRepository
 from app.db.topology_repo import TopologyRepository
 from app.db.writer import MetricsWriter, PgMetricsWriter
 from app.models import Plan
@@ -51,6 +52,7 @@ from app.services.collection import (
 from app.services.crypto import KeySource, SecretBox, load_or_create_key
 from app.services.registry import RouterRegistry
 from app.services.rtt import RttProber
+from app.services.runtime_config import RuntimeConfig
 from app.services.shaping import ShapingService
 
 logger = logging.getLogger(__name__)
@@ -145,6 +147,8 @@ class Container:
     secrets: SecretBox
     registry: RouterRegistry
     shaping: ShapingService
+    runtime_config: RuntimeConfig | None = None
+    settings_repo: SettingsRepository | None = None
     routers_repo: RoutersRepository | None = None
     topology_repo: TopologyRepository | None = None
     antennas_repo: AntennasRepository | None = None
@@ -179,6 +183,26 @@ async def build_container(settings: Settings) -> Container:
             compression_after_days=settings.compression_after_days,
             retention_days=settings.retention_days,
         )
+
+    # Reglages d'exploitation : la BASE fait foi. On les applique AVANT de
+    # construire quoi que ce soit, pour que collecteurs, cadences et politique de
+    # shaping partent deja des bonnes valeurs. L'environnement n'a servi qu'a
+    # fournir le defaut.
+    settings_repo = SettingsRepository(database.pool)
+    runtime_config = RuntimeConfig(settings)
+    try:
+        ignores = runtime_config.load(await settings_repo.load())
+    except Exception:  # noqa: BLE001 - table pas encore creee : on garde les defauts
+        logger.warning("Reglages non relus depuis la base : les defauts s'appliquent")
+    else:
+        if ignores:
+            logger.warning("Reglages ignores (inconnus ou hors bornes) : %s", ", ".join(ignores))
+        if runtime_config.overrides:
+            logger.info(
+                "%d reglage(s) repris de la base : %s",
+                len(runtime_config.overrides),
+                ", ".join(sorted(runtime_config.overrides)),
+            )
 
     writer = PgMetricsWriter(database.pool)
     repository = MetricsRepository(database.pool)
@@ -270,14 +294,9 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_RECONCILE, settings.shaping_reconcile_interval_s, reconcile_shaping)
 
-    async def adjust_for_qoe() -> None:
-        await shaping.adjust_for_qoe()
-
-    # Boucle fermee de la phase 4. Planifiee par defaut mais INERTE tant que la
-    # sonde RTT ne fournit pas de latence a correler : sans score, aucun secteur
-    # n'est note, donc aucune decision n'est prise. Et comme toute ecriture,
-    # celle-ci reste soumise a ENFORCEMENT_ENABLED.
-    scheduler.add_job(JOB_QOE_LOOP, settings.qoe_loop_interval_s, adjust_for_qoe)
+    # Changer une cadence depuis l'interface doit reprogrammer la boucle, pas
+    # seulement l'affichage : le scheduler relit interval_s a chaque tour.
+    runtime_config.on_interval_change = scheduler.set_interval
 
     return Container(
         settings=settings,
@@ -292,6 +311,8 @@ async def build_container(settings: Settings) -> Container:
         secrets=secrets,
         registry=registry,
         shaping=shaping,
+        runtime_config=runtime_config,
+        settings_repo=settings_repo,
         routers_repo=routers_repo,
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,

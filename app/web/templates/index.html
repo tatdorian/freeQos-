@@ -19,6 +19,7 @@
       <a href="#/shaping"  data-view="shaping">Shaping</a>
       <a href="#/pops"      data-view="pops">Equipements</a>
       <a href="#/remote"    data-view="remote">Connexion a distance</a>
+      <a href="#/settings"  data-view="settings">Reglages</a>
     </nav>
     <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
   </header>
@@ -365,6 +366,30 @@
       <div id="remote-integrations" class="grid cols-2"></div>
       <h2>Equipements distants</h2>
       <div class="table-wrap" id="remote-devices"></div>
+    </section>
+
+    <!-- ------------------------------------------------------- reglages -->
+    <section id="view-settings">
+      <div class="chart-head">
+        <h2 style="margin:0">Reglages d'exploitation</h2>
+        <span class="spacer"></span>
+        <span class="mode" id="settings-count"></span>
+      </div>
+      <p class="empty" style="text-align:left;padding:0 0 .8rem">
+        Ces reglages vivent en <b>base</b>, pas dans l'environnement : ce qui est
+        fixe ici fait foi et <b>prend effet sans redemarrage</b> — les options de
+        shaping et CAKE au prochain plan, les cadences au prochain tour de boucle.
+        <b>Defaut</b> signifie qu'aucune valeur n'a ete posee : c'est la valeur
+        d'origine qui s'applique.
+      </p>
+      <div id="settings-notice"></div>
+      <div id="settings-groups"></div>
+      <h2>Ce qui reste hors de portee de l'interface</h2>
+      <p class="empty" style="text-align:left;padding:0 0 .6rem">
+        Il faut connaitre ces valeurs <b>avant</b> de pouvoir ouvrir la base :
+        les y chercher serait circulaire. Elles restent donc dans l'environnement.
+      </p>
+      <div class="table-wrap" id="settings-bootstrap"></div>
     </section>
   </main>
 

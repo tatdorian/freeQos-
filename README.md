@@ -662,6 +662,31 @@ que la boucle centrale devra suivre, sans radio.
 
 ---
 
+## Réglages : la base fait foi, pas l'environnement
+
+Les réglages d'exploitation — politique de **shaping**, options **CAKE**, garde-fous
+d'écriture et **cadences** de collecte — vivent en **base**, pas dans l'environnement.
+Ils se changent depuis l'onglet **Réglages** de l'interface et **prennent effet sans
+redémarrage** : les options de shaping/CAKE au prochain plan, les cadences au prochain
+tour de boucle du collecteur.
+
+Les variables d'environnement correspondantes ne servent plus qu'à **amorcer** une
+valeur au tout premier démarrage, quand la table est vide. Dès qu'une valeur est posée,
+c'est elle qui gagne ; `GET /api/v1/settings` indique pour chaque réglage sa valeur, son
+défaut et sa provenance (`db` ou `defaut`), et `DELETE /api/v1/settings/{nom}` le fait
+revenir à son défaut.
+
+| Méthode | Chemin | Description |
+|---|---|---|
+| `GET` | `/api/v1/settings` | Réglages en vigueur, par groupe, avec valeur / défaut / provenance |
+| `PUT` | `/api/v1/settings/{nom}` | Fixer un réglage (validé, appliqué à chaud, puis persisté) |
+| `DELETE` | `/api/v1/settings/{nom}` | Revenir au défaut |
+| `GET` | `/api/v1/settings/history` | Qui a changé quel réglage, quand et pourquoi |
+
+Restent dans l'environnement **uniquement** ce qu'il faut connaître *avant* de pouvoir
+ouvrir la base — les y chercher serait circulaire : `DATABASE_URL`, `APP_SECRET_KEY`,
+l'inventaire fichier (`ROUTERS_FILE`), et `APP_ENV` / `LOG_LEVEL` / `API_PREFIX`.
+
 ## Écriture (enforcement)
 
 Le contrôleur reste **hors-bande** (jamais sur le chemin des paquets) mais **écrit**

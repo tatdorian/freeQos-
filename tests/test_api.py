@@ -22,6 +22,7 @@ from app.scheduler import Scheduler
 from app.services.collection import JOB_SUBSCRIBERS, CollectionService
 from app.services.crypto import SecretBox, generate_key
 from app.services.registry import RouterRegistry
+from app.services.runtime_config import RuntimeConfig
 from app.services.shaping import ShapingService
 from tests.conftest import FakeRouterOsClient
 
@@ -35,6 +36,31 @@ class FakeDatabase:
 
     async def ping(self) -> bool:
         return self.reachable
+
+
+class InMemorySettingsRepository:
+    """Depot de reglages en memoire : meme contrat que la version PostgreSQL."""
+
+    def __init__(self) -> None:
+        self.rows: dict[str, object] = {}
+        self.meta: dict[str, dict[str, object]] = {}
+
+    async def load(self) -> dict[str, object]:
+        return dict(self.rows)
+
+    async def set(self, name, value, *, updated_by=None, reason=None) -> None:
+        self.rows[name] = value
+        self.meta[name] = {"updated_by": updated_by, "reason": reason}
+
+    async def delete(self, name) -> bool:
+        self.meta.pop(name, None)
+        return self.rows.pop(name, None) is not None
+
+    async def history(self) -> list[dict[str, object]]:
+        return [
+            {"name": n, "value": v, "updated_at": NOW, **self.meta.get(n, {})}
+            for n, v in self.rows.items()
+        ]
 
 
 class FakeRepository:
@@ -294,6 +320,7 @@ def build_container(
     *,
     db_reachable: bool = True,
     secrets: SecretBox | None = None,
+    settings_repo: Any = None,
     routers_repo: Any = None,
     topology_repo: Any = None,
     antennas_repo: Any = None,
@@ -341,6 +368,8 @@ def build_container(
         secrets=secrets if secrets is not None else SecretBox(generate_key()),
         registry=registry,
         shaping=shaping,
+        runtime_config=RuntimeConfig(settings, on_interval_change=scheduler.set_interval),
+        settings_repo=settings_repo if settings_repo is not None else InMemorySettingsRepository(),
         routers_repo=routers_repo,
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,
