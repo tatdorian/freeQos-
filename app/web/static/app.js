@@ -403,10 +403,35 @@ function renderBackhaulCards(tree) {
 
 /* -------------------------------------------------------------- executif */
 
-/** QoE 0..100 derivee du RTT, meme formule que le backend (proxy latence). */
+/** QoE 0..100 derivee du SEUL RTT : le PROXY latence, et rien d'autre.
+ *
+ *  Le vrai score est composite (bufferbloat + latence a vide) et il est calcule
+ *  cote serveur -- app/services/qoe.py, la meme fonction que la heatmap et que
+ *  la boucle fermee. On ne le recode donc PAS ici : `qoeOf()` va le chercher, et
+ *  cette formule ne sert que de repli quand le serveur n'a rien pu conclure
+ *  (abonne silencieux, sonde RTT coupee). Recoder la regle cote client
+ *  garantirait qu'elles divergent un jour. */
 function qoeScore(ms) {
   if (ms === null || ms === undefined) return null;
   return Math.max(0, Math.min(100, Math.round(100 - Math.max(0, ms - 10) * 0.6)));
+}
+/** Score composite calcule par le serveur pour cet abonne, s'il existe. */
+function qoeOf(subscriberId) {
+  const b = exec.bloatById[subscriberId];
+  return b && b.qoe ? b.qoe : null;
+}
+/** Cellule QoO : le score composite du serveur, ou le proxy latence a defaut.
+ *  L'infobulle dit toujours d'ou vient le chiffre. */
+function qooCell(note, rttMs) {
+  if (note) {
+    const detail = note.grade
+      ? 'bufferbloat ' + note.grade + ' (+' + note.bloat_ms + ' ms sous charge)'
+      : 'proxy latence : aucune charge a correler';
+    return sqCell(String(note.score), note.severity, detail);
+  }
+  const proxy = qoeScore(rttMs);
+  return proxy == null ? sqCell('-', 'none')
+    : sqCell(String(proxy), qoeSev(proxy), 'proxy latence : aucune charge a correler');
 }
 function qoeSev(score) {
   if (score === null) return 'none';
@@ -423,8 +448,9 @@ function rttSevJs(ms) {
 const exec = { nodes: [], subsById: {}, bloatById: {}, selected: null, expanded: new Set() };
 
 /** Petit carre colore devant une valeur, signature visuelle de LibreQoS. */
-function sqCell(text, sev) {
-  return '<span class="sq ' + (sev || 'none') + '"></span>' + esc(text);
+function sqCell(text, sev, title) {
+  const attr = title ? ' title="' + esc(title) + '"' : '';
+  return '<span class="sq ' + (sev || 'none') + '"' + attr + '></span>' + esc(text);
 }
 
 /** Nombre d'equipements sous un noeud, deduit du graphe (degre - lien amont).
@@ -593,10 +619,15 @@ function renderHeatmap(host, heat) {
     }
     const last = [...row.cells].reverse().find((c) => c.value !== null && c.value !== undefined);
     const cells = row.cells.map((c) => {
-      const t = c.value !== null && c.value !== undefined
+      let t = c.value !== null && c.value !== undefined
         ? new Date(c.ts).toLocaleTimeString('fr-FR', { hour12: false }) + ' : ' +
           c.value + (row.unit ? ' ' + row.unit : '')
         : 'pas de mesure';
+      // La ligne QoE dit si le pas repose sur une latence SOUS CHARGE reellement
+      // mesuree ou sur le repli proxy : un chiffre qu'on croit mesure est pire
+      // qu'un repli annonce.
+      if (c.basis === 'latency') t += ' (proxy latence : aucune charge a correler)';
+      else if (c.basis) t += ' (bufferbloat ' + (c.grade || '?') + ', +' + c.bloat_ms + ' ms)';
       return '<span class="heat-cell ' + esc(c.severity) + '" title="' + esc(t) + '"></span>';
     }).join('');
     const now = last ? (last.value + (row.unit ? ' ' + row.unit : '')) : '-';
@@ -616,7 +647,7 @@ function aggregateNodes(subs, childCounts) {
     const nom = s.pop_name || '(sans PoP)';
     if (!parPop.has(nom)) {
       parPop.set(nom, { name: nom, circuits: 0, tx: 0, rx: 0, effDown: 0, effUp: 0,
-        confDown: 0, confUp: 0, rttMax: null, subs: [] });
+        confDown: 0, confUp: 0, rttMax: null, qoe: null, subs: [] });
     }
     const n = parPop.get(nom);
     n.circuits += 1;
@@ -629,6 +660,11 @@ function aggregateNodes(subs, childCounts) {
     if (s.rtt_ms !== null && s.rtt_ms !== undefined) {
       n.rttMax = n.rttMax === null ? s.rtt_ms : Math.max(n.rttMax, s.rtt_ms);
     }
+    // QoO du noeud = le PIRE de ses circuits, jamais la moyenne : dix abonnes en
+    // A+ et un en F, ce n'est pas "presque A", c'est un abonne dont la visio ne
+    // marche pas. Les scores viennent du serveur, ils ne sont pas recalcules ici.
+    const note = qoeOf(s.subscriber_id);
+    if (note && (n.qoe === null || note.score < n.qoe.score)) n.qoe = note;
     n.subs.push(s);
   });
   const nodes = [...parPop.values()];
@@ -658,7 +694,6 @@ function renderNodeTable(host) {
     '<th class="num" title="Drops qdisc — hors-bande">Drops</th></tr></thead><tbody>';
 
   const body = nodes.map((n) => {
-    const qoe = qoeScore(n.rttMax);
     const open = exec.expanded.has(n.name);
     const sel = exec.selected && exec.selected.type === 'node' && exec.selected.name === n.name;
     // Noeud synthetique (issu de la topologie, sans abonne mesure) : debit /
@@ -682,14 +717,12 @@ function renderNodeTable(host) {
       '<td class="num">' + (n.nodesCount == null ? '<span class="na">-</span>' : n.nodesCount) + '</td>' +
       effCell + confCell + txCell + rxCell +
       '<td class="num">' + rttSq(n.rttMax) + '</td>' +
-      '<td class="num">' + (qoe == null ? sqCell('-', 'none') : sqCell(String(qoe), qoeSev(qoe))) + '</td>' +
+      '<td class="num">' + qooCell(n.qoe, n.rttMax) + '</td>' +
       '<td class="num">' + naSq + '</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>';
 
     const subRows = !open ? '' : n.subs.map((s) => {
-      const b = exec.bloatById[s.subscriber_id];
       const eff = (Number(s.effective_down_mbps) || 0) * 1e6;
       const effU = (Number(s.effective_up_mbps) || 0) * 1e6;
-      const cq = qoeScore(s.rtt_ms);
       const csel = exec.selected && exec.selected.type === 'client' && exec.selected.id === s.subscriber_id;
       return '<tr class="sub-row' + (csel ? ' selected' : '') + '" data-client="' + s.subscriber_id + '">' +
         '<td></td><td class="login">' + esc(s.pppoe_login) + '</td>' +
@@ -699,8 +732,7 @@ function renderNodeTable(host) {
         '<td class="num">' + sqCell(bpsText(s.tx_bps), severity(pct(s.tx_bps, eff))) + '</td>' +
         '<td class="num">' + sqCell(bpsText(s.rx_bps), severity(pct(s.rx_bps, effU))) + '</td>' +
         '<td class="num">' + rttSq(s.rtt_ms) + '</td>' +
-        '<td class="num">' + (b ? sqCell(b.grade, b.severity)
-          : (cq == null ? sqCell('-', 'none') : sqCell(String(cq), qoeSev(cq)))) + '</td>' +
+        '<td class="num">' + qooCell(qoeOf(s.subscriber_id), s.rtt_ms) + '</td>' +
         '<td class="num">' + naSq + '</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>';
     }).join('');
     return nodeRow + subRows;
@@ -810,16 +842,17 @@ function renderQueuePanels() {
   const confDown = isClient ? (Number(client.plan_down_mbps) || 0) * 1e6 : node.confDown;
   const confUp = isClient ? (Number(client.plan_up_mbps) || 0) * 1e6 : node.confUp;
   const rttMs = isClient ? client.rtt_ms : node.rttMax;
-  const qoe = qoeScore(rttMs);
-  const b = isClient ? exec.bloatById[client.subscriber_id] : null;
+  // Score composite calcule par le serveur (bufferbloat + latence a vide). Pour
+  // un noeud, celui de son circuit le plus degrade.
+  const note = isClient ? qoeOf(client.subscriber_id) : node.qoe;
+  const qoe = note ? note.score : qoeScore(rttMs);
 
   // Noeud issu de la seule topologie (aucun abonne mesure) : tout ce qui est
   // "live" reste en n/d — on ne fabrique pas de zeros.
   const synth = !isClient && !!node.synthetic;
   const rttSq = (ms) => (ms === null || ms === undefined)
     ? sqCell('-', 'none') : sqCell(Math.round(ms) + 'ms', rttSevJs(ms));
-  const qooSq = b ? sqCell(b.grade + ' (+' + b.bloat_ms + 'ms)', b.severity)
-    : (qoe == null ? sqCell('-', 'none') : sqCell(String(qoe), qoeSev(qoe)));
+  const qooSq = qooCell(note, rttMs);
   const naSq = sqCell('n/d', 'none');
   const naCell = '<td class="num na">' + naSq + '</td>';
 

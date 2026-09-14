@@ -182,6 +182,10 @@ class LinkTarget:
     override_down_mbps: float | None = None
     override_up_mbps: float | None = None
     enabled: bool = True
+    # Resserrage decide par la boucle fermee QoE (phase 4), en fraction du debit
+    # qu'on appliquerait autrement. 1.0 = aucun resserrage, c'est le cas de tous
+    # les liens tant que la boucle n'a rien decide.
+    trim_factor: float = 1.0
 
     @property
     def queue_name(self) -> str:
@@ -214,18 +218,30 @@ def shaped_capacity(
     safety_factor: float,
     floor_mbps: float,
     override_mbps: float | None = None,
+    trim_factor: float = 1.0,
 ) -> float | None:
     """Debit a appliquer sur un lien parent.
 
     Une surcharge manuelle est prise telle quelle : l'operateur sait ce qu'il
     fait. Sinon on applique le facteur de securite a la capacite mesuree, avec
     un plancher pour qu'un fade profond ne coupe pas le lien a zero.
+
+    ``trim_factor`` est le resserrage decide par la boucle fermee QoE (phase 4).
+    Il s'applique EN PLUS, y compris sur une surcharge manuelle, et les deux se
+    composent sans se contredire : la surcharge dit OU est le plafond du lien, la
+    boucle dit de combien il faut s'en ecarter pour que la file se reforme dans
+    CAKE plutot que dans le buffer de la radio. Le plancher reste le dernier mot,
+    donc un resserrage ne peut jamais couper un secteur.
     """
     if override_mbps is not None and override_mbps > 0:
-        return override_mbps
-    if measured_mbps is None or measured_mbps <= 0:
+        base = override_mbps
+    elif measured_mbps is None or measured_mbps <= 0:
         return None
-    return max(floor_mbps, measured_mbps * safety_factor)
+    else:
+        base = max(floor_mbps, measured_mbps * safety_factor)
+    if trim_factor >= 1.0:
+        return base
+    return max(floor_mbps, base * max(0.0, trim_factor))
 
 
 def desired_queue_types(
@@ -279,12 +295,14 @@ def desired_state(
             safety_factor=safety_factor,
             floor_mbps=floor_mbps,
             override_mbps=link.override_down_mbps,
+            trim_factor=link.trim_factor,
         )
         up = shaped_capacity(
             link.measured_capacity_mbps,
             safety_factor=safety_factor,
             floor_mbps=floor_mbps,
             override_mbps=link.override_up_mbps,
+            trim_factor=link.trim_factor,
         )
         if down is None and up is None and not queue_unmeasured_links:
             continue

@@ -23,9 +23,9 @@ class Horloge:
         self.now += seconds
 
 
-def make_collector(client: FakeRouterOsClient) -> MikrotikCollector:
+def make_collector(client: FakeRouterOsClient, name: str = "pop") -> MikrotikCollector:
     return MikrotikCollector(
-        RouterConfig(name="pop", host="192.0.2.11", password="x"), client=client
+        RouterConfig(name=name, host="192.0.2.11", password="x"), client=client
     )
 
 
@@ -55,7 +55,7 @@ async def test_ping_valeurs_sous_milliseconde() -> None:
 
 # --------------------------------------------------------------------- sonde
 async def test_lot_limite_et_tourniquet() -> None:
-    """Le parc entier ne doit jamais etre pingue d'un coup."""
+    """Le PoP entier ne doit jamais etre pingue d'un coup."""
     client = FakeRouterOsClient()
     collector = make_collector(client)
     cibles = [(i, f"10.0.0.{i}", collector) for i in range(1, 11)]
@@ -127,3 +127,75 @@ async def test_oubli_des_abonnes_deconnectes() -> None:
 
 async def test_sans_cible_aucun_ping() -> None:
     assert await RttProber(clock=Horloge()).probe([]) == 0
+
+
+# ------------------------------------------------- un tourniquet PAR PoP
+def deux_pops(
+    petit: int, grand: int
+) -> tuple[
+    FakeRouterOsClient,
+    FakeRouterOsClient,
+    list[tuple[int, str, MikrotikCollector]],
+]:
+    """Un PoP minuscule et un PoP enorme, dans cet ordre dans la liste globale."""
+    client_petit = FakeRouterOsClient()
+    client_grand = FakeRouterOsClient()
+    collecteur_petit = make_collector(client_petit, name="pop-petit")
+    collecteur_grand = make_collector(client_grand, name="pop-grand")
+
+    cibles: list[tuple[int, str, MikrotikCollector]] = [
+        (i, f"10.1.0.{i}", collecteur_petit) for i in range(1, petit + 1)
+    ]
+    cibles += [(1000 + i, f"10.2.0.{i}", collecteur_grand) for i in range(1, grand + 1)]
+    return client_petit, client_grand, cibles
+
+
+async def test_le_petit_pop_n_attend_pas_le_tourniquet_du_grand() -> None:
+    """La fraicheur d'un abonne depend de SON PoP, pas du parc entier.
+
+    Avec un curseur unique, les 2 abonnes du petit PoP etaient sondes une fois
+    puis attendaient que les 100 abonnes du grand PoP defilent -- soit 26 cycles
+    a 4 par cycle. Le PoP qui grossit penalisait alors celui qui ne bouge pas.
+    """
+    petit, grand, cibles = deux_pops(petit=2, grand=100)
+    prober = RttProber(batch_size=4, clock=Horloge())
+
+    await prober.probe(cibles)
+    # Premier cycle : le petit PoP est deja entierement couvert.
+    assert [ip for ip, _ in petit.pings] == ["10.1.0.1", "10.1.0.2"]
+    assert len(grand.pings) == 4
+
+    await prober.probe(cibles)
+    # Deuxieme cycle : le petit PoP repart AU DEBUT, il n'attend personne.
+    assert [ip for ip, _ in petit.pings][-2:] == ["10.1.0.1", "10.1.0.2"]
+    # Et le grand PoP avance a son propre rythme, sans etre ralenti non plus.
+    assert len(grand.pings) == 8
+    assert grand.pings[4][0] == "10.2.0.5"
+
+
+async def test_la_charge_par_routeur_reste_celle_du_lot() -> None:
+    """Le lot est PAR PoP : c'est le routeur qui emet le ping, donc c'est son CPU
+    qu'on menage. Aucun des deux ne depasse batch_size sur un cycle."""
+    petit, grand, cibles = deux_pops(petit=30, grand=100)
+    prober = RttProber(batch_size=10, clock=Horloge())
+
+    await prober.probe(cibles)
+
+    assert len(petit.pings) == 10
+    assert len(grand.pings) == 10
+
+
+async def test_le_curseur_d_un_pop_disparu_est_oublie() -> None:
+    """Un PoP retire de l'inventaire ne doit pas garder son curseur : il
+    fausserait le tourniquet le jour ou le meme nom reapparait."""
+    petit, grand, cibles = deux_pops(petit=4, grand=8)
+    prober = RttProber(batch_size=2, clock=Horloge())
+
+    await prober.probe(cibles)
+    assert prober.stats()["pops"] == 2
+
+    # Le grand PoP disparait (routeur retire, ou plus aucune session ouverte).
+    restantes = [c for c in cibles if c[2].name == "pop-petit"]
+    await prober.probe(restantes)
+
+    assert prober.stats()["pops"] == 1

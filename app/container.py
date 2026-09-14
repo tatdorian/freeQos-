@@ -42,6 +42,7 @@ from app.services.collection import (
     JOB_INVENTORY,
     JOB_LINKS,
     JOB_PLANS,
+    JOB_QOE_LOOP,
     JOB_RECONCILE,
     JOB_RTT,
     JOB_SUBSCRIBERS,
@@ -268,6 +269,15 @@ async def build_container(settings: Settings) -> Container:
         await shaping.reconcile()
 
     scheduler.add_job(JOB_RECONCILE, settings.shaping_reconcile_interval_s, reconcile_shaping)
+
+    async def adjust_for_qoe() -> None:
+        await shaping.adjust_for_qoe()
+
+    # Boucle fermee de la phase 4. Planifiee par defaut mais INERTE tant que la
+    # sonde RTT ne fournit pas de latence a correler : sans score, aucun secteur
+    # n'est note, donc aucune decision n'est prise. Et comme toute ecriture,
+    # celle-ci reste soumise a ENFORCEMENT_ENABLED.
+    scheduler.add_job(JOB_QOE_LOOP, settings.qoe_loop_interval_s, adjust_for_qoe)
 
     return Container(
         settings=settings,

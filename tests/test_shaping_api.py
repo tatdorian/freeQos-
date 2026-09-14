@@ -37,6 +37,9 @@ class FauxDepotTopologie:
         self.attachment_rows: dict[str, str] = {}
         self.series_rows: list[dict[str, Any]] = []
         self.flags: dict[str, bool] = {}
+        # Etat de la boucle fermee QoE (phase 4), meme contrat que la version
+        # PostgreSQL : sans resserrage enregistre, les liens sortent intacts.
+        self.qoe_states: dict[str, dict[str, Any]] = {}
 
     async def save_snapshot(self, snapshot):
         self.saved_nodes += len(snapshot.nodes)
@@ -68,6 +71,19 @@ class FauxDepotTopologie:
 
     async def attachments(self):
         return dict(self.attachment_rows)
+
+    async def qoe_link_states(self):
+        return dict(self.qoe_states)
+
+    async def qoe_trims(self):
+        return {
+            cle: float(etat["trim_factor"])
+            for cle, etat in self.qoe_states.items()
+            if float(etat["trim_factor"]) < 1.0
+        }
+
+    async def save_qoe_link_state(self, *, link_key, **kwargs):
+        self.qoe_states[link_key] = {"link_key": link_key, **kwargs}
 
     async def set_node_kind(self, key, kind):
         self.node_kinds[key] = kind
@@ -951,3 +967,58 @@ def test_le_boost_apparait_dans_le_plan(client: TestClient) -> None:
 
     file_abonne = next(a for a in plan["actions"] if a["name"] == "freeqos-dupont")
     assert "750000000" in file_abonne["command"]
+
+
+# ------------------------------------------- boucle fermee QoE (phase 4)
+def test_l_etat_de_la_boucle_qoe_est_lisible(client: TestClient, topo) -> None:
+    """Une boucle qui resserre sans qu'on puisse voir ce qu'elle a decide, ni
+    quand, est une boucle que personne ne laissera active."""
+    topo.qoe_states = {
+        CLE_LIEN: {
+            "link_key": CLE_LIEN,
+            "sector_key": "mac:DC:9F:DB:11:22:33",
+            "trim_factor": 0.8,
+            "healthy_cycles": 0,
+            "scored_count": 5,
+            "degraded_count": 3,
+            "worst_score": 14.0,
+            "last_action": "tighten",
+            "last_reason": "3/5 abonne(s) sous 55",
+        }
+    }
+
+    reponse = client.get("/api/v1/shaping/qoe")
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    # Les seuils sont exposes avec l'etat : sans eux, "0.8" ne veut rien dire.
+    assert corps["score_threshold"] == 55.0
+    assert corps["trim_floor"] == 0.5
+    assert corps["sectors"][0]["trim_factor"] == 0.8
+    assert corps["sectors"][0]["last_action"] == "tighten"
+
+
+def test_un_cycle_de_boucle_qoe_se_declenche_a_la_demande(client: TestClient, topo) -> None:
+    """Un cycle hors cadence sur un parc sain : on evalue, on ne touche a rien."""
+    topo.attachment_rows = {"dupont": "mac:DC:9F:DB:11:22:33"}
+
+    reponse = client.post("/api/v1/shaping/qoe/run")
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["scored"] == 1
+    assert corps["sectors"][0]["action"] == "hold"
+    assert corps["sectors"][0]["trim_after"] == 1.0
+    assert corps["routers"] == [] and corps["plans"] == []
+
+
+def test_un_abonne_sans_secteur_ne_declenche_aucune_decision(client: TestClient) -> None:
+    """Note connue mais rattachement inconnu : on ne devine pas un secteur, donc
+    l'abonne ne pese sur aucune decision."""
+    reponse = client.post("/api/v1/shaping/qoe/run")
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["scored"] == 1
+    assert corps["sectors"] == []
+    assert corps["routers"] == []

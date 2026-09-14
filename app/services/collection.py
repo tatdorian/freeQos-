@@ -44,6 +44,7 @@ JOB_INVENTORY = "reload_inventory"
 JOB_RTT = "probe_rtt"
 JOB_BOOSTS = "expire_boosts"
 JOB_RECONCILE = "reconcile_shaping"
+JOB_QOE_LOOP = "qoe_closed_loop"
 
 # Drapeau basculable a chaud (base + interface), amorce par RTT_ENABLED. La sonde
 # est toujours instanciee et planifiee ; ce drapeau decide juste si elle sonde.

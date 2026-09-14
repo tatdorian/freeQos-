@@ -35,8 +35,8 @@ En phase 1 les trois sont **observés**, aucun n'est encore piloté.
 | **1** | Collecte `/ppp active` multi-routeurs, capacité backhaul, plans, TimescaleDB, boucle périodique, API de lecture, `/health` | **fait** |
 | **1.5** | Interface d'administration, connexion d'un PoP depuis l'UI, inventaire à chaud, sonde de latence | **fait** |
 | **2** | Topologie (arbre éditable), analyse de l'existant, files CAKE par abonné et parent backhaul | **fait** |
-| **3** | Latence **sous charge** (bufferbloat) : corrélation RTT ↔ débit, note A+…F | **fait** ; score QoE composite à venir |
-| 4 | Boucle fermée (ajustement selon QoE + capacité radio) | à venir |
+| **3** | Latence **sous charge** (bufferbloat) : corrélation RTT ↔ débit, note A+…F, **score QoE composite** | **fait** |
+| **4** | Boucle fermée : ajustement du partage d'un secteur selon la QoE + capacité radio | **fait** ; désactivée tant que `ENFORCEMENT_ENABLED` est faux |
 
 L'enforcement existe désormais, mais reste **désactivé par défaut** : `ENFORCEMENT_ENABLED`
 doit être passé à `true` explicitement, et chaque plan demande une application distincte.
@@ -419,11 +419,99 @@ RTT_BATCH_SIZE=20      # abonnés sondés par cycle
 Le compte `qos-ro` doit posséder la politique `test` (elle est dans le groupe recommandé
 plus bas).
 
+Le tourniquet est **par PoP**, pas pour le parc entier : c'est le routeur de l'abonné qui
+émet le ping, donc c'est son CPU qu'on ménage, et il n'existe aucune enveloppe globale à
+partager. Conséquence voulue : le délai de re-sondage d'un abonné dépend du nombre d'abonnés
+de **son** PoP, jamais de la taille totale du parc — un PoP de 3 abonnés n'attend plus
+derrière un PoP de 800. Le nombre total de pings d'un cycle vaut donc
+`RTT_BATCH_SIZE × nombre de PoPs sondés`.
+
+### Score de QoE composite
+
+La ligne *QoE* de l'écran Exécutif n'est plus un proxy latence. Elle l'a longtemps été — une
+fonction affine du RTT brut, faute de latence sous charge — et c'était honnête tant que la
+corrélation RTT ↔ débit n'existait pas. Elle existe (phase 3), donc le score la lit :
+
+| Composante | Ce qu'elle mesure |
+|---|---|
+| Latence **à vide** | le plancher du chemin : distance, encapsulation, radio |
+| **Bufferbloat** | ce que la charge **ajoute** à cette latence (note A+…F) |
+
+C'est le **maillon faible** qui fait la note (`min` des deux) : un lien à 8 ms au repos qui
+monte à 400 ms sous charge n'est pas « excellent », et un chemin intrinsèquement long reste
+injouable même parfaitement géré. La sévérité d'une note issue du bufferbloat est celle de la
+note A+…F prise telle quelle — un seul barème de couleur, pas deux.
+
+Quand aucune charge n'est corrélable (abonné silencieux, sonde coupée), le score retombe sur
+le proxy latence **et le dit** (`basis="latency"`, pas de note A+…F) : un repli annoncé vaut
+mieux qu'un chiffre qu'on croit mesuré. Tout vit dans `app/services/qoe.py`, et c'est cette
+**unique** fonction que lisent la heatmap Exécutif, l'API `/bufferbloat` et la boucle fermée
+ci-dessous.
+
+### Boucle fermée QoE (phase 4)
+
+Jusqu'ici, la seule grandeur qui refermait une boucle était la **capacité backhaul mesurée** :
+le planificateur pose la file du lien parent à `mesure × SHAPING_SAFETY_FACTOR`. C'est la
+boucle centrale lente pour le goulot radio, et elle marche. Ce qu'elle ne voit pas : un
+secteur dont la latence **gonfle** sous charge alors que la radio annonce toujours sa
+capacité — le cas classique du buffer d'équipement trop gros. Le signal qui le dit existait
+déjà, mais n'alimentait qu'un tableau de bord.
+
+Le job `qoe_closed_loop` ferme ce circuit : lecture des scores de QoE, décision, plan,
+application — le même enchaînement que `reconcile()`.
+
+**Ce qui bouge, c'est l'enveloppe partagée du secteur**, jamais le plan souscrit d'un abonné.
+Un abonné n'est pas responsable du bufferbloat de son secteur, et lui retirer le débit qu'il
+paie serait la mauvaise réponse : on resserre la file du **lien** qui dessert le secteur, et
+CAKE arbitre ensuite entre les circuits, comme d'habitude.
+
+Trois principes assumés :
+
+1. **Un abonné dégradé ne suffit pas.** Un seul abonné qui gonfle, c'est *son* dernier km
+   (CPE, wifi domestique, pare-feu). C'est la corrélation entre plusieurs abonnés du même
+   secteur qui désigne le secteur — d'où `QOE_MIN_DEGRADED_SUBSCRIBERS` (2 par défaut).
+2. **On resserre vite, on relâche lentement.** Une dégradation agit dès le cycle suivant ; un
+   retour à la normale doit tenir `QOE_RECOVERY_CYCLES` cycles avant de rendre **un** cran.
+   Sans cette asymétrie la boucle oscillerait. Ce n'est pas un cliquet : ce qu'elle prend,
+   elle le rend.
+3. **Le resserrage est borné.** `QOE_TRIM_FLOOR` (50 % par défaut) : au-delà, le goulot n'est
+   plus le buffer radio mais la capacité elle-même, et resserrer encore ne ferait que brider
+   un secteur déjà à genoux. La boucle le signale au lieu de continuer.
+
+Les garde-fous sont ceux des autres boucles automatiques : rien n'est écrit tant que
+`ENFORCEMENT_ENABLED` est faux (la décision est quand même prise et le plan calculé, ce qui
+permet de **lire** ce que la boucle ferait avant de lui donner la main), **jamais de purge**,
+et le plan passe par `build_plan` comme tous les autres — donc diffable, journalisé dans
+`enforcement_audit` sous l'auteur `system:qoe-loop`, et visible dans l'interface. Aucun
+chemin d'écriture parallèle.
+
+Le resserrage vit dans sa propre table (`qoe_link_states`), **séparée** des surcharges
+manuelles : une surcharge est une décision d'exploitant, un resserrage une décision de la
+boucle, et les confondre ferait qu'un cycle automatique écraserait un débit saisi à la main.
+Les deux se composent dans le planificateur, elles ne se marchent jamais dessus.
+
+```bash
+QOE_LOOP_INTERVAL_S=300           # 0 désactive la boucle
+QOE_WINDOW_MINUTES=15             # fenêtre d'observation
+QOE_SCORE_THRESHOLD=55            # sous ce score, l'abonné est dégradé
+QOE_MIN_DEGRADED_SUBSCRIBERS=2    # combien il en faut pour accuser le secteur
+QOE_TRIM_STEP=0.10                # un cran de resserrage
+QOE_TRIM_FLOOR=0.50               # jamais en dessous
+QOE_RECOVERY_CYCLES=3             # cycles sains avant de rendre un cran
+```
+
+Lecture : `GET /api/v1/shaping/qoe` montre ce que la boucle a décidé par secteur, avec sa
+raison. `POST /api/v1/shaping/qoe/run` déclenche un cycle hors cadence.
+
+La boucle reste **inerte** tant que la sonde RTT ne fournit pas de latence à corréler : sans
+score, aucun secteur n'est noté, donc aucune décision n'est prise. Elle n'invente pas de
+dégradation.
+
 ### Développement
 
 ```bash
 pip install -e ".[dev]"
-make test      # 437 tests, ni base ni routeur requis
+make test      # 556 tests, ni base ni routeur requis
 make lint
 make dev       # uvicorn en rechargement à chaud
 ```
@@ -460,7 +548,12 @@ app/
 │   ├── rates.py         Dérivation des débits + détection de reset de compteurs
 │   ├── crypto.py        Chiffrement des identifiants routeur (Fernet)
 │   ├── registry.py      Inventaire vivant : fusion fichier + base, rechargement à chaud
-│   ├── shaping.py       Découverte, analyse de l'existant, plan, application
+│   ├── rtt.py           Sonde de latence active, un tourniquet PAR PoP
+│   ├── bufferbloat.py   Latence sous charge : corrélation RTT ↔ débit, note A+…F (pure)
+│   ├── qoe.py           PHASE 3 — score composite, lu par la heatmap ET la boucle fermée
+│   ├── qoe_loop.py      PHASE 4 — décision de la boucle fermée, par secteur (pure)
+│   ├── heatmap.py       Bandes QoE / RTT / utilisation dans le temps (pure)
+│   ├── shaping.py       Découverte, analyse de l'existant, plan, application, boucles
 │   └── collection.py    Orchestration d'un cycle
 └── web/                 Interface d'administration (SPA sans framework ni CDN)
     ├── ui.py            Squelette servi par FastAPI
@@ -669,7 +762,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 469 tests, dont 437 sans aucune infrastructure
+make test        # 592 tests, dont 556 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et
@@ -726,4 +819,6 @@ configuration, aucune valeur codée en dur. Démarche conseillée :
   que les files RouterOS.
 - Aucune écriture RADIUS (CoA) : seule l'interface est posée.
 - La boucle locale rapide du PoP n'est pas implémentée ici : cette application fixe les
-  baselines que cette boucle respectera.
+  baselines que cette boucle respectera. La boucle fermée QoE de la phase 4 **n'y change
+  rien** : elle tourne à l'échelle de la minute, sur des fenêtres de plusieurs minutes, et
+  déplace des baselines de secteur. Rien en dessous de la seconde n'a sa place ici.
