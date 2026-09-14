@@ -1845,13 +1845,11 @@ async function loadTopology() {
   renderTopologyLinks(data.links);
 }
 
-/** Rang d'un role : plus petit = plus en amont. Sert a orienter un lien quand
- *  aucun parent n'a ete force a la main (la decouverte de voisinage est
- *  symetrique : elle dit "adjacents", pas "lequel est au-dessus"). */
+/** Rang d'un role : plus petit = plus en amont. Sert a choisir par ou entrer
+ *  dans le graphe et a departager deux parents possibles (la decouverte de
+ *  voisinage est symetrique : elle dit "adjacents", pas "lequel est au-dessus"). */
 const TOPO_RANG = { gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, cpe: 4, client: 4, unknown: 5 };
 
-/** Construit l'arbre : parent force (parent_override) prioritaire, sinon
- *  orientation par role. Un seul parent par case, cycles coupes. */
 /** Un lien est-il assez SUR pour dessiner une adjacence directe dans l'arbre ?
  *
  *  - manuel (pose par l'operateur) ou UISP/radio declare : oui.
@@ -1873,6 +1871,28 @@ function topoLinkConfident(l) {
   return peers <= 1;                            // point-a-point seulement
 }
 
+/** Construit l'arbre a partir du graphe d'adjacence.
+ *
+ *  POURQUOI UN PARCOURS EN LARGEUR, ET PAS UNE ORIENTATION LIEN PAR LIEN
+ *  --------------------------------------------------------------------
+ *  La decouverte ne dit que "A et B sont voisins". Orienter chaque lien
+ *  isolement (en comparant les roles de ses deux bouts) ne peut pas marcher :
+ *  entre deux equipements de MEME role -- deux PoPs relies par un lien de
+ *  secours, cas tres courant -- il n'y a rien a comparer, et l'un devenait
+ *  arbitrairement le parent de l'autre. Pire, le premier lien rencontre dans le
+ *  tableau gagnait : un PoP deja rattache a un voisin ignorait ensuite son
+ *  vrai lien vers le coeur. Resultat : une CHAINE (coeur > PoP Nord > PoP Sud)
+ *  la ou il fallait un arbre (coeur > PoP Nord, PoP Sud).
+ *
+ *  On construit donc le voisinage NON ORIENTE, puis on derive l'arbre par un
+ *  parcours en largeur qui part du haut de la hierarchie. Chaque case est
+ *  rattachee par le chemin le plus COURT depuis le sommet : un PoP relie au
+ *  coeur pend du coeur, jamais d'un PoP frere, quel que soit l'ordre des liens.
+ *
+ *  Deux tours : d'abord les seules adjacences SURES (ossature fiable), puis on
+ *  autorise les segments partages pour ne laisser personne orphelin -- ces
+ *  rattachements-la sont marques incertains (trait pointille).
+ */
 function topoBuildModel(data) {
   const nodes = new Map();
   data.nodes.forEach((n) => {
@@ -1880,27 +1900,26 @@ function topoBuildModel(data) {
     nodes.set(n.key, { ...n, children: [], parentKey: null, edge: null, depth: 0 });
   });
 
-  // Liens exploitables (les deux extremites visibles), orientes par role.
-  const oriented = [];
+  const rang = (key) => TOPO_RANG[nodes.get(key)?.kind] ?? 5;
+  const nom = (key) => String(nodes.get(key)?.name || '');
+
+  // Voisinage NON ORIENTE : chaque lien est inscrit dans les deux sens. C'est
+  // le parcours, plus bas, qui decidera du sens. ``inverted`` dit de quel cote
+  // du lien se trouve l'enfant, pour que le debit affiche sur l'arete soit bien
+  // oriente vers le bas de l'arbre (cf. topoEdgeRates).
+  const voisins = new Map();
+  const ajouter = (de, vers, link, inverted, confident) => {
+    if (!voisins.has(de)) voisins.set(de, []);
+    voisins.get(de).push({ key: vers, link, inverted, confident });
+  };
   data.links.forEach((l) => {
     if (!nodes.has(l.source_key) || !nodes.has(l.target_key)) return;
-    const ra = TOPO_RANG[nodes.get(l.source_key).kind] ?? 5;
-    const rb = TOPO_RANG[nodes.get(l.target_key).kind] ?? 5;
+    if (l.source_key === l.target_key) return;
     const conf = topoLinkConfident(l);
-    if (rb < ra) {
-      oriented.push({ parentKey: l.target_key, childKey: l.source_key, link: l,
-        inverted: true, confident: conf });
-    } else {
-      oriented.push({ parentKey: l.source_key, childKey: l.target_key, link: l,
-        inverted: false, confident: conf });
-    }
-  });
-
-  // Index des liens par paire, pour retrouver le debit d'un rattachement force.
-  const linkByPair = new Map();
-  oriented.forEach((e) => {
-    linkByPair.set(e.parentKey + '\u0000' + e.childKey, e);
-    linkByPair.set(e.childKey + '\u0000' + e.parentKey, { ...e, inverted: !e.inverted });
+    // parent = source, enfant = target  -> sens direct
+    ajouter(l.source_key, l.target_key, l, false, conf);
+    // parent = target, enfant = source  -> sens inverse
+    ajouter(l.target_key, l.source_key, l, true, conf);
   });
 
   const wouldCycle = (childKey, parentKey) => {
@@ -1918,36 +1937,110 @@ function topoBuildModel(data) {
   const attach = (childKey, parentKey, edge) => {
     const child = nodes.get(childKey);
     const parent = nodes.get(parentKey);
-    if (!child || !parent || childKey === parentKey || child.parentKey) return;
-    if (wouldCycle(childKey, parentKey)) return;
+    if (!child || !parent || childKey === parentKey || child.parentKey) return false;
+    if (wouldCycle(childKey, parentKey)) return false;
     child.parentKey = parentKey;
     child.edge = edge || null;
     parent.children.push(child);
+    return true;
   };
 
-  // 1) parents forces a la main.
+  // 1) Parents forces a la main : ils priment sur toute heuristique.
   nodes.forEach((n) => {
-    if (n.parent_override && nodes.has(n.parent_override)) {
-      const edge = linkByPair.get(n.parent_override + '\u0000' + n.key) || null;
-      attach(n.key, n.parent_override, edge);
-    }
+    if (!n.parent_override || !nodes.has(n.parent_override)) return;
+    const via = (voisins.get(n.parent_override) || []).find((v) => v.key === n.key);
+    attach(n.key, n.parent_override, via ? { parentKey: n.parent_override, childKey: n.key,
+      link: via.link, inverted: via.inverted, confident: via.confident } : null);
   });
-  // 2) par role, en DEUX passes pour ne perdre aucune vraie adjacence :
-  //   a) d'abord les liens SURS (point-a-point, UISP, manuels) : ils priment
-  //      toujours et forment l'ossature fiable de l'arbre.
-  //   b) puis, pour un noeud encore SANS parent, on retombe sur son meilleur
-  //      lien de segment partage plutot que de le laisser orphelin -- on prefere
-  //      un rattachement probable, marque INCERTAIN (trait pointille), a un trou.
-  // Un noeud n'a jamais qu'UN parent (attach ne l'ecrit qu'une fois) : pas de
-  // maillage, mais plus de routeur detache a tort non plus.
-  const rang = (k) => TOPO_RANG[nodes.get(k)?.kind] ?? 5;
-  oriented.filter((e) => e.confident).forEach((e) => attach(e.childKey, e.parentKey, e));
-  oriented
-    .filter((e) => !e.confident && !nodes.get(e.childKey)?.parentKey)
-    // Meilleur parent d'abord : le plus haut dans la hierarchie (coeur/gateway
-    // avant un PoP voisin), pour eviter de rattacher a un frere par hasard.
-    .sort((a, b) => rang(a.parentKey) - rang(b.parentKey))
-    .forEach((e) => attach(e.childKey, e.parentKey, { ...e, uncertain: true }));
+
+  // 2) Le reste est derive par plus court chemin depuis le haut de la
+  //    hierarchie. Un lien SUR coute 1, un segment partage coute tres cher :
+  //    une adjacence prouvee est donc toujours preferee, et un rattachement
+  //    incertain ne sert qu'en dernier recours (il sera dessine en pointille).
+  //    Comme on fige les cases par distance croissante, chaque case est
+  //    rattachee par le chemin le plus court depuis le sommet -- un PoP relie
+  //    au coeur pend du coeur, jamais d'un PoP frere.
+  const POIDS_SUR = 1;
+  const POIDS_INCERTAIN = 1000;
+
+  const parRangPuisNom = (a, b) => {
+    const ra = rang(a);
+    const rb = rang(b);
+    if (ra !== rb) return ra - rb;
+    return nom(a).localeCompare(nom(b));
+  };
+  const ordreVoisins = (a, b) => {
+    if (a.confident !== b.confident) return a.confident ? -1 : 1;
+    return parRangPuisNom(a.key, b.key);
+  };
+
+  const vus = new Set();
+
+  /** Parcourt toute la composante connexe de ``source`` et y pose les parents. */
+  const parcourirComposante = (source) => {
+    const dist = new Map([[source, 0]]);
+    const aTraiter = new Map([[source, 0]]);
+    const fige = new Set();
+    const candidat = new Map();   // cle -> meilleur rattachement connu
+
+    while (aTraiter.size) {
+      // Extraction du minimum. Les graphes de PoPs tiennent en quelques
+      // centaines de cases : un balayage lineaire suffit, et reste lisible.
+      let cle = null;
+      let meilleure = Infinity;
+      aTraiter.forEach((d, k) => {
+        if (d < meilleure || (d === meilleure && cle !== null && parRangPuisNom(k, cle) < 0)) {
+          meilleure = d;
+          cle = k;
+        }
+      });
+      aTraiter.delete(cle);
+      if (fige.has(cle)) continue;
+      fige.add(cle);
+      vus.add(cle);
+
+      // Distance definitive : on peut rattacher. Le parent retenu est deja fige
+      // (propriete du plus court chemin), donc l'arbre se construit de haut en bas.
+      const choix = candidat.get(cle);
+      if (choix) {
+        const edge = { parentKey: choix.parent, childKey: cle, link: choix.via.link,
+          inverted: choix.via.inverted, confident: choix.via.confident };
+        if (!choix.via.confident) edge.uncertain = true;
+        attach(cle, choix.parent, edge);
+      }
+
+      (voisins.get(cle) || []).slice().sort(ordreVoisins).forEach((v) => {
+        if (fige.has(v.key)) return;
+        const d = meilleure + (v.confident ? POIDS_SUR : POIDS_INCERTAIN);
+        const connue = dist.has(v.key) ? dist.get(v.key) : Infinity;
+        if (d >= connue) return;   // a egalite on garde le premier, deja trie
+        dist.set(v.key, d);
+        aTraiter.set(v.key, d);
+        candidat.set(v.key, { parent: cle, via: v });
+      });
+    }
+  };
+
+  // Par ou entrer : le role le plus haut present, et a role egal le mieux
+  // connecte (c'est le coeur, pas une feuille) -- puis le nom, pour la stabilite.
+  const parRangPuisDegre = (a, b) => {
+    const ra = rang(a);
+    const rb = rang(b);
+    if (ra !== rb) return ra - rb;
+    const da = (voisins.get(a) || []).length;
+    const db = (voisins.get(b) || []).length;
+    if (da !== db) return db - da;
+    return nom(a).localeCompare(nom(b));
+  };
+
+  // Une passe par composante connexe : chacune recoit sa propre racine, celle
+  // qui est le plus haut dans la hierarchie.
+  const restants = () => [...nodes.keys()].filter((k) => !nodes.get(k).synthetic && !vus.has(k));
+  let aPlacer = restants();
+  while (aPlacer.length) {
+    parcourirComposante(aPlacer.sort(parRangPuisDegre)[0]);
+    aPlacer = restants();
+  }
 
   // Rattache les abonnes a leur PoP : un noeud agrege repliable par PoP plutot
   // que 500 cases. Le debit de l'arete est la somme du trafic des abonnes.
@@ -1974,18 +2067,18 @@ function topoBuildModel(data) {
     });
   }
 
-  // Pour un noeud reste SANS parent, on retient les liens de segment partage
-  // qu'on a refuse d'auto-tracer : le panneau proposera de le rattacher a la
-  // main a ces candidats probables, plutot que de le laisser orphelin sans
+  // Pour un noeud reste SANS parent, on liste ses voisins connus : le panneau
+  // proposera de le rattacher a la main, plutot que de le laisser orphelin sans
   // explication.
   nodes.forEach((n) => {
     if (n.parentKey || n.synthetic) return;
     const cands = [];
-    const vus = new Set();
-    oriented.forEach((e) => {
-      if (e.childKey !== n.key || e.confident) return;
-      const p = nodes.get(e.parentKey);
-      if (p && !vus.has(p.key)) { vus.add(p.key); cands.push({ key: p.key, name: p.name }); }
+    const dejaVus = new Set();
+    (voisins.get(n.key) || []).forEach((v) => {
+      const p = nodes.get(v.key);
+      if (!p || p.key === n.key || dejaVus.has(p.key)) return;
+      dejaVus.add(p.key);
+      cands.push({ key: p.key, name: p.name });
     });
     if (cands.length) n.unsureParents = cands;
   });
@@ -1994,8 +2087,21 @@ function topoBuildModel(data) {
   return { nodesByKey: nodes, roots };
 }
 
+/** Ordre d'affichage de deux cases soeurs : hierarchie d'abord, puis le nom.
+ *  Deterministe, donc l'arbre ne se reorganise pas a chaque rafraichissement. */
+function topoOrdreFratrie(a, b) {
+  const ra = TOPO_RANG[a.kind] ?? 5;
+  const rb = TOPO_RANG[b.kind] ?? 5;
+  if (ra !== rb) return ra - rb;
+  return String(a.name || '').localeCompare(String(b.name || ''));
+}
+
 /** Range les cases : position enregistree si elle existe, sinon disposition
- *  automatique en arbre couche (parent a gauche, enfants a droite). */
+ *  automatique en arbre couche (parent a gauche, enfants a droite).
+ *
+ *  Chaque feuille prend une ligne a elle ; un parent est CENTRE sur ses enfants.
+ *  Comme les sous-arbres occupent des plages de lignes disjointes (parcours en
+ *  profondeur), deux cases ne peuvent pas se superposer. */
 function topoAutoLayout(model) {
   const COL = 268;   // large : laisse la place au debit sur l'arete
   const ROWH = 74;
@@ -2003,24 +2109,35 @@ function topoAutoLayout(model) {
   const MY = 22;
   let leaf = 0;
   const rowOf = new Map();
+
+  model.nodesByKey.forEach((n) => { n.children.sort(topoOrdreFratrie); });
+
   const place = (node, depth, guard) => {
     if (guard.has(node.key)) return;   // securite anti-boucle
     guard.add(node.key);
     node.depth = depth;
     if (!node.children.length) {
       rowOf.set(node.key, leaf++);
-    } else {
-      node.children.forEach((c) => place(c, depth + 1, guard));
-      const rows = node.children.map((c) => rowOf.get(c.key)).filter((r) => r !== undefined);
-      rowOf.set(node.key, rows.length ? rows.reduce((a, b) => a + b, 0) / rows.length : leaf++);
+      return;
     }
+    node.children.forEach((c) => place(c, depth + 1, guard));
+    const rows = node.children.map((c) => rowOf.get(c.key)).filter((r) => r !== undefined);
+    // Centre sur la PLAGE des enfants (premier..dernier) : c'est ce qui donne
+    // l'allure d'arbre, la moyenne tasserait le parent vers le sous-arbre le
+    // plus fourni.
+    rowOf.set(node.key, rows.length ? (Math.min(...rows) + Math.max(...rows)) / 2 : leaf++);
   };
   const guard = new Set();
-  model.roots.forEach((r) => place(r, 0, guard));
+  model.roots.sort(topoOrdreFratrie).forEach((r) => place(r, 0, guard));
+  // Filet : une case qu'aucune racine n'atteint garde une ligne a elle, plutot
+  // que de s'empiler a l'origine avec les autres.
+  model.nodesByKey.forEach((n) => {
+    if (!rowOf.has(n.key)) rowOf.set(n.key, leaf++);
+  });
 
   model.nodesByKey.forEach((n) => {
     const autoX = MX + n.depth * COL;
-    const autoY = MY + (rowOf.get(n.key) || 0) * ROWH;
+    const autoY = MY + rowOf.get(n.key) * ROWH;
     n.x = n.pos_x != null ? Number(n.pos_x) : autoX;
     n.y = n.pos_y != null ? Number(n.pos_y) : autoY;
   });
