@@ -28,7 +28,6 @@ from app.collectors.uisp import (
 )
 from app.config import Settings
 from app.db.antennas_repo import AntennasRepository
-from app.db.auth_repo import PgAuthStore
 from app.db.database import Database
 from app.db.directory import Directory, PgDirectory
 from app.db.repository import MetricsRepository
@@ -37,7 +36,6 @@ from app.db.topology_repo import TopologyRepository
 from app.db.writer import MetricsWriter, PgMetricsWriter
 from app.models import Plan
 from app.scheduler import Scheduler
-from app.services.auth import AuthService
 from app.services.collection import (
     JOB_BACKHAULS,
     JOB_BOOSTS,
@@ -146,7 +144,6 @@ class Container:
     secrets: SecretBox
     registry: RouterRegistry
     shaping: ShapingService
-    auth: AuthService | None = None
     routers_repo: RoutersRepository | None = None
     topology_repo: TopologyRepository | None = None
     antennas_repo: AntennasRepository | None = None
@@ -204,15 +201,6 @@ async def build_container(settings: Settings) -> Container:
     routers_repo = RoutersRepository(database.pool, secrets)
     topology_repo = TopologyRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
-
-    # Authentification : aucun endpoint de l'API n'est joignable sans identite.
-    auth = AuthService(
-        PgAuthStore(database.pool),
-        session_ttl_hours=settings.auth_session_ttl_hours,
-        login_max_attempts=settings.auth_login_max_attempts,
-        login_window_s=settings.auth_login_window_s,
-    )
-    await _bootstrap_admin(auth, settings)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
     #
@@ -281,13 +269,6 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_RECONCILE, settings.shaping_reconcile_interval_s, reconcile_shaping)
 
-    async def purge_sessions() -> None:
-        # Nettoyage des sessions expirees : sans effet fonctionnel (une session
-        # perimee est deja refusee), mais evite que la table enfle.
-        await auth.purge_expired_sessions()
-
-    scheduler.add_job("purge_sessions", 3600.0, purge_sessions)
-
     return Container(
         settings=settings,
         database=database,
@@ -301,49 +282,10 @@ async def build_container(settings: Settings) -> Container:
         secrets=secrets,
         registry=registry,
         shaping=shaping,
-        auth=auth,
         routers_repo=routers_repo,
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,
     )
-
-
-async def _bootstrap_admin(auth: AuthService, settings: Settings) -> None:
-    """Cree le compte administrateur initial au tout premier demarrage.
-
-    Jamais de mot de passe par defaut connu : si ``AUTH_ADMIN_PASSWORD`` n'est
-    pas fourni, on genere un mot de passe aleatoire et on le journalise une seule
-    fois, a charge pour l'operateur de le relever et de le changer. Idempotent :
-    des qu'un compte existe, cette fonction ne fait plus rien.
-    """
-    import secrets as secrets_module
-
-    try:
-        if await auth.count_users() > 0:
-            return
-    except Exception:  # noqa: BLE001 - table pas encore creee (migration desactivee)
-        logger.warning("Comptes non verifiables : amorcage de l'administrateur ignore")
-        return
-
-    if settings.auth_admin_password is not None:
-        password = settings.auth_admin_password.get_secret_value()
-        genere = False
-    else:
-        password = secrets_module.token_urlsafe(18)
-        genere = True
-
-    await auth.ensure_admin(settings.auth_admin_username, password, display="Administrateur")
-    if genere:
-        logger.warning(
-            "AUCUN mot de passe administrateur fourni : un compte '%s' a ete cree "
-            "avec le mot de passe genere ci-dessous. Notez-le et changez-le, il ne "
-            "sera plus jamais affiche.\n"
-            "    identifiant : %s\n"
-            "    mot de passe : %s",
-            settings.auth_admin_username,
-            settings.auth_admin_username,
-            password,
-        )
 
 
 async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Settings) -> None:

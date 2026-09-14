@@ -180,30 +180,6 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     api_prefix: str = "/api/v1"
 
-    # --- Authentification / securite ---
-    # Compte administrateur initial, cree UNIQUEMENT au premier demarrage (aucun
-    # compte en base). Sans mot de passe fourni, un mot de passe aleatoire est
-    # genere et journalise une fois : jamais de mot de passe par defaut connu.
-    auth_admin_username: str = "admin"
-    auth_admin_password: SecretStr | None = None
-    # Duree de vie d'une session (cookie). Au-dela, il faut se reconnecter.
-    auth_session_ttl_hours: float = 12.0
-    # Anti-bourrage sur la connexion : N echecs par identifiant dans la fenetre.
-    auth_login_max_attempts: int = 5
-    auth_login_window_s: float = 300.0
-    # Cookie ``Secure`` : None = automatique (actif sauf en lab/dev/test, ou un
-    # cookie Secure ne serait jamais renvoye sur HTTP et rendrait la connexion
-    # impossible). Forcer True en production derriere un reverse-proxy TLS.
-    auth_cookie_secure: bool | None = None
-    # Origines CORS autorisees. JAMAIS "*" : l'API porte des cookies et ecrit sur
-    # des routeurs. Vide = meme origine seulement (l'interface est servie ici).
-    cors_allow_origins: list[str] = Field(default_factory=list)
-    # En-tetes de securite. HSTS n'a d'effet qu'en HTTPS (les navigateurs
-    # l'ignorent en clair) : on peut le laisser actif sans risque en lab.
-    security_headers_enabled: bool = True
-    hsts_enabled: bool = True
-    hsts_max_age_s: int = 31_536_000
-
     # --- Base de donnees ---
     database_url: str = "postgresql://qos:changeme@localhost:5432/qos"
     db_pool_min: int = 1
@@ -384,29 +360,6 @@ class Settings(BaseSettings):
                 return []
             return json.loads(value)
         return value
-
-    @field_validator("cors_allow_origins", mode="before")
-    @classmethod
-    def _parse_origins(cls, value: Any) -> Any:
-        """Accepte CORS_ALLOW_ORIGINS en JSON ('["https://a"]') ou en CSV.
-
-        Un "*" est refuse explicitement : l'API porte des cookies de session et
-        ecrit sur des routeurs, une origine joker serait une faille beante.
-        """
-        if isinstance(value, str):
-            value = value.strip()
-            if not value:
-                return []
-            origins = (
-                json.loads(value)
-                if value.startswith("[")
-                else [part.strip() for part in value.split(",") if part.strip()]
-            )
-        else:
-            origins = value
-        if isinstance(origins, list) and "*" in origins:
-            raise ValueError("CORS_ALLOW_ORIGINS ne doit jamais valoir '*' (cookies + ecriture)")
-        return origins
 
     @field_validator("log_level", mode="before")
     @classmethod

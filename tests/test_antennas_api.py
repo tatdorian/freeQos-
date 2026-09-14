@@ -20,7 +20,6 @@ from app.config import Settings
 from app.db.antennas_repo import AntennaNotFoundError, DuplicateAntennaError
 from app.main import register_routes
 from app.services.crypto import SecretBox, generate_key
-from tests.conftest import AUTH_HEADERS
 from tests.test_api import build_container
 
 PUBLIC = {
@@ -171,7 +170,7 @@ def client(settings: Settings, secrets: SecretBox, repo: InMemoryAntennasReposit
     app.state.settings = settings
     register_routes(app, settings)
     app.dependency_overrides[get_container] = lambda: container
-    test_client = TestClient(app, headers=AUTH_HEADERS)
+    test_client = TestClient(app)
     test_client.container = container  # type: ignore[attr-defined]
     return test_client
 
