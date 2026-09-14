@@ -48,6 +48,26 @@ def _maintenant() -> datetime:
     return datetime.now(tz=UTC).replace(microsecond=0)
 
 
+def _ancre_dans_un_seul_pas(now: datetime, *, bucket_seconds: int, recul_s: int) -> datetime:
+    """Recule ``now`` juste assez pour que ``now`` ET ``now - recul_s`` tombent
+    dans le MEME pas de ``date_bin``.
+
+    ``date_bin`` aligne ses pas sur l'EPOCH, pas sur l'heure du test : deux
+    echantillons distants de 20 s se retrouvent dans deux pas differents des que
+    la suite tourne dans les 20 premieres secondes d'un pas de 5 minutes. C'est
+    le comportement attendu de la requete, pas un bug -- mais un test qui COMPTE
+    les pas doit s'en affranchir, sinon il echoue une fois sur quinze sans rien
+    dire de la logique qu'il verifie.
+
+    Le recul vaut au plus ``recul_s + 1`` secondes : les filtres de fraicheur des
+    vues (2 et 5 minutes) ne s'en apercoivent pas.
+    """
+    reste = int(now.timestamp()) % bucket_seconds
+    if reste >= recul_s:
+        return now
+    return now - timedelta(seconds=reste + 1)
+
+
 @pytest.fixture
 def now() -> datetime:
     return _maintenant()
@@ -543,6 +563,12 @@ async def test_vues_du_tableau_de_bord(database: Database, now: datetime) -> Non
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
+
+    # Ce test COMPTE les pas de temps rendus : il faut donc que ses deux
+    # echantillons, distants de 20 s, tombent dans le meme pas de 300 s. Sans
+    # cette ancre il echouait quand la suite tournait dans les 20 premieres
+    # secondes d'un pas -- une fois sur quinze environ.
+    now = _ancre_dans_un_seul_pas(now, bucket_seconds=300, recul_s=20)
 
     pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
     backhaul_id = await directory.ensure_backhaul(
