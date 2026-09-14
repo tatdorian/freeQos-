@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 from app.api.deps import ContainerDep
 from app.config import RouterConfig, RouterRole
-from app.db.routers_repo import DuplicateRouterError, RouterNotFoundError
+from app.db.routers_repo import DuplicateRouterError, RouterNotFoundError, RoutersRepository
 from app.services.crypto import SecretUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,11 @@ class RouterInput(BaseModel):
     pop_name: str | None = Field(default=None, max_length=128)
     enabled: bool = True
     use_ssl: bool = False
+    # Posture TLS quand use_ssl est vrai (defaut : strict). "fingerprint" exige
+    # tls_fingerprint (SHA-256). "insecure" desactive la verification, un choix
+    # assume et visible.
+    tls_verify: Literal["strict", "fingerprint", "insecure"] = "strict"
+    tls_fingerprint: str | None = Field(default=None, max_length=128)
     timeout_s: float = Field(default=5.0, ge=0.5, le=60.0)
     pppoe_interface_pattern: str = "<pppoe-{login}>"
 
@@ -52,11 +57,13 @@ class RouterUpdate(BaseModel):
     pop_name: str | None = None
     enabled: bool | None = None
     use_ssl: bool | None = None
+    tls_verify: Literal["strict", "fingerprint", "insecure"] | None = None
+    tls_fingerprint: str | None = Field(default=None, max_length=128)
     timeout_s: float | None = Field(default=None, ge=0.5, le=60.0)
     pppoe_interface_pattern: str | None = None
 
 
-def _require_repository(container: ContainerDep):
+def _require_repository(container: ContainerDep) -> RoutersRepository:
     if container.routers_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -167,6 +174,8 @@ async def test_connection(payload: RouterInput, container: ContainerDep) -> dict
         role=RouterRole(payload.role),
         pop_name=payload.pop_name,
         use_ssl=payload.use_ssl,
+        tls_verify=payload.tls_verify,
+        tls_fingerprint=payload.tls_fingerprint,
         timeout_s=payload.timeout_s,
         pppoe_interface_pattern=payload.pppoe_interface_pattern,
     )

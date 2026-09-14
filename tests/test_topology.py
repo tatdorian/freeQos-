@@ -177,11 +177,19 @@ def test_un_voisin_qui_est_un_routeur_gere_ne_fait_pas_de_doublon() -> None:
     snapshot.add_node(TopologyNode(key="router:main-gw", name="MAIN GATEWAY", kind="gateway"))
     snapshot.add_node(TopologyNode(key="router:ds-ccr", name="DS-CCR", kind=KIND_POP))
     # Le voisin decouvert par la gateway : nom different, mais IP du routeur gere.
-    snapshot.add_node(TopologyNode(key="mac:AA:BB:CC:00:00:09", name="CCR DS",
-                                   kind=KIND_POP, address="11.11.11.1"))
-    snapshot.add_link(TopologyLink(source_key="router:main-gw",
-                                   target_key="mac:AA:BB:CC:00:00:09",
-                                   kind="ethernet", interface="ether2"))
+    snapshot.add_node(
+        TopologyNode(
+            key="mac:AA:BB:CC:00:00:09", name="CCR DS", kind=KIND_POP, address="11.11.11.1"
+        )
+    )
+    snapshot.add_link(
+        TopologyLink(
+            source_key="router:main-gw",
+            target_key="mac:AA:BB:CC:00:00:09",
+            kind="ethernet",
+            interface="ether2",
+        )
+    )
 
     replies = resolve_to_managed(
         snapshot,
@@ -199,8 +207,11 @@ def test_un_client_non_gere_reste_une_feuille() -> None:
     """Un CPE / client (aucune IP de routeur gere) n'est PAS replie : il reste."""
     snapshot = TopologySnapshot()
     snapshot.add_node(TopologyNode(key="router:pop", name="PoP", kind=KIND_POP))
-    snapshot.add_node(TopologyNode(key="mac:DE:AD:BE:EF:00:01", name="CPE-dupont",
-                                   kind="cpe", address="192.168.88.2"))
+    snapshot.add_node(
+        TopologyNode(
+            key="mac:DE:AD:BE:EF:00:01", name="CPE-dupont", kind="cpe", address="192.168.88.2"
+        )
+    )
     replies = resolve_to_managed(
         snapshot, ip_owner={"10.0.0.1": "router:pop"}, mac_owner={}, name_owner={}
     )
@@ -211,8 +222,14 @@ def test_un_client_non_gere_reste_une_feuille() -> None:
 def test_resolution_par_mac_et_identite() -> None:
     snapshot = TopologySnapshot()
     snapshot.add_node(TopologyNode(key="router:a", name="A", kind=KIND_POP))
-    snapshot.add_node(TopologyNode(key="mac:48:8F:5A:00:00:11", name="quelque-chose",
-                                   kind=KIND_POP, mac="48:8F:5A:00:00:11"))
+    snapshot.add_node(
+        TopologyNode(
+            key="mac:48:8F:5A:00:00:11",
+            name="quelque-chose",
+            kind=KIND_POP,
+            mac="48:8F:5A:00:00:11",
+        )
+    )
     snapshot.add_node(TopologyNode(key="identity:routeur-a", name="Routeur-A", kind=KIND_POP))
     replies = resolve_to_managed(
         snapshot,
@@ -250,8 +267,14 @@ def test_config_ne_double_pas_un_lien_deja_trouve() -> None:
     snapshot = TopologySnapshot()
     snapshot.add_node(TopologyNode(key="router:pop-a", name="PoP A", kind=KIND_POP))
     snapshot.add_node(TopologyNode(key="router:pop-b", name="PoP B", kind=KIND_POP))
-    snapshot.add_link(TopologyLink(source_key="router:pop-a", target_key="router:pop-b",
-                                   kind="ethernet", interface="ether5"))
+    snapshot.add_link(
+        TopologyLink(
+            source_key="router:pop-a",
+            target_key="router:pop-b",
+            kind="ethernet",
+            interface="ether5",
+        )
+    )
     ajoutes = link_by_shared_subnets(
         snapshot,
         [
@@ -340,8 +363,13 @@ def test_liens_par_tunnel_relient_les_deux_bouts() -> None:
     ajoutes = link_by_tunnels(
         snapshot,
         ip_owner,
-        [("router:a", "a", [{"type": "eoip", "name": "eoip-sud",
-                             "remote_address": "100.100.101.113"}])],
+        [
+            (
+                "router:a",
+                "a",
+                [{"type": "eoip", "name": "eoip-sud", "remote_address": "100.100.101.113"}],
+            )
+        ],
     )
     assert ajoutes == 1
     lien = next(iter(snapshot.links.values()))
@@ -353,9 +381,7 @@ def test_tunnel_vers_ip_inconnue_est_ignore() -> None:
     """remote-address hors du parc (transit, Internet) : pas de lien fantome."""
     snapshot = TopologySnapshot()
     snapshot.add_node(TopologyNode(key="router:a", name="A", kind=KIND_POP))
-    ajoutes = link_by_tunnels(
-        snapshot, {}, [("router:a", "a", [{"remote_address": "8.8.8.8"}])]
-    )
+    ajoutes = link_by_tunnels(snapshot, {}, [("router:a", "a", [{"remote_address": "8.8.8.8"}])])
     assert ajoutes == 0
 
 
@@ -469,9 +495,18 @@ def test_session_sans_caller_id_ignoree() -> None:
 # ------------------------------------------ reconciliation des doublons
 def _noeud(key, name, **extra):
     base = {
-        "key": key, "name": name, "kind": KIND_POP, "mac": None, "address": None,
-        "platform": None, "version": None, "uisp_device_id": None,
-        "pos_x": None, "pos_y": None, "parent_override": None, "hidden": False,
+        "key": key,
+        "name": name,
+        "kind": KIND_POP,
+        "mac": None,
+        "address": None,
+        "platform": None,
+        "version": None,
+        "uisp_device_id": None,
+        "pos_x": None,
+        "pos_y": None,
+        "parent_override": None,
+        "hidden": False,
         "fresh": True,
     }
     base.update(extra)
@@ -486,15 +521,26 @@ def test_reconciliation_fusionne_le_meme_routeur_vu_plusieurs_fois() -> None:
     noeuds = [
         _noeud("router:NAS-FRANCOPHONIE", "NAS-FRANCOPHONIE", address="100.100.101.82"),
         _noeud("identity:NAS-francophonie", "NAS-francophonie", address="11.11.11.84"),
-        _noeud("mac:AA:BB:CC:00:00:01", "NAS-FRANCOPHONIE",
-               mac="AA:BB:CC:00:00:01", address="11.11.11.84"),
+        _noeud(
+            "mac:AA:BB:CC:00:00:01",
+            "NAS-FRANCOPHONIE",
+            mac="AA:BB:CC:00:00:01",
+            address="11.11.11.84",
+        ),
         _noeud("router:NAS-FRNACOPHONIE", "NAS-FRNACOPHONIE", address="11.11.11.81"),
     ]
     liens = [
-        {"key": "core|e1|identity:NAS-francophonie", "source_key": "router:core",
-         "target_key": "identity:NAS-francophonie", "source_name": "CORE",
-         "target_name": "NAS-francophonie", "target_kind": KIND_POP,
-         "interface": "ether1", "rx_bps": 1.0, "tx_bps": 2.0},
+        {
+            "key": "core|e1|identity:NAS-francophonie",
+            "source_key": "router:core",
+            "target_key": "identity:NAS-francophonie",
+            "source_name": "CORE",
+            "target_name": "NAS-francophonie",
+            "target_kind": KIND_POP,
+            "interface": "ether1",
+            "rx_bps": 1.0,
+            "tx_bps": 2.0,
+        },
     ]
     noeuds.append(_noeud("router:core", "CORE", kind="core"))
 
@@ -542,10 +588,13 @@ def test_reconciliation_fusionne_sur_le_numero_de_serie() -> None:
     double par l'operateur) : le numero de serie prouve que c'est le meme materiel,
     ses adresses sont rassemblees dans UNE case."""
     noeuds = [
-        _noeud("router:pop-a", "PoP A", address="10.0.0.1",
-               attributes={"serial": "HFX0ABCDEF"}),
-        _noeud("router:pop-b", "PoP A (bis)", address="192.168.0.1",
-               attributes={"serial": "hfx0abcdef"}),  # meme serie, casse differente
+        _noeud("router:pop-a", "PoP A", address="10.0.0.1", attributes={"serial": "HFX0ABCDEF"}),
+        _noeud(
+            "router:pop-b",
+            "PoP A (bis)",
+            address="192.168.0.1",
+            attributes={"serial": "hfx0abcdef"},
+        ),  # meme serie, casse differente
     ]
     fusion, _ = reconcile_topology(noeuds, [])
     assert len(fusion) == 1
@@ -555,9 +604,16 @@ def test_reconciliation_fusionne_sur_le_numero_de_serie() -> None:
 def test_le_routeur_gere_porte_son_numero_de_serie() -> None:
     snapshot = TopologySnapshot()
     build_from_router(
-        snapshot, router_name="pop-a", pop_name="PoP A", host="10.0.0.1",
-        neighbors=[], interfaces=[], ethernet=[], addresses=[],
-        identity="NAS-a", serial="HFX0ABCDEF",
+        snapshot,
+        router_name="pop-a",
+        pop_name="PoP A",
+        host="10.0.0.1",
+        neighbors=[],
+        interfaces=[],
+        ethernet=[],
+        addresses=[],
+        identity="NAS-a",
+        serial="HFX0ABCDEF",
     )
     assert snapshot.nodes["router:pop-a"].attributes["serial"] == "HFX0ABCDEF"
 
@@ -572,9 +628,14 @@ def test_reconciliation_fusionne_le_pop_gere_avec_sa_vue_voisin() -> None:
     parce que le noeud gere expose TOUTES ses MAC."""
     noeuds = [
         _noeud(
-            "router:pop-nord", "PoP Nord", mac="48:8F:5A:00:00:11",
-            attributes={"managed": True, "identity": "NAS-nord",
-                        "macs": ["48:8F:5A:00:00:11", "48:8F:5A:00:00:12"]},
+            "router:pop-nord",
+            "PoP Nord",
+            mac="48:8F:5A:00:00:11",
+            attributes={
+                "managed": True,
+                "identity": "NAS-nord",
+                "macs": ["48:8F:5A:00:00:11", "48:8F:5A:00:00:12"],
+            },
         ),
         _noeud("mac:48:8F:5A:00:00:12", "NAS-nord", mac="48:8F:5A:00:00:12"),
     ]
@@ -589,7 +650,8 @@ def test_reconciliation_lit_les_attributs_en_json_brut() -> None:
     quand meme lire les MAC et l'identite qui y sont rangees."""
     noeuds = [
         _noeud(
-            "router:pop", "PoP Nord",
+            "router:pop",
+            "PoP Nord",
             attributes='{"macs": ["48:8F:5A:00:00:12"], "identity": "NAS-nord"}',
         ),
         _noeud("mac:48:8F:5A:00:00:12", "NAS-nord", mac="48:8F:5A:00:00:12"),
@@ -627,9 +689,15 @@ def test_reconciliation_supprime_un_lien_devenu_interne() -> None:
         _noeud("mac:DC:9F:DB:11:22:33", "PoP Nord", mac="DC:9F:DB:11:22:33"),
     ]
     liens = [
-        {"key": "k", "source_key": "router:pop", "target_key": "mac:DC:9F:DB:11:22:33",
-         "source_name": "PoP Nord", "target_name": "PoP Nord", "target_kind": KIND_POP,
-         "interface": "e1"},
+        {
+            "key": "k",
+            "source_key": "router:pop",
+            "target_key": "mac:DC:9F:DB:11:22:33",
+            "source_name": "PoP Nord",
+            "target_name": "PoP Nord",
+            "target_kind": KIND_POP,
+            "interface": "e1",
+        },
     ]
     _, fusion_liens = reconcile_topology(noeuds, liens)
     assert fusion_liens == []

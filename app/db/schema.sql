@@ -54,6 +54,10 @@ CREATE TABLE IF NOT EXISTS routers (
     pop_name                 TEXT,
     enabled                  BOOLEAN NOT NULL DEFAULT TRUE,
     use_ssl                  BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Posture TLS par routeur (strict / fingerprint / insecure). Defaut sur : la
+    -- verification n'est plus desactivee en dur cote code.
+    tls_verify               TEXT NOT NULL DEFAULT 'strict',
+    tls_fingerprint          TEXT,
     timeout_s                DOUBLE PRECISION NOT NULL DEFAULT 5.0,
     pppoe_interface_pattern  TEXT NOT NULL DEFAULT '<pppoe-{login}>',
     -- Diagnostic de la derniere tentative de connexion, affiche dans l'interface.
@@ -216,6 +220,14 @@ CREATE TABLE IF NOT EXISTS runtime_flags (
 
 -- Journal de TOUTE commande envoyee a un equipement. C'est la trace dont on a
 -- besoin le jour ou il faut expliquer pourquoi un abonne a change de debit.
+--
+-- ``author`` dit QUI a lance la commande : l'identite du compte pour une action
+-- lancee depuis l'interface, ou "system:reconcile" / "system:boost-expiry" pour
+-- les ecritures automatiques. Sans lui, le journal disait ce qui a ete fait mais
+-- jamais par qui.
+-- ``changes`` porte le detail champ par champ ({champ: [avant, apres]}) : la
+-- commande finale seule ne permet pas de diagnostiquer un ecart depuis
+-- l'interface (pourquoi ce set ? qu'est-ce qui a change ?).
 CREATE TABLE IF NOT EXISTS enforcement_audit (
     id           BIGSERIAL PRIMARY KEY,
     ts           TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -225,10 +237,62 @@ CREATE TABLE IF NOT EXISTS enforcement_audit (
     command      TEXT NOT NULL,
     dry_run      BOOLEAN NOT NULL,
     ok           BOOLEAN NOT NULL,
-    detail       TEXT
+    detail       TEXT,
+    author       TEXT,
+    changes      JSONB
 );
 
 CREATE INDEX IF NOT EXISTS idx_enforcement_audit_ts ON enforcement_audit (ts DESC);
+
+
+-- -----------------------------------------------------------------------------
+-- Authentification (comptes locaux, cles d'API, sessions)
+--
+-- Aucun secret en clair : les mots de passe sont haches en argon2, les cles
+-- d'API et les jetons de session en SHA-256 (secrets a haute entropie). Une base
+-- volee ne rend donc aucun acces utilisable directement.
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS auth_users (
+    username       TEXT PRIMARY KEY,
+    password_hash  TEXT NOT NULL,
+    display_name   TEXT NOT NULL,
+    is_admin       BOOLEAN NOT NULL DEFAULT FALSE,
+    disabled       BOOLEAN NOT NULL DEFAULT FALSE,
+    last_login_at  TIMESTAMPTZ,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Cle d'API pour les appels machine. Le secret n'est stocke que hache
+-- (``key_hash``), avec un prefixe lisible (``prefix``) pour l'identifier dans un
+-- journal sans le divulguer.
+CREATE TABLE IF NOT EXISTS auth_api_keys (
+    id            TEXT PRIMARY KEY,
+    name          TEXT NOT NULL UNIQUE,
+    prefix        TEXT NOT NULL,
+    key_hash      TEXT NOT NULL UNIQUE,
+    is_admin      BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by    TEXT,
+    disabled      BOOLEAN NOT NULL DEFAULT FALSE,
+    last_used_at  TIMESTAMPTZ,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_api_keys_hash ON auth_api_keys (key_hash);
+
+-- Session posee dans un cookie SameSite=Strict. Seul le SHA-256 du jeton est
+-- stocke : la session reste revocable (deconnexion) et expire d'elle-meme.
+CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash  TEXT PRIMARY KEY,
+    username    TEXT NOT NULL REFERENCES auth_users(username) ON DELETE CASCADE,
+    display     TEXT NOT NULL,
+    is_admin    BOOLEAN NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_expiry ON auth_sessions (expires_at);
 
 
 -- -----------------------------------------------------------------------------
@@ -344,6 +408,13 @@ ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS boost_reason     TEXT;
 ALTER TABLE routers ADD COLUMN IF NOT EXISTS identity         TEXT;
 ALTER TABLE routers ADD COLUMN IF NOT EXISTS board_name       TEXT;
 ALTER TABLE routers ADD COLUMN IF NOT EXISTS routeros_version TEXT;
+ALTER TABLE routers ADD COLUMN IF NOT EXISTS tls_verify      TEXT NOT NULL DEFAULT 'strict';
+ALTER TABLE routers ADD COLUMN IF NOT EXISTS tls_fingerprint TEXT;
+
+-- Auteur de la commande et detail des changements : ajoutes apres coup, donc via
+-- ALTER pour les installations existantes (cf. table enforcement_audit ci-dessus).
+ALTER TABLE enforcement_audit ADD COLUMN IF NOT EXISTS author  TEXT;
+ALTER TABLE enforcement_audit ADD COLUMN IF NOT EXISTS changes JSONB;
 
 -- Depend d'une colonne ci-dessus : ne peut etre cree qu'apres les migrations.
 CREATE INDEX IF NOT EXISTS idx_shaping_boost_expiry

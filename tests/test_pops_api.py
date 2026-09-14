@@ -17,7 +17,7 @@ from app.config import RouterConfig, RouterRole, Settings
 from app.db.routers_repo import DuplicateRouterError, RouterNotFoundError
 from app.main import register_routes
 from app.services.crypto import SecretBox, generate_key
-from tests.conftest import FakeRouterOsClient
+from tests.conftest import AUTH_HEADERS, FakeRouterOsClient
 from tests.test_api import build_container
 
 
@@ -165,7 +165,7 @@ def client(
     app.state.settings = settings
     register_routes(app, settings)
     app.dependency_overrides[get_container] = lambda: container
-    test_client = TestClient(app)
+    test_client = TestClient(app, headers=AUTH_HEADERS)
     test_client.container = container  # type: ignore[attr-defined]
     return test_client
 
@@ -256,7 +256,7 @@ def test_sans_cle_de_chiffrement_l_ecriture_est_refusee(
     register_routes(app, settings)
     app.dependency_overrides[get_container] = lambda: container
 
-    response = TestClient(app).post("/api/v1/pops/routers", json=NOUVEAU_POP)
+    response = TestClient(app, headers=AUTH_HEADERS).post("/api/v1/pops/routers", json=NOUVEAU_POP)
 
     assert response.status_code == 409
     assert "APP_SECRET_KEY" in response.json()["detail"]

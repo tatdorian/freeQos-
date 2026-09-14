@@ -400,6 +400,62 @@ async def test_bout_en_bout_routeur_vers_api(database: Database) -> None:
     assert {run["job"] for run in runs} == {"collect_subscribers", "collect_backhauls"}
 
 
+async def test_conteneur_reel_cable_la_collecte_des_antennes(database: Database) -> None:
+    """Regression P0-3 au VRAI point de montage : ``build_container`` assemble le
+    provider des antennes (DbAirOsProvider), et un cycle backhaul complet doit
+    reussir.
+
+    Avant le correctif, ``collect_backhauls`` appelait ``backhaul_configs()`` sur
+    un provider qui ne portait pas cette methode : le cycle echouait a chaque
+    tour, invisible parce que le parametre etait annote ``Any``. La suite testait
+    les pieces, pas le montage : ce test monte le conteneur reel.
+    """
+    from app.config import Settings
+    from app.container import build_container, shutdown_container
+    from app.services.crypto import generate_key
+
+    settings = Settings(
+        _env_file=None,
+        database_url=DSN,
+        routers=[],
+        backhauls=[],
+        backhaul_provider="mock",
+        plan_provider="mock",
+        scheduler_enabled=False,
+        db_auto_migrate=True,
+        # Cle fournie : pas d'ecriture de data/secret.key pendant les tests.
+        app_secret_key=generate_key(),
+        # L'antenne de test est injoignable : on borne l'attente.
+        airos_timeout_s=0.5,
+    )
+
+    container = await build_container(settings)
+    try:
+        assert container.antennas_repo is not None
+        # Une antenne "ajoutee depuis l'interface" (aucun mot de passe requis).
+        await container.antennas_repo.create(
+            {
+                "name": "bh-toit",
+                "pop_name": "PoP Nord",
+                "host": "203.0.113.9",  # TEST-NET-3 : jamais joignable
+                "device_key": "device-toit",
+                "nominal_capacity_mbps": 300,
+                "timeout_s": 0.5,
+            },
+            None,
+        )
+
+        result = await container.collection.collect_backhauls()
+
+        # L'antenne est injoignable, donc aucun echantillon ecrit -- mais le CYCLE
+        # doit reussir : c'est la preuve que backhaul_configs() est bien cable.
+        assert result.ok is True, result.errors
+        assert all("backhaul_configs" not in err for err in result.errors)
+        assert all("has no attribute" not in err for err in result.errors)
+    finally:
+        await shutdown_container(container)
+
+
 # ---------------------------------------------------------------------------
 # Inventaire dynamique des routeurs
 # ---------------------------------------------------------------------------
@@ -768,9 +824,12 @@ async def test_journal_des_commandes(database: Database) -> None:
         fields={"max-limit": "20000000/100000000"},
         target_id="*7",
         name="freeqos-dupont",
+        changes={"max-limit": ("5M/20M", "20000000/100000000")},
     )
 
-    await repo.record_audit("pop-nord", dry_run=False, outcomes=[(action, True, "*7")])
+    await repo.record_audit(
+        "pop-nord", dry_run=False, outcomes=[(action, True, "*7")], author="alice"
+    )
 
     lignes = await repo.audit(limit=10)
     assert len(lignes) == 1
@@ -778,6 +837,14 @@ async def test_journal_des_commandes(database: Database) -> None:
     assert lignes[0]["dry_run"] is False
     assert lignes[0]["command"].startswith("/queue/simple/set")
     assert "max-limit=20000000/100000000" in lignes[0]["command"]
+    # P0-1 : l'auteur est trace. P0-4 : le detail des changements aussi.
+    assert lignes[0]["author"] == "alice"
+    changes = lignes[0]["changes"]
+    if isinstance(changes, str):
+        import json as _json
+
+        changes = _json.loads(changes)
+    assert changes == {"max-limit": ["5M/20M", "20000000/100000000"]}
 
 
 async def test_cycle_de_vie_d_un_boost(database: Database, now: datetime) -> None:

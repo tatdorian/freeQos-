@@ -8,12 +8,37 @@ les tests d'integration optionnels.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from app.collectors.mikrotik import MikrotikCollector
 from app.config import BackhaulConfig, RouterConfig, Settings
+from app.services.auth import ApiKeyRecord, AuthService, InMemoryAuthStore, sha256
+
+# Cle d'API de test : les clients HTTP de la suite s'authentifient avec, pour que
+# les endpoints (desormais tous proteges) restent joignables. Un test dedie
+# verifie qu'un appel SANS identite est bien refuse (P0-1).
+TEST_API_KEY = "fq_cle-de-test-a-haute-entropie-0000000000"
+AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+
+
+def make_test_auth(*, api_key: str = TEST_API_KEY) -> AuthService:
+    """Service d'auth memoire, amorce d'une cle d'API admin pour les tests."""
+    store = InMemoryAuthStore()
+    store.seed_api_key(
+        ApiKeyRecord(
+            id="test-key",
+            name="tests",
+            prefix=api_key[:12],
+            key_hash=sha256(api_key),
+            is_admin=True,
+            created_by="tests",
+            created_at=datetime.now(tz=UTC),
+        )
+    )
+    return AuthService(store)
 
 
 class FakeRouterOsClient:

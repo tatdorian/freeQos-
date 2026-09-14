@@ -18,6 +18,8 @@ dependencies = [
     "jinja2>=3.1",
     "pyyaml>=6.0",
     "cryptography>=42.0",
+    # Hachage des mots de passe des comptes locaux (authentification de l'API).
+    "argon2-cffi>=23.1",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +29,9 @@ dev = [
     "pytest-asyncio>=0.23",
     "anyio>=4.0",
     "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+    "pre-commit>=3.7",
 ]
 
 [tool.setuptools.packages.find]
@@ -48,3 +53,16 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "C4"]
 ignore = ["B008"]
+
+# mypy --strict sur app/ : c'est exactement le controle qui aurait attrape le bug
+# de cablage P0-3 (parametre annote Any). Les bibliotheques tierces sans stubs
+# (RouterOS, asyncpg) sont ignorees a l'import ; tout le reste est verifie.
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["app"]
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+module = ["librouteros.*", "asyncpg", "asyncpg.*"]
+ignore_missing_imports = true

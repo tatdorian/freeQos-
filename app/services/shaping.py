@@ -15,6 +15,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -117,7 +118,7 @@ class ShapingService:
         registry: RouterRegistry,
         repository: TopologyRepository | None = None,
         metrics: Any = None,
-        write_client_factory=None,
+        write_client_factory: Callable[..., RouterOsWriteClient] | None = None,
     ) -> None:
         self.settings = settings
         self.registry = registry
@@ -330,9 +331,7 @@ class ShapingService:
 
         Sert a VOIR ce que le controleur percoit du routeur : le texte brut et ce
         qu'on en tire (adresses, tunnels, commentaires). Lecture seule."""
-        collector = next(
-            (c for c in self.registry.collectors if c.name == router_name), None
-        )
+        collector = next((c for c in self.registry.collectors if c.name == router_name), None)
         if collector is None:
             raise KeyError(router_name)
         client = collector._client  # noqa: SLF001 - lecture interne assumee
@@ -454,9 +453,9 @@ class ShapingService:
         for backhaul in await self.metrics.backhaul_latest():
             if backhaul.get("pop_name") != pop_name or not backhaul.get("capacity_mbps"):
                 continue
-            for lien in liens:
-                if lien.name == backhaul["name"]:
-                    lien.measured_capacity_mbps = backhaul["capacity_mbps"]
+            for cible_lien in liens:
+                if cible_lien.name == backhaul["name"]:
+                    cible_lien.measured_capacity_mbps = backhaul["capacity_mbps"]
 
         # L'ADRESSE VIENT DU ROUTEUR, PAS DE LA BASE.
         #
@@ -583,7 +582,7 @@ class ShapingService:
                 plan = await self.plan_router(router_name, prune=False)
                 if plan.is_empty:
                     continue
-                applique = await self.apply(plan, dry_run=False)
+                applique = await self.apply(plan, dry_run=False, author="system:boost-expiry")
                 resultat["routers"].append(router_name)
                 resultat["applied"] += applique.applied
             except Exception as exc:  # noqa: BLE001
@@ -624,7 +623,7 @@ class ShapingService:
                 plan = await self.plan_router(nom, prune=False)
                 if plan.is_empty:
                     continue
-                applique = await self.apply(plan, dry_run=False)
+                applique = await self.apply(plan, dry_run=False, author="system:reconcile")
                 resultat["routers"].append(nom)
                 resultat["applied"] += applique.applied
                 if plan.conflicts:
@@ -673,6 +672,12 @@ class ShapingService:
             queue_types=desired_queue_types(
                 overhead=self.settings.cake_overhead,
                 rtt_ms=self.settings.cake_rtt_ms,
+                diffserv=self.settings.cake_diffserv,
+                flowmode=self.settings.cake_flowmode,
+                nat=self.settings.cake_nat,
+                ack_filter=self.settings.cake_ack_filter,
+                wash=self.settings.cake_wash,
+                mpu=self.settings.cake_mpu,
             ),
             target_mode=self.settings.subscriber_queue_target,
             queue_unmeasured_links=self.settings.shaping_queue_for_detected_links,
@@ -690,11 +695,18 @@ class ShapingService:
         return plan
 
     # ---------------------------------------------------------------- apply
-    async def apply(self, plan: Plan, *, dry_run: bool = True) -> ApplyResult:
+    async def apply(
+        self, plan: Plan, *, dry_run: bool = True, author: str | None = None
+    ) -> ApplyResult:
         """Execute un plan.
 
         Deux verrous : le drapeau global ``ENFORCEMENT_ENABLED``, et le fait que
         ``dry_run`` vaut vrai par defaut. Les deux doivent etre leves.
+
+        ``author`` identifie qui declenche l'action -- un compte connecte pour une
+        demande venue de l'interface, ou "system:*" pour les boucles automatiques.
+        Il est journalise dans ``enforcement_audit`` : une commande sans auteur
+        est intracable.
         """
         if not dry_run and not self._enforcement_enabled:
             raise EnforcementDisabledError(
@@ -718,6 +730,7 @@ class ShapingService:
                 plan.router_name,
                 dry_run=dry_run,
                 outcomes=[(o.action, o.ok, o.detail) for o in resultat.outcomes],
+                author=author,
             )
         return resultat
 
@@ -755,7 +768,7 @@ class ShapingService:
         utilisateur = config.rw_username or config.username
         client = collector._client  # noqa: SLF001
 
-        def lire() -> tuple[list, list]:
+        def lire() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
             return client.users(), client.user_groups()
 
         try:
@@ -797,7 +810,7 @@ def _segment_du_lien(lien: dict[str, Any]) -> str | None:
     if not isinstance(brut, dict):
         return None
 
-    reseaux = []
+    reseaux: list[tuple[int, str]] = []
     for valeur in brut.get("local_networks") or []:
         normalise = network_target(valeur)
         if normalise is None:

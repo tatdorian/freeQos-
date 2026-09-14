@@ -1,4 +1,4 @@
-.PHONY: help install dev up down logs test lint fmt psql seed
+.PHONY: help install dev up down logs test lint fmt typecheck hooks lock psql seed
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -26,6 +26,18 @@ lint: ## Verifie le style
 
 fmt: ## Formate / corrige automatiquement
 	ruff check --fix app tests && ruff format app tests
+
+typecheck: ## Verifie les types (mypy --strict sur app/, config dans pyproject)
+	mypy
+
+hooks: ## Installe les hooks git pre-commit (fmt + lint + typage avant commit)
+	pre-commit install
+
+lock: ## Regenere le verrou de dependances d'execution depuis pyproject.toml
+	rm -rf /tmp/freeqos-lock && python -m venv /tmp/freeqos-lock && \
+	/tmp/freeqos-lock/bin/pip install -q --upgrade pip && \
+	/tmp/freeqos-lock/bin/pip install -q . && \
+	/tmp/freeqos-lock/bin/pip freeze | grep -viE '^freeqos|@ file://|^-e ' | LC_ALL=C sort > requirements.lock
 
 psql: ## Ouvre un psql sur la base de lab
 	docker compose exec timescaledb psql -U $${POSTGRES_USER:-qos} -d $${POSTGRES_DB:-qos}

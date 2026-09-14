@@ -22,9 +22,9 @@ def test_severites_rtt() -> None:
 
 def test_qoe_derive_de_la_latence() -> None:
     assert qoe_from_rtt(None) is None
-    assert qoe_from_rtt(5) == 100          # imperceptible
+    assert qoe_from_rtt(5) == 100  # imperceptible
     assert qoe_from_rtt(10) == 100
-    assert qoe_from_rtt(200) < 20          # injouable
+    assert qoe_from_rtt(200) < 20  # injouable
     assert qoe_severity(qoe_from_rtt(10)) == "ok"
     assert qoe_severity(qoe_from_rtt(200)) == "crit"
 
@@ -45,8 +45,11 @@ def test_axe_de_temps_fixe_et_trous_marques() -> None:
     point_ts = datetime.fromtimestamp(dernier - bucket_s, tz=UTC)
     heat = build_heatmap(
         [{"bucket": point_ts, "rtt_p50": 12.0, "rtt_p90": 40.0, "tx_sum": 50_000_000.0}],
-        minutes=5, buckets=5, bucket_seconds=bucket_s,
-        reference_down_bps=100_000_000.0, now=now,
+        minutes=5,
+        buckets=5,
+        bucket_seconds=bucket_s,
+        reference_down_bps=100_000_000.0,
+        now=now,
     )
     rtt = next(r for r in heat["rows"] if r["key"] == "rtt")
     assert len(rtt["cells"]) == 5
@@ -62,8 +65,9 @@ def test_axe_de_temps_fixe_et_trous_marques() -> None:
 
 
 def test_ligne_retransmissions_marquee_indisponible() -> None:
-    heat = build_heatmap([], minutes=5, buckets=5, bucket_seconds=60,
-                         now=datetime(2026, 1, 1, tzinfo=UTC))
+    heat = build_heatmap(
+        [], minutes=5, buckets=5, bucket_seconds=60, now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
     retr = next(r for r in heat["rows"] if r["key"] == "retransmits")
     assert retr["unavailable"] is True
     assert "hors-bande" in retr["reason"].lower()
@@ -74,7 +78,11 @@ def test_utilisation_none_sans_reference() -> None:
     dernier = int(now.timestamp()) - (int(now.timestamp()) % 60)
     heat = build_heatmap(
         [{"bucket": datetime.fromtimestamp(dernier, tz=UTC), "rtt_p90": 20.0, "tx_sum": 1e6}],
-        minutes=5, buckets=5, bucket_seconds=60, reference_down_bps=0.0, now=now,
+        minutes=5,
+        buckets=5,
+        bucket_seconds=60,
+        reference_down_bps=0.0,
+        now=now,
     )
     util = next(r for r in heat["rows"] if r["key"] == "utilisation")
     assert all(c["severity"] == "none" for c in util["cells"])

@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from app.collectors.mikrotik import MikrotikCollector
@@ -48,7 +49,7 @@ class RttProber:
         batch_size: int = 20,
         max_age_s: float = 300.0,
         count: int = 1,
-        clock=time.monotonic,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.batch_size = max(1, batch_size)
         self.max_age_s = max_age_s

@@ -23,7 +23,7 @@ from app.services.collection import JOB_SUBSCRIBERS, CollectionService
 from app.services.crypto import SecretBox, generate_key
 from app.services.registry import RouterRegistry
 from app.services.shaping import ShapingService
-from tests.conftest import FakeRouterOsClient
+from tests.conftest import AUTH_HEADERS, FakeRouterOsClient, make_test_auth
 
 NOW = datetime(2026, 9, 7, 12, 0, tzinfo=UTC)
 
@@ -123,8 +123,14 @@ class FakeRepository:
                 {"key": "qoe", "label": "QoE", "unit": "", "cells": cells},
                 {"key": "rtt", "label": "RTT p90", "unit": "ms", "cells": cells},
                 {"key": "utilisation", "label": "Utilisation", "unit": "%", "cells": cells},
-                {"key": "retransmits", "label": "Retransmissions TCP", "unit": "%",
-                 "unavailable": True, "reason": "Hors-bande.", "cells": []},
+                {
+                    "key": "retransmits",
+                    "label": "Retransmissions TCP",
+                    "unit": "%",
+                    "unavailable": True,
+                    "reason": "Hors-bande.",
+                    "cells": [],
+                },
             ],
         }
 
@@ -313,6 +319,7 @@ def build_container(
         secrets=secrets if secrets is not None else SecretBox(generate_key()),
         registry=registry,
         shaping=shaping,
+        auth=make_test_auth(),
         routers_repo=routers_repo,
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,
@@ -330,7 +337,9 @@ def client(settings: Settings, container: Container) -> TestClient:
     app.state.settings = settings
     register_routes(app, settings)
     app.dependency_overrides[get_container] = lambda: container
-    return TestClient(app)
+    # Tous les endpoints exigent une identite : le client de test presente une
+    # cle d'API. Les tests d'absence d'identite montent leur propre client.
+    return TestClient(app, headers=AUTH_HEADERS)
 
 
 # ------------------------------------------------------------------- sante
@@ -362,6 +371,59 @@ def test_readiness_degradee_si_base_injoignable(settings: Settings) -> None:
 
     assert response.status_code == 503
     assert response.json()["status"] == "degraded"
+
+
+def test_readiness_503_si_un_collecteur_echoue_durablement(settings: Settings) -> None:
+    """Regression P0-2 : la sonde mesure si la DONNEE arrive, pas seulement si la
+    boucle tourne. Un collecteur qui s'execute a l'heure mais echoue a chaque
+    cycle doit faire basculer /health/ready en 503, meme base joignable."""
+    import asyncio
+
+    container = build_container(settings)
+
+    async def collecteur_en_panne() -> None:
+        raise ConnectionRefusedError("routeur muet")
+
+    # Le job tourne A L'HEURE (la boucle n'est jamais 'stale') mais echoue a
+    # chaque fois : c'est exactement le cas que l'ancien verdict laissait passer.
+    container.scheduler.add_job("collect_backhauls", 30, collecteur_en_panne)
+
+    async def rejouer_les_echecs() -> None:
+        for _ in range(4):
+            await container.scheduler.run_once("collect_backhauls")
+
+    asyncio.run(rejouer_les_echecs())
+
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: container
+    test_client = TestClient(app)
+
+    ready = test_client.get("/health/ready")
+    assert ready.status_code == 503
+    body = ready.json()
+    assert body["status"] == "degraded"
+    assert body["database"] == "ok"  # la base va bien : c'est la donnee qui manque
+    degrades = {d["job"] for d in body["degraded_jobs"]}
+    assert "collect_backhauls" in degrades
+    assert "collect_backhauls" in body["failing_jobs"]
+
+    # La liveness, elle, ne bronche pas : le processus repond toujours.
+    assert test_client.get("/health").status_code == 200
+
+
+def test_readiness_liveness_ignore_la_base(settings: Settings) -> None:
+    """La liveness ne doit dependre ni de la base ni des collecteurs : sinon un
+    orchestrateur tuerait le conteneur des que la base tousse."""
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: build_container(settings, db_reachable=False)
+    response = TestClient(app).get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
 
 
 # ---------------------------------------------------------------- metriques

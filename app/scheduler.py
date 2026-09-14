@@ -17,8 +17,10 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from app.models import RunResult
@@ -26,6 +28,11 @@ from app.models import RunResult
 logger = logging.getLogger(__name__)
 
 JobFn = Callable[[], Awaitable[RunResult | None]]
+
+# Fenetre glissante des derniers verdicts d'un job. Assez large pour lisser un
+# echec isole (un routeur momentanement muet), assez courte pour qu'un collecteur
+# qui repart soit reconnu sain rapidement.
+RECENT_WINDOW = 20
 
 
 @dataclass
@@ -40,9 +47,31 @@ class JobState:
     last_duration_s: float | None = None
     last_ok: bool | None = None
     last_error: str | None = None
+    # Fraicheur de la DONNEE, pas seulement de la boucle : quand un cycle a-t-il
+    # reellement REUSSI pour la derniere fois ? Un job qui tourne a l'heure mais
+    # echoue a chaque fois n'a pas de dernier succes recent, et la readiness doit
+    # le voir. On garde l'horloge monotone (pour le calcul de fraicheur) et un
+    # horodatage mural (pour l'affichage).
+    last_success_monotonic: float | None = None
+    last_success_at: datetime | None = None
+    consecutive_failures: int = 0
+    recent: deque[bool] = field(default_factory=lambda: deque(maxlen=RECENT_WINDOW))
     task: asyncio.Task[None] | None = field(default=None, repr=False)
 
+    def record(self, ok: bool) -> None:
+        """Enregistre le verdict d'un cycle, pour la fenetre glissante et la
+        fraicheur de la donnee."""
+        self.recent.append(ok)
+        if ok:
+            self.last_success_monotonic = time.monotonic()
+            self.last_success_at = datetime.now(tz=UTC)
+            self.consecutive_failures = 0
+        else:
+            self.consecutive_failures += 1
+
     def snapshot(self) -> dict[str, Any]:
+        recent = list(self.recent)
+        failure_rate = (recent.count(False) / len(recent)) if recent else None
         return {
             "job": self.name,
             "interval_s": self.interval_s,
@@ -55,6 +84,18 @@ class JobState:
             "seconds_since_last_run": (
                 None if self.last_started_at is None else time.monotonic() - self.last_started_at
             ),
+            # Fraicheur de la donnee : depuis combien de temps aucun cycle n'a
+            # reussi. C'est ce que la sonde de readiness doit regarder, pas
+            # seulement si la boucle tourne.
+            "last_success_at": self.last_success_at,
+            "seconds_since_last_success": (
+                None
+                if self.last_success_monotonic is None
+                else time.monotonic() - self.last_success_monotonic
+            ),
+            "consecutive_failures": self.consecutive_failures,
+            "recent_failure_rate": failure_rate,
+            "recent_window": len(recent),
         }
 
 
@@ -149,6 +190,7 @@ class Scheduler:
             job.last_ok = False
             job.last_error = f"{type(exc).__name__}: {exc}"
             job.last_duration_s = time.monotonic() - job.last_started_at
+            job.record(ok=False)
             logger.exception("Job '%s' en echec", job.name)
             return None
 
@@ -158,7 +200,9 @@ class Scheduler:
             job.last_error = result.error_text
             if not result.ok:
                 job.failures += 1
+            job.record(ok=result.ok)
         else:
             job.last_ok = True
             job.last_error = None
+            job.record(ok=True)
         return result

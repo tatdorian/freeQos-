@@ -209,5 +209,5 @@ class FreeradiusSqlPlanProvider:
 
     async def aclose(self) -> None:
         if self._pool is not None and hasattr(self._pool, "close"):
-            await self._pool.close()  # type: ignore[misc]
+            await self._pool.close()
             self._pool = None

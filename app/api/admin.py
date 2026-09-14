@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import BaseModel
 
 from app.api.deps import CollectionDep, ContainerDep, RepositoryDep, SchedulerDep
+from app.services.tls import describe_tls
 
 router = APIRouter(tags=["exploitation"])
 
@@ -83,6 +84,9 @@ async def status_view(
                 "role": collector.config.role.value,
                 "pop": collector.config.effective_pop_name,
                 "username": collector.config.username,
+                "use_ssl": collector.config.use_ssl,
+                # Posture TLS visible : une desactivation doit se voir.
+                "tls": describe_tls(collector.config),
             }
             for collector in collection.collectors
         ],

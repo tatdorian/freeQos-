@@ -569,12 +569,47 @@ que la boucle centrale devra suivre, sans radio.
 
 ---
 
+## Authentification
+
+**Aucun endpoint de l'API n'est accessible sans identité.** Deux voies :
+
+- **Session** — `POST /api/v1/auth/login` (identifiant + mot de passe) pose un cookie
+  `SameSite=Strict` / `HttpOnly`. C'est ce qu'utilise l'interface. `POST /auth/logout`
+  ferme la session.
+- **Clé d'API** — pour les appels machine : en-tête `X-API-Key: fq_…` (ou
+  `Authorization: Bearer fq_…`). Les clés se créent via `POST /api/v1/auth/api-keys`
+  (réservé aux administrateurs) ; le secret n'est montré **qu'à la création**.
+
+Les mots de passe sont hachés en **argon2**, les clés d'API et les jetons de session en
+SHA-256 (secrets à haute entropie) : la base volée ne rend aucun accès utilisable.
+
+**Premier démarrage** : un compte administrateur est créé si la base est vide. Renseignez
+`AUTH_ADMIN_PASSWORD` pour fixer son mot de passe ; sinon un mot de passe aléatoire est
+généré et **affiché une seule fois dans les logs de démarrage** (aucun défaut connu).
+`allow_origins` CORS n'est **jamais** `*`, et chaque réponse porte CSP / X-Frame-Options /
+HSTS. La connexion est limitée en débit contre le bourrage.
+
+## Écriture (enforcement)
+
+Le contrôleur reste **hors-bande** (jamais sur le chemin des paquets) mais **écrit**
+désormais des files `/queue/simple` sur les routeurs, sous garde-fous : rien ne part tant
+que `ENFORCEMENT_ENABLED` est faux, seules les files marquées `freeqos:managed` sont
+touchées, et **toute commande est journalisée dans `enforcement_audit` avec son auteur**
+(compte connecté, ou `system:reconcile` / `system:boost-expiry` pour les boucles
+automatiques). La vérification TLS vers chaque routeur est configurable
+(`tls_verify` : `strict` par défaut, `fingerprint`, ou `insecure` assumé).
+
 ## API
+
+Toutes les routes `/api/v1/*` exigent une identité (voir ci-dessus), sauf `POST
+/api/v1/auth/login`. `/health` et `/health/ready` restent ouverts (sondes).
 
 | Méthode | Chemin | Description |
 |---|---|---|
-| `GET` | `/health` | Liveness |
-| `GET` | `/health/ready` | Readiness : base + fraîcheur des cycles (503 si dégradé) |
+| `GET` | `/health` | Liveness (le processus répond ; ne dépend ni de la base ni des collecteurs) |
+| `GET` | `/health/ready` | Readiness : base + **fraîcheur de la donnée** (503 dès qu'un collecteur échoue durablement) |
+| `POST` | `/api/v1/auth/login` · `/logout` · `GET /me` | Session (cookie `SameSite=Strict`) |
+| `GET` · `POST` · `DELETE` | `/api/v1/auth/api-keys` | Clés d'API machine (admin) |
 | `GET` | `/api/v1/pops` | Liste des PoPs |
 | `GET` | `/api/v1/subscribers` | Abonnés (filtres `pop_id`, `search`) |
 | `GET` | `/api/v1/subscribers/latest` | Dernier échantillon par abonné (top talkers) |

@@ -44,6 +44,12 @@ jobs:
       - name: Format
         run: ruff format --check app tests
 
+      # Verification de types stricte : c'est EXACTEMENT ce controle qui aurait
+      # attrape le bug de cablage P0-3 (parametre annote Any). La configuration
+      # (strict, files = app) vit dans pyproject.toml.
+      - name: Typage (mypy --strict)
+        run: mypy
+
       - name: Tests unitaires (sans infrastructure)
         run: pytest -q
 

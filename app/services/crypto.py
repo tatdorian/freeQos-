@@ -20,6 +20,10 @@ import logging
 import os
 import stat
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +41,7 @@ class SecretBox:
     """Chiffre et dechiffre les secrets destines a la base."""
 
     def __init__(self, key: str | None) -> None:
-        self._fernet = None
+        self._fernet: Fernet | None = None
         self._error: str | None = None
 
         if not key:
@@ -65,7 +69,7 @@ class SecretBox:
     def unavailable_reason(self) -> str | None:
         return self._error
 
-    def _require(self):
+    def _require(self) -> Fernet:
         if self._fernet is None:
             raise SecretUnavailableError(self._error or "chiffrement indisponible")
         return self._fernet

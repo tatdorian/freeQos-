@@ -1,0 +1,23 @@
+# Hooks pre-commit : formatage, lint et typage AVANT chaque commit, pour que la
+# CI ne soit plus rouge en permanence sur des broutilles de forme.
+#   pip install -e ".[dev]" && pre-commit install    (ou : make hooks)
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      # Lint + corrections automatiques.
+      - id: ruff
+        args: [--fix]
+      # Formatage (equivalent de `ruff format`).
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      # mypy --strict depuis l'environnement de dev (config dans pyproject.toml).
+      # C'est le controle qui aurait attrape le bug de cablage P0-3.
+      - id: mypy
+        name: mypy --strict (app)
+        entry: mypy
+        language: system
+        types: [python]
+        pass_filenames: false

@@ -75,6 +75,7 @@ class PgDirectory:
                 name,
                 router_host,
             )
+        pop_id = int(pop_id)
         self._pop_cache[name] = pop_id
         return pop_id
 
@@ -107,6 +108,7 @@ class PgDirectory:
                 plan.up_mbps if plan else None,
                 plan.source if plan else None,
             )
+        subscriber_id = int(subscriber_id)
         self._subscriber_cache[login] = subscriber_id
         return subscriber_id
 
@@ -140,6 +142,7 @@ class PgDirectory:
                 uisp_device_id,
                 nominal_capacity_mbps,
             )
+        backhaul_id = int(backhaul_id)
         self._backhaul_cache[cache_key] = backhaul_id
         return backhaul_id
 

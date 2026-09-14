@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -435,7 +435,7 @@ class TopologyRepository:
         target_key: str,
         down_mbps: float | None,
         up_mbps: float | None,
-        expires_at,
+        expires_at: datetime,
         reason: str | None = None,
         updated_by: str | None = None,
     ) -> dict[str, Any]:
@@ -532,7 +532,8 @@ class TopologyRepository:
     # ------------------------------------------------------ drapeaux runtime
     async def get_flag(self, name: str) -> bool | None:
         async with self._pool.acquire() as conn:
-            return await conn.fetchval("SELECT value FROM runtime_flags WHERE name = $1", name)
+            value = await conn.fetchval("SELECT value FROM runtime_flags WHERE name = $1", name)
+        return None if value is None else bool(value)
 
     async def set_flag(
         self, name: str, value: bool, *, updated_by: str | None = None, reason: str | None = None
@@ -559,20 +560,45 @@ class TopologyRepository:
 
     # ---------------------------------------------------------------- audit
     async def record_audit(
-        self, router_name: str, *, dry_run: bool, outcomes: list[tuple[Any, bool, str]]
+        self,
+        router_name: str,
+        *,
+        dry_run: bool,
+        outcomes: list[tuple[Any, bool, str]],
+        author: str | None = None,
     ) -> int:
+        """Journalise chaque commande, avec son AUTEUR et le detail des changements.
+
+        ``author`` remonte l'identite qui a declenche l'action (compte connecte,
+        ou "system:*" pour les boucles automatiques). ``changes`` conserve le
+        dictionnaire {champ: [avant, apres]} de l'action : la commande finale
+        seule ne dit pas ce qui a change, donc ne se diagnostique pas depuis
+        l'interface.
+        """
         if not outcomes:
             return 0
         lignes = [
-            (router_name, action.verb, action.path, action.command, dry_run, ok, detail[:2000])
+            (
+                router_name,
+                action.verb,
+                action.path,
+                action.command,
+                dry_run,
+                ok,
+                detail[:2000],
+                author,
+                json.dumps({k: list(v) for k, v in action.changes.items()})
+                if getattr(action, "changes", None)
+                else None,
+            )
             for action, ok, detail in outcomes
         ]
         async with self._pool.acquire() as conn:
             await conn.executemany(
                 """
                 INSERT INTO enforcement_audit
-                       (router_name, verb, path, command, dry_run, ok, detail)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                       (router_name, verb, path, command, dry_run, ok, detail, author, changes)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
                 """,
                 lignes,
             )
@@ -582,7 +608,8 @@ class TopologyRepository:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT ts, router_name, verb, path, command, dry_run, ok, detail
+                SELECT ts, router_name, verb, path, command, dry_run, ok, detail,
+                       author, changes
                   FROM enforcement_audit
                  ORDER BY ts DESC
                  LIMIT $1

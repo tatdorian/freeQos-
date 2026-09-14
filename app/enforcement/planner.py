@@ -236,6 +236,10 @@ def desired_queue_types(
     ``overhead`` doit refleter l'encapsulation reelle : PPPoE ajoute 8 octets a
     l'ethernet, davantage avec du VLAN ou du MPLS. Le sous-estimer fait shaper
     au-dessus de la capacite du lien, ce qui annule le benefice de l'AQM.
+
+    ``extra`` transmet les options CAKE avancees (diffserv, flowmode, nat,
+    ack_filter, wash, mpu) telles quelles a ``QueueTypeSpec`` : une valeur None
+    n'ecrit pas le champ (defaut RouterOS conserve).
     """
     commun = {"overhead": overhead, "rtt_ms": rtt_ms, **extra}
     return [
@@ -284,19 +288,19 @@ def desired_state(
         )
         if down is None and up is None and not queue_unmeasured_links:
             continue
-        cible = link.queue_target
-        if cible in cibles_liens:
+        cible_lien = link.queue_target
+        if cible_lien in cibles_liens:
             # Plusieurs voisins sur le meme port, ou deux liens sur le meme
             # segment : deux files de meme cible se masqueraient l'une l'autre,
             # RouterOS n'appliquant que la premiere.
             logger.info(
                 "Lien '%s' sans file : la cible %s est deja celle de '%s'",
                 link.name,
-                cible,
-                cibles_liens[cible],
+                cible_lien,
+                cibles_liens[cible_lien],
             )
             continue
-        cibles_liens[cible] = link.name
+        cibles_liens[cible_lien] = link.name
         # Sans capacite connue on ecrit tout de meme la file, en ILLIMITE
         # (``0/0``) : elle ne bride rien tant que l'exploitant n'a pas fixe de
         # debit, mais elle existe des la decouverte du lien, elle porte les
@@ -306,7 +310,7 @@ def desired_state(
         files.append(
             QueueSpec(
                 name=link.queue_name,
-                target=cible,
+                target=cible_lien,
                 max_up_mbps=up,
                 max_down_mbps=down,
                 queue_up=QUEUE_TYPE_UP,
@@ -499,22 +503,22 @@ def build_plan(
             etrangeres_par_cible.setdefault(cible, []).append(row)
 
     # Les parents d'abord : RouterOS refuse un enfant dont le parent n'existe pas.
-    for spec in sorted(desired_queues, key=lambda q: q.order):
-        noms_desires.add(spec.name)
-        existante = files_existantes.get(spec.name)
-        champs = spec.routeros_fields()
+    for file_spec in sorted(desired_queues, key=lambda q: q.order):
+        noms_desires.add(file_spec.name)
+        existante = files_existantes.get(file_spec.name)
+        champs = file_spec.routeros_fields()
 
         if existante is None:
-            etrangeres = etrangeres_par_cible.get(spec.target) or []
+            etrangeres = etrangeres_par_cible.get(file_spec.target) or []
             if etrangeres:
-                _traiter_file_tierce(plan, spec, etrangeres, adopt=adopt)
+                _traiter_file_tierce(plan, file_spec, etrangeres, adopt=adopt)
                 continue
             plan.actions.append(
                 PlanAction(
                     verb="add",
                     path="/queue/simple",
                     fields=champs,
-                    name=spec.name,
+                    name=file_spec.name,
                     reason="file absente",
                 )
             )
@@ -523,7 +527,7 @@ def build_plan(
         if not _is_managed(existante):
             plan.conflicts.append(
                 PlanConflict(
-                    name=spec.name,
+                    name=file_spec.name,
                     path="/queue/simple",
                     detail=(
                         "une file de ce nom existe deja sans le marqueur "
@@ -542,7 +546,7 @@ def build_plan(
                     path="/queue/simple",
                     fields={k: v for k, v in champs.items() if k != "name"},
                     target_id=str(existante.get(".id") or existante.get("id") or ""),
-                    name=spec.name,
+                    name=file_spec.name,
                     reason="debit ou parent different",
                     changes=changements,
                 )
@@ -673,11 +677,23 @@ def _normalise(value: str | None) -> str | None:
         return "yes"
     if texte in {"false", "no"}:
         return "no"
+    # Champs de type LISTE (``target`` d'une file peut viser plusieurs membres :
+    # "ether3,lan-bridge"). RouterOS les rend dans SON ordre, avec SON espacement
+    # et parfois une casse differente : "lan-bridge, ETHER3" designe le meme
+    # ensemble. Sans canonisation, la moindre difference de forme au retour
+    # produit un ecart permanent -- donc un ``set`` a chaque cycle, pour toujours.
+    # On compare donc l'ENSEMBLE : on decoupe, on nettoie chaque membre, on trie.
+    # (La virgule est le separateur de liste RouterOS ; le slash, lui, separe un
+    # debit compose et reste traite plus bas.)
+    if "," in texte:
+        membres = [_normalise(m) or "" for m in texte.split(",")]
+        membres = [m for m in membres if m]
+        return ",".join(sorted(membres))
     # Debits composes : on compare les entiers, pas leur ecriture.
     if "/" in texte:
         morceaux = [_normalise_rate(m) for m in texte.split("/")]
         if all(m is not None for m in morceaux):
-            return "/".join(morceaux)  # type: ignore[arg-type]
+            return "/".join(m for m in morceaux if m is not None)
     seul = _normalise_rate(texte)
     return seul if seul is not None else texte
 

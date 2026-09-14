@@ -48,6 +48,12 @@ class RouterConfig(BaseModel):
     enabled: bool = True
     timeout_s: float = 5.0
     use_ssl: bool = False
+    # Verification TLS quand use_ssl est vrai, PAR ROUTEUR (defaut : la plus
+    # sure). "strict" verifie chaine + nom d'hote ; "fingerprint" epingle
+    # l'empreinte SHA-256 (certificats auto-signes des CHR) ; "insecure" desactive
+    # la verification -- un choix assume, jamais un defaut cache.
+    tls_verify: Literal["strict", "fingerprint", "insecure"] = "strict"
+    tls_fingerprint: str | None = None
 
     # RouterOS cree une interface dynamique par session PPPoE. Son nom par defaut
     # est "<pppoe-LOGIN>" : c'est la seule facon d'obtenir les compteurs d'octets,
@@ -57,6 +63,23 @@ class RouterConfig(BaseModel):
     # --- Phase 2 : enforcement (declare, non utilise) ---
     rw_username: str | None = None
     rw_password_env: str | None = None
+
+    @model_validator(mode="after")
+    def _check_tls(self) -> RouterConfig:
+        """Une empreinte est obligatoire en mode ``fingerprint``, et doit etre un
+        SHA-256 valide. Mieux vaut echouer au chargement qu'a la connexion."""
+        if self.tls_verify == "fingerprint":
+            from app.services.tls import TlsConfigurationError, normalise_fingerprint
+
+            if not self.tls_fingerprint:
+                raise ValueError(
+                    f"routeur '{self.name}' : tls_verify=fingerprint exige tls_fingerprint"
+                )
+            try:
+                self.tls_fingerprint = normalise_fingerprint(self.tls_fingerprint)
+            except TlsConfigurationError as exc:
+                raise ValueError(str(exc)) from exc
+        return self
 
     @property
     def effective_pop_name(self) -> str:
@@ -156,6 +179,30 @@ class Settings(BaseSettings):
     app_env: str = "lab"
     log_level: str = "INFO"
     api_prefix: str = "/api/v1"
+
+    # --- Authentification / securite ---
+    # Compte administrateur initial, cree UNIQUEMENT au premier demarrage (aucun
+    # compte en base). Sans mot de passe fourni, un mot de passe aleatoire est
+    # genere et journalise une fois : jamais de mot de passe par defaut connu.
+    auth_admin_username: str = "admin"
+    auth_admin_password: SecretStr | None = None
+    # Duree de vie d'une session (cookie). Au-dela, il faut se reconnecter.
+    auth_session_ttl_hours: float = 12.0
+    # Anti-bourrage sur la connexion : N echecs par identifiant dans la fenetre.
+    auth_login_max_attempts: int = 5
+    auth_login_window_s: float = 300.0
+    # Cookie ``Secure`` : None = automatique (actif sauf en lab/dev/test, ou un
+    # cookie Secure ne serait jamais renvoye sur HTTP et rendrait la connexion
+    # impossible). Forcer True en production derriere un reverse-proxy TLS.
+    auth_cookie_secure: bool | None = None
+    # Origines CORS autorisees. JAMAIS "*" : l'API porte des cookies et ecrit sur
+    # des routeurs. Vide = meme origine seulement (l'interface est servie ici).
+    cors_allow_origins: list[str] = Field(default_factory=list)
+    # En-tetes de securite. HSTS n'a d'effet qu'en HTTPS (les navigateurs
+    # l'ignorent en clair) : on peut le laisser actif sans risque en lab.
+    security_headers_enabled: bool = True
+    hsts_enabled: bool = True
+    hsts_max_age_s: int = 31_536_000
 
     # --- Base de donnees ---
     database_url: str = "postgresql://qos:changeme@localhost:5432/qos"
@@ -276,6 +323,25 @@ class Settings(BaseSettings):
     # shaper au-dessus de la capacite du lien, ce qui annule l'AQM.
     cake_overhead: int = 22
     cake_rtt_ms: int = 50
+    # Options CAKE avancees. Le rendu RouterOS existe deja (QueueTypeSpec) ; il
+    # ne restait qu'a les exposer. None = on ne pose pas le champ (defaut RouterOS).
+    #
+    # cake_diffserv   : classes de priorite selon le DSCP. "diffserv4" protege la
+    #                   voix et le jeu ; "besteffort" ignore le DSCP.
+    # cake_flowmode   : isolation des flux. "triple-isolate" est le bon defaut ;
+    #                   "dual-dsthost" par abonne derriere le lien.
+    # cake_nat        : DETERMINANT derriere CGNAT/PPPoE -- CAKE resout la NAT
+    #                   pour isoler les hotes reels et non la seule IP publique.
+    # cake_ack_filter : "filter" allege les ACK sur un lien tres asymetrique.
+    # cake_wash       : remet le DSCP a zero en sortie. NECESSAIRE quand le DSCP
+    #                   entrant n'est pas fiable (marquage client arbitraire).
+    # cake_mpu        : taille de paquet minimale facturee (cadrage ATM/PPPoE).
+    cake_diffserv: str | None = None
+    cake_flowmode: str | None = None
+    cake_nat: bool | None = None
+    cake_ack_filter: str | None = None
+    cake_wash: bool | None = None
+    cake_mpu: int | None = None
     # Coupe-circuit : un plan anormalement gros signale un etat desire mal
     # calcule, il vaut mieux s'arreter que de reecrire tout un PoP.
     enforcement_max_actions: int = 500
@@ -318,6 +384,29 @@ class Settings(BaseSettings):
                 return []
             return json.loads(value)
         return value
+
+    @field_validator("cors_allow_origins", mode="before")
+    @classmethod
+    def _parse_origins(cls, value: Any) -> Any:
+        """Accepte CORS_ALLOW_ORIGINS en JSON ('["https://a"]') ou en CSV.
+
+        Un "*" est refuse explicitement : l'API porte des cookies de session et
+        ecrit sur des routeurs, une origine joker serait une faille beante.
+        """
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return []
+            origins = (
+                json.loads(value)
+                if value.startswith("[")
+                else [part.strip() for part in value.split(",") if part.strip()]
+            )
+        else:
+            origins = value
+        if isinstance(origins, list) and "*" in origins:
+            raise ValueError("CORS_ALLOW_ORIGINS ne doit jamais valoir '*' (cookies + ecriture)")
+        return origins
 
     @field_validator("log_level", mode="before")
     @classmethod
