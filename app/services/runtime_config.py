@@ -294,6 +294,37 @@ REGLAGES: tuple[Reglage, ...] = (
         "reconcile_shaping",
         "Periode de reapplication automatique de l'etat desire sur les routeurs.",
     ),
+    _cadence(
+        "vlan_detect_interval_s",
+        "detect_vlan_clients",
+        "Periode de lecture de la table ARP pour reperer les clients sur VLAN "
+        "routee. Aide a la declaration : rien de ce qui est trouve n'est shape.",
+    ),
+    # --- Detection ---
+    Reglage(
+        "vlan_detect_enabled",
+        "detection",
+        "bool",
+        "Lire /ip/arp pour proposer les clients a IP fixe non declares. "
+        "Purement consultatif : aucun candidat n'est jamais façonne.",
+    ),
+    Reglage(
+        "vlan_candidate_limit",
+        "detection",
+        "int",
+        "Nombre maximum de candidats remontes a l'interface et poses dans le "
+        "graphe. Une VLAN bavarde ne doit pas rendre l'arbre illisible.",
+        minimum=1,
+        maximum=5_000,
+    ),
+    Reglage(
+        "vlan_sighting_retention_s",
+        "detection",
+        "float",
+        "Duree au-dela de laquelle une adresse qui ne parle plus est oubliee.",
+        minimum=60.0,
+        maximum=2_592_000.0,
+    ),
 )
 
 PAR_NOM: dict[str, Reglage] = {r.name: r for r in REGLAGES}

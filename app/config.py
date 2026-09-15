@@ -208,6 +208,18 @@ class Settings(BaseSettings):
     # faite hors de cette instance (edition directe en base, seconde instance).
     inventory_refresh_interval_s: float = 60.0
 
+    # --- Detection des clients sur VLAN routee (aide a la saisie) ---
+    # Lecture de /ip/arp pour reperer qui parle sur les VLAN sans PPPoE. La
+    # cadence est lache a dessein : c'est une aide a la DECLARATION, pas une
+    # metrique. Rien de ce qu'elle trouve n'est jamais shape.
+    vlan_detect_enabled: bool = True
+    vlan_detect_interval_s: float = 300.0
+    # Au-dela, une adresse qui s'est tue n'est plus une piste : on l'oublie.
+    vlan_sighting_retention_s: float = 86_400.0
+    # Plafond de candidats remontes a l'interface ET poses dans le graphe. Une
+    # VLAN bavarde ne doit pas noyer l'arbre sous des centaines de cases.
+    vlan_candidate_limit: int = 200
+
     # --- Sonde de latence (phase 3 amorcee) ---
     # DESACTIVEE par defaut : c'est une sonde ACTIVE (/ping depuis le routeur),
     # elle consomme du CPU routeur, contrairement a la mesure passive de LibreQoS

@@ -65,6 +65,15 @@ le meme chemin de planification :
   saisi par l'operateur est la seule verite, et son debit se lit sur les compteurs de
   la file qui le vise.
 
+**Detection assistee, jamais automatique** : la table ARP des routeurs
+(``/ip/arp``, filtree aux VLAN qui n'hebergent pas de serveur PPPoE) sert a deux
+choses seulement -- confirmer la presence d'un client deja declare, et PROPOSER
+des candidats dans ``/static-clients/candidates``. Un candidat n'est pas un
+client : une imprimante ou l'equipement d'un autre operateur laissent la meme
+trace. Aucun candidat n'est jamais faconne, aucun ne recoit de plan, et il
+n'existe deliberement aucune route pour le promouvoir -- declarer passe par
+``POST /static-clients`` avec un debit souscrit que seul un humain connait.
+
 **Boucle fermee QoE** : un job periodique lit le score de QoE composite
 (bufferbloat + latence a vide) et resserre l'enveloppe PARTAGEE d'un secteur qui
 decroche -- jamais le plan souscrit d'un abonne. Meme garde-fous que les autres

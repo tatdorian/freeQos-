@@ -24,6 +24,7 @@ from app.db.static_clients_repo import (
     InvalidStaticClientError,
     StaticClientNotFoundError,
     StaticClientsRepository,
+    VlanSightingsRepository,
 )
 
 logger = logging.getLogger(__name__)
@@ -88,12 +89,66 @@ def _require_repository(container: ContainerDep) -> StaticClientsRepository:
     return container.static_clients_repo
 
 
+def _sightings(container: ContainerDep) -> VlanSightingsRepository | None:
+    return container.sightings_repo
+
+
 @router.get("/static-clients", summary="Inventaire des clients a IP fixe")
 async def list_static_clients(
     container: ContainerDep,
     pop_name: Annotated[str | None, Query(max_length=128)] = None,
 ) -> list[dict[str, Any]]:
-    return await _require_repository(container).list_all(pop_name=pop_name)
+    """Fiches declarees, enrichies de leur derniere presence observee.
+
+    La presence vient de la table ARP et ne modifie JAMAIS la fiche : c'est une
+    lecture jointe a l'affichage. Une fiche sans presence n'est pas une erreur
+    -- le client peut etre silencieux, ou joignable par un chemin que l'ARP du
+    routeur ne montre pas.
+    """
+    fiches = await _require_repository(container).list_all(pop_name=pop_name)
+    repo = _sightings(container)
+    if repo is None:
+        return fiches
+    try:
+        presence = await repo.presence()
+    except Exception:  # noqa: BLE001 - l'inventaire doit rester lisible
+        logger.exception("Presence des clients statiques illisible")
+        return fiches
+    for fiche in fiches:
+        vu = presence.get(fiche["reference"])
+        fiche["last_seen_at"] = vu["last_seen"] if vu else None
+        fiche["seen_mac"] = vu["mac"] if vu else None
+        fiche["seen_vlan_interface"] = vu["vlan_interface"] if vu else None
+        fiche["seen_router"] = vu["router_name"] if vu else None
+    return fiches
+
+
+@router.get(
+    "/static-clients/candidates",
+    summary="Adresses detectees sur une VLAN routee, non declarees",
+)
+async def list_candidates(container: ContainerDep) -> dict[str, Any]:
+    """Ce que la table ARP montre et que l'inventaire ne connait pas.
+
+    A LIRE COMME UNE PISTE, PAS COMME UNE LISTE DE CLIENTS. Une entree ARP dit
+    qu'une adresse a parle sur une VLAN sans PPPoE : rien de plus. Une
+    imprimante, une camera ou l'equipement d'un autre operateur produisent le
+    meme signal. Aucun de ces candidats n'est faconne, aucun n'a de plan, et
+    aucun ne le sera tant qu'un humain n'aura pas saisi sa fiche.
+    """
+    repo = _sightings(container)
+    if repo is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Detection indisponible (base non initialisee)",
+        )
+    if not container.settings.vlan_detect_enabled:
+        return {"enabled": False, "candidates": [], "count": 0}
+    lignes = await repo.candidates(
+        limit=container.settings.vlan_candidate_limit,
+        max_age_s=container.settings.vlan_sighting_retention_s,
+    )
+    return {"enabled": True, "candidates": lignes, "count": len(lignes)}
 
 
 @router.post(

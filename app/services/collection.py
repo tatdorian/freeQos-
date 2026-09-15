@@ -34,6 +34,7 @@ from app.models import (
     RunResult,
     StaticClient,
     SubscriberSample,
+    VlanSighting,
 )
 from app.services.rates import RateTracker
 from app.services.rtt import RttProber
@@ -49,6 +50,7 @@ JOB_RTT = "probe_rtt"
 JOB_BOOSTS = "expire_boosts"
 JOB_RECONCILE = "reconcile_shaping"
 JOB_QOE_LOOP = "qoe_closed_loop"
+JOB_VLAN_CLIENTS = "detect_vlan_clients"
 
 # Origine du plan d'un client a IP fixe. Ce n'est pas RADIUS et ca ne doit pas
 # en avoir l'air : le debit vient de la fiche saisie par l'operateur.
@@ -92,6 +94,21 @@ class StaticClientsProvider(Protocol):
     async def load_enabled(self) -> list[StaticClient]: ...
 
 
+class VlanSightingsProvider(Protocol):
+    """Contrat du depot des observations ARP.
+
+    Volontairement en ECRITURE SEULE du point de vue du service de collecte :
+    il enregistre ce qu'il a vu et oublie ce qui est perime, mais ne relit
+    jamais les candidats. C'est structurel, pas cosmetique -- rien dans la
+    boucle de collecte ou de planification ne doit pouvoir consommer un
+    candidat pour en faire un abonne.
+    """
+
+    async def record(self, sightings: Sequence[VlanSighting], *, seen_at: datetime) -> int: ...
+
+    async def prune(self, *, older_than_s: float) -> int: ...
+
+
 class CollectionService:
     def __init__(
         self,
@@ -107,6 +124,7 @@ class CollectionService:
         rtt_prober: RttProber | None = None,
         antennas_provider: AntennasProvider | None = None,
         static_clients: StaticClientsProvider | None = None,
+        sightings: VlanSightingsProvider | None = None,
     ) -> None:
         self.settings = settings
         self.collectors = list(collectors)
@@ -118,6 +136,9 @@ class CollectionService:
         # Inventaire des clients a IP fixe. Absent = deploiement 100 % PPPoE,
         # et tout ce qui suit se comporte exactement comme avant.
         self.static_clients = static_clients
+        # Depot des observations ARP. Absent = detection coupee, et tout le
+        # reste se comporte exactement comme avant.
+        self.sightings = sightings
         self.directory = directory
         self.writer = writer
         self.backhauls = list(backhauls if backhauls is not None else settings.enabled_backhauls)
@@ -435,6 +456,78 @@ class CollectionService:
             # Un plan manquant ne doit pas empecher d'ecrire les metriques.
             logger.exception("Recuperation des plans impossible pour %d login(s)", len(unknown))
             return {}
+
+    # ------------------------------------------------------------------
+    # Detection des clients sur VLAN routee
+    # ------------------------------------------------------------------
+    async def detect_vlan_clients(self) -> RunResult:
+        """Repere qui parle sur les VLAN routees, pour AIDER a la declaration.
+
+        CE JOB NE CREE RIEN. Il enregistre des observations, point. Deux
+        lectures s'en deduisent ailleurs, au moment de l'affichage :
+
+          - une adresse comprise dans le bloc d'un client declare confirme sa
+            presence ;
+          - une adresse qui ne correspond a rien devient un candidat propose a
+            l'operateur.
+
+        La separation est volontairement structurelle : ce job ecrit dans
+        ``vlan_sightings`` et n'a meme pas de methode pour lire les candidats.
+        Aucun chemin de code ne peut donc transformer une detection en fiche,
+        en plan ou en file -- il faut passer par l'interface, et par un humain
+        qui saisit un debit souscrit que seul lui connait.
+        """
+        started_at = _utcnow()
+        monotonic = self._clock()
+        errors: list[str] = []
+
+        if self.sightings is None or not self.settings.vlan_detect_enabled:
+            result = RunResult(
+                job=JOB_VLAN_CLIENTS,
+                started_at=started_at,
+                duration_s=self._clock() - monotonic,
+                ok=True,
+                items=0,
+            )
+            await self._finalize(result)
+            return result
+
+        gathered = await asyncio.gather(
+            *(collector.collect_vlan_clients() for collector in self.collectors),
+            return_exceptions=True,
+        )
+
+        vues: list[VlanSighting] = []
+        for collector, outcome in zip(self.collectors, gathered, strict=True):
+            if isinstance(outcome, BaseException):
+                # Un routeur sans /ip/arp lisible ne doit pas annuler les autres.
+                errors.append(f"{collector.name}: {type(outcome).__name__}: {outcome}")
+                logger.warning("Table ARP illisible sur %s : %s", collector.name, outcome)
+                continue
+            vues.extend(outcome)
+
+        enregistrees = 0
+        try:
+            enregistrees = await self.sightings.record(vues, seen_at=started_at)
+            oubliees = await self.sightings.prune(
+                older_than_s=self.settings.vlan_sighting_retention_s
+            )
+            if oubliees:
+                logger.debug("Detection VLAN : %d observation(s) perimee(s) oubliee(s)", oubliees)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"ecriture: {exc}")
+            logger.exception("Enregistrement des observations VLAN impossible")
+
+        result = RunResult(
+            job=JOB_VLAN_CLIENTS,
+            started_at=started_at,
+            duration_s=self._clock() - monotonic,
+            ok=not errors,
+            items=enregistrees,
+            errors=errors,
+        )
+        await self._finalize(result)
+        return result
 
     # ------------------------------------------------------------------
     # Debit des liens (compteurs de ports)

@@ -44,6 +44,31 @@ SUBSCRIBER_KINDS = (KIND_PPPOE, KIND_STATIC)
 
 
 @dataclass(slots=True)
+class VlanSighting:
+    """Une machine vue parler sur une VLAN routee, lue dans ``/ip/arp``.
+
+    CE QUE C'EST, ET CE QUE CE N'EST PAS. C'est un signe de PRESENCE : une IP
+    et une MAC ont echange du trafic sur une interface VLAN qui n'heberge pas
+    de serveur PPPoE. Ce n'est pas un client : rien ici ne dit a qui appartient
+    cette adresse, ni quel debit a ete vendu. Une imprimante, un routeur de
+    passage ou un equipement reseau produisent exactement le meme signal.
+
+    D'ou les deux seuls usages autorises :
+      - confirmer la presence d'un client DEJA declare dans l'inventaire ;
+      - proposer un candidat a l'operateur, qui decide.
+
+    Jamais une fiche creee toute seule, jamais un plan, jamais une file.
+    """
+
+    router_name: str
+    pop_name: str
+    address: str
+    vlan_interface: str
+    mac: str | None = None
+    vlan_id: int | None = None
+
+
+@dataclass(slots=True)
 class StaticClient:
     """Un client a IP fixe, tel que l'operateur l'a DECLARE.
 

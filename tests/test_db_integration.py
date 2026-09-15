@@ -26,6 +26,7 @@ from app.db.static_clients_repo import (
     DuplicateStaticClientError,
     StaticClientNotFoundError,
     StaticClientsRepository,
+    VlanSightingsRepository,
 )
 from app.db.writer import PgMetricsWriter
 from app.models import (
@@ -34,6 +35,7 @@ from app.models import (
     Plan,
     RunResult,
     SubscriberSample,
+    VlanSighting,
 )
 
 DSN = os.environ.get("TEST_DATABASE_URL")
@@ -93,7 +95,7 @@ async def database():
             "airos_antennas, pops, "
             "topology_nodes, topology_links, subscriber_attachments, "
             "shaping_policies, enforcement_audit, runtime_flags, runtime_settings, "
-            "static_clients "
+            "static_clients, vlan_sightings "
             "RESTART IDENTITY CASCADE"
         )
     yield db
@@ -1817,5 +1819,189 @@ async def test_le_conteneur_reel_planifie_la_boucle_fermee_qoe(database: Databas
         assert resultat["sectors"] == []
         assert resultat["routers"] == []
         assert await container.topology_repo.qoe_trims() == {}
+    finally:
+        await shutdown_container(container)
+
+
+# =========================================================================
+# Detection ARP : ce que la vraie base sait rapprocher
+# =========================================================================
+
+
+def _vue(adresse: str, **kwargs) -> VlanSighting:
+    base = {
+        "router_name": "pop-nord",
+        "pop_name": "PoP Nord",
+        "address": adresse,
+        "vlan_interface": "vlan120",
+        "mac": "AA:BB:CC:00:00:01",
+        "vlan_id": 120,
+    }
+    return VlanSighting(**{**base, **kwargs})
+
+
+async def test_une_adresse_du_bloc_declare_confirme_la_presence(
+    database: Database, now: datetime
+) -> None:
+    """LA raison d'etre du SQL de ce depot : le rapprochement se fait par
+    CONTENANCE reseau, pas par egalite.
+
+    Un client declare en 10.0.0.0/29 doit etre reconnu present quand c'est
+    10.0.0.3 qui parle. Une jointure sur l'egalite ne l'aurait jamais vu, et
+    l'operateur aurait cru son client muet.
+    """
+    inventaire = StaticClientsRepository(database.pool)
+    observations = VlanSightingsRepository(database.pool)
+
+    await inventaire.create(
+        {"reference": "mairie", "pop_name": "PoP Nord", "address": "10.0.0.0/29"}
+    )
+    await observations.record([_vue("10.0.0.3")], seen_at=now)
+
+    presence = await observations.presence()
+    assert set(presence) == {"mairie"}
+    assert presence["mairie"]["mac"] == "AA:BB:CC:00:00:01"
+    assert presence["mairie"]["vlan_interface"] == "vlan120"
+
+    # Et cette adresse n'est donc PAS un candidat : elle est deja couverte.
+    assert await observations.candidates() == []
+
+
+async def test_une_adresse_hors_de_tout_bloc_devient_candidate(
+    database: Database, now: datetime
+) -> None:
+    inventaire = StaticClientsRepository(database.pool)
+    observations = VlanSightingsRepository(database.pool)
+
+    await inventaire.create(
+        {"reference": "mairie", "pop_name": "PoP Nord", "address": "10.0.0.0/29"}
+    )
+    await observations.record([_vue("10.0.0.3"), _vue("10.20.0.77")], seen_at=now)
+
+    candidats = await observations.candidates()
+    assert [c["address"] for c in candidats] == ["10.20.0.77"]
+    assert candidats[0]["vlan_id"] == 120
+    assert candidats[0]["router_name"] == "pop-nord"
+    assert candidats[0]["pop_name"] == "PoP Nord"
+
+
+async def test_declarer_un_client_retire_son_candidat(database: Database, now: datetime) -> None:
+    """Le cycle complet du brief : une adresse est detectee, un humain la
+    declare, elle disparait des candidats et devient une presence confirmee.
+    Aucun code ne l'a promue : c'est la declaration qui change la lecture.
+    """
+    inventaire = StaticClientsRepository(database.pool)
+    observations = VlanSightingsRepository(database.pool)
+
+    await observations.record([_vue("10.20.0.77")], seen_at=now)
+    assert [c["address"] for c in await observations.candidates()] == ["10.20.0.77"]
+    assert await observations.presence() == {}
+
+    await inventaire.create(
+        {
+            "reference": "clinique",
+            "pop_name": "PoP Nord",
+            "address": "10.20.0.77",
+            "plan_down_mbps": 100.0,
+        }
+    )
+
+    assert await observations.candidates() == []
+    assert set(await observations.presence()) == {"clinique"}
+
+
+async def test_first_seen_ne_recule_jamais(database: Database, now: datetime) -> None:
+    """L'anciennete d'un candidat est une information de tri pour l'operateur :
+    une adresse vue depuis trois jours n'a pas le meme sens qu'une nouvelle."""
+    observations = VlanSightingsRepository(database.pool)
+
+    await observations.record([_vue("10.20.0.77")], seen_at=now - timedelta(hours=6))
+    await observations.record([_vue("10.20.0.77", mac="AA:BB:CC:00:00:99")], seen_at=now)
+
+    candidats = await observations.candidates()
+    assert len(candidats) == 1
+    assert candidats[0]["first_seen"] < candidats[0]["last_seen"]
+    # La MAC, elle, suit la derniere observation.
+    assert candidats[0]["mac"] == "AA:BB:CC:00:00:99"
+
+
+async def test_deux_routeurs_peuvent_voir_la_meme_adresse(
+    database: Database, now: datetime
+) -> None:
+    """Des plans d'adressage prives se recoupent d'un PoP a l'autre : la cle
+    primaire porte le routeur, sinon un PoP ecraserait le candidat de l'autre."""
+    observations = VlanSightingsRepository(database.pool)
+
+    await observations.record(
+        [_vue("10.20.0.77"), _vue("10.20.0.77", router_name="pop-sud", pop_name="PoP Sud")],
+        seen_at=now,
+    )
+
+    candidats = await observations.candidates()
+    assert sorted(c["router_name"] for c in candidats) == ["pop-nord", "pop-sud"]
+
+
+async def test_les_observations_perimees_sont_oubliees(database: Database, now: datetime) -> None:
+    observations = VlanSightingsRepository(database.pool)
+    await observations.record([_vue("10.20.0.77")], seen_at=now - timedelta(days=3))
+    await observations.record([_vue("10.20.0.78")], seen_at=now)
+
+    # Filtre a la lecture...
+    recents = await observations.candidates(max_age_s=3600)
+    assert [c["address"] for c in recents] == ["10.20.0.78"]
+
+    # ... et purge effective.
+    oubliees = await observations.prune(older_than_s=86_400)
+    assert oubliees == 1
+    assert [c["address"] for c in await observations.candidates()] == ["10.20.0.78"]
+
+
+async def test_le_plafond_de_candidats_est_respecte(database: Database, now: datetime) -> None:
+    observations = VlanSightingsRepository(database.pool)
+    await observations.record([_vue(f"10.20.0.{i}") for i in range(1, 40)], seen_at=now)
+    assert len(await observations.candidates(limit=5)) == 5
+
+
+async def test_conteneur_reel_cable_la_detection(database: Database) -> None:
+    """Le montage complet : un cycle de detection sur le conteneur reel doit
+    remplir vlan_sightings, et RIEN d'autre.
+
+    C'est la garantie structurelle du brief verifiee de bout en bout : aucun
+    abonne, aucun plan, aucune file ne nait d'une detection.
+    """
+    from app.config import Settings
+    from app.container import build_container, shutdown_container
+    from app.services.collection import JOB_VLAN_CLIENTS
+    from app.services.crypto import generate_key
+
+    settings = Settings(
+        _env_file=None,
+        database_url=DSN,
+        routers=[],
+        backhauls=[],
+        backhaul_provider="mock",
+        plan_provider="mock",
+        scheduler_enabled=False,
+        db_auto_migrate=True,
+        app_secret_key=generate_key(),
+    )
+
+    container = await build_container(settings)
+    try:
+        assert container.sightings_repo is not None
+        assert JOB_VLAN_CLIENTS in container.scheduler.job_names()
+
+        # Aucun routeur dans l'inventaire : le cycle passe sans rien trouver.
+        resultat = await container.collection.detect_vlan_clients()
+        assert resultat.ok, resultat.errors
+
+        # On injecte une observation comme le ferait un routeur reel, puis on
+        # verifie que le referentiel d'abonnes reste VIDE.
+        await container.sightings_repo.record([_vue("10.20.0.77")], seen_at=datetime.now(tz=UTC))
+        assert [c["address"] for c in await container.sightings_repo.candidates()] == ["10.20.0.77"]
+        assert await container.repository.list_subscribers() == []
+
+        # Et le service de shaping n'a aucun moyen de lire ces observations.
+        assert not hasattr(container.shaping, "sightings")
     finally:
         await shutdown_container(container)

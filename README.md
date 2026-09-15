@@ -165,7 +165,7 @@ coupée d'internet.
 C'est la question qui conditionne tout le reste — sans elle, impossible de savoir quel
 backhaul un abonné traverse, donc quelle file doit être son parent.
 
-**Cinq sources, réconciliées** :
+**Sept sources, réconciliées** :
 
 | Source | Ce qu'elle apporte |
 |---|---|
@@ -175,6 +175,7 @@ backhaul un abonné traverse, donc quelle file doit être son parent.
 | UISP `/devices` | liens radio PtP/PtMP, capacité du moment, rattachement station → AP |
 | `/ppp/active` → `caller-id` | **la jointure clé** : la MAC du CPE de l'abonné |
 | `/interface` `rx-byte`/`tx-byte` | **le débit réellement mesuré** sur le port qui porte le lien |
+| `/ip/arp` (VLAN sans PPPoE) | présence d'une adresse **non identifiée** : confirme un client déclaré, ou propose un candidat. La seule source qui ne dit pas *qui* est en face |
 
 Ce dernier point mérite d'être souligné. Le champ `caller-id` de `/ppp/active` contient la
 **MAC du CPE**. UISP sait sur quel secteur radio chaque CPE est accroché, et connaît sa
@@ -419,6 +420,46 @@ fiche. Ils apparaissent alors dans l'arbre avec leur propre nature (`static`, pa
 `cpe` : ce n'est pas un équipement observé), ce qui les fait **compter dans le partage
 d'un lien congestionné** — sans quoi les abonnés PPPoE du même secteur se feraient
 rogner à leur place.
+
+**Détection assistée : le contrôleur signale, l'humain décide.** Attendre qu'on
+saisisse un client à l'aveugle est une mauvaise façon de travailler — encore
+faut-il savoir qu'il est là. RouterOS n'a aucune table qui liste « les VLAN
+clientes » (la notion n'existe pas dans sa configuration), mais il a un signal
+de présence fiable : la table ARP. Un job périodique lit `/ip/arp`, ne garde que
+les interfaces de `/interface/vlan` qui **n'hébergent pas** de serveur PPPoE, et
+en tire deux lectures :
+
+| Ce que l'ARP montre | Ce qu'on en fait |
+|---|---|
+| une adresse **dans le bloc** d'un client déclaré | confirme sa présence — colonne « Vu actif » |
+| une adresse qui **ne correspond à rien** | **candidat**, listé dans l'onglet Abonnés → « Détectés, non déclarés » |
+
+Le rapprochement se fait par **contenance réseau** (`<<=`), pas par égalité : un
+client déclaré en `/29` est reconnu quand n'importe laquelle de ses adresses
+parle.
+
+**Un candidat n'est pas un client, et rien ne peut le transformer tout seul.**
+Une imprimante, une caméra ou l'équipement d'un autre opérateur laissent
+exactement la même trace ARP. Trois garanties, chacune vérifiée par un test :
+
+- le job de détection **écrit** dans `vlan_sightings` et n'a même pas de méthode
+  pour lire les candidats — aucun chemin de code ne peut en faire un abonné ;
+- `ShapingService` ne reçoit pas le dépôt d'observations **au montage** : la
+  séparation est structurelle, pas une règle dans un commentaire ;
+- il n'existe **aucune route** « promouvoir ce candidat ». Déclarer passe par
+  `POST /static-clients` avec un débit souscrit. Le bouton **Déclarer** de
+  l'interface pré-remplit l'adresse, le VLAN et le PoP — la référence et le plan
+  restent à saisir, parce que l'IP ne doit pas servir d'identité et que le débit
+  vendu ne se devine pas.
+
+Dans l'arbre, un candidat est une **troisième nature de nœud** (`candidate`),
+distincte d'un voisin réseau (`/ip/neighbor`) et d'un abonné (`caller-id`). Il
+est posé **à la lecture** du graphe et jamais persisté dans `topology_nodes` :
+un candidat déclaré ou devenu muet disparaît de lui-même. Le nombre est plafonné
+(`vlan_candidate_limit`) pour qu'une VLAN bavarde ne rende pas l'arbre illisible.
+
+Réglages, tous pilotés depuis la base : `vlan_detect_enabled`,
+`vlan_detect_interval_s`, `vlan_candidate_limit`, `vlan_sighting_retention_s`.
 
 **Limite à connaître : la mesure dépend de la file.** Sans session PPPoE, aucune
 interface ne porte le trafic de ce client ; le seul compteur par client dont on dispose
@@ -785,6 +826,7 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `PATCH` · `DELETE` | `/api/v1/pops/routers/{id}` | Modifie / retire un routeur |
 | `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
 | `GET` · `POST` | `/api/v1/static-clients` | Inventaire déclaratif des clients à IP fixe |
+| `GET` | `/api/v1/static-clients/candidates` | Adresses détectées sur VLAN routée, non déclarées (consultation seule) |
 | `PATCH` · `DELETE` | `/api/v1/static-clients/{id}` | Modifie / retire une fiche (l'historique de mesures est conservé) |
 | `GET` | `/api/v1/topology` · `POST /topology/discover` | Graphe du réseau |
 | `PATCH` | `/api/v1/topology/nodes/{key}` | Corriger le rôle d'un équipement |
@@ -815,6 +857,8 @@ Documentation interactive : `/docs`.
 
 **Référentiel** — `pops`, `subscribers` (identité unique `login`, `kind`, plan, PoP,
 `last_seen`), `static_clients` (inventaire déclaratif des clients à IP fixe),
+`vlan_sightings` (présence observée dans `/ip/arp` : confirme un client déclaré, ou
+produit un candidat à déclarer),
 `backhauls` (PoP, `uisp_device_id`, capacité nominale), `routers` (PoPs ajoutés depuis
 l'interface, mot de passe chiffré, diagnostic de la dernière connexion),
 `topology_nodes` / `topology_links` (graphe découvert ; `pos_x`/`pos_y`, `parent_override`
@@ -854,7 +898,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 662 tests, dont 617 sans aucune infrastructure
+make test        # 707 tests, dont 654 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

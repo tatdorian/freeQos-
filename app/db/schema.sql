@@ -84,6 +84,36 @@ CREATE TABLE IF NOT EXISTS static_clients (
 
 CREATE INDEX IF NOT EXISTS idx_static_clients_pop ON static_clients (pop_name);
 
+-- -----------------------------------------------------------------------------
+-- Presence observee sur les VLAN routees
+--
+-- Ce que la table ARP d'un routeur a montre : une adresse a parle sur une VLAN
+-- qui n'heberge pas de serveur PPPoE. Deux lectures s'en deduisent, et AUCUNE
+-- ne cree quoi que ce soit toute seule :
+--
+--   - l'adresse tombe dans le bloc d'un client declare -> confirmation de
+--     presence ("vu actif a telle heure") ;
+--   - elle ne correspond a rien de declare -> CANDIDAT, propose a l'operateur.
+--
+-- Un candidat n'est pas un client. Une imprimante, une camera ou un routeur de
+-- passage laissent la meme trace. Seul un humain, en saisissant un plan, le
+-- transforme en fiche.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS vlan_sightings (
+    router_name    TEXT NOT NULL,
+    address        INET NOT NULL,
+    mac            TEXT,
+    vlan_interface TEXT NOT NULL,
+    vlan_id        INTEGER,
+    pop_name       TEXT,
+    first_seen     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (router_name, address)
+);
+
+CREATE INDEX IF NOT EXISTS idx_vlan_sightings_seen ON vlan_sightings (last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_vlan_sightings_addr ON vlan_sightings (address);
+
 
 CREATE INDEX IF NOT EXISTS idx_subscribers_pop      ON subscribers (pop_id);
 CREATE INDEX IF NOT EXISTS idx_subscribers_lastseen ON subscribers (last_seen DESC);

@@ -33,7 +33,7 @@ from app.db.directory import Directory, PgDirectory
 from app.db.repository import MetricsRepository
 from app.db.routers_repo import RoutersRepository
 from app.db.settings_repo import SettingsRepository
-from app.db.static_clients_repo import StaticClientsRepository
+from app.db.static_clients_repo import StaticClientsRepository, VlanSightingsRepository
 from app.db.topology_repo import TopologyRepository
 from app.db.writer import MetricsWriter, PgMetricsWriter
 from app.models import Plan
@@ -48,6 +48,7 @@ from app.services.collection import (
     JOB_RECONCILE,
     JOB_RTT,
     JOB_SUBSCRIBERS,
+    JOB_VLAN_CLIENTS,
     CollectionService,
 )
 from app.services.crypto import KeySource, SecretBox, load_or_create_key
@@ -154,6 +155,7 @@ class Container:
     topology_repo: TopologyRepository | None = None
     antennas_repo: AntennasRepository | None = None
     static_clients_repo: StaticClientsRepository | None = None
+    sightings_repo: VlanSightingsRepository | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -230,6 +232,10 @@ async def build_container(settings: Settings) -> Container:
     # Inventaire declaratif des clients a IP fixe. Aucun secret : ce sont des
     # adresses et des plans, pas des identifiants d'acces.
     static_clients_repo = StaticClientsRepository(database.pool)
+    # Observations ARP. Depot SEPARE de l'inventaire : le controleur ecrit
+    # ici, jamais dans static_clients, pour qu'aucune detection ne puisse
+    # devenir une fiche sans passer par un humain.
+    sightings_repo = VlanSightingsRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
@@ -275,6 +281,7 @@ async def build_container(settings: Settings) -> Container:
         writer=writer,
         rtt_prober=rtt_prober,
         static_clients=static_clients_repo,
+        sightings=sightings_repo,
     )
 
     # Amorce le drapeau de la sonde RTT : la base fait foi une fois posee, sinon
@@ -308,6 +315,9 @@ async def build_container(settings: Settings) -> Container:
         await shaping.adjust_for_qoe()
 
     scheduler.add_job(JOB_QOE_LOOP, settings.qoe_loop_interval_s, qoe_closed_loop)
+    scheduler.add_job(
+        JOB_VLAN_CLIENTS, settings.vlan_detect_interval_s, collection.detect_vlan_clients
+    )
 
     # Changer une cadence depuis l'interface doit reprogrammer la boucle, pas
     # seulement l'affichage : le scheduler relit interval_s a chaque tour.
@@ -332,6 +342,7 @@ async def build_container(settings: Settings) -> Container:
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,
         static_clients_repo=static_clients_repo,
+        sightings_repo=sightings_repo,
     )
 
 

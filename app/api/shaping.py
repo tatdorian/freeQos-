@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.api.deps import ContainerDep, RepositoryDep
+from app.collectors.topology import KIND_POP, TopologyNode, TopologySnapshot
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.routeros import MissingWriteCredentialsError
 from app.models import KIND_STATIC
@@ -61,6 +62,17 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
         manuelles = [k for k in noeud.get("members", []) if k in aliases]
         if manuelles:
             noeud["manual_aliases"] = manuelles
+
+    # Candidats detectes par ARP : poses A LA LECTURE, jamais persistes.
+    #
+    # Les mettre dans topology_nodes les rendrait indiscernables d'un
+    # equipement reellement decouvert, et ils y survivraient a leur propre
+    # disparition. Ici, un candidat declare ou devenu muet s'efface tout seul
+    # au chargement suivant.
+    candidats = await _candidats_detectes(container)
+    if candidats:
+        noeuds, liens = _fusionner_candidats(noeuds, liens, candidats, container)
+
     return {
         "nodes": noeuds,
         "links": liens,
@@ -73,8 +85,89 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
             "uisp": "UISP /devices - liens radio et capacite du moment",
             "pppoe": "/ppp/active caller-id - MAC du CPE, rattache l'abonne au secteur",
             "counters": "/interface rx-byte,tx-byte - debit mesure du port qui porte le lien",
+            "arp": (
+                "/ip/arp sur les VLAN sans PPPoE - presence d'une adresse non "
+                "declaree. Candidat a confirmer par un humain, jamais shape."
+            ),
         },
     }
+
+
+async def _candidats_detectes(container: Any) -> list[dict[str, Any]]:
+    """Adresses vues sur une VLAN routee et rattachees a aucun client declare."""
+    repo = getattr(container, "sightings_repo", None)
+    if repo is None or not container.settings.vlan_detect_enabled:
+        return []
+    try:
+        lignes: list[dict[str, Any]] = await repo.candidates(
+            limit=container.settings.vlan_candidate_limit,
+            max_age_s=container.settings.vlan_sighting_retention_s,
+        )
+        return lignes
+    except Exception:  # noqa: BLE001 - une aide a la saisie ne casse pas le graphe
+        logger.exception("Candidats VLAN illisibles, graphe rendu sans eux")
+        return []
+
+
+def _fusionner_candidats(
+    noeuds: list[dict[str, Any]],
+    liens: list[dict[str, Any]],
+    candidats: list[dict[str, Any]],
+    container: Any,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Ajoute les candidats au graphe deja reconcilie, sans y toucher.
+
+    On repasse par ``TopologySnapshot`` pour ne pas dupliquer la logique de
+    pose, puis on n'extrait QUE ce qui a ete ajoute : les cases existantes
+    ressortent telles quelles, y compris leur disposition et leurs fusions.
+    """
+    from app.collectors.topology import attach_vlan_candidates
+
+    snapshot = TopologySnapshot()
+    connus = {str(n["key"]) for n in noeuds}
+    for cle in connus:
+        snapshot.nodes[cle] = TopologyNode(key=cle, name=cle)
+
+    pop_keys = {
+        str(n.get("name") or ""): str(n["key"]) for n in noeuds if n.get("kind") == KIND_POP
+    }
+    attach_vlan_candidates(
+        snapshot,
+        candidats,
+        pop_keys=pop_keys,
+        limit=container.settings.vlan_candidate_limit,
+    )
+
+    ajoutes = [
+        {
+            "key": n.key,
+            "name": n.name,
+            "kind": n.kind,
+            "mac": n.mac,
+            "address": n.address,
+            "router_name": n.router_name,
+            "attributes": n.attributes,
+            "fresh": True,
+            "hidden": False,
+        }
+        for cle, n in snapshot.nodes.items()
+        if cle not in connus
+    ]
+    nouveaux_liens = [
+        {
+            "key": lien.key,
+            "source_key": lien.source_key,
+            "target_key": lien.target_key,
+            "kind": lien.kind,
+            "interface": lien.interface,
+            "capacity_mbps": None,
+            "discovered_by": lien.discovered_by,
+            "attributes": lien.attributes,
+            "hidden": False,
+        }
+        for lien in snapshot.links.values()
+    ]
+    return noeuds + ajoutes, liens + nouveaux_liens
 
 
 @router.get("/topology/routers/{router_name}/export", summary="Config complete d'un PoP")
