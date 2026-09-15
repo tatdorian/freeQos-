@@ -325,6 +325,7 @@ def build_container(
     topology_repo: Any = None,
     antennas_repo: Any = None,
     static_clients_repo: Any = None,
+    sightings_repo: Any = None,
     client: FakeRouterOsClient | None = None,
 ) -> Container:
     client = client or FakeRouterOsClient()
@@ -342,6 +343,7 @@ def build_container(
         plan_provider=plan_provider,
         directory=directory,
         writer=writer,
+        sightings=sightings_repo,
     )
     scheduler = Scheduler()
     scheduler.add_job(JOB_SUBSCRIBERS, 10, collection.collect_subscribers)
@@ -379,6 +381,7 @@ def build_container(
         topology_repo=topology_repo,
         antennas_repo=antennas_repo,
         static_clients_repo=static_clients_repo,
+        sightings_repo=sightings_repo,
     )
 
 

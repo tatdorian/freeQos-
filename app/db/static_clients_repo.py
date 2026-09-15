@@ -22,11 +22,13 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 
 import asyncpg
 
-from app.models import StaticClient
+from app.models import StaticClient, VlanSighting
 
 logger = logging.getLogger(__name__)
 
@@ -232,3 +234,119 @@ class StaticClientsRepository:
             result = await conn.execute("DELETE FROM static_clients WHERE id = $1", client_id)
         if result.endswith(" 0"):
             raise StaticClientNotFoundError(f"client statique {client_id} inconnu")
+
+
+class VlanSightingsRepository:
+    """Ce que la table ARP des routeurs a montre, et ce qu'on en deduit.
+
+    Le controleur ecrit ici, et NULLE PART ailleurs cote clients statiques :
+    l'inventaire ``static_clients`` porte l'intention humaine et lui reste
+    interdit. Separer les deux est ce qui garantit qu'une detection ne pourra
+    jamais se transformer en fiche toute seule.
+
+    Le rapprochement entre une adresse vue et un client declare se fait par
+    CONTENANCE reseau (``<<=``), pas par egalite : un client declare en
+    10.0.0.0/29 doit etre reconnu quand c'est 10.0.0.3 qui parle.
+    """
+
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        self._pool = pool
+
+    async def record(self, sightings: Sequence[VlanSighting], *, seen_at: datetime) -> int:
+        """Enregistre un tour d'observation. ``first_seen`` n'est jamais recule."""
+        if not sightings:
+            return 0
+        lignes = [
+            (
+                v.router_name,
+                v.address,
+                v.mac,
+                v.vlan_interface,
+                v.vlan_id,
+                v.pop_name,
+                seen_at,
+            )
+            for v in sightings
+        ]
+        async with self._pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO vlan_sightings
+                       (router_name, address, mac, vlan_interface, vlan_id, pop_name,
+                        first_seen, last_seen)
+                VALUES ($1, $2::inet, $3, $4, $5, $6, $7, $7)
+                ON CONFLICT (router_name, address) DO UPDATE
+                   SET mac            = EXCLUDED.mac,
+                       vlan_interface = EXCLUDED.vlan_interface,
+                       vlan_id        = EXCLUDED.vlan_id,
+                       pop_name       = COALESCE(EXCLUDED.pop_name, vlan_sightings.pop_name),
+                       last_seen      = EXCLUDED.last_seen
+                """,
+                lignes,
+            )
+        return len(lignes)
+
+    async def candidates(
+        self, *, limit: int = 500, max_age_s: float | None = None
+    ) -> list[dict[str, Any]]:
+        """Adresses vues qui ne correspondent a AUCUN client declare.
+
+        C'est la liste que l'interface propose a l'operateur. Elle ne sert qu'a
+        ca : rien dans le controleur ne la lit pour construire un plan.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT v.router_name, host(v.address) AS address, v.mac,
+                       v.vlan_interface, v.vlan_id, v.pop_name,
+                       v.first_seen, v.last_seen
+                  FROM vlan_sightings v
+                 WHERE NOT EXISTS (
+                           SELECT 1 FROM static_clients c
+                            WHERE v.address <<= c.address
+                       )
+                   AND ($1::float IS NULL
+                        OR v.last_seen > now() - make_interval(secs => $1::float))
+                 ORDER BY v.last_seen DESC, v.address
+                 LIMIT $2
+                """,
+                max_age_s,
+                limit,
+            )
+        return [dict(row) for row in rows]
+
+    async def presence(self) -> dict[str, dict[str, Any]]:
+        """``reference du client declare -> derniere fois vu actif``.
+
+        Un client declare dont aucune adresse n'a parle n'apparait pas : mieux
+        vaut une absence d'information qu'une date inventee.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT c.reference,
+                       max(v.last_seen)                        AS last_seen,
+                       count(*)                                AS addresses_seen,
+                       (array_agg(v.mac ORDER BY v.last_seen DESC))[1]            AS mac,
+                       (array_agg(v.vlan_interface ORDER BY v.last_seen DESC))[1] AS vlan_interface,
+                       (array_agg(v.router_name ORDER BY v.last_seen DESC))[1]    AS router_name
+                  FROM static_clients c
+                  JOIN vlan_sightings v ON v.address <<= c.address
+                 GROUP BY c.reference
+                """
+            )
+        return {row["reference"]: dict(row) for row in rows}
+
+    async def prune(self, *, older_than_s: float) -> int:
+        """Oublie ce qui n'a plus parle depuis longtemps.
+
+        Une adresse qui s'est tue pendant des jours n'est plus une piste utile,
+        et laisser grossir la liste finirait par la rendre illisible.
+        """
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                "DELETE FROM vlan_sightings "
+                "WHERE last_seen < now() - make_interval(secs => $1::float)",
+                older_than_s,
+            )
+        return int(resultat.rsplit(" ", 1)[-1] or 0)

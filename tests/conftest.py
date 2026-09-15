@@ -46,6 +46,14 @@ class FakeRouterOsClient:
         self.queue_tree_rows: list[dict[str, Any]] = []
         self.raise_on_neighbors: Exception | None = None
         self.raise_on_queues: Exception | None = None
+        # Presence sur VLAN routee : table ARP, VLAN declarees, serveurs PPPoE.
+        self.arp_rows: list[dict[str, Any]] = []
+        self.vlan_rows: list[dict[str, Any]] = []
+        self.pppoe_server_rows: list[dict[str, Any]] = []
+        self.raise_on_arp: Exception | None = None
+        # Un routeur purement L3 n'a pas cette table : le collecteur doit le
+        # supporter sans echouer.
+        self.raise_on_pppoe_servers: Exception | None = None
         # Par defaut : compte de lecture seule, comme qos-ro.
         self.user_rows: list[dict[str, Any]] = [{"name": "qos-ro", "group": "qos-ro"}]
         self.group_rows: list[dict[str, Any]] = [{"name": "qos-ro", "policy": "read,api,test"}]
@@ -105,6 +113,19 @@ class FakeRouterOsClient:
 
     def export_config(self) -> str:
         return self.export_text
+
+    def arp(self) -> list[dict[str, Any]]:
+        if self.raise_on_arp is not None:
+            raise self.raise_on_arp
+        return [dict(row) for row in self.arp_rows]
+
+    def vlans(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.vlan_rows]
+
+    def pppoe_servers(self) -> list[dict[str, Any]]:
+        if self.raise_on_pppoe_servers is not None:
+            raise self.raise_on_pppoe_servers
+        return [dict(row) for row in self.pppoe_server_rows]
 
     def simple_queues(self) -> list[dict[str, Any]]:
         if self.raise_on_queues is not None:

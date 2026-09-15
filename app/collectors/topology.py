@@ -1,7 +1,7 @@
 """Decouverte de topologie : quel lien va ou.
 
-CINQ SOURCES, RECONCILIEES
---------------------------
+SIX SOURCES, RECONCILIEES
+-------------------------
 Aucune ne suffit seule ; ensemble elles donnent le graphe complet.
 
 1. ``/ip/neighbor``    MNDP / LLDP / CDP. Source maitresse : pour chaque interface
@@ -12,6 +12,10 @@ Aucune ne suffit seule ; ensemble elles donnent le graphe complet.
 4. UISP                liens radio PtP/PtMP et capacite reelle du moment.
 5. ``/ppp/active``     et surtout son champ ``caller-id``, qui porte la MAC du
                        CPE de l'abonne.
+6. ``/ip/arp``         presence sur les VLAN routees sans PPPoE. La seule source
+                       des trois natures qui ne dit PAS qui est en face : elle
+                       produit des candidats a declarer, jamais des abonnes
+                       (cf. app/collectors/vlan_clients.py).
 
 LA JOINTURE QUI COMPTE
 ----------------------
@@ -51,6 +55,16 @@ KIND_CPE = "cpe"
 # le reseau qui le distingue de son voisin. Les confondre ferait croire a une
 # decouverte la ou il n'y a qu'une saisie.
 KIND_STATIC = "static"
+# TROISIEME NATURE, distincte des deux sources historiques.
+#
+# Un noeud de ce graphe vient jusqu'ici soit d'une adjacence /ip/neighbor (un
+# equipement reseau), soit d'un caller-id PPPoE (un abonne identifie). Une
+# entree ARP sur une VLAN routee n'est ni l'un ni l'autre : on sait qu'une
+# adresse parle, on ne sait pas QUI. La confondre avec un voisin ferait croire
+# a de l'infrastructure, la confondre avec un CPE ou un abonne ferait croire a
+# un client identifie -- les deux seraient faux, et le second serait dangereux
+# (il n'a ni plan, ni contrat, ni file).
+KIND_CANDIDATE = "candidate"
 KIND_UNKNOWN = "unknown"
 
 # Un lien est physique (cable/radio) ou logique (session PPPoE).
@@ -60,6 +74,8 @@ LINK_PPPOE = "pppoe"
 # Rattachement declare d'un client a IP fixe. Le nommer a part evite de le
 # confondre avec une adjacence observee : personne ne l'a mesure.
 LINK_STATIC = "static"
+# Rattachement DEDUIT d'une observation : ni mesure, ni declaration.
+LINK_DETECTED = "detected"
 
 # Identites trop generiques pour prouver que deux noeuds sont le meme equipement :
 # beaucoup de MikroTik gardent l'identite par defaut "MikroTik". On ne fusionne
@@ -868,6 +884,83 @@ def attach_static_clients(
         )
         if secteur:
             snapshot.subscriber_sectors[reference] = secteur
+    return poses
+
+
+def candidate_node_key(router_name: str, address: str) -> str:
+    return f"candidate:{router_name}:{address}"
+
+
+def attach_vlan_candidates(
+    snapshot: TopologySnapshot,
+    candidates: Sequence[dict[str, Any]],
+    *,
+    pop_keys: dict[str, str] | None = None,
+    limit: int = 200,
+) -> int:
+    """Pose les adresses vues mais NON DECLAREES, sous leur PoP.
+
+    Elles ne sont la que pour etre vues et traitees par un humain. Trois
+    proprietes tiennent cette promesse :
+
+    - leur nature est ``KIND_CANDIDATE``, jamais ``KIND_CPE`` ni ``KIND_POP`` :
+      rien dans l'arbre ne les fait passer pour un abonne ou un equipement ;
+    - elles portent ``declared: False``, que l'interface lit pour les traiter
+      a part ;
+    - elles ne sont posees qu'ICI, a la lecture du graphe, et ne sont jamais
+      persistees dans ``topology_nodes``. Un candidat declare ou devenu muet
+      disparait de lui-meme au chargement suivant.
+
+    Le plafond n'est pas une precaution theorique : une VLAN de collecte un peu
+    bavarde produirait des centaines d'entrees ARP, et un arbre illisible ne
+    sert plus a decider.
+    """
+    poses = 0
+    for candidat in candidates:
+        if poses >= limit:
+            break
+        adresse = str(candidat.get("address") or "").strip()
+        routeur = str(candidat.get("router_name") or "").strip()
+        if not adresse or not routeur:
+            continue
+        cle = candidate_node_key(routeur, adresse)
+        vlan = candidat.get("vlan_id")
+        snapshot.add_node(
+            TopologyNode(
+                key=cle,
+                name=adresse,
+                kind=KIND_CANDIDATE,
+                mac=normalize_mac(candidat.get("mac")),
+                address=adresse,
+                router_name=routeur,
+                attributes={
+                    "declared": False,
+                    "detected": True,
+                    "source": "arp",
+                    "vlan_id": vlan,
+                    "vlan_interface": candidat.get("vlan_interface"),
+                    "pop_name": candidat.get("pop_name"),
+                    "last_seen": candidat.get("last_seen"),
+                    "first_seen": candidat.get("first_seen"),
+                },
+            )
+        )
+        poses += 1
+
+        parent = (pop_keys or {}).get(str(candidat.get("pop_name") or ""), "")
+        if not parent:
+            parent = router_node_key(routeur)
+        if parent in snapshot.nodes:
+            snapshot.add_link(
+                TopologyLink(
+                    source_key=parent,
+                    target_key=cle,
+                    kind=LINK_DETECTED,
+                    interface=str(candidat.get("vlan_interface") or "") or None,
+                    discovered_by=routeur,
+                    attributes={"detected": True, "declared": False},
+                )
+            )
     return poses
 
 

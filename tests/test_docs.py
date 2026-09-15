@@ -56,3 +56,25 @@ def test_description_annonce_les_deux_natures_d_abonnes() -> None:
     assert "pppoe" in description
     # L'origine manuelle doit etre dite, pas sous-entendue.
     assert "declare a la main" in description or "declare" in description
+
+
+def test_description_dit_que_la_detection_ne_cree_rien() -> None:
+    """La pire erreur de lecture possible sur cette fonctionnalite serait de
+    croire qu'un client detecte est pris en charge. La description doit dire
+    l'inverse, explicitement."""
+    schema = _schema()
+    description = schema["info"]["description"].lower()
+    paths = schema["paths"]
+
+    # La route de consultation existe...
+    candidats = "/api/v1/static-clients/candidates"
+    assert candidats in paths
+    assert set(paths[candidats]) == {"get"}
+
+    # ... et il n'existe AUCUNE route de promotion.
+    assert not [c for c in paths if "promote" in c or "declare" in c]
+
+    assert "/ip/arp" in description
+    assert "candidat" in description
+    # L'absence de faconnage doit etre dite, pas sous-entendue.
+    assert "jamais faconne" in description or "aucun candidat n'est jamais" in description

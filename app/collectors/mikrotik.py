@@ -31,13 +31,15 @@ from typing import Any, Protocol
 from app.collectors.parsing import (
     parse_bitrate,
     parse_counter,
+    parse_flag,
     parse_routeros_duration_ms,
     parse_routeros_uptime,
     pppoe_interface_name,
 )
 from app.collectors.topology import ethernet_capacity_mbps
+from app.collectors.vlan_clients import sightings_from_arp
 from app.config import RouterConfig
-from app.models import InterfaceSample, PppoeSession
+from app.models import InterfaceSample, PppoeSession, VlanSighting
 
 logger = logging.getLogger(__name__)
 
@@ -56,20 +58,6 @@ def is_physical_interface(row: dict[str, Any]) -> bool:
     if not name or name.startswith("<"):
         return False
     return not str(row.get("type") or "").startswith(DYNAMIC_INTERFACE_TYPES)
-
-
-def parse_flag(value: object) -> bool | None:
-    """RouterOS ecrit les booleens ``true``/``false`` en texte."""
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"true", "yes", "1"}:
-        return True
-    if text in {"false", "no", "0"}:
-        return False
-    return None
 
 
 class RouterOsReadClient(Protocol):
@@ -97,6 +85,13 @@ class RouterOsReadClient(Protocol):
     def monitor_traffic(self, interface: str) -> dict[str, Any]: ...
 
     def addresses(self) -> list[dict[str, Any]]: ...
+
+    # --- Presence sur les VLAN routees (clients sans session PPPoE) ---
+    def arp(self) -> list[dict[str, Any]]: ...
+
+    def vlans(self) -> list[dict[str, Any]]: ...
+
+    def pppoe_servers(self) -> list[dict[str, Any]]: ...
 
     def simple_queues(self) -> list[dict[str, Any]]: ...
 
@@ -282,6 +277,27 @@ class LibrouterosReadClient:
     def addresses(self) -> list[dict[str, Any]]:
         return self._query("/ip/address")
 
+    def arp(self) -> list[dict[str, Any]]:
+        """Table ARP. Le seul signal de presence d'un client sans session.
+
+        Sur une VLAN routee, un client qui parle laisse une entree ARP (IP +
+        MAC) rattachee a son interface. C'est une LECTURE, elle ne configure
+        rien -- et elle ne dit rien de plus que "cette adresse a parle".
+        """
+        return self._query("/ip/arp")
+
+    def vlans(self) -> list[dict[str, Any]]:
+        return self._query("/interface/vlan")
+
+    def pppoe_servers(self) -> list[dict[str, Any]]:
+        """Serveurs PPPoE declares : sert a EXCLURE leurs interfaces.
+
+        Une VLAN qui porte un serveur PPPoE a deja sa source d'identite dans
+        /ppp/active. Y chercher des clients par ARP ferait doublonner chaque
+        abonne, et pire, le presenterait comme un client statique a declarer.
+        """
+        return self._query("/interface/pppoe-server/server")
+
     def simple_queues(self) -> list[dict[str, Any]]:
         return self._query("/queue/simple")
 
@@ -408,6 +424,35 @@ class MikrotikCollector:
                 )
             )
         return echantillons
+
+    # ------------------------------------------------------------------
+    # Presence sur les VLAN routees
+    # ------------------------------------------------------------------
+    async def collect_vlan_clients(self) -> list[VlanSighting]:
+        timeout = max(self.config.timeout_s * 3, 5.0)
+        return await asyncio.wait_for(
+            asyncio.to_thread(self.collect_vlan_clients_sync), timeout=timeout
+        )
+
+    def collect_vlan_clients_sync(self) -> list[VlanSighting]:
+        """Qui parle sur les VLAN routees de ce routeur.
+
+        Trois lectures, toutes en lecture seule. L'absence de serveur PPPoE
+        n'est pas une erreur : un routeur purement L3 n'a pas cette table, et
+        toutes ses VLAN sont alors eligibles.
+        """
+        try:
+            pppoe = self._client.pppoe_servers()
+        except Exception:  # noqa: BLE001
+            logger.debug("Pas de serveur PPPoE lisible sur %s", self.name)
+            pppoe = []
+        return sightings_from_arp(
+            self._client.arp(),
+            self._client.vlans(),
+            pppoe,
+            router_name=self.name,
+            pop_name=self.config.effective_pop_name,
+        )
 
     # ------------------------------------------------------------------
     # Compteurs des files simples

@@ -49,6 +49,20 @@ def parse_routeros_uptime(value: object) -> int | None:
     return None
 
 
+def parse_flag(value: object) -> bool | None:
+    """RouterOS ecrit les booleens ``true``/``false`` en texte."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "yes", "1"}:
+        return True
+    if text in {"false", "no", "0"}:
+        return False
+    return None
+
+
 def parse_counter(value: object) -> int | None:
     """Convertit un compteur d'octets RouterOS en entier.
 

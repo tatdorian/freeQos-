@@ -150,6 +150,20 @@ function clock(ts) {
   return new Date(ts).toLocaleTimeString('fr-FR', { hour12: false });
 }
 
+/** Anciennete lisible ("il y a 4 min"). Rend '-' sur une date absente plutot
+ *  qu'une valeur par defaut : ne pas savoir n'est pas la meme chose que zero. */
+function depuis(ts) {
+  if (!ts) return '-';
+  const secondes = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (!isFinite(secondes) || secondes < 0) return '-';
+  if (secondes < 90) return 'a l\'instant';
+  const minutes = Math.round(secondes / 60);
+  if (minutes < 90) return 'il y a ' + minutes + ' min';
+  const heures = Math.round(minutes / 60);
+  if (heures < 48) return 'il y a ' + heures + ' h';
+  return 'il y a ' + Math.round(heures / 24) + ' j';
+}
+
 /* ------------------------------------------------------- graphe en aires */
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -473,7 +487,7 @@ function childCountsFromTopo(topoData) {
 
 // Roles "feuille" (cote client) qu'on n'affiche PAS comme noeud d'infrastructure
 // dans l'Executif : un noeud est un site/routeur, pas un abonne.
-const LEAF_KINDS = new Set(['client', 'subscriber', 'cpe', 'static']);
+const LEAF_KINDS = new Set(['client', 'subscriber', 'cpe', 'static', 'candidate']);
 
 /** Construit des lignes de noeud a partir de la TOPOLOGIE quand aucun abonne
  *  n'est encore mesure. Le tableau reste vide sinon : ici on montre le reseau
@@ -1058,7 +1072,7 @@ function renderExecSankey(host, subs) {
 const ICONE = {
   gateway: 'GW', core: 'CORE', pop: 'POP', radio: 'RF',
   sector: 'SECT', cpe: 'CPE', client: 'CLI', unknown: '?', subscriber: 'ABO',
-  static: 'FIXE',
+  static: 'FIXE', candidate: '?IP',
 };
 
 /** Charge le graphe et les abonnes une seule fois, partage entre l'arbre
@@ -1262,6 +1276,71 @@ function scRemplirFormulaire(fiche) {
   scNotice('');
 }
 
+/** Ouvre le formulaire pre-rempli a partir d'un candidat detecte.
+ *
+ *  On reprend ce que l'observation SAIT (adresse, VLAN, PoP) et rien d'autre.
+ *  La reference et le plan restent vides a dessein : l'IP ne doit pas servir
+ *  d'identite (elle changera), et le debit souscrit ne se devine pas -- c'est
+ *  precisement ce qu'aucune detection ne pourra jamais fournir. */
+function scDepuisCandidat(candidat) {
+  scRemplirFormulaire(null);
+  const v = (id, valeur) => {
+    document.getElementById(id).value = valeur === null || valeur === undefined ? '' : valeur;
+  };
+  v('sc-address', candidat.address);
+  v('sc-vlan', candidat.vlan_id);
+  v('sc-pop', candidat.pop_name);
+  scNotice('<span class="badge">Adresse, VLAN et PoP repris de la detection &middot; ' +
+    'reference et debit a saisir</span>');
+  const reference = document.getElementById('sc-reference');
+  reference.focus();
+  reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
+}
+
+async function loadCandidates() {
+  const host = document.getElementById('sc-candidates');
+  let data;
+  try {
+    data = await api('/static-clients/candidates');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  if (!data.enabled) {
+    host.innerHTML = '<div class="empty">Detection desactivee ' +
+      '(reglage <code>vlan_detect_enabled</code>).</div>';
+    return;
+  }
+  const rows = data.candidates || [];
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">Aucune adresse non declaree sur les VLAN routees.</div>';
+    return;
+  }
+  host.innerHTML =
+    '<table><thead><tr><th>Adresse</th><th>MAC</th><th class="num">VLAN</th>' +
+    '<th>Interface</th><th>PoP</th><th>Routeur</th>' +
+    '<th>Vu</th><th>Depuis</th><th class="sticky-actions"></th>' +
+    '</tr></thead><tbody>' +
+    rows.map((c, i) =>
+      '<tr>' +
+      '<td class="login"><code>' + esc(c.address) + '</code></td>' +
+      '<td style="color:var(--faint)">' + esc(c.mac || '-') + '</td>' +
+      '<td class="num">' + esc(c.vlan_id === null || c.vlan_id === undefined ? '-' : c.vlan_id) + '</td>' +
+      '<td>' + esc(c.vlan_interface || '-') + '</td>' +
+      '<td>' + esc(c.pop_name || '-') + '</td>' +
+      '<td>' + esc(c.router_name || '-') + '</td>' +
+      '<td>' + esc(depuis(c.last_seen)) + '</td>' +
+      '<td style="color:var(--faint)">' + esc(depuis(c.first_seen)) + '</td>' +
+      '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
+        '<button class="sm primary" data-sc-declare="' + i + '">Declarer</button>' +
+      '</div></td>' +
+      '</tr>').join('') + '</tbody></table>';
+
+  host.querySelectorAll('[data-sc-declare]').forEach((b) => {
+    b.addEventListener('click', () => scDepuisCandidat(rows[Number(b.dataset.scDeclare)]));
+  });
+}
+
 /** Lit le formulaire. Les champs vides deviennent null plutot que "" : une
  *  chaine vide se lirait comme une valeur posee, un null comme une absence. */
 function scPayload() {
@@ -1319,7 +1398,11 @@ async function loadStaticClients() {
   host.innerHTML =
     '<table><thead><tr><th>Reference</th><th>Nom</th><th>PoP</th>' +
     '<th>Adresse</th><th class="num">VLAN</th><th>Secteur</th>' +
-    '<th class="num">Plan</th><th>Etat</th><th class="sticky-actions"></th>' +
+    '<th class="num">Plan</th>' +
+    '<th title="Derniere fois que cette adresse a parle, vu dans /ip/arp. ' +
+    'Un client silencieux ou joignable par un autre chemin reste vide : ' +
+    'ne pas savoir n\'est pas la meme chose qu\'etre absent.">Vu actif</th>' +
+    '<th>Etat</th><th class="sticky-actions"></th>' +
     '</tr></thead><tbody>' +
     fiches.map((f) =>
       '<tr>' +
@@ -1333,6 +1416,9 @@ async function loadStaticClients() {
         f.plan_down_mbps || f.plan_up_mbps
           ? mbps(f.plan_down_mbps || 0) + ' / ' + mbps(f.plan_up_mbps || 0)
           : '-') + '</td>' +
+      '<td' + (f.last_seen_at
+        ? ' title="' + esc((f.seen_mac || '') + ' sur ' + (f.seen_vlan_interface || '')) + '"'
+        : '') + '>' + esc(depuis(f.last_seen_at)) + '</td>' +
       '<td>' + (f.enabled
         ? '<span class="badge ok">actif</span>'
         : '<span class="badge warn" title="Fiche conservee, file retiree au plan suivant">suspendu</span>') + '</td>' +
@@ -1370,7 +1456,9 @@ async function scEnregistrer(event) {
       scNotice('<span class="badge ok">Client declare</span>');
     }
     scRemplirFormulaire(null);
-    await loadStaticClients();
+    // Declarer un client le retire de la liste des candidats : les deux
+    // tableaux doivent etre relus ensemble, sinon il apparait aux deux endroits.
+    await Promise.all([loadStaticClients(), loadCandidates()]);
     // La fiche modifiee change le plan : le tableau des abonnes doit suivre.
     await loadSubscribers();
   } catch (err) {
@@ -1389,7 +1477,8 @@ async function scSupprimer(id, fiches) {
   try {
     await api('/static-clients/' + encodeURIComponent(id), { method: 'DELETE' });
     if (scEdition && String(scEdition.id) === String(id)) scRemplirFormulaire(null);
-    await loadStaticClients();
+    // Retirer une fiche peut faire REAPPARAITRE son adresse en candidat.
+    await Promise.all([loadStaticClients(), loadCandidates()]);
     await loadSubscribers();
   } catch (err) {
     scNotice('<span class="badge crit">' + esc(err.message) + '</span>');
@@ -2036,16 +2125,21 @@ const KIND_LABEL = {
   sector: 'Secteur', cpe: 'CPE', client: 'Client', unknown: 'Inconnu', subscriber: 'Abonnes',
   // Nature a part entiere : ce noeud est DECLARE, pas decouvert.
   static: 'Client a IP fixe',
+  // Ni infrastructure, ni abonne : une adresse vue, rien de plus.
+  candidate: 'Detecte, non declare',
 };
 const KIND_COLOR = {
   gateway: 'var(--accent)', core: 'var(--accent)', pop: 'var(--down)',
   radio: 'var(--up)', sector: 'var(--up)', cpe: 'var(--muted)', client: '#a78bfa',
   unknown: 'var(--faint)', subscriber: '#a78bfa', static: '#f0abfc',
+  candidate: 'var(--warn)',
 };
 
 /* ------------------------------------------------- editeur d'arbre reseau */
 
-const KIND_ORDER = ['gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'static', 'client', 'unknown'];
+const KIND_ORDER = [
+  'gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'static', 'candidate', 'client', 'unknown',
+];
 const NODE_W = 176;
 const NODE_H = 48;
 
@@ -2070,7 +2164,7 @@ async function loadTopology() {
 // reseau, sous un secteur ou, a defaut de secteur declare, sous son PoP.
 const TOPO_RANG = {
   gateway: 0, core: 1, pop: 2, radio: 3, sector: 3,
-  cpe: 4, static: 4, client: 4, unknown: 5,
+  cpe: 4, static: 4, candidate: 4, client: 4, unknown: 5,
 };
 
 /** Un lien est-il assez SUR pour dessiner une adjacence directe dans l'arbre ?
@@ -3639,7 +3733,7 @@ async function refreshHealth() {
 
 const GROUPE_TITRE = {
   shaping: 'Shaping', cake: 'CAKE (AQM)', enforcement: 'Garde-fous d\'ecriture',
-  cadences: 'Cadences de collecte',
+  cadences: 'Cadences de collecte', detection: 'Detection des clients a IP fixe',
 };
 
 /** Controle de saisie adapte au type du reglage. Un reglage "nullable" recoit
@@ -3876,7 +3970,7 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
   panneau.hidden = !panneau.hidden;
   if (!panneau.hidden) {
     scRemplirFormulaire(null);
-    await loadStaticClients();
+    await Promise.all([loadStaticClients(), loadCandidates()]);
   }
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);

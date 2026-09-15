@@ -154,6 +154,22 @@
           Une fois declares, ils deviennent des abonnes comme les autres : meme
           plan, memes surcharges, memes boosts, meme file.
         </p>
+
+        <!-- Candidats detectes. Volontairement AU-DESSUS du formulaire : c'est
+             le point de depart naturel du travail (regarder ce qui parle, puis
+             declarer), et "Declarer" remplit le formulaire juste en dessous. -->
+        <div id="sc-candidates-block">
+          <h3 style="margin:.2rem 0 .4rem">Detectes, non declares</h3>
+          <p class="empty" style="text-align:left;padding:0 0 .6rem">
+            Adresses vues parler sur une VLAN routee sans serveur PPPoE
+            (<code>/ip/arp</code>). <b>Ce ne sont pas des clients</b> : une
+            imprimante, une camera ou l'equipement d'un autre operateur laissent
+            la meme trace. Aucun n'est faconne et aucun n'a de plan &mdash;
+            <b>Declarer</b> pre-remplit la fiche, vous saisissez le debit
+            souscrit, vous seul le connaissez.
+          </p>
+          <div class="table-wrap" id="sc-candidates"></div>
+        </div>
         <form class="stack" id="sc-form" autocomplete="off">
           <div class="row-3">
             <div class="field">
