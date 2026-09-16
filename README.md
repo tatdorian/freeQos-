@@ -165,7 +165,42 @@ coupée d'internet.
 C'est la question qui conditionne tout le reste — sans elle, impossible de savoir quel
 backhaul un abonné traverse, donc quelle file doit être son parent.
 
-**Sept sources, réconciliées** :
+#### L'identité d'un routeur est son loopback
+
+Un routeur géré est identifié par son adresse de **loopback**, et par elle seule
+quand elle est connue. C'est le seul identifiant qui tienne dans un réseau réel :
+
+| Candidat | Pourquoi il ne suffit pas |
+|---|---|
+| le nom | change, et n'est unique que par convention |
+| la MAC | dépend du port par lequel on regarde l'équipement, et suit le matériel |
+| une adresse d'interface | **un `/30` de liaison appartient aux deux bouts** — et les configurations modèles donnent souvent le même `/30` à tous les sites |
+| le loopback | unique par construction, indépendant de toute interface |
+
+Le dernier point n'est pas théorique. Avec des configurations modèles, deux PoPs
+portent le même `10.0.0.1/30` vers leur accès. Sans loopback, les deux liens du
+cœur aboutissaient **sur le même PoP** et l'autre restait orphelin : un arbre qui
+montre un réseau qui n'existe pas. C'est verrouillé par
+`test_deux_sites_au_meme_30_ne_se_confondent_plus`.
+
+Le loopback se déclare dans la fiche du PoP. Laissé vide, il est déduit — adresse
+d'hôte sur une interface `lo*`, puis `router-id` de l'export (dans un réseau
+d'opérateur, le router-id *est* le loopback), puis un `/32` isolé. L'arbre affiche
+toujours **d'où il vient**, et marque « déduit » ce qui n'a pas été déclaré.
+
+L'unicité est vérifiée, pas supposée : la base refuse deux routeurs au même
+loopback, et si la découverte en trouve deux malgré tout, l'adresse est écartée
+de l'index avec un avertissement — les fusionner silencieusement donnerait un
+arbre faux plutôt qu'incomplet.
+
+#### La nature d'un routeur est son rôle déclaré
+
+`gateway` / `core` / `pop`, saisis dans l'inventaire, donnent leur hiérarchie aux
+nœuds (la passerelle en haut, puis le cœur, puis les PoPs). Auparavant tout
+routeur géré était posé en « PoP » : l'arbre s'aplatissait et sa racine devenait
+arbitraire.
+
+**Huit sources, réconciliées** :
 
 | Source | Ce qu'elle apporte |
 |---|---|
@@ -175,6 +210,7 @@ backhaul un abonné traverse, donc quelle file doit être son parent.
 | UISP `/devices` | liens radio PtP/PtMP, capacité du moment, rattachement station → AP |
 | `/ppp/active` → `caller-id` | **la jointure clé** : la MAC du CPE de l'abonné |
 | `/interface` `rx-byte`/`tx-byte` | **le débit réellement mesuré** sur le port qui porte le lien |
+| `/ip/address` (`lo`) · `router-id` | **le loopback** : l'identité unique du routeur, quand elle n'est pas déclarée |
 | `/ip/arp` (VLAN sans PPPoE) | présence d'une adresse **non identifiée** : confirme un client déclaré, ou propose un candidat. La seule source qui ne dit pas *qui* est en face |
 
 Ce dernier point mérite d'être souligné. Le champ `caller-id` de `/ppp/active` contient la
@@ -860,7 +896,8 @@ Documentation interactive : `/docs`.
 `vlan_sightings` (présence observée dans `/ip/arp` : confirme un client déclaré, ou
 produit un candidat à déclarer),
 `backhauls` (PoP, `uisp_device_id`, capacité nominale), `routers` (PoPs ajoutés depuis
-l'interface, mot de passe chiffré, diagnostic de la dernière connexion),
+l'interface, mot de passe chiffré, `loopback` unique qui identifie le routeur dans la
+topologie, diagnostic de la dernière connexion),
 `topology_nodes` / `topology_links` (graphe découvert ; `pos_x`/`pos_y`, `parent_override`
 et `hidden` portent la disposition posée à la main dans l'éditeur d'arbre),
 `subscriber_attachments`
@@ -898,7 +935,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 707 tests, dont 654 sans aucune infrastructure
+make test        # 750 tests, dont 694 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

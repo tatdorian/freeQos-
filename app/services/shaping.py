@@ -21,18 +21,19 @@ from typing import Any
 
 from app.collectors.mikrotik import MikrotikCollector
 from app.collectors.topology import (
-    KIND_POP,
     KIND_SECTOR,
     TopologyNode,
     TopologySnapshot,
     attach_static_clients,
     attach_uisp_devices,
     build_from_router,
+    kind_for_role,
     link_by_shared_subnets,
     link_by_tunnels,
     map_subscribers_to_sectors,
     normalize_mac,
     parse_export,
+    pick_loopback,
     resolve_to_managed,
     router_node_key,
 )
@@ -224,6 +225,10 @@ class ShapingService:
         ip_owner: dict[str, str] = {}
         mac_owner: dict[str, str] = {}
         name_owner: dict[str, str] = {}
+        # Loopback -> case du routeur. C'est l'index qui tranche : il est le seul
+        # dont une correspondance vaut preuve d'identite.
+        loopback_owner: dict[str, str] = {}
+        loopbacks_par_routeur: dict[str, str] = {}
         for collector, resultat in zip(collectors, resultats, strict=True):
             if isinstance(resultat, BaseException):
                 message = f"{collector.name}: {type(resultat).__name__}: {resultat}"
@@ -232,28 +237,63 @@ class ShapingService:
                 # Un PoP injoignable ne doit pas DISPARAITRE de l'arbre : on pose
                 # quand meme sa case (marquee injoignable), sinon l'operateur croit
                 # l'avoir perdu alors que c'est juste la lecture qui a echoue.
+                # Meme injoignable, il garde son role declare et son loopback :
+                # sinon un coeur en panne se retrouverait pose en PoP, et l'arbre
+                # se reorganiserait autour d'une panne.
+                attributs_hs: dict[str, Any] = {
+                    "managed": True,
+                    "unreachable": True,
+                    "error": str(resultat),
+                    "role": str(collector.config.role),
+                }
+                if collector.config.loopback:
+                    attributs_hs["loopback"] = collector.config.loopback
+                    attributs_hs["loopback_source"] = "declare"
                 snapshot.add_node(
                     TopologyNode(
                         key=router_node_key(collector.config.name),
                         name=collector.config.effective_pop_name or collector.config.name,
-                        kind=KIND_POP,
+                        kind=kind_for_role(collector.config.role),
                         address=collector.config.host,
                         router_name=collector.config.name,
-                        attributes={"managed": True, "unreachable": True, "error": str(resultat)},
+                        attributes=attributs_hs,
                     )
                 )
+                if collector.config.loopback:
+                    loopbacks_par_routeur[collector.config.name] = collector.config.loopback
                 continue
             # L'export n'est pas un parametre de build_from_router : on le retire
             # avant de deballer, puis on l'analyse a part.
             export = resultat.pop("export", "") or ""
+            analyse_export = parse_export(export) if export else {}
+            # Le loopback est choisi AVANT de poser la case : c'est une propriete
+            # d'identite, pas une decoration ajoutee apres coup.
+            router_ids = analyse_export.get("router_ids") or []
+            loopback, origine_loopback = pick_loopback(
+                declared=collector.config.loopback,
+                addresses=(resultat.get("addresses") or [])
+                + (analyse_export.get("addresses") or []),
+                router_id=router_ids[0] if router_ids else None,
+            )
             build_from_router(
                 snapshot,
                 router_name=collector.config.name,
                 pop_name=collector.config.effective_pop_name,
                 host=collector.config.host,
+                role=str(collector.config.role),
+                loopback=loopback,
+                loopback_source=origine_loopback,
                 **resultat,
             )
             cle = router_node_key(collector.config.name)
+            if loopback:
+                loopbacks_par_routeur[collector.config.name] = loopback
+            else:
+                snapshot.warnings.append(
+                    f"{collector.config.name} : aucun loopback trouve. Son identite "
+                    f"retombe sur la MAC et l'adresse d'interface, moins sures. "
+                    f"Declarez-le dans la fiche du PoP."
+                )
             router_addresses.append((cle, collector.config.name, resultat.get("addresses") or []))
             # Toute IP portee par ce routeur pointe vers sa case (pour resoudre le
             # remote-address d'un tunnel vers le bon routeur).
@@ -274,7 +314,7 @@ class ShapingService:
             if identite:
                 name_owner.setdefault(identite, cle)
             if export:
-                analyse = parse_export(export)
+                analyse = analyse_export
                 router_tunnels.append((cle, collector.config.name, analyse.get("tunnels") or []))
                 # L'export peut reveler des adresses absentes du /ip/address structure.
                 for ligne in analyse.get("addresses") or []:
@@ -288,7 +328,26 @@ class ShapingService:
         # Un routeur gere vu en voisin par un autre ne doit PAS faire un doublon :
         # on replie ces cases decouvertes dans le routeur gere correspondant, les
         # liens pointent alors vers la case API. Ce qui reste = clients / non geres.
-        replies = resolve_to_managed(snapshot, ip_owner, mac_owner, name_owner)
+        # UNICITE : c'est la promesse du modele, donc c'est ce qu'il faut verifier.
+        # Deux routeurs qui partagent un loopback sont une erreur de configuration,
+        # et les fusionner silencieusement donnerait un arbre FAUX plutot
+        # qu'incomplet. On ecarte donc l'adresse en double de l'index plutot que
+        # de choisir un gagnant au hasard, et on le dit.
+        proprietaires: dict[str, list[str]] = {}
+        for nom_routeur, adresse in loopbacks_par_routeur.items():
+            proprietaires.setdefault(adresse, []).append(nom_routeur)
+        for adresse, noms in sorted(proprietaires.items()):
+            if len(noms) > 1:
+                snapshot.warnings.append(
+                    f"Loopback {adresse} declare par {len(noms)} routeurs "
+                    f"({', '.join(sorted(noms))}) : il doit etre unique. Aucun "
+                    f"n'est identifie par cette adresse tant que ce n'est pas corrige."
+                )
+                logger.error("Loopback %s partage par %s", adresse, sorted(noms))
+                continue
+            loopback_owner[adresse] = router_node_key(noms[0])
+
+        replies = resolve_to_managed(snapshot, ip_owner, mac_owner, name_owner, loopback_owner)
         if replies:
             logger.info("Topologie : %d voisin(s) reconnus comme routeurs geres", replies)
 

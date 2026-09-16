@@ -17,6 +17,28 @@ Aucune ne suffit seule ; ensemble elles donnent le graphe complet.
                        produit des candidats a declarer, jamais des abonnes
                        (cf. app/collectors/vlan_clients.py).
 
+L'IDENTITE D'UN ROUTEUR : SON LOOPBACK
+--------------------------------------
+Un routeur gere est identifie par son adresse de LOOPBACK, et par elle seule
+quand elle est connue. C'est le seul identifiant qui tienne :
+
+  - son NOM peut changer, et n'est unique que par convention ;
+  - sa MAC depend du port par lequel on le regarde, et suit le materiel ;
+  - une adresse d'INTERFACE ne l'identifie pas : un /30 de liaison appartient
+    aux deux bouts, et les configurations modeles donnent souvent le meme /30 a
+    tous les sites. Deux PoPs deployes au meme modele deviennent alors
+    indiscernables, et les liens du coeur aboutissent sur le mauvais.
+
+Le loopback, lui, est unique par construction dans un reseau d'operateur et ne
+depend d'aucune interface. Il est declare dans l'inventaire, ou deduit (adresse
+d'hote sur une interface ``lo*``, ou ``router-id`` de l'export), et le graphe
+dit toujours d'ou il vient pour que l'operateur puisse le corriger.
+
+LA NATURE D'UN ROUTEUR : SON ROLE DECLARE
+-----------------------------------------
+Passerelle, coeur ou PoP viennent de l'inventaire, pas d'une heuristique sur la
+plateforme : c'est ce qui donne sa hierarchie a l'arbre.
+
 LA JOINTURE QUI COMPTE
 ----------------------
 ``caller-id`` (MAC du CPE, cote RouterOS) contre la MAC des stations connues
@@ -38,7 +60,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.collectors.parsing import parse_bitrate
+from app.collectors.parsing import parse_bitrate, parse_flag
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +88,26 @@ KIND_STATIC = "static"
 # (il n'a ni plan, ni contrat, ni file).
 KIND_CANDIDATE = "candidate"
 KIND_UNKNOWN = "unknown"
+
+# Role DECLARE dans l'inventaire -> nature dans le graphe.
+#
+# Ces trois natures portent la hierarchie de l'arbre (cf. TOPO_RANG cote
+# interface : gateway 0, core 1, pop 2). Les ignorer -- ce que faisait ce module
+# en posant KIND_POP pour tout routeur gere -- met la passerelle, le coeur et
+# les PoPs au meme niveau : l'arbre s'aplatit et sa racine devient arbitraire.
+# L'operateur a declare ce role a la saisie ; c'est lui qui fait foi, pas une
+# heuristique sur la plateforme.
+ROLE_KINDS: dict[str, str] = {
+    "gateway": KIND_GATEWAY,
+    "core": KIND_CORE,
+    "pop": KIND_POP,
+}
+
+
+def kind_for_role(role: Any) -> str:
+    """Nature d'un routeur GERE d'apres son role declare. Defaut : PoP."""
+    return ROLE_KINDS.get(str(role or "").strip().lower(), KIND_POP)
+
 
 # Un lien est physique (cable/radio) ou logique (session PPPoE).
 LINK_ETHERNET = "ethernet"
@@ -371,8 +413,141 @@ def classify_platform(platform: str | None, board: str | None = None) -> str:
     return KIND_UNKNOWN
 
 
+# Une interface de loopback se nomme presque toujours ainsi sur RouterOS : 'lo'
+# (interface reelle en v7), ou un bridge sans port appele 'loopback' / 'lo0'.
+_LOOPBACK_INTERFACE = re.compile(r"^(lo|lo\d+|loopback[\w-]*|lobridge|bridge-lo\w*)$", re.I)
+
+
+def _host_address(valeur: Any) -> tuple[str, int] | None:
+    """``("10.255.0.1", 32)`` si la valeur est une adresse exploitable."""
+    texte = str(valeur or "").strip()
+    if not texte:
+        return None
+    try:
+        interface = ipaddress.ip_interface(texte)
+    except ValueError:
+        return None
+    ip = interface.ip
+    if ip.is_unspecified or ip.is_loopback or ip.is_link_local or ip.is_multicast:
+        return None
+    return str(ip), interface.network.prefixlen
+
+
+def loopback_from_addresses(rows: Sequence[dict[str, Any]]) -> tuple[str, str] | None:
+    """Trouve le loopback d'un routeur dans ``/ip/address``.
+
+    Renvoie ``(adresse, raison)``, la raison servant a l'afficher : l'operateur
+    doit pouvoir voir POURQUOI le controleur a choisi cette adresse, et la
+    corriger si la deduction est mauvaise.
+
+    Deux niveaux, dans cet ordre :
+
+    1. une adresse d'hote portee par une interface nommee ``lo``, ``lo0``,
+       ``loopback``... C'est la convention, et elle est sans ambiguite.
+    2. a defaut, une adresse en /32 (ou /128) posee ailleurs. Un /32 sur un
+       routeur ne sert a peu pres qu'a ca -- mais c'est une deduction, pas une
+       certitude, et la raison le dit.
+
+    Une adresse d'interface ordinaire n'est JAMAIS retenue : un /30 appartient
+    aux deux bouts du lien, il ne peut identifier ni l'un ni l'autre.
+    """
+    candidats_nommes: list[str] = []
+    candidats_hotes: list[str] = []
+    for row in rows:
+        if parse_flag(row.get("disabled")):
+            continue
+        analyse = _host_address(row.get("address"))
+        if analyse is None:
+            continue
+        adresse, prefixe = analyse
+        nom = str(row.get("interface") or "").strip()
+        est_hote = prefixe == ipaddress.ip_address(adresse).max_prefixlen
+        if _LOOPBACK_INTERFACE.match(nom) and est_hote:
+            candidats_nommes.append(adresse)
+        elif est_hote:
+            candidats_hotes.append(adresse)
+
+    if candidats_nommes:
+        return sorted(candidats_nommes)[0], "interface de loopback"
+    if candidats_hotes:
+        return sorted(candidats_hotes)[0], "adresse en /32"
+    return None
+
+
+def pick_loopback(
+    *,
+    declared: str | None,
+    addresses: Sequence[dict[str, Any]],
+    router_id: str | None = None,
+) -> tuple[str | None, str]:
+    """Choisit le loopback qui fera foi, et dit d'ou il vient.
+
+    L'ordre encode qui a le dernier mot :
+
+    1. **la declaration de l'operateur**. Elle bat toute deduction -- c'est la
+       convention de tout ce depot, et la seule facon de rattraper un reseau
+       qui ne suit pas les usages ;
+    2. une interface de loopback explicite ;
+    3. le ``router-id`` de l'export : dans un reseau d'operateur, le router-id
+       EST le loopback, c'est meme sa raison d'etre ;
+    4. un /32 isole, faute de mieux.
+    """
+    if declared:
+        analyse = _host_address(declared)
+        if analyse is not None:
+            return analyse[0], "declare"
+
+    trouve = loopback_from_addresses(addresses)
+    if trouve is not None and trouve[1] == "interface de loopback":
+        return trouve
+
+    if router_id:
+        analyse = _host_address(router_id)
+        if analyse is not None:
+            return analyse[0], "router-id"
+
+    if trouve is not None:
+        return trouve
+    return None, "introuvable"
+
+
 def router_node_key(router_name: str) -> str:
     return f"router:{router_name}"
+
+
+# MNDP annonce plus d'une adresse. RouterOS a change de nom de champ au fil
+# des versions, et les listes sont separees par des virgules.
+_NEIGHBOR_ADDRESS_FIELDS = (
+    "address",
+    "address4",
+    "address6",
+    "ipv4-addresses",
+    "ipv6-addresses",
+    "unicast-ipv4-addresses",
+    "unicast-ipv6-addresses",
+)
+
+
+def neighbor_addresses(neighbor: dict[str, Any]) -> list[str]:
+    """Toutes les adresses qu'un voisin annonce, sans doublon.
+
+    POURQUOI TOUTES, ET PAS SEULEMENT LA PREMIERE. MNDP annonce l'adresse de
+    l'interface par laquelle il parle -- une adresse de liaison, partagee avec
+    nous, donc incapable de l'identifier. Mais il annonce aussi, selon la
+    version, la liste de ses autres adresses, et c'est la que se trouve son
+    LOOPBACK. N'en garder qu'une revient a jeter la seule qui prouve quelque
+    chose, et a retomber sur la MAC ou le nom.
+    """
+    vues: list[str] = []
+    for champ in _NEIGHBOR_ADDRESS_FIELDS:
+        brut = neighbor.get(champ)
+        if not brut:
+            continue
+        for morceau in str(brut).split(","):
+            adresse = morceau.split("/")[0].strip()
+            if adresse and adresse not in vues:
+                vues.append(adresse)
+    return vues
 
 
 def neighbor_node_key(neighbor: dict[str, Any]) -> str:
@@ -436,14 +611,20 @@ def build_from_router(
     addresses: list[dict[str, Any]],
     identity: str | None = None,
     serial: str | None = None,
+    role: str | None = None,
+    loopback: str | None = None,
+    loopback_source: str | None = None,
 ) -> None:
     """Ajoute au graphe ce qu'un routeur voit autour de lui.
 
-    Le noeud du routeur gere porte desormais son numero de serie, son identite
-    RouterOS et TOUTES ses MAC d'interface : c'est ce qui permet a la
-    reconciliation de le reconnaitre quand un autre PoP le voit en voisin, ou
-    quand le meme routeur est joignable sous plusieurs adresses, au lieu de le
-    dedoubler.
+    Le noeud du routeur gere porte son LOOPBACK -- son identite dans le reseau,
+    unique par construction et independante de toute interface -- ainsi que son
+    numero de serie, son identite RouterOS et toutes ses MAC. Le loopback est ce
+    qui permet de le reconnaitre a coup sur quand un autre routeur le voit en
+    voisin, au lieu de le dedoubler.
+
+    Sa nature vient du ROLE DECLARE (passerelle, coeur, PoP), pas d'une
+    heuristique : c'est elle qui donne sa hierarchie a l'arbre.
     """
     router_key = router_node_key(router_name)
     macs = _router_macs(interfaces, ethernet)
@@ -454,11 +635,19 @@ def build_from_router(
         attributs["serial"] = str(serial)
     if macs:
         attributs["macs"] = macs
+    if role:
+        attributs["role"] = str(role)
+    # Le loopback voyage dans les attributs : l'interface doit pouvoir le
+    # montrer, et dire d'ou il vient, pour que l'operateur corrige une
+    # deduction douteuse au lieu de subir un arbre faux sans savoir pourquoi.
+    if loopback:
+        attributs["loopback"] = loopback
+        attributs["loopback_source"] = loopback_source or "inconnu"
     snapshot.add_node(
         TopologyNode(
             key=router_key,
             name=pop_name or router_name,
-            kind=KIND_POP,
+            kind=kind_for_role(role),
             mac=macs[0] if macs else None,
             address=host,
             router_name=router_name,
@@ -489,6 +678,7 @@ def build_from_router(
             continue
 
         platform = neighbor.get("platform")
+        annonces = neighbor_addresses(neighbor)
         snapshot.add_node(
             TopologyNode(
                 key=cle,
@@ -504,6 +694,9 @@ def build_from_router(
                 platform=str(platform) if platform else None,
                 version=str(neighbor.get("version")) if neighbor.get("version") else None,
                 router_name=router_name,
+                # Toutes les adresses annoncees : c'est parmi elles que la
+                # reconciliation cherchera un loopback connu.
+                attributes={"addresses": annonces} if annonces else {},
             )
         )
         snapshot.add_link(
@@ -551,11 +744,15 @@ _TUNNEL_SECTIONS = {
 def parse_export(text: str) -> dict[str, Any]:
     """Analyse un ``/export`` RouterOS (texte) en structures exploitables.
 
-    Renvoie ``{"addresses": [...], "tunnels": [...], "comments": {...}}`` :
-      - ``addresses`` : ``{address, interface, comment}`` de ``/ip address`` ;
-      - ``tunnels``   : ``{type, name, remote_address, local_address}`` des tunnels
+    Renvoie ``{"addresses": [...], "tunnels": [...], "comments": {...},
+    "router_ids": [...]}`` :
+      - ``addresses``  : ``{address, interface, comment}`` de ``/ip address`` ;
+      - ``tunnels``    : ``{type, name, remote_address, local_address}`` des tunnels
         (leur ``remote-address`` identifie le routeur pair) ;
-      - ``comments``  : interface -> commentaire (souvent le nom du bout d'en face).
+      - ``comments``   : interface -> commentaire (souvent le nom du bout d'en face) ;
+      - ``router_ids`` : les ``router-id`` declares dans les sections ``/routing``.
+        Dans un reseau d'operateur, le router-id EST le loopback : c'est le
+        meilleur indice quand aucune interface ne s'appelle ``lo``.
 
     Purement textuel et sans effet de bord : on peut donc l'appliquer aussi bien à
     l'export lu par l'API qu'à un export collé à la main. Tolérant : une ligne
@@ -564,6 +761,7 @@ def parse_export(text: str) -> dict[str, Any]:
     addresses: list[dict[str, str]] = []
     tunnels: list[dict[str, str]] = []
     comments: dict[str, str] = {}
+    router_ids: list[str] = []
     section = ""
     for ligne_brute in (text or "").splitlines():
         ligne = ligne_brute.strip()
@@ -592,9 +790,31 @@ def parse_export(text: str) -> dict[str, Any]:
                     "local_address": kv.get("local-address", ""),
                 }
             )
+        # Router-id : dans un reseau d'operateur, c'est le loopback. RouterOS
+        # l'ecrit sous plusieurs formes selon la version et le protocole --
+        # '/routing/id' en v7, 'router-id=' sur les instances OSPF et BGP.
+        section_plate = section.replace("/", " ").strip().lower()
+        if section_plate.startswith("routing"):
+            if kv.get("router-id"):
+                router_ids.append(kv["router-id"])
+            elif section_plate.startswith("routing id") and kv.get("id"):
+                router_ids.append(kv["id"])
         if kv.get("comment") and kv.get("name"):
             comments[kv["name"]] = kv["comment"]
-    return {"addresses": addresses, "tunnels": tunnels, "comments": comments}
+
+    # Plusieurs instances peuvent porter le meme router-id : on ne garde que des
+    # valeurs distinctes, dans l'ordre de lecture.
+    uniques: list[str] = []
+    for valeur in router_ids:
+        propre = str(valeur).strip()
+        if propre and propre not in uniques:
+            uniques.append(propre)
+    return {
+        "addresses": addresses,
+        "tunnels": tunnels,
+        "comments": comments,
+        "router_ids": uniques,
+    }
 
 
 def link_by_tunnels(
@@ -641,35 +861,66 @@ def link_by_tunnels(
     return ajoutes
 
 
+def _adresses_du_noeud(node: TopologyNode) -> list[str]:
+    """Toutes les adresses connues d'un noeud, sans prefixe et sans doublon."""
+    brutes = [node.address, *(node.attributes.get("addresses") or [])]
+    vues: list[str] = []
+    for valeur in brutes:
+        ip = str(valeur or "").split("/")[0].strip()
+        if ip and ip not in vues:
+            vues.append(ip)
+    return vues
+
+
 def resolve_to_managed(
     snapshot: TopologySnapshot,
     ip_owner: dict[str, str],
     mac_owner: dict[str, str],
     name_owner: dict[str, str],
+    loopback_owner: dict[str, str] | None = None,
 ) -> int:
     """Replie tout nœud DÉCOUVERT qui est en réalité un routeur GÉRÉ (ajouté par
     API) dans ce routeur — au lieu d'en créer un doublon à côté.
 
     Les routeurs, ce sont ceux que l'opérateur a connectés par API. Quand un PoP
     en voit un autre en voisin (``/ip/neighbor``), on ne crée pas une seconde case :
-    on reconnaît le routeur géré par son IP, sa MAC ou son identité, et on fait
-    pointer le lien vers SA case. Ce qui ne correspond à aucun routeur géré reste
-    (ce sont les clients / équipements non gérés). Renvoie le nombre de nœuds
-    repliés.
+    on reconnaît le routeur géré et on fait pointer le lien vers SA case. Ce qui
+    ne correspond à aucun routeur géré reste (ce sont les clients / équipements
+    non gérés). Renvoie le nombre de nœuds repliés.
+
+    L'ORDRE DES CRITÈRES N'EST PAS UNE COMMODITÉ
+    --------------------------------------------
+    1. **le loopback**, et il tranche seul. Unique par construction dans un
+       réseau d'opérateur, il n'appartient qu'à un routeur et ne dépend d'aucune
+       interface. Quand il correspond, il n'y a rien à interpréter.
+    2. la MAC, qui dépend du port par lequel on regarde l'équipement.
+    3. une adresse d'interface — le plus fragile des trois, parce qu'un ``/30``
+       de liaison appartient AUX DEUX bouts : il dit qu'on partage un lien avec
+       ce routeur, pas qu'on est ce routeur.
+    4. l'identité RouterOS, un nom libre que rien n'empêche de dupliquer.
+
+    Les trois derniers ne sont là que pour les équipements dont on ne connaît
+    pas le loopback (voisins non gérés, routeur dont l'export est illisible).
+    Dès qu'un loopback est connu des deux côtés, lui seul décide.
     """
     remap: dict[str, str] = {}
     for cle, node in list(snapshot.nodes.items()):
         if cle.startswith("router:"):
             continue  # deja un routeur gere
         cible: str | None = None
-        mac = normalize_mac(node.mac)
-        if mac and mac in mac_owner:
-            cible = mac_owner[mac]
+        # 1. Loopback : la seule preuve d'identite, elle passe avant tout.
+        for adr in _adresses_du_noeud(node):
+            if adr in (loopback_owner or {}):
+                cible = (loopback_owner or {})[adr]
+                break
+        # 2. MAC.
         if cible is None:
-            adresses = [node.address, *(node.attributes.get("addresses") or [])]
-            for adr in adresses:
-                ip = str(adr or "").split("/")[0].strip()
-                if ip and ip in ip_owner:
+            mac = normalize_mac(node.mac)
+            if mac and mac in mac_owner:
+                cible = mac_owner[mac]
+        if cible is None:
+            for ip in _adresses_du_noeud(node):
+                if ip in ip_owner:
                     cible = ip_owner[ip]
                     break
         if cible is None:

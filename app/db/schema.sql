@@ -137,6 +137,9 @@ CREATE TABLE IF NOT EXISTS routers (
     -- verification n'est plus desactivee en dur cote code.
     tls_verify               TEXT NOT NULL DEFAULT 'strict',
     tls_fingerprint          TEXT,
+    -- Identite du routeur dans la topologie : unique par construction dans un
+    -- reseau d'operateur, et independante des interfaces. NULL = a deduire.
+    loopback                 INET,
     timeout_s                DOUBLE PRECISION NOT NULL DEFAULT 5.0,
     pppoe_interface_pattern  TEXT NOT NULL DEFAULT '<pppoe-{login}>',
     -- Diagnostic de la derniere tentative de connexion, affiche dans l'interface.
@@ -513,6 +516,12 @@ ALTER TABLE routers ADD COLUMN IF NOT EXISTS board_name       TEXT;
 ALTER TABLE routers ADD COLUMN IF NOT EXISTS routeros_version TEXT;
 ALTER TABLE routers ADD COLUMN IF NOT EXISTS tls_verify      TEXT NOT NULL DEFAULT 'strict';
 ALTER TABLE routers ADD COLUMN IF NOT EXISTS tls_fingerprint TEXT;
+ALTER TABLE routers ADD COLUMN IF NOT EXISTS loopback        INET;
+-- Unicite : c'est la promesse du modele. Deux routeurs qui la partagent sont
+-- une erreur de configuration, et l'index la fait remonter a la saisie plutot
+-- qu'a la reconciliation, ou elle fusionnerait silencieusement deux routeurs.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_routers_loopback
+    ON routers (loopback) WHERE loopback IS NOT NULL;
 
 -- Auteur de la commande et detail des changements : ajoutes apres coup, donc via
 -- ALTER pour les installations existantes (cf. table enforcement_audit ci-dessus).

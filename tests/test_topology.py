@@ -349,7 +349,12 @@ def test_parse_export_extrait_adresses_tunnels_et_commentaires() -> None:
 
 
 def test_parse_export_tolere_le_vide_et_le_bruit() -> None:
-    assert parse_export("") == {"addresses": [], "tunnels": [], "comments": {}}
+    assert parse_export("") == {
+        "addresses": [],
+        "tunnels": [],
+        "comments": {},
+        "router_ids": [],
+    }
     assert parse_export("nimporte quoi\n# commentaire\n/truc\nset x")["tunnels"] == []
 
 

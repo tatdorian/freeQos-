@@ -7,6 +7,7 @@ de la variable d'environnement qui porte son mot de passe (``password_env``).
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 from enum import StrEnum
@@ -55,6 +56,19 @@ class RouterConfig(BaseModel):
     tls_verify: Literal["strict", "fingerprint", "insecure"] = "strict"
     tls_fingerprint: str | None = None
 
+    # IDENTITE DU ROUTEUR DANS LA TOPOLOGIE.
+    #
+    # Dans un reseau d'operateur, chaque routeur porte une adresse de loopback
+    # unique, independante de toute interface physique. C'est elle -- et rien
+    # d'autre -- qui dit "ce routeur est CE routeur" : son nom peut changer, ses
+    # IP d'interface sont partagees avec le voisin d'en face (un /30 appartient
+    # aux deux bouts), sa MAC depend du port par lequel on le regarde.
+    #
+    # Declaree ici, elle fait autorite. Laissee vide, le controleur la deduit
+    # (adresse /32 sur une interface 'lo*', ou router-id de l'export) et
+    # l'affiche pour que l'operateur puisse la corriger.
+    loopback: str | None = None
+
     # RouterOS cree une interface dynamique par session PPPoE. Son nom par defaut
     # est "<pppoe-LOGIN>" : c'est la seule facon d'obtenir les compteurs d'octets,
     # /ppp/active/print ne les expose pas.
@@ -63,6 +77,33 @@ class RouterConfig(BaseModel):
     # --- Phase 2 : enforcement (declare, non utilise) ---
     rw_username: str | None = None
     rw_password_env: str | None = None
+
+    @model_validator(mode="after")
+    def _check_loopback(self) -> RouterConfig:
+        """Un loopback designe UNE machine, jamais un reseau.
+
+        Accepte la forme nue comme la forme /32 et normalise : c'est une cle de
+        rapprochement, elle doit se comparer sans ambiguite.
+        """
+        if self.loopback is None:
+            return self
+        texte = str(self.loopback).strip()
+        if not texte:
+            self.loopback = None
+            return self
+        try:
+            interface = ipaddress.ip_interface(texte)
+        except ValueError as exc:
+            raise ValueError(f"loopback invalide : {texte}") from exc
+        if interface.network.prefixlen != interface.ip.max_prefixlen:
+            raise ValueError(
+                f"loopback {texte} : un loopback est une adresse d'hote "
+                f"(/{interface.ip.max_prefixlen}), pas un reseau"
+            )
+        if interface.ip.is_unspecified or interface.ip.is_loopback:
+            raise ValueError(f"loopback inutilisable : {texte}")
+        self.loopback = str(interface.ip)
+        return self
 
     @model_validator(mode="after")
     def _check_tls(self) -> RouterConfig:

@@ -41,6 +41,9 @@ class RouterInput(BaseModel):
     # assume et visible.
     tls_verify: Literal["strict", "fingerprint", "insecure"] = "strict"
     tls_fingerprint: str | None = Field(default=None, max_length=128)
+    # Identite du routeur dans la topologie. Vide = deduite (adresse /32 sur une
+    # interface 'lo*', ou router-id de l'export) puis affichee pour correction.
+    loopback: str | None = Field(default=None, max_length=64)
     timeout_s: float = Field(default=5.0, ge=0.5, le=60.0)
     pppoe_interface_pattern: str = "<pppoe-{login}>"
 
@@ -59,6 +62,7 @@ class RouterUpdate(BaseModel):
     use_ssl: bool | None = None
     tls_verify: Literal["strict", "fingerprint", "insecure"] | None = None
     tls_fingerprint: str | None = Field(default=None, max_length=128)
+    loopback: str | None = Field(default=None, max_length=64)
     timeout_s: float | None = Field(default=None, ge=0.5, le=60.0)
     pppoe_interface_pattern: str | None = None
 

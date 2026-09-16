@@ -2005,3 +2005,78 @@ async def test_conteneur_reel_cable_la_detection(database: Database) -> None:
         assert not hasattr(container.shaping, "sightings")
     finally:
         await shutdown_container(container)
+
+
+# =========================================================================
+# Loopback : identite des routeurs dans la topologie
+# =========================================================================
+
+
+async def test_le_loopback_traverse_la_base(database: Database) -> None:
+    """Aller-retour complet : saisie, relecture en RouterConfig, modification.
+
+    La colonne est un INET ; le contrat cote code est une adresse d'hote nue.
+    C'est cette traduction qui doit tenir, sinon la cle de rapprochement ne se
+    compare plus (``10.255.0.2`` contre ``10.255.0.2/32``).
+    """
+    from app.db.routers_repo import RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    repo = RoutersRepository(database.pool, SecretBox(generate_key()))
+
+    cree = await repo.create(
+        {
+            "name": "core-rennes",
+            "host": "10.10.0.2",
+            "role": "core",
+            "pop_name": "Coeur Rennes",
+            # Saisi en /32 : doit ressortir nu.
+            "loopback": "10.255.0.2/32",
+        },
+        "secret",
+    )
+    assert cree["loopback"] == "10.255.0.2"
+
+    configs = await repo.load_configs()
+    assert [c.loopback for c in configs] == ["10.255.0.2"]
+    assert configs[0].role == "core"
+
+    modifie = await repo.update(cree["id"], {"loopback": "10.255.0.99"})
+    assert modifie["loopback"] == "10.255.0.99"
+
+
+async def test_la_base_refuse_deux_routeurs_au_meme_loopback(database: Database) -> None:
+    """L'unicite est verifiee A LA SAISIE, pas seulement a la reconciliation.
+
+    Prise trop tard, une collision se traduirait par un arbre silencieusement
+    faux ; prise ici, elle devient un message que l'operateur peut corriger.
+    """
+    from app.db.routers_repo import DuplicateRouterError, RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    repo = RoutersRepository(database.pool, SecretBox(generate_key()))
+    await repo.create({"name": "a", "host": "1.1.1.1", "loopback": "10.255.0.1"}, "s")
+
+    with pytest.raises(DuplicateRouterError, match="loopback"):
+        await repo.create({"name": "b", "host": "1.1.1.2", "loopback": "10.255.0.1"}, "s")
+
+    # Le message doit distinguer les deux unicites de la table.
+    with pytest.raises(DuplicateRouterError, match="nomme 'a'"):
+        await repo.create({"name": "a", "host": "1.1.1.3"}, "s")
+
+
+async def test_plusieurs_routeurs_sans_loopback_restent_possibles(database: Database) -> None:
+    """L'index unique est partiel : NULL n'entre pas en collision avec NULL.
+
+    Sans cela, declarer un deuxieme routeur avant d'avoir renseigne son
+    loopback deviendrait impossible.
+    """
+    from app.db.routers_repo import RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    repo = RoutersRepository(database.pool, SecretBox(generate_key()))
+    await repo.create({"name": "a", "host": "1.1.1.1"}, "s")
+    await repo.create({"name": "b", "host": "1.1.1.2"}, "s")
+
+    configs = await repo.load_configs()
+    assert {c.loopback for c in configs} == {None}
