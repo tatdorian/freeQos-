@@ -333,3 +333,34 @@ console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey })
 """,
     )
     assert res["parent"] == "router:nord"
+
+
+def test_une_case_sans_aucun_lien_reste_affichee(harnais: Path) -> None:
+    """HYPOTHESE INFIRMEE, gardee comme telle.
+
+    On a soupconne qu'un candidat ARP prive de lien vers son PoP disparaissait
+    de l'arbre -- ce qui aurait explique qu'un client VLAN soit invisible. C'est
+    faux : une case non rattachee devient une RACINE et garde sa ligne a elle.
+
+    Le test existe pour que cette piste ne soit pas re-supposee : si un jour une
+    case orpheline devient invisible, c'est ici qu'on le verra.
+    """
+    res = executer(
+        harnais,
+        """
+const nodes = [
+  { key: 'router:pop', name: 'PoP Nord', kind: 'pop' },
+  { key: 'candidate:pop:10.20.0.77', name: '10.20.0.77', kind: 'candidate' },
+];
+const m = A.topoBuildModel({ nodes, links: [], counts: {} });
+A.topoAutoLayout(m);
+const c = m.nodesByKey.get('candidate:pop:10.20.0.77');
+console.log(JSON.stringify({
+  present: !!c, parent: c ? c.parentKey : 'absent', x: c ? c.x : null, cases: m.nodesByKey.size,
+}));
+""",
+    )
+    assert res["present"] is True
+    assert res["parent"] is None, "orpheline, donc racine -- pas disparue"
+    assert res["x"] is not None, "elle recoit bien une position"
+    assert res["cases"] == 2

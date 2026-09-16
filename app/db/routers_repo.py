@@ -39,6 +39,32 @@ class DuplicateRouterError(ValueError):
     pass
 
 
+def _ecarte(row: Any, motif: str) -> dict[str, str]:
+    """Fiche minimale d'un routeur ecarte, de quoi l'AFFICHER.
+
+    On garde hote, PoP et role : sans eux, l'interface ne pourrait montrer
+    qu'un nom, et l'arbre ne pourrait pas poser de case a sa place.
+    """
+    return {
+        "name": str(row["name"]),
+        "reason": motif,
+        "source": "db",
+        "host": str(row["host"] or ""),
+        "pop_name": str(row["pop_name"] or ""),
+        "role": str(row["role"] or "pop"),
+    }
+
+
+def _motif_court(exc: Exception) -> str:
+    """Premiere ligne utile d'une erreur de validation, pour l'affichage."""
+    texte = str(exc).strip()
+    for ligne in texte.splitlines():
+        propre = ligne.strip()
+        if propre and not propre.startswith("For further information"):
+            return propre[:160]
+    return texte[:160] or type(exc).__name__
+
+
 def _conflit(exc: asyncpg.UniqueViolationError, payload: dict[str, Any]) -> DuplicateRouterError:
     """Traduit la contrainte violee en message utile.
 
@@ -82,11 +108,25 @@ class RoutersRepository:
         return dict(row)
 
     async def load_configs(self, *, enabled_only: bool = True) -> list[RouterConfig]:
-        """Traduit les lignes en RouterConfig utilisables par le collecteur.
+        """Les routeurs exploitables. Les ecartes sont perdus : voir ci-dessous."""
+        configs, _ = await self.load_configs_with_report(enabled_only=enabled_only)
+        return configs
 
-        Une ligne dont le secret est indechiffrable (cle changee, valeur en clair)
-        est ecartee avec un message clair plutot que de faire echouer tout le
-        chargement : les autres PoPs doivent continuer a tourner.
+    async def load_configs_with_report(
+        self, *, enabled_only: bool = True
+    ) -> tuple[list[RouterConfig], list[dict[str, str]]]:
+        """Traduit les lignes en RouterConfig, ET rend la liste des ecartes.
+
+        POURQUOI CETTE VARIANTE EXISTE. Une ligne dont le secret est
+        indechiffrable (cle changee, volume perdu) est ecartee plutot que de
+        faire echouer tout le chargement : les autres PoPs doivent continuer a
+        tourner. C'est la bonne decision -- mais tant que ce depot se contentait
+        d'un log serveur, le routeur disparaissait de la collecte, de l'arbre et
+        de la detection ARP sans qu'AUCUN ecran ne dise pourquoi.
+
+        Le rapport porte donc de quoi le reconstituer a l'ecran : son nom, son
+        motif, et ce qu'on sait de lui (hote, PoP, role). Un PoP ecarte doit
+        rester visible en tant qu'ecarte, jamais s'evaporer.
         """
         query = "SELECT * FROM routers"
         if enabled_only:
@@ -95,34 +135,47 @@ class RoutersRepository:
             rows = await conn.fetch(query + " ORDER BY name")
 
         configs: list[RouterConfig] = []
+        ecartes: list[dict[str, str]] = []
         for row in rows:
             try:
                 password = self._secrets.decrypt(row["password_enc"])
             except Exception as exc:  # noqa: BLE001
                 logger.error("Routeur '%s' ignore : secret illisible (%s)", row["name"], exc)
                 await self.record_failure(row["id"], f"secret illisible : {exc}")
+                ecartes.append(_ecarte(row, f"secret illisible : {exc}"))
                 continue
-            configs.append(
-                RouterConfig(
-                    name=row["name"],
-                    host=row["host"],
-                    port=row["port"],
-                    username=row["username"],
-                    password=SecretStr(password),
-                    role=RouterRole(row["role"]),
-                    pop_name=row["pop_name"],
-                    enabled=row["enabled"],
-                    use_ssl=row["use_ssl"],
-                    tls_verify=row["tls_verify"],
-                    tls_fingerprint=row["tls_fingerprint"],
-                    # La colonne est INET : asyncpg rend un objet, le validateur
-                    # de RouterConfig ramene la forme /32 a l'adresse nue.
-                    loopback=str(row["loopback"]) if row["loopback"] is not None else None,
-                    timeout_s=row["timeout_s"],
-                    pppoe_interface_pattern=row["pppoe_interface_pattern"],
+            try:
+                configs.append(
+                    RouterConfig(
+                        name=row["name"],
+                        host=row["host"],
+                        port=row["port"],
+                        username=row["username"],
+                        password=SecretStr(password),
+                        role=RouterRole(row["role"]),
+                        pop_name=row["pop_name"],
+                        enabled=row["enabled"],
+                        use_ssl=row["use_ssl"],
+                        tls_verify=row["tls_verify"],
+                        tls_fingerprint=row["tls_fingerprint"],
+                        # La colonne est INET : asyncpg rend un objet, le
+                        # validateur de RouterConfig ramene la forme /32 a
+                        # l'adresse nue.
+                        loopback=(str(row["loopback"]) if row["loopback"] is not None else None),
+                        timeout_s=row["timeout_s"],
+                        pppoe_interface_pattern=row["pppoe_interface_pattern"],
+                    )
                 )
-            )
-        return configs
+            except (ValueError, TypeError, KeyError) as exc:
+                # UNE fiche invalide (role inconnu, loopback mal saisi) faisait
+                # remonter l'exception jusqu'au registre, dont le garde-fou
+                # large la rattrapait -- et TOUT l'inventaire en base
+                # disparaissait a cause d'une seule ligne. On n'en perd plus
+                # qu'une, et on dit laquelle.
+                logger.error("Routeur '%s' ignore : fiche invalide (%s)", row["name"], exc)
+                await self.record_failure(row["id"], f"fiche invalide : {exc}")
+                ecartes.append(_ecarte(row, f"fiche invalide : {_motif_court(exc)}"))
+        return configs, ecartes
 
     # ------------------------------------------------------------ ecritures
     async def create(self, payload: dict[str, Any], password: str) -> dict[str, Any]:

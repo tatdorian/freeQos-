@@ -165,6 +165,31 @@ coupée d'internet.
 C'est la question qui conditionne tout le reste — sans elle, impossible de savoir quel
 backhaul un abonné traverse, donc quelle file doit être son parent.
 
+#### Un PoP connu n'est jamais simplement absent
+
+`registry.collectors` alimente **tout** : la découverte de topologie, la collecte
+d'abonnés, la détection ARP des clients à IP fixe. Un routeur qui n'y entre pas
+disparaît donc de partout à la fois — et le repli « injoignable » de la
+découverte ne peut pas le sauver, puisqu'il est *dans* la boucle sur les
+collecteurs.
+
+Trois raisons peuvent l'en écarter, et toutes sont désormais **visibles depuis
+l'interface**, pas seulement dans le journal du serveur :
+
+| Situation | Ce que montre l'onglet Équipements |
+|---|---|
+| secret indéchiffrable (clé changée) | badge **écarté** + avertissement nommant le motif |
+| fiche invalide (rôle inconnu, loopback mal saisi) | idem, et **les autres routeurs survivent** |
+| inventaire en base illisible | avertissement global : « les routeurs déclarés en base sont absents de la collecte » |
+| masqué à la main | listé dans « retiré de l'inventaire », avec **Restaurer** |
+| présent mais non collecté, quelle qu'en soit la cause | badge **hors collecte** |
+
+Le routeur garde par ailleurs **sa case dans l'arbre**, marquée « écarté » : rien
+ne distingue visuellement un PoP effacé d'un PoP qui n'a jamais existé, alors
+qu'un PoP écarté est une situation à corriger.
+
+Un routeur masqué à la main, lui, ne réapparaît pas — « Retirer » doit retirer.
+
 #### L'arbre vient de la configuration, pas d'une heuristique
 
 `/ip/neighbor` répond à une question faible : *qui se voit ?* — ce qui est vrai
@@ -982,7 +1007,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 778 tests, dont 722 sans aucune infrastructure
+make test        # 791 tests, dont 732 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

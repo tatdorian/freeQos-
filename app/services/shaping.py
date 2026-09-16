@@ -397,7 +397,46 @@ class ShapingService:
         if ajoutes:
             logger.info("Topologie : %d lien(s) routeur<->routeur deduits de la config", ajoutes)
 
-        # ANALYSE DE CONFIGURATION : la hierarchie reelle.
+        # ROUTEURS CONNUS MAIS NON COLLECTES.
+        #
+        # Un PoP ecarte (secret illisible, fiche invalide) n'a pas de
+        # collecteur : la boucle ci-dessus ne peut donc pas lui poser de case,
+        # pas meme celle marquee "injoignable". Il disparaissait purement et
+        # simplement de l'arbre -- le pire des affichages, parce que rien ne
+        # distingue un PoP efface d'un PoP qui n'a jamais existe.
+        #
+        # Un routeur MASQUE a la main, lui, ne reapparait pas : le registre
+        # l'a deja retire des ecartes, et c'est exactement ce que "Retirer"
+        # doit faire.
+        for ecarte in self.registry.skipped:
+            nom = str(ecarte.get("name") or "")
+            if not nom:
+                continue  # panne globale de l'inventaire : rien a poser
+            cle_ecarte = router_node_key(nom)
+            if cle_ecarte in snapshot.nodes:
+                continue
+            snapshot.add_node(
+                TopologyNode(
+                    key=cle_ecarte,
+                    name=str(ecarte.get("pop_name") or "") or nom,
+                    kind=kind_for_role(ecarte.get("role")),
+                    address=str(ecarte.get("host") or "") or None,
+                    router_name=nom,
+                    attributes={
+                        "managed": True,
+                        "excluded": True,
+                        "error": str(ecarte.get("reason") or ""),
+                        "source": str(ecarte.get("source") or ""),
+                    },
+                )
+            )
+            snapshot.warnings.append(
+                f"{nom} : ecarte de la collecte ({ecarte.get('reason')}). Sa case "
+                f"reste dans l'arbre, mais rien n'est lu sur lui -- ni topologie, "
+                f"ni abonnes, ni detection des clients a IP fixe."
+            )
+
+            # ANALYSE DE CONFIGURATION : la hierarchie reelle.
         #
         # Elle vient APRES la reconciliation (les cases doivent etre fusionnees
         # pour que les passerelles se resolvent vers la bonne) et APRES les

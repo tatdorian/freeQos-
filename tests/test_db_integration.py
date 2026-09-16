@@ -2080,3 +2080,93 @@ async def test_plusieurs_routeurs_sans_loopback_restent_possibles(database: Data
 
     configs = await repo.load_configs()
     assert {c.loopback for c in configs} == {None}
+
+
+# =========================================================================
+# Un PoP ne disparait pas en silence
+# =========================================================================
+
+
+async def test_une_fiche_invalide_ne_vide_plus_tout_l_inventaire(database: Database) -> None:
+    """LE BUG LE PLUS GRAVE TROUVE EN CHEMIN.
+
+    ``RouterRole('chimere')`` leve. L'exception remontait de ``load_configs``
+    jusqu'au garde-fou large du registre, qui l'attrapait -- et TOUT
+    l'inventaire en base disparaissait a cause d'une seule ligne. Un parc de
+    vingt PoPs s'evaporait parce qu'une fiche avait un role mal saisi.
+    """
+    from app.db.routers_repo import RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    repo = RoutersRepository(database.pool, SecretBox(generate_key()))
+    await repo.create({"name": "bon", "host": "10.0.0.1", "role": "pop"}, "s")
+    await repo.create({"name": "casse", "host": "10.0.0.2", "role": "pop"}, "s")
+    async with database.pool.acquire() as conn:
+        await conn.execute("UPDATE routers SET role = 'chimere' WHERE name = 'casse'")
+
+    configs, ecartes = await repo.load_configs_with_report()
+
+    # Le routeur sain survit...
+    assert [c.name for c in configs] == ["bon"]
+    # ... et l'autre est ECARTE, pas perdu.
+    assert [e["name"] for e in ecartes] == ["casse"]
+    assert "fiche invalide" in ecartes[0]["reason"]
+    assert ecartes[0]["host"] == "10.0.0.2"
+
+    # Le motif est aussi pose sur la fiche, donc visible dans l'inventaire.
+    public = {r["name"]: r for r in await repo.list_public()}
+    assert "fiche invalide" in (public["casse"]["last_error"] or "")
+
+
+async def test_un_secret_illisible_est_rapporte_avec_sa_fiche(database: Database) -> None:
+    """Le cas du lab : la cle de chiffrement a change (volume perdu, secret
+    regenere). Le routeur devient illisible et sortait de la collecte, de
+    l'arbre et de la detection ARP en ne laissant qu'une ligne de log."""
+    from app.db.routers_repo import RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    await RoutersRepository(database.pool, SecretBox(generate_key())).create(
+        {"name": "pop-nord", "host": "10.10.0.10", "role": "pop", "pop_name": "PoP Nord"}, "s"
+    )
+
+    # Nouvelle cle : le secret d'hier ne se dechiffre plus.
+    autre = RoutersRepository(database.pool, SecretBox(generate_key()))
+    configs, ecartes = await autre.load_configs_with_report()
+
+    assert configs == []
+    assert len(ecartes) == 1
+    assert ecartes[0]["name"] == "pop-nord"
+    assert ecartes[0]["pop_name"] == "PoP Nord"
+    assert ecartes[0]["source"] == "db"
+    assert "secret illisible" in ecartes[0]["reason"]
+
+
+async def test_le_registre_reel_remonte_l_ecart_jusqu_a_l_interface(
+    database: Database,
+) -> None:
+    """Le montage complet : depot reel, registre reel. C'est ce chemin qui
+    alimente ``/pops/routers`` et donc l'avertissement affiche."""
+    from app.config import Settings
+    from app.db.routers_repo import RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+    from app.services.registry import RouterRegistry
+
+    await RoutersRepository(database.pool, SecretBox(generate_key())).create(
+        {"name": "pop-nord", "host": "10.10.0.10", "role": "pop", "pop_name": "PoP Nord"}, "s"
+    )
+    depot = RoutersRepository(database.pool, SecretBox(generate_key()))
+    settings = Settings(
+        _env_file=None,
+        database_url=DSN,
+        routers=[],
+        backhaul_provider="mock",
+        plan_provider="mock",
+        scheduler_enabled=False,
+    )
+    registre = RouterRegistry(settings, repository=depot)
+
+    await registre.reload()
+
+    assert registre.collectors == []
+    assert [e["name"] for e in registre.skipped] == ["pop-nord"]
+    assert registre.skipped[0]["source"] == "db"
