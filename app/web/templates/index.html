@@ -338,6 +338,25 @@
                 <option value="core">Coeur de reseau</option>
                 <option value="gateway">Gateway (egress)</option>
               </select>
+              <span class="help">
+                Determine sa place dans l'arbre : la gateway au sommet, puis le
+                coeur, puis les PoPs.
+              </span>
+            </div>
+          </div>
+
+          <div class="row-3">
+            <div class="field">
+              <label for="f-loopback">Loopback</label>
+              <input id="f-loopback" name="loopback" placeholder="10.255.0.1 (optionnel)">
+              <span class="help">
+                <b>L'identite du routeur dans la topologie.</b> Unique par
+                construction, et independante des interfaces : un nom change,
+                une MAC depend du port, et un /30 de liaison appartient aux deux
+                bouts &mdash; seul le loopback designe CE routeur. Laisse vide,
+                il est deduit (interface <code>lo</code>, ou router-id) et
+                affiche dans l'arbre pour que vous puissiez le corriger.
+              </span>
             </div>
           </div>
 

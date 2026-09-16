@@ -1782,6 +1782,9 @@ function formPayload() {
     username: (data.get('username') || 'qos-ro').trim(),
     role: data.get('role') || 'pop',
     pop_name: (data.get('pop_name') || '').trim() || null,
+    // Vide = a deduire. On envoie null plutot que "" : une chaine vide se
+    // lirait comme une valeur posee.
+    loopback: (data.get('loopback') || '').trim() || null,
     use_ssl: document.getElementById('f-ssl').checked,
     timeout_s: Number(data.get('timeout_s') || 5),
     pppoe_interface_pattern: data.get('pppoe_interface_pattern') || '<pppoe-{login}>',
@@ -2858,6 +2861,21 @@ function renderTopoPanel() {
         'p.ex. CCR↔DS), laissez : ce sont deux vrais routeurs.</span></div>'
       : '') +
     '<div class="kv"><span>Role</span><span>' + esc(KIND_LABEL[node.kind] || '?') + '</span></div>' +
+    // Le loopback EST l'identite du routeur : il merite la ligne juste sous le
+    // role, et l'origine de la deduction doit etre visible pour que l'operateur
+    // sache s'il peut lui faire confiance ou s'il doit la declarer.
+    (attrs.loopback
+      ? '<div class="kv"><span>Loopback</span><span title="Identite du routeur dans la ' +
+        'topologie, unique par construction. Origine : ' + esc(attrs.loopback_source || '?') +
+        '"><code>' + esc(attrs.loopback) + '</code>' +
+        (attrs.loopback_source && attrs.loopback_source !== 'declare'
+          ? ' <span class="badge warn">deduit</span>' : '') +
+        '</span></div>'
+      : (attrs.managed
+        ? '<div class="kv"><span>Loopback</span><span class="na" title="Sans loopback, ' +
+          'l\'identite de ce routeur retombe sur sa MAC et ses adresses d\'interface, ' +
+          'moins sures. Declarez-le dans sa fiche.">introuvable</span></div>'
+        : '')) +
     ((node.addresses && node.addresses.length)
       ? '<div class="kv"><span>Adresse(s)</span><span>' + esc(node.addresses.join(', ')) + '</span></div>'
       : (node.address ? '<div class="kv"><span>Adresse</span><span>' + esc(node.address) + '</span></div>' : '')) +

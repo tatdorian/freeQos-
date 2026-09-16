@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 # Colonnes renvoyees a l'interface. password_enc en est volontairement absente.
 PUBLIC_COLUMNS = """
     id, name, host, port, username, role, pop_name, enabled, use_ssl,
-    tls_verify, tls_fingerprint, timeout_s,
+    tls_verify, tls_fingerprint, host(loopback) AS loopback, timeout_s,
     pppoe_interface_pattern, last_ok_at, last_error, identity, board_name,
     routeros_version, created_at, updated_at
 """
@@ -37,6 +37,25 @@ class RouterNotFoundError(LookupError):
 
 class DuplicateRouterError(ValueError):
     pass
+
+
+def _conflit(exc: asyncpg.UniqueViolationError, payload: dict[str, Any]) -> DuplicateRouterError:
+    """Traduit la contrainte violee en message utile.
+
+    Deux unicites coexistent sur cette table -- le nom et le loopback -- et
+    dire "ce nom existe deja" quand c'est le loopback qui collisionne envoie
+    l'operateur chercher au mauvais endroit. Or une collision de loopback est
+    precisement ce qu'il doit corriger : elle casserait l'identification des
+    routeurs dans l'arbre.
+    """
+    contrainte = str(getattr(exc, "constraint_name", "") or "")
+    if "loopback" in contrainte:
+        return DuplicateRouterError(
+            f"le loopback '{payload.get('loopback')}' est deja utilise par un autre "
+            f"routeur. Il identifie un routeur et un seul : verifiez lequel des deux "
+            f"est mal declare."
+        )
+    return DuplicateRouterError(f"un routeur nomme '{payload.get('name')}' existe deja")
 
 
 class RoutersRepository:
@@ -96,6 +115,9 @@ class RoutersRepository:
                     use_ssl=row["use_ssl"],
                     tls_verify=row["tls_verify"],
                     tls_fingerprint=row["tls_fingerprint"],
+                    # La colonne est INET : asyncpg rend un objet, le validateur
+                    # de RouterConfig ramene la forme /32 a l'adresse nue.
+                    loopback=str(row["loopback"]) if row["loopback"] is not None else None,
                     timeout_s=row["timeout_s"],
                     pppoe_interface_pattern=row["pppoe_interface_pattern"],
                 )
@@ -111,9 +133,9 @@ class RoutersRepository:
                     f"""
                     INSERT INTO routers (name, host, port, username, password_enc, role,
                                          pop_name, enabled, use_ssl, tls_verify,
-                                         tls_fingerprint, timeout_s,
+                                         tls_fingerprint, loopback, timeout_s,
                                          pppoe_interface_pattern)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::inet, $13, $14)
                     RETURNING {PUBLIC_COLUMNS}
                     """,  # noqa: S608
                     payload["name"],
@@ -127,13 +149,12 @@ class RoutersRepository:
                     payload.get("use_ssl", False),
                     payload.get("tls_verify", "strict"),
                     payload.get("tls_fingerprint"),
+                    payload.get("loopback"),
                     payload.get("timeout_s", 5.0),
                     payload.get("pppoe_interface_pattern", "<pppoe-{login}>"),
                 )
             except asyncpg.UniqueViolationError as exc:
-                raise DuplicateRouterError(
-                    f"un routeur nomme '{payload['name']}' existe deja"
-                ) from exc
+                raise _conflit(exc, payload) from exc
         return dict(row)
 
     async def update(
@@ -156,6 +177,7 @@ class RoutersRepository:
                 "use_ssl",
                 "tls_verify",
                 "tls_fingerprint",
+                "loopback",
                 "timeout_s",
                 "pppoe_interface_pattern",
             }
@@ -166,7 +188,10 @@ class RoutersRepository:
         if not fields:
             return await self.get_public(router_id)
 
-        assignments = ", ".join(f"{name} = ${i + 2}" for i, name in enumerate(fields))
+        assignments = ", ".join(
+            f"{name} = ${i + 2}" + ("::inet" if name == "loopback" else "")
+            for i, name in enumerate(fields)
+        )
         async with self._pool.acquire() as conn:
             try:
                 row = await conn.fetchrow(
@@ -179,7 +204,7 @@ class RoutersRepository:
                     *fields.values(),
                 )
             except asyncpg.UniqueViolationError as exc:
-                raise DuplicateRouterError("ce nom de routeur est deja pris") from exc
+                raise _conflit(exc, {**fields, "name": fields.get("name", "")}) from exc
         if row is None:
             raise RouterNotFoundError(f"routeur {router_id} inconnu")
         return dict(row)
