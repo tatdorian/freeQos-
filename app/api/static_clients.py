@@ -151,6 +151,53 @@ async def list_candidates(container: ContainerDep) -> dict[str, Any]:
     return {"enabled": True, "candidates": lignes, "count": len(lignes)}
 
 
+@router.get(
+    "/static-clients/candidates/diagnostic",
+    summary="Pourquoi un client sur VLAN est vu, ou ne l'est pas",
+)
+async def diagnose_candidates(
+    container: ContainerDep,
+    router_name: Annotated[str | None, Query(max_length=64)] = None,
+) -> dict[str, Any]:
+    """Lit /ip/arp en direct et rend le motif de chaque ligne ecartee.
+
+    A LIRE D'ABORD QUAND UN CLIENT MANQUE. La detection suppose que l'adressage
+    du client est pose sur une interface de ``/interface/vlan``. Beaucoup de
+    routeurs portent l'adresse sur un PONT en filtrage VLAN : la table ARP nomme
+    alors ce pont, et le client est invisible. ``interfaces_hors_vlan`` le montre
+    d'un coup d'oeil -- une interface qui y apparait avec plusieurs adresses est
+    presque toujours la reponse.
+
+    Lecture seule : trois commandes ``print``, rien n'est configure.
+    """
+    collecteurs = [c for c in container.registry.collectors if router_name in (None, c.name)]
+    if not collecteurs:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Aucun routeur collecte ne correspond a '{router_name}'. "
+                f"Un routeur ecarte de la collecte n'est lu nulle part : "
+                f"verifiez l'onglet Equipements."
+            )
+            if router_name
+            else "Aucun routeur n'est collecte.",
+        )
+
+    rapports: list[dict[str, Any]] = []
+    for collecteur in collecteurs:
+        try:
+            rapports.append(await collecteur.explain_vlan_clients())
+        except Exception as exc:  # noqa: BLE001 - un routeur muet ne casse pas le reste
+            rapports.append(
+                {
+                    "router": collecteur.name,
+                    "pop_name": collecteur.config.effective_pop_name,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    return {"enabled": container.settings.vlan_detect_enabled, "routers": rapports}
+
+
 @router.post(
     "/static-clients",
     status_code=status.HTTP_201_CREATED,

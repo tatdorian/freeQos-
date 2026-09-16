@@ -568,6 +568,28 @@ un candidat déclaré ou devenu muet disparaît de lui-même. Le nombre est plaf
 Réglages, tous pilotés depuis la base : `vlan_detect_enabled`,
 `vlan_detect_interval_s`, `vlan_candidate_limit`, `vlan_sighting_retention_s`.
 
+**Limite à connaître : la détection ne voit que l'adressage porté par une
+`/interface/vlan`.** Un client n'est proposé en candidat que si son entrée ARP
+est rattachée à une interface déclarée dans `/interface/vlan`. Sur un **pont en
+filtrage VLAN** qui porte lui-même l'adressage client, `/ip/arp` nomme le pont —
+et le client reste invisible. Ce n'est pas une panne, c'est le périmètre actuel.
+
+Plutôt que de laisser deviner, le filtre **s'explique** : *Abonnés → Inventaire →
+« Un client manque ? Voir pourquoi »* lit `/ip/arp` en direct et rend le motif de
+chaque ligne écartée, avec le champ qui répond presque toujours —
+`interfaces_hors_vlan`, les interfaces vues dans ARP mais absentes de
+`/interface/vlan`. Une interface qui y apparaît avec plusieurs adresses est la
+réponse.
+
+Les motifs sont distincts, parce qu'ils appellent des gestes différents : VLAN
+absente (chercher où est l'adressage), VLAN déclarée mais **désactivée** (la
+réactiver), interface hébergeant un **serveur PPPoE** (rejet voulu, ces abonnés
+ont déjà une identité), adresse **sans MAC** (cherchée, pas répondue).
+
+Le diagnostic emprunte exactement le même chemin de décision que la détection
+(`judge_arp_rows`) : un diagnostic qui raconterait autre chose que ce que fait
+le code serait pire que pas de diagnostic.
+
 **Limite à connaître : la mesure dépend de la file.** Sans session PPPoE, aucune
 interface ne porte le trafic de ce client ; le seul compteur par client dont on dispose
 est celui de la file qui le vise (`/queue/simple`). Tant qu'aucune file n'existe sur
@@ -933,6 +955,7 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `PATCH` · `DELETE` | `/api/v1/pops/routers/{id}` | Modifie / retire un routeur |
 | `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
 | `GET` · `POST` | `/api/v1/static-clients` | Inventaire déclaratif des clients à IP fixe |
+| `GET` | `/api/v1/static-clients/candidates/diagnostic` | Pourquoi une adresse n'est pas proposée (lecture seule de `/ip/arp`) |
 | `GET` | `/api/v1/static-clients/candidates` | Adresses détectées sur VLAN routée, non déclarées (consultation seule) |
 | `PATCH` · `DELETE` | `/api/v1/static-clients/{id}` | Modifie / retire une fiche (l'historique de mesures est conservé) |
 | `GET` | `/api/v1/topology` · `POST /topology/discover` | Graphe du réseau |
@@ -1007,7 +1030,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 791 tests, dont 732 sans aucune infrastructure
+make test        # 799 tests, dont 740 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

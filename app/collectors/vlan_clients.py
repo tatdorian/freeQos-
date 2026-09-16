@@ -28,6 +28,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from app.collectors.parsing import parse_flag
@@ -60,6 +61,20 @@ def _adresse_exploitable(valeur: Any) -> str | None:
     if adresse.is_unspecified or adresse.is_loopback or adresse.is_multicast:
         return None
     return str(adresse)
+
+
+def disabled_vlans(rows: Sequence[dict[str, Any]]) -> set[str]:
+    """Noms des VLAN declarees mais desactivees.
+
+    Les distinguer des interfaces inconnues change tout pour l'exploitant : une
+    VLAN absente demande de chercher ou est l'adressage, une VLAN desactivee
+    demande juste de la reactiver.
+    """
+    return {
+        _texte(row.get("name"))
+        for row in rows
+        if parse_flag(row.get("disabled")) and _texte(row.get("name"))
+    }
 
 
 def vlan_index(rows: Sequence[dict[str, Any]]) -> dict[str, int | None]:
@@ -97,6 +112,133 @@ def pppoe_interfaces(rows: Sequence[dict[str, Any]]) -> set[str]:
     return interfaces
 
 
+# Motifs de rejet. Ils sont rendus tels quels a l'interface : chacun doit dire
+# a l'exploitant ce qu'il peut VERIFIER sur son routeur, pas seulement que la
+# ligne a ete ecartee.
+GARDE = "retenu"
+REJET_DESACTIVEE = "entree ARP desactivee"
+REJET_INVALIDE = "entree ARP invalide"
+REJET_HORS_VLAN = "interface absente de /interface/vlan"
+REJET_VLAN_DESACTIVEE = "VLAN declaree mais desactivee dans la configuration"
+REJET_PPPOE = "cette interface heberge un serveur PPPoE"
+REJET_ADRESSE = "adresse inexploitable"
+REJET_SANS_MAC = "aucune MAC : l'adresse a ete cherchee, elle n'a pas repondu"
+
+
+@dataclass(slots=True)
+class ArpVerdict:
+    """Le sort d'une entree ARP, et POURQUOI.
+
+    Exister separement du resultat permet de repondre a la seule question qui
+    compte quand un client manque : "qu'est-ce qui l'a ecarte ?". Sans cela,
+    l'exploitant n'a qu'une liste vide et aucune prise dessus.
+    """
+
+    address: str
+    mac: str | None
+    interface: str
+    kept: bool
+    reason: str
+    vlan_id: int | None = None
+
+
+def judge_arp_rows(
+    arp_rows: Sequence[dict[str, Any]],
+    vlan_rows: Sequence[dict[str, Any]],
+    pppoe_rows: Sequence[dict[str, Any]],
+) -> list[ArpVerdict]:
+    """Rend un verdict motive pour CHAQUE entree ARP.
+
+    C'est l'unique chemin de decision : ``sightings_from_arp`` se contente de
+    filtrer ce que cette fonction a retenu. Deux logiques separees auraient
+    fini par diverger, et un diagnostic qui ment sur ce que fait le code est
+    pire que pas de diagnostic du tout.
+    """
+    vlans = vlan_index(vlan_rows)
+    exclues = pppoe_interfaces(pppoe_rows)
+    eteintes = disabled_vlans(vlan_rows)
+
+    verdicts: list[ArpVerdict] = []
+    for row in arp_rows:
+        interface = _texte(row.get("interface"))
+        adresse = _adresse_exploitable(row.get("address"))
+        mac = _normalise_mac(row.get("mac-address") or row.get("mac_address"))
+
+        if parse_flag(row.get("disabled")):
+            motif, garde = REJET_DESACTIVEE, False
+        elif parse_flag(row.get("invalid")):
+            motif, garde = REJET_INVALIDE, False
+        elif interface in exclues:
+            motif, garde = REJET_PPPOE, False
+        elif interface in eteintes:
+            motif, garde = REJET_VLAN_DESACTIVEE, False
+        elif interface not in vlans:
+            motif, garde = REJET_HORS_VLAN, False
+        elif adresse is None:
+            motif, garde = REJET_ADRESSE, False
+        elif mac is None:
+            motif, garde = REJET_SANS_MAC, False
+        else:
+            motif, garde = GARDE, True
+
+        verdicts.append(
+            ArpVerdict(
+                # L'adresse brute est conservee quand elle est illisible : c'est
+                # elle que l'exploitant retrouvera dans son /ip/arp print.
+                address=adresse or (_texte(row.get("address")) or "?"),
+                mac=mac,
+                interface=interface,
+                kept=garde,
+                reason=motif,
+                vlan_id=vlans.get(interface),
+            )
+        )
+    return verdicts
+
+
+def explain_arp(
+    arp_rows: Sequence[dict[str, Any]],
+    vlan_rows: Sequence[dict[str, Any]],
+    pppoe_rows: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    """Synthese lisible : ce qui a ete retenu, et ce qui a ecarte le reste.
+
+    ``interfaces_hors_vlan`` est le champ qui repond le plus souvent a la
+    question. Si une interface y apparait avec beaucoup d'adresses -- un pont,
+    typiquement -- c'est que l'adressage client est pose sur elle et non sur une
+    interface de ``/interface/vlan`` : la detection, telle qu'elle est ecrite,
+    ne peut pas la voir.
+    """
+    verdicts = judge_arp_rows(arp_rows, vlan_rows, pppoe_rows)
+    par_motif: dict[str, int] = {}
+    hors_vlan: dict[str, int] = {}
+    for v in verdicts:
+        par_motif[v.reason] = par_motif.get(v.reason, 0) + 1
+        if v.reason == REJET_HORS_VLAN and v.interface:
+            hors_vlan[v.interface] = hors_vlan.get(v.interface, 0) + 1
+    return {
+        "arp_rows": len(verdicts),
+        "kept": sum(1 for v in verdicts if v.kept),
+        "by_reason": dict(sorted(par_motif.items(), key=lambda kv: -kv[1])),
+        # Interfaces vues dans /ip/arp mais absentes de /interface/vlan, les
+        # plus bavardes d'abord.
+        "interfaces_hors_vlan": dict(sorted(hors_vlan.items(), key=lambda kv: -kv[1])),
+        "vlans_declares": sorted(vlan_index(vlan_rows)),
+        "interfaces_pppoe": sorted(pppoe_interfaces(pppoe_rows)),
+        "verdicts": [
+            {
+                "address": v.address,
+                "mac": v.mac,
+                "interface": v.interface,
+                "vlan_id": v.vlan_id,
+                "kept": v.kept,
+                "reason": v.reason,
+            }
+            for v in verdicts
+        ],
+    }
+
+
 def sightings_from_arp(
     arp_rows: Sequence[dict[str, Any]],
     vlan_rows: Sequence[dict[str, Any]],
@@ -120,31 +262,25 @@ def sightings_from_arp(
     Les entrees statiques sont conservees volontairement : beaucoup d'operateurs
     figent le couple IP/MAC de leurs clients a IP fixe, et les ecarter
     reviendrait a rater exactement la population qu'on cherche.
-    """
-    vlans = vlan_index(vlan_rows)
-    exclues = pppoe_interfaces(pppoe_rows)
 
+    LIMITE CONNUE. Le premier filtre suppose que l'adressage du client est pose
+    sur une interface de ``/interface/vlan``. Si le routeur porte l'adresse sur
+    un PONT en filtrage VLAN, la table ARP nomme ce pont et non une VLAN : le
+    client est alors invisible ici. ``explain_arp`` le dit explicitement.
+    """
     vues: dict[str, VlanSighting] = {}
-    for row in arp_rows:
-        if parse_flag(row.get("disabled")) or parse_flag(row.get("invalid")):
-            continue
-        interface = _texte(row.get("interface"))
-        if interface not in vlans or interface in exclues:
-            continue
-        adresse = _adresse_exploitable(row.get("address"))
-        if adresse is None:
-            continue
-        mac = _normalise_mac(row.get("mac-address") or row.get("mac_address"))
-        if mac is None:
+    vlans = vlan_index(vlan_rows)
+    for verdict in judge_arp_rows(arp_rows, vlan_rows, pppoe_rows):
+        if not verdict.kept:
             continue
         # Une meme adresse peut apparaitre deux fois (entree statique doublee
         # d'une dynamique) : la derniere lue suffit, elles designent le meme hote.
-        vues[adresse] = VlanSighting(
+        vues[verdict.address] = VlanSighting(
             router_name=router_name,
             pop_name=pop_name,
-            address=adresse,
-            vlan_interface=interface,
-            mac=mac,
-            vlan_id=vlans.get(interface),
+            address=verdict.address,
+            vlan_interface=verdict.interface,
+            mac=verdict.mac,
+            vlan_id=vlans.get(verdict.interface),
         )
     return sorted(vues.values(), key=lambda v: ipaddress.ip_address(v.address))

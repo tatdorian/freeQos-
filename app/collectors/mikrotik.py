@@ -37,7 +37,7 @@ from app.collectors.parsing import (
     pppoe_interface_name,
 )
 from app.collectors.topology import ethernet_capacity_mbps
-from app.collectors.vlan_clients import sightings_from_arp
+from app.collectors.vlan_clients import explain_arp, sightings_from_arp
 from app.config import RouterConfig
 from app.models import InterfaceSample, PppoeSession, VlanSighting
 
@@ -472,6 +472,29 @@ class MikrotikCollector:
         return await asyncio.wait_for(
             asyncio.to_thread(self.collect_vlan_clients_sync), timeout=timeout
         )
+
+    async def explain_vlan_clients(self) -> dict[str, Any]:
+        """Pourquoi telle adresse est vue, ou ne l'est pas, sur CE routeur.
+
+        Meme lecture que la detection, meme chemin de decision : ce n'est pas
+        une simulation, c'est le filtre reel qui rend ses motifs. Un diagnostic
+        qui raconterait autre chose que ce que fait le code serait pire que pas
+        de diagnostic.
+        """
+        timeout = max(self.config.timeout_s * 3, 5.0)
+        return await asyncio.wait_for(
+            asyncio.to_thread(self.explain_vlan_clients_sync), timeout=timeout
+        )
+
+    def explain_vlan_clients_sync(self) -> dict[str, Any]:
+        try:
+            pppoe = self._client.pppoe_servers()
+        except Exception:  # noqa: BLE001
+            pppoe = []
+        rapport = explain_arp(self._client.arp(), self._client.vlans(), pppoe)
+        rapport["router"] = self.name
+        rapport["pop_name"] = self.config.effective_pop_name
+        return rapport
 
     def collect_vlan_clients_sync(self) -> list[VlanSighting]:
         """Qui parle sur les VLAN routees de ce routeur.
