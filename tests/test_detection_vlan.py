@@ -9,6 +9,8 @@ une file que personne n'a demandee.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -757,3 +759,44 @@ def test_api_diagnostic_sans_routeur_collecte(api) -> None:
     reponse = client.get("/api/v1/static-clients/candidates/diagnostic?router_name=fantome")
     assert reponse.status_code == 404
     assert "ecarte de la collecte" in reponse.json()["detail"]
+
+
+# =========================================================================
+# 6. L'arbre dit ce que la derniere decouverte a trouve
+# =========================================================================
+
+
+def test_le_graphe_expose_les_remarques_de_la_derniere_analyse(api) -> None:
+    """Le job periodique jetait les avertissements du snapshot.
+
+    Un arbre de cases isolees sans explication n'aide personne : ces messages
+    disent precisement ce qui manque pour les relier (un loopback non declare,
+    un secteur inconnu, un PoP ecarte de la collecte).
+    """
+    from app.collectors.topology import TopologySnapshot
+
+    client, _, _ = api
+    container = client.app.dependency_overrides[get_container]()
+    snapshot = TopologySnapshot()
+    snapshot.warnings.append("DS-CCR : aucun loopback trouve.")
+    container.shaping.last_snapshot = snapshot
+    container.shaping.last_discovery_at = datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
+
+    corps = client.get("/api/v1/topology").json()
+
+    assert corps["warnings"] == ["DS-CCR : aucun loopback trouve."]
+    assert corps["discovered_at"].startswith("2026-09-16T10:00")
+
+
+def test_un_arbre_vide_distingue_ses_deux_causes(api) -> None:
+    """ "Rien a decouvrir" et "rien n'a encore ete decouvert" produisent le meme
+    arbre vide et demandent des gestes opposes. Le champ discovered_at est ce
+    qui les separe."""
+    client, _, _ = api
+    container = client.app.dependency_overrides[get_container]()
+
+    container.shaping.last_discovery_at = None
+    assert client.get("/api/v1/topology").json()["discovered_at"] is None
+
+    container.shaping.last_discovery_at = datetime(2026, 9, 16, 10, 0, tzinfo=UTC)
+    assert client.get("/api/v1/topology").json()["discovered_at"] is not None

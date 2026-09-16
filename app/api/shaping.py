@@ -77,10 +77,21 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     if candidats:
         noeuds, liens = _fusionner_candidats(noeuds, liens, candidats, container)
 
+    # Les avertissements de la DERNIERE decouverte, qu'elle vienne du job
+    # periodique ou du bouton. Sans cela, un arbre de cases isolees ne disait
+    # pas ce qui manquait pour les relier -- et le job, lui, jetait ces
+    # messages en silence.
+    derniere = container.shaping.last_snapshot
     return {
         "nodes": noeuds,
         "links": liens,
         "counts": {"nodes": len(noeuds), "links": len(liens)},
+        "warnings": list(derniere.warnings) if derniere is not None else [],
+        "discovered_at": (
+            container.shaping.last_discovery_at.isoformat()
+            if container.shaping.last_discovery_at is not None
+            else None
+        ),
         "sources": {
             "neighbors": "/ip/neighbor (MNDP, LLDP, CDP) - adjacence physique",
             "config_subnets": "/ip/address - liens routeur<->routeur par /30 partage",
