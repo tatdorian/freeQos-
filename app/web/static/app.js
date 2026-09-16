@@ -2273,6 +2273,26 @@ function topoBuildModel(data) {
       link: via.link, inverted: via.inverted, confident: via.confident } : null);
   });
 
+  // 1bis) Parents PROUVES PAR LA CONFIGURATION.
+  //
+  //   La route par defaut d'un routeur dit ou part ce qu'il ne sait pas
+  //   router : c'est la relation hierarchique elle-meme, pas une deduction.
+  //   Elle passe donc avant le calcul de plus court chemin, qui n'est qu'une
+  //   approximation -- utile la ou la config ne dit rien (equipements non
+  //   geres, voisins decouverts), fausse des qu'un anneau relie deux PoPs
+  //   entre eux autant qu'au coeur.
+  //
+  //   Elle reste APRES le parent force a la main : l'operateur garde le
+  //   dernier mot sur le controleur, comme partout ailleurs.
+  nodes.forEach((n) => {
+    if (!n.config_parent || !nodes.has(n.config_parent)) return;
+    const via = (voisins.get(n.config_parent) || []).find((v) => v.key === n.key);
+    attach(n.key, n.config_parent, via
+      ? { parentKey: n.config_parent, childKey: n.key, link: via.link,
+          inverted: via.inverted, confident: true }
+      : null);
+  });
+
   // 2) Le reste est derive par plus court chemin depuis le haut de la
   //    hierarchie. Un lien SUR coute 1, un segment partage coute tres cher :
   //    une adjacence prouvee est donc toujours preferee, et un rattachement
@@ -2886,7 +2906,19 @@ function renderTopoPanel() {
         ' vues reconciliees</span></div>' : '') +
     (node.platform ? '<div class="kv"><span>Plateforme</span><span>' + esc(topoTrim(node.platform, 18)) + '</span></div>' : '') +
     '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'racine') +
-      (node.parent_override ? ' *' : '') + '</span></div>' +
+      (node.parent_override ? ' *' : '') +
+      // D'ou vient ce rattachement : pose a la main, PROUVE par la table de
+      // routage, ou seulement deduit du graphe. L'operateur doit pouvoir faire
+      // la difference avant de s'y fier.
+      (node.parent_override
+        ? ' <span class="badge">a la main</span>'
+        : (node.config_parent && parent && node.config_parent === parent.key
+          ? ' <span class="badge ok" title="Sa route par defaut sort vers ce noeud' +
+            (attrs.config_parent_via ? ', via ' + esc(attrs.config_parent_via) : '') +
+            '">route</span>'
+          : (parent ? ' <span class="badge warn" title="Deduit du graphe, faute de ' +
+            'route par defaut exploitable">deduit</span>' : ''))) +
+      '</span></div>' +
     '<div class="kv"><span>Vu</span><span>' + (node.fresh ? 'recemment' : 'ancien') + '</span></div>' +
     // Rattachement INCERTAIN (vu via un segment partage, pas prouve
     // point-a-point) : on le signale et on offre de le confirmer/verrouiller.

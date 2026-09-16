@@ -253,3 +253,83 @@ console.log(JSON.stringify({ x: nd.x, y: nd.y }));
     )
     assert res["x"] == 999
     assert res["y"] == 640
+
+
+# -------------------------------------------------------------------------
+# Le parent PROUVE par la configuration
+# -------------------------------------------------------------------------
+
+ANNEAU = """
+// Anneau : les deux PoPs sont relies au coeur ET entre eux. Rien dans le
+// graphe ne dit lequel des deux chemins est le bon -- ils ont la meme
+// longueur. C'est exactement la ou l'arbre devine peut pendre un PoP sous
+// son frere.
+const nodes = [
+  { key: 'router:coeur', name: 'Coeur', kind: 'core' },
+  { key: 'router:nord',  name: 'Nord',  kind: 'pop' },
+  { key: 'router:sud',   name: 'Sud',   kind: 'pop' },
+];
+const links = [
+  { key: 'l1', source_key: 'router:coeur', target_key: 'router:nord', interface: 'ether1' },
+  { key: 'l2', source_key: 'router:nord',  target_key: 'router:sud',  interface: 'ether2' },
+];
+"""
+
+
+def test_le_parent_de_la_config_bat_le_plus_court_chemin(harnais: Path) -> None:
+    """Sud n'est relie qu'a Nord dans le graphe : le calcul le pend donc sous
+    Nord. Sa table de routage dit qu'il sort par le coeur -- et c'est elle qui
+    doit gagner, parce qu'elle SAIT la ou le graphe suppose."""
+    sans = executer(
+        harnais,
+        ANNEAU
+        + """
+const m = A.topoBuildModel({ nodes, links, counts: {} });
+console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey }));
+""",
+    )
+    assert sans["parent"] == "router:nord", "sans la config, l'arbre pend Sud sous Nord"
+
+    avec = executer(
+        harnais,
+        ANNEAU
+        + """
+const noeuds = nodes.map((x) => ({ ...x }));
+noeuds[2].config_parent = 'router:coeur';
+const m = A.topoBuildModel({ nodes: noeuds, links, counts: {} });
+console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey }));
+""",
+    )
+    assert avec["parent"] == "router:coeur"
+
+
+def test_le_parent_pose_a_la_main_bat_celui_de_la_config(harnais: Path) -> None:
+    """L'operateur garde le dernier mot sur le controleur, ici comme partout."""
+    res = executer(
+        harnais,
+        ANNEAU
+        + """
+const noeuds = nodes.map((x) => ({ ...x }));
+noeuds[2].config_parent = 'router:coeur';
+noeuds[2].parent_override = 'router:nord';
+const m = A.topoBuildModel({ nodes: noeuds, links, counts: {} });
+console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey }));
+""",
+    )
+    assert res["parent"] == "router:nord"
+
+
+def test_un_parent_de_config_disparu_ne_bloque_pas_l_arbre(harnais: Path) -> None:
+    """Le noeud designe peut avoir ete masque ou retire : l'arbre doit
+    retomber sur son calcul, pas laisser la case orpheline."""
+    res = executer(
+        harnais,
+        ANNEAU
+        + """
+const noeuds = nodes.map((x) => ({ ...x }));
+noeuds[2].config_parent = 'router:fantome';
+const m = A.topoBuildModel({ nodes: noeuds, links, counts: {} });
+console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey }));
+""",
+    )
+    assert res["parent"] == "router:nord"

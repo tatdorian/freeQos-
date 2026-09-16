@@ -85,6 +85,20 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
             "uisp": "UISP /devices - liens radio et capacite du moment",
             "pppoe": "/ppp/active caller-id - MAC du CPE, rattache l'abonne au secteur",
             "counters": "/interface rx-byte,tx-byte - debit mesure du port qui porte le lien",
+            "routes": (
+                "/ip/route - la route par defaut dit QUI EST AU-DESSUS. C'est la "
+                "hierarchie telle que le routeur l'applique, pas une deduction."
+            ),
+            "routing": (
+                "/routing/ospf/neighbor, /routing/bgp/session - adjacences "
+                "PROUVEES : deux routeurs qui echangent des routes, pas deux "
+                "equipements qui se voient sur un switch."
+            ),
+            "stacking": (
+                "/interface/vlan, /interface/bridge/port, /interface/bonding - "
+                "par quel port physique sort un trafic donne, donc a quel lien "
+                "rattacher un client."
+            ),
             "arp": (
                 "/ip/arp sur les VLAN sans PPPoE - presence d'une adresse non "
                 "declaree. Candidat a confirmer par un humain, jamais shape."
