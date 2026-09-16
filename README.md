@@ -165,6 +165,25 @@ coupée d'internet.
 C'est la question qui conditionne tout le reste — sans elle, impossible de savoir quel
 backhaul un abonné traverse, donc quelle file doit être son parent.
 
+#### La topologie se découvre toute seule
+
+Les onglets **Topologie** et **Arbre réseau** lisent le graphe en base. Ce graphe
+n'est écrit que par `discover()` — et il est désormais appelé par un **job
+périodique** (`discover_topology`, cadence `topology_refresh_interval_s`), pas
+seulement par le bouton « Relancer la découverte ».
+
+Le planificateur exécute chaque job une première fois **immédiatement** : sur une
+installation neuve, l'arbre est peuplé dès le démarrage, sans geste de
+l'exploitant.
+
+Le job et le bouton empruntent **la même fonction** (`discover_with_devices`) :
+un arbre qui différerait selon qu'il a été construit par le planificateur ou par
+un clic serait impossible à diagnostiquer.
+
+> Toute cadence déclarée dans le registre des réglages doit piloter un job qui
+> existe. Un réglage orphelin s'affiche, se modifie, et ne change rien — c'est
+> arrivé deux fois. Un test monte le conteneur réel et le vérifie pour les onze.
+
 #### Un PoP connu n'est jamais simplement absent
 
 `registry.collectors` alimente **tout** : la découverte de topologie, la collecte
@@ -1030,7 +1049,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 799 tests, dont 740 sans aucune infrastructure
+make test        # 801 tests, dont 740 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

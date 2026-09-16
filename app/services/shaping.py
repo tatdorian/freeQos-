@@ -15,7 +15,7 @@ import asyncio
 import ipaddress
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -120,6 +120,30 @@ class RouterShapingState:
             "queue_types": self.queue_types,
             "queue_trees": self.queue_trees,
         }
+
+
+async def discover_with_devices(
+    shaping: ShapingService, providers: Sequence[Any]
+) -> TopologySnapshot:
+    """Decouverte complete : radios rassemblees, puis lecture des PoPs.
+
+    UN SEUL CHEMIN, partage par le job periodique et le bouton "Relancer la
+    decouverte". Les dupliquer aurait garanti qu'ils divergent -- et un arbre
+    qui change selon qu'il a ete construit par le planificateur ou par un clic
+    serait impossible a diagnostiquer.
+
+    Une source de radios muette n'empeche pas l'autre, ni la lecture des PoPs :
+    la topologie des routeurs ne depend pas d'UISP.
+    """
+    devices: list[dict[str, Any]] = []
+    for fournisseur in providers:
+        if fournisseur is None or not hasattr(fournisseur, "raw_devices"):
+            continue
+        try:
+            devices.extend(await fournisseur.raw_devices())
+        except Exception:  # noqa: BLE001
+            logger.warning("raw_devices indisponible pour %s", type(fournisseur).__name__)
+    return await shaping.discover(uisp_devices=devices)
 
 
 class ShapingService:
