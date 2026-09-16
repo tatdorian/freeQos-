@@ -295,6 +295,17 @@ REGLAGES: tuple[Reglage, ...] = (
         "Periode de reapplication automatique de l'etat desire sur les routeurs.",
     ),
     _cadence(
+        "topology_refresh_interval_s",
+        "discover_topology",
+        "Periode de redecouverte du graphe reseau. C'est ce job qui peuple les "
+        "onglets Topologie et Arbre reseau ; sans lui ils restent vides.",
+    ),
+    _cadence(
+        "qoe_loop_interval_s",
+        "qoe_closed_loop",
+        "Periode de la boucle fermee QoE (resserrage d'un secteur qui decroche).",
+    ),
+    _cadence(
         "vlan_detect_interval_s",
         "detect_vlan_clients",
         "Periode de lecture de la table ARP pour reperer les clients sur VLAN "

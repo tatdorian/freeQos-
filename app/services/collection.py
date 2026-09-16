@@ -51,6 +51,7 @@ JOB_BOOSTS = "expire_boosts"
 JOB_RECONCILE = "reconcile_shaping"
 JOB_QOE_LOOP = "qoe_closed_loop"
 JOB_VLAN_CLIENTS = "detect_vlan_clients"
+JOB_TOPOLOGY = "discover_topology"
 
 # Origine du plan d'un client a IP fixe. Ce n'est pas RADIUS et ca ne doit pas
 # en avoir l'air : le debit vient de la fiche saisie par l'operateur.

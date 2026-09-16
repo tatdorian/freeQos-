@@ -48,6 +48,7 @@ from app.services.collection import (
     JOB_RECONCILE,
     JOB_RTT,
     JOB_SUBSCRIBERS,
+    JOB_TOPOLOGY,
     JOB_VLAN_CLIENTS,
     CollectionService,
 )
@@ -55,7 +56,7 @@ from app.services.crypto import KeySource, SecretBox, load_or_create_key
 from app.services.registry import RouterRegistry
 from app.services.rtt import RttProber
 from app.services.runtime_config import RuntimeConfig
-from app.services.shaping import ShapingService
+from app.services.shaping import ShapingService, discover_with_devices
 
 logger = logging.getLogger(__name__)
 
@@ -318,6 +319,22 @@ async def build_container(settings: Settings) -> Container:
     scheduler.add_job(
         JOB_VLAN_CLIENTS, settings.vlan_detect_interval_s, collection.detect_vlan_clients
     )
+
+    async def discover_topology() -> None:
+        """Decouverte periodique du graphe.
+
+        SANS CE JOB, la topologie n'existait que si quelqu'un cliquait
+        "Relancer la decouverte" : les onglets Topologie et Arbre reseau
+        restaient vides sur une installation neuve, quel que soit l'etat des
+        PoPs et de leur API. Le reglage topology_refresh_interval_s etait
+        declare et ne pilotait rien.
+
+        Le planificateur execute chaque job une premiere fois immediatement :
+        l'arbre est donc peuple des le demarrage, sans geste de l'exploitant.
+        """
+        await discover_with_devices(shaping, (backhaul_provider, collection.antennas_provider))
+
+    scheduler.add_job(JOB_TOPOLOGY, settings.topology_refresh_interval_s, discover_topology)
 
     # Changer une cadence depuis l'interface doit reprogrammer la boucle, pas
     # seulement l'affichage : le scheduler relit interval_s a chaque tour.

@@ -25,7 +25,11 @@ from app.collectors.topology import KIND_POP, TopologyNode, TopologySnapshot
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.routeros import MissingWriteCredentialsError
 from app.models import KIND_STATIC
-from app.services.shaping import EnforcementDisabledError, EnforcementLockedError
+from app.services.shaping import (
+    EnforcementDisabledError,
+    EnforcementLockedError,
+    discover_with_devices,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,18 +205,16 @@ async def router_export(router_name: str, container: ContainerDep) -> dict[str, 
 @router.post("/topology/discover", summary="Relance la decouverte de topologie")
 async def discover(container: ContainerDep) -> dict[str, Any]:
     """Lecture seule sur tous les PoPs, puis persistance du graphe."""
-    devices: list[dict[str, Any]] = []
     # Les deux sources de radios : le fournisseur statique (mock/UISP/env-airOS)
     # et les antennes ajoutees depuis l'interface. Leurs fiches se rattachent au
     # graphe par la MAC, exactement de la meme facon.
-    for fournisseur in (container.backhaul_provider, container.collection.antennas_provider):
-        if fournisseur is not None and hasattr(fournisseur, "raw_devices"):
-            try:
-                devices.extend(await fournisseur.raw_devices())
-            except Exception:  # noqa: BLE001 - une source muette n'empeche pas l'autre
-                logger.warning("raw_devices indisponible pour %s", type(fournisseur).__name__)
-
-    snapshot = await container.shaping.discover(uisp_devices=devices)
+    #
+    # Meme fonction que le job periodique : le bouton ne doit pas produire un
+    # arbre different de celui que le planificateur construit tout seul.
+    snapshot = await discover_with_devices(
+        container.shaping,
+        (container.backhaul_provider, container.collection.antennas_provider),
+    )
     return {
         "nodes": len(snapshot.nodes),
         "links": len(snapshot.links),

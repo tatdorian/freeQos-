@@ -2170,3 +2170,78 @@ async def test_le_registre_reel_remonte_l_ecart_jusqu_a_l_interface(
     assert registre.collectors == []
     assert [e["name"] for e in registre.skipped] == ["pop-nord"]
     assert registre.skipped[0]["source"] == "db"
+
+
+async def test_le_conteneur_reel_decouvre_la_topologie_tout_seul(database: Database) -> None:
+    """LE BUG QUI VIDAIT LES ONGLETS TOPOLOGIE ET ARBRE RESEAU.
+
+    Ces deux vues lisent le graphe en base ; le graphe n'est ecrit que par
+    discover(). Or AUCUN job ne l'appelait : le reglage
+    topology_refresh_interval_s etait declare et ne pilotait rien. La topologie
+    n'existait donc que si un humain cliquait "Relancer la decouverte", et une
+    installation neuve affichait deux onglets vides quel que soit l'etat des
+    PoPs et de leur API.
+
+    Meme classe de bug que JOB_QOE_LOOP : un reglage, une fonction, et le
+    cablage manquant entre les deux. Ce test monte le conteneur reel.
+    """
+    from app.config import Settings
+    from app.container import build_container, shutdown_container
+    from app.services.collection import JOB_TOPOLOGY
+    from app.services.crypto import generate_key
+
+    settings = Settings(
+        _env_file=None,
+        database_url=DSN,
+        routers=[],
+        backhauls=[],
+        backhaul_provider="mock",
+        plan_provider="mock",
+        scheduler_enabled=False,
+        db_auto_migrate=True,
+        app_secret_key=generate_key(),
+    )
+
+    container = await build_container(settings)
+    try:
+        assert JOB_TOPOLOGY in container.scheduler.job_names()
+
+        # Le job tourne sans routeur : il doit reussir, pas exploser.
+        await container.scheduler.run_once(JOB_TOPOLOGY)
+
+        # Et la cadence est pilotable depuis la base, comme les autres.
+        assert container.runtime_config is not None
+        noms = {r["name"] for r in container.runtime_config.describe()}
+        assert "topology_refresh_interval_s" in noms
+        assert "qoe_loop_interval_s" in noms
+    finally:
+        await shutdown_container(container)
+
+
+async def test_chaque_cadence_pilote_un_job_qui_existe(database: Database) -> None:
+    """Un reglage de cadence qui ne correspond a aucun job est un piege : il
+    s'affiche, se modifie, et ne change rien. C'est exactement ce qui est
+    arrive deux fois -- a la boucle QoE, puis a la decouverte de topologie."""
+    from app.config import Settings
+    from app.container import build_container, shutdown_container
+    from app.services.crypto import generate_key
+    from app.services.runtime_config import REGLAGES
+
+    settings = Settings(
+        _env_file=None,
+        database_url=DSN,
+        routers=[],
+        backhauls=[],
+        backhaul_provider="mock",
+        plan_provider="mock",
+        scheduler_enabled=False,
+        db_auto_migrate=True,
+        app_secret_key=generate_key(),
+    )
+    container = await build_container(settings)
+    try:
+        jobs = set(container.scheduler.job_names())
+        orphelines = [r.name for r in REGLAGES if r.job and r.job not in jobs]
+        assert not orphelines, f"cadences sans job : {orphelines}"
+    finally:
+        await shutdown_container(container)
