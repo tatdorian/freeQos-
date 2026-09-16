@@ -180,6 +180,12 @@ Le job et le bouton empruntent **la même fonction** (`discover_with_devices`) :
 un arbre qui différerait selon qu'il a été construit par le planificateur ou par
 un clic serait impossible à diagnostiquer.
 
+`/topology` renvoie aussi les **remarques de la dernière analyse** et sa date,
+quelle que soit son origine (job ou bouton) : un arbre de cases isolées sans
+explication n'aide personne, alors que « aucun loopback trouvé, déclarez-le »
+est actionnable. La date distingue par ailleurs les **deux causes opposées** d'un
+arbre vide — rien à découvrir, ou rien n'a encore été découvert.
+
 > Toute cadence déclarée dans le registre des réglages doit piloter un job qui
 > existe. Un réglage orphelin s'affiche, se modifie, et ne change rien — c'est
 > arrivé deux fois. Un test monte le conteneur réel et le vérifie pour les onze.
@@ -1049,7 +1055,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 801 tests, dont 740 sans aucune infrastructure
+make test        # 803 tests, dont 742 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

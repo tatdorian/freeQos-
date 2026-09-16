@@ -17,6 +17,7 @@ import json
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from app.collectors.config_graph import (
@@ -170,6 +171,10 @@ class ShapingService:
         self._write_clients: dict[str, RouterOsWriteClient] = {}
         self._write_client_factory = write_client_factory or LibrouterosWriteClient
         self.last_snapshot: TopologySnapshot | None = None
+        # Quand la derniere decouverte a tourne. Distingue "aucun equipement"
+        # de "aucune decouverte n'a encore eu lieu" -- deux causes opposees
+        # derriere le meme arbre vide.
+        self.last_discovery_at: datetime | None = None
         # Etat courant du drapeau. La base fait foi une fois amorcee ; la
         # variable d'environnement ne sert plus qu'a la valeur initiale.
         self._enforcement_enabled = settings.enforcement_enabled
@@ -492,6 +497,7 @@ class ShapingService:
             logger.info("Topologie : %d client(s) a IP fixe declares", poses)
 
         self.last_snapshot = snapshot
+        self.last_discovery_at = datetime.now(tz=UTC)
         if self.repository is not None:
             compte = await self.repository.save_snapshot(snapshot)
             logger.info("Topologie : %d noeud(s), %d lien(s)", compte["nodes"], compte["links"])

@@ -1097,8 +1097,39 @@ async function loadNetwork() {
   if (compte) {
     compte.textContent = data.counts.nodes + ' equipement(s), ' + data.counts.links + ' lien(s)';
   }
+  renderDecouverte(data);
   renderTopoCanvas();
   renderTopoPanel();
+}
+
+/** Ce que la DERNIERE decouverte a a dire, qu'elle vienne du job periodique ou
+ *  du bouton. Un arbre de cases isolees sans explication n'aide personne : ces
+ *  avertissements disent precisement ce qui manque pour les relier. */
+function renderDecouverte(data) {
+  const hote = document.getElementById('topo-notice');
+  if (!hote) return;
+  const avertissements = data.warnings || [];
+
+  // Un arbre vide a DEUX causes opposees : rien a decouvrir, ou rien n'a encore
+  // ete decouvert. Les confondre laisse chercher au mauvais endroit.
+  if (!data.counts.nodes) {
+    hote.innerHTML = '<div class="notice' + (data.discovered_at ? '' : ' err') + '">' +
+      (data.discovered_at
+        ? '<strong>Aucun equipement decouvert.</strong> La derniere analyse a bien ' +
+          'tourne (' + esc(clock(data.discovered_at)) + ') mais n\'a rien trouve : ' +
+          'verifiez que vos PoPs sont bien collectes dans l\'onglet Equipements.'
+        : '<strong>Aucune analyse n\'a encore tourne.</strong> Elle se declenche ' +
+          'toute seule au demarrage puis periodiquement ; vous pouvez aussi la ' +
+          'lancer maintenant avec « Relancer la decouverte ».') +
+      '</div>';
+    return;
+  }
+  if (!avertissements.length) { hote.innerHTML = ''; return; }
+  hote.innerHTML = '<div class="notice"><strong>' + esc(avertissements.length) +
+    ' remarque(s) de la derniere analyse' +
+    (data.discovered_at ? ' (' + esc(clock(data.discovered_at)) + ')' : '') + '.</strong>' +
+    avertissements.map((a) => '<span class="hint">' + esc(a) + '</span>').join('') +
+    '</div>';
 }
 
 /* --------------------------------------------------------------- abonnes */
