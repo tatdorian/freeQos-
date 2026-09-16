@@ -1341,6 +1341,58 @@ async function loadCandidates() {
   });
 }
 
+/** Diagnostic : POURQUOI une adresse n'est pas proposee en candidat.
+ *
+ *  La detection ne voit un client que si son adressage est pose sur une
+ *  interface de /interface/vlan. Beaucoup de routeurs portent l'adresse sur un
+ *  PONT en filtrage VLAN : la table ARP nomme alors ce pont, et le client est
+ *  invisible. C'est la premiere chose que ce panneau montre. */
+async function scDiagnostic() {
+  const hote = document.getElementById('sc-diag-out');
+  hote.innerHTML = '<div class="empty">Lecture de /ip/arp sur les routeurs...</div>';
+  let data;
+  try {
+    data = await api('/static-clients/candidates/diagnostic');
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  if (!data.routers || !data.routers.length) {
+    hote.innerHTML = '<div class="empty">Aucun routeur collecte.</div>';
+    return;
+  }
+  hote.innerHTML = data.routers.map((r) => {
+    if (r.error) {
+      return '<div class="notice err"><strong>' + esc(r.router) + '</strong> : ' +
+        esc(r.error) + '</div>';
+    }
+    const horsVlan = Object.entries(r.interfaces_hors_vlan || {});
+    const motifs = Object.entries(r.by_reason || {})
+      .filter(([m]) => m !== 'retenu')
+      .map(([m, n]) => '<span class="hint">' + esc(n) + ' &times; ' + esc(m) + '</span>')
+      .join('');
+    return '<div class="notice">' +
+      '<strong>' + esc(r.router) + '</strong> &mdash; ' + esc(r.kept) + ' retenue(s) sur ' +
+      esc(r.arp_rows) + ' entree(s) ARP.' +
+      '<span class="hint">VLAN declarees : ' +
+        esc((r.vlans_declares || []).join(', ') || 'aucune') +
+        ((r.interfaces_pppoe || []).length
+          ? ' &middot; exclues (PPPoE) : ' + esc(r.interfaces_pppoe.join(', ')) : '') +
+      '</span>' + motifs +
+      (horsVlan.length
+        ? '<div class="notice err" style="margin-top:.5rem">' +
+          '<strong>Adressage hors /interface/vlan.</strong> ' +
+          horsVlan.map(([nom, n]) => '<code>' + esc(nom) + '</code> (' + esc(n) + ')').join(', ') +
+          '<span class="hint">Ces adresses parlent sur une interface qui n\'est pas ' +
+          'une VLAN declaree. Si l\'une d\'elles est un <b>pont en filtrage VLAN</b> ' +
+          'qui porte l\'adressage client, la detection ne peut pas les voir : c\'est une ' +
+          'limite connue, pas une panne. Signalez-le pour qu\'elle soit traitee.</span>' +
+          '</div>'
+        : '') +
+      '</div>';
+  }).join('');
+}
+
 /** Lit le formulaire. Les champs vides deviennent null plutot que "" : une
  *  chaine vide se lirait comme une valeur posee, un null comme une absence. */
 function scPayload() {
@@ -4059,6 +4111,7 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
   }
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
+document.getElementById('sc-diag').addEventListener('click', scDiagnostic);
 document.getElementById('sc-cancel').addEventListener('click', () => scRemplirFormulaire(null));
 
 let searchTimer = null;

@@ -629,3 +629,131 @@ def test_le_graphe_expose_les_candidats_avec_leur_nature(api) -> None:
     natures = {n["kind"] for n in graphe["nodes"] if n["key"].startswith("candidate:")}
     assert natures == {KIND_CANDIDATE}
     assert "arp" in graphe["sources"]
+
+
+# =========================================================================
+# 5. Pourquoi un client n'est PAS vu : le filtre s'explique
+# =========================================================================
+
+from app.collectors.vlan_clients import (  # noqa: E402
+    REJET_HORS_VLAN,
+    REJET_PPPOE,
+    REJET_SANS_MAC,
+    REJET_VLAN_DESACTIVEE,
+    explain_arp,
+    judge_arp_rows,
+)
+
+
+def _client(interface: str, adresse: str = "10.20.0.77", **kwargs) -> dict:
+    return {
+        "address": adresse,
+        "mac-address": "AA:BB:CC:00:00:77",
+        "interface": interface,
+        **kwargs,
+    }
+
+
+def test_le_diagnostic_dit_la_meme_chose_que_la_detection() -> None:
+    """UN SEUL CHEMIN DE DECISION.
+
+    Si le diagnostic raisonnait a part, il finirait par mentir sur ce que fait
+    le code -- et un diagnostic qui ment est pire que pas de diagnostic.
+    """
+    arp = [_client("vlan120"), _client("bridge1", "10.20.0.78"), _client("vlan999", "10.99.0.7")]
+    vlans = [{"name": "vlan120", "vlan-id": "120"}, {"name": "vlan999", "vlan-id": "999"}]
+    pppoe = [{"interface": "vlan999"}]
+
+    retenus = {v.address for v in judge_arp_rows(arp, vlans, pppoe) if v.kept}
+    vues = {v.address for v in sightings_from_arp(arp, vlans, pppoe, router_name="r", pop_name="p")}
+
+    assert retenus == vues == {"10.20.0.77"}
+
+
+def test_l_adressage_sur_un_pont_est_designe_nommement() -> None:
+    """LE CAS QUI REPOND A "pourquoi je ne vois pas mes clients VLAN".
+
+    Sur un pont en filtrage VLAN qui porte l'adressage client, la table ARP
+    nomme le PONT et non une VLAN. La detection ne peut pas les voir -- c'est
+    une limite connue, et le diagnostic doit la designer sans ambiguite plutot
+    que de rendre une liste vide.
+    """
+    arp = [_client("bridge1", f"10.20.0.{i}") for i in (77, 78, 79)]
+
+    rapport = explain_arp(arp, vlan_rows=[], pppoe_rows=[])
+
+    assert rapport["kept"] == 0
+    assert rapport["arp_rows"] == 3
+    assert rapport["by_reason"] == {REJET_HORS_VLAN: 3}
+    # Le champ qui donne la reponse : l'interface fautive, et son poids.
+    assert rapport["interfaces_hors_vlan"] == {"bridge1": 3}
+
+
+def test_une_vlan_declaree_mais_eteinte_a_son_propre_motif() -> None:
+    """Une VLAN absente demande de chercher ou est l'adressage ; une VLAN
+    desactivee demande juste de la reactiver. Confondre les deux envoie
+    l'exploitant au mauvais endroit."""
+    rapport = explain_arp(
+        [_client("vlan130", "10.30.0.5")],
+        [{"name": "vlan130", "vlan-id": "130", "disabled": "true"}],
+        [],
+    )
+    assert list(rapport["by_reason"]) == [REJET_VLAN_DESACTIVEE]
+
+
+def test_le_motif_pppoe_est_distingue() -> None:
+    """Ce rejet-la est VOULU : ces abonnes ont deja une identite."""
+    rapport = explain_arp(
+        [_client("vlan999", "10.99.0.7")],
+        [{"name": "vlan999", "vlan-id": "999"}],
+        [{"interface": "vlan999"}],
+    )
+    assert list(rapport["by_reason"]) == [REJET_PPPOE]
+    assert rapport["interfaces_pppoe"] == ["vlan999"]
+    # Pas dans "hors VLAN" : ce n'est pas un probleme d'adressage.
+    assert rapport["interfaces_hors_vlan"] == {}
+
+
+def test_une_adresse_cherchee_mais_muette_est_distinguee() -> None:
+    rapport = explain_arp(
+        [{"address": "10.20.0.50", "interface": "vlan120"}],
+        [{"name": "vlan120", "vlan-id": "120"}],
+        [],
+    )
+    assert list(rapport["by_reason"]) == [REJET_SANS_MAC]
+
+
+def test_le_rapport_porte_de_quoi_verifier_sur_le_routeur() -> None:
+    """Chaque champ doit correspondre a une commande que l'exploitant peut
+    taper : /ip/arp print, /interface/vlan print, /interface/pppoe-server."""
+    rapport = explain_arp([_client("vlan120")], [{"name": "vlan120", "vlan-id": "120"}], [])
+    assert rapport["vlans_declares"] == ["vlan120"]
+    assert rapport["kept"] == 1
+    detail = rapport["verdicts"][0]
+    assert detail["address"] == "10.20.0.77"
+    assert detail["vlan_id"] == 120
+    assert detail["kept"] is True
+
+
+async def test_le_collecteur_rend_le_rapport_du_routeur(
+    settings: Settings, routeur_vlan: FakeRouterOsClient
+) -> None:
+    from app.collectors.mikrotik import MikrotikCollector
+
+    collecteur = MikrotikCollector(settings.routers[0], client=routeur_vlan)
+
+    rapport = await collecteur.explain_vlan_clients()
+
+    assert rapport["router"] == settings.routers[0].name
+    assert rapport["kept"] == 2
+    # La VLAN du serveur PPPoE est comptee comme ecartee, pas oubliee.
+    assert REJET_PPPOE in rapport["by_reason"]
+
+
+def test_api_diagnostic_sans_routeur_collecte(api) -> None:
+    """Un routeur ecarte de la collecte n'est lu nulle part : le message doit
+    l'envoyer vers l'onglet Equipements, pas le laisser chercher."""
+    client, _, _ = api
+    reponse = client.get("/api/v1/static-clients/candidates/diagnostic?router_name=fantome")
+    assert reponse.status_code == 404
+    assert "ecarte de la collecte" in reponse.json()["detail"]
