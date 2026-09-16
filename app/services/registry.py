@@ -110,6 +110,19 @@ class RouterRegistry:
             logger.warning("Liste des routeurs masques illisible")
             return set()
 
+    async def _charger_base(self) -> tuple[list[RouterConfig], list[dict[str, str]]]:
+        """Configs et ecartes du depot, quelle que soit sa generation.
+
+        Un double de test peut n'exposer que ``load_configs`` : on ne lui
+        impose pas la variante detaillee pour autant.
+        """
+        detaille = getattr(self._repository, "load_configs_with_report", None)
+        if callable(detaille):
+            configs, ecartes = await detaille()
+            return list(configs), list(ecartes)
+        assert self._repository is not None
+        return list(await self._repository.load_configs()), []
+
     async def resolve_entries(self) -> list[RouterEntry]:
         entries: dict[str, RouterEntry] = {}
         skipped: list[dict[str, str]] = []
@@ -117,15 +130,33 @@ class RouterRegistry:
 
         if self._repository is not None:
             try:
-                for config in await self._repository.load_configs():
+                configs, ecartes = await self._charger_base()
+                for config in configs:
                     if config.name in hidden:
                         continue
                     router_id = await self._repository.find_id_by_name(config.name)
                     entries[config.name] = RouterEntry(config, SOURCE_DB, router_id)
-            except Exception:  # noqa: BLE001
+                # Les fiches ecartees par le depot (secret illisible, ligne
+                # invalide) remontent ici. Sans cela, un PoP disparaissait de la
+                # collecte, de l'arbre et de la detection ARP en ne laissant
+                # qu'une ligne dans le journal du serveur.
+                skipped.extend(e for e in ecartes if e["name"] not in hidden)
+            except Exception as exc:  # noqa: BLE001
                 # Une base momentanement indisponible ne doit pas vider l'inventaire
-                # fichier : on garde ce qu'on peut.
+                # fichier : on garde ce qu'on peut. Mais on le DIT : jusqu'ici
+                # l'inventaire en base s'evaporait en silence.
                 logger.exception("Chargement des routeurs en base impossible")
+                skipped.append(
+                    {
+                        "name": "",
+                        "reason": (
+                            f"inventaire en base illisible ({type(exc).__name__}: {exc}). "
+                            f"Les routeurs declares en base sont absents de la collecte "
+                            f"et de l'arbre tant que ce n'est pas resolu."
+                        ),
+                        "source": "db",
+                    }
+                )
 
         for config in self._settings.enabled_routers:
             # Un routeur masque a la main disparait de l'inventaire ET des
@@ -137,7 +168,16 @@ class RouterRegistry:
                 config.resolve_password()
             except MissingSecretError as exc:
                 logger.error("Routeur ignore : %s", exc)
-                skipped.append({"name": config.name, "reason": str(exc)})
+                skipped.append(
+                    {
+                        "name": config.name,
+                        "reason": str(exc),
+                        "source": SOURCE_FILE,
+                        "host": config.host,
+                        "pop_name": config.effective_pop_name or "",
+                        "role": str(config.role),
+                    }
+                )
                 continue
             # Le fichier prime sur la base en cas d'homonymie.
             entries[config.name] = RouterEntry(config, SOURCE_FILE)

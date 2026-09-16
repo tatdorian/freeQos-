@@ -1613,11 +1613,24 @@ async function loadRouters() {
       'puis redemarrez.</span></div>';
   }
   (data.skipped || []).forEach((skip) => {
-    // Ancien format (chaine) ou nouveau ({name, reason}) : on gere les deux.
+    // Ancien format (chaine) ou nouveau ({name, reason, source, ...}) : les deux.
     const nom = typeof skip === 'string' ? null : skip.name;
     const raison = typeof skip === 'string' ? skip : skip.reason;
-    html += '<div class="notice err"><strong>Routeur ignore.</strong> ' + esc(raison) +
-      (nom ? '<div class="actions" style="margin-top:.5rem">' +
+    const source = typeof skip === 'string' ? null : skip.source;
+    // « Retirer » agit sur l'inventaire FICHIER. Le proposer pour un routeur
+    // declare en base enverrait l'exploitant vers un bouton sans effet.
+    const retirable = nom && source !== 'db';
+    html += '<div class="notice err"><strong>' +
+      (nom ? esc(nom) + ' : ecarte de la collecte.' : 'Inventaire incomplet.') +
+      '</strong> ' + esc(raison) +
+      '<span class="hint">Tant que ce n\'est pas resolu, <b>rien n\'est lu sur ce ' +
+      'routeur</b> : ni topologie, ni abonnes, ni detection des clients a IP fixe. ' +
+      'Sa case reste dans l\'arbre, marquee « ecarte ».</span>' +
+      (source === 'db'
+        ? '<span class="hint">Declare en base : corrigez sa fiche ci-dessous ' +
+          '(resaisir le mot de passe suffit quand la cle de chiffrement a change).</span>'
+        : '') +
+      (retirable ? '<div class="actions" style="margin-top:.5rem">' +
         '<button class="sm danger" data-hide-file="' + esc(nom) + '">Retirer definitivement</button>' +
         '</div><span class="hint">« Retirer » ecarte ce routeur de l\'inventaire ' +
         'sans toucher au fichier, et l\'avertissement disparait.</span>' : '') +
@@ -1648,9 +1661,25 @@ async function loadRouters() {
     '<th>Etat</th><th>Modele</th><th></th></tr></thead><tbody>' +
     state.routers.map((r) => {
       let badge = '<span class="badge">jamais teste</span>';
-      if (r.last_error) badge = '<span class="badge crit" title="' + esc(r.last_error) + '">en echec</span>';
+      if (r.last_error) {
+        // Un secret illisible ou une fiche invalide ne sont pas une panne du
+        // routeur : il est ECARTE de la collecte, ce qui se corrige ici et non
+        // sur l'equipement. Les confondre envoie chercher au mauvais endroit.
+        const ecarte = /secret illisible|fiche invalide/.test(r.last_error);
+        badge = '<span class="badge crit" title="' + esc(r.last_error) + '">' +
+          (ecarte ? 'ecarte' : 'en echec') + '</span>';
+      }
       else if (r.last_ok_at) badge = '<span class="badge ok">joignable</span>';
       else if (r.source === 'file') badge = '<span class="badge ok">actif</span>';
+      // HORS COLLECTE : present dans l'inventaire, mais absent des collecteurs.
+      // C'est le signal le plus direct, et le seul qui ne depende pas de
+      // deviner la cause : rien n'est lu sur ce routeur, donc il n'a ni case
+      // decouverte dans l'arbre, ni abonnes, ni detection de clients.
+      if (r.active === false && r.enabled !== false) {
+        badge = '<span class="badge crit" title="' + esc(r.last_error ||
+          'Ce routeur figure dans l\'inventaire mais n\'est pas collecte.') +
+          '">hors collecte</span>';
+      }
       if (r.enabled === false) badge = '<span class="badge">desactive</span>';
 
       return '<tr>' +
@@ -2884,6 +2913,12 @@ function renderTopoPanel() {
     // Le loopback EST l'identite du routeur : il merite la ligne juste sous le
     // role, et l'origine de la deduction doit etre visible pour que l'operateur
     // sache s'il peut lui faire confiance ou s'il doit la declarer.
+    (attrs.excluded
+      ? '<div class="notice err" style="margin:.5rem 0"><b>Ecarte de la collecte.</b> ' +
+        esc(attrs.error || '') + '<span class="hint">Cette case est posee d\'apres ' +
+        'l\'inventaire : rien n\'a ete lu sur cet equipement. Corrigez sa fiche dans ' +
+        'l\'onglet Equipements.</span></div>'
+      : '') +
     (attrs.loopback
       ? '<div class="kv"><span>Loopback</span><span title="Identite du routeur dans la ' +
         'topologie, unique par construction. Origine : ' + esc(attrs.loopback_source || '?') +
