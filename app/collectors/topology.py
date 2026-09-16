@@ -16,6 +16,11 @@ Aucune ne suffit seule ; ensemble elles donnent le graphe complet.
                        des trois natures qui ne dit PAS qui est en face : elle
                        produit des candidats a declarer, jamais des abonnes
                        (cf. app/collectors/vlan_clients.py).
+7. LA CONFIGURATION    ``/ip/route``, OSPF/BGP, empilement VLAN/bridge/bonding.
+                       Les six sources ci-dessus decrivent ce que les routeurs
+                       VOIENT ; celle-ci decrit ce qu'ils FONT, et c'est elle
+                       qui donne sa hierarchie a l'arbre
+                       (cf. app/collectors/config_graph.py).
 
 L'IDENTITE D'UN ROUTEUR : SON LOOPBACK
 --------------------------------------
@@ -118,6 +123,8 @@ LINK_PPPOE = "pppoe"
 LINK_STATIC = "static"
 # Rattachement DEDUIT d'une observation : ni mesure, ni declaration.
 LINK_DETECTED = "detected"
+# Adjacence PROUVEE par une session de routage etablie (OSPF, BGP).
+LINK_ROUTING = "routing"
 
 # Identites trop generiques pour prouver que deux noeuds sont le meme equipement :
 # beaucoup de MikroTik gardent l'identite par defaut "MikroTik". On ne fusionne
@@ -259,7 +266,7 @@ def reconcile_topology(
         canon = dict(_pick_canonical(membres, canoniques_forces))
         # Toutes les adresses de l'equipement, rassemblees plutot que dedoublees.
         adresses = sorted({str(m.get("address")) for m in membres if m.get("address")})
-        for champ in ("mac", "platform", "version", "uisp_device_id"):
+        for champ in ("mac", "platform", "version", "uisp_device_id", "config_parent"):
             if not canon.get(champ):
                 for m in membres:
                     if m.get(champ):
@@ -280,6 +287,15 @@ def reconcile_topology(
         for m in membres:
             canonique_de[m["key"]] = canon["key"]
         fusionnes.append(canon)
+
+    # Le parent prouve par la config designe une case qui vient peut-etre
+    # d'etre fusionnee : sans ce recablage il pointerait dans le vide, et
+    # l'arbre retomberait silencieusement sur son calcul de plus court chemin.
+    for canon in fusionnes:
+        parent_config = canon.get("config_parent")
+        if parent_config:
+            remplacant = canonique_de.get(parent_config, parent_config)
+            canon["config_parent"] = None if remplacant == canon["key"] else remplacant
 
     par_cle = {n["key"]: n for n in fusionnes}
     liens_sortie: list[dict[str, Any]] = []
@@ -328,6 +344,11 @@ class TopologyNode:
     version: str | None = None
     router_name: str | None = None  # PoP qui l'a decouvert
     uisp_device_id: str | None = None
+    # Parent PROUVE PAR LA CONFIGURATION : la route par defaut de cet
+    # equipement sort vers ce noeud. Ce n'est pas une deduction de graphe, c'est
+    # la relation hierarchique telle que le routeur l'applique. None = inconnue,
+    # et l'arbre retombe alors sur son calcul de plus court chemin.
+    config_parent: str | None = None
     attributes: dict[str, Any] = field(default_factory=dict)
 
 
@@ -355,6 +376,9 @@ class TopologySnapshot:
     links: dict[str, TopologyLink] = field(default_factory=dict)
     # Abonne -> secteur radio, quand la jointure caller-id a abouti.
     subscriber_sectors: dict[str, str] = field(default_factory=dict)
+    # Routeur -> {interface logique: ses ports physiques}. Issu de la config,
+    # c'est ce qui permet de dire par quel port sort le trafic d'un client.
+    interface_paths: dict[str, Any] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
     def add_node(self, node: TopologyNode) -> TopologyNode:
@@ -363,7 +387,15 @@ class TopologySnapshot:
             self.nodes[node.key] = node
             return node
         # Fusion : on complete les champs manquants sans ecraser ce qu'on sait.
-        for attribut in ("name", "mac", "address", "platform", "version", "uisp_device_id"):
+        for attribut in (
+            "name",
+            "mac",
+            "address",
+            "platform",
+            "version",
+            "uisp_device_id",
+            "config_parent",
+        ):
             if getattr(existing, attribut) is None and getattr(node, attribut) is not None:
                 setattr(existing, attribut, getattr(node, attribut))
         if existing.kind == KIND_UNKNOWN and node.kind != KIND_UNKNOWN:
@@ -1213,6 +1245,108 @@ def attach_vlan_candidates(
                 )
             )
     return poses
+
+
+def orient_from_config(
+    snapshot: TopologySnapshot,
+    upstreams: dict[str, tuple[str | None, str]],
+    address_owner: dict[str, str],
+) -> tuple[int, list[str]]:
+    """Pose le parent de chaque routeur d'apres SA TABLE DE ROUTAGE.
+
+    C'est le passage de l'arbre devine a l'arbre reel. Jusqu'ici la hierarchie
+    se calculait : une racine choisie au rang, des parents au plus court chemin.
+    Ces heuristiques donnent souvent le bon resultat, mais elles ne SAVENT rien
+    -- deux PoPs relies entre eux et au coeur peuvent se retrouver l'un sous
+    l'autre sans que rien ne le contredise.
+
+    La route par defaut, elle, dit exactement ou part le trafic que le routeur
+    ne sait pas router. C'est la definition meme de "au-dessus".
+
+    ``upstreams`` : nom de routeur -> (adresse de passerelle, raison).
+    ``address_owner`` : adresse -> cle du noeud qui la porte.
+
+    Renvoie ``(nombre d'orientations posees, avertissements)``.
+    """
+    poses = 0
+    avertissements: list[str] = []
+    for nom_routeur, (passerelle, raison) in sorted(upstreams.items()):
+        cle = router_node_key(nom_routeur)
+        noeud = snapshot.nodes.get(cle)
+        if noeud is None:
+            continue
+        if passerelle is None:
+            if raison == "ambigu":
+                avertissements.append(
+                    f"{nom_routeur} : plusieurs routes par defaut a egalite. Un arbre "
+                    f"n'a qu'un parent et le controleur n'en inventera pas un ; "
+                    f"son rattachement reste deduit du graphe."
+                )
+            continue
+        parent = address_owner.get(passerelle)
+        if parent is None:
+            # Cas NORMAL pour la passerelle du reseau : son amont est le
+            # transit, qui n'est pas dans l'inventaire. Rien a signaler.
+            continue
+        if parent == cle:
+            avertissements.append(
+                f"{nom_routeur} : sa route par defaut pointe vers lui-meme "
+                f"({passerelle}). Rattachement ignore."
+            )
+            continue
+        noeud.config_parent = parent
+        noeud.attributes["config_parent_via"] = passerelle
+        poses += 1
+    return poses, avertissements
+
+
+def link_by_routing_adjacency(
+    snapshot: TopologySnapshot,
+    peers: dict[str, list[str]],
+    address_owner: dict[str, str],
+) -> int:
+    """Ajoute les liens PROUVES par une session de routage etablie.
+
+    MNDP dit "je vois cet equipement" -- ce qui est vrai aussi de tout ce qui
+    partage un switch. Une adjacence OSPF ou une session BGP etablie disent "je
+    lui parle", et c'est ce qui fait un lien dans un reseau route.
+
+    Les liens deja connus ne sont pas dupliques : ils sont seulement marques
+    comme prouves, ce qui les rend surs au sens de l'arbre et donc preferes a
+    un rattachement via un segment partage.
+    """
+    ajoutes = 0
+    for nom_routeur, adresses in sorted(peers.items()):
+        source = router_node_key(nom_routeur)
+        if source not in snapshot.nodes:
+            continue
+        for adresse in adresses:
+            cible = address_owner.get(adresse)
+            if cible is None or cible == source:
+                continue
+            existant = _lien_entre(snapshot, source, cible)
+            if existant is not None:
+                existant.attributes["routing_adjacency"] = True
+                continue
+            snapshot.add_link(
+                TopologyLink(
+                    source_key=source,
+                    target_key=cible,
+                    kind=LINK_ROUTING,
+                    discovered_by=nom_routeur,
+                    attributes={"routing_adjacency": True, "peer_address": adresse},
+                )
+            )
+            ajoutes += 1
+    return ajoutes
+
+
+def _lien_entre(snapshot: TopologySnapshot, a: str, b: str) -> TopologyLink | None:
+    """Un lien deja connu entre ces deux noeuds, quel que soit son sens."""
+    for lien in snapshot.links.values():
+        if {lien.source_key, lien.target_key} == {a, b}:
+            return lien
+    return None
 
 
 def map_subscribers_to_sectors(

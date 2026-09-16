@@ -19,6 +19,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.collectors.config_graph import (
+    InterfacePath,
+    best_upstream,
+    interface_stacks,
+    routing_peers,
+)
 from app.collectors.mikrotik import MikrotikCollector
 from app.collectors.topology import (
     KIND_SECTOR,
@@ -28,10 +34,12 @@ from app.collectors.topology import (
     attach_uisp_devices,
     build_from_router,
     kind_for_role,
+    link_by_routing_adjacency,
     link_by_shared_subnets,
     link_by_tunnels,
     map_subscribers_to_sectors,
     normalize_mac,
+    orient_from_config,
     parse_export,
     pick_loopback,
     resolve_to_managed,
@@ -229,6 +237,10 @@ class ShapingService:
         # dont une correspondance vaut preuve d'identite.
         loopback_owner: dict[str, str] = {}
         loopbacks_par_routeur: dict[str, str] = {}
+        # Ce que la CONFIGURATION dit de la hierarchie et des chemins.
+        amonts: dict[str, tuple[str | None, str]] = {}
+        pairs_routage: dict[str, list[str]] = {}
+        piles_interfaces: dict[str, dict[str, InterfacePath]] = {}
         for collector, resultat in zip(collectors, resultats, strict=True):
             if isinstance(resultat, BaseException):
                 message = f"{collector.name}: {type(resultat).__name__}: {resultat}"
@@ -265,6 +277,19 @@ class ShapingService:
             # L'export n'est pas un parametre de build_from_router : on le retire
             # avant de deballer, puis on l'analyse a part.
             export = resultat.pop("export", "") or ""
+            # La configuration voyage a part : build_from_router decrit ce que
+            # le routeur VOIT, l'analyse de config decrit ce qu'il FAIT.
+            config = {
+                cle: resultat.pop(cle, []) or []
+                for cle in (
+                    "routes",
+                    "vlans",
+                    "bridge_ports",
+                    "bondings",
+                    "ospf_neighbors",
+                    "bgp_sessions",
+                )
+            }
             analyse_export = parse_export(export) if export else {}
             # Le loopback est choisi AVANT de poser la case : c'est une propriete
             # d'identite, pas une decoration ajoutee apres coup.
@@ -286,6 +311,20 @@ class ShapingService:
                 **resultat,
             )
             cle = router_node_key(collector.config.name)
+            amont, raison_amont = best_upstream(config["routes"])
+            amonts[collector.config.name] = (amont.gateway if amont else None, raison_amont)
+            pairs = routing_peers(
+                ospf_neighbors=config["ospf_neighbors"],
+                bgp_sessions=config["bgp_sessions"],
+            )
+            if pairs:
+                pairs_routage[collector.config.name] = pairs
+            piles_interfaces[collector.config.name] = interface_stacks(
+                interfaces=resultat.get("interfaces") or [],
+                vlans=config["vlans"],
+                bridge_ports=config["bridge_ports"],
+                bondings=config["bondings"],
+            )
             if loopback:
                 loopbacks_par_routeur[collector.config.name] = loopback
             else:
@@ -358,6 +397,24 @@ class ShapingService:
         if ajoutes:
             logger.info("Topologie : %d lien(s) routeur<->routeur deduits de la config", ajoutes)
 
+        # ANALYSE DE CONFIGURATION : la hierarchie reelle.
+        #
+        # Elle vient APRES la reconciliation (les cases doivent etre fusionnees
+        # pour que les passerelles se resolvent vers la bonne) et APRES les
+        # liens deduits (une adjacence de routage marque un lien existant
+        # plutot que d'en creer un second).
+        proprietaire_adresse = {**ip_owner, **loopback_owner}
+        prouves = link_by_routing_adjacency(snapshot, pairs_routage, proprietaire_adresse)
+        if prouves:
+            logger.info("Topologie : %d lien(s) prouves par une session de routage", prouves)
+        orientes, alertes = orient_from_config(snapshot, amonts, proprietaire_adresse)
+        snapshot.warnings.extend(alertes)
+        if orientes:
+            logger.info("Topologie : %d routeur(s) rattaches par leur table de routage", orientes)
+        # Les piles d'interfaces servent a rattacher les clients a leur VRAI
+        # port de sortie ; elles restent sur le snapshot pour l'appelant.
+        snapshot.interface_paths = piles_interfaces
+
         if uisp_devices:
             attach_uisp_devices(snapshot, uisp_devices)
 
@@ -391,6 +448,23 @@ class ShapingService:
             lire_exp = getattr(client, "export_config", None)
             if callable(lire_exp):
                 export = lire_exp() or ""
+
+            def optionnel(nom: str) -> list[dict[str, Any]]:
+                """Lecture dont l'ABSENCE est normale.
+
+                Les chemins de routage et de pontage different d'une version a
+                l'autre, et un routeur peut n'avoir ni OSPF ni bridge. Un
+                echec ici ne doit pas priver la topologie du reste.
+                """
+                methode = getattr(client, nom, None)
+                if not callable(methode):
+                    return []
+                try:
+                    return list(methode())
+                except Exception:  # noqa: BLE001
+                    logger.debug("%s indisponible sur %s", nom, collector.name)
+                    return []
+
             return {
                 "neighbors": client.neighbors(),
                 "interfaces": client.interfaces(),
@@ -399,6 +473,13 @@ class ShapingService:
                 "identity": client.identity(),
                 "serial": serial,
                 "export": export,
+                # --- Configuration : d'ou vient la hierarchie reelle ---
+                "routes": optionnel("routes"),
+                "vlans": optionnel("vlans"),
+                "bridge_ports": optionnel("bridge_ports"),
+                "bondings": optionnel("bondings"),
+                "ospf_neighbors": optionnel("ospf_neighbors"),
+                "bgp_sessions": optionnel("bgp_sessions"),
             }
 
         return await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
@@ -513,6 +594,9 @@ class ShapingService:
         # cle du noeud d'en face -> file parent, pour rattacher chaque abonne au
         # lien qu'il traverse REELLEMENT et non a un lien pris au hasard.
         parent_par_noeud: dict[str, str] = {}
+        # interface physique -> file parente. Complete parent_par_noeud pour les
+        # clients rattaches par leur VLAN plutot que par un secteur declare.
+        parent_par_interface: dict[str, str] = {}
         for lien in await self.repository.links():
             if lien.get("discovered_by") != router_name or not lien.get("interface"):
                 continue
@@ -531,6 +615,9 @@ class ShapingService:
             liens.append(cible)
             if lien.get("target_key"):
                 parent_par_noeud[str(lien["target_key"])] = cible.queue_name
+            # Index par PORT : c'est par la que passent les clients dont on
+            # connait le VLAN mais pas le secteur radio.
+            parent_par_interface[str(lien["interface"])] = cible.queue_name
 
         # La capacite radio mesuree prime sur le debit negocie du port : c'est
         # elle le vrai goulot d'un backhaul sans fil.
@@ -598,18 +685,42 @@ class ShapingService:
         # Clients a IP fixe du meme PoP. Ils rejoignent la MEME liste : a partir
         # d'ici, plan(), le diff de reconciliation et apply() ne font plus
         # aucune difference entre les deux natures.
+        ports_par_vlan = self._ports_par_vlan(router_name)
         for client in await self._static_clients_for(pop_name):
             surcharge = surcharges_abonnes.get(client.reference, {})
             secteur = client.sector_key or rattachements.get(client.reference)
-            abonnes.append(
-                self._cible_statique(
-                    client,
-                    surcharge=surcharge,
-                    parent=parent_par_noeud.get(secteur) if secteur else None,
-                )
-            )
+            parent = parent_par_noeud.get(secteur) if secteur else None
+            if parent is None and client.vlan is not None:
+                # Aucun secteur declare : la CONFIGURATION sait quand meme par
+                # ou ce client sort. Son VLAN est pose sur une interface, qui
+                # descend jusqu'a un port physique, qui porte un lien connu --
+                # et ce lien est sa vraie file parente. Sans cela, un client
+                # sans secteur pendait a la racine et echappait au partage du
+                # lien qu'il sature pourtant.
+                for port in ports_par_vlan.get(client.vlan, []):
+                    parent = parent_par_interface.get(port)
+                    if parent is not None:
+                        break
+            abonnes.append(self._cible_statique(client, surcharge=surcharge, parent=parent))
 
         return liens, abonnes
+
+    def _ports_par_vlan(self, router_name: str) -> dict[int, list[str]]:
+        """``identifiant de VLAN -> ports physiques`` sur ce routeur.
+
+        Vient de l'analyse de configuration faite a la derniere decouverte. Vide
+        tant qu'aucune decouverte n'a tourne : le rattachement retombe alors sur
+        le secteur declare, comme avant.
+        """
+        if self.last_snapshot is None:
+            return {}
+        piles = self.last_snapshot.interface_paths.get(router_name) or {}
+        par_vlan: dict[int, list[str]] = {}
+        for chemin in piles.values():
+            if chemin.vlan_id is None or chemin.broken:
+                continue
+            par_vlan.setdefault(chemin.vlan_id, []).extend(chemin.ports)
+        return par_vlan
 
     async def _static_clients_all(self) -> list[StaticClient]:
         """Toutes les fiches actives, tous PoPs confondus."""

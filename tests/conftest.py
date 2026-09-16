@@ -48,6 +48,12 @@ class FakeRouterOsClient:
         self.raise_on_queues: Exception | None = None
         # Presence sur VLAN routee : table ARP, VLAN declarees, serveurs PPPoE.
         self.arp_rows: list[dict[str, Any]] = []
+        # Configuration : c'est elle qui porte la hierarchie reelle.
+        self.route_rows: list[dict[str, Any]] = []
+        self.bridge_port_rows: list[dict[str, Any]] = []
+        self.bonding_rows: list[dict[str, Any]] = []
+        self.ospf_neighbor_rows: list[dict[str, Any]] = []
+        self.bgp_session_rows: list[dict[str, Any]] = []
         self.vlan_rows: list[dict[str, Any]] = []
         self.pppoe_server_rows: list[dict[str, Any]] = []
         self.raise_on_arp: Exception | None = None
@@ -113,6 +119,21 @@ class FakeRouterOsClient:
 
     def export_config(self) -> str:
         return self.export_text
+
+    def routes(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.route_rows]
+
+    def bridge_ports(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.bridge_port_rows]
+
+    def bondings(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.bonding_rows]
+
+    def ospf_neighbors(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.ospf_neighbor_rows]
+
+    def bgp_sessions(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.bgp_session_rows]
 
     def arp(self) -> list[dict[str, Any]]:
         if self.raise_on_arp is not None:

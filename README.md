@@ -165,6 +165,51 @@ coupée d'internet.
 C'est la question qui conditionne tout le reste — sans elle, impossible de savoir quel
 backhaul un abonné traverse, donc quelle file doit être son parent.
 
+#### L'arbre vient de la configuration, pas d'une heuristique
+
+`/ip/neighbor` répond à une question faible : *qui se voit ?* — ce qui est vrai
+aussi de deux équipements branchés sur le même switch. L'arbre devait donc être
+**déduit** : racine choisie au rang, parents calculés au plus court chemin. Ces
+heuristiques tombent souvent juste, mais elles ne *savent* rien.
+
+La configuration répond aux questions fortes, parce que c'est elle qui fait le
+réseau :
+
+| Lecture | Ce qu'elle établit |
+|---|---|
+| `/ip/route` | **qui est au-dessus**. La route par défaut dit où part ce que le routeur ne sait pas router : c'est la relation hiérarchique elle-même |
+| `/routing/ospf/neighbor` · `/routing/bgp/session` | une adjacence **prouvée** — deux routeurs qui échangent des routes, pas deux qui se voient |
+| `/interface/vlan` · `/interface/bridge/port` · `/interface/bonding` | par quel **port physique** sort un trafic donné, donc à quel lien rattacher un client |
+
+**Le cas où l'arbre deviné se trompe.** Deux PoPs reliés au cœur *et* entre eux
+(anneau) : les deux chemins ont la même longueur, rien dans le graphe ne dit
+lequel est le bon, et le calcul finit par pendre un PoP sous son frère. Les
+tables de routage, elles, sont formelles — les deux sortent par le cœur. C'est
+verrouillé des deux côtés : `test_un_anneau_ne_pend_pas_un_pop_sous_son_frere`
+côté Python, `test_le_parent_de_la_config_bat_le_plus_court_chemin` côté
+interface, qui exécute la vraie fonction d'arbre avec Node.
+
+**L'ordre de priorité** des rattachements, du plus fort au plus faible :
+
+1. le parent **posé à la main** dans l'éditeur d'arbre — l'opérateur garde le
+   dernier mot, ici comme partout ;
+2. le parent **prouvé par la table de routage** (`config_parent`) ;
+3. le **plus court chemin** dans le graphe, qui ne sert plus que là où la
+   configuration ne dit rien : équipements non gérés, voisins découverts.
+
+L'arbre marque chaque case — « à la main », « route » ou « déduit » — pour que
+vous sachiez ce qui est établi et ce qui est supposé.
+
+Un routeur **multi-homé** (deux routes par défaut à égalité) n'a pas *un*
+parent : le contrôleur refuse d'en désigner un, le dit, et laisse le calcul
+faire. Un routeur dont `/ip/route` est illisible retombe simplement sur l'arbre
+déduit, sans faire échouer la découverte.
+
+**Les clients suivent leur VLAN.** Un client à IP fixe sans secteur déclaré
+pendait à la racine et échappait au partage du lien qu'il sature pourtant.
+L'empilement `vlan120 → bridge-accès → ether3` résolu depuis la configuration
+le rattache au lien réellement emprunté.
+
 #### L'identité d'un routeur est son loopback
 
 Un routeur géré est identifié par son adresse de **loopback**, et par elle seule
@@ -200,7 +245,7 @@ nœuds (la passerelle en haut, puis le cœur, puis les PoPs). Auparavant tout
 routeur géré était posé en « PoP » : l'arbre s'aplatissait et sa racine devenait
 arbitraire.
 
-**Huit sources, réconciliées** :
+**Neuf sources, réconciliées** :
 
 | Source | Ce qu'elle apporte |
 |---|---|
@@ -211,6 +256,7 @@ arbitraire.
 | `/ppp/active` → `caller-id` | **la jointure clé** : la MAC du CPE de l'abonné |
 | `/interface` `rx-byte`/`tx-byte` | **le débit réellement mesuré** sur le port qui porte le lien |
 | `/ip/address` (`lo`) · `router-id` | **le loopback** : l'identité unique du routeur, quand elle n'est pas déclarée |
+| `/ip/route` · OSPF · BGP | **la hiérarchie réelle** : qui est au-dessus, et quelles adjacences sont prouvées |
 | `/ip/arp` (VLAN sans PPPoE) | présence d'une adresse **non identifiée** : confirme un client déclaré, ou propose un candidat. La seule source qui ne dit pas *qui* est en face |
 
 Ce dernier point mérite d'être souligné. Le champ `caller-id` de `/ppp/active` contient la
@@ -898,7 +944,8 @@ produit un candidat à déclarer),
 `backhauls` (PoP, `uisp_device_id`, capacité nominale), `routers` (PoPs ajoutés depuis
 l'interface, mot de passe chiffré, `loopback` unique qui identifie le routeur dans la
 topologie, diagnostic de la dernière connexion),
-`topology_nodes` / `topology_links` (graphe découvert ; `pos_x`/`pos_y`, `parent_override`
+`topology_nodes` / `topology_links` (graphe découvert ; `config_parent` porte le
+rattachement prouvé par la table de routage ; `pos_x`/`pos_y`, `parent_override`
 et `hidden` portent la disposition posée à la main dans l'éditeur d'arbre),
 `subscriber_attachments`
 (abonné → secteur radio), `shaping_policies` (débits imposés à la main),
@@ -935,7 +982,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 750 tests, dont 694 sans aucune infrastructure
+make test        # 778 tests, dont 722 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

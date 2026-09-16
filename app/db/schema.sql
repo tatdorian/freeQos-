@@ -219,6 +219,10 @@ CREATE TABLE IF NOT EXISTS topology_nodes (
     uisp_device_id  TEXT,
     -- Role corrige a la main dans l'interface : il prime sur l'heuristique.
     kind_override   TEXT,
+    -- Parent PROUVE par la table de routage de l'equipement. Colonne dediee et
+    -- non attribut JSONB : les attributs sont FUSIONNES a l'ecriture, donc un
+    -- parent devenu faux y survivrait a la route qui l'avait justifie.
+    config_parent   TEXT,
     attributes      JSONB NOT NULL DEFAULT '{}'::jsonb,
     first_seen      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen       TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -493,6 +497,7 @@ ALTER TABLE subscriber_metrics ADD COLUMN IF NOT EXISTS rtt_ms           DOUBLE 
 ALTER TABLE subscriber_metrics ADD COLUMN IF NOT EXISTS session_uptime_s INTEGER;
 
 ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS kind_override TEXT;
+ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS config_parent TEXT;
 -- Position posee a la main dans l'editeur d'arbre, et parent force en glissant
 -- une case sous une autre. NULL = disposition/orientation automatique. Ces
 -- champs ne changent que l'arbre AFFICHE : ils ne pilotent aucun routeur.

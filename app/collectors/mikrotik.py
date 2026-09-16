@@ -93,6 +93,17 @@ class RouterOsReadClient(Protocol):
 
     def pppoe_servers(self) -> list[dict[str, Any]]: ...
 
+    # --- Configuration : la verite terrain de la topologie ---
+    def routes(self) -> list[dict[str, Any]]: ...
+
+    def bridge_ports(self) -> list[dict[str, Any]]: ...
+
+    def bondings(self) -> list[dict[str, Any]]: ...
+
+    def ospf_neighbors(self) -> list[dict[str, Any]]: ...
+
+    def bgp_sessions(self) -> list[dict[str, Any]]: ...
+
     def simple_queues(self) -> list[dict[str, Any]]: ...
 
     def queue_types(self) -> list[dict[str, Any]]: ...
@@ -288,6 +299,34 @@ class LibrouterosReadClient:
 
     def vlans(self) -> list[dict[str, Any]]:
         return self._query("/interface/vlan")
+
+    def routes(self) -> list[dict[str, Any]]:
+        """Table de routage.
+
+        C'est la seule source qui dise QUI EST AU-DESSUS. Une adjacence MNDP
+        dit "ces deux equipements se voient" ; une route par defaut dit "tout
+        ce que je ne sais pas router, je l'envoie la-bas" -- c'est-a-dire la
+        relation hierarchique elle-meme, celle qu'un arbre doit representer.
+        """
+        return self._query("/ip/route")
+
+    def bridge_ports(self) -> list[dict[str, Any]]:
+        return self._query("/interface/bridge/port")
+
+    def bondings(self) -> list[dict[str, Any]]:
+        return self._query("/interface/bonding")
+
+    def ospf_neighbors(self) -> list[dict[str, Any]]:
+        """Voisins OSPF etablis : une adjacence PROUVEE, pas devinee.
+
+        MNDP est un protocole de decouverte L2 : il voit ce qui est sur le meme
+        segment, switch compris. Une adjacence OSPF en etat Full signifie que
+        les deux routeurs echangent reellement des routes.
+        """
+        return self._query("/routing/ospf/neighbor")
+
+    def bgp_sessions(self) -> list[dict[str, Any]]:
+        return self._query("/routing/bgp/session")
 
     def pppoe_servers(self) -> list[dict[str, Any]]:
         """Serveurs PPPoE declares : sert a EXCLURE leurs interfaces.

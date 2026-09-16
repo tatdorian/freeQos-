@@ -40,6 +40,7 @@ class TopologyRepository:
                 n.version,
                 n.router_name,
                 n.uisp_device_id,
+                n.config_parent,
                 json.dumps(n.attributes),
             )
             for n in snapshot.nodes.values()
@@ -63,8 +64,8 @@ class TopologyRepository:
                 """
                 INSERT INTO topology_nodes
                        (key, name, kind, mac, address, platform, version,
-                        router_name, uisp_device_id, attributes)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+                        router_name, uisp_device_id, config_parent, attributes)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
                 ON CONFLICT (key) DO UPDATE SET
                     name           = EXCLUDED.name,
                     kind           = EXCLUDED.kind,
@@ -75,6 +76,9 @@ class TopologyRepository:
                     router_name    = COALESCE(EXCLUDED.router_name, topology_nodes.router_name),
                     uisp_device_id = COALESCE(EXCLUDED.uisp_device_id,
                                               topology_nodes.uisp_device_id),
+                    -- Ecrase, jamais COALESCE : une route par defaut retiree
+                    -- doit faire DISPARAITRE le parent qu'elle justifiait.
+                    config_parent  = EXCLUDED.config_parent,
                     attributes     = topology_nodes.attributes || EXCLUDED.attributes,
                     last_seen      = now()
                 """,
@@ -129,7 +133,7 @@ class TopologyRepository:
                 """
                 SELECT key, name, COALESCE(kind_override, kind) AS kind, kind AS kind_detected,
                        kind_override, mac, address, platform, version, router_name,
-                       uisp_device_id, attributes, first_seen, last_seen,
+                       uisp_device_id, config_parent, attributes, first_seen, last_seen,
                        pos_x, pos_y, parent_override, hidden,
                        (last_seen > now() - INTERVAL '10 minutes') AS fresh
                   FROM topology_nodes
