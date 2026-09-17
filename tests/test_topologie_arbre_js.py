@@ -364,3 +364,91 @@ console.log(JSON.stringify({
     assert res["parent"] is None, "orpheline, donc racine -- pas disparue"
     assert res["x"] is not None, "elle recoit bien une position"
     assert res["cases"] == 2
+
+
+# ---------------------------------------------------------------------------
+# RECONNAITRE UN ROUTEUR INTERROGE, OU QU'IL SOIT DANS LE TABLEAU
+#
+# Un cable entre deux routeurs interroges est vu de ses DEUX bouts, et ne
+# compte qu'une ligne : celle du bout canonique. Dans un reseau EN ETOILE --
+# un coeur, des PoPs autour, aucun voisin en aval -- tous les PoPs se
+# retrouvaient donc du cote replie, absents de la colonne "Depuis". Le tableau
+# ne nommait plus que le coeur, et l'exploitant en concluait qu'un seul routeur
+# etait detecte alors que les quatre etaient lus.
+#
+# ``topoInterroges`` est ce qui permet de marquer l'autre bout. Si elle se
+# trompe, le badge disparait et le malentendu revient.
+# ---------------------------------------------------------------------------
+MARQUEURS = ("function topoInterroges(", "function topoAttrs(")
+
+
+@pytest.fixture(scope="module")
+def harnais_interroges(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    source = APP_JS.read_text(encoding="utf-8")
+    morceaux = []
+    for marqueur in MARQUEURS:
+        debut = source.find(marqueur)
+        assert debut != -1, f"repere introuvable dans app.js : {marqueur}"
+        fin = source.find("\n}\n", debut)
+        assert fin != -1, f"fin de fonction introuvable pour {marqueur}"
+        morceaux.append(source[debut : fin + 3])
+
+    module = tmp_path_factory.mktemp("interroges") / "interroges.js"
+    module.write_text(
+        "\n".join(morceaux) + "\nmodule.exports = { topoInterroges };\n",
+        encoding="utf-8",
+    )
+    return module
+
+
+def test_un_routeur_gere_est_reconnu_comme_interroge(harnais_interroges: Path) -> None:
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [
+  { key: 'router:DS-CCR', attributes: { managed: true } },
+  { key: 'router:NAS-BASSORA', attributes: { managed: true } },
+  { key: 'mac:AA:00:00:00:00:FE', attributes: {} },
+];
+console.log(JSON.stringify({ cles: [...A.topoInterroges(nodes)].sort() }));
+""",
+    )
+    assert res["cles"] == ["router:DS-CCR", "router:NAS-BASSORA"]
+
+
+def test_un_voisin_simplement_vu_n_est_pas_marque(harnais_interroges: Path) -> None:
+    """C'est TOUTE la distinction : un equipement vu en face n'apporte ni ses
+    liens, ni ses abonnes, ni ses files. Le confondre avec un routeur lu
+    laisserait croire que le controleur le pilote."""
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [
+  { key: 'mac:AA:00:00:00:00:FE', name: 'MAIN GATEWAY', kind: 'pop', attributes: {} },
+  { key: 'mac:DC:9F:DB:11:22:33', name: 'BH-Nord', kind: 'radio' },
+];
+console.log(JSON.stringify({ cles: [...A.topoInterroges(nodes)] }));
+""",
+    )
+    assert res["cles"] == []
+
+
+def test_les_attributs_en_json_brut_repondent_aussi(harnais_interroges: Path) -> None:
+    """``attributes`` arrive en objet ou en chaine JSON selon le chemin de
+    lecture. Les deux doivent marcher, sinon le badge saute une fois sur deux."""
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [{ key: 'router:DS-CCR', attributes: '{"managed": true}' }];
+console.log(JSON.stringify({ cles: [...A.topoInterroges(nodes)] }));
+""",
+    )
+    assert res["cles"] == ["router:DS-CCR"]
+
+
+def test_une_liste_absente_ne_casse_rien(harnais_interroges: Path) -> None:
+    res = executer(
+        harnais_interroges,
+        "console.log(JSON.stringify({ cles: [...A.topoInterroges(undefined)] }));",
+    )
+    assert res["cles"] == []

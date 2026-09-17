@@ -2277,7 +2277,21 @@ async function loadTopology() {
     api('/pops/routers').catch(() => null),
   ]);
   renderTopologySources(data, inventaire);
-  renderTopologyLinks(data.links);
+  renderTopologyLinks(data.links, data.nodes);
+}
+
+/** Les cles des noeuds qui sont des routeurs INTERROGES par le controleur.
+ *
+ *  Sans cette distinction, la colonne "Vers" melange deux natures que tout
+ *  oppose : un equipement que le controleur LIT par API (il en tire ses liens,
+ *  ses abonnes, ses files) et un equipement qu'un voisin VOIT simplement en
+ *  face. Les deux s'affichaient avec le meme badge de role. */
+function topoInterroges(nodes) {
+  const cles = new Set();
+  (nodes || []).forEach((n) => {
+    if (topoAttrs(n).managed === true) cles.add(n.key);
+  });
+  return cles;
 }
 
 /** Dit QUI a produit ce tableau, et pourquoi certains routeurs n'y sont pas.
@@ -2313,10 +2327,14 @@ function renderTopologySources(data, inventaire) {
   let html = '';
   if (!muets.length && !ecartes.length) {
     host.innerHTML = '<div class="notice ok" style="margin-bottom:.8rem">' +
-      '<strong>' + producteurs.size + ' routeur(s) interroge(s)</strong> ' +
-      '<span class="hint">Toutes les lignes ci-dessous viennent de leur configuration ' +
-      'lue par API. Les equipements de la colonne <b>Vers</b> sont ce qu\'ils VOIENT ' +
-      'en face : ajoutez-les dans <b>Equipements</b> pour les interroger a leur tour.</span></div>';
+      '<strong>' + producteurs.size + ' routeur(s) interroge(s) : ' +
+      esc(declares.map((r) => r.name).sort().join(', ')) + '</strong>' +
+      '<span class="hint">Tous sont lus par API. Un cable entre deux d\'entre eux ' +
+      'ne compte qu\'UNE ligne, portee par l\'un des deux bouts : c\'est pourquoi la ' +
+      'colonne <b>Depuis</b> peut n\'en nommer qu\'un seul. Le badge ' +
+      '<span class="badge ok">interroge</span> de la colonne <b>Vers</b> signale ' +
+      'l\'autre bout. Les equipements SANS ce badge sont vus en face, pas lus : ' +
+      'ajoutez-les dans <b>Equipements</b> pour les interroger a leur tour.</span></div>';
     return;
   }
 
@@ -3252,8 +3270,9 @@ function linkLoad(l) {
   return meter(Math.max(l.rx_bps || 0, l.tx_bps || 0), plafond);
 }
 
-function renderTopologyLinks(allLinks) {
+function renderTopologyLinks(allLinks, allNodes) {
   const host = document.getElementById('topo-links');
+  const interroges = topoInterroges(allNodes);
   // Meme filtre que le canvas : "liens a debit seulement" masque le bruit des
   // adjacences sans compteur (radio UISP sans port, seconde lecture en attente).
   const hasRate = (l) => l.rx_bps !== null || l.tx_bps !== null;
@@ -3304,7 +3323,18 @@ function renderTopologyLinks(allLinks) {
             ' voisins sur ce port : le debit est celui du port, pas de ce seul voisin.">' +
             'partage</span>' : '') + '</td>' +
         '<td>' + esc(l.target_name || l.target_key) +
-          ' <span class="badge">' + esc(KIND_LABEL[l.target_kind] || '?') + '</span></td>' +
+          ' <span class="badge">' + esc(KIND_LABEL[l.target_kind] || '?') + '</span>' +
+          // UN CABLE ENTRE DEUX ROUTEURS INTERROGES N'A QU'UNE LIGNE : celle du
+          // bout canonique. Sans ce badge, le routeur d'en face n'apparaissait
+          // nulle part dans la colonne "Depuis" et semblait ne pas etre lu --
+          // dans un reseau en etoile, tous les PoPs disparaissaient ainsi
+          // derriere le coeur, et l'operateur concluait qu'un seul routeur
+          // etait detecte.
+          (interroges.has(l.target_key)
+            ? ' <span class="badge ok" title="Ce routeur est interroge par API. ' +
+              'Le cable ci-contre est vu de ses deux bouts et ne compte qu\'une ligne.">' +
+              'interroge</span>'
+            : '') + '</td>' +
         '<td>' + esc(l.kind) + '</td>' +
         '<td class="num">' + linkRates(l) + '</td>' +
         '<td style="min-width:120px">' + linkLoad(l) + '</td>' +
