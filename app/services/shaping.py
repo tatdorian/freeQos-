@@ -42,6 +42,7 @@ from app.collectors.topology import (
     link_by_tunnels,
     map_subscribers_to_sectors,
     mark_reciprocal_links,
+    mark_subscriber_cpes,
     normalize_mac,
     orient_from_config,
     parse_export,
@@ -582,6 +583,49 @@ class ShapingService:
         # graphe) et APRES attach_static_clients (qui inscrit, lui, les
         # rattachements DECLARES des clients a IP fixe dans le meme index).
         self._joindre_secteurs(snapshot, sessions_pppoe, uisp_devices or [])
+
+        # LE CPE D'UN ABONNE N'EST PAS UN EQUIPEMENT DE PLUS.
+        #
+        # Le routeur d'un abonne se presente aux deux bouts du controleur : une
+        # session PPPoE d'un cote -- c'est l'abonne -- et un voisin MNDP de
+        # l'autre -- c'est un equipement decouvert. L'arbre montrait les deux, et
+        # l'exploitant y comptait plus de clients qu'il n'en a. 'caller-id' porte
+        # la MAC du CPE : elle recolle les deux vues sur une EGALITE.
+        #
+        # Apres '_joindre_secteurs', qui a besoin de ces memes noeuds tels qu'ils
+        # ont ete decouverts pour calculer les rattachements.
+        cpe_abonnes = {
+            mac: login
+            for mac, login in (
+                (
+                    normalize_mac(session.get("caller-id") or session.get("caller_id")),
+                    str(session.get("name") or session.get("login") or ""),
+                )
+                for session in sessions_pppoe
+            )
+            if mac and login
+        }
+        # Sur une VLAN routee il n'y a pas de session, donc pas de 'caller-id' :
+        # le client y est declare par son ADRESSE, et c'est elle qui fait la
+        # jointure. Meme regle, autre preuve. Les deux index se completent -- un
+        # PoP peut servir des abonnes PPPoE et des clients sur VLAN.
+        adresses_abonnes: dict[str, str] = {}
+        for session in sessions_pppoe:
+            login = str(session.get("name") or session.get("login") or "")
+            ip = str(session.get("address") or "").split("/")[0].strip()
+            if login and ip:
+                adresses_abonnes[ip] = login
+        for client in clients:
+            reference = str(getattr(client, "reference", "") or "")
+            ip = str(getattr(client, "address", "") or "").split("/")[0].strip()
+            if reference and ip:
+                adresses_abonnes[ip] = reference
+
+        reconnus = mark_subscriber_cpes(snapshot, cpe_abonnes, adresses_abonnes)
+        if reconnus:
+            logger.info(
+                "Topologie : %d equipement(s) decouvert(s) reconnus comme CPE d'abonne", reconnus
+            )
 
         # Un cable vu par ses deux bouts a produit deux liens : on marque le
         # second pour que l'interface n'en montre qu'un. En DERNIER, quand plus

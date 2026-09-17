@@ -85,11 +85,23 @@ def test_normalisation_des_mac() -> None:
 
 
 def test_classification_des_plateformes() -> None:
-    assert classify_platform("MikroTik") == KIND_POP
+    # Une marque de radio DIT la nature de l'equipement : rien d'autre qu'une
+    # radio ne s'appelle PowerBeam.
     assert classify_platform("Ubiquiti Networks Inc.") == KIND_RADIO
     assert classify_platform("Cambium Networks") == KIND_RADIO
-    assert classify_platform(None) == KIND_UNKNOWN
     assert classify_platform("", "PowerBeam 5AC") == KIND_RADIO
+    assert classify_platform(None) == KIND_UNKNOWN
+
+
+def test_un_mikrotik_decouvert_n_est_pas_declare_pop() -> None:
+    """La plateforme la plus repandue du parc ne dit pas le role.
+
+    Un PoP, un CPE d'abonne et un switch de local technique annoncent tous les
+    trois 'MikroTik'. En deduire un PoP peuplait l'arbre de sites qui n'existent
+    pas : le role vient de l'inventaire, pas de la banniere MNDP.
+    """
+    for plateforme in ("MikroTik", "RouterOS 7.14", "CHR", "RouterBOARD 750"):
+        assert classify_platform(plateforme) == KIND_UNKNOWN, plateforme
 
 
 def test_debit_negocie_du_port() -> None:
