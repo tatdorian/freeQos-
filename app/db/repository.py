@@ -13,6 +13,8 @@ from typing import Any
 
 import asyncpg
 
+from app.services.capacity import SEUIL_PLAFOND
+
 
 def _rows(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
     return [dict(record) for record in records]
@@ -591,6 +593,215 @@ class MetricsRepository:
         return [{**dict(pop), "backhauls": par_pop.get(pop["id"], [])} for pop in pops]
 
     # ----------------------------------------------------------- Exploitation
+    # ------------------------------------------------------------------
+    # Capacite vendue, capacite reelle, et ce qui se passe entre les deux
+    # ------------------------------------------------------------------
+    async def capacity_by_pop(self, *, hours: int = 24) -> list[dict[str, Any]]:
+        """Par PoP : ce qui est vendu, ce qui porte, et la pointe reellement vue.
+
+        TROIS CHIFFRES, ET C'EST LEUR RAPPROCHEMENT QUI COMPTE. Vendre vingt fois
+        la capacite d'un site ne se voit pas tant que la pointe reste au tiers du
+        lien ; cela se voit tres bien quand elle le frole. Rendre le taux de
+        survente seul serait donc un chiffre a sensation ; il vient ici avec la
+        pointe qui le rend lisible.
+
+        La pointe est calculee par INSTANT DE MESURE : on additionne d'abord les
+        abonnes d'un meme horodatage, puis on prend le maximum. Prendre le
+        maximum de chaque abonne et les additionner donnerait une pointe que
+        personne n'a jamais vue -- tous les abonnes ne saturent pas a la meme
+        seconde.
+        """
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                WITH vendu AS (
+                    SELECT p.id   AS pop_id,
+                           p.name AS pop_name,
+                           count(s.id) FILTER (
+                               WHERE s.plan_down_mbps IS NOT NULL
+                           )                                        AS subscribers,
+                           coalesce(sum(s.plan_down_mbps), 0)       AS sold_down_mbps,
+                           coalesce(sum(s.plan_up_mbps), 0)         AS sold_up_mbps
+                      FROM pops p
+                      LEFT JOIN subscribers s ON s.pop_id = p.id
+                     GROUP BY p.id, p.name
+                ),
+                capacite AS (
+                    SELECT pop_id, sum(capacity_mbps) AS capacity_mbps
+                      FROM backhaul_latest
+                     WHERE capacity_mbps IS NOT NULL
+                     GROUP BY pop_id
+                ),
+                instants AS (
+                    SELECT s.pop_id, m.ts, sum(m.tx_bps) AS total_bps
+                      FROM subscriber_metrics m
+                      JOIN subscribers s ON s.id = m.subscriber_id
+                     WHERE m.ts > now() - make_interval(hours => $1)
+                     GROUP BY s.pop_id, m.ts
+                ),
+                pointe AS (
+                    SELECT pop_id, max(total_bps) AS peak_bps
+                      FROM instants
+                     GROUP BY pop_id
+                )
+                SELECT v.pop_name,
+                       v.subscribers,
+                       v.sold_down_mbps,
+                       v.sold_up_mbps,
+                       c.capacity_mbps,
+                       pt.peak_bps
+                  FROM vendu v
+                  LEFT JOIN capacite c ON c.pop_id = v.pop_id
+                  LEFT JOIN pointe   pt ON pt.pop_id = v.pop_id
+                 ORDER BY v.sold_down_mbps DESC, v.pop_name
+                """,
+                hours,
+            )
+        return _rows(records)
+
+    async def link_occupancy(self, *, hours: int = 24, limit: int = 30) -> list[dict[str, Any]]:
+        """Par port : l'occupation atteinte, et L'HEURE a laquelle elle l'a ete.
+
+        "Combien passe maintenant" se lit sur une courbe. "Quand ce lien
+        sature-t-il, et a combien de sa capacite" ne s'en lit pas, et c'est
+        pourtant ce chiffre qui decide d'un investissement.
+
+        Le nom du lien vient de la topologie quand elle le connait : un
+        exploitant raisonne sur "NAS-AGADEZ", pas sur "ether3".
+        """
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                WITH mesures AS (
+                    SELECT router_name, interface,
+                           max(capacity_mbps)                                   AS capacity_mbps,
+                           max(rx_bps)                                          AS peak_rx_bps,
+                           max(tx_bps)                                          AS peak_tx_bps,
+                           avg(greatest(coalesce(rx_bps, 0), coalesce(tx_bps, 0))) AS avg_bps,
+                           (array_agg(ts ORDER BY rx_bps DESC NULLS LAST))[1]   AS peak_rx_at,
+                           (array_agg(ts ORDER BY tx_bps DESC NULLS LAST))[1]   AS peak_tx_at
+                      FROM interface_metrics
+                     WHERE ts > now() - make_interval(hours => $1)
+                     GROUP BY router_name, interface
+                ),
+                noms AS (
+                    -- Le nom vient du NOEUD d'en face : topology_links ne porte
+                    -- que des cles. Le lien le plus recemment vu gagne quand
+                    -- plusieurs voisins partagent le meme port (un switch entre
+                    -- les deux) -- et l'interface reste affichee a cote, parce
+                    -- que le debit, lui, est bien celui du port.
+                    SELECT DISTINCT ON (l.discovered_by, l.interface)
+                           l.discovered_by, l.interface, n.name AS target_name
+                      FROM topology_links l
+                      LEFT JOIN topology_nodes n ON n.key = l.target_key
+                     WHERE l.interface IS NOT NULL
+                     ORDER BY l.discovered_by, l.interface, l.last_seen DESC
+                )
+                SELECT m.*, n.target_name AS link_name
+                  FROM mesures m
+                  LEFT JOIN noms n
+                         ON n.discovered_by = m.router_name AND n.interface = m.interface
+                 ORDER BY greatest(coalesce(m.peak_rx_bps, 0), coalesce(m.peak_tx_bps, 0)) DESC
+                 LIMIT $2
+                """,
+                hours,
+                limit,
+            )
+        return _rows(records)
+
+    async def subscriber_usage(self, *, hours: int = 168, limit: int = 20) -> list[dict[str, Any]]:
+        """Par abonne : le VOLUME consomme, et le temps passe a son plafond.
+
+        Le top des debits instantanes designe celui qui telecharge a cet
+        instant ; le volume sur une semaine designe celui qui pese sur le
+        reseau. Ce ne sont presque jamais les memes abonnes, et c'est le second
+        qui sert a dimensionner.
+
+        LE VOLUME EST UNE INTEGRATION DU DEBIT MESURE, pas un releve de
+        compteurs : les compteurs d'une session PPPoE repartent de zero a chaque
+        reconnexion, et les additionner produirait des volumes fantaisistes.
+        L'integration utilise la cadence REELLE de l'abonne (duree observee
+        divisee par le nombre d'intervalles) : un abonne mesure deux fois moins
+        souvent n'en sort pas deux fois plus leger. Chaque echantillon porte les
+        secondes qui l'ont PRECEDE, puisque son debit vient d'un delta de
+        compteurs sur cet intervalle.
+
+        Un abonne qui n'a qu'un seul echantillon sort a zero : d'un point unique
+        aucune duree ne se deduit, et inventer un intervalle par defaut serait
+        inventer du volume.
+        """
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                SELECT m.subscriber_id,
+                       s.login,
+                       s.kind,
+                       p.name AS pop_name,
+                       s.plan_down_mbps,
+                       count(*)                                        AS samples,
+                       max(m.tx_bps)                                   AS peak_bps,
+                       count(*) FILTER (
+                           WHERE s.plan_down_mbps IS NOT NULL
+                             AND m.tx_bps >= $3 * s.plan_down_mbps * 1000000
+                       )                                               AS capped_samples,
+                       max(m.ts) FILTER (
+                           WHERE coalesce(m.rx_bps, 0) + coalesce(m.tx_bps, 0) > 0
+                       )                                               AS last_traffic_at,
+                       -- Integration : somme des debits x cadence observee / 8.
+                       coalesce(sum(coalesce(m.rx_bps, 0) + coalesce(m.tx_bps, 0)), 0) / 8.0
+                         * coalesce(
+                               extract(epoch FROM (max(m.ts) - min(m.ts)))
+                                 / nullif(count(*) - 1, 0),
+                               0
+                           )                                           AS bytes
+                  FROM subscriber_metrics m
+                  JOIN subscribers s ON s.id = m.subscriber_id
+                  LEFT JOIN pops p ON p.id = s.pop_id
+                 WHERE m.ts > now() - make_interval(hours => $1)
+                 GROUP BY m.subscriber_id, s.login, s.kind, p.name, s.plan_down_mbps
+                 ORDER BY bytes DESC
+                 LIMIT $2
+                """,
+                hours,
+                limit,
+                SEUIL_PLAFOND,
+            )
+        return _rows(records)
+
+    async def silent_subscribers(self, *, days: int = 7, limit: int = 20) -> list[dict[str, Any]]:
+        """Abonnes declares dont plus rien n'est passe depuis N jours.
+
+        Une ligne qui ne consomme plus est soit un depart qu'on facture encore,
+        soit une panne que personne n'a signalee. Les deux valent qu'on regarde,
+        et aucun ecran ne les montrait : le tableau de bord ne parle que de ce
+        qui est EN LIGNE.
+        """
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                SELECT s.id AS subscriber_id, s.login, s.kind, p.name AS pop_name,
+                       s.plan_down_mbps, s.last_seen,
+                       (SELECT max(m.ts)
+                          FROM subscriber_metrics m
+                         WHERE m.subscriber_id = s.id
+                           AND coalesce(m.rx_bps, 0) + coalesce(m.tx_bps, 0) > 0
+                       ) AS last_traffic_at
+                  FROM subscribers s
+                  LEFT JOIN pops p ON p.id = s.pop_id
+                 WHERE NOT EXISTS (
+                           SELECT 1 FROM subscriber_metrics m
+                            WHERE m.subscriber_id = s.id
+                              AND m.ts > now() - make_interval(days => $1)
+                              AND coalesce(m.rx_bps, 0) + coalesce(m.tx_bps, 0) > 0
+                       )
+                 ORDER BY s.last_seen DESC NULLS LAST, s.login
+                 LIMIT $2
+                """,
+                days,
+                limit,
+            )
+        return _rows(records)
+
     async def recent_runs(self, *, limit: int = 20) -> list[dict[str, Any]]:
         async with self._pool.acquire() as conn:
             records = await conn.fetch(

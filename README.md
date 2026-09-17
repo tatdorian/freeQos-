@@ -232,9 +232,11 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
 - **Équipements** — ajout d'un routeur ou d'une antenne **via leur API** ; chaque ajout
   **analyse la configuration et (re)construit l'arbre tout seul**. Inventaire des sites et
   routeurs en bas de page.
-- **Connexion à distance** — vue façon LibreQoS de toutes les intégrations distantes
-  (RouterOS, airOS Ubiquiti, UISP, FreeRADIUS) : joignabilité par famille d'API et détail
-  par équipement. En lecture seule.
+- **Capacité** — la seule page qui regarde la **durée** plutôt que l'instant : ce qui est
+  **vendu** sur chaque PoP rapporté à ce qui le **porte**, l'occupation des liens avec leur
+  **heure de pointe**, les abonnés classés par **volume** consommé (pas par débit de
+  l'instant), et les **lignes muettes** — déclarées, mais plus rien depuis des jours. Ce
+  sont les chiffres qui servent à dimensionner, pas à dépanner. En lecture seule.
 
 Aucune dépendance externe : ni framework, ni CDN, ni chaîne de build. Les graphes sont du
 SVG généré à la main, pour que le contrôleur reste utilisable sur une VM de management
@@ -1265,7 +1267,7 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `GET` | `/api/v1/heatmap` | Heatmap exécutif : QoE / RTT / utilisation dans le temps |
 | `GET` · `PUT` | `/api/v1/rtt` | Lire / basculer la sonde de latence (sans variable d'environnement) |
 | `GET` | `/api/v1/network/tree` | Arbre PoP → backhauls, capacité et charge |
-| `GET` | `/api/v1/remote/status` | État des connexions distantes par intégration (RouterOS, airOS, UISP, RADIUS) |
+| `GET` | `/api/v1/capacity` | **Capacité** : survente par PoP, occupation des liens et heure de pointe, volumes consommés, lignes muettes |
 | `GET` | `/api/v1/pops/routers` | Inventaire des routeurs (fichier + base) |
 | `POST` | `/api/v1/pops/routers/test` | Teste une connexion **sans rien enregistrer** |
 | `POST` | `/api/v1/pops/routers` | Enregistre un routeur |

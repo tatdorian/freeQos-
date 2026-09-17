@@ -2166,73 +2166,131 @@ async function toggleRouter(id) {
 }
 
 
-/* ------------------------------------------------- connexion a distance */
+/* ------------------------------------------------------------- capacite */
 
-const REMOTE_STATUS = {
-  ok: '<span class="badge ok">joignable</span>',
-  error: '<span class="badge crit">en echec</span>',
-  disabled: '<span class="badge">desactive</span>',
-  unknown: '<span class="badge">jamais teste</span>',
+/** Capacite : ce qui est vendu, ce qui porte, et l'usage entre les deux.
+ *
+ *  Le reste de l'interface regarde l'INSTANT. Cette page regarde la DUREE :
+ *  survente par PoP, occupation des liens et leur heure de pointe, volumes
+ *  consommes, lignes muettes. Quatre questions qui servent a dimensionner, et
+ *  dont la donnee dormait en base sans que personne ne la croise. */
+const CAPACITY_VERDICTS = {
+  'confortable': 'ok',
+  'a surveiller': 'warn',
+  'tendu': 'crit',
+  'capacite inconnue': '',
+  'rien de vendu': '',
 };
+const CAPACITY_ETATS = { 'libre': 'ok', 'charge': 'warn', 'sature': 'crit', 'capacite inconnue': '' };
 
-/** Page facon LibreQoS : la joignabilite de chaque integration distante en un
- *  coup d'oeil (RouterOS, airOS, UISP, RADIUS), plus le detail par equipement. */
-async function loadRemote() {
-  const data = await api('/remote/status');
-  const integrations = data.integrations || [];
+function capacityBadge(libelle, table) {
+  return '<span class="badge ' + (table[libelle] || '') + '">' + esc(libelle) + '</span>';
+}
 
-  const totalOk = integrations.reduce((a, i) => a + (i.summary.ok || 0), 0);
-  const totalDev = integrations.reduce((a, i) => a + (i.summary.total || 0), 0);
-  document.getElementById('remote-count').textContent =
-    totalDev + ' equipement(s) distant(s), ' + totalOk + ' joignable(s)';
+function pct(part) {
+  return part === null || part === undefined ? '-' : Math.round(part * 100) + ' %';
+}
 
-  document.getElementById('remote-integrations').innerHTML = integrations.map((i) => {
-    const s = i.summary || { total: 0, ok: 0, error: 0 };
-    const etat = !i.configured
-      ? '<span class="badge">non configure</span>'
-      : s.error
-        ? '<span class="badge crit">' + s.error + ' en echec</span>'
-        : s.total
-          ? '<span class="badge ok">' + s.ok + '/' + s.total + ' joignable(s)</span>'
-          : '<span class="badge ok">actif</span>';
-    return '<div class="card">' +
-      '<div class="node-head" style="margin-bottom:.5rem">' +
-        '<div class="node-title">' + esc(i.label) + '</div>' + etat + '</div>' +
-      '<div class="child" style="border:0;padding:.2rem 0;font-size:.76rem;color:var(--muted)">' +
-        esc(i.transport) + '</div>' +
-      (i.endpoint ? '<div class="child" style="border:0;padding:.2rem 0;font-size:.76rem">' +
-        '<span class="name" style="color:var(--faint)">Endpoint</span>' +
-        '<span class="host">' + esc(i.endpoint) + '</span></div>' : '') +
-      (i.provider ? '<div class="child" style="border:0;padding:.2rem 0;font-size:.76rem">' +
-        '<span class="name" style="color:var(--faint)">Fournisseur</span>' +
-        '<span class="host">' + esc(i.provider) + '</span></div>' : '') +
-      (i.note ? '<div class="child" style="border:0;padding:.2rem 0;font-size:.74rem;color:var(--faint)">' +
-        esc(i.note) + '</div>' : '') +
-      '</div>';
-  }).join('');
-
-  const devices = [];
-  integrations.forEach((i) => (i.devices || []).forEach((d) => devices.push({ ...d, kind: i.label })));
-  const host = document.getElementById('remote-devices');
-  if (!devices.length) {
-    host.innerHTML = '<div class="empty">Aucun equipement distant enregistre. ' +
-      'Ajoutez-en dans l\'onglet Equipements.</div>';
+async function loadCapacity() {
+  const heures = document.getElementById('capacity-hours').value;
+  const volumes = document.getElementById('capacity-usage').value;
+  let data;
+  try {
+    data = await api('/capacity?hours=' + heures + '&usage_hours=' + volumes);
+  } catch (err) {
+    document.getElementById('capacity-pops').innerHTML =
+      '<div class="notice err">' + esc(err.message) + '</div>';
     return;
   }
-  host.innerHTML =
-    '<table><thead><tr><th>Equipement</th><th>Integration</th><th>Adresse</th>' +
-    '<th>Etat</th><th>Detail</th><th class="num">Derniere connexion OK</th>' +
-    '</tr></thead><tbody>' +
-    devices.map((d) => '<tr>' +
-      '<td><strong>' + esc(d.name) + '</strong></td>' +
-      '<td>' + esc(d.kind) + (d.source === 'file'
-        ? ' <span class="badge file">fichier</span>' : '') + '</td>' +
-      '<td class="login">' + esc(d.host) + '</td>' +
-      '<td>' + (REMOTE_STATUS[d.status] || esc(d.status)) + '</td>' +
-      '<td style="font-size:.76rem;color:var(--muted)">' + esc(d.detail || '') + '</td>' +
-      '<td class="num" style="color:var(--faint)">' +
-        (d.last_ok_at ? esc(clock(d.last_ok_at)) : '-') + '</td>' +
-      '</tr>').join('') + '</tbody></table>';
+  const t = data.totals || {};
+  document.getElementById('capacity-count').textContent =
+    'pointes sur ' + data.window.hours + ' h, volumes sur ' +
+    Math.round(data.window.usage_hours / 24) + ' j';
+
+  document.getElementById('capacity-cards').innerHTML =
+    statCard('', 'Vendu (descendant)', mbps(t.sold_down_mbps || 0), '',
+      'somme des plans souscrits') +
+    statCard('', 'Capacite mesuree', mbps(t.capacity_mbps || 0), '',
+      'derniere capacite connue des backhauls') +
+    statCard(t.ratio && t.ratio > 20 ? 'crit' : (t.ratio && t.ratio > 5 ? 'warn' : ''),
+      'Survente du reseau', t.ratio === null || t.ratio === undefined ? '-' : t.ratio + ':1', '',
+      'un chiffre de reseau : regardez PoP par PoP') +
+    statCard(t.subscribers_at_ceiling ? 'warn' : '', 'Abonnes a leur plafond',
+      String(t.subscribers_at_ceiling || 0), '',
+      (t.silent || 0) + ' ligne(s) muette(s)');
+
+  const pops = data.pops || [];
+  document.getElementById('capacity-pops').innerHTML = !pops.length
+    ? '<div class="empty">Aucun PoP.</div>'
+    : '<table><thead><tr><th>PoP</th><th class="num">Abonnes</th>' +
+      '<th class="num">Vendu</th><th class="num">Capacite</th><th class="num">Survente</th>' +
+      '<th class="num">Pointe vue</th><th>Verdict</th></tr></thead><tbody>' +
+      pops.map((p) => '<tr>' +
+        '<td><b>' + esc(p.pop_name || '-') + '</b></td>' +
+        '<td class="num">' + esc(p.subscribers) + '</td>' +
+        '<td class="num">' + mbps(p.sold_down_mbps) + '</td>' +
+        '<td class="num">' + (p.capacity_mbps === null
+          ? '<span class="hint">non mesuree</span>' : mbps(p.capacity_mbps) + '') + '</td>' +
+        '<td class="num">' + (p.ratio === null ? '-' : esc(p.ratio) + ':1') + '</td>' +
+        '<td class="num">' + (p.peak_mbps === null ? '-'
+          : mbps(p.peak_mbps) + ' <span class="hint">' + pct(p.peak_share) + '</span>') + '</td>' +
+        '<td>' + capacityBadge(p.verdict, CAPACITY_VERDICTS) + '</td>' +
+        '</tr>').join('') + '</tbody></table>';
+
+  const liens = data.links || [];
+  document.getElementById('capacity-links').innerHTML = !liens.length
+    ? '<div class="empty">Aucun port mesure sur la periode.</div>'
+    : '<table><thead><tr><th>Lien</th><th>Port</th><th class="num">Capacite</th>' +
+      '<th class="num">Pointe</th><th class="num">Occupation</th><th>Heure de pointe</th>' +
+      '<th>Etat</th></tr></thead><tbody>' +
+      liens.map((l) => '<tr>' +
+        '<td><b>' + esc(l.link_name || l.interface) + '</b> ' +
+          '<span class="hint">sur ' + esc(l.router_name) + '</span></td>' +
+        '<td class="login">' + esc(l.interface) + '</td>' +
+        '<td class="num">' + (l.capacity_mbps === null ? '-' : mbps(l.capacity_mbps) + '') + '</td>' +
+        '<td class="num">' + (l.peak_mbps === null ? '-' : mbps(l.peak_mbps) + '') +
+          ' <span class="hint">' + esc(l.peak_direction) + '</span></td>' +
+        '<td class="num">' + pct(l.share) + '</td>' +
+        '<td style="color:var(--faint)">' + (l.peak_at ? esc(clock(l.peak_at)) : '-') + '</td>' +
+        '<td>' + capacityBadge(l.state, CAPACITY_ETATS) + '</td>' +
+        '</tr>').join('') + '</tbody></table>';
+
+  const usage = data.usage || [];
+  document.getElementById('capacity-usage-table').innerHTML = !usage.length
+    ? '<div class="empty">Aucun volume mesure sur la periode.</div>'
+    : '<table><thead><tr><th>Abonne</th><th>PoP</th><th class="num">Volume</th>' +
+      '<th class="num">Plan</th><th class="num">Pointe</th>' +
+      '<th class="num" title="Part du temps passee a plus de 90 % du plan">Au plafond</th>' +
+      '</tr></thead><tbody>' +
+      usage.map((u) => '<tr>' +
+        '<td class="login"><b>' + esc(u.login) + '</b>' +
+          (u.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
+        '<td>' + esc(u.pop_name || '-') + '</td>' +
+        '<td class="num">' + esc(u.gigabytes) + ' Go</td>' +
+        '<td class="num">' + (u.plan_down_mbps ? mbps(u.plan_down_mbps) + '' : '-') + '</td>' +
+        '<td class="num">' + (u.peak_mbps === null ? '-' : mbps(u.peak_mbps) + '') + '</td>' +
+        '<td class="num">' + pct(u.capped_share) +
+          (u.at_plan_ceiling
+            ? ' <span class="badge warn" title="Il ne profite plus de son plan, il vit dedans : ' +
+              'candidat a une offre superieure, ou plan mal taille">plafond</span>' : '') + '</td>' +
+        '</tr>').join('') + '</tbody></table>';
+
+  const muets = data.silent || [];
+  document.getElementById('capacity-silent').innerHTML = !muets.length
+    ? '<div class="empty">Aucune ligne muette depuis ' + esc(data.window.silent_days) +
+      ' jours. Tout le monde consomme.</div>'
+    : '<table><thead><tr><th>Abonne</th><th>PoP</th><th class="num">Plan</th>' +
+      '<th>Derniere session</th><th>Dernier trafic</th></tr></thead><tbody>' +
+      muets.map((m) => '<tr>' +
+        '<td class="login"><b>' + esc(m.login) + '</b>' +
+          (m.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
+        '<td>' + esc(m.pop_name || '-') + '</td>' +
+        '<td class="num">' + (m.plan_down_mbps ? mbps(m.plan_down_mbps) + '' : '-') + '</td>' +
+        '<td style="color:var(--faint)">' + esc(depuis(m.last_seen)) + '</td>' +
+        '<td style="color:var(--faint)">' +
+          (m.last_traffic_at ? esc(depuis(m.last_traffic_at))
+            : '<span class="hint">jamais vu passer</span>') + '</td>' +
+        '</tr>').join('') + '</tbody></table>';
 }
 
 /* ---------------------------------------------------- antennes Ubiquiti */
@@ -4601,7 +4659,7 @@ const LOADERS = {
   topology: loadTopology,
   shaping: loadShaping,
   pops: loadRouters,
-  remote: loadRemote,
+  capacity: loadCapacity,
   settings: loadSettings,
 };
 
@@ -4683,7 +4741,8 @@ document.getElementById('btn-topo-link').addEventListener('click', (e) => {
   setTopoLinkNotice();
 });
 document.getElementById('btn-build-tree').addEventListener('click', () => buildTreeFromConfig(false));
-document.getElementById('btn-remote-refresh').addEventListener('click', loadRemote);
+document.getElementById('capacity-hours').addEventListener('change', loadCapacity);
+document.getElementById('capacity-usage').addEventListener('change', loadCapacity);
 document.getElementById('exec-range').addEventListener('change', (e) => {
   state.execRange = Number(e.target.value);
   loadExec();
