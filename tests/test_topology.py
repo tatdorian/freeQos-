@@ -10,6 +10,7 @@ from app.collectors.topology import (
     TopologyLink,
     TopologyNode,
     TopologySnapshot,
+    ambiguous_neighbor_macs,
     attach_uisp_devices,
     build_from_router,
     classify_platform,
@@ -522,18 +523,35 @@ def _noeud(key, name, **extra):
 def test_reconciliation_fusionne_le_meme_routeur_vu_plusieurs_fois() -> None:
     """Le PoP gere et son apparition comme voisin du coeur sont UN routeur.
 
-    Casses differentes (NAS-FRANCOPHONIE / NAS-francophonie), IP differentes
-    (management vs lien amont) : une seule case, ses adresses rassemblees."""
+    C'est la MAC exposee par le routeur gere qui replie sa vue "voisin", pas son
+    nom : deux equipements homonymes dans deux sites existent, et un nom ne se
+    verifie pas. Le PoP au nom fautif (FRNACOPHONIE) reste donc une case a part,
+    comme il se doit -- c'est un AUTRE routeur declare."""
     noeuds = [
-        _noeud("router:NAS-FRANCOPHONIE", "NAS-FRANCOPHONIE", address="100.100.101.82"),
-        _noeud("identity:NAS-francophonie", "NAS-francophonie", address="11.11.11.84"),
+        _noeud(
+            "router:NAS-FRANCOPHONIE",
+            "NAS-FRANCOPHONIE",
+            address="100.100.101.82",
+            attributes={"managed": True, "macs": ["AA:BB:CC:00:00:01"]},
+        ),
+        _noeud(
+            "identity:NAS-francophonie",
+            "NAS-francophonie",
+            mac="AA:BB:CC:00:00:01",
+            address="11.11.11.84",
+        ),
         _noeud(
             "mac:AA:BB:CC:00:00:01",
             "NAS-FRANCOPHONIE",
             mac="AA:BB:CC:00:00:01",
             address="11.11.11.84",
         ),
-        _noeud("router:NAS-FRNACOPHONIE", "NAS-FRNACOPHONIE", address="11.11.11.81"),
+        _noeud(
+            "router:NAS-FRNACOPHONIE",
+            "NAS-FRNACOPHONIE",
+            address="11.11.11.81",
+            attributes={"managed": True},
+        ),
     ]
     liens = [
         {
@@ -658,7 +676,7 @@ def test_reconciliation_lit_les_attributs_en_json_brut() -> None:
         _noeud(
             "router:pop",
             "PoP Nord",
-            attributes='{"macs": ["48:8F:5A:00:00:12"], "identity": "NAS-nord"}',
+            attributes='{"managed": true, "macs": ["48:8F:5A:00:00:12"]}',
         ),
         _noeud("mac:48:8F:5A:00:00:12", "NAS-nord", mac="48:8F:5A:00:00:12"),
     ]
@@ -677,13 +695,19 @@ def test_reconciliation_ne_fusionne_pas_sur_un_nom_generique() -> None:
 
 
 def test_reconciliation_fusionne_sur_le_mac_meme_si_le_nom_manque() -> None:
+    """La MAC du routeur gere replie ses deux vues "voisin", y compris celle qui
+    n'a qu'un nom generique."""
     noeuds = [
-        _noeud("router:pop", "PoP Nord", address="10.0.0.1"),
+        _noeud(
+            "router:pop",
+            "PoP Nord",
+            address="10.0.0.1",
+            attributes={"managed": True, "macs": ["DC:9F:DB:11:22:33"]},
+        ),
         _noeud("mac:DC:9F:DB:11:22:33", "PoP Nord", mac="DC:9F:DB:11:22:33"),
         _noeud("address:fe80", "MikroTik", mac="DC:9F:DB:11:22:33", address="fe80::1"),
     ]
     fusion, _ = reconcile_topology(noeuds, [])
-    # Le nom rassemble les deux premiers, le MAC y agrege le troisieme (generique).
     assert len(fusion) == 1
     assert fusion[0]["key"] == "router:pop"
     assert fusion[0]["merged_count"] == 3
@@ -691,7 +715,11 @@ def test_reconciliation_fusionne_sur_le_mac_meme_si_le_nom_manque() -> None:
 
 def test_reconciliation_supprime_un_lien_devenu_interne() -> None:
     noeuds = [
-        _noeud("router:pop", "PoP Nord"),
+        _noeud(
+            "router:pop",
+            "PoP Nord",
+            attributes={"managed": True, "macs": ["DC:9F:DB:11:22:33"]},
+        ),
         _noeud("mac:DC:9F:DB:11:22:33", "PoP Nord", mac="DC:9F:DB:11:22:33"),
     ]
     liens = [
@@ -828,3 +856,180 @@ def test_un_lien_vers_un_equipement_non_gere_n_est_jamais_replie() -> None:
     )
 
     assert mark_reciprocal_links(snapshot) == 0
+
+
+# ---------------------------------------------------------------------------
+# DEUX ROUTEURS DECLARES NE SE CONFONDENT JAMAIS
+#
+# Sur un parc virtualise -- un laboratoire EVE-NG, des CHR deployees depuis la
+# meme image -- les routeurs partagent les MAC de leurs interfaces. La
+# reconciliation fusionnait dessus : quatre routeurs bien distincts devenaient
+# UNE case, qui absorbait leurs adresses et leurs liens, et les trois autres
+# disparaissaient pureement et simplement de l'arbre. L'exploitant les voyait
+# "joignables" dans son inventaire et introuvables dans sa topologie.
+# ---------------------------------------------------------------------------
+def _chr_clone(nom: str, adresse: str, mac_partagee: str) -> dict:
+    """Une CHR d'un parc clone : identifiants propres, MAC communes."""
+    return _noeud(
+        f"router:{nom}",
+        nom,
+        address=adresse,
+        mac=mac_partagee,
+        attributes={"managed": True, "macs": [mac_partagee], "identity": nom},
+    )
+
+
+MAC_CLONE = "50:00:00:0A:00:00"
+
+
+def test_des_routeurs_clones_gardent_chacun_leur_case() -> None:
+    """LE cas qui faisait disparaitre trois routeurs sur quatre."""
+    noeuds = [
+        _chr_clone("DS-CCR", "11.11.11.1", MAC_CLONE),
+        _chr_clone("NAS-BASSORA", "11.11.11.75", MAC_CLONE),
+        _chr_clone("NAS-FRANCOPHONIE", "11.11.11.81", MAC_CLONE),
+        _chr_clone("NAS-TAILLADJE", "11.11.11.84", MAC_CLONE),
+    ]
+
+    fusion, _ = reconcile_topology(noeuds, [])
+
+    assert {n["key"] for n in fusion} == {
+        "router:DS-CCR",
+        "router:NAS-BASSORA",
+        "router:NAS-FRANCOPHONIE",
+        "router:NAS-TAILLADJE",
+    }
+    assert all(n["merged_count"] == 1 for n in fusion)
+
+
+def test_une_mac_partagee_ne_replie_plus_aucun_voisin() -> None:
+    """Elle n'identifie plus personne : la rattacher au premier routeur venu
+    serait un rattachement tire au sort."""
+    noeuds = [
+        _chr_clone("DS-CCR", "11.11.11.1", MAC_CLONE),
+        _chr_clone("NAS-BASSORA", "11.11.11.75", MAC_CLONE),
+        _noeud("mac:50:00:00:0A:00:00", "MikroTik", mac=MAC_CLONE, address="fe80::1"),
+    ]
+
+    fusion, _ = reconcile_topology(noeuds, [])
+
+    assert len(fusion) == 3
+    assert "mac:50:00:00:0A:00:00" in {n["key"] for n in fusion}
+
+
+def test_deux_routeurs_declares_au_meme_serie_restent_distincts() -> None:
+    """Meme le numero de serie ne peut pas les replier : l'exploitant les a
+    declares separement, et une image clonee sans reinitialisation produit
+    exactement ce symptome. Effacer un routeur de l'arbre serait pire que
+    d'afficher un doublon."""
+    noeuds = [
+        _noeud("router:a", "PoP A", attributes={"managed": True, "serial": "HFX0ABCDEF"}),
+        _noeud("router:b", "PoP B", attributes={"managed": True, "serial": "HFX0ABCDEF"}),
+    ]
+
+    fusion, _ = reconcile_topology(noeuds, [])
+
+    assert {n["key"] for n in fusion} == {"router:a", "router:b"}
+
+
+def test_le_nom_ne_fusionne_plus_rien() -> None:
+    """Un nom n'est unique que par convention, et une convention ne se verifie
+    pas. Deux equipements homonymes dans deux sites suffisent a tout confondre."""
+    noeuds = [
+        _noeud("router:pop-a", "NAS-NORD", attributes={"managed": True}),
+        _noeud("autre:chose", "NAS-NORD"),
+    ]
+
+    fusion, _ = reconcile_topology(noeuds, [])
+
+    assert len(fusion) == 2
+
+
+def test_le_numero_de_serie_replie_toujours_une_vue_decouverte() -> None:
+    """Ce qu'on garde : la preuve d'identite. Une case decouverte qui porte le
+    meme numero de serie qu'un routeur gere EST ce routeur."""
+    noeuds = [
+        _noeud("router:pop", "PoP Nord", attributes={"managed": True, "serial": "HFX0ABCDEF"}),
+        _noeud(
+            "mac:AA:BB", "MikroTik", mac="AA:BB:CC:DD:EE:FF", attributes={"serial": "hfx0abcdef"}
+        ),
+    ]
+
+    fusion, _ = reconcile_topology(noeuds, [])
+
+    assert len(fusion) == 1
+    assert fusion[0]["key"] == "router:pop"
+
+
+# ---------------------------------------------------------------------------
+# UNE MAC PARTAGEE NE PEUT PAS SERVIR DE CLE
+#
+# ``neighbor_node_key`` keyait un voisin sur sa MAC. Quand plusieurs voisins
+# annoncent la MEME -- machines virtuelles clonees -- ils recevaient tous LA
+# MEME CLE et s'ecrasaient en un seul noeud des l'ajout au graphe, avant toute
+# reconciliation. Tous les liens du reseau aboutissaient alors au meme endroit,
+# et l'arbre montrait une chaine la ou il y avait une etoile.
+# ---------------------------------------------------------------------------
+def _voisin(identite: str, mac: str, ip: str = "") -> dict:
+    return {"interface": "ether1", "identity": identite, "mac-address": mac, "address": ip}
+
+
+def test_une_mac_annoncee_par_plusieurs_identites_est_reperee() -> None:
+    ambigues = ambiguous_neighbor_macs(
+        [
+            _voisin("NAS-BASSORA", "50:00:00:0A:00:00"),
+            _voisin("NAS-TAILLADJE", "50:00:00:0A:00:00"),
+            _voisin("BH-Nord", "DC:9F:DB:11:22:33"),
+        ]
+    )
+    assert ambigues == {"50:00:00:0A:00:00"}
+
+
+def test_le_meme_equipement_vu_deux_fois_n_est_pas_ambigu() -> None:
+    """Un voisin vu par deux routeurs annonce la meme MAC ET la meme identite :
+    c'est bien un seul equipement, sa MAC reste une cle valable."""
+    assert (
+        ambiguous_neighbor_macs(
+            [_voisin("BH-Nord", "DC:9F:DB:11:22:33"), _voisin("BH-Nord", "DC:9F:DB:11:22:33")]
+        )
+        == set()
+    )
+
+
+def test_un_nom_generique_ne_rend_pas_une_mac_ambigue() -> None:
+    """Deux 'MikroTik' sur la meme MAC ne prouvent pas deux equipements : le nom
+    par defaut ne distingue rien, et on ne casserait la cle que sur du bruit."""
+    assert (
+        ambiguous_neighbor_macs(
+            [_voisin("MikroTik", "DC:9F:DB:11:22:33"), _voisin("MikroTik", "DC:9F:DB:11:22:33")]
+        )
+        == set()
+    )
+
+
+def test_une_mac_ambigue_cede_la_cle_a_l_identite() -> None:
+    """LE correctif : sans cela, ces deux voisins recevaient la meme cle."""
+    ambigues = {"50:00:00:0A:00:00"}
+    a = neighbor_node_key(_voisin("NAS-BASSORA", "50:00:00:0A:00:00"), ambigues)
+    b = neighbor_node_key(_voisin("NAS-TAILLADJE", "50:00:00:0A:00:00"), ambigues)
+
+    assert a != b
+    assert a == "identity:NAS-BASSORA"
+
+
+def test_une_mac_unique_reste_la_cle() -> None:
+    """Le cas normal ne change pas : la MAC survit a un changement de nom ou
+    d'adresse, et c'est elle qui joint le graphe a UISP."""
+    assert neighbor_node_key(_voisin("BH-Nord", "DC:9F:DB:11:22:33"), set()) == (
+        "mac:DC:9F:DB:11:22:33"
+    )
+
+
+def test_une_mac_ambigue_sans_identite_garde_la_mac() -> None:
+    """Faute de mieux : une cle imparfaite vaut mieux qu'aucune."""
+    assert (
+        neighbor_node_key(
+            {"interface": "e1", "mac-address": "50:00:00:0A:00:00"}, {"50:00:00:0A:00:00"}
+        )
+        == "mac:50:00:00:0A:00:00"
+    )

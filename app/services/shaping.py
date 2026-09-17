@@ -32,6 +32,7 @@ from app.collectors.topology import (
     KIND_SECTOR,
     TopologyNode,
     TopologySnapshot,
+    ambiguous_neighbor_macs,
     attach_static_clients,
     attach_uisp_devices,
     build_from_router,
@@ -269,9 +270,11 @@ class ShapingService:
         # pas le dedoubler.
         router_addresses: list[tuple[str, str, list[dict[str, Any]]]] = []
         router_tunnels: list[tuple[str, str, list[dict[str, Any]]]] = []
-        ip_owner: dict[str, str] = {}
-        mac_owner: dict[str, str] = {}
-        name_owner: dict[str, str] = {}
+        # Candidats AVANT arbitrage : un indice peut etre revendique par
+        # plusieurs routeurs, et c'est precisement ce qu'il faut savoir.
+        ip_candidats: dict[str, set[str]] = {}
+        mac_candidats: dict[str, set[str]] = {}
+        name_candidats: dict[str, set[str]] = {}
         # Loopback -> case du routeur. C'est l'index qui tranche : il est le seul
         # dont une correspondance vaut preuve d'identite.
         loopback_owner: dict[str, str] = {}
@@ -283,6 +286,24 @@ class ShapingService:
         # Sessions PPPoE de tous les PoPs, avec leur caller-id : c'est la matiere
         # de la jointure abonne -> secteur radio, faite en fin de decouverte.
         sessions_pppoe: list[dict[str, Any]] = []
+        # MAC annoncees par PLUSIEURS voisins distincts, calculees sur TOUS les
+        # routeurs avant de construire quoi que ce soit. Une cle de noeud doit
+        # etre decidee avec la vue d'ensemble : prise routeur par routeur, la
+        # premiere occurrence garderait la MAC et les suivantes s'ecraseraient
+        # dessus, dans un ordre qui depend de la lecture.
+        tous_voisins: list[dict[str, Any]] = []
+        for resultat in resultats:
+            if not isinstance(resultat, BaseException):
+                tous_voisins.extend(resultat.get("neighbors") or [])
+        macs_ambigues = ambiguous_neighbor_macs(tous_voisins)
+        if macs_ambigues:
+            snapshot.warnings.append(
+                f"{len(macs_ambigues)} MAC annoncee(s) par plusieurs equipements distincts : "
+                f"elles ne servent plus a les identifier. Des equipements clones depuis la "
+                f"meme image donnent ce symptome."
+            )
+            logger.warning("MAC de voisins ambigues : %s", sorted(macs_ambigues))
+
         for collector, resultat in zip(collectors, resultats, strict=True):
             if isinstance(resultat, BaseException):
                 message = f"{collector.name}: {type(resultat).__name__}: {resultat}"
@@ -325,7 +346,7 @@ class ShapingService:
                 # exactement quand l'operateur cherche a comprendre pourquoi il
                 # ne repond pas.
                 if collector.config.host:
-                    ip_owner.setdefault(str(collector.config.host), cle_hs)
+                    ip_candidats.setdefault(str(collector.config.host), set()).add(cle_hs)
                 continue
             # L'export n'est pas un parametre de build_from_router : on le retire
             # avant de deballer, puis on l'analyse a part.
@@ -373,6 +394,7 @@ class ShapingService:
                 role=str(collector.config.role),
                 loopback=loopback,
                 loopback_source=origine_loopback,
+                ambiguous_macs=macs_ambigues,
                 **resultat,
             )
             cle = router_node_key(collector.config.name)
@@ -404,19 +426,19 @@ class ShapingService:
             for ligne in resultat.get("addresses") or []:
                 brut = str(ligne.get("address") or "").split("/")[0].strip()
                 if brut:
-                    ip_owner.setdefault(brut, cle)
+                    ip_candidats.setdefault(brut, set()).add(cle)
             if collector.config.host:
-                ip_owner.setdefault(str(collector.config.host), cle)
+                ip_candidats.setdefault(str(collector.config.host), set()).add(cle)
             # MAC et identite du routeur gere -> sa case (pour le reconnaitre en voisin).
             noeud_gere = snapshot.nodes.get(cle)
             if noeud_gere is not None:
                 for mac in noeud_gere.attributes.get("macs") or []:
                     normalisee = normalize_mac(mac)
                     if normalisee:
-                        mac_owner.setdefault(normalisee, cle)
+                        mac_candidats.setdefault(normalisee, set()).add(cle)
             identite = str(resultat.get("identity") or "").strip().lower()
             if identite:
-                name_owner.setdefault(identite, cle)
+                name_candidats.setdefault(identite, set()).add(cle)
             if export:
                 analyse = analyse_export
                 router_tunnels.append((cle, collector.config.name, analyse.get("tunnels") or []))
@@ -424,7 +446,7 @@ class ShapingService:
                 for ligne in analyse.get("addresses") or []:
                     brut = str(ligne.get("address") or "").split("/")[0].strip()
                     if brut:
-                        ip_owner.setdefault(brut, cle)
+                        ip_candidats.setdefault(brut, set()).add(cle)
                 router_addresses.append(
                     (cle, collector.config.name, analyse.get("addresses") or [])
                 )
@@ -450,6 +472,22 @@ class ShapingService:
                 logger.error("Loopback %s partage par %s", adresse, sorted(noms))
                 continue
             loopback_owner[adresse] = router_node_key(noms[0])
+
+        # UN INDICE PARTAGE PAR DEUX ROUTEURS N'IDENTIFIE PLUS PERSONNE.
+        #
+        # Ces index servent a reconnaitre un routeur gere quand un voisin
+        # l'annonce. Ils etaient remplis avec ``setdefault`` : en cas de
+        # collision, le PREMIER routeur rencontre gagnait, en silence, et tous
+        # les voisins de l'autre se repliaient dans la mauvaise case.
+        #
+        # Les collisions ne sont pas theoriques : des CHR deployees depuis la
+        # meme image partagent les MAC de leurs interfaces, et les
+        # configurations modeles donnent le meme /30 de liaison a tous les
+        # sites. Un indice ambigu est donc ECARTE -- ne pas savoir vaut mieux
+        # que rattacher au hasard.
+        ip_owner = _index_sans_ambiguite(ip_candidats, "adresse", snapshot)
+        mac_owner = _index_sans_ambiguite(mac_candidats, "MAC", snapshot)
+        name_owner = _index_sans_ambiguite(name_candidats, "identite", snapshot)
 
         replies = resolve_to_managed(snapshot, ip_owner, mac_owner, name_owner, loopback_owner)
         if replies:
@@ -684,10 +722,26 @@ class ShapingService:
         timeout = max(collector.config.timeout_s * 4, 10.0)
 
         def lire() -> dict[str, Any]:
+            # LE NUMERO DE SERIE EST L'IDENTITE DE L'EQUIPEMENT.
+            #
+            # Deux sources, parce qu'un parc en melange les deux natures :
+            # '/system/routerboard' donne le numero grave dans le materiel, et
+            # '/system/license' le 'system-id' d'une CHR, qui n'a pas de
+            # RouterBOARD. Sans la seconde, un parc virtualise n'a AUCUN
+            # identifiant propre : des CHR deployees depuis la meme image
+            # partagent jusqu'aux MAC de leurs interfaces, et rien ne les
+            # distingue plus les unes des autres.
             serial = None
             lire_rb = getattr(client, "routerboard", None)
             if callable(lire_rb):
                 serial = (lire_rb() or {}).get("serial-number")
+            if not serial:
+                lire_lic = getattr(client, "license_id", None)
+                if callable(lire_lic):
+                    try:
+                        serial = lire_lic()
+                    except Exception:  # noqa: BLE001 - jamais bloquant
+                        logger.debug("license_id indisponible sur %s", collector.name)
             export = ""
             lire_exp = getattr(client, "export_config", None)
             if callable(lire_exp):
@@ -1515,6 +1569,36 @@ class ShapingService:
             except Exception:  # noqa: BLE001
                 pass
         self._write_clients.clear()
+
+
+def _index_sans_ambiguite(
+    candidats: dict[str, set[str]], quoi: str, snapshot: TopologySnapshot
+) -> dict[str, str]:
+    """``indice -> routeur``, en ECARTANT tout indice revendique par plusieurs.
+
+    Ces index servent a reconnaitre un routeur gere quand un voisin l'annonce.
+    Un indice partage par deux routeurs n'identifie plus personne : le retenir
+    reviendrait a rattacher les voisins de l'un a l'autre, silencieusement.
+
+    Et les collisions arrivent pour de bon. Des CHR deployees depuis la meme
+    image partagent les MAC de leurs interfaces ; les configurations modeles
+    donnent le meme /30 de liaison a tous les sites ; deux equipements peuvent
+    porter la meme identite RouterOS. Chaque cas est signale, parce qu'il
+    explique a lui seul qu'une partie du reseau n'apparaisse pas comme prevu.
+    """
+    index: dict[str, str] = {}
+    for indice, proprietaires in sorted(candidats.items()):
+        if len(proprietaires) == 1:
+            index[indice] = next(iter(proprietaires))
+            continue
+        noms = sorted(cle.removeprefix("router:") for cle in proprietaires)
+        snapshot.warnings.append(
+            f"{quoi} {indice} revendiquee par {len(noms)} routeurs ({', '.join(noms)}) : "
+            f"elle n'identifie plus aucun d'eux. Leurs voisins restent des cases a part. "
+            f"Des equipements clones depuis la meme image donnent ce symptome."
+        )
+        logger.warning("%s %s partagee par %s", quoi, indice, noms)
+    return index
 
 
 def _identites_physiques(

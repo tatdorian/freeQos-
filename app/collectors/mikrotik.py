@@ -82,6 +82,8 @@ class RouterOsReadClient(Protocol):
 
     def routerboard(self) -> dict[str, Any]: ...
 
+    def license_id(self) -> str | None: ...
+
     def export_config(self) -> str: ...
 
     def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]: ...
@@ -245,6 +247,34 @@ class LibrouterosReadClient:
             except Exception:  # noqa: BLE001 - best-effort, on degrade proprement
                 self._drop()
                 return ""
+
+    def license_id(self) -> str | None:
+        """``/system/license`` : l'identite d'une instance CHR (machine virtuelle).
+
+        Une CHR n'a pas de RouterBOARD, donc pas de numero de serie materiel :
+        ``/system/routerboard`` ne rend rien. Son identifiant stable est le
+        ``system-id`` de sa licence, propre a chaque instance -- y compris entre
+        deux CHR deployees depuis la MEME image, qui partagent alors tout le
+        reste, MAC d'interface comprises.
+
+        C'est exactement le cas d'un laboratoire EVE-NG ou d'un parc virtualise :
+        sans cette lecture, plusieurs routeurs bien distincts n'ont aucun
+        identifiant qui les separe.
+        """
+        for chemin in ("/system/license", "/system/hardware"):
+            if chemin in self._chemins_absents:
+                continue
+            try:
+                rows = self._query(chemin)
+            except Exception:  # noqa: BLE001 - absent selon la version et l'edition
+                logger.debug("%s indisponible sur %s", chemin, self._config.name)
+                self._chemins_absents.add(chemin)
+                continue
+            for row in rows:
+                valeur = str(row.get("system-id") or row.get("software-id") or "").strip()
+                if valeur:
+                    return valeur
+        return None
 
     def routerboard(self) -> dict[str, Any]:
         """``/system/routerboard`` : numero de serie et modele materiel.

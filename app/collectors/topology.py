@@ -142,42 +142,42 @@ def _as_attributes(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _merge_signatures(node: dict[str, Any]) -> set[str]:
-    """Signaux qui prouvent une IDENTITE d'equipement (pas une simple adjacence).
+def _est_gere(node: dict[str, Any]) -> bool:
+    """Cette case est-elle un routeur de l'INVENTAIRE ?"""
+    return _as_attributes(node.get("attributes")).get("managed") is True
 
-    Le MAC est le plus sur. Un routeur gere porte PLUSIEURS MAC (une par
-    interface) : quand un autre routeur le voit en voisin, il ne connait que la
-    MAC de l'interface en face. On expose donc TOUTES ses MAC (``attributes.macs``)
-    pour que la fusion aboutisse quelle que soit l'interface observee. Le nom
-    (identite RouterOS) sert aussi, une fois insensibilise a la casse --
-    ``NAS-FRANCOPHONIE`` et ``NAS-francophonie`` sont le meme routeur -- SAUF s'il
-    est generique. On NE fusionne PAS sur l'adresse IP : un meme equipement porte
-    plusieurs IP, et deux equipements distincts peuvent partager une IP de segment.
-    C'est justement pour ca qu'on RASSEMBLE les adresses sur un seul noeud au lieu
-    de dedoubler.
+
+def _merge_signatures(node: dict[str, Any]) -> set[str]:
+    """Ce qui PROUVE que deux cases sont le meme equipement.
+
+    LE NUMERO DE SERIE, ET RIEN D'AUTRE.
+
+    Ce module a longtemps fusionne aussi sur la MAC et sur le nom. Les deux se
+    sont reveles faux sur un parc reel :
+
+    - la MAC n'est unique que si le materiel l'est. Des CHR deployees depuis la
+      meme image -- un laboratoire EVE-NG, un parc virtualise -- partagent les
+      MAC de leurs interfaces. Fusionner dessus repliait des routeurs
+      parfaitement distincts en UNE case, qui absorbait leurs adresses et leurs
+      liens ; les autres disparaissaient purement et simplement de l'arbre ;
+    - le nom n'est unique que par convention, et une convention ne se verifie
+      pas. Deux equipements homonymes dans deux sites differents suffisent.
+
+    Le numero de serie, lui, identifie l'equipement et lui seul : grave dans le
+    materiel, ou ``system-id`` de la licence pour une CHR. Quand il manque, on ne
+    fusionne pas -- deux cases valent mieux qu'une case fausse, et l'operateur
+    garde le dernier mot avec la fusion manuelle.
     """
-    signatures: set[str] = set()
     attrs = _as_attributes(node.get("attributes"))
-    # Numero de serie : l'identifiant qui ne bouge JAMAIS. Deux cases qui le
-    # partagent sont le meme routeur, quelles que soient ses adresses ou son nom.
     serial = str(attrs.get("serial") or "").strip().lower()
-    if serial:
-        signatures.add("serial:" + serial)
-    # Toutes les MAC connues de l'equipement : le champ principal + celles de ses
-    # interfaces (routeur gere) + une eventuelle MAC de gestion.
-    macs = [node.get("mac"), attrs.get("mgmt_mac")]
-    macs.extend(attrs.get("macs") or [])
-    for brut in macs:
-        mac = normalize_mac(brut)
-        if mac:
-            signatures.add("mac:" + mac)
-    # Nom affiche ET identite RouterOS reelle (le nom d'un PoP gere est souvent
-    # un libelle "PoP Nord", alors que ses voisins le voient sous son identite).
-    for source in (node.get("name"), attrs.get("identity")):
-        nom = str(source or "").strip().lower()
-        if nom and nom not in GENERIC_NAMES:
-            signatures.add("name:" + nom)
-    return signatures
+    return {"serial:" + serial} if serial else set()
+
+
+def _macs_du_noeud(node: dict[str, Any]) -> set[str]:
+    """Toutes les MAC connues d'une case, normalisees."""
+    attrs = _as_attributes(node.get("attributes"))
+    brutes = [node.get("mac"), attrs.get("mgmt_mac"), *(attrs.get("macs") or [])]
+    return {mac for mac in (normalize_mac(b) for b in brutes) if mac}
 
 
 def _pick_canonical(
@@ -240,13 +240,71 @@ def reconcile_topology(
         if ra != rb:
             parent[ra] = rb
 
+    # DEUX ROUTEURS DE L'INVENTAIRE NE SE FUSIONNENT JAMAIS TOUT SEULS.
+    #
+    # L'exploitant les a declares separement : c'est une affirmation, pas une
+    # observation, et aucune heuristique ne peut la contredire. Meme un numero de
+    # serie commun -- qui signale alors une image clonee sans reinitialisation,
+    # pas un equipement unique -- ne doit pas les replier : le faire effacerait
+    # des routeurs de l'arbre au moment precis ou l'exploitant vient de les
+    # ajouter, sans que rien ne l'explique.
+    geres = {n["key"] for n in nodes if _est_gere(n)}
+
+    def unir_si_possible(a: str, b: str) -> bool:
+        if a in geres and b in geres:
+            return False
+        union(a, b)
+        return True
+
     par_signature: dict[str, str] = {}
     for node in nodes:
         for signature in _merge_signatures(node):
-            if signature in par_signature:
-                union(node["key"], par_signature[signature])
-            else:
+            connu = par_signature.get(signature)
+            if connu is None:
                 par_signature[signature] = node["key"]
+            elif not unir_si_possible(node["key"], connu):
+                logger.warning(
+                    "Meme numero de serie sur deux routeurs declares (%s et %s) : ils "
+                    "restent distincts. Une image clonee sans reinitialisation donne ce "
+                    "symptome.",
+                    node["key"],
+                    connu,
+                )
+
+    # LA MAC NE SERT PLUS QU'A UNE CHOSE : replier une case DECOUVERTE dans le
+    # routeur gere qu'elle represente. Quand le coeur voit un PoP en voisin, il
+    # n'en connait que la MAC de l'interface tournee vers lui -- sans ce
+    # rapprochement, le PoP aurait deux cases, la sienne et celle que son voisin
+    # lui fabrique.
+    #
+    # Elle ne rapproche JAMAIS deux routeurs geres, et une MAC revendiquee par
+    # PLUSIEURS d'entre eux ne rapproche plus rien du tout : elle n'identifie
+    # alors personne. C'est le cas de machines virtuelles deployees depuis la
+    # meme image, qui partagent les MAC de leurs interfaces -- s'y fier repliait
+    # des routeurs parfaitement distincts en une seule case, et faisait
+    # disparaitre les autres de l'arbre.
+    geres_par_mac: dict[str, set[str]] = {}
+    for node in nodes:
+        if not _est_gere(node):
+            continue
+        for mac in _macs_du_noeud(node):
+            geres_par_mac.setdefault(mac, set()).add(node["key"])
+    macs_ambigues = {mac for mac, cles in geres_par_mac.items() if len(cles) > 1}
+    for mac in sorted(macs_ambigues):
+        logger.warning(
+            "MAC %s portee par %d routeurs declares : elle ne sert plus a les reconnaitre.",
+            mac,
+            len(geres_par_mac[mac]),
+        )
+    for node in nodes:
+        if _est_gere(node):
+            continue
+        for mac in _macs_du_noeud(node):
+            if mac in macs_ambigues:
+                continue
+            proprietaires = geres_par_mac.get(mac)
+            if proprietaires and len(proprietaires) == 1:
+                union(node["key"], next(iter(proprietaires)))
 
     # Fusions manuelles : appliquees APRES les signatures, elles ne peuvent que
     # rapprocher davantage (jamais separer ce que la signature a uni). On ignore
@@ -632,16 +690,43 @@ def neighbor_addresses(neighbor: dict[str, Any]) -> list[str]:
     return vues
 
 
-def neighbor_node_key(neighbor: dict[str, Any]) -> str:
+def ambiguous_neighbor_macs(neighbors: Sequence[dict[str, Any]]) -> set[str]:
+    """MAC annoncees par PLUSIEURS equipements distincts.
+
+    Une MAC n'identifie un equipement que si le materiel est unique. Des
+    machines virtuelles deployees depuis la meme image partagent les MAC de
+    leurs interfaces : plusieurs voisins bien differents se presentent alors
+    avec la MEME, et les keyer dessus les ecrase en UN SEUL noeud -- tous leurs
+    liens aboutissent au meme endroit et le reste du reseau disparait.
+
+    On repere donc, AVANT de construire le graphe, les MAC que plusieurs
+    identites revendiquent. Elles ne serviront pas de cle.
+    """
+    identites_par_mac: dict[str, set[str]] = {}
+    for neighbor in neighbors:
+        mac = normalize_mac(neighbor.get("mac-address"))
+        identite = str(neighbor.get("identity") or "").strip().lower()
+        if mac and identite and identite not in GENERIC_NAMES:
+            identites_par_mac.setdefault(mac, set()).add(identite)
+    return {mac for mac, noms in identites_par_mac.items() if len(noms) > 1}
+
+
+def neighbor_node_key(neighbor: dict[str, Any], ambiguous_macs: set[str] | None = None) -> str:
     """Cle stable d'un voisin : MAC de preference, sinon identite, sinon IP.
 
     La MAC est le seul identifiant qui survive a un changement de nom ou
-    d'adresse, et c'est aussi ce qui permet la jointure avec UISP.
+    d'adresse, et c'est aussi ce qui permet la jointure avec UISP -- tant qu'elle
+    est UNIQUE. ``ambiguous_macs`` porte celles qui ne le sont pas : on retombe
+    alors sur l'identite annoncee, qui distingue encore ces equipements.
     """
     mac = normalize_mac(neighbor.get("mac-address"))
+    identity = str(neighbor.get("identity") or "").strip()
+    if mac and mac in (ambiguous_macs or set()):
+        # MAC partagee : elle ecraserait ces voisins les uns sur les autres.
+        if identity and identity.lower() not in GENERIC_NAMES:
+            return f"identity:{identity}"
     if mac:
         return f"mac:{mac}"
-    identity = str(neighbor.get("identity") or "").strip()
     if identity:
         return f"identity:{identity}"
     address = str(neighbor.get("address") or neighbor.get("address4") or "").strip()
@@ -696,6 +781,7 @@ def build_from_router(
     role: str | None = None,
     loopback: str | None = None,
     loopback_source: str | None = None,
+    ambiguous_macs: set[str] | None = None,
 ) -> None:
     """Ajoute au graphe ce qu'un routeur voit autour de lui.
 
@@ -755,7 +841,7 @@ def build_from_router(
         interface = str(neighbor.get("interface") or "").strip()
         if not interface:
             continue
-        cle = neighbor_node_key(neighbor)
+        cle = neighbor_node_key(neighbor, ambiguous_macs)
         if cle.startswith("unknown"):
             continue
 
