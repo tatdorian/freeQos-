@@ -415,7 +415,7 @@ base momentanément illisible, pas d'une suppression.
 | `/interface` `rx-byte`/`tx-byte` | **le débit réellement mesuré** sur le port qui porte le lien |
 | `/ip/address` (`lo`) · `router-id` | **le loopback** : l'identité unique du routeur, quand elle n'est pas déclarée |
 | `/ip/route` · OSPF · BGP | **la hiérarchie réelle** : qui est au-dessus, et quelles adjacences sont prouvées |
-| `/ip/arp` (VLAN sans PPPoE) | présence d'une adresse **non identifiée** : confirme un client déclaré, ou propose un candidat. La seule source qui ne dit pas *qui* est en face |
+| `/ip/arp` · baux DHCP · table de ponts · routes · files (recensement) | présence d'une adresse **non identifiée** : confirme un client déclaré, ou propose un candidat. Les seules sources qui ne disent pas *qui* est en face |
 
 Ce dernier point mérite d'être souligné. Le champ `caller-id` de `/ppp/active` contient la
 **MAC du CPE**. UISP sait sur quel secteur radio chaque CPE est accroché, et connaît sa
@@ -688,13 +688,12 @@ rogner à leur place.
 
 **Détection assistée : le contrôleur signale, l'humain décide.** Attendre qu'on
 saisisse un client à l'aveugle est une mauvaise façon de travailler — encore
-faut-il savoir qu'il est là. RouterOS n'a aucune table qui liste « les VLAN
-clientes » (la notion n'existe pas dans sa configuration), mais il a un signal
-de présence fiable : la table ARP. Un job périodique lit `/ip/arp`, ne garde que
-les interfaces de `/interface/vlan` qui **n'hébergent pas** de serveur PPPoE, et
-en tire deux lectures :
+faut-il savoir qu'il est là. RouterOS n'a aucune table qui liste « les clients »
+(la notion n'existe pas dans sa configuration), et chaque population laisse une
+trace différente. Un job périodique **recense** donc le PoP (voir la section
+suivante) et en tire deux lectures :
 
-| Ce que l'ARP montre | Ce qu'on en fait |
+| Ce que le recensement montre | Ce qu'on en fait |
 |---|---|
 | une adresse **dans le bloc** d'un client déclaré | confirme sa présence — colonne « Vu actif » |
 | une adresse qui **ne correspond à rien** | **candidat**, listé dans l'onglet Abonnés → « Détectés, non déclarés » |
@@ -705,7 +704,7 @@ parle.
 
 **Un candidat n'est pas un client, et rien ne peut le transformer tout seul.**
 Une imprimante, une caméra ou l'équipement d'un autre opérateur laissent
-exactement la même trace ARP. Trois garanties, chacune vérifiée par un test :
+exactement la même trace. Trois garanties, chacune vérifiée par un test :
 
 - le job de détection **écrit** dans `vlan_sightings` et n'a même pas de méthode
   pour lire les candidats — aucun chemin de code ne peut en faire un abonné ;
@@ -726,27 +725,98 @@ un candidat déclaré ou devenu muet disparaît de lui-même. Le nombre est plaf
 Réglages, tous pilotés depuis la base : `vlan_detect_enabled`,
 `vlan_detect_interval_s`, `vlan_candidate_limit`, `vlan_sighting_retention_s`.
 
-**Limite à connaître : la détection ne voit que l'adressage porté par une
-`/interface/vlan`.** Un client n'est proposé en candidat que si son entrée ARP
-est rattachée à une interface déclarée dans `/interface/vlan`. Sur un **pont en
-filtrage VLAN** qui porte lui-même l'adressage client, `/ip/arp` nomme le pont —
-et le client reste invisible. Ce n'est pas une panne, c'est le périmètre actuel.
+#### Localiser **tous** les clients d'un PoP, VLAN comprises
 
-Plutôt que de laisser deviner, le filtre **s'explique** : *Abonnés → Inventaire →
-« Un client manque ? Voir pourquoi »* lit `/ip/arp` en direct et rend le motif de
-chaque ligne écartée, avec le champ qui répond presque toujours —
-`interfaces_hors_vlan`, les interfaces vues dans ARP mais absentes de
-`/interface/vlan`. Une interface qui y apparaît avec plusieurs adresses est la
-réponse.
+Chercher les clients par le **nom de leurs interfaces** ne marche pas. C'est la
+question que posait la première version (« cette entrée ARP est-elle rattachée à
+une `/interface/vlan` ? ») et elle rate exactement les montages les plus
+répandus. Le recensement (`app/collectors/pop_census.py`) la pose autrement, en
+trois temps.
 
-Les motifs sont distincts, parce qu'ils appellent des gestes différents : VLAN
-absente (chercher où est l'adressage), VLAN déclarée mais **désactivée** (la
-réactiver), interface hébergeant un **serveur PPPoE** (rejet voulu, ces abonnés
-ont déjà une identité), adresse **sans MAC** (cherchée, pas répondue).
+**1. Le périmètre vient de l'adressage, pas des noms.** `/ip/address` dit quels
+sous-réseaux ce routeur dessert vraiment. Chacun est classé, avec son motif :
+
+| Classement | Sur quel signe | Conséquence |
+|---|---|---|
+| **client** | rien ne le range ailleurs | on y cherche des clients |
+| point-à-point | préfixe `/30` ou plus étroit (`/126`+ en v6) | un lien entre deux équipements, pas de la desserte |
+| transit | porte une adjacence OSPF/BGP établie, ou la passerelle par défaut | du transit, quelle que soit sa taille |
+| pppoe | l'interface héberge un serveur PPPoE | ses abonnés ont déjà une identité |
+| désactivé | adresse ou VLAN éteinte dans la configuration | ne dessert plus rien |
+
+La question devient : *cette adresse tombe-t-elle dans un sous-réseau client de
+ce PoP ?* Le nom de l'interface ne compte plus — **un client derrière un pont en
+filtrage VLAN est vu comme les autres.** Le classement est délibérément large :
+rater un sous-réseau client rend un client invisible, alors qu'un sous-réseau
+d'infrastructure pris à tort pour de la desserte ne produit qu'un candidat qu'on
+écarte d'un coup d'œil. Entre les deux erreurs, la seconde se répare.
+
+**2. Sept sources, chacune couvrant l'angle mort des autres.**
+
+| Source | Ce qu'elle seule apporte | Ce qu'elle ne voit pas |
+|---|---|---|
+| `/ip/arp` | toute machine qui a parlé récemment | s'efface après quelques minutes de silence |
+| `/ip/dhcp-server/lease` | **survit au silence** du client, et porte souvent son nom (`host-name`, commentaire) | les clients à IP fixe |
+| `/ppp/active` | l'identité des abonnés PPPoE — recensés pour être **écartés** des propositions | le reste |
+| `/interface/bridge/host` | le **VLAN et le port physique** que l'ARP perd sous un pont (jointure par la MAC) | pas d'adresse IP |
+| `/ip/route` | les **blocs routés derrière un CPE** (`/29` d'entreprise) : aucune table de présence ne les montre | ce qui n'est pas routé |
+| `/queue/simple` | ce que l'exploitant a **déjà déclaré sur le routeur** — la source la plus qualifiée | là où aucune file n'existe |
+| `/ip/neighbor` | l'identité et le modèle annoncés par le CPE | ce qui ne parle ni MNDP ni LLDP |
+
+Les sources **s'ajoutent** : aucune ne peut faire disparaître ce qu'une autre a
+vu, et chaque hôte porte la liste de celles qui l'ont trouvé. Ce champ est plus
+utile qu'il n'en a l'air : un client connu par la seule table ARP disparaîtra
+s'il se tait, un client qui porte aussi un bail restera. C'est ce qui dit quelle
+confiance accorder à une **absence**.
+
+Le VLAN est résolu du plus sûr au moins sûr, et sa provenance est rendue : une
+`/interface/vlan` **porte** son numéro, la table de ponts l'**observe**, un pvid
+le **suppose**. Chaque hôte sort donc avec son VLAN, son port physique, son
+routeur, son PoP — et de quoi recouper tout cela sur l'équipement.
+
+**3. Ce qu'on ne sait pas est dit.** C'est ce troisième temps qui rend la
+méthode sûre : non pas la promesse de ne rien rater, mais la garantie que rien
+ne se perd **en silence**. Le recensement rend l'état de chaque lecture et une
+liste de remarques en clair : source illisible, sous-réseau client sans aucune
+présence, adresse vue hors de tout sous-réseau connu (le PoP commute sans
+router : l'adressage est sur un autre routeur, à déclarer), MAC vue en L2 sans
+IP, clients tenus par la seule table ARP.
+
+```bash
+# Qui vit sur ce PoP, et lesquels ne sont pas dans l'inventaire
+curl 'localhost:8000/api/v1/pops/census?pop_name=PoP%20Nord' | jq '.pops[0].counts'
+{ "clients": 47, "pppoe": 31, "declares": 38, "non_declares": 9 }
+```
+
+Depuis l'interface : *Abonnés → Inventaire → **Recenser le PoP (toutes
+sources)***. Chaque ligne non déclarée porte un bouton **Déclarer** qui
+pré-remplit adresse, VLAN et PoP — la référence et le débit souscrit restent à
+saisir, comme partout ailleurs.
+
+**Une table absente ne fait perdre ni les autres, ni ce qui a été vu.** Un
+routeur sans serveur PPPoE, sans OSPF ni BGP n'a tout simplement pas ces tables :
+c'est normal et rien n'est signalé. Toute autre lecture qui échoue est une
+dégradation : les observations obtenues sont **quand même enregistrées**, et
+l'erreur remonte dans le journal du job (`PartialCensusError`). Jeter la liste
+parce qu'une table sur seize a expiré punirait l'exploitant deux fois.
+
+**Rien de tout cela ne crée quoi que ce soit.** Le recensement propose ; un
+abonné PPPoE, une antenne de l'inventaire, un pair de routage et le routeur
+lui-même ne sont **jamais** proposés à la déclaration, et seule la nature
+`client-possible` devient une observation dans `vlan_sightings`.
+
+**Pourquoi une ligne a été écartée** : *Abonnés → Inventaire → « Un client
+manque ? Voir pourquoi »* rend le motif de chaque ligne ARP, et le champ qui
+répond presque toujours — `reseaux_clients`. S'il est vide, `/ip/address` n'a
+rien donné et seul le nom des interfaces sert de critère : c'est là qu'il faut
+regarder. Les autres motifs appellent des gestes différents : VLAN **désactivée**
+(la réactiver), interface hébergeant un **serveur PPPoE** (rejet voulu), adresse
+**sans MAC** (cherchée, pas répondue).
 
 Le diagnostic emprunte exactement le même chemin de décision que la détection
-(`judge_arp_rows`) : un diagnostic qui raconterait autre chose que ce que fait
-le code serait pire que pas de diagnostic.
+(`judge_arp_rows`, et le recensement de la même lecture) : un diagnostic qui
+raconterait autre chose que ce que fait le code serait pire que pas de
+diagnostic.
 
 **Limite à connaître : la mesure dépend de la file.** Sans session PPPoE, aucune
 interface ne porte le trafic de ce client ; le seul compteur par client dont on dispose
@@ -1123,7 +1193,8 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `PATCH` · `DELETE` | `/api/v1/pops/routers/{id}` | Modifie / retire un routeur |
 | `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
 | `GET` · `POST` | `/api/v1/static-clients` | Inventaire déclaratif des clients à IP fixe |
-| `GET` | `/api/v1/static-clients/candidates/diagnostic` | Pourquoi une adresse n'est pas proposée (lecture seule de `/ip/arp`) |
+| `GET` | `/api/v1/pops/census` | **Recensement d'un PoP** : tous les clients localisés (sept sources), rapprochés de l'inventaire — lecture seule |
+| `GET` | `/api/v1/static-clients/candidates/diagnostic` | Pourquoi une adresse n'est pas proposée (lecture seule, motif ligne par ligne) |
 | `GET` | `/api/v1/static-clients/candidates` | Adresses détectées sur VLAN routée, non déclarées (consultation seule) |
 | `PATCH` · `DELETE` | `/api/v1/static-clients/{id}` | Modifie / retire une fiche (l'historique de mesures est conservé) |
 | `GET` | `/api/v1/topology` · `POST /topology/discover` | Graphe du réseau |
@@ -1156,8 +1227,8 @@ Documentation interactive : `/docs`.
 
 **Référentiel** — `pops`, `subscribers` (identité unique `login`, `kind`, plan, PoP,
 `last_seen`), `static_clients` (inventaire déclaratif des clients à IP fixe),
-`vlan_sightings` (présence observée dans `/ip/arp` : confirme un client déclaré, ou
-produit un candidat à déclarer),
+`vlan_sightings` (présence observée par le recensement du PoP — ARP, baux DHCP, table de
+ponts, routes, files : confirme un client déclaré, ou produit un candidat à déclarer),
 `backhauls` (PoP, `uisp_device_id`, capacité nominale), `routers` (PoPs ajoutés depuis
 l'interface, mot de passe chiffré, `loopback` unique qui identifie le routeur dans la
 topologie, diagnostic de la dernière connexion),

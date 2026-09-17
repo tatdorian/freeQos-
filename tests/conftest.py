@@ -61,6 +61,12 @@ class FakeRouterOsClient:
         self.vlan_rows: list[dict[str, Any]] = []
         self.pppoe_server_rows: list[dict[str, Any]] = []
         self.raise_on_arp: Exception | None = None
+        # Recensement : les sources que l'ARP seule ne remplace pas.
+        self.dhcp_lease_rows: list[dict[str, Any]] = []
+        self.dhcp_server_rows: list[dict[str, Any]] = []
+        self.bridge_host_rows: list[dict[str, Any]] = []
+        self.raise_on_dhcp: Exception | None = None
+        self.raise_on_bridge_hosts: Exception | None = None
         # Un routeur purement L3 n'a pas cette table : le collecteur doit le
         # supporter sans echouer.
         self.raise_on_pppoe_servers: Exception | None = None
@@ -156,6 +162,21 @@ class FakeRouterOsClient:
         if self.raise_on_pppoe_servers is not None:
             raise self.raise_on_pppoe_servers
         return [dict(row) for row in self.pppoe_server_rows]
+
+    def dhcp_leases(self) -> list[dict[str, Any]]:
+        if self.raise_on_dhcp is not None:
+            raise self.raise_on_dhcp
+        return [dict(row) for row in self.dhcp_lease_rows]
+
+    def dhcp_servers(self) -> list[dict[str, Any]]:
+        if self.raise_on_dhcp is not None:
+            raise self.raise_on_dhcp
+        return [dict(row) for row in self.dhcp_server_rows]
+
+    def bridge_hosts(self) -> list[dict[str, Any]]:
+        if self.raise_on_bridge_hosts is not None:
+            raise self.raise_on_bridge_hosts
+        return [dict(row) for row in self.bridge_host_rows]
 
     def simple_queues(self) -> list[dict[str, Any]]:
         if self.raise_on_queues is not None:

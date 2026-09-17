@@ -1376,12 +1376,97 @@ async function loadCandidates() {
   });
 }
 
-/** Diagnostic : POURQUOI une adresse n'est pas proposee en candidat.
+/** Recensement d'un PoP : TOUS les clients, quelle que soit leur trace.
  *
- *  La detection ne voit un client que si son adressage est pose sur une
- *  interface de /interface/vlan. Beaucoup de routeurs portent l'adresse sur un
- *  PONT en filtrage VLAN : la table ARP nomme alors ce pont, et le client est
- *  invisible. C'est la premiere chose que ce panneau montre. */
+ *  Les candidats ci-dessus sortent de la detection periodique. Ce panneau lit
+ *  les routeurs EN DIRECT et croise sept sources : ARP, baux DHCP, sessions
+ *  PPPoE, table de ponts, routes statiques, files deja posees, voisinage. Il
+ *  repond a la question que la liste des candidats ne repond pas : "combien de
+ *  clients ce PoP porte-t-il, et lesquels ne sont pas dans mon inventaire ?".
+ *
+ *  Les remarques sont affichees AVANT la table, a dessein : une liste courte se
+ *  lirait comme un PoP vide alors qu'elle signale souvent une source illisible
+ *  ou un adressage porte par un autre routeur. */
+async function scRecensement() {
+  const hote = document.getElementById('sc-recensement-out');
+  hote.innerHTML = '<div class="empty">Lecture des routeurs (une quinzaine de tables par PoP)...</div>';
+  let data;
+  try {
+    data = await api('/pops/census');
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const pops = data.pops || [];
+  if (!pops.length) {
+    hote.innerHTML = '<div class="empty">Aucun routeur collecte.</div>';
+    return;
+  }
+  const declarations = [];
+  hote.innerHTML = pops.map((pop) => {
+    const c = pop.counts || {};
+    const erreurs = (pop.errors || []).map((e) =>
+      '<div class="notice err">' + esc(e) + '</div>').join('');
+    const remarques = (pop.remarks || []).map((r) =>
+      '<div class="notice"><span class="hint">' + esc(r) + '</span></div>').join('');
+    const lignes = (pop.clients || []).map((cl) => {
+      const declare = cl.declared
+        ? '<span class="badge">' + esc(cl.declared.reference) + '</span>'
+        : (cl.login
+          ? '<span class="badge">PPPoE ' + esc(cl.login) + '</span>'
+          : '<button class="sm primary" data-sc-census="' + (declarations.push({
+              address: cl.address, vlan_id: cl.vlan_id, pop_name: pop.pop_name,
+            }) - 1) + '">Declarer</button>');
+      const vlan = cl.vlan_id === null || cl.vlan_id === undefined
+        ? '-'
+        : '<span title="' + esc(cl.vlan_source || '') + '">' + esc(cl.vlan_id) + '</span>';
+      const nom = cl.hostname || cl.identity || cl.comment || '';
+      return '<tr>' +
+        '<td class="login"><code>' + esc(cl.address) + '</code>' +
+          ((cl.routed_prefixes || []).length
+            ? ' <span class="badge" title="bloc route derriere cette adresse">+ ' +
+              esc(cl.routed_prefixes.join(', ')) + '</span>' : '') +
+        '</td>' +
+        '<td style="color:var(--faint)">' + esc(cl.mac || '-') + '</td>' +
+        '<td class="num">' + vlan + '</td>' +
+        '<td>' + esc(cl.interface || '-') +
+          ((cl.ports || []).length ? ' <span class="hint">' + esc(cl.ports.join(', ')) + '</span>' : '') +
+        '</td>' +
+        '<td style="color:var(--faint)">' + esc((cl.sources || []).join(' + ')) + '</td>' +
+        '<td>' + esc(nom || '-') + '</td>' +
+        '<td>' + esc(cl.router || '-') + '</td>' +
+        '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
+          declare + '</div></td>' +
+        '</tr>';
+    }).join('');
+
+    return '<div class="notice" style="margin-top:.6rem">' +
+      '<strong>' + esc(pop.pop_name) + '</strong> &mdash; ' +
+      esc(c.clients || 0) + ' client(s) localise(s), dont ' +
+      esc(c.pppoe || 0) + ' en PPPoE. ' +
+      '<b>' + esc(c.non_declares || 0) + ' non declare(s) dans l\'inventaire.</b>' +
+      '</div>' + erreurs + remarques +
+      (lignes
+        ? '<div class="table-wrap"><table><thead><tr>' +
+          '<th>Adresse</th><th>MAC</th><th class="num">VLAN</th><th>Interface / port</th>' +
+          '<th>Vu par</th><th>Nom connu</th><th>Routeur</th><th class="sticky-actions"></th>' +
+          '</tr></thead><tbody>' + lignes + '</tbody></table></div>'
+        : '<div class="empty">Aucun client localise sur ce PoP.</div>');
+  }).join('');
+
+  hote.querySelectorAll('[data-sc-census]').forEach((b) => {
+    b.addEventListener('click', () => scDepuisCandidat(declarations[Number(b.dataset.scCensus)]));
+  });
+}
+
+/** Diagnostic : POURQUOI une entree ARP a ete ecartee, ligne par ligne.
+ *
+ *  Une adresse est retenue par deux chemins : son interface est une VLAN
+ *  declaree sans serveur PPPoE, OU son adresse tombe dans un sous-reseau que le
+ *  PoP dessert (/ip/address). Le second chemin est ce qui rend visible un
+ *  client derriere un pont en filtrage VLAN, que le nom de l'interface seul
+ *  ferait disparaitre. Les sous-reseaux retenus sont affiches : s'ils manquent,
+ *  c'est la que se trouve la reponse. */
 async function scDiagnostic() {
   const hote = document.getElementById('sc-diag-out');
   hote.innerHTML = '<div class="empty">Lecture de /ip/arp sur les routeurs...</div>';
@@ -1416,12 +1501,15 @@ async function scDiagnostic() {
       '</span>' + motifs +
       (horsVlan.length
         ? '<div class="notice err" style="margin-top:.5rem">' +
-          '<strong>Adressage hors /interface/vlan.</strong> ' +
+          '<strong>Ecartees : ni VLAN declaree, ni sous-reseau desservi.</strong> ' +
           horsVlan.map(([nom, n]) => '<code>' + esc(nom) + '</code> (' + esc(n) + ')').join(', ') +
-          '<span class="hint">Ces adresses parlent sur une interface qui n\'est pas ' +
-          'une VLAN declaree. Si l\'une d\'elles est un <b>pont en filtrage VLAN</b> ' +
-          'qui porte l\'adressage client, la detection ne peut pas les voir : c\'est une ' +
-          'limite connue, pas une panne. Signalez-le pour qu\'elle soit traitee.</span>' +
+          '<span class="hint">Ces adresses parlent sur une interface qui n\'est pas une ' +
+          'VLAN declaree, ET ne tombent dans aucun sous-reseau porte par ce routeur ' +
+          '(' + esc((r.reseaux_clients || []).join(', ') || 'aucun lu dans /ip/address') + '). ' +
+          'Un client derriere un <b>pont en filtrage VLAN</b> est bien vu, lui, tant que ' +
+          'son adresse tombe dans l\'un de ces sous-reseaux. Si la liste est vide, c\'est ' +
+          '<code>/ip/address</code> qu\'il faut regarder : sans elle, seul le nom des ' +
+          'interfaces sert de critere.</span>' +
           '</div>'
         : '') +
       '</div>';
@@ -4424,6 +4512,7 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
 document.getElementById('sc-diag').addEventListener('click', scDiagnostic);
+document.getElementById('sc-recensement').addEventListener('click', scRecensement);
 document.getElementById('sc-cancel').addEventListener('click', () => scRemplirFormulaire(null));
 
 let searchTimer = null;

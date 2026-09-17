@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from app.collectors.mikrotik import MikrotikCollector
+from app.collectors.pop_census import PartialCensusError
 from app.collectors.radius import PlanProvider
 from app.collectors.uisp import BackhaulCapacityProvider
 from app.config import BackhaulConfig, Settings
@@ -493,17 +494,27 @@ class CollectionService:
             await self._finalize(result)
             return result
 
+        # Les routeurs se voient les uns les autres : sans cette liste, chaque
+        # PoP proposerait ses voisins comme clients a declarer, a chaque cycle.
+        materiel = [c.config.host for c in self.collectors if c.config.host]
         gathered = await asyncio.gather(
-            *(collector.collect_vlan_clients() for collector in self.collectors),
+            *(
+                collector.collect_vlan_clients(known_equipment=materiel)
+                for collector in self.collectors
+            ),
             return_exceptions=True,
         )
 
         vues: list[VlanSighting] = []
         for collector, outcome in zip(self.collectors, gathered, strict=True):
             if isinstance(outcome, BaseException):
-                # Un routeur sans /ip/arp lisible ne doit pas annuler les autres.
+                # Un routeur mal lu ne doit annuler ni les autres routeurs, ni ce
+                # qu'on a quand meme vu sur lui : un recensement partiel porte ses
+                # observations avec son erreur, et les deux sont conservees.
                 errors.append(f"{collector.name}: {type(outcome).__name__}: {outcome}")
-                logger.warning("Table ARP illisible sur %s : %s", collector.name, outcome)
+                logger.warning("Recensement incomplet sur %s : %s", collector.name, outcome)
+                if isinstance(outcome, PartialCensusError):
+                    vues.extend(outcome.sightings)
                 continue
             vues.extend(outcome)
 

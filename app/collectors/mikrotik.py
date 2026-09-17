@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -36,8 +37,17 @@ from app.collectors.parsing import (
     parse_routeros_uptime,
     pppoe_interface_name,
 )
+from app.collectors.pop_census import (
+    PartialCensusError,
+    PopCensus,
+    RouterTables,
+    build_census,
+    client_networks,
+    missing_sources,
+    sightings_from_census,
+)
 from app.collectors.topology import ethernet_capacity_mbps
-from app.collectors.vlan_clients import explain_arp, sightings_from_arp
+from app.collectors.vlan_clients import explain_arp
 from app.config import RouterConfig
 from app.models import InterfaceSample, PppoeSession, VlanSighting
 
@@ -103,6 +113,13 @@ class RouterOsReadClient(Protocol):
     def vlans(self) -> list[dict[str, Any]]: ...
 
     def pppoe_servers(self) -> list[dict[str, Any]]: ...
+
+    # --- Recensement : les sources que l'ARP seule ne remplace pas ---
+    def dhcp_leases(self) -> list[dict[str, Any]]: ...
+
+    def dhcp_servers(self) -> list[dict[str, Any]]: ...
+
+    def bridge_hosts(self) -> list[dict[str, Any]]: ...
 
     # --- Configuration : la verite terrain de la topologie ---
     def routes(self) -> list[dict[str, Any]]: ...
@@ -344,6 +361,30 @@ class LibrouterosReadClient:
     def vlans(self) -> list[dict[str, Any]]:
         return self._query("/interface/vlan")
 
+    def dhcp_leases(self) -> list[dict[str, Any]]:
+        """Baux DHCP. La memoire que la table ARP n'a pas.
+
+        Une entree ARP s'efface apres quelques minutes de silence ; un bail
+        survit a son client pendant toute sa duree. C'est aussi la seule table
+        qui porte souvent un NOM -- le ``host-name`` annonce par la machine, ou
+        le commentaire pose par l'exploitant.
+        """
+        return self._query("/ip/dhcp-server/lease")
+
+    def dhcp_servers(self) -> list[dict[str, Any]]:
+        """Serveurs DHCP declares : sur quelles interfaces un bail peut exister."""
+        return self._query("/ip/dhcp-server")
+
+    def bridge_hosts(self) -> list[dict[str, Any]]:
+        """Table de ponts : MAC, port physique et VLAN, vus en L2.
+
+        C'est la reponse au pont en filtrage VLAN. Quand l'adressage client est
+        porte par un pont, ``/ip/arp`` ne nomme que ce pont et le numero de VLAN
+        est perdu : cette table le porte, avec le port par lequel la machine
+        est branchee. La jointure avec l'ARP se fait par la MAC.
+        """
+        return self._query("/interface/bridge/host")
+
     def routes(self) -> list[dict[str, Any]]:
         """Table de routage.
 
@@ -557,13 +598,18 @@ class MikrotikCollector:
     # ------------------------------------------------------------------
     # Presence sur les VLAN routees
     # ------------------------------------------------------------------
-    async def collect_vlan_clients(self) -> list[VlanSighting]:
-        timeout = max(self.config.timeout_s * 3, 5.0)
+    async def collect_vlan_clients(
+        self, *, known_equipment: Collection[str] = ()
+    ) -> list[VlanSighting]:
+        timeout = max(self.config.timeout_s * 6, 10.0)
         return await asyncio.wait_for(
-            asyncio.to_thread(self.collect_vlan_clients_sync), timeout=timeout
+            asyncio.to_thread(self.collect_vlan_clients_sync, known_equipment=known_equipment),
+            timeout=timeout,
         )
 
-    async def explain_vlan_clients(self) -> dict[str, Any]:
+    async def explain_vlan_clients(
+        self, *, known_equipment: Collection[str] = ()
+    ) -> dict[str, Any]:
         """Pourquoi telle adresse est vue, ou ne l'est pas, sur CE routeur.
 
         Meme lecture que la detection, meme chemin de decision : ce n'est pas
@@ -571,40 +617,117 @@ class MikrotikCollector:
         qui raconterait autre chose que ce que fait le code serait pire que pas
         de diagnostic.
         """
-        timeout = max(self.config.timeout_s * 3, 5.0)
+        timeout = max(self.config.timeout_s * 6, 10.0)
         return await asyncio.wait_for(
-            asyncio.to_thread(self.explain_vlan_clients_sync), timeout=timeout
+            asyncio.to_thread(self.explain_vlan_clients_sync, known_equipment=known_equipment),
+            timeout=timeout,
         )
 
-    def explain_vlan_clients_sync(self) -> dict[str, Any]:
-        try:
-            pppoe = self._client.pppoe_servers()
-        except Exception:  # noqa: BLE001
-            pppoe = []
-        rapport = explain_arp(self._client.arp(), self._client.vlans(), pppoe)
+    def explain_vlan_clients_sync(self, *, known_equipment: Collection[str] = ()) -> dict[str, Any]:
+        """Le rapport ARP ligne a ligne, ET le recensement complet du PoP.
+
+        Les deux repondent a des questions differentes et sont tous les deux
+        necessaires : "pourquoi cette ligne d'ARP a-t-elle ete ecartee ?" se lit
+        dans ``by_reason``, "qui vit sur ce PoP ?" se lit dans ``recensement``.
+        Ils sortent de la MEME lecture, faite une fois : un diagnostic calcule a
+        part finirait par decrire un autre routeur que celui qu'on regarde.
+        """
+        tables, census = self._recenser_sync(known_equipment=known_equipment)
+        rapport = explain_arp(
+            tables.arp,
+            tables.vlans,
+            tables.pppoe_servers,
+            client_networks=client_networks(census.subnets),
+        )
         rapport["router"] = self.name
         rapport["pop_name"] = self.config.effective_pop_name
+        rapport["recensement"] = census.as_dict()
         return rapport
 
-    def collect_vlan_clients_sync(self) -> list[VlanSighting]:
-        """Qui parle sur les VLAN routees de ce routeur.
+    # ------------------------------------------------------------------
+    # Recensement du PoP
+    # ------------------------------------------------------------------
+    async def census(self, *, known_equipment: Collection[str] = ()) -> PopCensus:
+        """Recensement complet : plus long que la detection, et fait pour ca."""
+        timeout = max(self.config.timeout_s * 6, 10.0)
+        return await asyncio.wait_for(
+            asyncio.to_thread(self.census_sync, known_equipment=known_equipment),
+            timeout=timeout,
+        )
 
-        Trois lectures, toutes en lecture seule. L'absence de serveur PPPoE
-        n'est pas une erreur : un routeur purement L3 n'a pas cette table, et
-        toutes ses VLAN sont alors eligibles.
+    def census_sync(self, *, known_equipment: Collection[str] = ()) -> PopCensus:
+        return self._recenser_sync(known_equipment=known_equipment)[1]
+
+    def _recenser_sync(
+        self, *, known_equipment: Collection[str] = ()
+    ) -> tuple[RouterTables, PopCensus]:
+        """Lit les tables du recensement, puis les croise.
+
+        CHAQUE LECTURE EST TOLEREE SEPAREMENT, et son echec est CONSERVE. Un
+        routeur sans serveur DHCP, sans pont ou sans OSPF n'a pas ces tables --
+        ce n'est pas une panne. Mais une source muette doit se voir dans le
+        resultat : un recensement ampute qui se presenterait comme complet
+        serait exactement le piege que ce module existe pour eviter.
+
+        Une quinzaine de ``print`` en lecture seule, a la cadence lache du job
+        de detection (5 minutes par defaut) : c'est le prix d'un recensement qui
+        ne depend pas du nom des interfaces.
         """
-        try:
-            pppoe = self._client.pppoe_servers()
-        except Exception:  # noqa: BLE001
-            logger.debug("Pas de serveur PPPoE lisible sur %s", self.name)
-            pppoe = []
-        return sightings_from_arp(
-            self._client.arp(),
-            self._client.vlans(),
-            pppoe,
+        tables = RouterTables()
+
+        def lire(champ: str, lecture: Callable[[], list[dict[str, Any]]]) -> None:
+            try:
+                setattr(tables, champ, lecture())
+            except Exception as exc:  # noqa: BLE001 - une table absente n'annule pas le reste
+                tables.unreadable[champ] = f"{type(exc).__name__}: {exc}"
+                logger.debug("Table %s illisible sur %s : %s", champ, self.name, exc)
+
+        lire("addresses", self._client.addresses)
+        lire("arp", self._client.arp)
+        lire("vlans", self._client.vlans)
+        lire("pppoe_servers", self._client.pppoe_servers)
+        lire("ppp_active", self._client.ppp_active)
+        lire("dhcp_leases", self._client.dhcp_leases)
+        lire("dhcp_servers", self._client.dhcp_servers)
+        lire("bridge_hosts", self._client.bridge_hosts)
+        lire("bridge_ports", self._client.bridge_ports)
+        lire("interfaces", self._client.interfaces)
+        lire("bondings", self._client.bondings)
+        lire("routes", self._client.routes)
+        lire("queues", self._client.simple_queues)
+        lire("neighbors", self._client.neighbors)
+        lire("ospf_neighbors", self._client.ospf_neighbors)
+        lire("bgp_sessions", self._client.bgp_sessions)
+
+        census = build_census(
+            tables,
             router_name=self.name,
             pop_name=self.config.effective_pop_name,
+            known_equipment=known_equipment,
         )
+        return tables, census
+
+    def collect_vlan_clients_sync(
+        self, *, known_equipment: Collection[str] = ()
+    ) -> list[VlanSighting]:
+        """Qui vit sur ce routeur, hors abonnes PPPoE deja identifies.
+
+        La detection ne part plus du NOM des interfaces mais du PLAN
+        D'ADRESSAGE du PoP, croise avec sept sources de presence. C'est ce qui
+        fait apparaitre les clients qu'un pont en filtrage VLAN cachait : leur
+        entree ARP nomme le pont, mais leur adresse tombe dans un sous-reseau
+        que ce routeur dessert, et cela suffit.
+
+        Une source manquante ne fait pas perdre les autres : les observations
+        obtenues remontent avec l'erreur, portees par ``PartialCensusError``.
+        """
+        tables, census = self._recenser_sync(known_equipment=known_equipment)
+        vues = sightings_from_census(census)
+        manquantes = missing_sources(tables)
+        if manquantes:
+            detail = ", ".join(f"{champ} ({motif})" for champ, motif in sorted(manquantes.items()))
+            raise PartialCensusError(f"recensement incomplet : {detail}", vues)
+        return vues
 
     # ------------------------------------------------------------------
     # Compteurs des files simples

@@ -128,13 +128,16 @@ async def list_static_clients(
     summary="Adresses detectees sur une VLAN routee, non declarees",
 )
 async def list_candidates(container: ContainerDep) -> dict[str, Any]:
-    """Ce que la table ARP montre et que l'inventaire ne connait pas.
+    """Ce que le recensement montre et que l'inventaire ne connait pas.
 
-    A LIRE COMME UNE PISTE, PAS COMME UNE LISTE DE CLIENTS. Une entree ARP dit
-    qu'une adresse a parle sur une VLAN sans PPPoE : rien de plus. Une
-    imprimante, une camera ou l'equipement d'un autre operateur produisent le
-    meme signal. Aucun de ces candidats n'est faconne, aucun n'a de plan, et
+    A LIRE COMME UNE PISTE, PAS COMME UNE LISTE DE CLIENTS. Une observation dit
+    qu'une adresse vit dans un sous-reseau desservi par le PoP : rien de plus.
+    Une imprimante, une camera ou l'equipement d'un autre operateur produisent
+    le meme signal. Aucun de ces candidats n'est faconne, aucun n'a de plan, et
     aucun ne le sera tant qu'un humain n'aura pas saisi sa fiche.
+
+    Le recensement complet, avec ses sources et ses trous, est sur
+    ``GET /pops/census``.
     """
     repo = _sightings(container)
     if repo is None:
@@ -159,16 +162,20 @@ async def diagnose_candidates(
     container: ContainerDep,
     router_name: Annotated[str | None, Query(max_length=64)] = None,
 ) -> dict[str, Any]:
-    """Lit /ip/arp en direct et rend le motif de chaque ligne ecartee.
+    """Lit le routeur en direct et rend le motif de chaque ligne ARP ecartee.
 
-    A LIRE D'ABORD QUAND UN CLIENT MANQUE. La detection suppose que l'adressage
-    du client est pose sur une interface de ``/interface/vlan``. Beaucoup de
-    routeurs portent l'adresse sur un PONT en filtrage VLAN : la table ARP nomme
-    alors ce pont, et le client est invisible. ``interfaces_hors_vlan`` le montre
-    d'un coup d'oeil -- une interface qui y apparait avec plusieurs adresses est
-    presque toujours la reponse.
+    A LIRE D'ABORD QUAND UN CLIENT MANQUE. Une adresse est retenue par deux
+    chemins : son interface est une VLAN declaree sans serveur PPPoE, OU son
+    adresse tombe dans un sous-reseau que le routeur dessert (``reseaux_clients``,
+    tire de ``/ip/address``). Le second chemin est celui qui rend visibles les
+    clients derriere un pont en filtrage VLAN.
 
-    Lecture seule : trois commandes ``print``, rien n'est configure.
+    Deux champs repondent presque toujours : ``reseaux_clients`` s'il est vide --
+    sans ``/ip/address``, seul le nom des interfaces sert de critere -- et
+    ``interfaces_hors_vlan``, les interfaces dont les adresses ne tombent nulle
+    part. Le recensement complet du PoP est joint sous ``recensement``.
+
+    Lecture seule : une quinzaine de commandes ``print``, rien n'est configure.
     """
     collecteurs = [c for c in container.registry.collectors if router_name in (None, c.name)]
     if not collecteurs:

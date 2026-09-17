@@ -165,8 +165,12 @@
         <div id="sc-candidates-block">
           <h3 style="margin:.2rem 0 .4rem">Detectes, non declares</h3>
           <p class="empty" style="text-align:left;padding:0 0 .6rem">
-            Adresses vues parler sur une VLAN routee sans serveur PPPoE
-            (<code>/ip/arp</code>). <b>Ce ne sont pas des clients</b> : une
+            Adresses vues vivre dans un sous-reseau que le PoP dessert, hors
+            abonnes PPPoE deja identifies. Sept sources sont croisees
+            (<code>/ip/arp</code>, baux DHCP, table de ponts, routes, files
+            posees, voisinage, sessions) : un client derriere un <b>pont en
+            filtrage VLAN</b> ou joignable par un bloc route apparait ici comme
+            les autres. <b>Ce ne sont pas des clients pour autant</b> : une
             imprimante, une camera ou l'equipement d'un autre operateur laissent
             la meme trace. Aucun n'est faconne et aucun n'a de plan &mdash;
             <b>Declarer</b> pre-remplit la fiche, vous saisissez le debit
@@ -174,11 +178,16 @@
           </p>
           <div class="table-wrap" id="sc-candidates"></div>
           <div class="actions" style="margin-top:.4rem">
+            <button class="sm" id="sc-recensement"
+                    title="Croise sept sources sur chaque routeur du PoP : ARP, baux DHCP, sessions PPPoE, table de ponts, routes, files posees, voisinage">
+              Recenser le PoP (toutes sources)
+            </button>
             <button class="sm" id="sc-diag"
                     title="Lit /ip/arp en direct et dit, ligne par ligne, ce qui a ecarte chaque adresse">
               Un client manque ? Voir pourquoi
             </button>
           </div>
+          <div id="sc-recensement-out"></div>
           <div id="sc-diag-out"></div>
         </div>
         <form class="stack" id="sc-form" autocomplete="off">
