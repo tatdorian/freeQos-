@@ -2272,8 +2272,74 @@ const topo = {
 async function loadTopology() {
   // Onglet Topologie : le tableau technique des liens. L'arbre visuel, lui, vit
   // dans l'onglet Arbre reseau (meme donnees, partagees via fetchTopo).
-  const data = await fetchTopo();
+  const [data, inventaire] = await Promise.all([
+    fetchTopo(),
+    api('/pops/routers').catch(() => null),
+  ]);
+  renderTopologySources(data, inventaire);
   renderTopologyLinks(data.links);
+}
+
+/** Dit QUI a produit ce tableau, et pourquoi certains routeurs n'y sont pas.
+ *
+ *  Un tableau dont toutes les lignes portent le meme nom dans la colonne
+ *  "Depuis" pose une question a laquelle l'ecran ne repondait pas : ce routeur
+ *  est-il le seul declare, le seul joignable, ou le seul dont les compteurs ont
+ *  ete lus ? Les trois causes sont opposees -- l'une n'appelle aucune action,
+ *  les deux autres si -- et rien ne les distinguait. Le detail de l'echec
+ *  n'existait que dans le panneau d'une case de l'onglet Arbre reseau, qu'il
+ *  fallait penser a ouvrir.
+ */
+function renderTopologySources(data, inventaire) {
+  const host = document.getElementById('topo-sources');
+  if (!host) return;
+  const declares = (inventaire && inventaire.routers) || [];
+  const ecartes = (inventaire && inventaire.skipped) || [];
+  // Un routeur "producteur" est un routeur dont au moins un lien a ete
+  // decouvert : c'est la preuve qu'on a vraiment lu sa configuration.
+  const producteurs = new Set(
+    (data.links || []).map((l) => l.discovered_by).filter((n) => n && n !== 'manual'));
+  const muets = declares.filter((r) => !producteurs.has(r.name));
+
+  // Les cases posees pour un routeur dont la lecture a echoue portent l'erreur.
+  const injoignables = {};
+  (data.nodes || []).forEach((n) => {
+    const a = topoAttrs(n);
+    if (a.unreachable && n.router_name) injoignables[n.router_name] = a.error || 'lecture en echec';
+  });
+
+  if (!declares.length && !ecartes.length) { host.innerHTML = ''; return; }
+
+  let html = '';
+  if (!muets.length && !ecartes.length) {
+    host.innerHTML = '<div class="notice ok" style="margin-bottom:.8rem">' +
+      '<strong>' + producteurs.size + ' routeur(s) interroge(s)</strong> ' +
+      '<span class="hint">Toutes les lignes ci-dessous viennent de leur configuration ' +
+      'lue par API. Les equipements de la colonne <b>Vers</b> sont ce qu\'ils VOIENT ' +
+      'en face : ajoutez-les dans <b>Equipements</b> pour les interroger a leur tour.</span></div>';
+    return;
+  }
+
+  html += '<div class="notice err" style="margin-bottom:.8rem"><strong>' +
+    producteurs.size + ' routeur(s) interroge(s) sur ' + (declares.length + ecartes.length) +
+    ' declare(s).</strong><span class="hint">Seul un routeur INTERROGE produit des lignes ' +
+    'ici. Un equipement qui n\'apparait que dans la colonne <b>Vers</b> est vu par un ' +
+    'voisin, pas lu : il n\'apporte ni ses propres liens, ni ses abonnes, ni ses files.' +
+    '</span><ul style="margin:.5rem 0 0;padding-left:1.1rem">';
+  muets.forEach((r) => {
+    const raison = injoignables[r.name];
+    html += '<li><b>' + esc(r.name) + '</b> (' + esc(r.host) + ') — ' +
+      (raison
+        ? 'injoignable : <code>' + esc(String(raison).slice(0, 200)) + '</code>'
+        : 'declare, mais aucun lien decouvert. Verifiez le compte API (policy ' +
+          '<code>read,api,test</code>) et le port.') + '</li>';
+  });
+  ecartes.forEach((e) => {
+    html += '<li><b>' + esc(e.name || '(fiche invalide)') + '</b> — ecarte : ' +
+      esc(String(e.reason || '').slice(0, 200)) + '</li>';
+  });
+  html += '</ul></div>';
+  host.innerHTML = html;
 }
 
 /** Rang d'un role : plus petit = plus en amont. Sert a choisir par ou entrer
@@ -3198,7 +3264,15 @@ function renderTopologyLinks(allLinks) {
   const visibles = allLinks.filter((l) => !topoAttrs(l).mirror_of);
   const links = topo.rateOnly ? visibles.filter(hasRate) : visibles;
   const compte = document.getElementById('topo-links-count');
-  if (compte) compte.textContent = links.length + ' lien(s)';
+  // DIRE CE QUI EST MASQUE. Le filtre "liens a debit seulement" est actif par
+  // defaut : un lien decouvert mais dont les compteurs ne sont pas encore lus
+  // disparaissait du tableau sans laisser de trace, et le compte affiche
+  // paraissait etre le total.
+  const masques = visibles.length - links.length;
+  if (compte) {
+    compte.textContent = links.length + ' lien(s)' +
+      (masques > 0 ? ' · ' + masques + ' sans debit mesure, masque(s)' : '');
+  }
   if (!links.length) {
     host.innerHTML = '<div class="empty">' +
       (allLinks.length && topo.rateOnly
