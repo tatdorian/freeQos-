@@ -61,7 +61,7 @@ import ipaddress
 import json
 import logging
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -482,7 +482,14 @@ def classify_platform(platform: str | None, board: str | None = None) -> str:
     if not text.strip():
         return KIND_UNKNOWN
     if "mikrotik" in text or "routeros" in text or "routerboard" in text or "chr" in text:
-        return KIND_POP
+        # DIRE "MIKROTIK" NE DIT PAS "POP". C'est la plateforme la plus repandue
+        # du parc : elle porte aussi bien un PoP qu'un CPE d'abonne, un switch de
+        # local technique ou un routeur de client. La peindre en PoP inventait
+        # des PoPs -- un arbre montrant plus de sites que l'exploitant n'en a,
+        # sans rien qui dise lesquels sont reels. Le role d'un routeur vient de
+        # l'inventaire (cf. 'kind_for_role'), et un equipement non declare est
+        # exactement ce qu'il est : inconnu.
+        return KIND_UNKNOWN
     if any(
         marque in text
         for marque in (
@@ -688,6 +695,40 @@ def neighbor_addresses(neighbor: dict[str, Any]) -> list[str]:
             if adresse and adresse not in vues:
                 vues.append(adresse)
     return vues
+
+
+def mac_from_link_local(address: Any) -> str | None:
+    """MAC portee par une adresse IPv6 de lien-local en EUI-64.
+
+    ``fe80::5200:ff:fe09:0`` n'est pas une adresse quelconque : elle est
+    DERIVEE de la MAC de l'interface qui la porte (RFC 4291), et la MAC s'en
+    relit exactement -- on retire le ``ff:fe`` insere au milieu et on rebascule
+    le bit U/L. Elle vaut donc identification a part entiere.
+
+    POURQUOI C'EST UTILE ICI. Un voisin MNDP qui n'annonce que son adresse de
+    lien-local -- le cas d'un CPE qui n'a pas encore d'IPv4 sur ce segment --
+    semblait n'avoir aucune MAC : impossible de le reconnaitre comme le CPE
+    d'un abonne, et il s'affichait en case autonome a cote de l'abonne qu'il
+    EST. Sa MAC etait pourtant ecrite dans son adresse.
+
+    Rend ``None`` pour tout ce qui n'est pas un lien-local en EUI-64 : une
+    adresse construite autrement (aleatoire, RFC 7217, manuelle) ne porte
+    aucune MAC, et en deviner une serait pire que de n'en rendre aucune.
+    """
+    texte = str(address or "").split("/")[0].split("%")[0].strip()
+    if not texte:
+        return None
+    try:
+        ip = ipaddress.IPv6Address(texte)
+    except ValueError:
+        return None
+    if not ip.is_link_local:
+        return None
+    octets = ip.packed[8:]
+    if octets[3] != 0xFF or octets[4] != 0xFE:
+        return None  # identifiant d'interface qui ne vient pas d'une MAC
+    brut = bytes([octets[0] ^ 0x02, octets[1], octets[2], octets[5], octets[6], octets[7]])
+    return normalize_mac(":".join(f"{o:02x}" for o in brut))
 
 
 def ambiguous_neighbor_macs(neighbors: Sequence[dict[str, Any]]) -> set[str]:
@@ -1169,6 +1210,98 @@ def mark_reciprocal_links(snapshot: TopologySnapshot) -> int:
         capacites = [lien.capacity_mbps for lien in liens if lien.capacity_mbps]
         if capacites:
             canonique.capacity_mbps = min(capacites)
+        marques += 1
+    return marques
+
+
+def _macs_connues(node: TopologyNode) -> set[str]:
+    """Toutes les MAC par lesquelles un noeud peut etre reconnu.
+
+    Celle du champ ``mac``, celles listees dans ``attributes.macs`` pour un
+    routeur gere, et celles RELUES dans ses adresses de lien-local -- un voisin
+    qui n'annonce qu'une ``fe80::`` porte quand meme sa MAC, ecrite dedans.
+    """
+    macs: set[str] = set()
+    directe = normalize_mac(node.mac)
+    if directe:
+        macs.add(directe)
+    attributs = node.attributes or {}
+    brut = attributs.get("macs")
+    if isinstance(brut, list):
+        for valeur in brut:
+            mac = normalize_mac(valeur)
+            if mac:
+                macs.add(mac)
+    adresses = attributs.get("addresses")
+    candidates = list(adresses) if isinstance(adresses, list) else []
+    if node.address:
+        candidates.append(node.address)
+    for adresse in candidates:
+        mac = mac_from_link_local(adresse)
+        if mac:
+            macs.add(mac)
+    return macs
+
+
+def mark_subscriber_cpes(
+    snapshot: TopologySnapshot,
+    caller_ids: Mapping[str, str],
+    addresses: Mapping[str, str] | None = None,
+) -> int:
+    """Marque les voisins qui sont, en fait, le CPE d'un abonne deja connu.
+
+    LE PROBLEME QU'ELLE REGLE. Le routeur d'un abonne est vu deux fois par le
+    controleur, et sous deux natures : une session ``/ppp/active`` -- l'abonne,
+    avec son login, son plan et ses files -- et un voisin ``/ip/neighbor`` au
+    bout du port du PoP. Rien ne disait que c'etait le MEME equipement : l'arbre
+    posait une case d'abonne SOUS le PoP et, a cote, une case d'equipement
+    decouvert pour le meme boitier. Un exploitant comptant ses clients sur
+    l'arbre en trouvait plus qu'il n'en a, sans moyen de savoir lesquels
+    comptaient double.
+
+    CE QUI PERMET DE LES RECOLLER. ``caller-id``, sur une session PPPoE, porte
+    la MAC du CPE cote RouterOS : c'est exactement la MAC que ce meme CPE
+    annonce en voisin. La jointure est donc une EGALITE, pas une ressemblance --
+    on ne rapproche jamais deux equipements sur un nom ou une proximite.
+
+    NE TOUCHE JAMAIS A UN ROUTEUR GERE. Un PoP qui ouvrirait par ailleurs une
+    session PPPoE vers son transit (un cas reel) se verrait sinon reclasse en
+    CPE d'abonne et disparaitrait de l'arbre avec tout ce qui pend dessous.
+    L'inventaire prime, toujours.
+
+    ET LE CLIENT QUI N'A PAS DE SESSION PPPoE. Sur une VLAN routee il n'y a pas
+    de ``caller-id`` : le client est declare par son ADRESSE, et c'est elle qui
+    fait la jointure. ``addresses`` porte cet index -- adresse hote exacte vers
+    reference du client. Un voisin qui annonce l'adresse meme d'un client
+    declare EST ce client ; c'est une egalite, au meme titre que la MAC.
+
+    Rend le nombre de noeuds marques. Le marquage est un attribut, pas une
+    suppression : la case reste dans le graphe -- son lien porte le rattachement
+    de l'abonne -- et c'est l'API qui decide de ne pas la servir en double.
+    """
+    par_mac = {mac: login for mac, login in caller_ids.items() if mac and login}
+    par_adresse = {
+        adresse: login for adresse, login in (addresses or {}).items() if adresse and login
+    }
+    if not par_mac and not par_adresse:
+        return 0
+    marques = 0
+    for node in snapshot.nodes.values():
+        if (node.attributes or {}).get("managed") is True:
+            continue
+        if node.kind == KIND_STATIC:
+            continue  # c'est la fiche du client lui-meme, pas son CPE
+        if (node.attributes or {}).get("subscriber_cpe"):
+            continue
+        login = next((par_mac[mac] for mac in _macs_connues(node) if mac in par_mac), None)
+        if not login:
+            login = next(
+                (par_adresse[ip] for ip in _adresses_du_noeud(node) if ip in par_adresse), None
+            )
+        if not login:
+            continue
+        node.attributes["subscriber_cpe"] = login
+        node.kind = KIND_CPE
         marques += 1
     return marques
 

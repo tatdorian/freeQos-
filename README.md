@@ -436,7 +436,32 @@ mauvais backhaul serait pire que de ne rien faire.
 
 La classification automatique des rôles est une heuristique (d'après la plateforme
 annoncée) : elle est corrigeable d'un menu déroulant dans l'interface, et la correction
-prime sur la détection.
+prime sur la détection. Elle ne s'autorise que ce que la plateforme **dit vraiment** :
+une marque de radio (Ubiquiti, Cambium, un PowerBeam) désigne une radio, rien d'autre
+ne s'appelle ainsi. « MikroTik » ne désigne rien — c'est aussi bien un PoP qu'un CPE
+d'abonné ou un switch de local technique — et en déduire un PoP peuplait l'arbre de
+sites qui n'existent pas. Un équipement découvert mais non déclaré est donc *inconnu*,
+et il pend en feuille sous le routeur qui le voit.
+
+#### Le CPE d'un abonné n'est pas un équipement de plus
+
+Le routeur d'un abonné arrive par deux chemins : une session `/ppp/active` — c'est
+l'abonné, avec son login et ses files — et un voisin `/ip/neighbor` au bout du port du
+PoP — c'est un équipement découvert. Rien ne disait que c'était le **même boîtier** :
+l'arbre affichait les deux, et l'exploitant y comptait plus de clients qu'il n'en a.
+
+La jointure est une **égalité**, jamais une ressemblance :
+
+| Nature de l'abonné | Ce qui prouve que c'est le même boîtier |
+|---|---|
+| PPPoE | `caller-id` de la session = MAC annoncée par le voisin. Quand le voisin n'annonce qu'une adresse de lien-local `fe80::`, sa MAC s'y **relit** : l'identifiant d'interface en est dérivé (EUI-64, RFC 4291) |
+| VLAN routée | pas de session, donc pas de `caller-id` : l'adresse déclarée du client = adresse annoncée par le voisin |
+
+Un routeur de l'inventaire n'est **jamais** reclassé en CPE, même s'il ouvre lui-même
+une session PPPoE vers son transit : il disparaîtrait de l'arbre avec tout ce qui pend
+dessous. La case du CPE reste dans le graphe — son lien porte le rattachement de
+l'abonné — elle n'est simplement pas servie en double : l'arbre lit les abonnés dans la
+liste des abonnés, comme pour les clients à IP fixe.
 
 ### Voir le débit d'un lien
 

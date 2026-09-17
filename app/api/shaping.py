@@ -45,19 +45,26 @@ def _require_topology(container: ContainerDep) -> TopologyRepository:
     return container.topology_repo
 
 
-def _miroir(lien: dict[str, Any]) -> bool:
-    """Ce lien est-il la seconde vue d'un cable deja compte ?
+def _attributs(ligne: dict[str, Any]) -> dict[str, Any]:
+    """Les ``attributes`` d'un noeud ou d'un lien, toujours en dictionnaire.
 
-    ``attributes`` arrive en objet ou en JSON brut selon le chemin de lecture :
-    les deux doivent repondre.
+    Ils arrivent en objet quand ils viennent du snapshot en memoire, et en JSON
+    brut quand ils viennent de la base -- aucun codec JSONB n'est enregistre sur
+    le pool. Une lecture qui ne gere qu'une des deux formes marche en test et
+    rend silencieusement faux en production.
     """
-    attributs = lien.get("attributes")
+    attributs = ligne.get("attributes")
     if isinstance(attributs, str):
         try:
             attributs = json.loads(attributs)
         except ValueError:
-            return False
-    return bool(isinstance(attributs, dict) and attributs.get("mirror_of"))
+            return {}
+    return attributs if isinstance(attributs, dict) else {}
+
+
+def _miroir(lien: dict[str, Any]) -> bool:
+    """Ce lien est-il la seconde vue d'un cable deja compte ?"""
+    return bool(_attributs(lien).get("mirror_of"))
 
 
 # --------------------------------------------------------------- topologie
@@ -105,7 +112,18 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     # c'est le meme client. On la garde donc pour le calcul et on ne la sert
     # pas : l'arbre lit les abonnes dans la liste des abonnes, un point c'est
     # tout, et les deux natures y sont traitees pareil.
-    abonnes_du_graphe = {n["key"] for n in noeuds if n.get("kind") == KIND_STATIC}
+    #
+    # MEME RAISON POUR LE CPE D'UN ABONNE PPPoE. Son routeur est vu en voisin
+    # par le PoP, donc pose en case d'equipement decouvert, alors que le meme
+    # boitier est DEJA l'abonne compte sous ce PoP. La decouverte les a recolles
+    # par le 'caller-id' de la session (cf. 'mark_subscriber_cpes') ; ici on
+    # applique la meme regle qu'aux clients a IP fixe -- la case sert au calcul
+    # du rattachement, elle n'est pas servie a l'arbre.
+    abonnes_du_graphe = {
+        n["key"]
+        for n in noeuds
+        if n.get("kind") == KIND_STATIC or _attributs(n).get("subscriber_cpe")
+    }
     if abonnes_du_graphe:
         noeuds = [n for n in noeuds if n["key"] not in abonnes_du_graphe]
         liens = [
