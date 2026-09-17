@@ -44,8 +44,10 @@ def harnais(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     module = tmp_path_factory.mktemp("arbre") / "arbre.js"
     module.write_text(
-        # ``topo`` est l'etat global de l'editeur ; seuls les abonnes servent ici.
-        "const topo = { subs: [] };\n"
+        # ``topo`` est l'etat global de l'editeur ; seuls les abonnes et l'etat
+        # des agregats deplies servent ici.
+        "const topo = { subs: [], abosOuverts: new Set() };\n"
+        "const TOPO_ABOS_MAX = 25;\n"
         + source[debut:fin]
         + "\nmodule.exports = { topo, topoBuildModel, topoAutoLayout };\n",
         encoding="utf-8",
@@ -510,3 +512,136 @@ console.log(JSON.stringify({ compte: f.get('k').compte, membres: f.get('k').memb
     )
     assert res["compte"] == 3
     assert res["membres"] == []
+
+
+# ---------------------------------------------------------------------------
+# LES ABONNES DANS L'ARBRE
+#
+# Un PoP porte une case "N abonne(s)". Elle s'annoncait "repliable" dans le
+# code, mais rien ne la depliait : on lisait un COMPTE, jamais QUI. Or c'est
+# exactement la question qu'on se pose devant un PoP qui sature.
+# ---------------------------------------------------------------------------
+ARBRE_ABOS = """
+const nodes = [{ key: 'router:pop', name: 'PoP Nord', kind: 'pop', hidden: false }];
+const data = { nodes, links: [], counts: {} };
+const abonne = (login, pop, tx) => ({
+  login, pop_name: pop, kind: 'pppoe', tx_bps: tx, rx_bps: 1000,
+  last_ip: '10.20.0.' + login.length,
+});
+const cles = (m) => [...m.nodesByKey.keys()];
+"""
+
+
+def test_les_abonnes_sont_replies_par_defaut(harnais: Path) -> None:
+    """Un PoP d'operateur en porte des centaines : aucun arbre ne se lit avec
+    des centaines de cases."""
+    res = executer(
+        harnais,
+        ARBRE_ABOS
+        + """
+A.topo.subs = [abonne('alice', 'PoP Nord', 5e6), abonne('bob', 'PoP Nord', 2e6)];
+const m = A.topoBuildModel(data);
+const agregat = m.nodesByKey.get('abos:router:pop');
+console.log(JSON.stringify({
+  cles: cles(m), nom: agregat.name, deplie: agregat.expanded,
+  enfants: agregat.children.length,
+}));
+""",
+    )
+    assert res["cles"] == ["router:pop", "abos:router:pop"]
+    assert res["nom"] == "2 abonne(s)"
+    assert res["deplie"] is False
+    assert res["enfants"] == 0
+
+
+def test_l_agregat_deplie_montre_chaque_abonne(harnais: Path) -> None:
+    """LE manque : le compte ne disait pas qui."""
+    res = executer(
+        harnais,
+        ARBRE_ABOS
+        + """
+A.topo.subs = [abonne('alice', 'PoP Nord', 5e6), abonne('bob', 'PoP Nord', 2e6)];
+A.topo.abosOuverts.add('abos:router:pop');
+const m = A.topoBuildModel(data);
+const agregat = m.nodesByKey.get('abos:router:pop');
+console.log(JSON.stringify({
+  deplie: agregat.expanded,
+  enfants: agregat.children.map((c) => c.name),
+  logins: agregat.children.map((c) => c.subscriber && c.subscriber.login),
+}));
+""",
+    )
+    assert res["deplie"] is True
+    assert res["enfants"] == ["alice", "bob"]
+    assert res["logins"] == ["alice", "bob"]
+
+
+def test_un_abonne_porte_son_adresse_et_son_debit(harnais: Path) -> None:
+    """C'est ce qu'on cherche en ouvrant la liste d'un PoP qui sature."""
+    res = executer(
+        harnais,
+        ARBRE_ABOS
+        + """
+A.topo.subs = [abonne('alice', 'PoP Nord', 5e6)];
+A.topo.abosOuverts.add('abos:router:pop');
+const m = A.topoBuildModel(data);
+const feuille = m.nodesByKey.get('abos:router:pop|alice');
+console.log(JSON.stringify({
+  adresses: feuille.addresses, debit: feuille.synthRates, kind: feuille.kind,
+}));
+""",
+    )
+    assert res["adresses"] == ["10.20.0.5"]
+    assert res["debit"]["down"] == 5e6
+    assert res["kind"] == "cpe"
+
+
+def test_un_client_a_ip_fixe_garde_sa_nature(harnais: Path) -> None:
+    """Un client statique est une DECLARATION, pas un CPE observe : les
+    confondre ferait croire a une decouverte la ou il n'y a qu'une saisie."""
+    res = executer(
+        harnais,
+        ARBRE_ABOS
+        + """
+A.topo.subs = [{ login: 'mairie', pop_name: 'PoP Nord', kind: 'static' }];
+A.topo.abosOuverts.add('abos:router:pop');
+const m = A.topoBuildModel(data);
+console.log(JSON.stringify({ kind: m.nodesByKey.get('abos:router:pop|mairie').kind }));
+""",
+    )
+    assert res["kind"] == "static"
+
+
+def test_une_liste_trop_longue_est_bornee(harnais: Path) -> None:
+    """Sinon un PoP de 800 abonnes rend l'arbre inutilisable -- et le detail se
+    lit dans l'onglet Abonnes, qui est fait pour ca."""
+    res = executer(
+        harnais,
+        ARBRE_ABOS
+        + """
+A.topo.subs = Array.from({ length: 40 }, (_, i) => abonne('cli' + i, 'PoP Nord', 1e6));
+A.topo.abosOuverts.add('abos:router:pop');
+const m = A.topoBuildModel(data);
+const agregat = m.nodesByKey.get('abos:router:pop');
+console.log(JSON.stringify({
+  enfants: agregat.children.length,
+  dernier: agregat.children[agregat.children.length - 1].name,
+}));
+""",
+    )
+    assert res["enfants"] == 26, "25 abonnes + la case 'et les autres'"
+    assert res["dernier"] == "+ 15 autres"
+
+
+def test_un_abonne_sans_pop_n_est_rattache_nulle_part(harnais: Path) -> None:
+    """On ne devine pas : le poser sous un PoP au hasard serait faux."""
+    res = executer(
+        harnais,
+        ARBRE_ABOS
+        + """
+A.topo.subs = [abonne('orphelin', '', 1e6)];
+const m = A.topoBuildModel(data);
+console.log(JSON.stringify({ cles: cles(m) }));
+""",
+    )
+    assert res["cles"] == ["router:pop"]

@@ -158,7 +158,11 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   une case qu'on déplace, qu'on dépose sur une autre pour la rattacher. On peut **corriger
   son rôle** (dont *Client*), **créer un lien** manquant (*Créer un lien* → clic parent puis
   enfant) et **retirer un lien** erroné (clic sur l'arête). Chaque lien porte son **débit
-  mesuré** (couleur de charge), et chaque PoP ses abonnés (nœud agrégé avec le débit total).
+  mesuré** (couleur de charge), et chaque PoP ses abonnés. Leur case affiche le compte et le
+  débit total ; **un clic la déplie** et montre chaque abonné avec son adresse et son débit,
+  un second la referme. Le repli est le défaut, et la liste dépliée est bornée : un PoP
+  d'opérateur porte des centaines d'abonnés, et aucun arbre ne se lit avec des centaines de
+  cases — le détail complet vit dans l'onglet *Abonnés*, qui est fait pour ça.
   Les liens **routeur↔routeur** sont découverts de plusieurs façons complémentaires :
   `/ip/neighbor` (MNDP/LLDP/CDP), **et surtout la configuration complète** lue par API. La
   découverte analyse chaque `/export` : deux PoP portant chacun une adresse sur le **même /30**

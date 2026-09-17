@@ -2267,7 +2267,14 @@ const NODE_H = 48;
 const topo = {
   data: null, subs: [], model: null, selected: null, dragging: false,
   rateOnly: true, linkMode: false, linkSource: null,
+  // Agregats d'abonnes ouverts, par cle. Replie par defaut : un PoP
+  // d'operateur porte des centaines d'abonnes.
+  abosOuverts: new Set(),
 };
+
+// Au-dela, l'arbre cesse d'etre lisible et ne renseigne plus sur rien :
+// le detail se lit dans l'onglet Abonnes, qui est fait pour ca.
+const TOPO_ABOS_MAX = 25;
 
 async function loadTopology() {
   // Onglet Topologie : le tableau technique des liens. L'arbre visuel, lui, vit
@@ -2601,8 +2608,14 @@ function topoBuildModel(data) {
     aPlacer = restants();
   }
 
-  // Rattache les abonnes a leur PoP : un noeud agrege repliable par PoP plutot
-  // que 500 cases. Le debit de l'arete est la somme du trafic des abonnes.
+  // Rattache les abonnes a leur PoP : un noeud agrege par PoP plutot que 500
+  // cases. Le debit de l'arete est la somme du trafic des abonnes.
+  //
+  // L'AGREGAT SE DEPLIE. Il s'annoncait "repliable" sans que rien ne le deplie :
+  // on lisait un compte, jamais QUI. Or c'est la question qu'on se pose devant
+  // un PoP qui sature. Un clic ouvre donc la liste, et un second la referme.
+  // Le repli reste le defaut, parce qu'un PoP d'operateur porte des centaines
+  // d'abonnes et qu'aucun arbre ne se lit avec des centaines de cases.
   const parPop = new Map();
   (topo.subs || []).forEach((s) => {
     if (!s.pop_name) return;
@@ -2615,14 +2628,49 @@ function topoBuildModel(data) {
       if (!abonnes || !abonnes.length) return;
       const tx = abonnes.reduce((a, s) => a + (Number(s.tx_bps) || 0), 0);
       const rx = abonnes.reduce((a, s) => a + (Number(s.rx_bps) || 0), 0);
+      const cle = 'abos:' + n.key;
+      const ouvert = topo.abosOuverts.has(cle);
       const synth = {
-        key: 'abos:' + n.key, name: abonnes.length + ' abonne(s)', kind: 'subscriber',
+        key: cle,
+        name: ouvert ? 'Abonnes de ' + n.name : abonnes.length + ' abonne(s)',
+        kind: 'subscriber',
         synthetic: true, parentKey: n.key, children: [], edge: null,
         synthRates: (tx || rx) ? { down: tx, up: rx, cap: 0 } : null,
         count: abonnes.length, addresses: [], fresh: true,
+        expandable: true, expanded: ouvert,
       };
       nodes.set(synth.key, synth);
       n.children.push(synth);
+      if (!ouvert) return;
+
+      // Deplie : une case par abonne, sous l'agregat. BORNE, parce qu'un PoP
+      // charge en compte des centaines et qu'un arbre illisible ne renseigne
+      // sur rien. Le reste se lit dans l'onglet Abonnes, qui est fait pour ca.
+      const montres = abonnes.slice(0, TOPO_ABOS_MAX);
+      montres.forEach((s) => {
+        const feuille = {
+          key: cle + '|' + s.login,
+          name: s.login,
+          kind: s.kind === 'static' ? 'static' : 'cpe',
+          synthetic: true, parentKey: synth.key, children: [], edge: null,
+          subscriber: s,
+          synthRates: (s.tx_bps || s.rx_bps)
+            ? { down: Number(s.tx_bps) || 0, up: Number(s.rx_bps) || 0, cap: 0 } : null,
+          addresses: s.last_ip ? [String(s.last_ip)] : [], fresh: true,
+        };
+        nodes.set(feuille.key, feuille);
+        synth.children.push(feuille);
+      });
+      if (abonnes.length > montres.length) {
+        const reste = {
+          key: cle + '|…',
+          name: '+ ' + (abonnes.length - montres.length) + ' autres',
+          kind: 'subscriber', synthetic: true, parentKey: synth.key,
+          children: [], edge: null, synthRates: null, addresses: [], fresh: true,
+        };
+        nodes.set(reste.key, reste);
+        synth.children.push(reste);
+      }
     });
   }
 
@@ -2749,7 +2797,11 @@ function renderTopoCanvas() {
     const linkKey = (n.edge && n.edge.link && n.edge.link.key) || null;
     const manual = !!linkKey && String(linkKey).indexOf('manual:') === 0;
     const forced = n.parent_override && n.parent_override === p.key;
-    if (!rates && topo.rateOnly && !forced && !manual) return;
+    // Le trait d'un abonne est un RATTACHEMENT, pas un cable : "liens a debit
+    // seulement" filtre les adjacences decouvertes sans compteur, pas
+    // l'appartenance d'un abonne a son PoP. Le masquer laissait sa case flotter
+    // a cote de l'arbre, sans rien pour dire de qui elle depend.
+    if (!rates && topo.rateOnly && !forced && !manual && !n.synthetic) return;
 
     const x1 = p.x + NODE_W;
     const y1 = p.y + NODE_H / 2;
@@ -2802,10 +2854,16 @@ function renderTopoCanvas() {
     if (topo.linkSource === n.key) cls += ' linksrc';
     if (n.fresh === false) cls += ' stale';
     // Rassemble toutes les adresses de l'equipement plutot que d'en montrer une.
-    const meta = n.synthetic
-      ? (n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : 'abonnes')
-      : (n.addresses && n.addresses.length ? n.addresses.join(', ')
-        : (n.address || n.platform || ''));
+    // Une case d'abonne montre son adresse ET son debit : c'est ce qu'on
+    // cherche quand on ouvre la liste d'un PoP qui sature.
+    const meta = n.subscriber
+      ? [n.addresses.join(', '),
+         n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : '']
+        .filter(Boolean).join(' · ')
+      : n.synthetic
+        ? (n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : 'abonnes')
+        : (n.addresses && n.addresses.length ? n.addresses.join(', ')
+          : (n.address || n.platform || ''));
     parts.push(
       '<g class="' + cls + '" data-node="' + esc(n.key) +
         (n.synthetic ? '" data-synthetic="1' : '') + '" transform="translate(' +
@@ -2814,7 +2872,9 @@ function renderTopoCanvas() {
         '<rect class="accent" x="0" y="0" width="5" height="' + NODE_H +
           '" fill="' + color + '"></rect>' +
         '<text class="role" x="13" y="18" fill="' + color + '">' +
-          esc(ICONE[n.kind] || '?') + '</text>' +
+          esc(ICONE[n.kind] || '?') +
+          // Le chevron dit que la case s'ouvre, et dans quel sens elle va.
+          (n.expandable ? (n.expanded ? '  ▾ ouvert' : '  ▸ voir') : '') + '</text>' +
         '<text class="title" x="13" y="31">' + esc(topoTrim(n.name, 20)) + '</text>' +
         (meta ? '<text class="meta" x="13" y="42">' + esc(topoTrim(meta, 26)) + '</text>' : '') +
       '</g>');
@@ -2919,8 +2979,21 @@ function bindTopoDrag(svg, model) {
       ev.preventDefault();
       const key = g.dataset.node;
       const node = model.nodesByKey.get(key);
-      // Le noeud "abonnes" est un agregat synthetique : ni deplacable ni
-      // rattachable, il suit son PoP.
+      // L'agregat d'abonnes se DEPLIE au clic : c'est la seule facon de savoir
+      // QUI est derriere un compte, sans imposer des centaines de cases par
+      // defaut.
+      if (node && node.expandable) {
+        const rouvrir = () => {
+          window.removeEventListener('pointerup', rouvrir);
+          if (topo.abosOuverts.has(key)) topo.abosOuverts.delete(key);
+          else topo.abosOuverts.add(key);
+          renderTopoCanvas();
+        };
+        window.addEventListener('pointerup', rouvrir);
+        return;
+      }
+      // Les autres cases synthetiques (abonnes deplies) ne sont ni deplacables
+      // ni rattachables : elles suivent leur PoP.
       if (!node || node.synthetic) return;
 
       // En mode "creer un lien", un clic choisit une extremite : pas de drag.
