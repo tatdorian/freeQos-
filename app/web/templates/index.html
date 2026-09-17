@@ -295,8 +295,6 @@
     <section id="view-shaping">
       <div class="toolbar">
         <select id="shaping-router" style="width:auto"></select>
-        <button id="btn-inspect">Analyser l'existant</button>
-        <button id="btn-plan">Calculer le plan</button>
         <span class="spacer"></span>
         <label class="switch" id="enforcement-switch" title="Autoriser l'ecriture sur les routeurs">
           <input type="checkbox" id="enforcement-toggle">
@@ -305,10 +303,25 @@
         </label>
       </div>
       <div id="shaping-notice"></div>
-      <div id="shaping-state"></div>
-      <div id="shaping-plan"></div>
-      <h2>Journal des commandes envoyees</h2>
-      <div class="table-wrap" id="shaping-audit"></div>
+      <!-- LA CARTE. Ce que l'exploitant vient chercher ici n'est pas la liste
+           des commandes envoyees mais OU ca bride, et a combien. Les commandes
+           sont un moyen : elles partent toutes seules, et vivent plus bas. -->
+      <div id="shaping-points"></div>
+
+      <!-- Le detail technique reste accessible -- toute commande envoyee doit
+           rester verifiable -- mais replie : ce n'est pas la question de tous
+           les jours. -->
+      <details id="shaping-technique">
+        <summary>Detail technique : analyse brute, plan calcule, journal des commandes</summary>
+        <div class="actions" style="margin:.6rem 0">
+          <button class="sm" id="btn-inspect">Analyser l'existant</button>
+          <button class="sm" id="btn-plan">Calculer le plan (sans envoyer)</button>
+        </div>
+        <div id="shaping-state"></div>
+        <div id="shaping-plan"></div>
+        <h2>Journal des commandes envoyees</h2>
+        <div class="table-wrap" id="shaping-audit"></div>
+      </details>
     </section>
 
     <!-- --------------------------------------------------- equipements -->

@@ -308,12 +308,14 @@ def desired_state(
     types = list(queue_types) if queue_types is not None else desired_queue_types()
 
     files: list[QueueSpec] = []
+    ecartes: list[PlanSkip] = []
     # Cibles deja prises par une file de lien, et segments L3 de ces files : ce
     # sont eux qui donneront leur parent aux abonnes dont on ignore le secteur.
     cibles_liens: dict[str, str] = {}
     reseaux_parents: list[tuple[Any, str]] = []
     for index, link in enumerate(links):
         if not link.enabled:
+            ecartes.append(PlanSkip(link.name, "shaping desactive pour ce lien"))
             continue
         down = shaped_capacity(
             link.measured_capacity_mbps,
@@ -330,6 +332,13 @@ def desired_state(
             trim_factor=link.trim_factor,
         )
         if down is None and up is None and not queue_unmeasured_links:
+            ecartes.append(
+                PlanSkip(
+                    link.name,
+                    "aucune capacite connue, et les liens non mesures ne recoivent pas de file "
+                    "(reglage shaping_queue_for_detected_links)",
+                )
+            )
             continue
         cible_lien = link.queue_target
         if cible_lien in cibles_liens:
@@ -341,6 +350,13 @@ def desired_state(
                 link.name,
                 cible_lien,
                 cibles_liens[cible_lien],
+            )
+            ecartes.append(
+                PlanSkip(
+                    link.name,
+                    f"la cible {cible_lien} est deja celle de '{cibles_liens[cible_lien]}' : "
+                    "RouterOS n'appliquerait que la premiere file",
+                )
             )
             continue
         cibles_liens[cible_lien] = link.name
@@ -366,7 +382,6 @@ def desired_state(
             reseaux_parents.append((ipaddress.ip_network(reseau), link.queue_name))
 
     parents_connus = {file.name for file in files}
-    ecartes: list[PlanSkip] = []
 
     # Deux abonnes qui reclament la MEME adresse : l'un des deux est perime
     # (session fermee dont l'IP a ete reattribuee, doublon de collecte). On ne
