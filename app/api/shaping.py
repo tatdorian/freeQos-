@@ -13,6 +13,7 @@ Aucun endpoint de lecture n'ecrit sur un equipement. Le seul qui le fasse exige
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -43,6 +44,21 @@ def _require_topology(container: ContainerDep) -> TopologyRepository:
             detail="Topologie indisponible (base non initialisee)",
         )
     return container.topology_repo
+
+
+def _miroir(lien: dict[str, Any]) -> bool:
+    """Ce lien est-il la seconde vue d'un cable deja compte ?
+
+    ``attributes`` arrive en objet ou en JSON brut selon le chemin de lecture :
+    les deux doivent repondre.
+    """
+    attributs = lien.get("attributes")
+    if isinstance(attributs, str):
+        try:
+            attributs = json.loads(attributs)
+        except ValueError:
+            return False
+    return bool(isinstance(attributs, dict) and attributs.get("mirror_of"))
 
 
 # --------------------------------------------------------------- topologie
@@ -85,7 +101,11 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     return {
         "nodes": noeuds,
         "links": liens,
-        "counts": {"nodes": len(noeuds), "links": len(liens)},
+        # Le compte des liens est celui des CABLES, pas des observations : un
+        # cable vu par ses deux bouts a deux lignes, dont l'une est marquee
+        # miroir. Les compter toutes annoncait plus de liens que le reseau n'en
+        # porte.
+        "counts": {"nodes": len(noeuds), "links": sum(1 for lien in liens if not _miroir(lien))},
         "warnings": list(derniere.warnings) if derniere is not None else [],
         "discovered_at": (
             container.shaping.last_discovery_at.isoformat()

@@ -1198,6 +1198,10 @@ async function loadSubscribers() {
     compte += ' · bufferbloat : ' + bloat.summary.measured + ' mesure(s)' +
       (mauvais ? ', ' + mauvais + ' degrade(s)' : ', tous bons') +
       (bloat.summary.worst_bloat_ms ? ' (pire +' + bloat.summary.worst_bloat_ms + ' ms)' : '');
+  } else if (bloat && bloat.rtt_enabled === false) {
+    // Sonde coupee : sans RTT la note ne PEUT pas exister. Le dire, plutot que
+    // de laisser une colonne vide passer pour un reseau sain.
+    compte += ' · bufferbloat indisponible : sonde de latence coupee';
   }
   document.getElementById('sub-count').textContent = compte;
 
@@ -3187,7 +3191,12 @@ function renderTopologyLinks(allLinks) {
   // Meme filtre que le canvas : "liens a debit seulement" masque le bruit des
   // adjacences sans compteur (radio UISP sans port, seconde lecture en attente).
   const hasRate = (l) => l.rx_bps !== null || l.tx_bps !== null;
-  const links = topo.rateOnly ? allLinks.filter(hasRate) : allLinks;
+  // UN CABLE, UNE LIGNE. Deux routeurs geres relies par un cable se voient
+  // mutuellement : la decouverte produit donc deux liens pour un seul cable, et
+  // le second porte 'mirror_of'. On l'ecarte de ce tableau -- le port d'en face
+  // est montre sur la ligne qui reste, colonne Interface.
+  const visibles = allLinks.filter((l) => !topoAttrs(l).mirror_of);
+  const links = topo.rateOnly ? visibles.filter(hasRate) : visibles;
   const compte = document.getElementById('topo-links-count');
   if (compte) compte.textContent = links.length + ' lien(s)';
   if (!links.length) {
@@ -3205,9 +3214,18 @@ function renderTopologyLinks(allLinks) {
     links.map((l) => {
       const impose = l.max_down_mbps || l.max_up_mbps;
       const partage = (l.interface_links || 0) > 1;
+      const attrs = topoAttrs(l);
       return '<tr>' +
         '<td>' + esc(l.source_name || l.source_key) + '</td>' +
         '<td class="login">' + esc(l.interface || '-') +
+          // Port d'en face : le cable est vu des deux cotes, on garde les deux
+          // noms plutot que d'en perdre un en repliant les doublons.
+          (attrs.peer_interface
+            ? ' <span style="color:var(--faint)" title="Port de ' +
+              esc(attrs.peer_router || 'l\'equipement d\'en face') +
+              ', a l\'autre bout du meme cable.">&#8596; ' +
+              esc(attrs.peer_interface) + '</span>'
+            : '') +
           (partage ? ' <span class="badge warn" title="' + esc(l.interface_links) +
             ' voisins sur ce port : le debit est celui du port, pas de ce seul voisin.">' +
             'partage</span>' : '') + '</td>' +

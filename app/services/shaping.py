@@ -28,6 +28,7 @@ from app.collectors.config_graph import (
 )
 from app.collectors.mikrotik import MikrotikCollector
 from app.collectors.topology import (
+    KIND_RADIO,
     KIND_SECTOR,
     TopologyNode,
     TopologySnapshot,
@@ -39,6 +40,7 @@ from app.collectors.topology import (
     link_by_shared_subnets,
     link_by_tunnels,
     map_subscribers_to_sectors,
+    mark_reciprocal_links,
     normalize_mac,
     orient_from_config,
     parse_export,
@@ -270,6 +272,9 @@ class ShapingService:
         amonts: dict[str, tuple[str | None, str]] = {}
         pairs_routage: dict[str, list[str]] = {}
         piles_interfaces: dict[str, dict[str, InterfacePath]] = {}
+        # Sessions PPPoE de tous les PoPs, avec leur caller-id : c'est la matiere
+        # de la jointure abonne -> secteur radio, faite en fin de decouverte.
+        sessions_pppoe: list[dict[str, Any]] = []
         for collector, resultat in zip(collectors, resultats, strict=True):
             if isinstance(resultat, BaseException):
                 message = f"{collector.name}: {type(resultat).__name__}: {resultat}"
@@ -306,6 +311,9 @@ class ShapingService:
             # L'export n'est pas un parametre de build_from_router : on le retire
             # avant de deballer, puis on l'analyse a part.
             export = resultat.pop("export", "") or ""
+            # Les sessions non plus : elles ne decrivent pas le voisinage du
+            # routeur, elles servent la jointure de fin de decouverte.
+            sessions_pppoe.extend(resultat.pop("ppp", []) or [])
             # La configuration voyage a part : build_from_router decrit ce que
             # le routeur VOIT, l'analyse de config decrit ce qu'il FAIT.
             config = {
@@ -496,12 +504,133 @@ class ShapingService:
             poses = attach_static_clients(snapshot, clients, pop_keys=pop_keys)
             logger.info("Topologie : %d client(s) a IP fixe declares", poses)
 
+        # LA JOINTURE QUI DONNE SA CHAINE DE GOULOTS A UN ABONNE.
+        #
+        # caller-id (MAC du CPE, cote RouterOS) contre la MAC des stations
+        # connues d'UISP : c'est le seul moyen de savoir par QUEL secteur radio
+        # passe un abonne. Sans elle on sait seulement qu'il est sur un PoP, sa
+        # file est posee a la racine, et la boucle fermee QoE n'a aucun secteur a
+        # incriminer -- les deux fonctionnalites restaient donc inertes.
+        #
+        # Elle vient APRES attach_uisp_devices (les stations doivent etre dans le
+        # graphe) et APRES attach_static_clients (qui inscrit, lui, les
+        # rattachements DECLARES des clients a IP fixe dans le meme index).
+        self._joindre_secteurs(snapshot, sessions_pppoe, uisp_devices or [])
+
+        # Un cable vu par ses deux bouts a produit deux liens : on marque le
+        # second pour que l'interface n'en montre qu'un. En DERNIER, quand plus
+        # aucune passe n'ajoute de lien.
+        miroirs = mark_reciprocal_links(snapshot)
+        if miroirs:
+            logger.info("Topologie : %d lien(s) reciproques replies sur un seul cable", miroirs)
+
         self.last_snapshot = snapshot
         self.last_discovery_at = datetime.now(tz=UTC)
         if self.repository is not None:
             compte = await self.repository.save_snapshot(snapshot)
             logger.info("Topologie : %d noeud(s), %d lien(s)", compte["nodes"], compte["links"])
+            await self._persister_rattachements(snapshot, sessions_pppoe)
         return snapshot
+
+    def _joindre_secteurs(
+        self,
+        snapshot: TopologySnapshot,
+        sessions: list[dict[str, Any]],
+        uisp_devices: list[dict[str, Any]],
+    ) -> None:
+        """Remplit ``snapshot.subscriber_sectors`` pour les abonnes PPPoE.
+
+        Deux index de stations sont essayes, dans cet ordre :
+
+        1. le rattachement declare par UISP (``attributes.apDevice``), qui donne
+           l'AP exact d'une station -- la meilleure reponse quand elle existe ;
+        2. a defaut, la MAC de la station contre les noeuds RADIO deja poses
+           dans le graphe. Un exploitant sans UISP (mode ``airos``, ou radios lues
+           en direct) n'a jamais d'``apDevice`` : sans ce second index, aucun
+           abonne ne serait jamais rattache chez lui.
+
+        Ne rattache JAMAIS de force : un abonne dont le CPE n'est reconnu nulle
+        part reste sans secteur, et ``_persister_rattachements`` le dit.
+        """
+        # LE SECTEUR DOIT ETRE UNE CLE DE NOEUD DE CE GRAPHE, pas un identifiant
+        # UISP brut. Quand l'AP est aussi vu en voisin MNDP par le PoP -- le cas
+        # normal, puisqu'il est au bout d'un port -- ``attach_uisp_devices`` a
+        # FUSIONNE la fiche UISP dans le noeud existant, qui garde sa cle
+        # ``mac:...``. Poser ``uisp:<id>`` designerait alors un noeud qui n'existe
+        # pas : le rattachement serait ecrit, et le planificateur comme la boucle
+        # QoE ne trouveraient aucun lien desservant ce secteur.
+        noeud_par_uisp_id: dict[str, str] = {
+            str(node.uisp_device_id): node.key
+            for node in snapshot.nodes.values()
+            if node.uisp_device_id
+        }
+
+        stations: dict[str, str] = {}
+        for device in uisp_devices:
+            identification = device.get("identification") or {}
+            mac = normalize_mac(identification.get("mac"))
+            if not mac:
+                continue
+            parent_id = ((device.get("attributes") or {}).get("apDevice") or {}).get("id")
+            if parent_id:
+                cle_ap = noeud_par_uisp_id.get(str(parent_id), f"uisp:{parent_id}")
+                if cle_ap in snapshot.nodes:
+                    stations[mac] = cle_ap
+
+        # Second index : les radios du graphe, par MAC. Il ne remplace pas le
+        # premier -- une station rattachee par UISP garde son AP -- il comble le
+        # cas ou la MAC du CPE est elle-meme celle d'un equipement connu.
+        for node in snapshot.nodes.values():
+            if node.kind in {KIND_RADIO, KIND_SECTOR} and node.mac:
+                stations.setdefault(node.mac, node.key)
+
+        map_subscribers_to_sectors(snapshot, sessions, stations)
+
+    async def _persister_rattachements(
+        self, snapshot: TopologySnapshot, sessions: list[dict[str, Any]]
+    ) -> None:
+        """Ecrit les rattachements du graphe dans ``subscriber_attachments``.
+
+        C'est l'etape qui manquait : le graphe savait deja rattacher un abonne a
+        son secteur, mais le resultat mourait avec le snapshot. Or le
+        planificateur et la boucle QoE lisent la TABLE, pas le graphe -- ils
+        travaillaient donc en permanence sur un index vide.
+
+        ON N'EFFACE JAMAIS UN RATTACHEMENT DEVENU ABSENT, on ne fait qu'ajouter
+        et mettre a jour. Meme raison que le ``prune=False`` de la
+        reconciliation : une lecture UISP momentanement muette detacherait tout
+        le parc d'un coup, ferait remonter chaque file d'abonne a la racine, et
+        la decouverte suivante les redescendrait -- une oscillation qui reecrit
+        les files de tous les PoPs a chaque hoquet. Un CPE qui change vraiment de
+        secteur est corrige au cycle suivant, puisque la jointure le reconduit.
+
+        La MAC du CPE accompagne le rattachement quand on la connait : elle
+        permet de verifier apres coup d'ou vient un rattachement, et distingue un
+        abonne PPPoE observe d'un client statique declare.
+        """
+        if not snapshot.subscriber_sectors:
+            return
+        ecrire = getattr(self.repository, "save_attachments", None)
+        if not callable(ecrire):
+            return  # depot d'une generation anterieure, ou double de test
+
+        macs: dict[str, str] = {}
+        for session in sessions:
+            login = str(session.get("name") or session.get("login") or "")
+            mac = normalize_mac(session.get("caller-id") or session.get("caller_id"))
+            if login and mac:
+                macs[login] = mac
+
+        rattachements = {
+            login: (secteur, macs.get(login))
+            for login, secteur in snapshot.subscriber_sectors.items()
+        }
+        try:
+            ecrits = await ecrire(rattachements)
+        except Exception:  # noqa: BLE001 - un rattachement perdu ne casse pas la decouverte
+            logger.exception("Rattachements abonne -> secteur non enregistres")
+            return
+        logger.info("Topologie : %d rattachement(s) abonne -> secteur enregistres", ecrits)
 
     @staticmethod
     async def _read_router_topology(collector: MikrotikCollector) -> dict[str, Any]:
@@ -542,6 +671,12 @@ class ShapingService:
                 "identity": client.identity(),
                 "serial": serial,
                 "export": export,
+                # Sessions PPPoE : lues ICI et pas dans un second passage, pour
+                # leur champ 'caller-id' (la MAC du CPE de l'abonne). C'est la
+                # seule cle qui relie un abonne a la station radio par laquelle
+                # il passe. Optionnelle : un coeur ou une passerelle n'a pas de
+                # serveur PPPoE, et son absence ne doit rien faire echouer.
+                "ppp": optionnel("ppp_active"),
                 # --- Configuration : d'ou vient la hierarchie reelle ---
                 "routes": optionnel("routes"),
                 "vlans": optionnel("vlans"),
@@ -571,28 +706,11 @@ class ShapingService:
         texte = await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
         return {"router_name": router_name, "export": texte, "parsed": parse_export(texte)}
 
-    async def map_sectors(
-        self, sessions: list[dict[str, Any]], uisp_devices: list[dict[str, Any]]
-    ) -> dict[str, str]:
-        """Rattache les abonnes a leur secteur via la MAC du CPE.
-
-        C'est la jointure qui donne la vraie chaine de goulots : sans elle, on
-        sait qu'un abonne est sur un PoP mais pas par quelle antenne il passe.
-        """
-        if self.last_snapshot is None:
-            return {}
-        stations: dict[str, str] = {}
-        for device in uisp_devices:
-            identification = device.get("identification") or {}
-            mac = normalize_mac(identification.get("mac"))
-            if not mac:
-                continue
-            parent = (device.get("attributes") or {}).get("apDevice") or {}
-            parent_id = parent.get("id")
-            if parent_id:
-                stations[mac] = f"uisp:{parent_id}"
-        map_subscribers_to_sectors(self.last_snapshot, sessions, stations)
-        return dict(self.last_snapshot.subscriber_sectors)
+    # NOTE : la jointure abonne -> secteur vit dans ``_joindre_secteurs``, appele
+    # par ``discover()``. Elle a longtemps eu ici un jumeau public (``map_sectors``)
+    # que PERSONNE n'appelait : la fonctionnalite paraissait donc presente alors
+    # qu'aucun abonne n'etait jamais rattache. Un seul chemin desormais, celui que
+    # la decouverte emprunte vraiment.
 
     # -------------------------------------------------------------- analyse
     async def inspect(self, router_name: str | None = None) -> list[RouterShapingState]:
@@ -666,6 +784,10 @@ class ShapingService:
         # interface physique -> file parente. Complete parent_par_noeud pour les
         # clients rattaches par leur VLAN plutot que par un secteur declare.
         parent_par_interface: dict[str, str] = {}
+        # Identites PHYSIQUES de l'equipement d'en face -> la file du lien qui le
+        # dessert. C'est par elles que la capacite radio mesuree retrouve son
+        # lien, plus bas.
+        liens_par_identite: dict[str, LinkTarget] = {}
         for lien in await self.repository.links():
             if lien.get("discovered_by") != router_name or not lien.get("interface"):
                 continue
@@ -682,6 +804,8 @@ class ShapingService:
                 trim_factor=resserrages.get(str(lien["key"]), 1.0),
             )
             liens.append(cible)
+            for identite in _identites_du_bout_distant(lien):
+                liens_par_identite.setdefault(identite, cible)
             if lien.get("target_key"):
                 parent_par_noeud[str(lien["target_key"])] = cible.queue_name
             # Index par PORT : c'est par la que passent les clients dont on
@@ -690,12 +814,44 @@ class ShapingService:
 
         # La capacite radio mesuree prime sur le debit negocie du port : c'est
         # elle le vrai goulot d'un backhaul sans fil.
+        #
+        # LE RAPPROCHEMENT SE FAIT SUR L'IDENTITE PHYSIQUE DE LA RADIO, PAS SUR
+        # SON NOM. Le nom d'un lien est l'identite que l'equipement d'en face
+        # annonce en MNDP/LLDP ('NanoBeam-Nord') ; le nom d'un backhaul est le
+        # libelle saisi par l'exploitant dans l'inventaire ('bh-1'). Rien ne les
+        # oblige a coincider, et en pratique ils different presque toujours : la
+        # capacite mesuree n'atteignait alors jamais la file, qui restait posee
+        # sur le debit negocie du PORT -- soit le plafond du cable ethernet, pas
+        # celui de la parabole. C'est precisement le goulot que ce controleur
+        # existe pour tenir.
+        #
+        # L'egalite des noms reste acceptee en DERNIER recours : elle sert les
+        # inventaires ou l'exploitant a deliberement nomme le backhaul comme la
+        # radio, et ne coute rien quand l'identite a deja tranche.
         for backhaul in await self.metrics.backhaul_latest():
             if backhaul.get("pop_name") != pop_name or not backhaul.get("capacity_mbps"):
                 continue
-            for cible_lien in liens:
-                if cible_lien.name == backhaul["name"]:
-                    cible_lien.measured_capacity_mbps = backhaul["capacity_mbps"]
+            cible_lien = None
+            for identite in _identites_du_backhaul(backhaul):
+                cible_lien = liens_par_identite.get(identite)
+                if cible_lien is not None:
+                    break
+            if cible_lien is None:
+                cible_lien = next(
+                    (lien for lien in liens if lien.name == backhaul["name"]),
+                    None,
+                )
+            if cible_lien is None:
+                logger.info(
+                    "Backhaul '%s' (%s) sans lien correspondant sur %s : sa capacite "
+                    "mesuree (%s Mbps) ne s'applique a aucune file parente.",
+                    backhaul.get("name"),
+                    backhaul.get("uisp_device_id") or "sans identifiant",
+                    router_name,
+                    backhaul.get("capacity_mbps"),
+                )
+                continue
+            cible_lien.measured_capacity_mbps = backhaul["capacity_mbps"]
 
         # L'ADRESSE VIENT DU ROUTEUR, PAS DE LA BASE.
         #
@@ -1033,13 +1189,37 @@ class ShapingService:
                 lien_par_secteur.setdefault(str(cle_secteur), ligne)
 
         par_secteur: dict[str, list[dict[str, Any]]] = {}
+        sans_secteur: list[str] = []
         for note in notes:
             secteur = rattachements.get(str(note["login"]))
             if secteur is None:
                 # Abonne dont on ignore le secteur : il ne peut incriminer
                 # personne. On ne devine pas un rattachement.
+                sans_secteur.append(str(note["login"]))
                 continue
             par_secteur.setdefault(secteur, []).append(note)
+
+        # NE PAS SE TAIRE QUAND ON NE PEUT PAS CONCLURE.
+        #
+        # Une boucle qui rend {scored: 12, sectors: [], errors: []} est
+        # indiscernable d'un reseau en pleine sante : c'est exactement le cas ou
+        # tous les abonnes sont notes mais aucun n'est rattache a un secteur, et
+        # la boucle ne peut alors RIEN faire. Le dire coute une ligne et evite de
+        # chercher la panne ailleurs.
+        resultat["unattached"] = sans_secteur
+        if sans_secteur and not par_secteur:
+            resultat["errors"].append(
+                f"{len(sans_secteur)} abonne(s) notes mais aucun rattache a un secteur : "
+                f"la boucle n'a aucun secteur a evaluer. Le rattachement vient de la "
+                f"jointure caller-id <-> station UISP a la decouverte, ou du champ "
+                f"'secteur' de la fiche pour un client a IP fixe."
+            )
+        elif sans_secteur:
+            resultat["errors"].append(
+                f"{len(sans_secteur)} abonne(s) notes sans secteur connu : ils ne comptent "
+                f"dans l'evaluation d'aucun secteur ({', '.join(sorted(sans_secteur)[:5])}"
+                f"{', ...' if len(sans_secteur) > 5 else ''})."
+            )
 
         routeurs: dict[str, list[str]] = {}
         for secteur in sorted(par_secteur):
@@ -1276,6 +1456,53 @@ class ShapingService:
             except Exception:  # noqa: BLE001
                 pass
         self._write_clients.clear()
+
+
+def _identites_physiques(
+    *, device_id: Any = None, mac: Any = None, node_key: Any = None
+) -> list[str]:
+    """Toutes les facons de designer le MEME equipement, normalisees.
+
+    Un backhaul et le bout distant d'un lien peuvent se reconnaitre par trois
+    biais : l'identifiant UISP, la MAC, ou la cle de noeud qui derive de l'un
+    des deux (``mac:AA:BB:..`` / ``uisp:<id>``). Un exploitant sans UISP met
+    d'ailleurs la MAC dans ``uisp_device_id`` -- le README le recommande -- donc
+    les deux champs doivent etre essayes l'un comme l'autre, et compares apres
+    normalisation : ``dc:9f:db:11:22:33`` et ``DC-9F-DB-11-22-33`` sont la meme
+    radio.
+    """
+    identites: list[str] = []
+
+    def ajouter(valeur: str) -> None:
+        if valeur and valeur not in identites:
+            identites.append(valeur)
+
+    for brut in (device_id, mac, node_key):
+        texte = str(brut or "").strip()
+        if not texte:
+            continue
+        # Une cle de noeud porte son prefixe : on compare la partie utile.
+        nu = texte.split(":", 1)[1] if texte.startswith(("mac:", "uisp:")) else texte
+        normalisee = normalize_mac(nu)
+        if normalisee:
+            ajouter(f"mac:{normalisee}")
+        else:
+            ajouter(f"id:{nu.casefold()}")
+    return identites
+
+
+def _identites_du_bout_distant(lien: dict[str, Any]) -> list[str]:
+    """Identites physiques de l'equipement a l'autre bout d'un lien."""
+    return _identites_physiques(
+        device_id=lien.get("target_uisp_device_id"),
+        mac=lien.get("target_mac"),
+        node_key=lien.get("target_key"),
+    )
+
+
+def _identites_du_backhaul(backhaul: dict[str, Any]) -> list[str]:
+    """Identites physiques d'un backhaul de l'inventaire."""
+    return _identites_physiques(device_id=backhaul.get("uisp_device_id"))
 
 
 def _segment_du_lien(lien: dict[str, Any]) -> str | None:

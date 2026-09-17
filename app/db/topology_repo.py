@@ -103,23 +103,32 @@ class TopologyRepository:
             )
         return {"nodes": len(noeuds), "links": len(liens)}
 
-    async def save_attachments(self, attachments: dict[int, tuple[str, str | None]]) -> int:
-        """Rattachements abonne -> secteur radio (subscriber_id -> (secteur, mac)).
+    async def save_attachments(self, attachments: dict[str, tuple[str, str | None]]) -> int:
+        """Rattachements abonne -> secteur radio (login -> (secteur, MAC du CPE)).
 
         La MAC est absente pour un client statique : il n'a pas de CPE observe,
         son rattachement vient d'une declaration.
+
+        LA CLE EST LE LOGIN, PAS L'IDENTIFIANT NUMERIQUE. C'est l'identite stable
+        que manipulent le graphe (``subscriber_sectors``), le planificateur et la
+        boucle QoE ; leur imposer de resoudre eux-memes un ``subscriber_id``
+        obligeait a un aller-retour de plus et ouvrait un decalage possible entre
+        les deux tables. La resolution se fait donc ICI, dans la meme requete :
+        un login inconnu de ``subscribers`` est simplement ignore par la
+        jointure, ce qui est le bon comportement pour un abonne pas encore
+        materialise par un cycle de collecte.
         """
         if not attachments:
             return 0
-        lignes = [(sid, secteur, mac) for sid, (secteur, mac) in attachments.items()]
+        lignes = [(login, secteur, mac) for login, (secteur, mac) in attachments.items()]
         async with self._pool.acquire() as conn:
             await conn.executemany(
                 """
                 INSERT INTO subscriber_attachments (subscriber_id, sector_key, cpe_mac)
-                VALUES ($1, $2, $3)
+                SELECT s.id, $2, $3 FROM subscribers s WHERE s.login = $1
                 ON CONFLICT (subscriber_id) DO UPDATE SET
                     sector_key = EXCLUDED.sector_key,
-                    cpe_mac    = EXCLUDED.cpe_mac,
+                    cpe_mac    = COALESCE(EXCLUDED.cpe_mac, subscriber_attachments.cpe_mac),
                     updated_at = now()
                 """,
                 lignes,
@@ -160,6 +169,13 @@ class TopologyRepository:
                        (l.last_seen > now() - INTERVAL '10 minutes') AS fresh,
                        s.name AS source_name, t.name AS target_name,
                        COALESCE(t.kind_override, t.kind) AS target_kind,
+                       -- Identite PHYSIQUE de l'equipement d'en face. C'est par
+                       -- elle que la capacite radio mesuree retrouve son lien :
+                       -- le NOM ne peut pas servir (cote lien c'est l'identite
+                       -- annoncee en MNDP, cote backhaul le libelle saisi par
+                       -- l'exploitant -- deux choses sans rapport).
+                       t.uisp_device_id AS target_uisp_device_id,
+                       t.mac AS target_mac,
                        p.max_down_mbps, p.max_up_mbps, p.enabled AS policy_enabled,
                        p.note AS policy_note,
                        im.rx_bps, im.tx_bps, im.running,

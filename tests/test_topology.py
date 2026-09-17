@@ -17,6 +17,7 @@ from app.collectors.topology import (
     link_by_shared_subnets,
     link_by_tunnels,
     map_subscribers_to_sectors,
+    mark_reciprocal_links,
     neighbor_node_key,
     normalize_mac,
     parse_export,
@@ -706,3 +707,124 @@ def test_reconciliation_supprime_un_lien_devenu_interne() -> None:
     ]
     _, fusion_liens = reconcile_topology(noeuds, liens)
     assert fusion_liens == []
+
+
+# ------------------------------------- un cable vu par ses deux bouts
+def _routeur(cle: str) -> TopologyNode:
+    return TopologyNode(key=cle, name=cle, kind=KIND_POP, attributes={"managed": True})
+
+
+def _paire_reciproque() -> TopologySnapshot:
+    """Le cas courant : deux PoPs relies par un cable, chacun voyant l'autre."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(_routeur("router:pop-1"))
+    snapshot.add_node(_routeur("router:core-1"))
+    snapshot.add_link(
+        TopologyLink(
+            source_key="router:pop-1",
+            target_key="router:core-1",
+            kind="ethernet",
+            interface="ether1",
+            capacity_mbps=1000.0,
+            discovered_by="pop-1",
+        )
+    )
+    snapshot.add_link(
+        TopologyLink(
+            source_key="router:core-1",
+            target_key="router:pop-1",
+            kind="ethernet",
+            interface="ether5",
+            capacity_mbps=10000.0,
+            discovered_by="core-1",
+        )
+    )
+    return snapshot
+
+
+def test_un_cable_vu_des_deux_bouts_ne_compte_qu_une_fois() -> None:
+    snapshot = _paire_reciproque()
+
+    assert mark_reciprocal_links(snapshot) == 1
+
+    miroirs = [lien for lien in snapshot.links.values() if lien.attributes.get("mirror_of")]
+    assert len(miroirs) == 1
+    # Le doublon reste EN BASE : sa cle porte peut-etre une surcharge de debit
+    # ou un resserrage QoE, que sa suppression effacerait en silence.
+    assert len(snapshot.links) == 2
+
+
+def test_le_lien_canonique_garde_le_port_d_en_face() -> None:
+    """Replier ne doit rien perdre : les deux noms de port restent lisibles."""
+    snapshot = _paire_reciproque()
+    mark_reciprocal_links(snapshot)
+
+    canonique = next(
+        lien for lien in snapshot.links.values() if not lien.attributes.get("mirror_of")
+    )
+    assert canonique.attributes["peer_interface"] in {"ether1", "ether5"}
+    assert canonique.attributes["peer_interface"] != canonique.interface
+    assert canonique.attributes["peer_router"] in {"pop-1", "core-1"}
+
+
+def test_la_capacite_retenue_est_la_plus_basse_des_deux_bouts() -> None:
+    """Convertisseur de media ou port bride : c'est le plus petit qui passe."""
+    snapshot = _paire_reciproque()
+    mark_reciprocal_links(snapshot)
+
+    canonique = next(
+        lien for lien in snapshot.links.values() if not lien.attributes.get("mirror_of")
+    )
+    assert canonique.capacity_mbps == 1000.0
+
+
+def test_le_choix_du_canonique_ne_bouge_pas_d_une_decouverte_a_l_autre() -> None:
+    """Sinon l'arbre et le tableau se reorganiseraient a chaque cycle."""
+    premier = _paire_reciproque()
+    mark_reciprocal_links(premier)
+    second = _paire_reciproque()
+    mark_reciprocal_links(second)
+
+    garde = lambda s: {  # noqa: E731
+        lien.key for lien in s.links.values() if not lien.attributes.get("mirror_of")
+    }
+    assert garde(premier) == garde(second)
+
+
+def test_deux_cables_paralleles_sont_laisses_intacts() -> None:
+    """Quatre liens, aucune preuve de qui repond a qui : on n'efface rien."""
+    snapshot = _paire_reciproque()
+    for source, cible, port, par in (
+        ("router:pop-1", "router:core-1", "ether2", "pop-1"),
+        ("router:core-1", "router:pop-1", "ether6", "core-1"),
+    ):
+        snapshot.add_link(
+            TopologyLink(
+                source_key=source,
+                target_key=cible,
+                kind="ethernet",
+                interface=port,
+                discovered_by=par,
+            )
+        )
+
+    assert mark_reciprocal_links(snapshot) == 0
+    assert not any(lien.attributes.get("mirror_of") for lien in snapshot.links.values())
+
+
+def test_un_lien_vers_un_equipement_non_gere_n_est_jamais_replie() -> None:
+    """Une radio ou un CPE n'a qu'un seul bout observe : rien a replier."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(_routeur("router:pop-1"))
+    snapshot.add_node(TopologyNode(key="mac:DC:9F:DB:11:22:33", name="BH", kind=KIND_RADIO))
+    snapshot.add_link(
+        TopologyLink(
+            source_key="router:pop-1",
+            target_key="mac:DC:9F:DB:11:22:33",
+            kind="ethernet",
+            interface="ether2",
+            discovered_by="pop-1",
+        )
+    )
+
+    assert mark_reciprocal_links(snapshot) == 0

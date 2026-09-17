@@ -482,6 +482,11 @@ async def test_un_abonne_sans_secteur_connu_n_accuse_personne(
     assert resultat["scored"] == 2
     assert resultat["sectors"] == []
     assert depot.ecritures == 0
+    # ET ON LE DIT. Rendre {scored: 2, sectors: [], errors: []} etait
+    # indiscernable d'un reseau sain : l'exploitant cherchait la panne ailleurs
+    # alors que la boucle n'avait simplement aucun secteur a evaluer.
+    assert sorted(resultat["unattached"]) == ["dupont", "durand"]
+    assert any("aucun rattache a un secteur" in e for e in resultat["errors"])
 
 
 async def test_un_secteur_sans_lien_connu_est_signale(
@@ -525,3 +530,27 @@ async def test_un_routeur_injoignable_n_arrete_pas_la_boucle(
 
     assert resultat["routers"] == []
     assert resultat["errors"] and "pop-test" in resultat["errors"][0]
+
+
+async def test_les_abonnes_sans_secteur_sont_nommes_meme_quand_la_boucle_agit(
+    settings: Settings, secteur_routeur: FakeRouterOsClient
+) -> None:
+    """Un secteur evalue ne doit pas masquer les abonnes restes hors de tout
+    secteur : ils ne comptent nulle part, et c'est une information."""
+
+    class RattachementPartiel(DepotQoe):
+        async def attachments(self) -> dict[str, str]:
+            return {"dupont": SECTEUR}
+
+    service = make_service(
+        settings,
+        secteur_routeur,
+        depot=RattachementPartiel(),
+        metriques=MetriquesQoe({"dupont": 5.0, "durand": 8.0}),
+    )
+    await service.registry.reload()
+
+    resultat = await service.adjust_for_qoe()
+
+    assert resultat["unattached"] == ["durand"]
+    assert any("durand" in e for e in resultat["errors"])
