@@ -111,6 +111,10 @@
         </label>
         <button id="btn-topo-link" class="sm">Creer un lien</button>
         <button id="btn-topo-reset" class="sm">Reinitialiser la disposition</button>
+        <!-- Le graphe n'efface jamais rien tout seul, pour qu'un equipement
+             momentanement invisible ne disparaisse pas. Le revers : ce qui a
+             VRAIMENT disparu y reste. Voici le geste qui le retire. -->
+        <button id="btn-topo-forget" class="sm">Oublier les equipements disparus</button>
         <span class="spacer"></span>
         <span class="mode" id="net-count"></span>
       </div>

@@ -152,6 +152,79 @@ class TopologyRepository:
         logger.info("Topologie : %d case(s) de routeur retire effacee(s)", len(obsoletes))
         return len(obsoletes)
 
+    async def forget_stale(self, *, older_than_minutes: int) -> dict[str, int]:
+        """Oublie les equipements que plus aucune decouverte ne revoit.
+
+        POURQUOI CETTE ACTION EXISTE. ``save_snapshot`` n'efface jamais rien, et
+        c'est le bon defaut : un equipement momentanement invisible -- fade
+        radio, redemarrage, lecture en echec -- ne doit pas disparaitre de
+        l'arbre. Mais rien ne nettoyait non plus ce qui a VRAIMENT disparu : une
+        adresse de gestion changee, un lien de test demonte, un voisin croise une
+        fois pendant une migration. Ces cases s'accumulaient indefiniment, et
+        l'arbre finissait encombre de fantomes qu'aucun geste ne pouvait retirer
+        -- sinon les masquer une par une.
+
+        POURQUOI ELLE EST MANUELLE. Une purge automatique sur l'age ferait
+        exactement ce que le defaut refuse : effacer un PoP injoignable depuis
+        une heure. C'est donc l'exploitant qui declenche, qui choisit le seuil,
+        et qui voit d'abord combien de cases partiraient.
+
+        CE QU'ELLE EPARGNE, TOUJOURS :
+
+        - les routeurs de l'inventaire (cles ``router:``). Ils sont declares, pas
+          decouverts : leur case existe meme injoignable, c'est tout l'interet ;
+        - les liens et fusions poses A LA MAIN (``discovered_by = 'manual'``) :
+          ce sont des decisions d'exploitant, pas des observations.
+        """
+        seuil = max(1, int(older_than_minutes))
+        async with self._pool.acquire() as conn, conn.transaction():
+            obsoletes = [
+                row["key"]
+                for row in await conn.fetch(
+                    """
+                    SELECT key FROM topology_nodes
+                     WHERE key NOT LIKE 'router:%'
+                       AND last_seen < now() - ($1 || ' minutes')::interval
+                    """,
+                    str(seuil),
+                )
+            ]
+            if not obsoletes:
+                return {"nodes": 0, "links": 0}
+            liens = await conn.fetchval(
+                """
+                DELETE FROM topology_links
+                 WHERE discovered_by IS DISTINCT FROM 'manual'
+                   AND (source_key = ANY($1::text[]) OR target_key = ANY($1::text[]))
+                RETURNING 1
+                """,
+                obsoletes,
+            )
+            # Une case encore reliee par un lien MANUEL reste : l'exploitant a
+            # declare cette adjacence, la retirer effacerait sa decision.
+            retenues = {
+                row["key"]
+                for row in await conn.fetch(
+                    """
+                    SELECT n.key FROM topology_nodes n
+                     WHERE n.key = ANY($1::text[])
+                       AND EXISTS (SELECT 1 FROM topology_links l
+                                    WHERE l.discovered_by = 'manual'
+                                      AND (l.source_key = n.key OR l.target_key = n.key))
+                    """,
+                    obsoletes,
+                )
+            }
+            a_effacer = [cle for cle in obsoletes if cle not in retenues]
+            if a_effacer:
+                await conn.execute(
+                    "DELETE FROM topology_nodes WHERE key = ANY($1::text[])", a_effacer
+                )
+        logger.info(
+            "Topologie : %d case(s) disparue(s) oubliee(s) (seuil %d min)", len(a_effacer), seuil
+        )
+        return {"nodes": len(a_effacer), "links": int(liens or 0)}
+
     async def save_attachments(self, attachments: dict[str, tuple[str, str | None]]) -> int:
         """Rattachements abonne -> secteur radio (login -> (secteur, MAC du CPE)).
 

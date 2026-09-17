@@ -3277,6 +3277,45 @@ async function resetTopoLayout() {
   } catch (err) { alert(err.message); }
 }
 
+/** Retire de l'arbre ce qu'aucune decouverte ne revoit depuis un moment.
+ *
+ *  Le graphe n'efface jamais rien tout seul, pour qu'un equipement
+ *  momentanement invisible -- fade radio, redemarrage, lecture en echec -- ne
+ *  disparaisse pas. Le revers : une adresse de gestion changee, un lien de test
+ *  demonte ou un voisin croise pendant une migration y restent pour toujours.
+ *  Il n'existait aucun geste pour les retirer, sinon masquer les cases une par
+ *  une. En voici un, explicite et borne. */
+async function forgetStaleNodes() {
+  const heures = prompt(
+    'Oublier les equipements que la decouverte ne revoit plus.\n\n' +
+    'Depuis combien d\'HEURES un equipement doit-il avoir disparu pour etre ' +
+    'retire de l\'arbre ?\n\n' +
+    'Les routeurs de votre inventaire ne sont jamais concernes, meme ' +
+    'injoignables : leur case est declaree, pas decouverte. Les liens poses a ' +
+    'la main non plus. Ce qui existe encore revient a la prochaine decouverte.',
+    '24');
+  if (heures === null) return;
+  const minutes = Math.round(Number(heures) * 60);
+  if (!Number.isFinite(minutes) || minutes < 5) {
+    alert('Duree invalide : au moins 5 minutes (0.1 heure).');
+    return;
+  }
+  try {
+    const r = await api('/topology/forget-stale?confirm=true&older_than_minutes=' + minutes,
+      { method: 'POST' });
+    // Le redessin AVANT le message : loadNetwork reecrit #topo-notice avec les
+    // remarques de la derniere decouverte, et effacerait le compte-rendu.
+    await loadNetwork();
+    const notice = document.getElementById('topo-notice');
+    if (notice) {
+      notice.insertAdjacentHTML('afterbegin',
+        '<div class="notice ok"><b>' + esc(r.forgotten_nodes) +
+        ' case(s) et ' + esc(r.forgotten_links) + ' lien(s) oublies.</b>' +
+        '<span class="hint">' + esc(r.detail) + '</span></div>');
+    }
+  } catch (err) { alert(err.message); }
+}
+
 /** Debit mesure d'un lien, dans le sens du tableau : la fleche part de la
  *  colonne "Depuis" et va vers la colonne "Vers". Aucune heuristique ici, on
  *  montre les compteurs tels que le routeur les tient. */
@@ -4272,6 +4311,7 @@ document.getElementById('topo-rate-only').addEventListener('change', (e) => {
   if (topo.data) { renderTopoCanvas(); renderTopologyLinks(topo.data.links); }
 });
 document.getElementById('btn-topo-reset').addEventListener('click', resetTopoLayout);
+document.getElementById('btn-topo-forget').addEventListener('click', forgetStaleNodes);
 document.getElementById('btn-topo-link').addEventListener('click', (e) => {
   topo.linkMode = !topo.linkMode;
   topo.linkSource = null;
