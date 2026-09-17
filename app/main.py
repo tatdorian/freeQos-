@@ -23,6 +23,7 @@ from app.api import (
     antennas_admin,
     health,
     metrics,
+    pop_census,
     remote,
     routers_admin,
     shaping,
@@ -65,13 +66,16 @@ le meme chemin de planification :
   saisi par l'operateur est la seule verite, et son debit se lit sur les compteurs de
   la file qui le vise.
 
-**Detection assistee, jamais automatique** : la table ARP des routeurs
-(``/ip/arp``, filtree aux VLAN qui n'hebergent pas de serveur PPPoE) sert a deux
-choses seulement -- confirmer la presence d'un client deja declare, et PROPOSER
-des candidats dans ``/static-clients/candidates``. Un candidat n'est pas un
-client : une imprimante ou l'equipement d'un autre operateur laissent la meme
-trace. Aucun candidat n'est jamais faconne, aucun ne recoit de plan, et il
-n'existe deliberement aucune route pour le promouvoir -- declarer passe par
+**Detection assistee, jamais automatique** : un recensement du PoP
+(``/pops/census``) croise sept sources de presence -- ``/ip/arp``, baux DHCP,
+sessions PPPoE, table de ponts, routes statiques, files deja posees, voisinage --
+sur les sous-reseaux que le routeur dessert reellement (``/ip/address``), et non
+sur le seul nom des interfaces. Il sert a deux choses seulement : confirmer la
+presence d'un client deja declare, et PROPOSER des candidats dans
+``/static-clients/candidates``. Un candidat n'est pas un client : une imprimante
+ou l'equipement d'un autre operateur laissent la meme trace. Aucun candidat
+n'est jamais faconne, aucun ne recoit de plan, et il n'existe deliberement
+aucune route pour le promouvoir -- declarer passe par
 ``POST /static-clients`` avec un debit souscrit que seul un humain connait.
 
 **Boucle fermee QoE** : un job periodique lit le score de QoE composite
@@ -118,6 +122,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     app.include_router(remote.router, prefix=settings.api_prefix)
     app.include_router(shaping.router, prefix=settings.api_prefix)
     app.include_router(static_clients.router, prefix=settings.api_prefix)
+    app.include_router(pop_census.router, prefix=settings.api_prefix)
     app.include_router(settings_api.router, prefix=settings.api_prefix)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(ui_router)
