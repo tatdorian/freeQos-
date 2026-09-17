@@ -186,6 +186,14 @@ class RouteurQuiSeSouvient(FauxClientEcriture):
 
     def execute(self, action):  # type: ignore[no-untyped-def]
         resultat = super().execute(action)
+        if action.path == "/queue/type":
+            # Sans cette memoire, les types CAKE seraient recrees a chaque
+            # passage : un cycle de reconciliation n'aurait alors jamais "rien
+            # a faire", et on ne pourrait pas tester ce cas.
+            self.lecture.queue_type_rows.append(
+                {".id": f"*t{len(self.lecture.queue_type_rows)}", **action.fields}
+            )
+            return resultat
         if action.path != "/queue/simple":
             return resultat
         lignes = self.lecture.simple_queue_rows

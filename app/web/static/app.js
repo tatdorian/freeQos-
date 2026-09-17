@@ -309,6 +309,8 @@ const state = {
   routers: [], lastPoints: [], lastTree: [],
   // Lien suivi dans le tiroir, et derniere mesure instantanee affichee.
   link: null, linkLive: null,
+  // Motif de la derniere bascule d'enforcement, rendu avec la carte du shaping.
+  enforcementReason: null,
 };
 
 function statCard(cls, label, value, unit, sub) {
@@ -4046,11 +4048,141 @@ async function loadShaping() {
   const select = document.getElementById('shaping-router');
   if (!select.options.length) {
     const inventaire = await api('/pops/routers');
-    select.innerHTML = inventaire.routers
+    select.innerHTML = '<option value="">Tous les PoP</option>' + inventaire.routers
       .map((r) => '<option value="' + esc(r.name) + '">' + esc(r.name) + '</option>').join('');
   }
   await refreshEnforcement();
-  await loadAudit();
+  await loadPoints();
+  // Le journal n'est lu que si le detail technique est ouvert : c'est une
+  // lecture de plus pour une question qu'on ne se pose pas tous les jours.
+  if (document.getElementById('shaping-technique').open) await loadAudit();
+}
+
+/** Etats d'un point de shaping, et ce qu'ils veulent dire sur le reseau. */
+const POINT_ETATS = {
+  'file-posee': ['ok', 'bride'],
+  'file-a-poser': ['warn', 'a poser'],
+  'ecarte': ['warn', 'pas de file'],
+  'conflit': ['crit', 'conflit'],
+  'posee-a-la-main': ['', 'file manuelle'],
+};
+
+function pointBadge(etat) {
+  const [classe, libelle] = POINT_ETATS[etat] || ['', etat || '?'];
+  return '<span class="badge ' + classe + '">' + esc(libelle) + '</span>';
+}
+
+function pointDebit(point) {
+  if (point.limit) return esc(point.limit);
+  const bas = point.down_mbps, haut = point.up_mbps;
+  if (bas === null && haut === null) return '<span class="hint">-</span>';
+  const fmt = (v) => (v === null || v === undefined ? '0' : mbps(v));
+  return fmt(bas) + ' &darr; / ' + fmt(haut) + ' &uarr;';
+}
+
+/** Une ligne de la carte, et ses enfants en dessous.
+ *
+ *  L'arbre est celui que RouterOS applique : un abonne pend sous le lien qu'il
+ *  traverse, et partage donc son plafond avec ses voisins. L'afficher a plat
+ *  obligerait a le reconstruire de tete. */
+function renderPoint(point, profondeur) {
+  const decalage = 'padding-left:' + (profondeur * 1.1 + 0.2) + 'rem';
+  const nature = point.kind === 'lien'
+    ? '<span class="badge">lien</span>'
+    : (point.detail && point.detail.nature === 'static'
+      ? '<span class="badge">client IP fixe</span>'
+      : '<span class="badge">abonne</span>');
+  const cible = point.target
+    ? '<code>' + esc(point.target) + '</code>'
+    : '<span class="hint">aucune cible</span>';
+  // Le motif s'affiche pour ce qui ne bride PAS et ne bridera pas tout seul :
+  // c'est l'information qu'on est venu chercher, et une infobulle la cacherait.
+  // "A poser" n'en a pas besoin -- le bandeau du haut dit deja que la boucle
+  // passe, et le repeter sur chaque ligne noierait les deux qui comptent.
+  const motif = (point.state === 'ecarte' || point.state === 'conflit')
+    ? '<span class="hint">' + esc(point.reason || '') + '</span>' : '';
+  const ligne =
+    '<tr>' +
+    '<td style="' + decalage + '">' + (profondeur ? '<span class="hint">&#8627; </span>' : '') +
+      '<b>' + esc(point.label) + '</b> ' + nature + motif + '</td>' +
+    '<td>' + cible + '</td>' +
+    '<td class="num">' + pointDebit(point) + '</td>' +
+    '<td>' + esc(point.source || '') + '</td>' +
+    '<td title="' + esc(point.reason || '') + '">' + pointBadge(point.state) + '</td>' +
+    '</tr>';
+  return ligne + (point.children || []).map((e) => renderPoint(e, profondeur + 1)).join('');
+}
+
+/** La carte du shaping : ou ca bride sur le reseau, et a combien.
+ *
+ *  Les commandes partent toutes seules (boucle de reconciliation) : cette page
+ *  ne fait que regarder. Le bandeau du haut dit quand la derniere passe a eu
+ *  lieu -- sans lui, une page qui n'a aucun bouton se lit comme une page qui ne
+ *  fait rien. */
+async function loadPoints() {
+  const host = document.getElementById('shaping-points');
+  const routeur = document.getElementById('shaping-router').value;
+  if (!host.innerHTML) host.innerHTML = '<div class="empty">Lecture des routeurs...</div>';
+  let data;
+  try {
+    data = await api('/shaping/points' + (routeur ? '?router=' + encodeURIComponent(routeur) : ''));
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const passe = data.last_reconcile;
+  const cadence = Math.round(data.reconcile_interval_s || 0);
+  let bandeau;
+  if (!data.enforcement_enabled) {
+    bandeau = '<div class="notice"><strong>Application automatique en veille.</strong> ' +
+      'La carte ci-dessous est calculee et tenue a jour, mais rien n\'est ecrit tant que ' +
+      'l\'enforcement est coupe. Les points marques <b>a poser</b> partiront des que ' +
+      'vous basculerez l\'interrupteur.</div>';
+  } else {
+    bandeau = '<div class="notice ok"><strong>Application automatique active.</strong> ' +
+      'Les commandes partent seules, toutes les ' + esc(cadence) + ' s' +
+      (passe && passe.at
+        ? ' &middot; derniere passe ' + esc(depuis(passe.at)) + ' : ' +
+          esc(passe.applied || 0) + ' commande(s) sur ' + esc((passe.routers || []).length) +
+          ' routeur(s)'
+        : ' &middot; premiere passe a venir') +
+      ((passe && (passe.errors || []).length)
+        ? '<span class="hint">' + esc(passe.errors.join(' | ')) + '</span>' : '') +
+      (state.enforcementReason
+        ? '<span class="hint">Ecriture autorisee, motif : ' +
+          esc(state.enforcementReason) + '</span>' : '') +
+      '</div>';
+  }
+
+  const routeurs = data.routers || [];
+  const corps = routeurs.map((r) => {
+    if (r.error) {
+      return '<div class="notice err"><strong>' + esc(r.router) + '</strong> : ' +
+        esc(r.error) + '</div>';
+    }
+    const c = r.counts || {};
+    const entete = '<h2 style="margin-top:1rem">' + esc(r.router) +
+      ' <span class="hint">' + esc(r.pop_name || '') + '</span></h2>' +
+      '<div class="hint" style="margin-bottom:.4rem">' +
+      esc(c['file-posee'] || 0) + ' point(s) brides &middot; ' +
+      esc(c['file-a-poser'] || 0) + ' a poser &middot; ' +
+      esc(c['ecarte'] || 0) + ' sans file &middot; ' +
+      esc(c['posee-a-la-main'] || 0) + ' file(s) manuelle(s)' +
+      ((c['conflit'] || 0) ? ' &middot; ' + esc(c['conflit']) + ' conflit(s)' : '') +
+      '</div>';
+    if (!(r.points || []).length) {
+      return entete + '<div class="empty">Aucun point de shaping sur ce routeur : ni lien ' +
+        'decouvert, ni abonne a brider.</div>';
+    }
+    return entete + '<div class="table-wrap"><table><thead><tr>' +
+      '<th>Point du reseau</th><th>Cible</th><th class="num">Plafond</th>' +
+      '<th>D\'ou vient le plafond</th><th>Etat</th>' +
+      '</tr></thead><tbody>' +
+      r.points.map((p) => renderPoint(p, 0)).join('') +
+      '</tbody></table></div>';
+  }).join('');
+
+  host.innerHTML = bandeau + (corps || '<div class="empty">Aucun routeur collecte.</div>');
 }
 
 async function refreshEnforcement() {
@@ -4068,24 +4200,16 @@ async function refreshEnforcement() {
     ? 'ENFORCEMENT_LOCKED=true : la bascule est interdite depuis l\'interface'
     : 'Autoriser ou couper l\'ecriture sur les routeurs';
 
+  // Le bandeau de la carte dit deja si l'ecriture est active et quand la boucle
+  // est passee : ne reste ici que ce qu'il ne peut pas dire.
   const notice = document.getElementById('shaping-notice');
-  if (etat.enabled) {
-    notice.innerHTML = '<div class="notice warn"><strong>Ecriture autorisee.</strong> ' +
-      'Les plans appliques modifient reellement les routeurs. Seules les files ' +
-      'portant <code>freeqos:managed</code> sont concernees.' +
-      (etat.last_change && etat.last_change.reason
-        ? '<span class="hint">Motif : ' + esc(etat.last_change.reason) + '</span>' : '') +
-      '</div>';
-  } else {
-    notice.innerHTML = '<div class="notice"><strong>Lecture seule.</strong> ' +
-      'Les plans sont calcules et affiches, mais rien n\'est envoye. ' +
-      'Basculez l\'interrupteur pour autoriser l\'ecriture.' +
-      (etat.locked
-        ? '<span class="hint">Verrouille par <code>ENFORCEMENT_LOCKED=true</code> : ' +
-          'seul un redemarrage avec <code>ENFORCEMENT_ENABLED</code> modifie peut ' +
-          'autoriser l\'ecriture.</span>'
-        : '') + '</div>';
-  }
+  notice.innerHTML = etat.locked
+    ? '<div class="notice"><strong>Ecriture verrouillee.</strong> ' +
+      '<code>ENFORCEMENT_LOCKED=true</code> : l\'interrupteur est sans effet, seul un ' +
+      'redemarrage avec <code>ENFORCEMENT_ENABLED</code> modifie peut autoriser ' +
+      'l\'ecriture.</div>'
+    : '';
+  state.enforcementReason = (etat.last_change && etat.last_change.reason) || null;
 }
 
 async function toggleEnforcement(active) {
@@ -4518,6 +4642,10 @@ document.getElementById('range-select').addEventListener('change', (e) => {
   loadThroughput();
 });
 document.getElementById('btn-test').addEventListener('click', testConnection);
+document.getElementById('shaping-router').addEventListener('change', loadPoints);
+document.getElementById('shaping-technique').addEventListener('toggle', (e) => {
+  if (e.target.open) loadAudit();
+});
 document.getElementById('btn-inspect').addEventListener('click', inspectShaping);
 document.getElementById('enforcement-toggle').addEventListener('change', (e) => {
   toggleEnforcement(e.target.checked);
@@ -4600,7 +4728,7 @@ refreshHealth();
 // pendant qu'un administrateur le remplit.
 // Les vues d'edition ne se rafraichissent pas toutes seules : ce serait effacer
 // un formulaire en cours de saisie, ou un plan qu'on est en train de lire.
-const VUES_FIGEES = new Set(['pops', 'shaping', 'settings']);
+const VUES_FIGEES = new Set(['pops', 'settings']);
 setInterval(() => {
   if (VUES_FIGEES.has(state.view)) return;
   // L'arbre porte le debit des liens : le laisser vivre pour ne pas afficher un
@@ -4612,6 +4740,9 @@ setInterval(() => {
   // Vue Files live : ne pas ecraser un champ de debit en cours de saisie.
   if (state.view === 'exec' && document.activeElement &&
       document.activeElement.tagName === 'INPUT') return;
+  // Vue Shaping : la carte vit, mais pas pendant qu'on lit un plan calcule a la
+  // main -- le rafraichissement l'effacerait sous les yeux de l'exploitant.
+  if (state.view === 'shaping' && document.getElementById('shaping-technique').open) return;
   refresh();
   // Le tiroir d'un lien suit le meme rythme : on regarde un debit justement
   // quand il bouge.

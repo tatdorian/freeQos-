@@ -225,12 +225,16 @@ class PlanAction:
 
 @dataclass(slots=True)
 class PlanSkip:
-    """Un abonne volontairement laisse de cote, et pourquoi.
+    """Ce qui a ete volontairement laisse de cote, et pourquoi.
 
     Sans cette trace, un abonne absent du plan est indiscernable d'un abonne
     correctement shape : l'exploitant chercherait la panne au mauvais endroit.
+    Les LIENS ecartes y figurent aussi -- un lien sans file parente ne partage
+    rien, et sa disparition silencieuse du plan etait tout aussi trompeuse.
     """
 
+    # Le login d'un abonne, ou le nom d'un lien. Le champ garde son nom d'origine
+    # pour ne pas casser les lectures existantes du plan.
     login: str
     reason: str
 

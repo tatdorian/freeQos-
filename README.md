@@ -508,16 +508,46 @@ Activer demande une confirmation et un motif, tracé dans le journal ; couper es
 et sans cérémonie. `ENFORCEMENT_LOCKED=true` interdit la bascule depuis l'interface, pour
 qui préfère garder la friction du redémarrage.
 
-**Le parcours, en trois temps volontairement séparés :**
+**Les commandes partent seules.** La boucle de réconciliation
+(`SHAPING_RECONCILE_INTERVAL_S`, 120 s par défaut) relit l'état désiré, le compare aux
+routeurs et écrit l'écart — sans que personne n'ait rien à cliquer. C'est elle qui fait
+qu'un débit saisi dans l'interface **plafonne vraiment**, et qu'une reconnexion PPPoE ne
+laisse pas une file posée sur l'adresse d'hier. Déclarer un client à IP fixe applique en
+plus **immédiatement**, sans attendre son passage.
+
+**L'onglet Shaping montre donc la CARTE, pas les commandes.** La question de l'exploitant
+n'est pas « quelles commandes as-tu envoyées » — c'est **où ça bride, et à combien**. La
+page rend l'arbre que RouterOS applique réellement : chaque lien parent porte les abonnés
+qui passent par lui, avec son plafond et **d'où vient ce plafond** (capacité mesurée,
+surcharge saisie, plan souscrit, boost, resserrage QoE).
+
+| État d'un point | Ce qu'il veut dire |
+|---|---|
+| **bridé** | la file est en place sur le routeur, conforme à ce qui est prévu |
+| **à poser** | elle sera écrite au prochain passage de la boucle (ou dès l'activation de l'enforcement) |
+| **pas de file** | le planificateur l'a écartée, avec son motif : aucun débit à appliquer, adresse revendiquée deux fois, lien désactivé à la main… |
+| **conflit** | une file tierce occupe déjà cette cible ; RouterOS n'appliquerait que la première |
+| **file manuelle** | une file posée par l'exploitant, sans `freeqos:managed` : montrée parce qu'elle bride, **jamais** modifiée |
+
+Les points **sans file y figurent au même titre que les autres**. Une carte qui ne
+montrerait que ce qui marche laisserait chercher le reste dans le journal des commandes,
+c'est-à-dire nulle part. `GET /api/v1/shaping/points` rend cet arbre, en lecture seule —
+même enforcement actif, cette page regarde, la boucle écrit.
+
+**Le détail technique reste accessible**, replié sous la carte : analyse brute de
+l'existant, plan calculé à la demande, et le journal des commandes envoyées. Toute
+commande doit rester vérifiable ; ce n'est simplement pas la question de tous les jours.
+
+**Le parcours manuel, quand on veut voir avant d'écrire :**
 
 ```
+GET  /api/v1/shaping/points   OÙ le réseau est bridé, et à combien
 GET  /api/v1/shaping/state    ce qui est DÉJÀ configuré sur le routeur
 POST /api/v1/shaping/plan     ce qu'il faudrait changer, commandes exactes
 POST /api/v1/shaping/apply    exécution — dry_run:true par défaut
 ```
 
-Dans l'interface : onglet **Shaping** → *Analyser l'existant* → *Calculer le plan* →
-*Appliquer*. Le plan affiche chaque commande RouterOS telle qu'elle sera envoyée, avec sa
+Le plan affiche chaque commande RouterOS telle qu'elle sera envoyée, avec sa
 raison et ce qui change :
 
 ```
@@ -1256,6 +1286,7 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `GET` | `/api/v1/topology/links/{key}/throughput` | Débit mesuré d'un lien + historique |
 | `GET` | `/api/v1/topology/links/{key}/live` | Mesure instantanée (`/interface/monitor-traffic`) |
 | `GET` | `/api/v1/topology/routers/{name}/export` | Config complète (`/export`) + son analyse |
+| `GET` | `/api/v1/shaping/points` | **La carte du shaping** : où ça bride sur le réseau, à combien, et pourquoi pas ailleurs |
 | `GET` | `/api/v1/shaping/state` | Ce qui est **déjà** configuré sur les routeurs |
 | `PUT` · `DELETE` | `/api/v1/shaping/policies` | Fixer / retirer un débit imposé |
 | `POST` | `/api/v1/shaping/plan` | Commandes exactes, **sans rien envoyer** |

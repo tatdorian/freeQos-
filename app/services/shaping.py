@@ -27,6 +27,7 @@ from app.collectors.config_graph import (
     routing_peers,
 )
 from app.collectors.mikrotik import MikrotikCollector
+from app.collectors.parsing import parse_flag
 from app.collectors.topology import (
     KIND_RADIO,
     KIND_SECTOR,
@@ -53,7 +54,7 @@ from app.collectors.topology import (
 from app.config import Settings
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.capability import WriteCapability, inspect_write_capability
-from app.enforcement.models import PREFIX, Plan, network_target, slugify
+from app.enforcement.models import PREFIX, Plan, QueueSpec, network_target, slugify
 from app.enforcement.planner import (
     LinkTarget,
     SubscriberTarget,
@@ -192,6 +193,10 @@ class ShapingService:
         # Etat courant du drapeau. La base fait foi une fois amorcee ; la
         # variable d'environnement ne sert plus qu'a la valeur initiale.
         self._enforcement_enabled = settings.enforcement_enabled
+        # Ce qu'a fait le DERNIER passage de la boucle de reconciliation. C'est
+        # elle qui ecrit sur les routeurs ; sans cette trace, l'exploitant n'a
+        # aucun moyen de voir qu'elle tourne, et croit que rien ne se passe.
+        self.last_reconcile: dict[str, Any] | None = None
 
     # ------------------------------------------------------------- drapeau
     @property
@@ -952,6 +957,21 @@ class ShapingService:
                 continue
             surcharge = surcharges_liens.get(lien["key"], {})
             if surcharge and not surcharge.get("enabled", True):
+                # Le lien reste dans l'etat desire, DESACTIVE. Le retirer d'ici
+                # le faisait disparaitre partout : ni file, ni motif, ni ligne
+                # sur la carte du shaping -- alors qu'un lien sans file parente
+                # ne partage plus rien, ce qui se voit sur le reseau. Il n'entre
+                # en revanche dans aucun index : il ne doit ni servir de parent,
+                # ni capter la capacite mesuree d'un backhaul.
+                liens.append(
+                    LinkTarget(
+                        name=str(lien.get("target_name") or lien["interface"]),
+                        interface=str(lien["interface"]),
+                        subnet=_segment_du_lien(lien),
+                        measured_capacity_mbps=lien.get("capacity_mbps"),
+                        enabled=False,
+                    )
+                )
                 continue
             cible = LinkTarget(
                 name=str(lien.get("target_name") or lien["interface"]),
@@ -1194,6 +1214,209 @@ class ShapingService:
             enabled=surcharge.get("enabled", True),
             parent=parent,
         )
+
+    # ------------------------------------------------ carte du shaping
+    #
+    # LA QUESTION DE L'EXPLOITANT N'EST PAS "quelles commandes as-tu envoyees",
+    # c'est "OU est-ce que ca bride, et a combien". Les commandes sont un moyen ;
+    # les montrer comme resultat oblige a relire du RouterOS pour reconstruire
+    # mentalement une carte que le controleur possede deja.
+    ETAT_MANUELLE = "posee-a-la-main"
+
+    POINT_LIEN = "lien"
+    POINT_ABONNE = "abonne"
+
+    async def shaping_points(self, router_name: str | None = None) -> dict[str, Any]:
+        """Ou le shaping s'applique sur le reseau, et ou il ne s'applique pas.
+
+        Rend un ARBRE : chaque lien parent porte les abonnes qui passent par lui.
+        C'est la hierarchie que RouterOS applique reellement, et c'est aussi
+        celle qui explique un debit -- un abonne a 100 Mbps sous un backhaul
+        plafonne a 80 partage ces 80 avec ses voisins.
+
+        Les points ECARTES y figurent au meme titre que les autres : un abonne
+        sans file n'est pas absent de la carte, il y est avec son motif. Une
+        carte qui ne montrerait que ce qui marche laisserait chercher le reste
+        dans le journal des commandes, c'est-a-dire nulle part.
+
+        Lecture seule. Aucun plan n'est applique ici, meme quand l'enforcement
+        est actif : cette page REGARDE, la boucle de reconciliation ECRIT.
+        """
+        noms = [c.name for c in self.registry.collectors if router_name in (None, "", c.name)]
+        resultats = await asyncio.gather(
+            *(self._points_un_routeur(nom) for nom in noms), return_exceptions=True
+        )
+        routeurs: list[dict[str, Any]] = []
+        for nom, resultat in zip(noms, resultats, strict=True):
+            if isinstance(resultat, BaseException):
+                logger.exception("Carte du shaping impossible sur %s", nom)
+                routeurs.append(
+                    {
+                        "router": nom,
+                        "error": f"{type(resultat).__name__}: {resultat}",
+                        "points": [],
+                        "counts": {},
+                    }
+                )
+                continue
+            routeurs.append(resultat)
+        return {
+            "enforcement_enabled": self._enforcement_enabled,
+            "last_reconcile": self.last_reconcile,
+            "reconcile_interval_s": self.settings.shaping_reconcile_interval_s,
+            "routers": routeurs,
+        }
+
+    async def _points_un_routeur(self, router_name: str) -> dict[str, Any]:
+        """La carte d'un routeur, batie sur le MEME calcul que le plan.
+
+        Rien n'est recalcule a cote : les memes ``build_targets`` et
+        ``desired_state`` que l'ecriture, puis ``build_plan`` pour savoir ce qui
+        est deja en place. Une carte qui raconterait autre chose que ce que fait
+        le controleur serait pire qu'une absence de carte.
+        """
+        collector = self._collector(router_name)
+        liens, abonnes = await self.build_targets(router_name)
+        etat = await self._inspect_one(collector)
+        types, files, ecartes = desired_state(
+            links=liens,
+            subscribers=abonnes,
+            safety_factor=self.settings.shaping_safety_factor,
+            floor_mbps=self.settings.shaping_floor_mbps,
+            target_mode=self.settings.subscriber_queue_target,
+            queue_unmeasured_links=self.settings.shaping_queue_for_detected_links,
+        )
+        plan = build_plan(
+            router_name,
+            desired_types=types,
+            desired_queues=files,
+            actual_types=etat.queue_types,
+            actual_queues=etat.simple_queues,
+            prune=False,
+            adopt=self.settings.shaping_adopt_foreign_queues,
+        )
+        a_ecrire = {a.name for a in plan.actions if a.path == "/queue/simple" and a.name}
+        conflits = {c.name: c.detail for c in plan.conflicts}
+        motifs = {e.login: e.reason for e in ecartes}
+        specs = {f.name: f for f in files}
+
+        points: list[dict[str, Any]] = []
+        for lien in liens:
+            points.append(
+                self._point(
+                    kind=self.POINT_LIEN,
+                    label=lien.name,
+                    spec=specs.get(lien.queue_name),
+                    queue_name=lien.queue_name,
+                    detail={
+                        "interface": lien.interface,
+                        "capacity_mbps": lien.measured_capacity_mbps,
+                        "trim_factor": lien.trim_factor,
+                        "override": lien.override_down_mbps is not None
+                        or lien.override_up_mbps is not None,
+                    },
+                    a_ecrire=a_ecrire,
+                    conflits=conflits,
+                    motifs=motifs,
+                )
+            )
+        for abonne in abonnes:
+            points.append(
+                self._point(
+                    kind=self.POINT_ABONNE,
+                    label=abonne.login,
+                    spec=specs.get(abonne.queue_name),
+                    queue_name=abonne.queue_name,
+                    detail={
+                        "nature": abonne.kind,
+                        "address": abonne.address,
+                        "plan_down_mbps": abonne.plan_down_mbps,
+                        "plan_up_mbps": abonne.plan_up_mbps,
+                        "override": abonne.override_down_mbps is not None
+                        or abonne.override_up_mbps is not None,
+                        "boost": abonne.boost_active(),
+                    },
+                    a_ecrire=a_ecrire,
+                    conflits=conflits,
+                    motifs=motifs,
+                )
+            )
+
+        # Les files posees a la main par l'exploitant SONT du shaping : les
+        # omettre donnerait une carte qui contredit le routeur. Elles ne sont
+        # jamais touchees par le controleur, et c'est dit.
+        for file_tierce in etat.foreign_queues:
+            if parse_flag(file_tierce.get("disabled")):
+                continue
+            points.append(
+                {
+                    "kind": self.POINT_ABONNE,
+                    "name": str(file_tierce.get("name") or ""),
+                    "label": str(file_tierce.get("name") or ""),
+                    "target": str(file_tierce.get("target") or ""),
+                    "parent": str(file_tierce.get("parent") or "") or None,
+                    "down_mbps": None,
+                    "up_mbps": None,
+                    "limit": str(file_tierce.get("max-limit") or ""),
+                    "source": "posee par l'exploitant, hors controleur",
+                    "state": self.ETAT_MANUELLE,
+                    "reason": "cette file ne porte pas freeqos:managed : le controleur ne la "
+                    "modifie jamais",
+                    "detail": {},
+                    "children": [],
+                }
+            )
+
+        return {
+            "router": router_name,
+            "pop_name": collector.config.effective_pop_name,
+            "reachable": etat.reachable,
+            "error": etat.error,
+            "points": _en_arbre(points),
+            "counts": _compter(points),
+        }
+
+    def _point(
+        self,
+        *,
+        kind: str,
+        label: str,
+        spec: QueueSpec | None,
+        queue_name: str,
+        detail: dict[str, Any],
+        a_ecrire: set[str],
+        conflits: dict[str, str],
+        motifs: dict[str, str],
+    ) -> dict[str, Any]:
+        """Un point de la carte : ce qui est bride, a combien, et dans quel etat."""
+        if queue_name in conflits:
+            etat, motif = self.ETAT_CONFLIT, conflits[queue_name]
+        elif spec is None:
+            etat = self.ETAT_ECARTE
+            motif = motifs.get(label, "aucune file : rien a appliquer ici")
+        elif queue_name in a_ecrire:
+            etat = self.ETAT_A_POSER
+            motif = (
+                "sera ecrite au prochain passage de la reconciliation"
+                if self._enforcement_enabled
+                else "l'enforcement est desactive : rien n'est ecrit tant qu'il ne l'est pas"
+            )
+        else:
+            etat, motif = self.ETAT_POSEE, "file en place, conforme a ce qui est prevu"
+        return {
+            "kind": kind,
+            "name": queue_name,
+            "label": label,
+            "target": spec.target if spec else None,
+            "parent": spec.parent if spec else None,
+            "down_mbps": spec.max_down_mbps if spec else None,
+            "up_mbps": spec.max_up_mbps if spec else None,
+            "source": _origine_du_debit(kind, detail),
+            "state": etat,
+            "reason": motif,
+            "detail": detail,
+            "children": [],
+        }
 
     # ------------------------------------------- files des clients declares
     #
@@ -1590,6 +1813,8 @@ class ShapingService:
             "errors": [],
         }
         if not self._enforcement_enabled:
+            resultat["at"] = datetime.now(tz=UTC).isoformat()
+            self.last_reconcile = resultat
             return resultat
 
         for collector in self.registry.collectors:
@@ -1614,6 +1839,10 @@ class ShapingService:
             except Exception as exc:  # noqa: BLE001 - un routeur ne bloque pas les autres
                 resultat["errors"].append(f"{nom}: {type(exc).__name__}: {exc}")
                 logger.exception("Reconciliation impossible sur %s", nom)
+        # Garder la trace du passage, meme vide : "rien a faire" est une reponse,
+        # et c'est celle que l'exploitant doit lire quand tout est deja en place.
+        resultat["at"] = datetime.now(tz=UTC).isoformat()
+        self.last_reconcile = resultat
         return resultat
 
     # ------------------------------------------------- boucle fermee QoE
@@ -2047,6 +2276,81 @@ def _segment_du_lien(lien: dict[str, Any]) -> str | None:
     if not reseaux:
         return None
     return min(reseaux)[1]
+
+
+def _origine_du_debit(kind: str, detail: dict[str, Any]) -> str:
+    """D'ou vient le plafond de ce point. C'est la question qui suit "combien".
+
+    Un exploitant qui voit 80 Mbps doit savoir s'il regarde une capacite radio
+    mesuree, un plafond qu'il a lui-meme saisi, ou un resserrage decide par la
+    boucle QoE -- les trois se corrigent a des endroits differents.
+    """
+    if detail.get("override"):
+        origine = "surcharge saisie a la main"
+    elif kind == ShapingService.POINT_LIEN:
+        origine = (
+            "capacite mesuree du lien"
+            if detail.get("capacity_mbps")
+            else "aucune capacite connue : file illimitee, prete a recevoir un plafond"
+        )
+    elif detail.get("boost"):
+        origine = "boost en cours"
+    elif detail.get("plan_down_mbps") or detail.get("plan_up_mbps"):
+        origine = "plan souscrit"
+    else:
+        origine = "aucun debit connu"
+    trim = detail.get("trim_factor")
+    if isinstance(trim, (int, float)) and trim < 1.0:
+        origine += f" - resserre a {round(float(trim) * 100)} % par la boucle QoE"
+    return origine
+
+
+def _en_arbre(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Range chaque abonne sous le lien qu'il traverse.
+
+    C'est la hierarchie que RouterOS applique : la rendre a plat obligerait a
+    relire les noms de files pour la reconstruire, ce qui est exactement le
+    travail qu'on veut eviter a l'exploitant. Un point dont le parent est
+    inconnu reste a la racine -- il partage alors la capacite du PoP entier, et
+    le voir a la racine le dit.
+    """
+    par_nom = {p["name"]: p for p in points if p.get("name")}
+    racines: list[dict[str, Any]] = []
+    for point in points:
+        parent = par_nom.get(str(point.get("parent") or ""))
+        if parent is not None and parent is not point:
+            parent["children"].append(point)
+        else:
+            racines.append(point)
+    ordre = {
+        ShapingService.ETAT_CONFLIT: 0,
+        ShapingService.ETAT_ECARTE: 1,
+        ShapingService.ETAT_A_POSER: 2,
+        ShapingService.ETAT_POSEE: 3,
+        ShapingService.ETAT_MANUELLE: 4,
+    }
+
+    def trier(liste: list[dict[str, Any]]) -> None:
+        liste.sort(key=lambda p: (p["kind"] != ShapingService.POINT_LIEN, str(p["label"]).lower()))
+        for point in liste:
+            point["children"].sort(
+                key=lambda p: (ordre.get(p["state"], 9), str(p["label"]).lower())
+            )
+
+    trier(racines)
+    return racines
+
+
+def _compter(points: list[dict[str, Any]]) -> dict[str, int]:
+    """Le decompte par etat : ce qui bride, et ce qui ne bride pas encore."""
+    compte: dict[str, int] = {"total": len(points)}
+    for point in points:
+        compte[str(point["state"])] = compte.get(str(point["state"]), 0) + 1
+        if point["kind"] == ShapingService.POINT_LIEN:
+            compte["liens"] = compte.get("liens", 0) + 1
+        else:
+            compte["abonnes"] = compte.get("abonnes", 0) + 1
+    return compte
 
 
 def sector_key_for(snapshot: TopologySnapshot, login: str) -> str | None:

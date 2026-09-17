@@ -516,6 +516,28 @@ async def shaping_state(
     return [etat.to_dict() for etat in etats]
 
 
+@router.get("/shaping/points", summary="Ou le shaping s'applique sur le reseau")
+async def shaping_points(
+    container: ContainerDep,
+    router_name: Annotated[str | None, Query(alias="router")] = None,
+) -> dict[str, Any]:
+    """La CARTE du shaping : quels points du reseau sont brides, et a combien.
+
+    Rend un arbre -- chaque lien parent porte les abonnes qui passent par lui --
+    parce que c'est la hierarchie que RouterOS applique vraiment : un abonne a
+    100 Mbps sous un backhaul plafonne a 80 partage ces 80 avec ses voisins.
+
+    Les points SANS file y figurent aussi, avec leur motif. Une carte qui ne
+    montrerait que ce qui marche laisserait chercher le reste dans le journal
+    des commandes, c'est-a-dire nulle part.
+
+    Lecture seule, meme enforcement actif : cette page regarde, la boucle de
+    reconciliation ecrit. ``last_reconcile`` dit quand elle est passee pour la
+    derniere fois et ce qu'elle a fait.
+    """
+    return await container.shaping.shaping_points(router_name)
+
+
 # ---------------------------------------------------------------- politique
 def _en_mbps(
     mbps: float | None, kbps: float | None, gbps: float | None, champ: str
