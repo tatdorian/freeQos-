@@ -8,6 +8,13 @@ Il n'y a volontairement aucune decouverte automatique derriere. Un client a IP
 fixe n'ouvre pas de session et n'a pas d'attribut RADIUS : rien sur le reseau ne
 dit qu'une adresse appartient a tel client ni quel debit il a souscrit. La
 saisie manuelle n'est pas un pis-aller, c'est la seule source qui existe.
+
+EN REVANCHE, LA SUITE NE SE FAIT PLUS A LA MAIN. Declarer un client POSE sa file
+dans la foulee, sur le routeur de son PoP, et la reponse dit ce qui a ete ecrit
+-- ou ce qui l'en empeche. La reconciliation periodique continue de passer
+derriere ; elle n'est plus le seul chemin, et surtout plus la seule facon
+d'apprendre qu'un client ne sera jamais bride parce que son PoP ne correspond a
+aucun routeur.
 """
 
 from __future__ import annotations
@@ -91,6 +98,39 @@ def _require_repository(container: ContainerDep) -> StaticClientsRepository:
 
 def _sightings(container: ContainerDep) -> VlanSightingsRepository | None:
     return container.sightings_repo
+
+
+async def _poser_la_file(
+    container: ContainerDep,
+    *,
+    reference: str,
+    pop_name: str,
+    removing: bool = False,
+) -> dict[str, Any]:
+    """Applique la file de ce client, et rend ce qui s'est passe.
+
+    NE FAIT JAMAIS ECHOUER LA SAISIE. La fiche est deja enregistree quand on
+    arrive ici : un routeur injoignable doit se raconter, pas annuler une
+    declaration que l'exploitant a validee. Le rapport part dans la reponse,
+    l'interface l'affiche telle quelle.
+    """
+    try:
+        return await container.shaping.enforce_static_client(
+            reference=reference,
+            pop_name=pop_name,
+            author="ui:static-client",
+            removing=removing,
+        )
+    except Exception as exc:  # noqa: BLE001 - la fiche reste valide quoi qu'il arrive
+        logger.exception("Pose immediate de la file impossible pour '%s'", reference)
+        return {
+            "reference": reference,
+            "pop_name": pop_name,
+            "state": "erreur",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "applied": 0,
+            "routers": [],
+        }
 
 
 @router.get("/static-clients", summary="Inventaire des clients a IP fixe")
@@ -205,6 +245,32 @@ async def diagnose_candidates(
     return {"enabled": container.settings.vlan_detect_enabled, "routers": rapports}
 
 
+@router.get(
+    "/static-clients/enforcement",
+    summary="Etat de la file de chaque client declare, et ce qui manque",
+)
+async def enforcement_state(container: ContainerDep) -> dict[str, Any]:
+    """Repond a "j'ai declare ce client, pourquoi ne remonte-t-il pas ?".
+
+    Un client declare peut rester sans file pour des raisons qui n'ont rien
+    d'une panne, et qu'aucun ecran ne montrait jusqu'ici :
+
+    - son PoP ne correspond a aucun routeur collecte (faute de frappe, routeur
+      ecarte) -- il n'entre alors dans l'etat desire de personne ;
+    - aucun debit souscrit n'a ete saisi : il n'y a rien a appliquer ;
+    - une file tierce occupe deja son adresse ;
+    - l'enforcement est desactive.
+
+    Chaque cas a son motif, rendu tel que le planificateur l'a ecrit. Lecture
+    seule : un plan par routeur concerne, aucune ecriture.
+    """
+    _require_repository(container)
+    return {
+        "enforcement_enabled": container.shaping.enforcement_enabled,
+        "clients": await container.shaping.static_clients_enforcement(),
+    }
+
+
 @router.post(
     "/static-clients",
     status_code=status.HTTP_201_CREATED,
@@ -221,6 +287,9 @@ async def create_static_client(
     except InvalidStaticClientError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     logger.info("Client statique '%s' declare depuis l'interface", created["reference"])
+    created["enforcement"] = await _poser_la_file(
+        container, reference=created["reference"], pop_name=str(created["pop_name"])
+    )
     return created
 
 
@@ -230,15 +299,25 @@ async def update_static_client(
     container: ContainerDep,
     client_id: Annotated[int, Path(ge=1)],
 ) -> dict[str, Any]:
+    """Modifie la fiche, puis REAPPLIQUE la file dans la foulee.
+
+    Un debit change ou une adresse corrigee n'a aucun effet tant que la file ne
+    l'a pas suivi. Attendre la reconciliation laisserait l'exploitant devant une
+    fiche qui dit une chose et un routeur qui en fait une autre.
+    """
     repository = _require_repository(container)
     try:
-        return await repository.update(client_id, payload.model_dump(exclude_unset=True))
+        modifie = await repository.update(client_id, payload.model_dump(exclude_unset=True))
     except StaticClientNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except DuplicateStaticClientError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except InvalidStaticClientError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    modifie["enforcement"] = await _poser_la_file(
+        container, reference=modifie["reference"], pop_name=str(modifie["pop_name"])
+    )
+    return modifie
 
 
 @router.delete(
@@ -250,13 +329,26 @@ async def delete_static_client(
     container: ContainerDep,
     client_id: Annotated[int, Path(ge=1)],
 ) -> None:
-    """Retire la fiche. L'historique de mesures du client est CONSERVE.
+    """Retire la fiche ET sa file, tout de suite. L'historique est CONSERVE.
 
-    Sa file tombera au plan suivant, faute de cible declaree : c'est la
-    consequence normale, pas un effet de bord.
+    La file de CE client est retiree, et elle seule : le plan est calcule avec
+    ``prune`` puis restreint a son nom, si bien qu'un ``/ppp/active`` vide au
+    mauvais moment ne peut pas emporter les files du PoP avec elle.
     """
     repository = _require_repository(container)
+    try:
+        fiche = await repository.get(client_id)
+    except StaticClientNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     try:
         await repository.delete(client_id)
     except StaticClientNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    # Apres la suppression : la fiche ne doit plus etre dans l'etat desire au
+    # moment ou le plan est calcule, sinon la file serait aussitot reposee.
+    await _poser_la_file(
+        container,
+        reference=str(fiche["reference"]),
+        pop_name=str(fiche["pop_name"]),
+        removing=True,
+    )

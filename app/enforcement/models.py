@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -256,6 +257,55 @@ class Plan:
     @property
     def is_empty(self) -> bool:
         return not self.actions
+
+    def restrict_to(self, names: Collection[str], *, keep_types: bool = True) -> Plan:
+        """Le meme plan, reduit aux files nommees.
+
+        POURQUOI CE DECOUPAGE EXISTE. Declarer un client doit poser SA file, et
+        rien d'autre. Appliquer le plan entier au passage ecrirait au meme moment
+        les files de tous les abonnes du routeur -- des ecritures que personne
+        n'a demandees, au pire moment pour les relire. Restreindre est aussi ce
+        qui rend un retrait sur : meme calcule avec ``prune``, un plan reduit a
+        un nom ne peut pas emporter les files des autres.
+
+        ``keep_types`` conserve les types CAKE, prerequis d'une file qu'on
+        ajoute. Un retrait n'en a pas besoin et ne les cree donc pas.
+
+        ``unchanged`` n'est pas reporte : il comptait les files du plan complet,
+        et le rendre ici laisserait croire qu'on a verifie ce qu'on a ecarte.
+        """
+        gardes = set(names)
+        actions = [
+            action
+            for action in self.actions
+            if (keep_types and action.path == "/queue/type") or (action.name or "") in gardes
+        ]
+        return Plan(
+            router_name=self.router_name,
+            actions=actions,
+            conflicts=[c for c in self.conflicts if c.name in gardes],
+            skipped=list(self.skipped),
+        )
+
+    def parent_chain(self, name: str) -> set[str]:
+        """``name`` et les files parentes que ce plan doit creer avant elle.
+
+        RouterOS refuse un enfant dont le parent n'existe pas encore. Un parent
+        deja en place n'apparait pas dans le plan : il n'y a alors rien a
+        remonter, et l'ensemble s'arrete de lui-meme.
+        """
+        par_nom = {action.name: action for action in self.actions if action.name}
+        chaine: set[str] = {name}
+        courant = par_nom.get(name)
+        # Une file ne peut pas etre sa propre aieule : la borne protege d'un
+        # plan incoherent plutot que de partir en boucle.
+        for _ in range(8):
+            parent = str(courant.fields.get("parent") or "") if courant is not None else ""
+            if not parent or parent in chaine:
+                break
+            chaine.add(parent)
+            courant = par_nom.get(parent)
+        return chaine
 
     def counts(self) -> dict[str, int]:
         resultat = {"add": 0, "set": 0, "remove": 0}
