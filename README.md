@@ -157,13 +157,23 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   dans un ordre différent (« CCR DS » / « DS-CCR ») — avec un bouton *Fusionner* en un clic ;
   il ne les fusionne pas d'office, car deux bouts d'un même lien peuvent être deux vrais
   routeurs. Rôles, position, rattachements, liens et fusions manuels sont enregistrés, mais ne
-  changent que l'arbre **affiché** — aucun équipement n'est reconfiguré.
+  changent que l'arbre **affiché** — aucun équipement n'est reconfiguré. Une case qui regroupe
+  plusieurs observations **dit lesquelles** : le compte seul ne permet pas de juger, puisque
+  « 4 vues » est parfaitement normal pour un équipement vu par quatre ports et parfaitement
+  faux pour quatre équipements confondus. La liste des observations repliées laisse trancher,
+  et un loopback distinct déclaré à chacun défait une fusion abusive à la racine.
 - **Abonnés** — sessions filtrables **par PoP** et par login, avec débit vs plan, latence,
   **note de bufferbloat** (latence sous charge), boost en cours et son décompte. Un clic
   ouvre la série de l'abonné ; les boutons *Débit* et *Boost* agissent directement.
 - **Topologie** — le tableau technique des liens : **débit mesuré**, charge vs capacité du
   port, capacité négociée et débit imposé. Le bouton *Débit* ouvre l'historique d'un lien
   et permet une mesure instantanée ; *Bande passante* enregistre une intention de shaping.
+  L'onglet **nomme les routeurs interrogés** et signale ceux qui ne produisent rien, avec
+  leur erreur : seul un routeur *lu par API* apporte des liens, des abonnés et des files.
+  Comme un câble entre deux routeurs interrogés ne compte qu'**une** ligne — portée par
+  l'un des deux bouts — le badge *interrogé* de la colonne *Vers* signale l'autre bout.
+  Sans lui, un réseau **en étoile** faisait disparaître tous les PoPs derrière le cœur :
+  chacun n'a qu'un câble, celui qui monte, donc chacun se retrouvait du côté replié.
 - **Équipements** — ajout d'un routeur ou d'une antenne **via leur API** ; chaque ajout
   **analyse la configuration et (re)construit l'arbre tout seul**. Inventaire des sites et
   routeurs en bas de page.

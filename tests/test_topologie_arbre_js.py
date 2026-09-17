@@ -364,3 +364,149 @@ console.log(JSON.stringify({
     assert res["parent"] is None, "orpheline, donc racine -- pas disparue"
     assert res["x"] is not None, "elle recoit bien une position"
     assert res["cases"] == 2
+
+
+# ---------------------------------------------------------------------------
+# RECONNAITRE UN ROUTEUR INTERROGE, OU QU'IL SOIT DANS LE TABLEAU
+#
+# Un cable entre deux routeurs interroges est vu de ses DEUX bouts, et ne
+# compte qu'une ligne : celle du bout canonique. Dans un reseau EN ETOILE --
+# un coeur, des PoPs autour, aucun voisin en aval -- tous les PoPs se
+# retrouvaient donc du cote replie, absents de la colonne "Depuis". Le tableau
+# ne nommait plus que le coeur, et l'exploitant en concluait qu'un seul routeur
+# etait detecte alors que les quatre etaient lus.
+#
+# ``topoInterroges`` est ce qui permet de marquer l'autre bout. Si elle se
+# trompe, le badge disparait et le malentendu revient.
+# ---------------------------------------------------------------------------
+MARQUEURS = ("function topoInterroges(", "function topoFusions(", "function topoAttrs(")
+
+
+@pytest.fixture(scope="module")
+def harnais_interroges(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    source = APP_JS.read_text(encoding="utf-8")
+    morceaux = []
+    for marqueur in MARQUEURS:
+        debut = source.find(marqueur)
+        assert debut != -1, f"repere introuvable dans app.js : {marqueur}"
+        fin = source.find("\n}\n", debut)
+        assert fin != -1, f"fin de fonction introuvable pour {marqueur}"
+        morceaux.append(source[debut : fin + 3])
+
+    module = tmp_path_factory.mktemp("interroges") / "interroges.js"
+    module.write_text(
+        "\n".join(morceaux) + "\nmodule.exports = { topoInterroges, topoFusions };\n",
+        encoding="utf-8",
+    )
+    return module
+
+
+def test_un_routeur_gere_est_reconnu_comme_interroge(harnais_interroges: Path) -> None:
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [
+  { key: 'router:DS-CCR', attributes: { managed: true } },
+  { key: 'router:NAS-BASSORA', attributes: { managed: true } },
+  { key: 'mac:AA:00:00:00:00:FE', attributes: {} },
+];
+console.log(JSON.stringify({ cles: [...A.topoInterroges(nodes)].sort() }));
+""",
+    )
+    assert res["cles"] == ["router:DS-CCR", "router:NAS-BASSORA"]
+
+
+def test_un_voisin_simplement_vu_n_est_pas_marque(harnais_interroges: Path) -> None:
+    """C'est TOUTE la distinction : un equipement vu en face n'apporte ni ses
+    liens, ni ses abonnes, ni ses files. Le confondre avec un routeur lu
+    laisserait croire que le controleur le pilote."""
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [
+  { key: 'mac:AA:00:00:00:00:FE', name: 'MAIN GATEWAY', kind: 'pop', attributes: {} },
+  { key: 'mac:DC:9F:DB:11:22:33', name: 'BH-Nord', kind: 'radio' },
+];
+console.log(JSON.stringify({ cles: [...A.topoInterroges(nodes)] }));
+""",
+    )
+    assert res["cles"] == []
+
+
+def test_les_attributs_en_json_brut_repondent_aussi(harnais_interroges: Path) -> None:
+    """``attributes`` arrive en objet ou en chaine JSON selon le chemin de
+    lecture. Les deux doivent marcher, sinon le badge saute une fois sur deux."""
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [{ key: 'router:DS-CCR', attributes: '{"managed": true}' }];
+console.log(JSON.stringify({ cles: [...A.topoInterroges(nodes)] }));
+""",
+    )
+    assert res["cles"] == ["router:DS-CCR"]
+
+
+def test_une_liste_absente_ne_casse_rien(harnais_interroges: Path) -> None:
+    res = executer(
+        harnais_interroges,
+        "console.log(JSON.stringify({ cles: [...A.topoInterroges(undefined)] }));",
+    )
+    assert res["cles"] == []
+
+
+# ---------------------------------------------------------------------------
+# VOIR CE QU'UNE CASE A ABSORBE
+#
+# La reconciliation replie en UNE case plusieurs observations du meme
+# equipement. Quand elle se trompe, elle replie deux equipements DIFFERENTS et
+# la case absorbe des liens qui ne lui appartiennent pas. Le compte etait
+# calcule a chaque decouverte et n'apparaissait que dans le panneau d'une case
+# de l'arbre, qu'il fallait penser a ouvrir -- jamais dans le tableau, la ou
+# plusieurs lignes pointant vers un meme nom posent la question.
+# ---------------------------------------------------------------------------
+def test_une_case_qui_regroupe_plusieurs_vues_est_signalee(harnais_interroges: Path) -> None:
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [
+  { key: 'mac:AA:50', merged_count: 2, members: ['mac:AA:50', 'mac:AA:51'] },
+  { key: 'router:DS-CCR', merged_count: 1, members: ['router:DS-CCR'] },
+];
+const f = A.topoFusions(nodes);
+console.log(JSON.stringify({
+  cles: [...f.keys()], compte: f.get('mac:AA:50').compte,
+  membres: f.get('mac:AA:50').membres,
+}));
+""",
+    )
+    assert res["cles"] == ["mac:AA:50"], "une case non fusionnee ne doit pas etre signalee"
+    assert res["compte"] == 2
+    assert res["membres"] == ["mac:AA:50", "mac:AA:51"]
+
+
+def test_les_membres_sont_nommes_pas_seulement_comptes(harnais_interroges: Path) -> None:
+    """Un compte seul ne permet pas de juger : "4 vues" est normal pour un
+    equipement vu par quatre ports, et faux pour quatre equipements confondus.
+    Sans la liste, l'operateur ne peut pas trancher."""
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [{ key: 'k', merged_count: 4,
+                 members: ['mac:A', 'mac:B', 'mac:C', 'mac:D'] }];
+console.log(JSON.stringify({ membres: A.topoFusions(nodes).get('k').membres }));
+""",
+    )
+    assert res["membres"] == ["mac:A", "mac:B", "mac:C", "mac:D"]
+
+
+def test_une_case_sans_membres_ne_casse_pas(harnais_interroges: Path) -> None:
+    """Un depot d'une generation anterieure peut ne pas porter ``members``."""
+    res = executer(
+        harnais_interroges,
+        """
+const f = A.topoFusions([{ key: 'k', merged_count: 3 }]);
+console.log(JSON.stringify({ compte: f.get('k').compte, membres: f.get('k').membres }));
+""",
+    )
+    assert res["compte"] == 3
+    assert res["membres"] == []

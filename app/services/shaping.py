@@ -303,9 +303,10 @@ class ShapingService:
                 if collector.config.loopback:
                     attributs_hs["loopback"] = collector.config.loopback
                     attributs_hs["loopback_source"] = "declare"
+                cle_hs = router_node_key(collector.config.name)
                 snapshot.add_node(
                     TopologyNode(
-                        key=router_node_key(collector.config.name),
+                        key=cle_hs,
                         name=collector.config.effective_pop_name or collector.config.name,
                         kind=kind_for_role(collector.config.role),
                         address=collector.config.host,
@@ -315,6 +316,16 @@ class ShapingService:
                 )
                 if collector.config.loopback:
                     loopbacks_par_routeur[collector.config.name] = collector.config.loopback
+                # SON ADRESSE DE MANAGEMENT RESTE UNE VERITE, meme quand la
+                # lecture echoue : l'exploitant a declare "ce routeur est a cette
+                # adresse". Sans cet index, un voisin qui l'annonce ne se
+                # reconnaissait pas en lui et posait une SECONDE case pour le
+                # meme equipement -- le routeur apparaissait deux fois dans
+                # l'arbre, une fois injoignable et une fois en voisin anonyme,
+                # exactement quand l'operateur cherche a comprendre pourquoi il
+                # ne repond pas.
+                if collector.config.host:
+                    ip_owner.setdefault(str(collector.config.host), cle_hs)
                 continue
             # L'export n'est pas un parametre de build_from_router : on le retire
             # avant de deballer, puis on l'analyse a part.

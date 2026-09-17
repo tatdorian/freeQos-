@@ -2272,8 +2272,111 @@ const topo = {
 async function loadTopology() {
   // Onglet Topologie : le tableau technique des liens. L'arbre visuel, lui, vit
   // dans l'onglet Arbre reseau (meme donnees, partagees via fetchTopo).
-  const data = await fetchTopo();
-  renderTopologyLinks(data.links);
+  const [data, inventaire] = await Promise.all([
+    fetchTopo(),
+    api('/pops/routers').catch(() => null),
+  ]);
+  renderTopologySources(data, inventaire);
+  renderTopologyLinks(data.links, data.nodes);
+}
+
+/** Les cles des noeuds qui sont des routeurs INTERROGES par le controleur.
+ *
+ *  Sans cette distinction, la colonne "Vers" melange deux natures que tout
+ *  oppose : un equipement que le controleur LIT par API (il en tire ses liens,
+ *  ses abonnes, ses files) et un equipement qu'un voisin VOIT simplement en
+ *  face. Les deux s'affichaient avec le meme badge de role. */
+function topoInterroges(nodes) {
+  const cles = new Set();
+  (nodes || []).forEach((n) => {
+    if (topoAttrs(n).managed === true) cles.add(n.key);
+  });
+  return cles;
+}
+
+/** Combien de vues distinctes chaque case regroupe, indexe par cle.
+ *
+ *  La reconciliation replie en UNE case plusieurs observations du meme
+ *  equipement (vu par deux voisins, en IPv4 et IPv6, sous deux casses). C'est
+ *  ce qu'on veut -- mais quand elle se trompe, elle replie deux equipements
+ *  DIFFERENTS, et la case absorbe des liens qui ne lui appartiennent pas. Rien
+ *  ne le signalait la ou on le remarque : plusieurs lignes du tableau pointant
+ *  vers un meme nom sont soit un equipement joignable par plusieurs chemins
+ *  (normal), soit une fusion abusive (a defaire) -- et l'ecran ne permettait
+ *  pas de trancher. */
+function topoFusions(nodes) {
+  const parCle = new Map();
+  (nodes || []).forEach((n) => {
+    const compte = Number(n.merged_count) || 0;
+    if (compte > 1) parCle.set(n.key, { compte, membres: n.members || [] });
+  });
+  return parCle;
+}
+
+/** Dit QUI a produit ce tableau, et pourquoi certains routeurs n'y sont pas.
+ *
+ *  Un tableau dont toutes les lignes portent le meme nom dans la colonne
+ *  "Depuis" pose une question a laquelle l'ecran ne repondait pas : ce routeur
+ *  est-il le seul declare, le seul joignable, ou le seul dont les compteurs ont
+ *  ete lus ? Les trois causes sont opposees -- l'une n'appelle aucune action,
+ *  les deux autres si -- et rien ne les distinguait. Le detail de l'echec
+ *  n'existait que dans le panneau d'une case de l'onglet Arbre reseau, qu'il
+ *  fallait penser a ouvrir.
+ */
+function renderTopologySources(data, inventaire) {
+  const host = document.getElementById('topo-sources');
+  if (!host) return;
+  const declares = (inventaire && inventaire.routers) || [];
+  const ecartes = (inventaire && inventaire.skipped) || [];
+  // Un routeur "producteur" est un routeur dont au moins un lien a ete
+  // decouvert : c'est la preuve qu'on a vraiment lu sa configuration.
+  const producteurs = new Set(
+    (data.links || []).map((l) => l.discovered_by).filter((n) => n && n !== 'manual'));
+  const muets = declares.filter((r) => !producteurs.has(r.name));
+
+  // Les cases posees pour un routeur dont la lecture a echoue portent l'erreur.
+  const injoignables = {};
+  (data.nodes || []).forEach((n) => {
+    const a = topoAttrs(n);
+    if (a.unreachable && n.router_name) injoignables[n.router_name] = a.error || 'lecture en echec';
+  });
+
+  if (!declares.length && !ecartes.length) { host.innerHTML = ''; return; }
+
+  let html = '';
+  if (!muets.length && !ecartes.length) {
+    host.innerHTML = '<div class="notice ok" style="margin-bottom:.8rem">' +
+      '<strong>' + producteurs.size + ' routeur(s) interroge(s) : ' +
+      esc(declares.map((r) => r.name).sort().join(', ')) + '</strong>' +
+      '<span class="hint">Tous sont lus par API. Un cable entre deux d\'entre eux ' +
+      'ne compte qu\'UNE ligne, portee par l\'un des deux bouts : c\'est pourquoi la ' +
+      'colonne <b>Depuis</b> peut n\'en nommer qu\'un seul. Le badge ' +
+      '<span class="badge ok">interroge</span> de la colonne <b>Vers</b> signale ' +
+      'l\'autre bout. Les equipements SANS ce badge sont vus en face, pas lus : ' +
+      'ajoutez-les dans <b>Equipements</b> pour les interroger a leur tour.</span></div>';
+    return;
+  }
+
+  html += '<div class="notice err" style="margin-bottom:.8rem"><strong>' +
+    producteurs.size + ' routeur(s) interroge(s) sur ' + (declares.length + ecartes.length) +
+    ' declare(s).</strong><span class="hint">Seul un routeur INTERROGE produit des lignes ' +
+    'ici. Un equipement qui n\'apparait que dans la colonne <b>Vers</b> est vu par un ' +
+    'voisin, pas lu : il n\'apporte ni ses propres liens, ni ses abonnes, ni ses files.' +
+    '</span><ul style="margin:.5rem 0 0;padding-left:1.1rem">';
+  muets.forEach((r) => {
+    const raison = injoignables[r.name];
+    html += '<li><b>' + esc(r.name) + '</b> (' + esc(r.host) + ') — ' +
+      (raison
+        ? 'injoignable : <code>' + esc(String(raison).slice(0, 200)) + '</code>'
+        : 'declare, mais aucun lien decouvert. Verifiez le compte API (policy ' +
+          '<code>read,api,test</code>) et le port.') + '</li>';
+  });
+  ecartes.forEach((e) => {
+    html += '<li><b>' + esc(e.name || '(fiche invalide)') + '</b> — ecarte : ' +
+      esc(String(e.reason || '').slice(0, 200)) + '</li>';
+  });
+  html += '</ul></div>';
+  host.innerHTML = html;
 }
 
 /** Rang d'un role : plus petit = plus en amont. Sert a choisir par ou entrer
@@ -3023,9 +3126,23 @@ function renderTopoPanel() {
       : (node.address ? '<div class="kv"><span>Adresse</span><span>' + esc(node.address) + '</span></div>' : '')) +
     (attrs.serial
       ? '<div class="kv"><span>N° serie</span><span>' + esc(attrs.serial) + '</span></div>' : '') +
+    // QUOI a ete replie, pas seulement COMBIEN. Un compte seul ne permet pas de
+    // juger : "4 vues reconciliees" est parfaitement normal pour un equipement
+    // vu par quatre ports, et parfaitement faux pour quatre equipements
+    // distincts qu'on vient de confondre. Les nommer laisse trancher.
     (node.merged_count > 1
-      ? '<div class="kv"><span>Fusion</span><span>' + esc(node.merged_count) +
-        ' vues reconciliees</span></div>' : '') +
+      ? '<div class="kv"><span>Fusion</span><span title="Observations repliees en cette ' +
+        'seule case.">' + esc(node.merged_count) + ' vues reconciliees</span></div>' +
+        '<div class="notice" style="margin:.5rem 0"><b>Cette case regroupe ' +
+        esc(node.merged_count) + ' observations :</b>' +
+        '<ul style="margin:.35rem 0 0;padding-left:1.1rem">' +
+        (node.members || []).map((k) => '<li><code>' + esc(k) + '</code></li>').join('') +
+        '</ul><span class="hint">Meme equipement vu par plusieurs ports ou sous ' +
+        'plusieurs adresses : c\'est normal. Equipements <b>differents</b> : la ' +
+        'reconciliation s\'est trompee, et cette case absorbe des liens qui ne lui ' +
+        'appartiennent pas. Declarez alors un loopback distinct a chacun dans ' +
+        '<b>Equipements</b> — c\'est lui qui les distingue.</span></div>'
+      : '') +
     (node.platform ? '<div class="kv"><span>Plateforme</span><span>' + esc(topoTrim(node.platform, 18)) + '</span></div>' : '') +
     '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'racine') +
       (node.parent_override ? ' *' : '') +
@@ -3186,8 +3303,10 @@ function linkLoad(l) {
   return meter(Math.max(l.rx_bps || 0, l.tx_bps || 0), plafond);
 }
 
-function renderTopologyLinks(allLinks) {
+function renderTopologyLinks(allLinks, allNodes) {
   const host = document.getElementById('topo-links');
+  const interroges = topoInterroges(allNodes);
+  const fusions = topoFusions(allNodes);
   // Meme filtre que le canvas : "liens a debit seulement" masque le bruit des
   // adjacences sans compteur (radio UISP sans port, seconde lecture en attente).
   const hasRate = (l) => l.rx_bps !== null || l.tx_bps !== null;
@@ -3198,7 +3317,15 @@ function renderTopologyLinks(allLinks) {
   const visibles = allLinks.filter((l) => !topoAttrs(l).mirror_of);
   const links = topo.rateOnly ? visibles.filter(hasRate) : visibles;
   const compte = document.getElementById('topo-links-count');
-  if (compte) compte.textContent = links.length + ' lien(s)';
+  // DIRE CE QUI EST MASQUE. Le filtre "liens a debit seulement" est actif par
+  // defaut : un lien decouvert mais dont les compteurs ne sont pas encore lus
+  // disparaissait du tableau sans laisser de trace, et le compte affiche
+  // paraissait etre le total.
+  const masques = visibles.length - links.length;
+  if (compte) {
+    compte.textContent = links.length + ' lien(s)' +
+      (masques > 0 ? ' · ' + masques + ' sans debit mesure, masque(s)' : '');
+  }
   if (!links.length) {
     host.innerHTML = '<div class="empty">' +
       (allLinks.length && topo.rateOnly
@@ -3230,7 +3357,30 @@ function renderTopologyLinks(allLinks) {
             ' voisins sur ce port : le debit est celui du port, pas de ce seul voisin.">' +
             'partage</span>' : '') + '</td>' +
         '<td>' + esc(l.target_name || l.target_key) +
-          ' <span class="badge">' + esc(KIND_LABEL[l.target_kind] || '?') + '</span></td>' +
+          ' <span class="badge">' + esc(KIND_LABEL[l.target_kind] || '?') + '</span>' +
+          // UN CABLE ENTRE DEUX ROUTEURS INTERROGES N'A QU'UNE LIGNE : celle du
+          // bout canonique. Sans ce badge, le routeur d'en face n'apparaissait
+          // nulle part dans la colonne "Depuis" et semblait ne pas etre lu --
+          // dans un reseau en etoile, tous les PoPs disparaissaient ainsi
+          // derriere le coeur, et l'operateur concluait qu'un seul routeur
+          // etait detecte.
+          (interroges.has(l.target_key)
+            ? ' <span class="badge ok" title="Ce routeur est interroge par API. ' +
+              'Le cable ci-contre est vu de ses deux bouts et ne compte qu\'une ligne.">' +
+              'interroge</span>'
+            : '') +
+          // Plusieurs lignes vers un meme nom : equipement joignable par
+          // plusieurs chemins, ou fusion abusive de la reconciliation ? Ce
+          // badge donne de quoi trancher, en nommant ce qui a ete replie.
+          (fusions.has(l.target_key)
+            ? ' <span class="badge warn" title="Cette case regroupe ' +
+              esc(fusions.get(l.target_key).compte) + ' observations reconciliees en un ' +
+              'seul equipement :&#10;' +
+              esc(fusions.get(l.target_key).membres.join('\n')) +
+              '&#10;&#10;Si ce sont des equipements DIFFERENTS, la fusion est abusive : ' +
+              'ouvrez la case dans l\'onglet Arbre reseau pour la defaire.">' +
+              esc(fusions.get(l.target_key).compte) + ' vues</span>'
+            : '') + '</td>' +
         '<td>' + esc(l.kind) + '</td>' +
         '<td class="num">' + linkRates(l) + '</td>' +
         '<td style="min-width:120px">' + linkLoad(l) + '</td>' +

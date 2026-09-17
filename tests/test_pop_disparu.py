@@ -287,3 +287,53 @@ async def test_un_collecteur_present_produit_bien_une_observation() -> None:
 
     assert [v.address for v in depot.enregistrees] == ["10.20.0.77"]
     assert depot.enregistrees[0].pop_name == "PoP Nord"
+
+
+# ---------------------------------------------------------------------------
+# UN ROUTEUR INJOIGNABLE NE DOIT PAS APPARAITRE DEUX FOIS
+#
+# Sa case est posee (marquee injoignable) pour qu'il ne disparaisse pas de
+# l'arbre. Mais son voisin, lui, l'annonce toujours en MNDP : faute d'index sur
+# son adresse de management -- construit uniquement dans la branche de lecture
+# REUSSIE -- ce voisin ne se reconnaissait pas en lui et posait une SECONDE case
+# pour le meme equipement. Le routeur figurait donc deux fois, une fois
+# injoignable et une fois en voisin anonyme, precisement au moment ou
+# l'exploitant cherche a comprendre pourquoi il ne repond pas.
+# ---------------------------------------------------------------------------
+async def test_un_routeur_injoignable_ne_se_dedouble_pas() -> None:
+    from app.collectors.topology import router_node_key
+    from app.services.shaping import ShapingService
+
+    temoin = FakeRouterOsClient(identity="DS-CCR")
+    temoin.add_interface("ether2", speed="1Gbps")
+    temoin.neighbor_rows = [
+        {
+            "interface": "ether2",
+            "identity": "MAIN GATEWAY",
+            "address": "10.0.1.1",
+            "mac-address": "AA:00:00:00:00:09",
+            "platform": "MikroTik",
+        }
+    ]
+    muet = FakeRouterOsClient(identity="MAIN-GW")
+    muet.raise_on_neighbors = ConnectionRefusedError("[Errno 111] Connection refused")
+    clients = {"DS-CCR": temoin, "MAIN-GW": muet}
+
+    configs = [
+        RouterConfig(name="DS-CCR", host="10.0.0.1", username="u", password="p", role="core"),
+        RouterConfig(name="MAIN-GW", host="10.0.1.1", username="u", password="p", role="gateway"),
+    ]
+    settings = _settings(configs)
+    registre = RouterRegistry(settings, client_factory=lambda c: clients[c.name])
+    await registre.reload()
+    service = ShapingService(settings, registry=registre)
+
+    snapshot = await service.discover()
+
+    # Une seule case pour la passerelle, et c'est la case GEREE : elle garde son
+    # role declare, son erreur, et le lien du temoin aboutit sur elle.
+    assert "mac:AA:00:00:00:00:09" not in snapshot.nodes
+    passerelle = snapshot.nodes[router_node_key("MAIN-GW")]
+    assert passerelle.kind == "gateway"
+    assert passerelle.attributes["unreachable"] is True
+    assert [lien.target_key for lien in snapshot.links.values()] == [router_node_key("MAIN-GW")]
