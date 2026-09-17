@@ -177,6 +177,14 @@ class ShapingService:
         # de "aucune decouverte n'a encore eu lieu" -- deux causes opposees
         # derriere le meme arbre vide.
         self.last_discovery_at: datetime | None = None
+        # L'inventaire TEL QU'IL ETAIT a la derniere decouverte. C'est lui la
+        # reference pour savoir si le graphe est perime : le comparer a
+        # l'inventaire courant dit si un routeur a ete ajoute, retire ou
+        # reconfigure depuis. Comparer deux rechargements successifs ne
+        # marcherait pas -- n'importe quel autre appel (l'API qui liste les
+        # routeurs, par exemple) recharge l'inventaire et effacerait l'ecart
+        # avant que le job periodique ne l'ait vu.
+        self.last_inventory_signature: tuple[tuple[Any, ...], ...] | None = None
         # Etat courant du drapeau. La base fait foi une fois amorcee ; la
         # variable d'environnement ne sert plus qu'a la valeur initiale.
         self._enforcement_enabled = settings.enforcement_enabled
@@ -330,12 +338,21 @@ class ShapingService:
             analyse_export = parse_export(export) if export else {}
             # Le loopback est choisi AVANT de poser la case : c'est une propriete
             # d'identite, pas une decoration ajoutee apres coup.
-            router_ids = analyse_export.get("router_ids") or []
+            #
+            # DEUX sources de router-id, dans cet ordre : les chemins structures
+            # (/routing/id, instances OSPF et BGP) puis le texte de /export. Les
+            # structures d'abord parce qu'elles repondent toujours, la ou l'API
+            # refuse '/export' selon la version -- le loopback disparaissait alors
+            # sans bruit, et le routeur retombait sur sa MAC pour s'identifier.
+            router_ids = [
+                *(resultat.pop("router_ids", []) or []),
+                *(analyse_export.get("router_ids") or []),
+            ]
             loopback, origine_loopback = pick_loopback(
                 declared=collector.config.loopback,
                 addresses=(resultat.get("addresses") or [])
                 + (analyse_export.get("addresses") or []),
-                router_id=router_ids[0] if router_ids else None,
+                router_ids=router_ids,
             )
             build_from_router(
                 snapshot,
@@ -526,11 +543,29 @@ class ShapingService:
 
         self.last_snapshot = snapshot
         self.last_discovery_at = datetime.now(tz=UTC)
+        self.last_inventory_signature = self.registry.inventory_signature()
         if self.repository is not None:
             compte = await self.repository.save_snapshot(snapshot)
             logger.info("Topologie : %d noeud(s), %d lien(s)", compte["nodes"], compte["links"])
+            await self._oublier_routeurs_retires(collectors)
             await self._persister_rattachements(snapshot, sessions_pppoe)
         return snapshot
+
+    async def _oublier_routeurs_retires(self, collectors: Sequence[MikrotikCollector]) -> None:
+        """Retire du graphe les cases des routeurs sortis de l'inventaire.
+
+        La persistance est volontairement additive : un PoP momentanement
+        illisible ne doit pas disparaitre de l'arbre. Mais un routeur SUPPRIME de
+        l'inventaire n'en sortait jamais non plus -- l'exploitant le retirait
+        depuis l'interface et le voyait encore, sans rien pour l'expliquer.
+        """
+        oublier = getattr(self.repository, "forget_removed_routers", None)
+        if not callable(oublier):
+            return  # depot d'une generation anterieure, ou double de test
+        try:
+            await oublier([c.name for c in collectors])
+        except Exception:  # noqa: BLE001 - un nettoyage rate ne casse rien
+            logger.exception("Nettoyage des routeurs retires impossible")
 
     def _joindre_secteurs(
         self,
@@ -663,6 +698,18 @@ class ShapingService:
                     logger.debug("%s indisponible sur %s", nom, collector.name)
                     return []
 
+            # Router-id lu par les chemins STRUCTURES. Dans un reseau
+            # d'operateur c'est le loopback, et c'est la seule source qui reponde
+            # quand aucune interface ne s'appelle 'lo' et que l'API refuse
+            # '/export' (ce qui arrive selon la version).
+            router_ids: list[str] = []
+            lire_ids = getattr(client, "routing_ids", None)
+            if callable(lire_ids):
+                try:
+                    router_ids = [str(v) for v in (lire_ids() or [])]
+                except Exception:  # noqa: BLE001 - jamais bloquant
+                    logger.debug("routing_ids indisponible sur %s", collector.name)
+
             return {
                 "neighbors": client.neighbors(),
                 "interfaces": client.interfaces(),
@@ -671,6 +718,7 @@ class ShapingService:
                 "identity": client.identity(),
                 "serial": serial,
                 "export": export,
+                "router_ids": router_ids,
                 # Sessions PPPoE : lues ICI et pas dans un second passage, pour
                 # leur champ 'caller-id' (la MAC du CPE de l'abonne). C'est la
                 # seule cle qui relie un abonne a la station radio par laquelle

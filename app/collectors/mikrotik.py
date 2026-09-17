@@ -51,6 +51,15 @@ logger = logging.getLogger(__name__)
 # rythme du parc plutot qu'au rythme des ports.
 DYNAMIC_INTERFACE_TYPES = ("pppoe-in", "pppoe-out", "ppp-in", "ppp-out")
 
+# Ou RouterOS range le router-id du routeur, selon sa version et les protocoles
+# actives. Aucun n'est garanti present : on les essaie dans cet ordre.
+_ROUTER_ID_PATHS = (
+    "/routing/id",
+    "/routing/ospf/instance",
+    "/routing/bgp/instance",
+    "/routing/bgp/connection",
+)
+
 
 def is_physical_interface(row: dict[str, Any]) -> bool:
     """Vrai pour un port qui porte un lien, faux pour une interface de session."""
@@ -104,6 +113,8 @@ class RouterOsReadClient(Protocol):
 
     def bgp_sessions(self) -> list[dict[str, Any]]: ...
 
+    def routing_ids(self) -> list[str]: ...
+
     def simple_queues(self) -> list[dict[str, Any]]: ...
 
     def queue_types(self) -> list[dict[str, Any]]: ...
@@ -133,6 +144,9 @@ class LibrouterosReadClient:
         self._config = config
         self._api: Any = None
         self._lock = threading.Lock()
+        # Chemins que CE routeur ne connait pas (version, protocole absent).
+        # Les resonder a chaque cycle rouvrirait la session pour rien.
+        self._chemins_absents: set[str] = set()
 
     # -- connexion ---------------------------------------------------------
     def _connect(self) -> Any:
@@ -324,6 +338,52 @@ class LibrouterosReadClient:
         les deux routeurs echangent reellement des routes.
         """
         return self._query("/routing/ospf/neighbor")
+
+    def routing_ids(self) -> list[str]:
+        """Le ``router-id`` DU ROUTEUR, lu dans sa configuration de routage.
+
+        Dans un reseau d'operateur le router-id EST le loopback : c'est sa raison
+        d'etre. C'est donc le meilleur indice quand aucune interface ne s'appelle
+        ``lo`` -- et sans loopback, un routeur retombe sur sa MAC et ses adresses
+        d'interface pour s'identifier, ce qui rend indiscernables deux PoPs
+        deployes depuis la meme configuration modele.
+
+        Cette valeur n'etait jusqu'ici lue que dans le TEXTE de ``/export``, dont
+        l'API peut refuser l'execution selon la version : la troisieme source de
+        loopback disparaissait alors sans bruit. On la lit ici par les chemins
+        STRUCTURES, qui repondent toujours.
+
+        Les chemins different d'une version et d'un protocole a l'autre ; on les
+        essaie tous et on ignore ceux qui n'existent pas. Ordre volontaire :
+        ``/routing/id`` d'abord (v7, la declaration explicite), puis les
+        instances OSPF et BGP.
+
+        Un chemin absent est RETENU comme tel : ``_query`` ferme la connexion a
+        la moindre erreur, et resonder quatre chemins inexistants a chaque
+        decouverte rouvrirait la session API autant de fois -- exactement ce que
+        la connexion persistante de cette classe existe pour eviter.
+        """
+        trouves: list[str] = []
+        for chemin in _ROUTER_ID_PATHS:
+            if chemin in self._chemins_absents:
+                continue
+            try:
+                rows = self._query(chemin)
+            except Exception:  # noqa: BLE001 - chemin absent selon la version
+                logger.debug("%s indisponible sur %s", chemin, self._config.name)
+                self._chemins_absents.add(chemin)
+                continue
+            for row in rows:
+                if parse_flag(row.get("disabled")):
+                    continue
+                # '/routing/id' porte la valeur dans 'id', les instances dans
+                # 'router-id'. Une instance peut aussi referencer une entree de
+                # '/routing/id' par son nom : ce n'est alors pas une adresse, et
+                # l'appelant l'ecartera.
+                valeur = str(row.get("router-id") or row.get("id") or "").strip()
+                if valeur and valeur not in trouves:
+                    trouves.append(valeur)
+        return trouves
 
     def bgp_sessions(self) -> list[dict[str, Any]]:
         return self._query("/routing/bgp/session")

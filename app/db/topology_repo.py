@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -102,6 +103,54 @@ class TopologyRepository:
                 liens,
             )
         return {"nodes": len(noeuds), "links": len(liens)}
+
+    async def forget_removed_routers(self, current: Sequence[str]) -> int:
+        """Efface les cases des routeurs qui ne sont PLUS dans l'inventaire.
+
+        ``save_snapshot`` n'ajoute et ne met a jour, jamais n'efface -- a dessein :
+        une lecture qui echoue ne doit pas faire disparaitre un PoP de l'arbre.
+        Mais un routeur RETIRE de l'inventaire, lui, n'a plus rien a y faire, et
+        il y restait indefiniment.
+
+        DEUX GARDE-FOUS, parce que cette methode efface :
+
+        1. seules les cles ``router:<nom>`` sont concernees. Elles ne sont creees
+           que pour un routeur de l'inventaire ; tout le reste du graphe (voisins
+           decouverts, radios, clients) n'est jamais touche. Si l'equipement
+           existe toujours physiquement, la decouverte suivante le reposera comme
+           voisin non gere -- ce qu'il est devenu ;
+        2. un inventaire VIDE n'efface rien. Il signifie soit une installation
+           neuve (rien a effacer), soit une base momentanement illisible -- et
+           dans ce second cas, purger viderait tout l'arbre sur un incident
+           passager.
+        """
+        if not current:
+            return 0
+        gardes = [f"router:{nom}" for nom in current]
+        async with self._pool.acquire() as conn, conn.transaction():
+            obsoletes = [
+                row["key"]
+                for row in await conn.fetch(
+                    "SELECT key FROM topology_nodes "
+                    " WHERE key LIKE 'router:%' AND NOT (key = ANY($1::text[]))",
+                    gardes,
+                )
+            ]
+            if not obsoletes:
+                return 0
+            # Les liens qui aboutissent a une case effacee n'ont plus de sens,
+            # et ceux decouverts PAR ce routeur non plus : plus personne ne les
+            # rafraichira.
+            await conn.execute(
+                "DELETE FROM topology_links "
+                " WHERE source_key = ANY($1::text[]) OR target_key = ANY($1::text[]) "
+                "    OR discovered_by = ANY($2::text[])",
+                obsoletes,
+                [cle.removeprefix("router:") for cle in obsoletes],
+            )
+            await conn.execute("DELETE FROM topology_nodes WHERE key = ANY($1::text[])", obsoletes)
+        logger.info("Topologie : %d case(s) de routeur retire effacee(s)", len(obsoletes))
+        return len(obsoletes)
 
     async def save_attachments(self, attachments: dict[str, tuple[str, str | None]]) -> int:
         """Rattachements abonne -> secteur radio (login -> (secteur, MAC du CPE)).

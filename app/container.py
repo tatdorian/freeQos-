@@ -289,8 +289,40 @@ async def build_container(settings: Settings) -> Container:
     # on l'y ecrit depuis RTT_ENABLED. Ensuite, l'interface le bascule a chaud.
     await _bootstrap_rtt_flag(collection, topology_repo, settings)
 
+    async def discover_topology() -> None:
+        """Decouverte periodique du graphe.
+
+        SANS CE JOB, la topologie n'existait que si quelqu'un cliquait
+        "Relancer la decouverte" : les onglets Topologie et Arbre reseau
+        restaient vides sur une installation neuve, quel que soit l'etat des
+        PoPs et de leur API. Le reglage topology_refresh_interval_s etait
+        declare et ne pilotait rien.
+
+        Le planificateur execute chaque job une premiere fois immediatement :
+        l'arbre est donc peuple des le demarrage, sans geste de l'exploitant.
+        """
+        await discover_with_devices(shaping, (backhaul_provider, collection.antennas_provider))
+
     async def reload_inventory() -> None:
+        """Relit l'inventaire, et REDECOUVRE si le graphe ne lui correspond plus.
+
+        Un routeur ajoute, retire, desactive ou dont le role change modifie
+        l'arbre : attendre le prochain cycle de decouverte (un quart d'heure par
+        defaut) laissait l'interface afficher un reseau qui n'existait plus.
+        Ce job-ci tourne toutes les minutes ; il est donc le bon endroit pour
+        s'en apercevoir, et il ne coute rien quand rien ne bouge.
+
+        La comparaison porte sur l'inventaire de la DERNIERE DECOUVERTE, pas sur
+        le rechargement precedent : l'inventaire est relu par d'autres chemins
+        (l'API qui liste les routeurs, par exemple), et comparer deux
+        rechargements successifs laisserait le premier venu effacer l'ecart avant
+        que ce job ne l'ait vu.
+        """
         collection.set_collectors(await registry.reload())
+        if registry.inventory_signature() == shaping.last_inventory_signature:
+            return
+        logger.info("Inventaire modifie : la topologie est redecouverte sans attendre")
+        await discover_topology()
 
     scheduler = Scheduler()
     scheduler.add_job(
@@ -319,20 +351,6 @@ async def build_container(settings: Settings) -> Container:
     scheduler.add_job(
         JOB_VLAN_CLIENTS, settings.vlan_detect_interval_s, collection.detect_vlan_clients
     )
-
-    async def discover_topology() -> None:
-        """Decouverte periodique du graphe.
-
-        SANS CE JOB, la topologie n'existait que si quelqu'un cliquait
-        "Relancer la decouverte" : les onglets Topologie et Arbre reseau
-        restaient vides sur une installation neuve, quel que soit l'etat des
-        PoPs et de leur API. Le reglage topology_refresh_interval_s etait
-        declare et ne pilotait rien.
-
-        Le planificateur execute chaque job une premiere fois immediatement :
-        l'arbre est donc peuple des le demarrage, sans geste de l'exploitant.
-        """
-        await discover_with_devices(shaping, (backhaul_provider, collection.antennas_provider))
 
     scheduler.add_job(JOB_TOPOLOGY, settings.topology_refresh_interval_s, discover_topology)
 

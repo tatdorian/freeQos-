@@ -18,6 +18,7 @@ routeur, un collecteur recree repartirait sans point de reference).
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -40,16 +41,40 @@ class RouterEntry:
     router_id: int | None = None
 
 
+def _empreinte_secret(config: RouterConfig) -> str:
+    """Empreinte du mot de passe, pour DETECTER son changement sans le porter.
+
+    Le comparer en clair dans un tuple le mettrait a portee d'un ``repr`` ou
+    d'une trace ; on n'a besoin que de savoir s'il a bouge.
+    """
+    try:
+        secret = config.resolve_password() or ""
+    except Exception:  # noqa: BLE001 - un secret illisible est traite en amont
+        return "?"
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
 def _fingerprint(config: RouterConfig) -> tuple[Any, ...]:
-    """Ce qui, en changeant, impose de reconstruire le collecteur."""
+    """Ce qui, en changeant, impose de ROUVRIR la session API.
+
+    Strictement les parametres de CONNEXION. Tout le reste (role, PoP, loopback,
+    motif d'interface PPPoE) ne change que la facon d'interpreter ce qu'on lit :
+    ``reload()`` rafraichit alors la configuration du collecteur sans toucher a
+    la connexion, ce qui preserve la continuite du calcul de debit.
+
+    Le MOT DE PASSE en fait partie. Il n'y etait pas : corriger des identifiants
+    depuis l'interface ne prenait donc effet qu'au redemarrage suivant, et le
+    routeur restait injoignable sans que rien n'explique pourquoi.
+    """
     return (
         config.host,
         config.port,
         config.username,
         config.use_ssl,
+        config.tls_verify,
+        config.tls_fingerprint,
         config.timeout_s,
-        config.pppoe_interface_pattern,
-        config.effective_pop_name,
+        _empreinte_secret(config),
     )
 
 
@@ -78,6 +103,39 @@ class RouterRegistry:
 
     def source_of(self, name: str) -> str | None:
         return self._sources.get(name)
+
+    def inventory_signature(self) -> tuple[tuple[Any, ...], ...]:
+        """Ce qui, en changeant, doit faire REDECOUVRIR la topologie.
+
+        L'arbre est construit a partir de l'inventaire ; quand l'inventaire
+        bouge, l'arbre ment jusqu'a la decouverte suivante -- au plus tard un
+        quart d'heure plus tard avec la cadence par defaut. Un routeur ajoute
+        n'apparaissait donc pas, un routeur supprime restait affiche, et rien ne
+        le disait.
+
+        L'interface appelait bien une decouverte apres un AJOUT, mais elle est le
+        mauvais endroit pour porter cette garantie : elle ne le faisait ni sur une
+        suppression, ni sur une desactivation, ni quand l'inventaire change par
+        un autre chemin (appel direct a l'API, edition du fichier YAML, autre
+        onglet ouvert). Le declencheur appartient au serveur.
+
+        Le role et le PoP en font partie, pas seulement la liste des noms : le
+        role decide de la nature du noeud dans l'arbre (passerelle / coeur / PoP,
+        donc sa hauteur), et le PoP de son libelle.
+        """
+        return tuple(
+            sorted(
+                (
+                    name,
+                    collector.config.host,
+                    collector.config.port,
+                    str(collector.config.role),
+                    collector.config.effective_pop_name or "",
+                    collector.config.loopback or "",
+                )
+                for name, collector in self._collectors.items()
+            )
+        )
 
     def describe(self) -> list[dict[str, object]]:
         return [
@@ -197,7 +255,14 @@ class RouterRegistry:
             fingerprint = _fingerprint(entry.config)
             existing = self._collectors.get(name)
             if existing is not None and self._fingerprints.get(name) == fingerprint:
-                # Inchange : on garde la connexion et l'historique de debit.
+                # Connexion inchangee : on la garde, avec l'historique de debit.
+                #
+                # Mais on RAFRAICHIT la configuration. Le collecteur portait
+                # sinon celle de sa creation, indefiniment : modifier le role
+                # d'un routeur depuis l'interface -- donc sa nature et sa hauteur
+                # dans l'arbre -- ou son loopback -- donc son identite -- ne
+                # changeait rien avant un redemarrage, et rien ne le disait.
+                existing.config = entry.config
                 self._sources[name] = entry.source
                 self._ids[name] = entry.router_id
                 continue
