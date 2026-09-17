@@ -379,7 +379,7 @@ console.log(JSON.stringify({
 # ``topoInterroges`` est ce qui permet de marquer l'autre bout. Si elle se
 # trompe, le badge disparait et le malentendu revient.
 # ---------------------------------------------------------------------------
-MARQUEURS = ("function topoInterroges(", "function topoAttrs(")
+MARQUEURS = ("function topoInterroges(", "function topoFusions(", "function topoAttrs(")
 
 
 @pytest.fixture(scope="module")
@@ -395,7 +395,7 @@ def harnais_interroges(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     module = tmp_path_factory.mktemp("interroges") / "interroges.js"
     module.write_text(
-        "\n".join(morceaux) + "\nmodule.exports = { topoInterroges };\n",
+        "\n".join(morceaux) + "\nmodule.exports = { topoInterroges, topoFusions };\n",
         encoding="utf-8",
     )
     return module
@@ -452,3 +452,61 @@ def test_une_liste_absente_ne_casse_rien(harnais_interroges: Path) -> None:
         "console.log(JSON.stringify({ cles: [...A.topoInterroges(undefined)] }));",
     )
     assert res["cles"] == []
+
+
+# ---------------------------------------------------------------------------
+# VOIR CE QU'UNE CASE A ABSORBE
+#
+# La reconciliation replie en UNE case plusieurs observations du meme
+# equipement. Quand elle se trompe, elle replie deux equipements DIFFERENTS et
+# la case absorbe des liens qui ne lui appartiennent pas. Le compte etait
+# calcule a chaque decouverte et n'apparaissait que dans le panneau d'une case
+# de l'arbre, qu'il fallait penser a ouvrir -- jamais dans le tableau, la ou
+# plusieurs lignes pointant vers un meme nom posent la question.
+# ---------------------------------------------------------------------------
+def test_une_case_qui_regroupe_plusieurs_vues_est_signalee(harnais_interroges: Path) -> None:
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [
+  { key: 'mac:AA:50', merged_count: 2, members: ['mac:AA:50', 'mac:AA:51'] },
+  { key: 'router:DS-CCR', merged_count: 1, members: ['router:DS-CCR'] },
+];
+const f = A.topoFusions(nodes);
+console.log(JSON.stringify({
+  cles: [...f.keys()], compte: f.get('mac:AA:50').compte,
+  membres: f.get('mac:AA:50').membres,
+}));
+""",
+    )
+    assert res["cles"] == ["mac:AA:50"], "une case non fusionnee ne doit pas etre signalee"
+    assert res["compte"] == 2
+    assert res["membres"] == ["mac:AA:50", "mac:AA:51"]
+
+
+def test_les_membres_sont_nommes_pas_seulement_comptes(harnais_interroges: Path) -> None:
+    """Un compte seul ne permet pas de juger : "4 vues" est normal pour un
+    equipement vu par quatre ports, et faux pour quatre equipements confondus.
+    Sans la liste, l'operateur ne peut pas trancher."""
+    res = executer(
+        harnais_interroges,
+        """
+const nodes = [{ key: 'k', merged_count: 4,
+                 members: ['mac:A', 'mac:B', 'mac:C', 'mac:D'] }];
+console.log(JSON.stringify({ membres: A.topoFusions(nodes).get('k').membres }));
+""",
+    )
+    assert res["membres"] == ["mac:A", "mac:B", "mac:C", "mac:D"]
+
+
+def test_une_case_sans_membres_ne_casse_pas(harnais_interroges: Path) -> None:
+    """Un depot d'une generation anterieure peut ne pas porter ``members``."""
+    res = executer(
+        harnais_interroges,
+        """
+const f = A.topoFusions([{ key: 'k', merged_count: 3 }]);
+console.log(JSON.stringify({ compte: f.get('k').compte, membres: f.get('k').membres }));
+""",
+    )
+    assert res["compte"] == 3
+    assert res["membres"] == []

@@ -2294,6 +2294,25 @@ function topoInterroges(nodes) {
   return cles;
 }
 
+/** Combien de vues distinctes chaque case regroupe, indexe par cle.
+ *
+ *  La reconciliation replie en UNE case plusieurs observations du meme
+ *  equipement (vu par deux voisins, en IPv4 et IPv6, sous deux casses). C'est
+ *  ce qu'on veut -- mais quand elle se trompe, elle replie deux equipements
+ *  DIFFERENTS, et la case absorbe des liens qui ne lui appartiennent pas. Rien
+ *  ne le signalait la ou on le remarque : plusieurs lignes du tableau pointant
+ *  vers un meme nom sont soit un equipement joignable par plusieurs chemins
+ *  (normal), soit une fusion abusive (a defaire) -- et l'ecran ne permettait
+ *  pas de trancher. */
+function topoFusions(nodes) {
+  const parCle = new Map();
+  (nodes || []).forEach((n) => {
+    const compte = Number(n.merged_count) || 0;
+    if (compte > 1) parCle.set(n.key, { compte, membres: n.members || [] });
+  });
+  return parCle;
+}
+
 /** Dit QUI a produit ce tableau, et pourquoi certains routeurs n'y sont pas.
  *
  *  Un tableau dont toutes les lignes portent le meme nom dans la colonne
@@ -3107,9 +3126,23 @@ function renderTopoPanel() {
       : (node.address ? '<div class="kv"><span>Adresse</span><span>' + esc(node.address) + '</span></div>' : '')) +
     (attrs.serial
       ? '<div class="kv"><span>N° serie</span><span>' + esc(attrs.serial) + '</span></div>' : '') +
+    // QUOI a ete replie, pas seulement COMBIEN. Un compte seul ne permet pas de
+    // juger : "4 vues reconciliees" est parfaitement normal pour un equipement
+    // vu par quatre ports, et parfaitement faux pour quatre equipements
+    // distincts qu'on vient de confondre. Les nommer laisse trancher.
     (node.merged_count > 1
-      ? '<div class="kv"><span>Fusion</span><span>' + esc(node.merged_count) +
-        ' vues reconciliees</span></div>' : '') +
+      ? '<div class="kv"><span>Fusion</span><span title="Observations repliees en cette ' +
+        'seule case.">' + esc(node.merged_count) + ' vues reconciliees</span></div>' +
+        '<div class="notice" style="margin:.5rem 0"><b>Cette case regroupe ' +
+        esc(node.merged_count) + ' observations :</b>' +
+        '<ul style="margin:.35rem 0 0;padding-left:1.1rem">' +
+        (node.members || []).map((k) => '<li><code>' + esc(k) + '</code></li>').join('') +
+        '</ul><span class="hint">Meme equipement vu par plusieurs ports ou sous ' +
+        'plusieurs adresses : c\'est normal. Equipements <b>differents</b> : la ' +
+        'reconciliation s\'est trompee, et cette case absorbe des liens qui ne lui ' +
+        'appartiennent pas. Declarez alors un loopback distinct a chacun dans ' +
+        '<b>Equipements</b> — c\'est lui qui les distingue.</span></div>'
+      : '') +
     (node.platform ? '<div class="kv"><span>Plateforme</span><span>' + esc(topoTrim(node.platform, 18)) + '</span></div>' : '') +
     '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'racine') +
       (node.parent_override ? ' *' : '') +
@@ -3273,6 +3306,7 @@ function linkLoad(l) {
 function renderTopologyLinks(allLinks, allNodes) {
   const host = document.getElementById('topo-links');
   const interroges = topoInterroges(allNodes);
+  const fusions = topoFusions(allNodes);
   // Meme filtre que le canvas : "liens a debit seulement" masque le bruit des
   // adjacences sans compteur (radio UISP sans port, seconde lecture en attente).
   const hasRate = (l) => l.rx_bps !== null || l.tx_bps !== null;
@@ -3334,6 +3368,18 @@ function renderTopologyLinks(allLinks, allNodes) {
             ? ' <span class="badge ok" title="Ce routeur est interroge par API. ' +
               'Le cable ci-contre est vu de ses deux bouts et ne compte qu\'une ligne.">' +
               'interroge</span>'
+            : '') +
+          // Plusieurs lignes vers un meme nom : equipement joignable par
+          // plusieurs chemins, ou fusion abusive de la reconciliation ? Ce
+          // badge donne de quoi trancher, en nommant ce qui a ete replie.
+          (fusions.has(l.target_key)
+            ? ' <span class="badge warn" title="Cette case regroupe ' +
+              esc(fusions.get(l.target_key).compte) + ' observations reconciliees en un ' +
+              'seul equipement :&#10;' +
+              esc(fusions.get(l.target_key).membres.join('\n')) +
+              '&#10;&#10;Si ce sont des equipements DIFFERENTS, la fusion est abusive : ' +
+              'ouvrez la case dans l\'onglet Arbre reseau pour la defaire.">' +
+              esc(fusions.get(l.target_key).compte) + ' vues</span>'
             : '') + '</td>' +
         '<td>' + esc(l.kind) + '</td>' +
         '<td class="num">' + linkRates(l) + '</td>' +
