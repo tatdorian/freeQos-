@@ -54,6 +54,10 @@ class FakeRouterOsClient:
         self.bonding_rows: list[dict[str, Any]] = []
         self.ospf_neighbor_rows: list[dict[str, Any]] = []
         self.bgp_session_rows: list[dict[str, Any]] = []
+        # Router-id lu par les chemins structures (/routing/id, instances
+        # OSPF/BGP). C'est le loopback quand aucune interface ne s'appelle 'lo'.
+        self.router_id_rows: list[str] = []
+        self.raise_on_routing_ids: Exception | None = None
         self.vlan_rows: list[dict[str, Any]] = []
         self.pppoe_server_rows: list[dict[str, Any]] = []
         self.raise_on_arp: Exception | None = None
@@ -134,6 +138,11 @@ class FakeRouterOsClient:
 
     def bgp_sessions(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self.bgp_session_rows]
+
+    def routing_ids(self) -> list[str]:
+        if self.raise_on_routing_ids is not None:
+            raise self.raise_on_routing_ids
+        return list(self.router_id_rows)
 
     def arp(self) -> list[dict[str, Any]]:
         if self.raise_on_arp is not None:

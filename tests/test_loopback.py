@@ -478,3 +478,144 @@ async def test_un_routeur_injoignable_garde_son_role_et_son_loopback() -> None:
     assert noeud.kind == KIND_CORE
     assert noeud.attributes["unreachable"] is True
     assert noeud.attributes["loopback"] == "10.255.0.2"
+
+
+# =========================================================================
+# 7. Trouver le loopback DANS LA CONFIGURATION
+#
+# Sans loopback, un routeur retombe sur sa MAC et ses adresses d'interface pour
+# s'identifier -- et deux PoPs deployes depuis la meme configuration modele
+# (donc portant le meme /30) deviennent indiscernables. La detection ne tenait
+# qu'a deux sources : une interface nommee 'lo*', ou le texte de /export. Or
+# l'API RouterOS refuse '/export' selon la version, et les conventions de
+# nommage reelles sont bien plus variees que la poignee de formes reconnues.
+# =========================================================================
+
+
+def test_le_router_id_structure_sert_de_loopback() -> None:
+    """La source qui repond TOUJOURS, la ou /export peut etre refuse."""
+    adresse, origine = pick_loopback(
+        declared=None,
+        addresses=[{"address": "10.0.12.1/30", "interface": "ether1"}],
+        router_ids=["10.255.0.7"],
+    )
+    assert (adresse, origine) == ("10.255.0.7", "router-id")
+
+
+def test_un_router_id_qui_n_est_pas_une_adresse_est_ignore() -> None:
+    """Une instance OSPF peut referencer une entree /routing/id par son NOM :
+    'lo0' n'est pas une adresse, et un router-id a 0.0.0.0 n'est pas elu."""
+    adresse, origine = pick_loopback(
+        declared=None,
+        addresses=[{"address": "10.0.12.1/30", "interface": "ether1"}],
+        router_ids=["lo0", "0.0.0.0", "10.255.0.9"],
+    )
+    assert (adresse, origine) == ("10.255.0.9", "router-id")
+
+
+def test_une_interface_de_loopback_prime_sur_le_router_id() -> None:
+    """Le router-id peut etre fixe a la main ailleurs : l'interface fait foi."""
+    adresse, origine = pick_loopback(
+        declared=None,
+        addresses=[{"address": "10.255.0.1/32", "interface": "loopback"}],
+        router_ids=["10.255.0.99"],
+    )
+    assert (adresse, origine) == ("10.255.0.1", "interface de loopback")
+
+
+def test_le_parametre_router_id_simple_reste_accepte() -> None:
+    """Retrocompatibilite : les appelants existants ne changent pas."""
+    adresse, origine = pick_loopback(declared=None, addresses=[], router_id="10.255.0.4")
+    assert (adresse, origine) == ("10.255.0.4", "router-id")
+
+
+@pytest.mark.parametrize(
+    "nom",
+    [
+        "lo",
+        "lo0",
+        "loopback",
+        "loopback0",
+        "Loopback-RID",
+        "dummy0",
+        "dummy",
+        "bridge-loopback",
+        "br_lo0",
+        "lo-bridge",
+        "loopback_rid",
+    ],
+)
+def test_les_conventions_de_nommage_reelles_sont_reconnues(nom: str) -> None:
+    """Le motif d'origine ne reconnaissait qu'une poignee de formes exactes et
+    ratait 'dummy0' ou 'lo-bridge', pourtant tres repandues."""
+    adresse, origine = pick_loopback(
+        declared=None, addresses=[{"address": "10.255.0.3/32", "interface": nom}]
+    )
+    assert (adresse, origine) == ("10.255.0.3", "interface de loopback")
+
+
+@pytest.mark.parametrize("nom", ["bridge-local", "ether1", "local", "vlan-lo-clients"])
+def test_une_interface_ordinaire_n_est_pas_prise_pour_un_loopback(nom: str) -> None:
+    """Elargir le motif ne doit pas le rendre credule : 'bridge-local' commence
+    par 'lo' au milieu du mot, ce n'est pas un loopback pour autant. Son /32
+    reste retenu, mais comme une DEDUCTION, pas comme une convention."""
+    _, origine = pick_loopback(
+        declared=None, addresses=[{"address": "10.255.0.3/32", "interface": nom}]
+    )
+    assert origine == "adresse en /32"
+
+
+def test_un_commentaire_designe_le_loopback_pose_sur_un_bridge_quelconque() -> None:
+    """Beaucoup de configurations posent le loopback sur 'bridge1' et
+    l'annotent : le commentaire est alors la seule trace de l'intention."""
+    adresse, origine = pick_loopback(
+        declared=None,
+        addresses=[
+            {"address": "10.0.12.1/30", "interface": "ether1"},
+            {"address": "10.255.0.5/32", "interface": "bridge1", "comment": "Loopback OSPF"},
+            {"address": "192.168.99.1/32", "interface": "bridge2"},
+        ],
+    )
+    assert (adresse, origine) == ("10.255.0.5", "commentaire d'adresse")
+
+
+def test_la_declaration_de_l_operateur_bat_toutes_les_deductions() -> None:
+    adresse, origine = pick_loopback(
+        declared="10.255.0.42",
+        addresses=[{"address": "10.255.0.1/32", "interface": "loopback"}],
+        router_ids=["10.255.0.99"],
+    )
+    assert (adresse, origine) == ("10.255.0.42", "declare")
+
+
+async def test_la_decouverte_lit_le_router_id_sur_le_routeur() -> None:
+    """De bout en bout : un routeur sans interface 'lo' et sans /export
+    exploitable doit quand meme avoir son loopback."""
+    client = FakeRouterOsClient(identity="pop-nord")
+    client.address_rows = [{"address": "10.0.12.1/30", "interface": "ether1"}]
+    client.router_id_rows = ["10.255.0.7"]
+    client.export_text = ""
+
+    service = _service({"pop": client}, [_config(name="pop", host="1.1.1.3", role="pop")])
+    await service.registry.reload()
+
+    snapshot = await service.discover()
+
+    noeud = snapshot.nodes["router:pop"]
+    assert noeud.attributes["loopback"] == "10.255.0.7"
+    assert noeud.attributes["loopback_source"] == "router-id"
+    assert not any("aucun loopback" in a for a in snapshot.warnings)
+
+
+async def test_un_chemin_de_routage_absent_ne_prive_pas_du_reste() -> None:
+    """RouterOS 6 n'a pas /routing/id : la decouverte doit continuer."""
+    client = FakeRouterOsClient(identity="pop-sud")
+    client.address_rows = [{"address": "10.255.0.8/32", "interface": "loopback"}]
+    client.raise_on_routing_ids = RuntimeError("no such command prefix")
+
+    service = _service({"pop": client}, [_config(name="pop", host="1.1.1.4", role="pop")])
+    await service.registry.reload()
+
+    snapshot = await service.discover()
+
+    assert snapshot.nodes["router:pop"].attributes["loopback"] == "10.255.0.8"

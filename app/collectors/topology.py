@@ -447,7 +447,34 @@ def classify_platform(platform: str | None, board: str | None = None) -> str:
 
 # Une interface de loopback se nomme presque toujours ainsi sur RouterOS : 'lo'
 # (interface reelle en v7), ou un bridge sans port appele 'loopback' / 'lo0'.
-_LOOPBACK_INTERFACE = re.compile(r"^(lo|lo\d+|loopback[\w-]*|lobridge|bridge-lo\w*)$", re.I)
+#
+# L'ancienne version de ce motif etait ancree des deux cotes sur une poignee de
+# formes exactes, et ratait donc les conventions les plus repandues en
+# production : 'dummy0' (le nom que prend l'interface de loopback sur beaucoup
+# de deploiements), 'lo-bridge', 'br-loopback', 'Loopback-RID'. Un loopback
+# manque n'est pas anodin : le routeur retombe alors sur sa MAC et ses adresses
+# d'interface pour s'identifier, et deux PoPs deployes depuis la meme
+# configuration modele (donc portant le meme /30) deviennent indiscernables.
+#
+# On reste STRICT sur une chose : le nom doit designer un loopback, pas
+# simplement le contenir n'importe ou. 'bridge-local' ne doit pas passer pour un
+# loopback parce qu'il commence par 'lo' au milieu du mot.
+_LOOPBACK_INTERFACE = re.compile(
+    r"""^(?:
+        lo\d*                       # lo, lo0, lo1
+      | loopback[\w.-]*             # loopback, loopback0, loopback-rid
+      | dummy\d*                    # dummy, dummy0 : l'autre convention courante
+      | (?:br|bridge)[\w.-]*[_.-]?(?:lo|loopback|dummy)\d*   # bridge-loopback, br_lo0
+      | (?:lo|loopback|dummy)[_.-][\w.-]*                    # lo-bridge, loopback_rid
+    )$""",
+    re.I | re.X,
+)
+
+# Un commentaire d'adresse le dit souvent explicitement, la ou le nom de
+# l'interface ne dit rien ('bridge1' portant le loopback, commente "loopback").
+# C'est de la CONFIGURATION ecrite par l'exploitant : une intention, pas une
+# deduction.
+_LOOPBACK_COMMENT = re.compile(r"\b(loopback|router[- ]?id|lo0?)\b", re.I)
 
 
 def _host_address(valeur: Any) -> tuple[str, int] | None:
@@ -472,11 +499,17 @@ def loopback_from_addresses(rows: Sequence[dict[str, Any]]) -> tuple[str, str] |
     doit pouvoir voir POURQUOI le controleur a choisi cette adresse, et la
     corriger si la deduction est mauvaise.
 
-    Deux niveaux, dans cet ordre :
+    Trois niveaux, dans cet ordre :
 
     1. une adresse d'hote portee par une interface nommee ``lo``, ``lo0``,
-       ``loopback``... C'est la convention, et elle est sans ambiguite.
-    2. a defaut, une adresse en /32 (ou /128) posee ailleurs. Un /32 sur un
+       ``loopback``, ``dummy0``... C'est la convention, et elle est sans
+       ambiguite.
+    2. une adresse d'hote que son COMMENTAIRE designe comme le loopback. Beaucoup
+       de configurations posent le loopback sur un ``bridge1`` quelconque et
+       l'annotent ("loopback", "router-id") : le commentaire est alors la seule
+       trace de l'intention, et c'est une declaration de l'exploitant, pas une
+       devinette.
+    3. a defaut, une adresse en /32 (ou /128) posee ailleurs. Un /32 sur un
        routeur ne sert a peu pres qu'a ca -- mais c'est une deduction, pas une
        certitude, et la raison le dit.
 
@@ -484,6 +517,7 @@ def loopback_from_addresses(rows: Sequence[dict[str, Any]]) -> tuple[str, str] |
     aux deux bouts du lien, il ne peut identifier ni l'un ni l'autre.
     """
     candidats_nommes: list[str] = []
+    candidats_commentes: list[str] = []
     candidats_hotes: list[str] = []
     for row in rows:
         if parse_flag(row.get("disabled")):
@@ -493,14 +527,21 @@ def loopback_from_addresses(rows: Sequence[dict[str, Any]]) -> tuple[str, str] |
             continue
         adresse, prefixe = analyse
         nom = str(row.get("interface") or "").strip()
+        commentaire = str(row.get("comment") or "").strip()
         est_hote = prefixe == ipaddress.ip_address(adresse).max_prefixlen
-        if _LOOPBACK_INTERFACE.match(nom) and est_hote:
+        if not est_hote:
+            continue
+        if _LOOPBACK_INTERFACE.match(nom):
             candidats_nommes.append(adresse)
-        elif est_hote:
+        elif commentaire and _LOOPBACK_COMMENT.search(commentaire):
+            candidats_commentes.append(adresse)
+        else:
             candidats_hotes.append(adresse)
 
     if candidats_nommes:
         return sorted(candidats_nommes)[0], "interface de loopback"
+    if candidats_commentes:
+        return sorted(candidats_commentes)[0], "commentaire d'adresse"
     if candidats_hotes:
         return sorted(candidats_hotes)[0], "adresse en /32"
     return None
@@ -511,6 +552,7 @@ def pick_loopback(
     declared: str | None,
     addresses: Sequence[dict[str, Any]],
     router_id: str | None = None,
+    router_ids: Sequence[str] | None = None,
 ) -> tuple[str | None, str]:
     """Choisit le loopback qui fera foi, et dit d'ou il vient.
 
@@ -520,9 +562,16 @@ def pick_loopback(
        convention de tout ce depot, et la seule facon de rattraper un reseau
        qui ne suit pas les usages ;
     2. une interface de loopback explicite ;
-    3. le ``router-id`` de l'export : dans un reseau d'operateur, le router-id
-       EST le loopback, c'est meme sa raison d'etre ;
-    4. un /32 isole, faute de mieux.
+    3. le ``router-id`` de la configuration de routage : dans un reseau
+       d'operateur, le router-id EST le loopback, c'est meme sa raison d'etre.
+       Plusieurs valeurs peuvent remonter (``/routing/id``, instances OSPF et
+       BGP, texte de l'export) : on retient la premiere qui est une VRAIE
+       adresse, car une instance peut referencer une entree ``/routing/id`` par
+       son NOM, et un ``router-id`` a 0.0.0.0 signifie "pas encore elu" ;
+    4. le commentaire d'une adresse d'hote qui se declare loopback ;
+    5. un /32 isole, faute de mieux.
+
+    ``router_id`` (singulier) reste accepte pour les appelants existants.
     """
     if declared:
         analyse = _host_address(declared)
@@ -533,8 +582,9 @@ def pick_loopback(
     if trouve is not None and trouve[1] == "interface de loopback":
         return trouve
 
-    if router_id:
-        analyse = _host_address(router_id)
+    candidats = [*(router_ids or []), *([router_id] if router_id else [])]
+    for valeur in candidats:
+        analyse = _host_address(valeur)
         if analyse is not None:
             return analyse[0], "router-id"
 

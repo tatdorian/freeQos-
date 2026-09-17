@@ -293,10 +293,23 @@ cœur aboutissaient **sur le même PoP** et l'autre restait orphelin : un arbre 
 montre un réseau qui n'existe pas. C'est verrouillé par
 `test_deux_sites_au_meme_30_ne_se_confondent_plus`.
 
-Le loopback se déclare dans la fiche du PoP. Laissé vide, il est déduit — adresse
-d'hôte sur une interface `lo*`, puis `router-id` de l'export (dans un réseau
-d'opérateur, le router-id *est* le loopback), puis un `/32` isolé. L'arbre affiche
-toujours **d'où il vient**, et marque « déduit » ce qui n'a pas été déclaré.
+Le loopback se déclare dans la fiche du PoP. Laissé vide, il est **cherché dans la
+configuration**, dans cet ordre :
+
+| Source | Ce qu'on lit |
+|---|---|
+| interface de loopback | adresse d'hôte sur `lo`, `lo0`, `loopback*`, `dummy0`, `bridge-loopback`, `lo-bridge`… |
+| `router-id` | `/routing/id`, instances OSPF et BGP — **lus par l'API structurée**, puis à défaut dans le texte de `/export` |
+| commentaire d'adresse | un `/32` posé sur un `bridge1` quelconque mais annoté « loopback » ou « router-id » |
+| `/32` isolé | faute de mieux, et l'arbre le dit |
+
+Le `router-id` mérite son rang : dans un réseau d'opérateur, il *est* le loopback.
+Il n'était lu que dans le texte de `/export`, dont l'API RouterOS refuse
+l'exécution selon la version — cette source disparaissait alors sans bruit. Elle
+passe désormais par les chemins structurés, qui répondent toujours.
+
+L'arbre affiche toujours **d'où vient** le loopback, et marque « déduit » ce qui
+n'a pas été déclaré.
 
 L'unicité est vérifiée, pas supposée : la base refuse deux routeurs au même
 loopback, et si la découverte en trouve deux malgré tout, l'adresse est écartée
@@ -309,6 +322,21 @@ arbre faux plutôt qu'incomplet.
 nœuds (la passerelle en haut, puis le cœur, puis les PoPs). Auparavant tout
 routeur géré était posé en « PoP » : l'arbre s'aplatissait et sa racine devenait
 arbitraire.
+
+#### L'arbre suit l'inventaire tout seul
+
+Ajouter, retirer, désactiver un routeur ou changer son rôle **relance la
+découverte dans la minute**, sans redémarrage et sans qu'il faille cliquer
+« Relancer la découverte ». Le déclencheur est côté serveur : il compare
+l'inventaire courant à celui de la dernière découverte, quel que soit le chemin
+par lequel l'inventaire a changé — l'interface, un appel direct à l'API, ou une
+modification du fichier YAML.
+
+Un routeur **retiré** de l'inventaire sort aussi de l'arbre. Seule sa case de
+routeur géré est effacée : si l'équipement existe encore physiquement et qu'un
+voisin le voit toujours, il réapparaît comme équipement **non géré**, ce qu'il est
+devenu. Un inventaire vide, lui, n'efface rien — ce serait le comportement d'une
+base momentanément illisible, pas d'une suppression.
 
 **Neuf sources, réconciliées** :
 

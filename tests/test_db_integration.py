@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 import asyncpg
 import pytest
 
+from app.collectors.topology import TopologyLink, TopologyNode, TopologySnapshot
 from app.db.database import Database
 from app.db.directory import PgDirectory
 from app.db.repository import MetricsRepository
@@ -28,6 +29,7 @@ from app.db.static_clients_repo import (
     StaticClientsRepository,
     VlanSightingsRepository,
 )
+from app.db.topology_repo import TopologyRepository
 from app.db.writer import PgMetricsWriter
 from app.models import (
     BackhaulSample,
@@ -2245,3 +2247,88 @@ async def test_chaque_cadence_pilote_un_job_qui_existe(database: Database) -> No
         assert not orphelines, f"cadences sans job : {orphelines}"
     finally:
         await shutdown_container(container)
+
+
+# ---------------------------------------------------------------------------
+# UN ROUTEUR RETIRE DOIT SORTIR DE L'ARBRE
+#
+# La persistance est volontairement additive : un PoP momentanement illisible ne
+# doit pas disparaitre. Mais un routeur SUPPRIME de l'inventaire n'en sortait
+# jamais non plus -- l'exploitant le retirait depuis l'interface et le voyait
+# encore, sans rien pour l'expliquer.
+# ---------------------------------------------------------------------------
+def _graphe_deux_routeurs() -> TopologySnapshot:
+    snapshot = TopologySnapshot()
+    for nom in ("pop-1", "core-1"):
+        snapshot.add_node(
+            TopologyNode(
+                key=f"router:{nom}",
+                name=nom,
+                kind="pop",
+                router_name=nom,
+                attributes={"managed": True},
+            )
+        )
+    snapshot.add_node(TopologyNode(key="mac:DC:9F:DB:11:22:33", name="BH-Nord", kind="radio"))
+    snapshot.add_link(
+        TopologyLink(
+            source_key="router:pop-1",
+            target_key="router:core-1",
+            kind="ethernet",
+            interface="ether1",
+            discovered_by="pop-1",
+        )
+    )
+    snapshot.add_link(
+        TopologyLink(
+            source_key="router:core-1",
+            target_key="mac:DC:9F:DB:11:22:33",
+            kind="ethernet",
+            interface="ether5",
+            discovered_by="core-1",
+        )
+    )
+    return snapshot
+
+
+async def test_un_routeur_retire_sort_du_graphe(database: Database) -> None:
+    repo = TopologyRepository(database.pool)
+    await repo.save_snapshot(_graphe_deux_routeurs())
+
+    efface = await repo.forget_removed_routers(["pop-1"])
+
+    assert efface == 1
+    cles = {n["key"] for n in await repo.nodes()}
+    assert "router:core-1" not in cles
+    assert "router:pop-1" in cles
+    # Le reste du graphe n'est pas touche : la radio existe toujours.
+    assert "mac:DC:9F:DB:11:22:33" in cles
+
+
+async def test_les_liens_du_routeur_retire_partent_avec_lui(database: Database) -> None:
+    """Un lien vers une case effacee, ou decouvert par le routeur parti, n'a
+    plus personne pour le rafraichir."""
+    repo = TopologyRepository(database.pool)
+    await repo.save_snapshot(_graphe_deux_routeurs())
+
+    await repo.forget_removed_routers(["pop-1"])
+
+    assert await repo.links() == []
+
+
+async def test_un_inventaire_vide_n_efface_rien(database: Database) -> None:
+    """Garde-fou : une base momentanement illisible rend un inventaire vide.
+    Purger la-dessus viderait tout l'arbre sur un incident passager."""
+    repo = TopologyRepository(database.pool)
+    await repo.save_snapshot(_graphe_deux_routeurs())
+
+    assert await repo.forget_removed_routers([]) == 0
+    assert len(await repo.nodes()) == 3
+
+
+async def test_un_inventaire_inchange_n_efface_rien(database: Database) -> None:
+    repo = TopologyRepository(database.pool)
+    await repo.save_snapshot(_graphe_deux_routeurs())
+
+    assert await repo.forget_removed_routers(["pop-1", "core-1"]) == 0
+    assert len(await repo.nodes()) == 3
