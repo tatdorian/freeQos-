@@ -978,6 +978,65 @@ def resolve_to_managed(
     return len(remap)
 
 
+def mark_reciprocal_links(snapshot: TopologySnapshot) -> int:
+    """Marque le second exemplaire d'un cable vu par ses DEUX bouts.
+
+    Deux routeurs geres relies par un cable se voient mutuellement en MNDP :
+    ``pop-1`` annonce ``ether1 -> core-1`` et ``core-1`` annonce
+    ``ether1 -> pop-1``. Comme la cle d'un lien vaut ``source|interface|cible``,
+    ces deux observations produisent deux entrees distinctes pour UN SEUL cable.
+    Le tableau des liens montrait donc chaque cable deux fois, et les compteurs
+    annoncaient plus de liens que le reseau n'en porte.
+
+    ON NE SUPPRIME PAS LE DOUBLON, ON LE MARQUE. Une cle de lien est referencee
+    ailleurs -- surcharge de debit posee par l'exploitant (``shaping_policies``
+    de portee ``link``), resserrage de la boucle QoE (``qoe_link_states``). La
+    faire disparaitre effacerait silencieusement ces reglages. Le miroir garde
+    donc sa cle et sa mesure ; il porte seulement ``mirror_of``, et l'interface
+    s'en sert pour n'afficher qu'une ligne par cable. Le lien canonique, lui,
+    apprend le nom du port d'en face (``peer_interface``) : l'information des
+    deux bouts est conservee, pas perdue.
+
+    PRUDENCE ASSUMEE : on ne marque que les paires ou l'on peut PROUVER la
+    reciprocite, c'est-a-dire exactement deux liens entre les deux memes
+    routeurs geres, un dans chaque sens. Deux cables paralleles entre les memes
+    routeurs produisent quatre liens sans qu'on puisse dire lequel repond a
+    lequel : on les laisse alors tous tels quels plutot que d'en effacer un vrai.
+    """
+    geres = {cle for cle, node in snapshot.nodes.items() if node.attributes.get("managed") is True}
+    par_paire: dict[frozenset[str], list[TopologyLink]] = {}
+    for lien in snapshot.links.values():
+        if lien.discovered_by == "manual" or not lien.interface:
+            continue
+        if lien.source_key not in geres or lien.target_key not in geres:
+            continue
+        par_paire.setdefault(frozenset({lien.source_key, lien.target_key}), []).append(lien)
+
+    marques = 0
+    for liens in par_paire.values():
+        if len(liens) != 2:
+            continue
+        premier, second = liens
+        if premier.source_key != second.target_key:
+            continue  # meme sens : ce ne sont pas deux vues du meme cable
+        # Choix DETERMINISTE du canonique, pour que l'arbre et le tableau ne se
+        # reorganisent pas d'une decouverte a l'autre.
+        canonique, miroir = sorted(liens, key=lambda lien: (lien.discovered_by or "", lien.key))
+        if canonique.attributes.get("mirror_of") or miroir.attributes.get("mirror_of"):
+            continue
+        miroir.attributes["mirror_of"] = canonique.key
+        canonique.attributes["peer_interface"] = miroir.interface
+        canonique.attributes["peer_router"] = miroir.discovered_by
+        # La capacite honnete d'un cable est la PLUS BASSE des deux negociations :
+        # avec un convertisseur de media ou un port bride, les deux bouts peuvent
+        # annoncer des debits differents, et c'est le plus petit qui passe.
+        capacites = [lien.capacity_mbps for lien in liens if lien.capacity_mbps]
+        if capacites:
+            canonique.capacity_mbps = min(capacites)
+        marques += 1
+    return marques
+
+
 def link_by_shared_subnets(
     snapshot: TopologySnapshot,
     router_addresses: list[tuple[str, str, list[dict[str, Any]]]],

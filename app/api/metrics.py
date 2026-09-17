@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
 
-from app.api.deps import RepositoryDep, TimeRangeDep
+from app.api.deps import CollectionDep, RepositoryDep, TimeRangeDep
 
 router = APIRouter(tags=["metrics"])
 
@@ -124,6 +124,7 @@ async def subscriber_metrics(
 @router.get("/bufferbloat", summary="Note de bufferbloat (latence sous charge) par abonne")
 async def bufferbloat(
     repo: RepositoryDep,
+    collection: CollectionDep,
     minutes: Annotated[int, Query(ge=5, le=60 * 24 * 7, description="Fenetre d'observation")] = 60,
     pop_id: Annotated[int | None, Query()] = None,
 ) -> dict[str, Any]:
@@ -132,8 +133,22 @@ async def bufferbloat(
     Il se lit en correlant RTT et debit deja collectes : rien de nouveau a
     mesurer, juste a rapprocher. Un abonne sans charge sur la fenetre reste sans
     note (compte dans ``indeterminate``) plutot que d'en recevoir une flatteuse.
+
+    LA REPONSE DIT SI LA SONDE TOURNE. Sans RTT, cette note ne peut pas exister :
+    la moitie de la correlation manque. La sonde etant coupee par defaut (elle
+    coute du CPU aux routeurs), un tableau vide etait indiscernable d'un reseau
+    parfaitement sain -- c'est le pire des deux messages possibles. On l'annonce
+    donc explicitement plutot que de laisser deviner.
     """
-    return await repo.bufferbloat(minutes=minutes, pop_id=pop_id)
+    resultat = await repo.bufferbloat(minutes=minutes, pop_id=pop_id)
+    resultat["rtt_enabled"] = collection.rtt_enabled
+    if not collection.rtt_enabled:
+        resultat["unavailable_reason"] = (
+            "La sonde de latence est coupee : sans RTT, le bufferbloat et le score "
+            "de QoE ne peuvent pas etre calcules. Activez-la dans l'onglet Executif "
+            "(case 'Sonde RTT'), ou via PUT /api/v1/rtt."
+        )
+    return resultat
 
 
 @router.get("/heatmap", summary="Heatmap executif : QoE / RTT / utilisation dans le temps")

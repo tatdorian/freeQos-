@@ -35,11 +35,26 @@ En phase 1 les trois sont **observés**, aucun n'est encore piloté.
 | **1** | Collecte `/ppp active` multi-routeurs, capacité backhaul, plans, TimescaleDB, boucle périodique, API de lecture, `/health` | **fait** |
 | **1.5** | Interface d'administration, connexion d'un PoP depuis l'UI, inventaire à chaud, sonde de latence | **fait** |
 | **2** | Topologie (arbre éditable), analyse de l'existant, files CAKE par abonné et parent backhaul | **fait** |
-| **3** | Latence **sous charge** (bufferbloat) : corrélation RTT ↔ débit, note A+…F, **score QoE composite** | **fait** |
+| **3** | Latence **sous charge** (bufferbloat) : corrélation RTT ↔ débit, note A+…F, **score QoE composite** | **fait** ; **exige la sonde RTT**, coupée par défaut |
 | **4** | Boucle fermée : ajustement du partage d'un secteur selon la QoE + capacité radio | **fait** ; désactivée tant que `ENFORCEMENT_ENABLED` est faux |
 
 L'enforcement existe désormais, mais reste **désactivé par défaut** : `ENFORCEMENT_ENABLED`
 doit être passé à `true` explicitement, et chaque plan demande une application distincte.
+
+**Deux interrupteurs, pas un.** Les phases 3 et 4 ont besoin de la **sonde RTT**, qui est
+coupée par défaut parce qu'elle coûte du CPU aux routeurs. Sans elle, `rtt_ms` reste vide,
+le bufferbloat ne peut pas se calculer (il faut corréler latence et débit), le score de QoE
+n'existe pas, et la boucle fermée n'a rien à évaluer. Activez-la dans **Exécutif › Sonde
+RTT** — l'interface le dit désormais explicitement plutôt que d'afficher des colonnes vides
+qu'on pourrait prendre pour un réseau sain.
+
+**Ce qui rattache un abonné à son secteur.** La phase 4 agit sur l'enveloppe d'un *secteur*,
+et la file d'un abonné pend sous celle du lien qu'il traverse : les deux ont besoin du
+rattachement abonné → secteur. Il se construit à la découverte, par la jointure `caller-id`
+↔ station UISP (cf. [Comprendre la topologie](#comprendre-la-topologie--quel-lien-va-où)),
+ou par le champ *secteur* de la fiche pour un client à IP fixe. Sans UISP, un abonné dont le
+CPE n'est reconnu nulle part reste sans secteur : sa file est posée à la racine, et
+`POST /api/v1/shaping/qoe/run` le nomme dans `unattached` plutôt que de se taire.
 
 ---
 
@@ -884,9 +899,19 @@ routers:
 backhauls:
   - name: bh-1
     pop_name: Site 1
-    uisp_device_id: 8a2f1c3e-…
+    uisp_device_id: 8a2f1c3e-…   # ou la MAC de la radio — voir ci-dessous
     nominal_capacity_mbps: 500
 ```
+
+**`uisp_device_id` n'est pas décoratif : c'est lui qui fait descendre la capacité mesurée
+dans la file.** Le contrôleur rapproche un backhaul du lien qui le porte par l'**identité
+physique** de la radio — son identifiant UISP ou sa MAC, les deux formes étant acceptées
+dans ce champ et comparées sans tenir compte de la casse ni des séparateurs. Le `name`, lui,
+est votre libellé (`bh-1`) alors que le lien porte l'identité que la radio annonce en
+MNDP/LLDP (`NanoBeam-Nord`) : les faire correspondre relèverait de la coïncidence. Sans
+identité renseignée, le rapprochement retombe sur l'égalité des deux noms, et à défaut la
+file parente garde le **débit négocié du port** — le plafond du câble ethernet, pas celui de
+la parabole. Un backhaul dont aucun lien ne correspond est signalé dans le journal.
 
 **Sécurité.** Un routeur déclare le *nom* de la variable d'environnement qui porte son mot
 de passe, jamais le mot de passe. Un secret manquant est signalé au démarrage et le

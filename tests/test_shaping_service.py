@@ -788,3 +788,125 @@ async def test_une_application_automatique_ne_purge_jamais(
 
     assert avec_purge.counts()["remove"] == 1
     assert sans_purge.counts()["remove"] == 0
+
+
+# ---------------------------------------------------------------------------
+# LA CAPACITE RADIO DOIT ATTEINDRE LA FILE PARENTE
+#
+# Le rapprochement backhaul <-> lien se faisait sur le NOM. Or le nom d'un lien
+# est l'identite que la radio annonce en MNDP ('BH-Nord'), et le nom d'un
+# backhaul est le libelle saisi dans l'inventaire ('bh-1') : ils ne coincident
+# presque jamais. La file parente restait donc posee sur le debit negocie du
+# PORT -- le plafond du cable ethernet, pas celui de la parabole -- c'est-a-dire
+# exactement le goulot que ce controleur existe pour tenir.
+# ---------------------------------------------------------------------------
+class DepotLienRadio(DepotBoosts):
+    """Un lien vers une radio, identifiee par sa MAC comme dans le vrai graphe."""
+
+    async def links(self):
+        return [
+            {
+                "key": "router:pop-test|ether2|mac:DC:9F:DB:11:22:33",
+                "source_key": "router:pop-test",
+                "target_key": "mac:DC:9F:DB:11:22:33",
+                # L'identite MNDP de la radio : PAS le nom du backhaul.
+                "target_name": "BH-Nord",
+                "target_mac": "DC:9F:DB:11:22:33",
+                "target_uisp_device_id": None,
+                "kind": "ethernet",
+                "interface": "ether2",
+                "capacity_mbps": 1000.0,
+                "discovered_by": "pop-test",
+            }
+        ]
+
+
+class MetriquesBackhaul(MetriquesMinimales):
+    def __init__(self, backhauls: list[dict]) -> None:
+        super().__init__([])
+        self.backhauls = backhauls
+
+    async def backhaul_latest(self, **kwargs):
+        return self.backhauls
+
+
+async def test_la_capacite_radio_rejoint_son_lien_par_la_mac(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Le backhaul s'appelle 'bh-1', la radio annonce 'BH-Nord' : seule la MAC
+    les relie, et c'est la capacite MESUREE qui doit gagner."""
+    service = make_service(
+        settings,
+        routeur,
+        repository=DepotLienRadio(),
+        metrics=MetriquesBackhaul(
+            [
+                {
+                    "name": "bh-1",
+                    "pop_name": "PoP Test",
+                    "uisp_device_id": "dc-9f-db-11-22-33",  # casse et separateurs libres
+                    "capacity_mbps": 420.0,
+                }
+            ]
+        ),
+    )
+    await service.registry.reload()
+
+    liens, _ = await service.build_targets("pop-test")
+
+    assert [lien.measured_capacity_mbps for lien in liens] == [420.0]
+
+
+async def test_un_backhaul_sans_lien_correspondant_ne_bride_personne(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Une capacite qui ne trouve pas son lien ne doit surtout pas etre posee
+    sur un lien pris au hasard : le port garde alors son propre plafond."""
+    service = make_service(
+        settings,
+        routeur,
+        repository=DepotLienRadio(),
+        metrics=MetriquesBackhaul(
+            [
+                {
+                    "name": "bh-ailleurs",
+                    "pop_name": "PoP Test",
+                    "uisp_device_id": "AA:AA:AA:AA:AA:AA",
+                    "capacity_mbps": 42.0,
+                }
+            ]
+        ),
+    )
+    await service.registry.reload()
+
+    liens, _ = await service.build_targets("pop-test")
+
+    assert [lien.measured_capacity_mbps for lien in liens] == [1000.0]
+
+
+async def test_l_egalite_des_noms_reste_un_recours(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Un inventaire ou le backhaul porte deja le nom de la radio continue de
+    marcher, meme sans identifiant physique."""
+
+    class SansIdentite(DepotLienRadio):
+        async def links(self):
+            liens = await super().links()
+            liens[0]["target_mac"] = None
+            liens[0]["target_key"] = "radio-sans-mac"
+            return liens
+
+    service = make_service(
+        settings,
+        routeur,
+        repository=SansIdentite(),
+        metrics=MetriquesBackhaul(
+            [{"name": "BH-Nord", "pop_name": "PoP Test", "capacity_mbps": 310.0}]
+        ),
+    )
+    await service.registry.reload()
+
+    liens, _ = await service.build_targets("pop-test")
+
+    assert [lien.measured_capacity_mbps for lien in liens] == [310.0]
