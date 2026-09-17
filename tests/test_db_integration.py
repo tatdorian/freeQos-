@@ -2332,3 +2332,102 @@ async def test_un_inventaire_inchange_n_efface_rien(database: Database) -> None:
 
     assert await repo.forget_removed_routers(["pop-1", "core-1"]) == 0
     assert len(await repo.nodes()) == 3
+
+
+# ---------------------------------------------------------------------------
+# OUBLIER CE QUI A VRAIMENT DISPARU
+#
+# ``save_snapshot`` n'efface jamais rien, a dessein : un equipement
+# momentanement invisible ne doit pas quitter l'arbre. Le revers, c'est qu'une
+# adresse de gestion changee, un lien de test demonte ou un voisin croise
+# pendant une migration y restaient POUR TOUJOURS. Aucun geste ne permettait de
+# les retirer, sinon masquer les cases une par une.
+# ---------------------------------------------------------------------------
+async def _vieillir(database: Database, cles: list[str], minutes: int) -> None:
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE topology_nodes SET last_seen = now() - ($2 || ' minutes')::interval "
+            " WHERE key = ANY($1::text[])",
+            cles,
+            str(minutes),
+        )
+
+
+def _graphe_avec_fantomes() -> TopologySnapshot:
+    snapshot = TopologySnapshot()
+    snapshot.add_node(
+        TopologyNode(key="router:DS-CCR", name="DS-CCR", kind="core", attributes={"managed": True})
+    )
+    snapshot.add_node(TopologyNode(key="mac:AA:VIVANT", name="NAS-AGADEZ", kind="pop"))
+    snapshot.add_node(TopologyNode(key="ip:10.255.255.2", name="10.255.255.2", kind="unknown"))
+    snapshot.add_node(TopologyNode(key="mac:BB:FANTOME", name="MikroTik", kind="pop"))
+    for cible, port in (
+        ("mac:AA:VIVANT", "ether1"),
+        ("ip:10.255.255.2", "ether2"),
+        ("mac:BB:FANTOME", "ether3"),
+    ):
+        snapshot.add_link(
+            TopologyLink(
+                source_key="router:DS-CCR",
+                target_key=cible,
+                kind="ethernet",
+                interface=port,
+                discovered_by="DS-CCR",
+            )
+        )
+    return snapshot
+
+
+async def test_les_cases_disparues_sont_oubliees(database: Database) -> None:
+    repo = TopologyRepository(database.pool)
+    await repo.save_snapshot(_graphe_avec_fantomes())
+    await _vieillir(database, ["ip:10.255.255.2", "mac:BB:FANTOME"], 240)
+
+    compte = await repo.forget_stale(older_than_minutes=60)
+
+    assert compte["nodes"] == 2
+    cles = {n["key"] for n in await repo.nodes()}
+    assert cles == {"router:DS-CCR", "mac:AA:VIVANT"}
+
+
+async def test_un_equipement_encore_vu_reste(database: Database) -> None:
+    """Le seuil protege ce qui vit : sans cela on effacerait un PoP en cours de
+    redemarrage."""
+    repo = TopologyRepository(database.pool)
+    await repo.save_snapshot(_graphe_avec_fantomes())
+
+    assert (await repo.forget_stale(older_than_minutes=60))["nodes"] == 0
+    assert len(await repo.nodes()) == 4
+
+
+async def test_un_routeur_de_l_inventaire_n_est_jamais_oublie(database: Database) -> None:
+    """Sa case est DECLAREE, pas decouverte : elle doit rester meme injoignable
+    depuis des jours -- c'est tout l'interet de la poser."""
+    repo = TopologyRepository(database.pool)
+    await repo.save_snapshot(_graphe_avec_fantomes())
+    # TOUT est vieilli, le routeur declare comme les cases decouvertes.
+    await _vieillir(
+        database,
+        ["router:DS-CCR", "mac:AA:VIVANT", "ip:10.255.255.2", "mac:BB:FANTOME"],
+        60 * 24 * 30,
+    )
+
+    await repo.forget_stale(older_than_minutes=60)
+
+    assert {n["key"] for n in await repo.nodes()} == {"router:DS-CCR"}
+
+
+async def test_une_case_reliee_a_la_main_est_epargnee(database: Database) -> None:
+    """Un lien pose a la main est une DECISION d'exploitant, pas une
+    observation : l'effacer supprimerait son travail sans le dire."""
+    repo = TopologyRepository(database.pool)
+    await repo.save_snapshot(_graphe_avec_fantomes())
+    await repo.add_manual_link("router:DS-CCR", "mac:BB:FANTOME")
+    await _vieillir(database, ["ip:10.255.255.2", "mac:BB:FANTOME"], 240)
+
+    compte = await repo.forget_stale(older_than_minutes=60)
+
+    assert compte["nodes"] == 1
+    cles = {n["key"] for n in await repo.nodes()}
+    assert "mac:BB:FANTOME" in cles
+    assert "ip:10.255.255.2" not in cles

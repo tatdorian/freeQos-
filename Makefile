@@ -1,4 +1,4 @@
-.PHONY: help install dev up down logs test lint fmt typecheck hooks lock psql seed
+.PHONY: help install dev up down update reset-db logs test lint fmt typecheck hooks lock psql seed
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -9,8 +9,22 @@ install: ## Installe l'app + les deps de dev dans le venv courant
 up: ## Demarre TimescaleDB + l'app (lab)
 	docker compose up -d --build
 
-down: ## Arrete la stack
+down: ## Arrete la stack (les donnees sont conservees)
 	docker compose down
+
+update: ## Recupere le code a jour et redemarre l'app (donnees conservees)
+	git pull --ff-only
+	docker compose up -d --build
+	@echo "Application a jour. Videz le cache du navigateur (Ctrl+Maj+R) : app.js est mis en cache."
+
+reset-db: ## EFFACE la base (mesures, inventaire, topologie) et redemarre a vide
+	@echo "Cette commande EFFACE toutes les donnees : mesures, routeurs declares,"
+	@echo "antennes, topologie, reglages et clients statiques. Ctrl-C pour annuler."
+	@read -p "Taper 'oui' pour confirmer : " r && [ "$$r" = "oui" ]
+	docker compose down -v
+	docker compose up -d --build
+	@echo "Base recreee a vide. La cle de chiffrement a ete regeneree : redeclarez"
+	@echo "vos routeurs dans l'onglet Equipements."
 
 logs: ## Suit les logs de l'app
 	docker compose logs -f app

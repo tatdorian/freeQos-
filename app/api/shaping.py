@@ -253,6 +253,48 @@ async def discover(container: ContainerDep) -> dict[str, Any]:
     }
 
 
+@router.post("/topology/forget-stale", summary="Oublier les equipements disparus de l'arbre")
+async def forget_stale(
+    container: ContainerDep,
+    older_than_minutes: Annotated[
+        int,
+        Query(
+            ge=5,
+            le=60 * 24 * 365,
+            description="Age minimal, en minutes, depuis la derniere fois qu'on a vu l'equipement",
+        ),
+    ] = 60,
+    confirm: Annotated[bool, Query(description="Obligatoire : cette action efface")] = False,
+) -> dict[str, Any]:
+    """Retire du graphe ce qu'aucune decouverte ne revoit depuis un moment.
+
+    La persistance du graphe n'efface jamais rien, a dessein : un equipement
+    momentanement invisible ne doit pas disparaitre de l'arbre. Le revers, c'est
+    qu'une adresse de gestion changee, un lien de test demonte ou un voisin
+    croise pendant une migration y restent pour toujours. C'est le geste qui
+    manquait pour les retirer, sans avoir a masquer les cases une par une.
+
+    Les routeurs de l'inventaire ne sont JAMAIS concernes : leur case est
+    declaree, pas decouverte. Les liens et fusions poses a la main non plus.
+    """
+    repo = _require_topology(container)
+    if not confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cette action efface des cases de l'arbre : 'confirm' doit valoir true.",
+        )
+    compte = await repo.forget_stale(older_than_minutes=older_than_minutes)
+    return {
+        "forgotten_nodes": compte["nodes"],
+        "forgotten_links": compte["links"],
+        "older_than_minutes": older_than_minutes,
+        "detail": (
+            "Les routeurs de l'inventaire et les liens poses a la main sont conserves. "
+            "Relancez la decouverte : ce qui existe encore reviendra."
+        ),
+    }
+
+
 @router.get("/topology/links/{key:path}/throughput", summary="Debit mesure d'un lien")
 async def link_throughput(
     key: str,

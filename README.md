@@ -73,6 +73,43 @@ open http://localhost:8000/docs            # API
 Sans routeur sous la main, les providers `mock` suffisent à faire tourner toute la chaîne :
 `BACKHAUL_PROVIDER=mock` et `PLAN_PROVIDER=mock` (valeurs par défaut).
 
+### Mettre à jour, nettoyer, repartir de zéro
+
+Quatre gestes, du plus doux au plus radical. Prenez le premier qui suffit.
+
+```bash
+make update      # récupère le code et redémarre l'app — AUCUNE donnée perdue
+```
+
+L'interface est un fichier statique que le navigateur met en cache : après une mise à jour,
+rechargez la page **en forçant** (`Ctrl+Maj+R`), sinon vous continuez de voir l'ancienne.
+
+**Nettoyer l'arbre sans rien perdre d'autre.** Le graphe n'efface jamais rien tout seul —
+c'est voulu, pour qu'un équipement momentanément invisible (fade radio, redémarrage, lecture
+en échec) ne disparaisse pas. Le revers : une adresse de gestion changée, un lien de test
+démonté ou un voisin croisé pendant une migration y restent. *Arbre réseau ›* **Oublier les
+équipements disparus** les retire, en demandant depuis combien de temps ils doivent avoir
+disparu. Vos routeurs déclarés ne sont **jamais** concernés, même injoignables depuis des
+jours : leur case est déclarée, pas découverte. Les liens et fusions posés à la main non plus.
+
+```bash
+# Le même geste en ligne de commande (ici : rien vu depuis 24 h)
+curl -X POST 'http://localhost:8000/api/v1/topology/forget-stale?confirm=true&older_than_minutes=1440'
+```
+
+**Tout effacer.** Mesures, routeurs déclarés, antennes, topologie, réglages et clients
+statiques :
+
+```bash
+make reset-db    # demande confirmation, puis recrée une base vide
+```
+
+> **La clé de chiffrement part avec.** Elle vit dans le volume `qosdata` et protège les mots
+> de passe des routeurs enregistrés depuis l'interface. `make reset-db` la régénère : il
+> faudra redéclarer vos routeurs. C'est sans conséquence ici puisque la base part aussi —
+> mais ne supprimez **jamais** ce volume seul, sinon les fiches survivent avec des mots de
+> passe devenus illisibles.
+
 ### Connecter un PoP depuis l'interface
 
 Onglet **PoPs** → formulaire *Connecter un PoP*. **Tester la connexion** ouvre une
@@ -1051,6 +1088,7 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `PATCH` | `/api/v1/topology/nodes/{key}/layout` · `/parent` · `/visibility` | Position, rattachement forcé, masquage — arbre affiché seulement |
 | `POST` · `DELETE` | `/api/v1/topology/links` · `/topology/links/{key}` | Créer / retirer un lien à la main (arbre affiché) |
 | `POST` · `DELETE` | `/api/v1/topology/merge` · `/topology/merge/{alias_key}` | Fusion manuelle de deux cases (même équipement) / annulation |
+| `POST` | `/api/v1/topology/forget-stale` | Oublier les cases plus revues depuis N minutes (`confirm=true`). Épargne toujours les routeurs déclarés et les liens posés à la main |
 | `GET` | `/api/v1/topology/links/{key}/throughput` | Débit mesuré d'un lien + historique |
 | `GET` | `/api/v1/topology/links/{key}/live` | Mesure instantanée (`/interface/monitor-traffic`) |
 | `GET` | `/api/v1/topology/routers/{name}/export` | Config complète (`/export`) + son analyse |
