@@ -292,6 +292,71 @@ class FakeRepository:
             }
         ]
 
+    # --- Capacite : vendu, porte, et l'usage entre les deux ---
+    async def capacity_by_pop(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "pop_name": "PoP Test",
+                "subscribers": 3,
+                "sold_down_mbps": 300.0,
+                "sold_up_mbps": 60.0,
+                "capacity_mbps": 420.0,
+                "peak_bps": 210_000_000.0,
+            },
+            {
+                "pop_name": "PoP Sans Radio",
+                "subscribers": 2,
+                "sold_down_mbps": 200.0,
+                "sold_up_mbps": 40.0,
+                "capacity_mbps": None,
+                "peak_bps": None,
+            },
+        ]
+
+    async def link_occupancy(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "router_name": "pop-test",
+                "interface": "ether2",
+                "link_name": "BH-Nord",
+                "capacity_mbps": 1000.0,
+                "peak_rx_bps": 120_000_000.0,
+                "peak_tx_bps": 960_000_000.0,
+                "avg_bps": 300_000_000.0,
+                "peak_rx_at": NOW,
+                "peak_tx_at": NOW,
+            }
+        ]
+
+    async def subscriber_usage(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "subscriber_id": 1,
+                "login": "dupont",
+                "kind": "pppoe",
+                "pop_name": "PoP Test",
+                "plan_down_mbps": 100.0,
+                "samples": 100,
+                "peak_bps": 98_000_000.0,
+                "capped_samples": 40,
+                "last_traffic_at": NOW,
+                "bytes": 42_000_000_000.0,
+            }
+        ]
+
+    async def silent_subscribers(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "subscriber_id": 2,
+                "login": "ecole-dosso",
+                "kind": "static",
+                "pop_name": "PoP Test",
+                "plan_down_mbps": 50.0,
+                "last_seen": NOW,
+                "last_traffic_at": None,
+            }
+        ]
+
     async def recent_runs(self, **kwargs: Any) -> list[dict[str, Any]]:
         return [
             {
@@ -522,15 +587,14 @@ def test_serie_porte_la_note_de_bufferbloat(client: TestClient) -> None:
     assert body["bufferbloat"]["bloat_ms"] == 3.0
 
 
-def test_connexion_a_distance(client: TestClient) -> None:
-    """Vue unique de toutes les integrations distantes et de leur joignabilite."""
-    body = client.get("/api/v1/remote/status").json()
-    kinds = {i["kind"] for i in body["integrations"]}
-    assert {"routeros", "airos", "uisp", "radius"} <= kinds
-    routeros = next(i for i in body["integrations"] if i["kind"] == "routeros")
-    # L'inventaire fichier de test porte au moins un routeur.
-    assert routeros["summary"]["total"] >= 1
-    assert body["mode"].startswith("out-of-band")
+def test_la_page_capacite_croise_les_quatre_analyses(client: TestClient) -> None:
+    """Une seule lecture rend les quatre reponses qui portent sur la DUREE :
+    survente, occupation des liens, volumes consommes, lignes muettes."""
+    body = client.get("/api/v1/capacity").json()
+
+    assert {"pops", "links", "usage", "silent", "totals", "window"} <= set(body)
+    assert body["totals"]["ratio"] == pytest.approx(500.0 / 420.0, rel=1e-2)
+    assert body["window"]["usage_hours"] == 168
 
 
 def test_bufferbloat_reseau(client: TestClient) -> None:

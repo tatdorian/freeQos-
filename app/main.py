@@ -21,10 +21,10 @@ from app import __version__
 from app.api import (
     admin,
     antennas_admin,
+    capacity,
     health,
     metrics,
     pop_census,
-    remote,
     routers_admin,
     shaping,
     static_clients,
@@ -121,7 +121,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     app.include_router(admin.router, prefix=settings.api_prefix)
     app.include_router(routers_admin.router, prefix=settings.api_prefix)
     app.include_router(antennas_admin.router, prefix=settings.api_prefix)
-    app.include_router(remote.router, prefix=settings.api_prefix)
+    app.include_router(capacity.router, prefix=settings.api_prefix)
     app.include_router(shaping.router, prefix=settings.api_prefix)
     app.include_router(static_clients.router, prefix=settings.api_prefix)
     app.include_router(pop_census.router, prefix=settings.api_prefix)

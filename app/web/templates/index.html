@@ -18,7 +18,7 @@
       <a href="#/topology" data-view="topology">Topologie</a>
       <a href="#/shaping"  data-view="shaping">Shaping</a>
       <a href="#/pops"      data-view="pops">Equipements</a>
-      <a href="#/remote"    data-view="remote">Connexion a distance</a>
+      <a href="#/capacity"  data-view="capacity">Capacite</a>
       <a href="#/settings"  data-view="settings">Reglages</a>
     </nav>
     <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
@@ -518,21 +518,56 @@
     </section>
 
     <!-- ---------------------------------------------- connexion a distance -->
-    <section id="view-remote">
+    <!-- ------------------------------------------------------ capacite -->
+    <section id="view-capacity">
       <div class="toolbar">
-        <button id="btn-remote-refresh">Rafraichir</button>
+        <select id="capacity-hours" style="width:auto">
+          <option value="24">Pointes sur 24 h</option>
+          <option value="72">Pointes sur 3 jours</option>
+          <option value="168">Pointes sur 7 jours</option>
+        </select>
+        <select id="capacity-usage" style="width:auto">
+          <option value="168">Volumes sur 7 jours</option>
+          <option value="720">Volumes sur 30 jours</option>
+          <option value="24">Volumes sur 24 h</option>
+        </select>
         <span class="spacer"></span>
-        <span class="mode" id="remote-count"></span>
+        <span class="mode" id="capacity-count"></span>
       </div>
       <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Etat des connexions distantes, par famille d'API. Tout est en
-        <b>lecture</b> : cette page n'ouvre aucune session d'ecriture, elle donne
-        la joignabilite de chaque integration. Ajouter demain une antenne d'un
-        autre fabricant ajoutera une famille ici.
+        Le reste de l'interface regarde l'<b>instant</b> : qui est en ligne, quel
+        debit passe maintenant. Cette page regarde la <b>duree</b> &mdash; ce qui
+        sert a dimensionner, pas a depanner. Tout est en lecture.
       </p>
-      <div id="remote-integrations" class="grid cols-2"></div>
-      <h2>Equipements distants</h2>
-      <div class="table-wrap" id="remote-devices"></div>
+      <div id="capacity-cards" class="grid stats"></div>
+      <h2>Vendu, porte, et la pointe reellement vue</h2>
+      <p class="empty" style="text-align:left;padding:0 0 .6rem">
+        Vendre vingt fois la capacite d'un site ne se voit pas tant que la pointe
+        reste au tiers du lien ; cela se voit tres bien quand elle le frole. Le
+        taux seul serait un chiffre a sensation : il vient avec sa pointe.
+      </p>
+      <div class="table-wrap" id="capacity-pops"></div>
+      <h2>Occupation des liens, et l'heure de pointe</h2>
+      <p class="empty" style="text-align:left;padding:0 0 .6rem">
+        &laquo; Combien passe maintenant &raquo; se lit sur une courbe. &laquo; A
+        quelle part de sa capacite ce lien monte, et quand &raquo; ne s'en lit
+        pas &mdash; et c'est ce chiffre-la qui decide d'un investissement.
+      </p>
+      <div class="table-wrap" id="capacity-links"></div>
+      <h2>Qui consomme, en volume</h2>
+      <p class="empty" style="text-align:left;padding:0 0 .6rem">
+        Le haut du tableau des debits designe celui qui telecharge a cet instant.
+        Le volume sur une semaine designe celui qui <b>pese</b> sur le reseau :
+        ce ne sont presque jamais les memes abonnes.
+      </p>
+      <div class="table-wrap" id="capacity-usage-table"></div>
+      <h2>Lignes muettes</h2>
+      <p class="empty" style="text-align:left;padding:0 0 .6rem">
+        Declarees, plus rien depuis des jours. Soit un depart qu'on facture
+        encore, soit une panne que personne n'a signalee : les deux valent qu'on
+        regarde.
+      </p>
+      <div class="table-wrap" id="capacity-silent"></div>
     </section>
 
     <!-- ------------------------------------------------------- reglages -->

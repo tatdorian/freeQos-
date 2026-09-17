@@ -2431,3 +2431,109 @@ async def test_une_case_reliee_a_la_main_est_epargnee(database: Database) -> Non
     cles = {n["key"] for n in await repo.nodes()}
     assert "mac:BB:FANTOME" in cles
     assert "ip:10.255.255.2" not in cles
+
+
+# =========================================================================
+# Capacite : le SQL des quatre analyses qui portent sur la duree
+# =========================================================================
+
+
+async def test_les_analyses_de_capacite_repondent_sur_du_sql_reel(
+    database: Database, now: datetime
+) -> None:
+    """Ces quatre requetes ne peuvent pas etre validees par un double memoire :
+    integration de debits, agregats par instant, LATERAL sur la topologie. Une
+    erreur SQL y passerait inapercue jusqu'a la page de production."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    bavard = await directory.ensure_subscriber("bavard", pop_id=pop_id, plan=Plan(100, 20, "mock"))
+    muet = await directory.ensure_subscriber("muet", pop_id=pop_id, plan=Plan(50, 10, "mock"))
+    backhaul_id = await directory.ensure_backhaul(
+        "bh-nord", pop_id=pop_id, nominal_capacity_mbps=500
+    )
+
+    await writer.write_backhaul_metrics(
+        [
+            (
+                backhaul_id,
+                BackhaulSample(ts=now, device_id="bh-nord", capacity_mbps=400.0, online=True),
+            )
+        ]
+    )
+    # Le bavard consomme ; le muet existe mais n'a jamais rien fait passer.
+    await writer.write_subscriber_metrics(
+        [
+            (
+                bavard,
+                SubscriberSample(
+                    ts=now - timedelta(seconds=10 * i),
+                    login="bavard",
+                    router_name="pop-nord",
+                    pop_name="PoP Nord",
+                    rx_bps=10_000_000.0,
+                    # 95 Mbps sur un plan a 100 : au plafond.
+                    tx_bps=95_000_000.0,
+                ),
+            )
+            for i in range(6)
+        ]
+        + [
+            (
+                muet,
+                SubscriberSample(
+                    ts=now - timedelta(days=30),
+                    login="muet",
+                    router_name="pop-nord",
+                    pop_name="PoP Nord",
+                    rx_bps=0.0,
+                    tx_bps=0.0,
+                ),
+            )
+        ]
+    )
+    await writer.write_interface_metrics(
+        [
+            InterfaceSample(
+                ts=now - timedelta(seconds=10 * i),
+                router_name="pop-nord",
+                interface="ether2",
+                rx_bps=20_000_000.0,
+                tx_bps=900_000_000.0,
+                capacity_mbps=1000.0,
+            )
+            for i in range(3)
+        ]
+    )
+
+    # 1. Survente : 150 Mbps vendus sur 400 mesures, pointe a 95 Mbps.
+    pops = await repo.capacity_by_pop(hours=24)
+    nord = next(p for p in pops if p["pop_name"] == "PoP Nord")
+    assert float(nord["sold_down_mbps"]) == 150.0
+    assert float(nord["capacity_mbps"]) == 400.0
+    assert float(nord["peak_bps"]) == 95_000_000.0
+
+    # 2. Occupation : la pointe du port et l'heure a laquelle elle tombe.
+    liens = await repo.link_occupancy(hours=24)
+    port = next(ligne for ligne in liens if ligne["interface"] == "ether2")
+    assert float(port["peak_tx_bps"]) == 900_000_000.0
+    assert float(port["capacity_mbps"]) == 1000.0
+    assert port["peak_tx_at"] is not None
+
+    # 3. Volume : integration du debit sur la cadence reellement observee.
+    usage = await repo.subscriber_usage(hours=24, limit=10)
+    ligne = next(u for u in usage if u["login"] == "bavard")
+    # 6 echantillons a 105 Mbps (10 + 95), cadence observee de 10 s. Chaque
+    # echantillon PORTE les 10 secondes qui l'ont precede -- c'est ainsi que le
+    # debit est calcule, par delta de compteurs -- donc 6 x 10 s de trafic et
+    # non 5 : 630 Mbit/s / 8 x 10 s = 787,5 Mo.
+    assert float(ligne["bytes"]) == pytest.approx(787_500_000.0)
+    assert ligne["capped_samples"] == 6
+    assert ligne["last_traffic_at"] is not None
+
+    # 4. Lignes muettes : declarees, plus rien depuis des jours.
+    muets = await repo.silent_subscribers(days=7, limit=10)
+    assert [m["login"] for m in muets] == ["muet"]
+    assert muets[0]["last_traffic_at"] is None
