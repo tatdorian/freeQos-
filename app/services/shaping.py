@@ -53,7 +53,7 @@ from app.collectors.topology import (
 from app.config import Settings
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.capability import WriteCapability, inspect_write_capability
-from app.enforcement.models import Plan, network_target
+from app.enforcement.models import PREFIX, Plan, network_target, slugify
 from app.enforcement.planner import (
     LinkTarget,
     SubscriberTarget,
@@ -68,6 +68,8 @@ from app.enforcement.routeros import (
     apply_plan,
 )
 from app.models import KIND_STATIC, StaticClient
+from app.services.pop_match import explain as explain_pop
+from app.services.pop_match import resolve_pop
 from app.services.qoe_loop import ACTION_UNKNOWN, SectorState, decide_sector
 from app.services.registry import RouterRegistry
 
@@ -1068,7 +1070,7 @@ class ShapingService:
         # d'ici, plan(), le diff de reconciliation et apply() ne font plus
         # aucune difference entre les deux natures.
         ports_par_vlan = self._ports_par_vlan(router_name)
-        for client in await self._static_clients_for(pop_name):
+        for client in await self._static_clients_for(collector):
             surcharge = surcharges_abonnes.get(client.reference, {})
             secteur = client.sector_key or rattachements.get(client.reference)
             parent = parent_par_noeud.get(secteur) if secteur else None
@@ -1115,13 +1117,25 @@ class ShapingService:
             return []
         return clients
 
-    async def _static_clients_for(self, pop_name: str) -> list[StaticClient]:
-        """Fiches actives de ce PoP, ou liste vide si l'inventaire est absent.
+    async def _static_clients_for(self, collector: MikrotikCollector) -> list[StaticClient]:
+        """Fiches actives que CE routeur doit shaper.
+
+        Le rapprochement passe par ``resolve_pop`` et non par une egalite de
+        chaine : "francophonie" saisi a la main et "PoP Francophonie" porte par
+        le routeur designent le meme site, et une egalite stricte laissait le
+        client hors de l'etat desire -- donc sans file, sans erreur, et sans que
+        rien ne le dise.
 
         Un inventaire illisible ne doit pas faire echouer le plan des abonnes
         PPPoE : on journalise et on continue avec ce qu'on a.
         """
-        return [c for c in await self._static_clients_all() if c.pop_name == pop_name]
+        routeurs = self.registry.collectors
+        retenus: list[StaticClient] = []
+        for client in await self._static_clients_all():
+            match = resolve_pop(client.pop_name, routeurs)
+            if any(c.name == collector.name for c in match.collectors):
+                retenus.append(client)
+        return retenus
 
     def _cible_statique(
         self,
@@ -1180,6 +1194,322 @@ class ShapingService:
             enabled=surcharge.get("enabled", True),
             parent=parent,
         )
+
+    # ------------------------------------------- files des clients declares
+    #
+    # Etats rendus a l'interface. Ils repondent tous a la meme question, celle
+    # qu'on se pose apres avoir declare un client : "est-ce qu'il est bride, et
+    # sinon qu'est-ce qui manque ?".
+    ETAT_POSEE = "file-posee"
+    ETAT_RETIREE = "file-retiree"
+    ETAT_A_POSER = "file-a-poser"
+    ETAT_ECARTE = "ecarte"
+    ETAT_SANS_ROUTEUR = "sans-routeur"
+    ETAT_CONFLIT = "conflit"
+    ETAT_ERREUR = "erreur"
+
+    @staticmethod
+    def queue_name_for(reference: str) -> str:
+        """Le nom de file d'un client declare. Meme regle que le planificateur."""
+        return f"{PREFIX}{slugify(reference)}"
+
+    async def enforce_static_client(
+        self,
+        *,
+        reference: str,
+        pop_name: str,
+        author: str,
+        removing: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Pose (ou retire) la file de CE client, tout de suite.
+
+        POURQUOI NE PAS ATTENDRE LA RECONCILIATION. Elle passe toutes les deux
+        minutes et fait le travail -- mais entre la declaration et son passage,
+        le client n'est pas bride et rien ne dit pourquoi. L'exploitant ne peut
+        pas distinguer "ca arrive" de "ca n'arrivera jamais parce que le PoP est
+        mal ecrit". Poser la file au moment de la saisie supprime cette fenetre,
+        et surtout : le rapport rendu ici NOMME ce qui manque quand rien n'est
+        pose.
+
+        RIEN D'AUTRE QUE CETTE FILE N'EST TOUCHE. Le plan est calcule en entier
+        -- il faut les parents et les types CAKE -- puis restreint au nom de ce
+        client. Declarer un abonne n'ecrit donc pas les files des autres, et un
+        retrait ne peut pas emporter le PoP meme calcule avec ``prune``.
+        """
+        routeurs = self.registry.collectors
+        match = resolve_pop(pop_name, routeurs)
+        rapport: dict[str, Any] = {
+            "reference": reference,
+            "pop_name": match.pop_name or pop_name,
+            "pop_declared": pop_name,
+            "pop_resolution": match.resolution,
+            "enforcement_enabled": self._enforcement_enabled,
+            "applied": 0,
+            "routers": [],
+        }
+        if not match.found:
+            rapport["state"] = self.ETAT_SANS_ROUTEUR
+            rapport["reason"] = explain_pop(match, pop_name, routeurs)
+            return rapport
+
+        nom_file = self.queue_name_for(reference)
+        for collector in match.collectors:
+            rapport["routers"].append(
+                await self._enforce_one(
+                    collector.name,
+                    reference=reference,
+                    queue_name=nom_file,
+                    author=author,
+                    removing=removing,
+                    dry_run=dry_run,
+                )
+            )
+        rapport["applied"] = sum(int(r["applied"]) for r in rapport["routers"])
+        principal = self._etat_principal(rapport["routers"])
+        rapport["state"] = principal["state"]
+        rapport["reason"] = principal["reason"]
+        rapport["router"] = principal["router"]
+        return rapport
+
+    def _plan_impossible(self) -> str | None:
+        """Ce qui empeche de planifier, ou None.
+
+        Sans topologie ni metriques, ``build_targets`` rend deux listes vides :
+        le client serait absent du plan, et l'absence d'action se lirait alors
+        comme "file conforme". Ce serait faux, et faux dans le sens le plus
+        trompeur -- on annoncerait un client bride qui ne l'est pas.
+        """
+        if self.repository is None or self.metrics is None:
+            return (
+                "planification indisponible : ni topologie ni metriques (base non "
+                "initialisee). La file sera calculee des que la base repondra."
+            )
+        return None
+
+    async def _enforce_one(
+        self,
+        router_name: str,
+        *,
+        reference: str,
+        queue_name: str,
+        author: str,
+        removing: bool,
+        dry_run: bool,
+    ) -> dict[str, Any]:
+        """Le sort de cette file sur UN routeur, applique ou seulement decrit."""
+        ligne: dict[str, Any] = {
+            "router": router_name,
+            "applied": 0,
+            "actions": [],
+            "state": self.ETAT_POSEE,
+            "reason": "file deja conforme sur le routeur",
+        }
+        empeche = self._plan_impossible()
+        if empeche is not None:
+            ligne["state"] = self.ETAT_ERREUR
+            ligne["reason"] = empeche
+            return ligne
+        try:
+            plan = await self.plan_router(router_name, prune=removing)
+        except Exception as exc:  # noqa: BLE001 - un routeur muet ne casse pas la saisie
+            logger.exception("Plan impossible sur %s pour '%s'", router_name, reference)
+            ligne["state"] = self.ETAT_ERREUR
+            ligne["reason"] = f"{type(exc).__name__}: {exc}"
+            return ligne
+
+        ecarte = next((s for s in plan.skipped if s.login == reference), None)
+        conflit = next((c for c in plan.conflicts if c.name == queue_name), None)
+        restreint = plan.restrict_to(plan.parent_chain(queue_name), keep_types=not removing)
+        ligne["actions"] = [action.summary() for action in restreint.actions]
+
+        if conflit is not None:
+            ligne["state"] = self.ETAT_CONFLIT
+            ligne["reason"] = conflit.detail
+            return ligne
+        if ecarte is not None:
+            # Le motif vient du planificateur lui-meme : "aucun debit a
+            # appliquer", "adresse revendiquee aussi par...". C'est la reponse
+            # exacte a "pourquoi ce client n'a pas de file", et elle est rendue
+            # telle quelle plutot que reformulee.
+            ligne["state"] = self.ETAT_ECARTE
+            ligne["reason"] = ecarte.reason
+            return ligne
+        if restreint.is_empty:
+            if removing:
+                ligne["state"] = self.ETAT_RETIREE
+                ligne["reason"] = "aucune file de ce client sur le routeur"
+            return ligne
+
+        if dry_run or not self._enforcement_enabled:
+            ligne["state"] = self.ETAT_A_POSER
+            ligne["reason"] = (
+                "l'enforcement est desactive : la file est calculee, rien n'est ecrit "
+                "tant qu'il ne sera pas actif (onglet Shaping)"
+                if not self._enforcement_enabled
+                else "simulation : rien n'a ete ecrit"
+            )
+            return ligne
+
+        try:
+            resultat = await self.apply(restreint, dry_run=False, author=author)
+        except Exception as exc:  # noqa: BLE001 - la fiche est deja enregistree
+            logger.exception("Ecriture impossible sur %s pour '%s'", router_name, reference)
+            ligne["state"] = self.ETAT_ERREUR
+            ligne["reason"] = f"{type(exc).__name__}: {exc}"
+            return ligne
+
+        ligne["applied"] = resultat.applied
+        rates = [o for o in resultat.outcomes if not o.ok]
+        if rates:
+            ligne["state"] = self.ETAT_ERREUR
+            ligne["reason"] = "; ".join(str(o.detail) for o in rates if o.detail)
+            return ligne
+        ligne["state"] = self.ETAT_RETIREE if removing else self.ETAT_POSEE
+        ligne["reason"] = (
+            "file retiree du routeur"
+            if removing
+            else f"{resultat.applied} commande(s) appliquee(s)"
+        )
+        return ligne
+
+    # Du plus urgent au moins urgent : c'est cet ordre qui decide ce qu'on
+    # montre en resume quand un PoP porte plusieurs routeurs.
+    _ORDRE_ETATS = (
+        ETAT_ERREUR,
+        ETAT_CONFLIT,
+        ETAT_ECARTE,
+        ETAT_A_POSER,
+        ETAT_POSEE,
+        ETAT_RETIREE,
+    )
+
+    def _etat_principal(self, lignes: Sequence[dict[str, Any]]) -> dict[str, Any]:
+        """Ce qu'on retient quand plusieurs routeurs portent le meme PoP.
+
+        Le plus urgent gagne : un client bride sur un routeur et en erreur sur
+        l'autre doit se voir, pas se noyer.
+        """
+        if not lignes:
+            return {"state": self.ETAT_SANS_ROUTEUR, "reason": "aucun routeur", "router": None}
+        rang = {etat: i for i, etat in enumerate(self._ORDRE_ETATS)}
+        return min(lignes, key=lambda r: rang.get(str(r["state"]), len(rang)))
+
+    async def static_clients_enforcement(self) -> list[dict[str, Any]]:
+        """Etat de la file de CHAQUE fiche declaree. N'ecrit rien.
+
+        Un plan par routeur concerne, pas un par client : l'exploitant veut
+        l'etat de son inventaire, pas dix lectures du meme routeur. La question
+        posee est toujours la meme -- "ce client est-il bride, et sinon qu'est-ce
+        qui manque ?" -- et la reponse vient du planificateur, donc elle ne peut
+        pas diverger de ce qui serait reellement ecrit.
+        """
+        clients = await self._static_clients_all()
+        if not clients:
+            return []
+        routeurs = self.registry.collectors
+        matches = {c.reference: resolve_pop(c.pop_name, routeurs) for c in clients}
+        empeche = self._plan_impossible()
+
+        plans: dict[str, Plan | str] = {}
+        for match in matches.values():
+            for collector in match.collectors:
+                if collector.name in plans:
+                    continue
+                if empeche is not None:
+                    plans[collector.name] = empeche
+                    continue
+                try:
+                    plans[collector.name] = await self.plan_router(collector.name, prune=False)
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Plan impossible sur %s", collector.name)
+                    plans[collector.name] = f"{type(exc).__name__}: {exc}"
+
+        etats: list[dict[str, Any]] = []
+        for client in clients:
+            match = matches[client.reference]
+            ligne: dict[str, Any] = {
+                "reference": client.reference,
+                "pop_name": match.pop_name or client.pop_name,
+                "pop_declared": client.pop_name,
+                "pop_resolution": match.resolution,
+                "enforcement_enabled": self._enforcement_enabled,
+                "routers": [],
+            }
+            if not match.found:
+                ligne["state"] = self.ETAT_SANS_ROUTEUR
+                ligne["reason"] = explain_pop(match, client.pop_name, routeurs)
+                ligne["router"] = None
+                etats.append(ligne)
+                continue
+            nom_file = self.queue_name_for(client.reference)
+            for collector in match.collectors:
+                plan = plans.get(collector.name)
+                if isinstance(plan, str) or plan is None:
+                    ligne["routers"].append(
+                        {
+                            "router": collector.name,
+                            "state": self.ETAT_ERREUR,
+                            "reason": plan or "routeur non lu",
+                            "applied": 0,
+                            "actions": [],
+                        }
+                    )
+                    continue
+                ligne["routers"].append(self._etat_dans_le_plan(plan, client.reference, nom_file))
+            principal = self._etat_principal(ligne["routers"])
+            ligne["state"] = principal["state"]
+            ligne["reason"] = principal["reason"]
+            ligne["router"] = principal["router"]
+            etats.append(ligne)
+        return etats
+
+    def _etat_dans_le_plan(self, plan: Plan, reference: str, queue_name: str) -> dict[str, Any]:
+        """Lit le plan d'un routeur du point de vue d'UN client.
+
+        Aucune action a son nom et aucun motif d'ecart : la file existe et
+        correspond. C'est la seule deduction possible, et elle est exacte parce
+        que le planificateur ne produit une action que sur un ECART.
+        """
+        ecarte = next((s for s in plan.skipped if s.login == reference), None)
+        conflit = next((c for c in plan.conflicts if c.name == queue_name), None)
+        actions = [a.summary() for a in plan.actions if (a.name or "") == queue_name]
+        if conflit is not None:
+            return {
+                "router": plan.router_name,
+                "state": self.ETAT_CONFLIT,
+                "reason": conflit.detail,
+                "applied": 0,
+                "actions": actions,
+            }
+        if ecarte is not None:
+            return {
+                "router": plan.router_name,
+                "state": self.ETAT_ECARTE,
+                "reason": ecarte.reason,
+                "applied": 0,
+                "actions": actions,
+            }
+        if actions:
+            return {
+                "router": plan.router_name,
+                "state": self.ETAT_A_POSER,
+                "reason": (
+                    "file a poser : elle sera ecrite a la prochaine reconciliation"
+                    if self._enforcement_enabled
+                    else "l'enforcement est desactive : rien ne sera ecrit tant qu'il ne "
+                    "sera pas actif (onglet Shaping)"
+                ),
+                "applied": 0,
+                "actions": actions,
+            }
+        return {
+            "router": plan.router_name,
+            "state": self.ETAT_POSEE,
+            "reason": "file posee et conforme sur le routeur",
+            "applied": 0,
+            "actions": [],
+        }
 
     async def plan_router(self, router_name: str, *, prune: bool | None = None) -> Plan:
         """Raccourci : assemble l'etat desire puis compare au routeur."""

@@ -37,6 +37,7 @@ from app.models import (
     SubscriberSample,
     VlanSighting,
 )
+from app.services.pop_match import resolve_pop
 from app.services.rates import RateTracker
 from app.services.rtt import RttProber
 
@@ -349,14 +350,21 @@ class CollectionService:
         if not clients:
             return
 
-        par_pop = {c.config.effective_pop_name: c for c in self.collectors}
+        # Le PoP saisi dans la fiche est rapproche du PoP porte par un routeur a
+        # la casse, aux accents et au mot "PoP" pres. Une egalite stricte faisait
+        # de "francophonie" et "Francophonie" deux sites distincts : le client
+        # n'avait alors ni collecteur, ni compteur, ni file -- sans qu'aucune
+        # erreur ne soit levee nulle part.
+        par_client = {
+            client.reference: resolve_pop(client.pop_name, self.collectors) for client in clients
+        }
 
         # Compteurs de files, lus UNE fois par routeur concerne. Un routeur
         # injoignable coute juste la mesure de ses clients, pas leur existence.
         routeurs = {
-            par_pop[client.pop_name].name: par_pop[client.pop_name]
-            for client in clients
-            if client.pop_name in par_pop
+            collector.name: collector
+            for match in par_client.values()
+            for collector in match.collectors
         }
         compteurs: dict[str, dict[str, tuple[int | None, int | None]]] = {}
         if routeurs:
@@ -373,10 +381,15 @@ class CollectionService:
                     compteurs[nom] = mesure
 
         for client in clients:
-            collector = par_pop.get(client.pop_name)
+            match = par_client[client.reference]
+            collector = match.collectors[0] if match.collectors else None
+            # Le PoP retenu est celui du ROUTEUR quand il a ete rapproche : sans
+            # cela, une difference de casse ferait naitre un PoP fantome en base,
+            # et les mesures du client iraient s'y ranger au lieu du vrai site.
+            pop_name = match.pop_name or client.pop_name
             try:
                 pop_id = await self.directory.ensure_pop(
-                    client.pop_name,
+                    pop_name,
                     collector.config.host if collector is not None else None,
                 )
             except Exception as exc:  # noqa: BLE001
@@ -416,7 +429,7 @@ class CollectionService:
                         ts=started_at,
                         login=client.reference,
                         router_name=collector.name if collector is not None else "",
-                        pop_name=client.pop_name,
+                        pop_name=pop_name,
                         address=client.address,
                         # Pas de session, donc pas d'anciennete de session : la
                         # remplir avec la duree depuis la saisie serait un

@@ -64,7 +64,9 @@ le meme chemin de planification :
 - ``static`` : client a IP fixe, **declare a la main** dans ``/static-clients``. Aucune
   source automatique n'existe pour lui (ni session, ni attribut RADIUS) : l'inventaire
   saisi par l'operateur est la seule verite, et son debit se lit sur les compteurs de
-  la file qui le vise.
+  la file qui le vise. Declarer un tel client POSE sa file dans la foulee, et la
+  reponse dit ce qui a ete ecrit -- ou ce qui l'en empeche (``enforcement``).
+  ``GET /static-clients/enforcement`` rend le meme etat pour tout l'inventaire.
 
 **Detection assistee, jamais automatique** : un recensement du PoP
 (``/pops/census``) croise sept sources de presence -- ``/ip/arp``, baux DHCP,

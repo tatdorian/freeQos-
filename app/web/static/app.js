@@ -1553,10 +1553,16 @@ async function loadStaticClients() {
 
   // Listes de suggestion : saisir une cle de secteur de memoire est le meilleur
   // moyen de rattacher un client a un noeud qui n'existe pas.
+  // La liste vient des ROUTEURS COLLECTES, pas de la table des PoP : celle-ci
+  // contient aussi les PoP nes d'une faute de frappe, et les proposer
+  // reproduirait l'erreur qu'on cherche a empecher.
   try {
-    const pops = await api('/pops');
+    const inventaire = await api('/pops/routers');
+    const noms = [...new Set((inventaire.routers || [])
+      .filter((r) => r.active !== false && r.pop_name)
+      .map((r) => r.pop_name))].sort();
     document.getElementById('sc-pop-list').innerHTML =
-      pops.map((p) => '<option value="' + esc(p.name) + '">').join('');
+      noms.map((nom) => '<option value="' + esc(nom) + '">').join('');
   } catch (err) { /* la saisie libre reste possible */ }
   try {
     const graphe = await api('/topology');
@@ -1577,7 +1583,10 @@ async function loadStaticClients() {
     '<th title="Derniere fois que cette adresse a parle, vu dans /ip/arp. ' +
     'Un client silencieux ou joignable par un autre chemin reste vide : ' +
     'ne pas savoir n\'est pas la meme chose qu\'etre absent.">Vu actif</th>' +
-    '<th>Etat</th><th class="sticky-actions"></th>' +
+    '<th>Etat</th>' +
+    '<th title="La file reellement posee sur le routeur, et ce qui manque quand ' +
+    'elle ne l\'est pas. Lu sur les routeurs, apres l\'affichage du tableau.">File</th>' +
+    '<th class="sticky-actions"></th>' +
     '</tr></thead><tbody>' +
     fiches.map((f) =>
       '<tr>' +
@@ -1597,6 +1606,8 @@ async function loadStaticClients() {
       '<td>' + (f.enabled
         ? '<span class="badge ok">actif</span>'
         : '<span class="badge warn" title="Fiche conservee, file retiree au plan suivant">suspendu</span>') + '</td>' +
+      '<td class="sc-file" data-sc-file="' + esc(f.reference) + '">' +
+        '<span class="hint">lecture...</span></td>' +
       '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
         '<button class="sm" data-sc-edit="' + esc(f.id) + '">Modifier</button>' +
         '<button class="sm" data-sc-del="' + esc(f.id) + '">Retirer</button>' +
@@ -1613,6 +1624,67 @@ async function loadStaticClients() {
   host.querySelectorAll('[data-sc-del]').forEach((b) => {
     b.addEventListener('click', () => scSupprimer(b.dataset.scDel, fiches));
   });
+  scEtatDesFiles(host);
+}
+
+/** Remplit la colonne "File" APRES l'affichage du tableau.
+ *
+ *  Cette lecture interroge chaque routeur concerne (un plan par routeur) : la
+ *  faire avant l'affichage retarderait tout l'inventaire pour une colonne. Une
+ *  cellule qui reste en "lecture..." est donc un routeur lent, pas une erreur. */
+async function scEtatDesFiles(host) {
+  let data;
+  try {
+    data = await api('/static-clients/enforcement');
+  } catch (err) {
+    host.querySelectorAll('[data-sc-file]').forEach((cell) => {
+      cell.innerHTML = '<span class="hint" title="' + esc(err.message) + '">illisible</span>';
+    });
+    return;
+  }
+  const parReference = {};
+  (data.clients || []).forEach((ligne) => { parReference[ligne.reference] = ligne; });
+  host.querySelectorAll('[data-sc-file]').forEach((cell) => {
+    const ligne = parReference[cell.dataset.scFile];
+    if (!ligne) { cell.innerHTML = '<span class="hint">-</span>'; return; }
+    const detail = (ligne.reason || '') + (ligne.router ? ' (' + ligne.router + ')' : '');
+    cell.innerHTML = '<span title="' + esc(detail) + '">' + scBadgeEtat(ligne.state) + '</span>';
+  });
+}
+
+/** Etats de file rendus par l'API, et ce qu'ils veulent dire pour l'exploitant.
+ *
+ *  Ils repondent tous a la meme question, celle qu'on se pose apres avoir
+ *  declare un client : est-ce qu'il est bride, et sinon qu'est-ce qui manque ? */
+const SC_ETATS = {
+  'file-posee': ['ok', 'File posee'],
+  'file-retiree': ['', 'File retiree'],
+  'file-a-poser': ['warn', 'File a poser'],
+  'ecarte': ['warn', 'Aucune file'],
+  'sans-routeur': ['crit', 'PoP sans routeur'],
+  'conflit': ['crit', 'Conflit'],
+  'erreur': ['crit', 'Erreur'],
+};
+
+function scBadgeEtat(etat) {
+  const [classe, libelle] = SC_ETATS[etat] || ['', etat || '?'];
+  return '<span class="badge ' + classe + '">' + esc(libelle) + '</span>';
+}
+
+/** Ce que la declaration a REELLEMENT fait sur le routeur.
+ *
+ *  Une fiche enregistree ne dit rien de la file : entre "elle est posee" et
+ *  "elle ne le sera jamais parce que le PoP ne correspond a aucun routeur", il
+ *  n'y avait aucune difference visible. C'est ce rapport qui la fait. */
+function scEnforcement(rapport) {
+  if (!rapport) return '';
+  const routeur = rapport.router ? ' sur <code>' + esc(rapport.router) + '</code>' : '';
+  const rapproche = rapport.pop_resolution === 'normalise'
+    ? '<span class="hint">PoP saisi <code>' + esc(rapport.pop_declared || '') +
+      '</code>, rapproche de <code>' + esc(rapport.pop_name || '') + '</code>.</span>'
+    : '';
+  return ' ' + scBadgeEtat(rapport.state) + routeur +
+    '<span class="hint">' + esc(rapport.reason || '') + '</span>' + rapproche;
 }
 
 async function scEnregistrer(event) {
@@ -1621,14 +1693,15 @@ async function scEnregistrer(event) {
   bouton.disabled = true;
   try {
     const payload = scPayload();
+    let fiche;
     if (scEdition) {
-      await api('/static-clients/' + encodeURIComponent(scEdition.id), {
+      fiche = await api('/static-clients/' + encodeURIComponent(scEdition.id), {
         method: 'PATCH', body: JSON.stringify(payload),
       });
-      scNotice('<span class="badge ok">Fiche mise a jour</span>');
+      scNotice('<span class="badge ok">Fiche mise a jour</span>' + scEnforcement(fiche.enforcement));
     } else {
-      await api('/static-clients', { method: 'POST', body: JSON.stringify(payload) });
-      scNotice('<span class="badge ok">Client declare</span>');
+      fiche = await api('/static-clients', { method: 'POST', body: JSON.stringify(payload) });
+      scNotice('<span class="badge ok">Client declare</span>' + scEnforcement(fiche.enforcement));
     }
     scRemplirFormulaire(null);
     // Declarer un client le retire de la liste des candidats : les deux
@@ -1647,8 +1720,8 @@ async function scSupprimer(id, fiches) {
   const fiche = (fiches || []).find((f) => String(f.id) === String(id));
   const nom = fiche ? (fiche.label || fiche.reference) : id;
   if (!confirm('Retirer "' + nom + '" de l\'inventaire ?\n\n' +
-      'Son historique de mesures est conserve. Sa file sera retiree du routeur ' +
-      'au prochain plan, faute de cible declaree.')) return;
+      'Son historique de mesures est conserve. Sa file est retiree du routeur ' +
+      'immediatement, et elle seule.')) return;
   try {
     await api('/static-clients/' + encodeURIComponent(id), { method: 'DELETE' });
     if (scEdition && String(scEdition.id) === String(id)) scRemplirFormulaire(null);

@@ -679,6 +679,53 @@ bloc entier plafonné. C'est la seule différence de traitement à l'écriture :
 session PPPoE est toujours ramenée à un `/32` (élargir shaperait les voisins de
 l'abonné), un client déclaré garde le préfixe de sa fiche.
 
+**Déclarer un client POSE sa file, tout de suite.** La réconciliation périodique
+passe toutes les deux minutes et fait le travail — mais entre la saisie et son
+passage, rien ne distinguait « ça arrive » de « ça n'arrivera jamais ». La
+déclaration applique donc elle-même, et la réponse dit ce qui a été écrit :
+
+| État rendu | Ce qu'il veut dire |
+|---|---|
+| **File posée** | la file existe sur le routeur, au débit de la fiche |
+| **File à poser** | l'enforcement est désactivé : elle est calculée, rien n'est écrit |
+| **Aucune file** | le planificateur l'a écartée, avec son motif — le plus souvent : aucun débit souscrit saisi |
+| **PoP sans routeur** | aucun routeur collecté ne porte ce PoP. Le message **nomme ceux qui existent** |
+| **Conflit** | une file tierce occupe déjà cette adresse (RouterOS n'applique que la première) |
+
+**Seule la file de ce client est écrite.** Le plan est calculé en entier — il
+faut les files parentes et les types CAKE — puis **restreint à son nom**.
+Déclarer un abonné ne réécrit donc pas les files des autres, et retirer une fiche
+retire sa file *immédiatement* sans qu'un `/ppp/active` vide au mauvais moment
+puisse emporter le PoP avec elle, alors même que le plan est calculé avec `prune`.
+
+Une déclaration n'échoue **jamais** parce qu'un routeur est muet : la fiche est
+l'intention de l'exploitant, elle est enregistrée, et le rapport dit ce qui n'a
+pas pu être écrit. La réconciliation repassera derrière.
+
+**« Mon client ne remonte pas » : le PoP.** Le rapprochement fiche ↔ routeur se
+faisait par **égalité de chaîne**. `francophonie` et `Francophonie` étaient donc
+deux sites : le client n'avait ni collecteur, ni compteur, ni file — et un PoP
+fantôme naissait en base, indiscernable du vrai. Rien ne tombait en panne, le
+client ne remontait simplement jamais.
+
+Le rapprochement tolère désormais la casse, les accents, la ponctuation et le mot
+« PoP » lui-même : `PoP Francophonie`, `pop-francophonie` et `francophonie`
+désignent le même site. Deux PoP **réellement distincts** qui se ressembleraient
+après cette normalisation ne sont jamais fusionnés — la résolution rend
+« ambigu » et n'en choisit aucun, parce que poser une file sur le mauvais site
+est pire que de ne rien poser. L'égalité exacte garde la priorité.
+
+Le nom retenu pour la mesure est celui du **routeur**, pas celui de la saisie :
+c'est ce qui empêche le PoP fantôme de renaître au cycle suivant. Et la liste
+déroulante du formulaire est alimentée par les **routeurs collectés**, non par la
+table des PoP — proposer un PoP né d'une faute de frappe reproduirait l'erreur.
+
+**La colonne « File » répond sans qu'on la pose.** L'inventaire affiche l'état
+réel de la file de chaque fiche, lu sur les routeurs après l'affichage du
+tableau (`GET /api/v1/static-clients/enforcement`). Le motif vient du
+planificateur lui-même : il ne peut donc pas raconter autre chose que ce qui
+serait réellement écrit.
+
 **Rattachement topologique déclaré.** Aucun `caller-id` n'existe pour ces clients : la
 jointure MAC ↔ station UISP ne peut pas les rattacher. Le secteur se saisit dans la
 fiche. Ils apparaissent alors dans l'arbre avec leur propre nature (`static`, pas
@@ -821,13 +868,15 @@ diagnostic.
 **Limite à connaître : la mesure dépend de la file.** Sans session PPPoE, aucune
 interface ne porte le trafic de ce client ; le seul compteur par client dont on dispose
 est celui de la file qui le vise (`/queue/simple`). Tant qu'aucune file n'existe sur
-son adresse — enforcement désactivé, ou premier cycle — le client apparaît avec son
-plan et son état, mais **sans débit**. Un trou est plus honnête qu'un zéro, qui se
-lirait comme une absence de trafic. Une file posée à la main par l'opérateur est lue
-aussi, si elle vise la même adresse.
+son adresse — enforcement désactivé, débit souscrit non saisi, PoP sans routeur — le
+client apparaît avec son plan et son état, mais **sans débit**. Un trou est plus
+honnête qu'un zéro, qui se lirait comme une absence de trafic. La colonne « File » de
+l'inventaire dit alors laquelle de ces raisons s'applique. Une file posée à la main
+par l'opérateur est lue aussi, si elle vise la même adresse.
 
 ```bash
-# Déclarer un client à IP fixe
+# Declarer un client a IP fixe : la file est posee dans la foulee, la reponse
+# porte 'enforcement' -- ce qui a ete ecrit, ou ce qui l'en empeche
 curl -X POST localhost:8000/api/v1/static-clients -H 'content-type: application/json' -d '{
   "reference": "mairie-vitre", "label": "Mairie de Vitré",
   "pop_name": "PoP Nord", "address": "10.0.0.0/29", "vlan": 120,
@@ -1193,6 +1242,7 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `PATCH` · `DELETE` | `/api/v1/pops/routers/{id}` | Modifie / retire un routeur |
 | `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
 | `GET` · `POST` | `/api/v1/static-clients` | Inventaire déclaratif des clients à IP fixe |
+| `GET` | `/api/v1/static-clients/enforcement` | État réel de la file de chaque fiche, et le motif quand il n'y en a pas |
 | `GET` | `/api/v1/pops/census` | **Recensement d'un PoP** : tous les clients localisés (sept sources), rapprochés de l'inventaire — lecture seule |
 | `GET` | `/api/v1/static-clients/candidates/diagnostic` | Pourquoi une adresse n'est pas proposée (lecture seule, motif ligne par ligne) |
 | `GET` | `/api/v1/static-clients/candidates` | Adresses détectées sur VLAN routée, non déclarées (consultation seule) |
