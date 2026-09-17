@@ -163,6 +163,11 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   un second la referme. Le repli est le défaut, et la liste dépliée est bornée : un PoP
   d'opérateur porte des centaines d'abonnés, et aucun arbre ne se lit avec des centaines de
   cases — le détail complet vit dans l'onglet *Abonnés*, qui est fait pour ça.
+  **Les abonnés de l'arbre viennent de la liste des abonnés, et d'elle seule.** Les deux
+  natures y sont traitées pareil : un abonné PPPoE porte le badge *CPE*, un client à IP fixe
+  le badge *FIXE*. Ni les adresses repérées en ARP (elles restent des *candidats* à examiner
+  dans l'onglet des clients à IP fixe, cf. [Clients à IP fixe](#clients-à-ip-fixe-non-pppoe)),
+  ni une seconde case pour un client déjà compté : une seule source, donc une seule case.
   Les liens **routeur↔routeur** sont découverts de plusieurs façons complémentaires :
   `/ip/neighbor` (MNDP/LLDP/CDP), **et surtout la configuration complète** lue par API. La
   découverte analyse chaque `/export` : deux PoP portant chacun une adresse sur le **même /30**

@@ -625,12 +625,34 @@ def test_une_fiche_sans_presence_reste_lisible(api) -> None:
     assert fiches[0]["last_seen_at"] is None
 
 
-def test_le_graphe_expose_les_candidats_avec_leur_nature(api) -> None:
+def test_l_arbre_ne_montre_aucun_candidat(api) -> None:
+    """L'ARBRE NE MONTRE QUE DES ABONNES DECLARES.
+
+    Une adresse reperee en ARP n'a rien d'un abonne : une imprimante, un
+    equipement d'un autre operateur ou une machine de passage laissent la meme
+    trace. Melees a l'infrastructure, ces cases "?IP" encombraient l'arbre sans
+    que rien ne permette de les qualifier -- et aucun geste ne les retirait,
+    puisque la lecture suivante les reposait.
+    """
     client, _, _ = api
     graphe = client.get("/api/v1/topology").json()
-    natures = {n["kind"] for n in graphe["nodes"] if n["key"].startswith("candidate:")}
-    assert natures == {KIND_CANDIDATE}
+
+    assert [n for n in graphe["nodes"] if n["key"].startswith("candidate:")] == []
+    assert KIND_CANDIDATE not in {n["kind"] for n in graphe["nodes"]}
+    # La source ARP reste documentee : la detection tourne toujours, elle
+    # alimente simplement l'onglet des clients a IP fixe, pas l'arbre.
     assert "arp" in graphe["sources"]
+
+
+def test_les_candidats_restent_disponibles_la_ou_on_les_traite(api) -> None:
+    """Les retirer de l'arbre ne les supprime pas : c'est dans l'onglet des
+    clients a IP fixe que l'operateur les examine et en declare un client."""
+    client, _, _ = api
+
+    reponse = client.get("/api/v1/static-clients/candidates").json()
+
+    assert reponse["enabled"] is True
+    assert reponse["count"] >= 1
 
 
 # =========================================================================
