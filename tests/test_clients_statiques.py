@@ -645,3 +645,53 @@ async def test_radius_ne_reecrit_pas_le_plan_d_un_client_statique(
     # ... et le client statique a garde le plan de sa fiche.
     assert directory.plans[sid_statique].source == PLAN_SOURCE_STATIC
     assert directory.plans[sid_statique].down_mbps == 200.0
+
+
+# ---------------------------------------------------------------------------
+# UNE SEULE SOURCE POUR LES ABONNES, DONC UNE SEULE CASE
+#
+# Un client a IP fixe declare a aussi une case dans le graphe : elle sert a
+# calculer son rattachement a un secteur pendant la decouverte, et c'est sa
+# seule raison d'etre. La rendre EN PLUS le faisait apparaitre DEUX FOIS dans
+# l'arbre -- sa propre case, et son compte dans les abonnes de son PoP -- alors
+# que c'est le meme client.
+# ---------------------------------------------------------------------------
+async def test_l_arbre_ne_sert_pas_les_cases_de_clients_statiques() -> None:
+    from app.api.shaping import topology as lire_topologie
+    from app.models import KIND_STATIC
+
+    class DepotGraphe:
+        async def nodes(self):
+            return [
+                {"key": "router:pop", "name": "PoP Nord", "kind": "pop", "attributes": {}},
+                {"key": "static:mairie", "name": "mairie", "kind": KIND_STATIC, "attributes": {}},
+            ]
+
+        async def links(self):
+            return [
+                {
+                    "key": "l1",
+                    "source_key": "router:pop",
+                    "target_key": "static:mairie",
+                    "kind": "static",
+                    "interface": None,
+                    "attributes": {},
+                }
+            ]
+
+        async def aliases(self):
+            return {}
+
+    class FauxShaping:
+        last_snapshot = None
+        last_discovery_at = None
+
+    class FauxConteneur:
+        topology_repo = DepotGraphe()
+        shaping = FauxShaping()
+
+    reponse = await lire_topologie(FauxConteneur())
+
+    assert [n["key"] for n in reponse["nodes"]] == ["router:pop"]
+    assert reponse["links"] == [], "le lien vers le client part avec sa case"
+    assert reponse["counts"]["nodes"] == 1

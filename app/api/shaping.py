@@ -22,7 +22,6 @@ from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel, Field, model_validator
 
 from app.api.deps import ContainerDep, RepositoryDep
-from app.collectors.topology import KIND_POP, TopologyNode, TopologySnapshot
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.routeros import MissingWriteCredentialsError
 from app.models import KIND_STATIC
@@ -83,15 +82,38 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
         if manuelles:
             noeud["manual_aliases"] = manuelles
 
-    # Candidats detectes par ARP : poses A LA LECTURE, jamais persistes.
+    # L'ARBRE NE MONTRE QUE DES ABONNES DECLARES.
     #
-    # Les mettre dans topology_nodes les rendrait indiscernables d'un
-    # equipement reellement decouvert, et ils y survivraient a leur propre
-    # disparition. Ici, un candidat declare ou devenu muet s'efface tout seul
-    # au chargement suivant.
-    candidats = await _candidats_detectes(container)
-    if candidats:
-        noeuds, liens = _fusionner_candidats(noeuds, liens, candidats, container)
+    # Les adresses reperees en ARP sur une VLAN routee y figuraient comme cases
+    # "?IP". Elles n'ont pourtant rien d'un abonne : une imprimante, un
+    # equipement d'un autre operateur ou une machine de passage laissent la meme
+    # trace. Melees a l'infrastructure, elles encombraient l'arbre de cases que
+    # rien ne permettait de qualifier -- et qu'aucun geste ne retirait, puisque
+    # la decouverte les reposait au chargement suivant.
+    #
+    # Elles restent entierement disponibles la ou elles servent VRAIMENT : dans
+    # 'GET /static-clients/candidates', c'est-a-dire l'onglet des clients a IP
+    # fixe, ou l'operateur les examine une par une et en declare ce qui est un
+    # client. Une fois declare, le client entre dans l'arbre -- par la liste des
+    # abonnes, comme tous les autres.
+    #
+    # UNE SEULE SOURCE POUR LES ABONNES, DONC UNE SEULE CASE. Les clients a IP
+    # fixe declares ont aussi une case dans le graphe : elle sert a calculer
+    # leur rattachement a un secteur pendant la decouverte, et c'est sa seule
+    # raison d'etre. La rendre EN PLUS ferait apparaitre chacun d'eux deux fois
+    # -- sa propre case, et son compte dans les abonnes du PoP -- alors que
+    # c'est le meme client. On la garde donc pour le calcul et on ne la sert
+    # pas : l'arbre lit les abonnes dans la liste des abonnes, un point c'est
+    # tout, et les deux natures y sont traitees pareil.
+    abonnes_du_graphe = {n["key"] for n in noeuds if n.get("kind") == KIND_STATIC}
+    if abonnes_du_graphe:
+        noeuds = [n for n in noeuds if n["key"] not in abonnes_du_graphe]
+        liens = [
+            lien
+            for lien in liens
+            if lien["source_key"] not in abonnes_du_graphe
+            and lien["target_key"] not in abonnes_du_graphe
+        ]
 
     # Les avertissements de la DERNIERE decouverte, qu'elle vienne du job
     # periodique ou du bouton. Sans cela, un arbre de cases isolees ne disait
@@ -140,83 +162,6 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
             ),
         },
     }
-
-
-async def _candidats_detectes(container: Any) -> list[dict[str, Any]]:
-    """Adresses vues sur une VLAN routee et rattachees a aucun client declare."""
-    repo = getattr(container, "sightings_repo", None)
-    if repo is None or not container.settings.vlan_detect_enabled:
-        return []
-    try:
-        lignes: list[dict[str, Any]] = await repo.candidates(
-            limit=container.settings.vlan_candidate_limit,
-            max_age_s=container.settings.vlan_sighting_retention_s,
-        )
-        return lignes
-    except Exception:  # noqa: BLE001 - une aide a la saisie ne casse pas le graphe
-        logger.exception("Candidats VLAN illisibles, graphe rendu sans eux")
-        return []
-
-
-def _fusionner_candidats(
-    noeuds: list[dict[str, Any]],
-    liens: list[dict[str, Any]],
-    candidats: list[dict[str, Any]],
-    container: Any,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Ajoute les candidats au graphe deja reconcilie, sans y toucher.
-
-    On repasse par ``TopologySnapshot`` pour ne pas dupliquer la logique de
-    pose, puis on n'extrait QUE ce qui a ete ajoute : les cases existantes
-    ressortent telles quelles, y compris leur disposition et leurs fusions.
-    """
-    from app.collectors.topology import attach_vlan_candidates
-
-    snapshot = TopologySnapshot()
-    connus = {str(n["key"]) for n in noeuds}
-    for cle in connus:
-        snapshot.nodes[cle] = TopologyNode(key=cle, name=cle)
-
-    pop_keys = {
-        str(n.get("name") or ""): str(n["key"]) for n in noeuds if n.get("kind") == KIND_POP
-    }
-    attach_vlan_candidates(
-        snapshot,
-        candidats,
-        pop_keys=pop_keys,
-        limit=container.settings.vlan_candidate_limit,
-    )
-
-    ajoutes = [
-        {
-            "key": n.key,
-            "name": n.name,
-            "kind": n.kind,
-            "mac": n.mac,
-            "address": n.address,
-            "router_name": n.router_name,
-            "attributes": n.attributes,
-            "fresh": True,
-            "hidden": False,
-        }
-        for cle, n in snapshot.nodes.items()
-        if cle not in connus
-    ]
-    nouveaux_liens = [
-        {
-            "key": lien.key,
-            "source_key": lien.source_key,
-            "target_key": lien.target_key,
-            "kind": lien.kind,
-            "interface": lien.interface,
-            "capacity_mbps": None,
-            "discovered_by": lien.discovered_by,
-            "attributes": lien.attributes,
-            "hidden": False,
-        }
-        for lien in snapshot.links.values()
-    ]
-    return noeuds + ajoutes, liens + nouveaux_liens
 
 
 @router.get("/topology/routers/{router_name}/export", summary="Config complete d'un PoP")
