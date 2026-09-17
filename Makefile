@@ -20,7 +20,11 @@ update: ## Recupere le code a jour et redemarre l'app (donnees conservees)
 reset-db: ## EFFACE la base (mesures, inventaire, topologie) et redemarre a vide
 	@echo "Cette commande EFFACE toutes les donnees : mesures, routeurs declares,"
 	@echo "antennes, topologie, reglages et clients statiques. Ctrl-C pour annuler."
-	@read -p "Taper 'oui' pour confirmer : " r && [ "$$r" = "oui" ]
+	@# printf plutot que 'read -p' : make execute ses recettes avec /bin/sh, qui
+	@# est dash sur Debian et Ubuntu, et dash ignore l'option -p. L'invite ne
+	@# s'affichait pas -- on ne voyait qu'un curseur qui attend sans rien dire.
+	@printf "Taper 'oui' pour confirmer : "; read r; [ "$$r" = "oui" ] || \
+		{ echo "Annule : rien n'a ete efface."; exit 1; }
 	docker compose down -v
 	docker compose up -d --build
 	@echo "Base recreee a vide. La cle de chiffrement a ete regeneree : redeclarez"
