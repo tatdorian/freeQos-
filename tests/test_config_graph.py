@@ -267,7 +267,15 @@ def test_le_parent_prouve_suit_la_fusion_des_doublons() -> None:
     recablage il pointerait dans le vide, et l'arbre retomberait silencieusement
     sur son calcul de plus court chemin."""
     noeuds = [
-        {"key": "router:core", "name": "Coeur", "kind": KIND_CORE, "mac": "AA:AA:AA:AA:AA:AA"},
+        {
+            "key": "router:core",
+            "name": "Coeur",
+            "kind": KIND_CORE,
+            "mac": "AA:AA:AA:AA:AA:AA",
+            # Un routeur gere expose toujours ces deux choses : c'est par elles
+            # que sa vue "voisin" se replie dans sa case.
+            "attributes": {"managed": True, "macs": ["AA:AA:AA:AA:AA:AA"]},
+        },
         {
             "key": "mac:AA:AA:AA:AA:AA:AA",
             "name": "Coeur",

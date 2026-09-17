@@ -186,7 +186,16 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   son **numéro de série** (`/system/routerboard`, l'identifiant qui ne bouge jamais), son
   **identité RouterOS** et *toutes* ses **MAC d'interface** — c'est ce qui empêche qu'il se
   dédouble, que ce soit sous une autre IP ou vu en voisin par un autre PoP (le voisinage ne
-  révèle que la MAC de l'interface en face). Un PoP **injoignable** reste affiché (badge
+  révèle que la MAC de l'interface en face). **Un équipement est reconnu par son numéro de
+  série** (`/system/routerboard`, ou le `system-id` de `/system/license` pour une CHR, qui
+  n'a pas de RouterBOARD) : c'est le seul identifiant qui ne dépende ni du nom, ni de
+  l'adresse, ni du matériel par lequel on le regarde. **Deux routeurs déclarés ne fusionnent
+  jamais entre eux**, et une **MAC revendiquée par plusieurs** d'entre eux cesse de les
+  identifier — des machines virtuelles déployées depuis la même image partagent les MAC de
+  leurs interfaces, et s'y fier repliait des routeurs bien distincts en une seule case, qui
+  absorbait leurs liens pendant que les autres disparaissaient de l'arbre. Le nom, lui, ne
+  fusionne plus rien : il n'est unique que par convention, et une convention ne se vérifie
+  pas. Un PoP **injoignable** reste affiché (badge
   *injoignable*) plutôt que de disparaître silencieusement. Quand l'automatique ne peut pas
   *prouver* l'identité (nom générique « MikroTik », pas de MAC commune), l'opérateur tranche
   à la main : *Même équipement que…* replie une case sur une autre, *Séparer* défait la
