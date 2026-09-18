@@ -272,6 +272,10 @@
         <div class="table-wrap" id="sc-table"></div>
       </div>
 
+      <!-- Ce qui EMPECHE un plafond de tenir. Vide quand tout bride
+           reellement : un bandeau permanent finirait par ne plus se lire. -->
+      <div id="limits-alert"></div>
+
       <div class="table-wrap" id="subscribers-table"></div>
     </section>
 
@@ -313,6 +317,13 @@
            des commandes envoyees mais OU ca bride, et a combien. Les commandes
            sont un moyen : elles partent toutes seules, et vivent plus bas. -->
       <div id="shaping-points"></div>
+
+      <!-- LA VERIFICATION. "Ou ca bride" et "ca bride VRAIMENT" sont deux
+           questions differentes : une file peut exister, porter le bon debit,
+           et ne rien plafonner (fasttrack, file masquee, file desactivee).
+           C'est ce panneau qui repond a la seconde. -->
+      <h2>Les plafonds sont-ils reellement tenus ?</h2>
+      <div id="shaping-limits"></div>
 
       <!-- Le detail technique reste accessible -- toute commande envoyee doit
            rester verifiable -- mais replie : ce n'est pas la question de tous

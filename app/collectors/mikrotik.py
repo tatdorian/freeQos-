@@ -136,6 +136,8 @@ class RouterOsReadClient(Protocol):
 
     def simple_queues(self) -> list[dict[str, Any]]: ...
 
+    def firewall_filters(self) -> list[dict[str, Any]]: ...
+
     def queue_types(self) -> list[dict[str, Any]]: ...
 
     def queue_trees(self) -> list[dict[str, Any]]: ...
@@ -470,6 +472,17 @@ class LibrouterosReadClient:
 
     def simple_queues(self) -> list[dict[str, Any]]:
         return self._query("/queue/simple")
+
+    def firewall_filters(self) -> list[dict[str, Any]]:
+        """Regles de filtrage, DANS L'ORDRE. Sert a detecter le fasttrack.
+
+        Une regle ``action=fasttrack-connection`` fait sauter aux connexions
+        etablies le reste du chemin, FILES SIMPLES COMPRISES. C'est la premiere
+        cause d'un plafond qui ne plafonne pas, et elle est active par defaut
+        dans le pare-feu d'usine. Lecture seule : le controleur ne touche pas au
+        pare-feu, il se contente de dire pourquoi ses files ne servent a rien.
+        """
+        return self._query("/ip/firewall/filter")
 
     def queue_types(self) -> list[dict[str, Any]]:
         return self._query("/queue/type")

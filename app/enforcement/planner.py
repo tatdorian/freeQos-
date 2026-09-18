@@ -486,6 +486,93 @@ def _index_by_name(rows: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return {str(row.get("name") or ""): row for row in rows if row.get("name")}
 
 
+# --------------------------------------------------- masquage des files
+#
+# RouterOS n'evalue les files simples qu'en LISTE, et seule la PREMIERE qui
+# matche s'applique. Une file placee apres une autre visant le meme trafic est
+# donc purement decorative : elle affiche un debit, elle ne bride rien, et rien
+# ne le signale. La regle vit ici, au plus bas niveau, parce que deux etages en
+# ont besoin -- le planificateur, pour ne pas ecrire une file inutile, et
+# l'audit des plafonds, pour ne pas annoncer un plafond qui n'est pas tenu.
+
+
+def _reseaux(cible: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """Les reseaux vises par une cible de file, ou [] si ce n'est pas une adresse.
+
+    Une cible peut viser plusieurs membres ("172.16.0.0/24,10.0.0.0/8") et peut
+    aussi bien nommer une interface : on ne garde que ce qui est une adresse,
+    parce que le recouvrement ne se raisonne que la.
+    """
+    reseaux: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for membre in str(cible or "").split(","):
+        texte = membre.strip()
+        if not texte:
+            continue
+        try:
+            reseaux.append(ipaddress.ip_network(texte, strict=False))
+        except ValueError:
+            continue
+    return reseaux
+
+
+def targets_overlap(avant: str, apres: str) -> bool:
+    """La cible ``avant`` intercepte-t-elle le trafic de la cible ``apres`` ?
+
+    Egalite de forme d'abord (deux files sur la meme interface, ou sur la meme
+    liste de membres), puis recouvrement d'adresses : un /29 contient le /32
+    d'un abonne, donc une file posee sur le /29 et placee plus haut prend son
+    trafic avant lui.
+    """
+    if not str(avant).strip() or not str(apres).strip():
+        return False
+    if normalise_field(avant) == normalise_field(apres):
+        return True
+    reseaux_avant = _reseaux(avant)
+    reseaux_apres = _reseaux(apres)
+    if not reseaux_avant or not reseaux_apres:
+        return False
+    return any(
+        a.version == b.version and (b.subnet_of(a) or a.subnet_of(b))  # type: ignore[arg-type]
+        for a in reseaux_avant
+        for b in reseaux_apres
+    )
+
+
+def masked_queues(rows: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """``nom de file -> file qui la masque``, dans l'ordre reel du routeur.
+
+    Une file DESACTIVEE ne masque personne : elle ne shape rien, donc elle ne
+    prend le trafic de personne. Une file PARENTE non plus -- la hierarchie est
+    voulue, c'est elle qui fait le partage, et la compter comme un masquage
+    signalerait une panne a chaque abonne correctement rattache.
+    """
+    masquees: dict[str, dict[str, Any]] = {}
+    vues: list[dict[str, Any]] = []
+    for row in rows:
+        if _is_disabled(row):
+            continue
+        nom = str(row.get("name") or "").strip()
+        cible = str(row.get("target") or "")
+        parent = str(row.get("parent") or "").strip().lower()
+        for precedente in vues:
+            nom_precedent = str(precedente.get("name") or "").strip()
+            if nom_precedent.lower() == parent:
+                continue
+            if targets_overlap(str(precedente.get("target") or ""), cible):
+                masquees[nom] = {
+                    "by": nom_precedent,
+                    "target": str(precedente.get("target") or ""),
+                    "detail": (
+                        f"la file '{nom_precedent}' vise {precedente.get('target')} et la "
+                        f"precede dans la liste : RouterOS lui donne le trafic, "
+                        f"'{nom}' ne bride rien"
+                    ),
+                }
+                break
+        vues.append(row)
+    return masquees
+
+
 def build_plan(
     router_name: str,
     *,
@@ -544,6 +631,11 @@ def build_plan(
     files_existantes = _index_by_name(actual_queues)
     noms_desires: set[str] = set()
 
+    # Files deja masquees par une autre dans l'ordre du routeur. Une file qui en
+    # suit une autre visant le meme trafic ne bride RIEN : corriger son debit
+    # donnerait un plan vert sur un abonne qui passe sans plafond. On le dit.
+    deja_masquees = masked_queues(actual_queues)
+
     # Files tierces indexees par cible. RouterOS n'evalue les files ``simple``
     # qu'en liste : quand deux files visent la meme cible, seule la PREMIERE
     # s'applique, l'autre est ignoree sans le moindre avertissement. Ajouter
@@ -578,6 +670,21 @@ def build_plan(
                     fields=champs,
                     name=file_spec.name,
                     reason="file absente",
+                )
+            )
+            continue
+
+        masque = deja_masquees.get(file_spec.name)
+        if masque is not None:
+            plan.conflicts.append(
+                PlanConflict(
+                    name=file_spec.name,
+                    path="/queue/simple",
+                    detail=(
+                        str(masque["detail"])
+                        + ". Tant que cette file la precede, le plafond ne peut pas "
+                        "etre tenu : il faut retirer ou reparenter l'une des deux."
+                    ),
                 )
             )
             continue
@@ -707,6 +814,12 @@ def _is_disabled(row: dict[str, Any]) -> bool:
     return str(row.get("disabled") or "").strip().lower() in {"true", "yes"}
 
 
+# Valeur que RouterOS applique quand il ne RENVOIE pas le champ. Sans cette
+# table, demander explicitement ``disabled=no`` sur un routeur qui omet le champ
+# produirait un ecart permanent -- donc un ``set`` a chaque cycle, pour toujours.
+_DEFAUTS_ABSENTS = {"disabled": "no"}
+
+
 def _diff_fields(
     actual: dict[str, Any], desired: dict[str, str], *, ignore: set[str]
 ) -> dict[str, tuple[str | None, str]]:
@@ -716,13 +829,15 @@ def _diff_fields(
         if cle in ignore:
             continue
         brut = actual.get(cle)
+        if brut is None and cle in _DEFAUTS_ABSENTS:
+            brut = _DEFAUTS_ABSENTS[cle]
         lu = None if brut is None else str(brut)
         if _normalise(lu) != _normalise(voulu):
             changements[cle] = (lu, voulu)
     return changements
 
 
-def _normalise(value: str | None) -> str | None:
+def normalise_field(value: str | None) -> str | None:
     """Compare des valeurs RouterOS sans se laisser piéger par la mise en forme.
 
     RouterOS renvoie volontiers ``20000000/100000000`` la ou on a ecrit ``20M/100M``,
@@ -754,6 +869,12 @@ def _normalise(value: str | None) -> str | None:
             return "/".join(m for m in morceaux if m is not None)
     seul = _normalise_rate(texte)
     return seul if seul is not None else texte
+
+
+# Nom historique, conserve pour les appels internes. La forme publique sert a
+# l'audit des plafonds, qui doit comparer EXACTEMENT comme le planificateur :
+# deux canonisations differentes finiraient par rendre des verdicts differents.
+_normalise = normalise_field
 
 
 def _normalise_rate(value: str) -> str | None:
