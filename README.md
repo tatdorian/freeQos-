@@ -217,9 +217,14 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   « 4 vues » est parfaitement normal pour un équipement vu par quatre ports et parfaitement
   faux pour quatre équipements confondus. La liste des observations repliées laisse trancher,
   et un loopback distinct déclaré à chacun défait une fusion abusive à la racine.
-- **Abonnés** — sessions filtrables **par PoP** et par login, avec débit vs plan, latence,
-  **note de bufferbloat** (latence sous charge), boost en cours et son décompte. Un clic
-  ouvre la série de l'abonné ; les boutons *Débit* et *Boost* agissent directement.
+- **Abonnés** — **tout l'effectif** de chaque PoP, filtrable par PoP, par nature et par
+  login : débit vs plan, latence, **note de bufferbloat** (latence sous charge), boost en
+  cours et son décompte. Les abonnés **déclarés mais jamais mesurés** — jamais connectés,
+  ou PoP qui n'est plus collecté — y figurent aussi, marqués comme tels et avec des
+  **trous plutôt que des zéros** : un zéro se lirait comme une absence de trafic, alors
+  qu'il s'agit d'une absence d'information, et un abonné facturé qui n'apparaît nulle part
+  est indiscernable d'un abonné qui n'existe pas. Un clic ouvre la série de l'abonné ; les
+  boutons *Débit* et *Boost* agissent directement.
 - **Topologie** — le tableau technique des liens : **débit mesuré**, charge vs capacité du
   port, capacité négociée et débit imposé. Le bouton *Débit* ouvre l'historique d'un lien
   et permet une mesure instantanée ; *Bande passante* enregistre une intention de shaping.

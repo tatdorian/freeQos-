@@ -1165,8 +1165,12 @@ async function loadSubscribers() {
   if (state.subPop) query += '&pop_id=' + encodeURIComponent(state.subPop);
   if (state.subKind) query += '&kind=' + encodeURIComponent(state.subKind);
   const bloatQuery = state.subPop ? '&pop_id=' + encodeURIComponent(state.subPop) : '';
+  // include_unmeasured : la liste doit montrer les abonnes QU'IL Y A sur le
+  // PoP, pas seulement ceux qui ont deja produit une mesure. Un abonne declare
+  // et jamais vu est facture comme les autres ; l'omettre le rendait
+  // indiscernable d'un abonne qui n'existe pas.
   const [rows, pops, boosts, bloat] = await Promise.all([
-    api('/subscribers/latest?limit=200' + query),
+    api('/subscribers/latest?limit=200&include_unmeasured=true' + query),
     api('/pops'),
     api('/shaping/boosts').catch(() => []),
     api('/bufferbloat?minutes=60' + bloatQuery).catch(() => null),
@@ -1191,8 +1195,16 @@ async function loadSubscribers() {
   (boosts || []).forEach((b) => { if (b.scope === 'subscriber') parLogin[b.target_key] = b; });
 
   const statiques = rows.filter((r) => r.kind === 'static').length;
+  const sansMesure = rows.filter((r) => !r.ts).length;
+  // L'effectif declare du (ou des) PoP concerne : il dit si la liste est
+  // complete ou tronquee par la limite, ce qu'un simple total ne dit pas.
+  const effectif = pops
+    .filter((p) => !state.subPop || String(p.id) === String(state.subPop))
+    .reduce((a, p) => a + (p.subscriber_count || 0), 0);
   let compte = rows.length + ' abonne(s)' +
+    (effectif > rows.length ? ' sur ' + effectif + ' declare(s)' : '') +
     (statiques ? ' dont ' + statiques + ' a IP fixe' : '') +
+    (sansMesure ? ' · ' + sansMesure + ' sans mesure' : '') +
     (state.subPop ? ' sur ce PoP' : '');
   if (bloat && bloat.summary && bloat.summary.measured) {
     const dist = bloat.summary.distribution || {};
@@ -1212,8 +1224,9 @@ async function loadSubscribers() {
     host.innerHTML = '<div class="empty">' +
       (state.subSearch || state.subPop || state.subKind
         ? 'Aucun abonne ne correspond au filtre.'
-        : 'Aucune mesure. Connectez un PoP, ouvrez une session PPPoE ou ' +
-          'declarez un client a IP fixe.') + '</div>';
+        : 'Aucun abonne. La liste porte tout l\'effectif des PoP, mesure ou non : ' +
+          'vide, elle signifie qu\'aucune session PPPoE n\'a encore ete vue et ' +
+          'qu\'aucun client a IP fixe n\'est declare.') + '</div>';
     return;
   }
   host.innerHTML =
@@ -1230,15 +1243,25 @@ async function loadSubscribers() {
       // La jauge se compare a la limite APPLIQUEE, pas au plan commercial :
       // un abonne bride a 512 kbps qui en consomme 400 est a 78 %, pas a 0,08 %.
       const limiteDown = (r.effective_down_mbps || 0) * 1e6;
+      // AUCUNE MESURE N'EST PAS UN DEBIT NUL. Afficher 0 bps ferait passer un
+      // abonne jamais vu pour un abonne silencieux -- deux situations qui
+      // n'appellent pas du tout le meme geste.
+      const mesure = !!r.ts;
+      const trou = '<span style="color:var(--faint)">-</span>';
       return '<tr class="clickable" data-sub="' + r.subscriber_id + '">' +
-        '<td class="login">' + esc(r.login) + '</td>' +
+        '<td class="login">' + esc(r.login) +
+          (mesure ? '' : '<span class="hint" style="display:block" title="Aucun echantillon : ' +
+            'cet abonne n\'a jamais ete mesure, ou son PoP n\'est plus collecte">jamais mesure</span>') +
+          '</td>' +
         '<td>' + kindBadge(r.kind) + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td>' +
         '<td class="num">' + limitCell(r) + '</td>' +
-        '<td class="num" style="color:var(--down)">' + esc(bpsText(r.tx_bps)) + '</td>' +
-        '<td>' + meter(r.tx_bps, limiteDown) + '</td>' +
-        '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
-        '<td class="num">' + rtt(r.rtt_ms) + '</td>' +
+        '<td class="num" style="color:var(--down)">' +
+          (mesure ? esc(bpsText(r.tx_bps)) : trou) + '</td>' +
+        '<td>' + (mesure ? meter(r.tx_bps, limiteDown) : '') + '</td>' +
+        '<td class="num" style="color:var(--up)">' +
+          (mesure ? esc(bpsText(r.rx_bps)) : trou) + '</td>' +
+        '<td class="num">' + (mesure ? rtt(r.rtt_ms) : trou) + '</td>' +
         '<td>' + bloatBadge(bloatParId[r.subscriber_id]) + '</td>' +
         '<td>' + (parLogin[r.login]
           ? '<span class="boost-pill" title="' +
@@ -1246,8 +1269,11 @@ async function loadSubscribers() {
             esc(Math.max(0, Math.round(parLogin[r.login].seconds_left / 60))) +
             ' min</span>'
           : '<span style="color:var(--faint)">-</span>') + '</td>' +
-        '<td class="num">' + esc(uptime(r.session_uptime_s)) + '</td>' +
-        '<td class="num" style="color:var(--faint)">' + esc(clock(r.ts)) + '</td>' +
+        '<td class="num">' + (mesure ? esc(uptime(r.session_uptime_s)) : trou) + '</td>' +
+        '<td class="num" style="color:var(--faint)">' +
+          (mesure ? esc(clock(r.ts))
+            : '<span title="Derniere session connue">' + esc(depuis(r.last_seen)) + '</span>') +
+          '</td>' +
         '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
           '<button class="sm" data-bw="' + esc(r.login) + '">Debit</button>' +
           '<button class="sm" data-boost="' + esc(r.login) + '">Boost</button>' +
@@ -2187,7 +2213,13 @@ function capacityBadge(libelle, table) {
   return '<span class="badge ' + (table[libelle] || '') + '">' + esc(libelle) + '</span>';
 }
 
-function pct(part) {
+/** Une part deja normalisee (0 a 1) en pourcentage lisible.
+ *
+ *  Nom distinct de pct() a dessein : celui-ci formate une part connue, pct()
+ *  calcule un rapport valeur/plafond pour les jauges. Les deux ont coexiste
+ *  sous le meme nom, et la seconde declaration ecrasait la premiere : toutes
+ *  les jauges de l'interface tombaient. */
+function partPct(part) {
   return part === null || part === undefined ? '-' : Math.round(part * 100) + ' %';
 }
 
@@ -2233,7 +2265,7 @@ async function loadCapacity() {
           ? '<span class="hint">non mesuree</span>' : mbps(p.capacity_mbps) + '') + '</td>' +
         '<td class="num">' + (p.ratio === null ? '-' : esc(p.ratio) + ':1') + '</td>' +
         '<td class="num">' + (p.peak_mbps === null ? '-'
-          : mbps(p.peak_mbps) + ' <span class="hint">' + pct(p.peak_share) + '</span>') + '</td>' +
+          : mbps(p.peak_mbps) + ' <span class="hint">' + partPct(p.peak_share) + '</span>') + '</td>' +
         '<td>' + capacityBadge(p.verdict, CAPACITY_VERDICTS) + '</td>' +
         '</tr>').join('') + '</tbody></table>';
 
@@ -2250,7 +2282,7 @@ async function loadCapacity() {
         '<td class="num">' + (l.capacity_mbps === null ? '-' : mbps(l.capacity_mbps) + '') + '</td>' +
         '<td class="num">' + (l.peak_mbps === null ? '-' : mbps(l.peak_mbps) + '') +
           ' <span class="hint">' + esc(l.peak_direction) + '</span></td>' +
-        '<td class="num">' + pct(l.share) + '</td>' +
+        '<td class="num">' + partPct(l.share) + '</td>' +
         '<td style="color:var(--faint)">' + (l.peak_at ? esc(clock(l.peak_at)) : '-') + '</td>' +
         '<td>' + capacityBadge(l.state, CAPACITY_ETATS) + '</td>' +
         '</tr>').join('') + '</tbody></table>';
@@ -2269,7 +2301,7 @@ async function loadCapacity() {
         '<td class="num">' + esc(u.gigabytes) + ' Go</td>' +
         '<td class="num">' + (u.plan_down_mbps ? mbps(u.plan_down_mbps) + '' : '-') + '</td>' +
         '<td class="num">' + (u.peak_mbps === null ? '-' : mbps(u.peak_mbps) + '') + '</td>' +
-        '<td class="num">' + pct(u.capped_share) +
+        '<td class="num">' + partPct(u.capped_share) +
           (u.at_plan_ceiling
             ? ' <span class="badge warn" title="Il ne profite plus de son plan, il vit dedans : ' +
               'candidat a une offre superieure, ou plan mal taille">plafond</span>' : '') + '</td>' +

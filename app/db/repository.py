@@ -384,18 +384,38 @@ class MetricsRepository:
         kind: str | None = None,
         limit: int = 50,
         order_by: str = "total",
+        include_unmeasured: bool = False,
     ) -> list[dict[str, Any]]:
-        """Dernier echantillon par abonne, trie par debit (top talkers)."""
+        """Les abonnes d'un PoP, avec leur dernier echantillon quand il existe.
+
+        LA REQUETE PART DE L'EFFECTIF, PAS DES MESURES. Elle lisait autrefois la
+        vue ``subscriber_latest``, c'est-a-dire les abonnes qui ont AU MOINS UNE
+        mesure : un abonne declare qui ne s'est jamais connecte, ou dont le PoP
+        n'est plus collecte, n'apparaissait nulle part. Il etait indiscernable
+        d'un abonne qui n'existe pas -- alors qu'il est facture.
+
+        ``include_unmeasured`` decide lequel des deux ensembles on veut :
+
+          - ``False`` (defaut) : seulement ceux qui ont une mesure. C'est ce que
+            demande le classement par debit -- un abonne sans mesure n'a pas sa
+            place dans un "top talkers" ;
+          - ``True`` : TOUT l'effectif du PoP. Les abonnes sans mesure sortent
+            avec des debits a NULL, jamais a zero : un trou se lit comme une
+            absence d'information, un zero comme une absence de trafic.
+        """
         order_sql = {
-            "total": "COALESCE(rx_bps, 0) + COALESCE(tx_bps, 0) DESC",
-            "down": "COALESCE(tx_bps, 0) DESC",
-            "up": "COALESCE(rx_bps, 0) DESC",
-            "login": "login ASC",
-        }.get(order_by, "COALESCE(rx_bps, 0) + COALESCE(tx_bps, 0) DESC")
+            "total": "COALESCE(l.rx_bps, 0) + COALESCE(l.tx_bps, 0) DESC, s.login ASC",
+            "down": "COALESCE(l.tx_bps, 0) DESC, s.login ASC",
+            "up": "COALESCE(l.rx_bps, 0) DESC, s.login ASC",
+            "login": "s.login ASC",
+        }.get(order_by, "COALESCE(l.rx_bps, 0) + COALESCE(l.tx_bps, 0) DESC, s.login ASC")
         async with self._pool.acquire() as conn:
             records = await conn.fetch(
                 f"""
-                SELECT l.*,
+                SELECT s.id AS subscriber_id, s.login, s.kind, s.pop_id,
+                       pop.name AS pop_name,
+                       s.plan_down_mbps, s.plan_up_mbps, s.last_seen, s.last_ip,
+                       l.ts, l.rx_bps, l.tx_bps, l.rtt_ms, l.session_uptime_s,
                        p.max_down_mbps  AS override_down_mbps,
                        p.max_up_mbps    AS override_up_mbps,
                        p.boost_down_mbps,
@@ -403,12 +423,15 @@ class MetricsRepository:
                        p.boost_expires_at,
                        p.boost_reason,
                        p.note           AS policy_note
-                  FROM subscriber_latest l
+                  FROM subscribers s
+                  LEFT JOIN pops pop ON pop.id = s.pop_id
+                  LEFT JOIN subscriber_latest l ON l.subscriber_id = s.id
                   LEFT JOIN shaping_policies p
-                         ON p.scope = 'subscriber' AND p.target_key = l.login
-                 WHERE ($1::int IS NULL OR l.pop_id = $1)
-                   AND ($2::text IS NULL OR l.login ILIKE '%' || $2 || '%')
-                   AND ($3::text IS NULL OR l.kind = $3)
+                         ON p.scope = 'subscriber' AND p.target_key = s.login
+                 WHERE ($1::int IS NULL OR s.pop_id = $1)
+                   AND ($2::text IS NULL OR s.login ILIKE '%' || $2 || '%')
+                   AND ($3::text IS NULL OR s.kind = $3)
+                   AND ($5::bool OR l.subscriber_id IS NOT NULL)
                  ORDER BY {order_sql}
                  LIMIT $4
                 """,  # noqa: S608 - order_sql provient d'une liste blanche
@@ -416,6 +439,7 @@ class MetricsRepository:
                 search,
                 kind,
                 limit,
+                include_unmeasured,
             )
         return [_with_effective_limits(dict(record)) for record in records]
 

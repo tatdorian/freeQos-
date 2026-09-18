@@ -2537,3 +2537,60 @@ async def test_les_analyses_de_capacite_repondent_sur_du_sql_reel(
     muets = await repo.silent_subscribers(days=7, limit=10)
     assert [m["login"] for m in muets] == ["muet"]
     assert muets[0]["last_traffic_at"] is None
+
+
+async def test_la_liste_des_abonnes_porte_tout_l_effectif_du_pop(
+    database: Database, now: datetime
+) -> None:
+    """UN ABONNE DECLARE ET JAMAIS MESURE EXISTE QUAND MEME.
+
+    La liste partait des MESURES : un abonne qui ne s'est jamais connecte, ou
+    dont le PoP n'est plus collecte, n'apparaissait nulle part. Il etait
+    indiscernable d'un abonne qui n'existe pas -- alors qu'il est facture.
+    """
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+
+    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    vu = await directory.ensure_subscriber("vu", pop_id=pop_id, plan=Plan(100, 20, "mock"))
+    await directory.ensure_subscriber("jamais-vu", pop_id=pop_id, plan=Plan(50, 10, "mock"))
+    await writer.write_subscriber_metrics(
+        [
+            (
+                vu,
+                SubscriberSample(
+                    ts=now,
+                    login="vu",
+                    router_name="pop-nord",
+                    pop_name="PoP Nord",
+                    rx_bps=1_000_000.0,
+                    tx_bps=9_000_000.0,
+                ),
+            )
+        ]
+    )
+
+    mesures = await repo.subscriber_latest(limit=50)
+    effectif = await repo.subscriber_latest(limit=50, include_unmeasured=True)
+
+    assert [r["login"] for r in mesures] == ["vu"]
+    assert sorted(r["login"] for r in effectif) == ["jamais-vu", "vu"]
+
+    # Un abonne sans mesure sort avec des trous, JAMAIS avec des zeros : un zero
+    # se lirait comme une absence de trafic, un trou dit qu'on ne sait pas.
+    absent = next(r for r in effectif if r["login"] == "jamais-vu")
+    assert absent["ts"] is None
+    assert absent["rx_bps"] is None and absent["tx_bps"] is None
+    # Son plan, lui, est connu : c'est bien un abonne, pas une ligne vide.
+    assert absent["plan_down_mbps"] == 50
+    assert absent["pop_name"] == "PoP Nord"
+
+    # Le classement par debit ne le remonte pas devant celui qui consomme.
+    assert [r["login"] for r in effectif] == ["vu", "jamais-vu"]
+
+    # Et les filtres continuent de s'appliquer a l'effectif entier.
+    par_nature = await repo.subscriber_latest(limit=50, include_unmeasured=True, kind="pppoe")
+    assert sorted(r["login"] for r in par_nature) == ["jamais-vu", "vu"]
+    par_recherche = await repo.subscriber_latest(limit=50, include_unmeasured=True, search="jamais")
+    assert [r["login"] for r in par_recherche] == ["jamais-vu"]
