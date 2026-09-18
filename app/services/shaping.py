@@ -15,6 +15,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -198,6 +199,10 @@ class ShapingService:
         # elle qui ecrit sur les routeurs ; sans cette trace, l'exploitant n'a
         # aucun moyen de voir qu'elle tourne, et croit que rien ne se passe.
         self.last_reconcile: dict[str, Any] | None = None
+        # Audits des plafonds deja calcules : perimetre -> (instant, rapport).
+        # Ils lisent les routeurs ; l'interface se rafraichit bien plus vite
+        # qu'ils ne changent (cf. AUDIT_TTL_S).
+        self._audit_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
     # ------------------------------------------------------------- drapeau
     @property
@@ -1511,29 +1516,96 @@ class ShapingService:
         l'ecart entre ce qui est decide et ce que le reseau applique vraiment.
         """
         noms = [router_name] if router_name else [c.name for c in self.registry.collectors]
-        routeurs: list[dict[str, Any]] = []
-        for nom in noms:
-            try:
-                routeurs.append(await self._audit_un_routeur(nom))
-            except Exception as exc:  # noqa: BLE001 - un PoP muet n'annule pas les autres
-                logger.exception("Audit des plafonds impossible sur %s", nom)
-                routeurs.append(
-                    {
-                        "router": nom,
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "queues": [],
-                        "fasttrack": {"active": None, "rules": [], "detail": "routeur non lu"},
-                        "enforced": 0,
-                        "leaking": 0,
-                        "counts": {},
-                    }
-                )
-        return {
+
+        frais = self._audit_en_cache(noms)
+        if frais is not None:
+            return frais
+
+        # EN PARALLELE, et chacun sous minuterie.
+        #
+        # Sequentiel, un parc de six PoPs faisait attendre la somme de six
+        # lectures ; et un routeur injoignable pouvait retenir la reponse
+        # jusqu'a son propre delai d'expiration. L'interface, elle, ne peut
+        # pas attendre : c'est ainsi qu'une page finit vide.
+        resultats = await asyncio.gather(
+            *(self._audit_sous_minuterie(nom) for nom in noms), return_exceptions=False
+        )
+        rapport = {
             "enforcement_enabled": self._enforcement_enabled,
             "last_reconcile": self.last_reconcile,
-            "routers": routeurs,
-            "enforced": sum(int(r.get("enforced") or 0) for r in routeurs),
-            "leaking": sum(int(r.get("leaking") or 0) for r in routeurs),
+            "computed_at": datetime.now(tz=UTC),
+            "routers": list(resultats),
+            "enforced": sum(int(r.get("enforced") or 0) for r in resultats),
+            "leaking": sum(int(r.get("leaking") or 0) for r in resultats),
+        }
+        self._audit_cache[self._cle_audit(noms)] = (time.monotonic(), rapport)
+        return rapport
+
+    # Duree de validite d'un audit. Il decrit ce que la reconciliation entretient
+    # -- elle passe toutes les deux minutes -- alors que l'interface se
+    # rafraichit toutes les dix secondes. Relire tous les routeurs a chaque
+    # rafraichissement les martelerait pour une reponse qui n'a pas bouge.
+    AUDIT_TTL_S = 45.0
+
+    # Au-dela, on rend ce qu'on a plutot que de faire attendre. Un routeur lent
+    # doit couter une ligne "non lu", pas la page entiere.
+    AUDIT_TIMEOUT_S = 12.0
+
+    @staticmethod
+    def _cle_audit(noms: Sequence[str]) -> str:
+        return "|".join(sorted(noms))
+
+    def _audit_en_cache(self, noms: Sequence[str]) -> dict[str, Any] | None:
+        """L'audit recent de ce perimetre, s'il l'est encore assez."""
+        entree = self._audit_cache.get(self._cle_audit(noms))
+        if entree is None:
+            return None
+        pose_a, rapport = entree
+        if (time.monotonic() - pose_a) > self.AUDIT_TTL_S:
+            return None
+        return rapport
+
+    def invalidate_limit_audit(self) -> None:
+        """Oublie les audits en cache : ce qui vient d'etre ecrit a change l'etat.
+
+        Appele apres une pose immediate. Sans cela, l'interface reafficherait
+        pendant une minute le defaut qu'on vient de corriger -- et on douterait
+        de la correction, pas du cache.
+        """
+        self._audit_cache.clear()
+
+    async def _audit_sous_minuterie(self, router_name: str) -> dict[str, Any]:
+        """L'audit d'un routeur, borne dans le temps et sans exception qui sorte."""
+        try:
+            return await asyncio.wait_for(
+                self._audit_un_routeur(router_name), timeout=self.AUDIT_TIMEOUT_S
+            )
+        except TimeoutError:
+            logger.warning("Audit des plafonds trop long sur %s", router_name)
+            return self._audit_muet(
+                router_name,
+                f"routeur trop lent : pas de reponse en {self.AUDIT_TIMEOUT_S:.0f} s",
+            )
+        except Exception as exc:  # noqa: BLE001 - un PoP muet n'annule pas les autres
+            logger.exception("Audit des plafonds impossible sur %s", router_name)
+            return self._audit_muet(router_name, f"{type(exc).__name__}: {exc}")
+
+    @staticmethod
+    def _audit_muet(router_name: str, motif: str) -> dict[str, Any]:
+        """Un routeur qu'on n'a pas pu lire. Il le DIT, il ne compte rien.
+
+        Surtout pas zero plafond qui fuit : "je n'ai pas pu verifier" et "tout
+        va bien" sont deux reponses differentes, et les confondre est
+        exactement le defaut que cet audit repare.
+        """
+        return {
+            "router": router_name,
+            "error": motif,
+            "queues": [],
+            "fasttrack": {"active": None, "rules": [], "detail": motif, "remedy": None},
+            "enforced": 0,
+            "leaking": 0,
+            "counts": {},
         }
 
     async def _audit_un_routeur(self, router_name: str) -> dict[str, Any]:
@@ -2338,6 +2410,13 @@ class ShapingService:
             dry_run=dry_run,
             max_actions=self.settings.enforcement_max_actions,
         )
+
+        if not dry_run and resultat.applied:
+            # Ce qu'on vient d'ecrire a change l'etat des routeurs : un audit
+            # calcule avant ne decrit plus rien. Sans cet oubli, l'interface
+            # reafficherait pendant une minute le defaut qu'on vient de
+            # corriger -- et on douterait de la correction, pas du cache.
+            self.invalidate_limit_audit()
 
         if self.repository is not None:
             await self.repository.record_audit(

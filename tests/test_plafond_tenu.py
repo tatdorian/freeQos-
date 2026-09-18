@@ -477,3 +477,94 @@ async def test_la_chaine_des_unites_va_du_kbps_aux_bits_par_seconde(
 
         commandes = [a.command for a in ecriture.executed if a.path == "/queue/simple"]
         assert any(f"max-limit={attendu}/{attendu}" in c for c in commandes), (kbps, commandes)
+
+
+# =========================================================================
+# L'audit ne doit JAMAIS retenir l'interface
+# =========================================================================
+#
+# LE DEFAUT SHIPPE, ET SA LECON. La verification des plafonds a d'abord ete
+# placee dans le chargement de la liste des abonnes, attendue avec le reste :
+# la page est restee vide. Une page vide n'est pas un affichage plus honnete
+# qu'un affichage incomplet -- c'est l'absence de reponse. Ce qui lit les
+# routeurs ne bloque donc plus rien, et ne peut plus pendre.
+
+
+class RouteurQuiTraine(FakeRouterOsClient):
+    """Un routeur qui ne repond jamais. Il y en a un dans chaque parc."""
+
+    # Une seconde suffit a depasser la minuterie du test ; plus longtemps
+    # couterait ce temps a la suite entiere, car le fil continue de dormir
+    # apres l'expiration.
+    def simple_queues(self):  # type: ignore[no-untyped-def]
+        import time as _t
+
+        _t.sleep(1.0)
+        return []
+
+
+async def test_un_routeur_muet_coute_une_ligne_pas_la_page(
+    settings: Settings, routeur_lecture: FakeRouterOsClient
+) -> None:
+    """Le rapport arrive quand meme, et NOMME le routeur qu'il n'a pas pu lire."""
+    service = _service(settings, RouteurQuiTraine(), RouteurQuiSeSouvient(routeur_lecture), {})
+    service.AUDIT_TIMEOUT_S = 0.05  # type: ignore[misc]
+    await service.registry.reload()
+
+    audit = await service.limit_audit()
+
+    (routeur,) = audit["routers"]
+    assert "trop lent" in routeur["error"]
+    # Surtout pas "0 plafond qui fuit" : on n'a rien verifie du tout.
+    assert routeur["fasttrack"]["active"] is None
+    assert routeur["queues"] == []
+
+
+async def test_l_audit_ne_relit_pas_les_routeurs_a_chaque_appel(
+    settings: Settings, routeur_lecture: FakeRouterOsClient
+) -> None:
+    """L'interface se rafraichit toutes les dix secondes ; la reconciliation
+    passe toutes les deux minutes. Relire le parc a chaque coup serait le
+    marteler pour une reponse qui n'a pas bouge."""
+    service = _service(settings, routeur_lecture, RouteurQuiSeSouvient(routeur_lecture), {})
+    await service.registry.reload()
+    appels: list[int] = []
+    vrai = service._audit_un_routeur  # noqa: SLF001
+
+    async def compter(nom: str) -> dict:
+        appels.append(1)
+        return await vrai(nom)
+
+    service._audit_un_routeur = compter  # type: ignore[assignment, method-assign]
+
+    await service.limit_audit()
+    await service.limit_audit()
+    await service.limit_audit()
+
+    assert len(appels) == 1
+
+
+async def test_une_ecriture_perime_l_audit_en_cache(
+    settings: Settings, routeur_lecture: FakeRouterOsClient
+) -> None:
+    """Sinon on reafficherait une minute durant le defaut qu'on vient de
+    corriger, et c'est la correction qu'on soupconnerait, pas le cache."""
+    settings.enforcement_enabled = True
+    settings.routers[0].rw_username = "qos-rw"
+    service = _service(
+        settings,
+        routeur_lecture,
+        RouteurQuiSeSouvient(routeur_lecture),
+        {"test-ba": {"max_down_mbps": 0.1, "max_up_mbps": 0.1, "enabled": True}},
+    )
+    await service.registry.reload()
+
+    premier = await service.limit_audit()
+    ligne = next(q for q in premier["routers"][0]["queues"] if q["name"] == "freeqos-test-ba")
+    assert ligne["verdict"] == VERDICT_ABSENTE
+
+    await service.enforce_subscriber(login="test-ba", author="test")
+    second = await service.limit_audit()
+
+    ligne = next(q for q in second["routers"][0]["queues"] if q["name"] == "freeqos-test-ba")
+    assert ligne["verdict"] == VERDICT_EN_VIGUEUR

@@ -1278,25 +1278,22 @@ async function loadSubscribers() {
   // PoP, pas seulement ceux qui ont deja produit une mesure. Un abonne declare
   // et jamais vu est facture comme les autres ; l'omettre le rendait
   // indiscernable d'un abonne qui n'existe pas.
-  const [rows, pops, boosts, bloat, plafonds] = await Promise.all([
+  const [rows, pops, boosts, bloat] = await Promise.all([
     api('/subscribers/latest?limit=200&include_unmeasured=true' + query),
     api('/pops'),
     api('/shaping/boosts').catch(() => []),
     api('/bufferbloat?minutes=60' + bloatQuery).catch(() => null),
-    // Verifie SUR LE ROUTEUR que chaque plafond s'applique vraiment. Sans lui,
-    // la colonne Limite ne montrait qu'une ligne de base de donnees.
-    api('/shaping/limits').catch(() => null),
   ]);
 
-  // Etat reel du plafond, par login. Le rapprochement se fait sur le login que
-  // l'audit rattache a chaque file, pas sur le nom de file : c'est l'abonne que
-  // l'exploitant cherche.
-  const plafondParLogin = {};
-  if (plafonds) {
-    (plafonds.routers || []).forEach((rt) => {
-      (rt.queues || []).forEach((q) => { if (q.login) plafondParLogin[q.login] = q; });
-    });
-  }
+  // L'ETAT REEL DES PLAFONDS NE BLOQUE PAS LA LISTE.
+  //
+  // Il se lit SUR LES ROUTEURS, un par un : sur un parc de plusieurs PoPs, ou
+  // avec un routeur injoignable, la reponse peut prendre des secondes. Tant
+  // qu'il etait attendu avec le reste, la liste des abonnes ne s'affichait
+  // pas du tout -- on remplacait un affichage trompeur par une page vide, ce
+  // qui est pire. Il arrive donc APRES, et vient decorer une liste deja
+  // lisible (cf. annoterLesPlafonds, plus bas).
+  const plafondParLogin = state.plafonds || {};
 
   // Note de bufferbloat par abonne : latence a vide vs sous charge, calculee en
   // correlant RTT et debit deja collectes.
@@ -1339,11 +1336,8 @@ async function loadSubscribers() {
     // de laisser une colonne vide passer pour un reseau sain.
     compte += ' · bufferbloat indisponible : sonde de latence coupee';
   }
-  document.getElementById('sub-count').textContent = compte +
-    (plafonds && plafonds.leaking
-      ? ' \u00b7 ' + plafonds.leaking + ' plafond(s) NON tenu(s)'
-      : '');
-  renderLimitsAlert(plafonds);
+  document.getElementById('sub-count').textContent = compte;
+  state.subCompte = compte;
 
   const host = document.getElementById('subscribers-table');
   if (!rows.length) {
@@ -1381,7 +1375,8 @@ async function loadSubscribers() {
           '</td>' +
         '<td>' + kindBadge(r.kind) + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td>' +
-        '<td class="num">' + limitCell(r, plafondParLogin[r.login]) + '</td>' +
+        '<td class="num" data-limite="' + esc(r.login) + '">' +
+          limitCell(r, plafondParLogin[r.login]) + '</td>' +
         '<td class="num" style="color:var(--down)">' +
           (mesure ? esc(bpsText(r.tx_bps)) : trou) + '</td>' +
         '<td>' + (mesure ? meter(r.tx_bps, limiteDown) : '') + '</td>' +
@@ -1422,6 +1417,53 @@ async function loadSubscribers() {
     const ligne = rows.find((r) => r.login === b.dataset.boost);
     b.addEventListener('click', () => openBoostEditor(ligne));
   });
+
+  // La verification des plafonds part MAINTENANT, sans etre attendue : la
+  // liste est deja a l'ecran, elle se decorera quand les routeurs auront
+  // repondu. Une page vide n'est pas une reponse plus honnete qu'une page
+  // incomplete -- c'est l'absence de reponse.
+  annoterLesPlafonds(rows);
+}
+
+/** Va lire sur les routeurs si les plafonds tiennent, puis decore la liste.
+ *
+ *  Detache a dessein : cette lecture touche chaque routeur (calcul du plan,
+ *  files, pare-feu). Elle peut prendre plusieurs secondes sur un parc etendu,
+ *  et un PoP injoignable ne doit pas faire disparaitre la liste des abonnes. */
+async function annoterLesPlafonds(rows) {
+  let data;
+  try {
+    data = await api('/shaping/limits');
+  } catch (err) {
+    // Silencieux a l'ecran : l'absence de verification n'est pas une panne de
+    // la page. Les pastilles restent simplement absentes, et l'onglet Shaping
+    // porte le message complet.
+    console.warn('Plafonds non verifies :', err);
+    return;
+  }
+
+  const parLogin = {};
+  (data.routers || []).forEach((rt) => {
+    (rt.queues || []).forEach((q) => { if (q.login) parLogin[q.login] = q; });
+  });
+  state.plafonds = parLogin;
+
+  // La liste a pu changer entre-temps (filtre, rafraichissement) : on ne
+  // touche qu'aux lignes encore affichees, en les retrouvant par leur login.
+  const host = document.getElementById('subscribers-table');
+  if (host) {
+    host.querySelectorAll('td[data-limite]').forEach((cell) => {
+      const ligne = rows.find((r) => r.login === cell.dataset.limite);
+      if (ligne) cell.innerHTML = limitCell(ligne, parLogin[ligne.login]);
+    });
+  }
+
+  const compteur = document.getElementById('sub-count');
+  if (compteur && state.subCompte) {
+    compteur.textContent = state.subCompte +
+      (data.leaking ? ' \u00b7 ' + data.leaking + ' plafond(s) NON tenu(s)' : '');
+  }
+  renderLimitsAlert(data);
 }
 
 /* ---------------------------------------------------------------- nature
@@ -4396,7 +4438,10 @@ async function loadShaping() {
   }
   await refreshEnforcement();
   await loadPoints();
-  await loadLimits();
+  // PAS d'await : la verification des plafonds lit chaque routeur. Attendue
+  // ici, un PoP lent gelait la vue entiere -- et le verrou de rafraichissement
+  // avec elle, donc la page ne repartait plus jamais.
+  loadLimits();
   // Le journal n'est lu que si le detail technique est ouvert : c'est une
   // lecture de plus pour une question qu'on ne se pose pas tous les jours.
   if (document.getElementById('shaping-technique').open) await loadAudit();
@@ -4497,6 +4542,9 @@ async function loadLimits() {
   const host = document.getElementById('shaping-limits');
   if (!host) return;
   const routeur = document.getElementById('shaping-router').value;
+  if (!host.innerHTML) {
+    host.innerHTML = '<div class="empty">Verification sur les routeurs...</div>';
+  }
   let data;
   try {
     data = await api('/shaping/limits' + (routeur ? '?router=' + encodeURIComponent(routeur) : ''));
@@ -5101,7 +5149,10 @@ document.getElementById('range-select').addEventListener('change', (e) => {
   loadThroughput();
 });
 document.getElementById('btn-test').addEventListener('click', testConnection);
-document.getElementById('shaping-router').addEventListener('change', loadPoints);
+document.getElementById('shaping-router').addEventListener('change', () => {
+  loadPoints();
+  loadLimits();
+});
 document.getElementById('shaping-technique').addEventListener('toggle', (e) => {
   if (e.target.open) loadAudit();
 });
