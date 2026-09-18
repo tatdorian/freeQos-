@@ -45,6 +45,7 @@ __all__ = [
     "VERDICT_ECART",
     "VERDICT_EN_VIGUEUR",
     "VERDICT_MASQUEE",
+    "VERDICT_SANS_PLAFOND",
     "VERDICTS_QUI_LAISSENT_PASSER",
     "audit_router",
     "fasttrack_rules",
@@ -61,6 +62,8 @@ VERDICT_MASQUEE = "file-masquee"
 VERDICT_DESACTIVEE = "file-desactivee"
 VERDICT_ECART = "debit-different"
 VERDICT_EN_VIGUEUR = "en-vigueur"
+# Cas a part : il n'y a RIEN a tenir.
+VERDICT_SANS_PLAFOND = "sans-plafond"
 
 GRAVITE = (
     VERDICT_CONTOURNE,
@@ -69,10 +72,14 @@ GRAVITE = (
     VERDICT_DESACTIVEE,
     VERDICT_ECART,
     VERDICT_EN_VIGUEUR,
+    VERDICT_SANS_PLAFOND,
 )
 
-# Un verdict autre que celui-la veut dire : le reseau PEUT depasser le plafond.
-VERDICTS_QUI_LAISSENT_PASSER = frozenset(GRAVITE) - {VERDICT_EN_VIGUEUR}
+# Un verdict autre que ces deux-la veut dire : le reseau PEUT depasser le plafond.
+VERDICTS_QUI_LAISSENT_PASSER = frozenset(GRAVITE) - {VERDICT_EN_VIGUEUR, VERDICT_SANS_PLAFOND}
+
+# Ce que RouterOS ecrit quand une file ne borne rien.
+SANS_LIMITE = frozenset({"0/0", "0", ""})
 
 ACTION_FASTTRACK = "fasttrack-connection"
 
@@ -189,6 +196,11 @@ class LimitState:
     def enforced(self) -> bool:
         return self.verdict == VERDICT_EN_VIGUEUR
 
+    @property
+    def is_cap(self) -> bool:
+        """Y a-t-il seulement un plafond a tenir ? Une file a 0/0 n'en est pas un."""
+        return self.verdict != VERDICT_SANS_PLAFOND
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -203,12 +215,36 @@ class LimitState:
         }
 
 
+def _motif_absence(enforcement_enabled: bool | None, deja_reconcilie: bool | None) -> str:
+    """Pourquoi la file n'est pas (encore) la. LA question, sur un PoP neuf.
+
+    "Aucune file de ce nom sur le routeur" est exact et inutile : sur un site
+    qu'on vient d'ajouter, ca se lit comme une panne alors que rien n'a encore
+    eu l'occasion d'etre ecrit. Le motif doit nommer ce qui manque -- une
+    autorisation d'ecrire, un tour de reconciliation, ou rien du tout, auquel
+    cas c'est bien un defaut.
+    """
+    if enforcement_enabled is False:
+        return (
+            "l'enforcement est coupe : la file est calculee mais rien n'est ecrit "
+            "tant qu'il ne sera pas actif (interrupteur en haut de cette page)"
+        )
+    if deja_reconcilie is False:
+        return (
+            "la reconciliation n'est pas encore passee sur ce routeur : la file part "
+            "au prochain tour. Normal sur un site qu'on vient d'ajouter"
+        )
+    return "aucune file de ce nom sur le routeur : rien ne bride cet abonne"
+
+
 def limit_state(
     spec: QueueSpec,
     *,
     rows: Sequence[dict[str, Any]],
     masquees: dict[str, dict[str, Any]],
     fasttrack: bool,
+    enforcement_enabled: bool | None = None,
+    deja_reconcilie: bool | None = None,
 ) -> LimitState:
     """Le verdict d'un plafond voulu, face a ce que le routeur porte vraiment.
 
@@ -219,10 +255,28 @@ def limit_state(
     index = {_nom(row): row for row in rows if _nom(row)}
     etat = LimitState(name=spec.name, target=spec.target, wanted=spec.max_limit)
 
+    # UNE FILE SANS PLAFOND N'EST PAS UN PLAFOND.
+    #
+    # Une file parente dont la capacite du lien est inconnue sort en 0/0 :
+    # illimitee. La compter parmi les plafonds "non tenus" gonflait l'alarme
+    # d'un site neuf -- "3 plafonds sur 3 ne sont PAS tenus" -- et noyait la
+    # seule ligne qui comptait vraiment. Il n'y a rien a tenir ici ; ce qui
+    # manque, c'est une capacite mesuree sur le lien, et cela se dit autrement.
+    if str(spec.max_limit).strip() in SANS_LIMITE:
+        etat.verdict = VERDICT_SANS_PLAFOND
+        etat.detail = (
+            "cette file ne porte aucun plafond (capacite du lien inconnue) : il n'y a "
+            "rien a tenir. Declarez la capacite du lien pour qu'elle en porte un"
+        )
+        ligne_existante = index.get(spec.name)
+        if ligne_existante is not None:
+            etat.seen = str(ligne_existante.get("max-limit") or "")
+        return etat
+
     ligne = index.get(spec.name)
     if ligne is None:
         etat.verdict = VERDICT_ABSENTE
-        etat.detail = "aucune file de ce nom sur le routeur : rien ne bride cet abonne"
+        etat.detail = _motif_absence(enforcement_enabled, deja_reconcilie)
         return etat
 
     etat.seen = str(ligne.get("max-limit") or "")
@@ -262,25 +316,44 @@ def audit_router(
     desired: Iterable[QueueSpec],
     rows: Sequence[dict[str, Any]],
     firewall: Sequence[dict[str, Any]] | None = (),
+    enforcement_enabled: bool | None = None,
+    deja_reconcilie: bool | None = None,
 ) -> dict[str, Any]:
     """L'audit complet d'un routeur : ce qui bride vraiment, et ce qui ne bride pas.
 
     ``firewall=None`` veut dire "pas lisible", et non "vide" : le verdict le dit
     alors explicitement au lieu de rassurer a tort.
+
+    ``enforcement_enabled`` et ``deja_reconcilie`` ne changent aucun verdict :
+    ils changent le MOTIF d'une file absente. Sur un site qu'on vient d'ajouter,
+    "rien ne bride cet abonne" se lit comme une panne alors que rien n'a encore
+    eu l'occasion d'etre ecrit.
     """
     regles = None if firewall is None else fasttrack_rules(firewall)
     ft = fasttrack_verdict(regles)
     masquees = masked_queues(rows)
     etats = [
-        limit_state(spec, rows=rows, masquees=masquees, fasttrack=bool(regles)).to_dict()
+        limit_state(
+            spec,
+            rows=rows,
+            masquees=masquees,
+            fasttrack=bool(regles),
+            enforcement_enabled=enforcement_enabled,
+            deja_reconcilie=deja_reconcilie,
+        ).to_dict()
         for spec in desired
     ]
     etats.sort(key=lambda e: (GRAVITE.index(str(e["verdict"])), str(e["name"])))
+    # Les files SANS plafond ne comptent ni d'un cote ni de l'autre : il n'y a
+    # rien a tenir. Les mettre parmi les "non tenus" gonflait l'alarme et
+    # noyait les lignes qui comptent.
+    plafonds = [e for e in etats if e["verdict"] != VERDICT_SANS_PLAFOND]
     return {
         "router": router_name,
         "fasttrack": ft,
         "queues": etats,
-        "enforced": sum(1 for e in etats if e["enforced"]),
-        "leaking": sum(1 for e in etats if not e["enforced"]),
+        "enforced": sum(1 for e in plafonds if e["enforced"]),
+        "leaking": sum(1 for e in plafonds if not e["enforced"]),
+        "uncapped": len(etats) - len(plafonds),
         "counts": {v: sum(1 for e in etats if e["verdict"] == v) for v in GRAVITE},
     }

@@ -16,6 +16,7 @@ from app.services.limit_audit import (
     VERDICT_ECART,
     VERDICT_EN_VIGUEUR,
     VERDICT_MASQUEE,
+    VERDICT_SANS_PLAFOND,
     audit_router,
     fasttrack_rules,
     fasttrack_verdict,
@@ -568,3 +569,122 @@ async def test_une_ecriture_perime_l_audit_en_cache(
 
     ligne = next(q for q in second["routers"][0]["queues"] if q["name"] == "freeqos-test-ba")
     assert ligne["verdict"] == VERDICT_EN_VIGUEUR
+
+
+# =========================================================================
+# Un PoP qu'on vient d'ajouter n'est pas un PoP en panne
+# =========================================================================
+#
+# CE QUE L'AUDIT ANNONCAIT A TORT. Sur un site neuf, il affichait "3 plafonds
+# sur 3 ne sont PAS tenus" en rouge. Deux erreurs s'additionnaient :
+#
+# 1. il comptait comme "plafonds" des files parentes a 0/0 -- illimitees faute
+#    de capacite connue sur le lien. Il n'y a rien a tenir dans une file qui ne
+#    borne rien ;
+# 2. il disait "rien ne bride cet abonne" sans dire POURQUOI la file n'est pas
+#    la, alors que la cause est connue : enforcement coupe, ou reconciliation
+#    pas encore passee.
+#
+# Resultat : une alarme rouge sur un site qui fonctionne, et la seule ligne qui
+# comptait vraiment noyee au milieu.
+
+
+def test_une_file_sans_plafond_n_est_pas_un_plafond_non_tenu() -> None:
+    """Une file parente a 0/0 ne borne rien : il n'y a rien a tenir."""
+    etat = limit_state(
+        voulue("freeqos-parent-MikroTik", "172.16.38.0/23", None, None),
+        rows=[],
+        masquees={},
+        fasttrack=False,
+    )
+
+    assert etat.verdict == VERDICT_SANS_PLAFOND
+    assert etat.enforced is False
+    assert etat.is_cap is False
+    assert "capacite du lien inconnue" in etat.detail
+
+
+def test_les_files_sans_plafond_ne_gonflent_pas_l_alarme() -> None:
+    """Le cas exact du terrain : deux parents illimites et UN vrai plafond."""
+    rapport = audit_router(
+        router_name="NAS-Tailladje",
+        desired=[
+            voulue("freeqos-parent-MikroTik", "172.16.38.0/23", None, None),
+            voulue("freeqos-parent-NAS-FRANCOPHONIE", "100.100.101.112/29", None, None),
+            voulue("freeqos-test-ta", "172.16.39.253/32", 50, 300),
+        ],
+        rows=[],
+        firewall=[],
+    )
+
+    # Un seul plafond en jeu, pas trois.
+    assert rapport["leaking"] == 1
+    assert rapport["enforced"] == 0
+    assert rapport["uncapped"] == 2
+
+
+def test_enforcement_coupe_explique_la_file_absente() -> None:
+    """'Rien ne bride cet abonne' est exact et inutile : ce qui manque, c'est
+    l'autorisation d'ecrire, et c'est cela qu'il faut lire."""
+    rapport = audit_router(
+        router_name="NAS-Tailladje",
+        desired=[voulue("freeqos-test-ta", "172.16.39.253/32", 50, 300)],
+        rows=[],
+        firewall=[],
+        enforcement_enabled=False,
+    )
+
+    (ligne,) = rapport["queues"]
+    assert ligne["verdict"] == VERDICT_ABSENTE
+    assert "enforcement est coupe" in ligne["detail"]
+
+
+def test_un_site_neuf_dit_que_la_reconciliation_n_est_pas_passee() -> None:
+    """Sur un PoP qu'on vient d'ajouter, la file part au prochain tour. Le dire
+    evite de lire une panne la ou il n'y a qu'une attente."""
+    rapport = audit_router(
+        router_name="NAS-Tailladje",
+        desired=[voulue("freeqos-test-ta", "172.16.39.253/32", 50, 300)],
+        rows=[],
+        firewall=[],
+        enforcement_enabled=True,
+        deja_reconcilie=False,
+    )
+
+    (ligne,) = rapport["queues"]
+    assert "reconciliation n'est pas encore passee" in ligne["detail"]
+    assert "site qu'on vient d'ajouter" in ligne["detail"]
+
+
+def test_une_file_vraiment_manquante_reste_un_defaut() -> None:
+    """La tolerance ne doit pas tout excuser : ecriture permise, reconciliation
+    passee, et toujours pas de file -- c'est un defaut, et il se dit."""
+    rapport = audit_router(
+        router_name="NAS-Tailladje",
+        desired=[voulue("freeqos-test-ta", "172.16.39.253/32", 50, 300)],
+        rows=[],
+        firewall=[],
+        enforcement_enabled=True,
+        deja_reconcilie=True,
+    )
+
+    (ligne,) = rapport["queues"]
+    assert ligne["detail"] == "aucune file de ce nom sur le routeur : rien ne bride cet abonne"
+
+
+async def test_le_service_dit_si_la_reconciliation_a_touche_ce_routeur(
+    settings: Settings, routeur_lecture: FakeRouterOsClient
+) -> None:
+    service = _service(settings, routeur_lecture, RouteurQuiSeSouvient(routeur_lecture), {})
+    await service.registry.reload()
+
+    # Aucune passe : c'est "pas encore", pas "on ne sait pas".
+    assert service._deja_reconcilie("pop-test") is False  # noqa: SLF001
+
+    service.last_reconcile = {"at": "2026-09-18T12:00:00Z", "routers": ["pop-test"]}
+    assert service._deja_reconcilie("pop-test") is True  # noqa: SLF001
+    assert service._deja_reconcilie("un-autre") is False  # noqa: SLF001
+
+    # Trace sans liste de routeurs : on ne conclut rien plutot que d'affirmer.
+    service.last_reconcile = {"at": "2026-09-18T12:00:00Z"}
+    assert service._deja_reconcilie("pop-test") is None  # noqa: SLF001

@@ -20,9 +20,24 @@ async function api(path, options) {
   const body = await res.json().catch(() => null);
   if (!res.ok) {
     const detail = body && body.detail ? body.detail : res.status + ' ' + res.statusText;
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    throw new Error(typeof detail === 'string' ? detail : validationText(detail));
   }
   return body;
+}
+
+/** Rend lisible une erreur de validation d'API.
+ *
+ *  FastAPI rend un TABLEAU d'objets ; affiche tel quel, l'exploitant recevait
+ *  '[{"type":"string_too_short","loc":["body","router"],...}]' en pleine page.
+ *  Un message d'erreur qu'il faut dechiffrer ne vaut guere mieux que pas de
+ *  message du tout. */
+function validationText(detail) {
+  if (!Array.isArray(detail)) return JSON.stringify(detail);
+  const lignes = detail.map((e) => {
+    const champ = Array.isArray(e.loc) ? e.loc.filter((l) => l !== 'body').join('.') : '';
+    return (champ ? champ + ' : ' : '') + (e.msg || e.type || 'valeur refusee');
+  });
+  return lignes.join(' ; ');
 }
 
 /** Formate un debit en bits/s. Retourne la valeur et l'unite separement pour
@@ -1191,6 +1206,7 @@ function popCell(r, siteParNom) {
  *  colonne dit laquelle des deux on regarde. */
 function limitProof(etat) {
   if (!etat) return '';
+  if (etat.verdict === 'sans-plafond') return '';
   if (etat.enforced) {
     // Discret : le cas normal ne doit pas crier. La pastille sert surtout a
     // montrer que la verification a bien eu lieu.
@@ -1272,7 +1288,10 @@ function renderLimitsAlert(plafonds) {
   const fuites = [];
   (plafonds.routers || []).forEach((rt) => {
     (rt.queues || []).forEach((q) => {
-      if (!q.enforced && q.verdict !== 'contourne') fuites.push({ routeur: rt.router, q: q });
+      // 'sans-plafond' n'est pas une fuite : la file existe et ne borne rien,
+      // ce qui est voulu tant que la capacite du lien est inconnue.
+      if (q.verdict === 'sans-plafond' || q.verdict === 'contourne') return;
+      if (!q.enforced) fuites.push({ routeur: rt.router, q: q });
     });
   });
   if (fuites.length) {
@@ -4614,18 +4633,30 @@ async function loadLimits() {
   }
 
   const total = (data.enforced || 0) + (data.leaking || 0);
+  const sansPlafond = (data.routers || []).reduce((a, rt) => a + (rt.uncapped || 0), 0);
+  // Une file a 0/0 ne borne rien : il n'y a RIEN a tenir. La compter parmi les
+  // plafonds non tenus gonflait l'alarme d'un site neuf et noyait la seule
+  // ligne qui comptait.
+  const note = sansPlafond
+    ? '<span class="hint">' + sansPlafond + ' file(s) ne portent aucun plafond ' +
+      '(capacite du lien inconnue) : elles ne sont comptees ni d\'un cote ni de ' +
+      'l\'autre.</span>'
+    : '';
   const entete = data.leaking
     ? '<div class="notice err"><strong>' + data.leaking + ' plafond(s) sur ' + total +
       ' ne sont PAS tenus par le reseau.</strong><span class="hint">Une file qui existe et ' +
       'porte le bon debit peut ne rien brider : c\'est ce que ce tableau va chercher, ' +
-      'directement sur le routeur.</span></div>'
+      'directement sur le routeur.</span>' + note + '</div>'
     : (total
         ? '<div class="notice ok"><strong>Les ' + total + ' plafonds decides sont tenus par ' +
           'le reseau.</strong><span class="hint">Verifie file par file sur le routeur : ' +
           'debit conforme, file active, non masquee, et aucun fasttrack pour la contourner.' +
-          '</span></div>'
-        : '<div class="empty">Aucun plafond a verifier : aucune file n\'est encore ' +
-          'attendue sur ce perimetre.</div>');
+          '</span>' + note + '</div>'
+        : (sansPlafond
+            ? '<div class="notice"><strong>Aucun plafond a tenir sur ce perimetre.</strong>' +
+              note + '</div>'
+            : '<div class="empty">Aucun plafond a verifier : aucune file n\'est encore ' +
+              'attendue sur ce perimetre.</div>'));
 
   const routeurs = (data.routers || []).map((rt) => {
     if (rt.error) {
@@ -4643,7 +4674,8 @@ async function loadLimits() {
       bandeau = '<div class="notice warn"><strong>Fasttrack non verifie.</strong>' +
         '<span class="hint">' + esc(ft.detail || '') + '</span></div>';
     }
-    const fuites = (rt.queues || []).filter((q) => !q.enforced);
+    const fuites = (rt.queues || []).filter((q) => !q.enforced && q.verdict !== 'sans-plafond');
+    const libres = (rt.queues || []).filter((q) => q.verdict === 'sans-plafond');
     const tableau = fuites.length
       ? '<div class="table-wrap"><table><thead><tr><th>File</th><th>Abonne</th>' +
         '<th>Cible</th><th class="num">Voulu</th><th class="num">Sur le routeur</th>' +
@@ -4657,11 +4689,21 @@ async function loadLimits() {
           '<td>' + esc(q.detail || q.verdict) + '</td>' +
           '</tr>').join('') + '</tbody></table></div>'
       : '<p class="empty" style="text-align:left">Tous les plafonds de ce routeur sont tenus.</p>';
+    // Informatif, pas une alerte : ces files existent et ne bornent rien, ce
+    // qui est le comportement voulu tant que la capacite du lien est inconnue.
+    const sans = libres.length
+      ? '<p class="empty" style="text-align:left">' + libres.length +
+        ' file(s) sans plafond : ' +
+        libres.map((q) => '<code>' + esc(q.name) + '</code>').join(', ') + '. ' +
+        'La capacite de ces liens n\'est pas connue, donc rien n\'y est borne. ' +
+        'Declarez-la pour qu\'elles portent une enveloppe.</p>'
+      : '';
     return '<div class="card" style="margin-bottom:.8rem">' +
       '<h3 style="margin:0 0 .4rem">' + esc(rt.router) +
       '<span class="hint" style="display:inline;font-weight:400;margin-left:.5rem">' +
-      (rt.enforced || 0) + ' tenu(s), ' + (rt.leaking || 0) + ' non tenu(s)</span></h3>' +
-      bandeau + tableau + '</div>';
+      (rt.enforced || 0) + ' tenu(s), ' + (rt.leaking || 0) + ' non tenu(s)' +
+      (rt.uncapped ? ', ' + rt.uncapped + ' sans plafond' : '') + '</span></h3>' +
+      bandeau + tableau + sans + '</div>';
   }).join('');
 
   host.innerHTML = entete + routeurs;
@@ -4866,17 +4908,55 @@ async function inspectShaping() {
 }
 
 async function computePlan() {
-  const routeur = document.getElementById('shaping-router').value;
+  const choisi = document.getElementById('shaping-router').value;
   const host = document.getElementById('shaping-plan');
-  host.innerHTML = '<div class="notice">Calcul du plan pour ' + esc(routeur) + '...</div>';
-  try {
-    const plan = await api('/shaping/plan', {
-      method: 'POST', body: JSON.stringify({ router: routeur }),
-    });
-    renderPlan(plan, routeur);
-  } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+
+  // UN PLAN EST TOUJOURS LE PLAN D'UN ROUTEUR.
+  //
+  // Avec "Tous les PoP", le selecteur vaut la chaine vide : on envoyait
+  // router:"" et l'API refusait, en rendant son erreur de validation brute a
+  // l'ecran. Ce que l'exploitant demande dans ce cas n'a pourtant rien
+  // d'ambigu -- le plan de chacun -- alors on les calcule tous.
+  const routeurs = choisi ? [choisi] : [...document.getElementById('shaping-router').options]
+    .map((o) => o.value).filter(Boolean);
+  if (!routeurs.length) {
+    host.innerHTML = '<div class="notice warn">Aucun routeur dans l\'inventaire : ' +
+      'declarez-en un dans l\'onglet Equipements.</div>';
+    return;
   }
+
+  host.innerHTML = '<div class="notice">Calcul du plan pour ' +
+    esc(routeurs.join(', ')) + '...</div>';
+  const morceaux = [];
+  for (const routeur of routeurs) {
+    try {
+      const plan = await api('/shaping/plan', {
+        method: 'POST', body: JSON.stringify({ router: routeur }),
+      });
+      morceaux.push({ routeur: routeur, plan: plan });
+    } catch (err) {
+      morceaux.push({ routeur: routeur, erreur: err.message });
+    }
+  }
+  host.innerHTML = '';
+  morceaux.forEach((m) => {
+    const bloc = document.createElement('div');
+    if (!m.erreur) {
+      host.appendChild(bloc);
+      try {
+        renderPlan(m.plan, m.routeur, bloc);
+      } catch (err) {
+        // Une reponse inattendue sur UN routeur ne doit pas vider le panneau
+        // des autres : on dit lequel, et on continue.
+        bloc.innerHTML = '<div class="notice err"><strong>' + esc(m.routeur) +
+          '</strong> : reponse inattendue (' + esc(err.message) + ')</div>';
+      }
+      return;
+    }
+    bloc.innerHTML = '<div class="notice err"><strong>' + esc(m.routeur) + '</strong> : ' +
+      esc(m.erreur) + '</div>';
+    host.appendChild(bloc);
+  });
 }
 
 /** Abonnes volontairement laisses de cote. Les motifs identiques sont
@@ -4899,8 +4979,11 @@ function renderEcartes(ecartes) {
     '</div>';
 }
 
-function renderPlan(plan, routeur) {
-  const host = document.getElementById('shaping-plan');
+/** Rend un plan. ``hote`` permet d'en afficher PLUSIEURS sur la meme page
+ *  (un par routeur) : les boutons sont retrouves dans leur propre bloc et non
+ *  par identifiant global, qui n'aurait cable que le premier plan affiche. */
+function renderPlan(plan, routeur, hote) {
+  const host = hote || document.getElementById('shaping-plan');
   const c = plan.counts;
   const total = c.add + c.set + c.remove;
 
@@ -4944,23 +5027,30 @@ function renderPlan(plan, routeur) {
     }).join('') + '</tbody></table></div>';
 
   html += '<div class="actions" style="margin-top:1rem">' +
-    '<button id="btn-simulate">Simuler (dry-run)</button>' +
-    '<button id="btn-apply" class="primary">Appliquer sur le routeur</button>' +
-    '</div><div id="apply-result"></div>';
+    '<button data-act="simulate">Simuler (dry-run)</button>' +
+    '<button data-act="apply" class="primary">Appliquer sur ' + esc(routeur) + '</button>' +
+    '</div><div data-act="result"></div>';
 
   host.innerHTML = html;
-  document.getElementById('btn-simulate').addEventListener('click', () => applyPlan(routeur, true));
-  document.getElementById('btn-apply').addEventListener('click', () => applyPlan(routeur, false));
+  host.querySelector('[data-act="simulate"]')
+    .addEventListener('click', () => applyPlan(routeur, true, host));
+  host.querySelector('[data-act="apply"]')
+    .addEventListener('click', () => applyPlan(routeur, false, host));
 }
 
-async function applyPlan(routeur, dryRun) {
+async function applyPlan(routeur, dryRun, bloc) {
   if (!dryRun && !confirm(
       'Appliquer reellement sur ' + routeur + ' ?\n\n' +
       'Des commandes vont etre envoyees au routeur. Seules les files portant ' +
       'le marqueur freeqos:managed sont concernees.')) {
     return;
   }
-  const host = document.getElementById('apply-result');
+  // Le compte rendu va dans le bloc DE CE PLAN : avec plusieurs plans a
+  // l'ecran, un identifiant global aurait affiche le resultat du routeur B
+  // sous le plan du routeur A.
+  const host = (bloc && bloc.querySelector('[data-act="result"]'))
+    || document.querySelector('#shaping-plan [data-act="result"]');
+  if (!host) return;
   host.innerHTML = '<div class="notice">Execution...</div>';
   try {
     const reponse = await api('/shaping/apply', {
