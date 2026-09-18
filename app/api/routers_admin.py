@@ -10,6 +10,7 @@ l'ecriture et aucune reponse ne le contient, meme chiffre.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, Any, Literal
 
@@ -87,6 +88,44 @@ def _guard_secrets(container: ContainerDep) -> None:
             status_code=status.HTTP_409_CONFLICT,
             detail=container.secrets.unavailable_reason,
         )
+
+
+@router.get("/pops/health", summary="Sante des routeurs collectes (CPU, memoire, uptime)")
+async def routers_health(container: ContainerDep) -> dict[str, Any]:
+    """Ce que les routeurs eux-memes disent de leur etat, en direct.
+
+    Un routeur a 95 % de CPU n'appliquera pas les files qu'on lui envoie, et un
+    routeur qui vient de redemarrer a perdu les siennes -- deux causes de "mon
+    abonne n'est pas bride" qui n'ont rien a voir avec le controleur et qui ne
+    se voyaient nulle part.
+
+    Une commande de lecture par routeur. Un routeur muet est rendu avec son
+    erreur plutot qu'omis : une liste courte qui ne dit pas qui manque est
+    exactement ce qu'on cherche a eviter.
+    """
+    collecteurs = container.registry.collectors
+    resultats = await asyncio.gather(
+        *(collecteur.health() for collecteur in collecteurs), return_exceptions=True
+    )
+    routeurs: list[dict[str, Any]] = []
+    for collecteur, resultat in zip(collecteurs, resultats, strict=True):
+        if isinstance(resultat, BaseException):
+            logger.warning("Sante illisible sur %s : %s", collecteur.name, resultat)
+            routeurs.append(
+                {
+                    "router": collecteur.name,
+                    "pop_name": collecteur.config.effective_pop_name,
+                    "host": collecteur.config.host,
+                    "reachable": False,
+                    "error": f"{type(resultat).__name__}: {resultat}",
+                }
+            )
+            continue
+        routeurs.append(resultat)
+    return {
+        "routers": routeurs,
+        "unreachable": sum(1 for r in routeurs if not r.get("reachable")),
+    }
 
 
 @router.get("/pops/routers", summary="Inventaire des routeurs (fichier + base)")

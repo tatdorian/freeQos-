@@ -28,6 +28,7 @@ from app.services.capacity import (
     VERDICT_SANS_VENTE,
     VERDICT_SURVEILLER,
     VERDICT_TENDU,
+    a_renforcer,
     etat_du_lien,
     link_row,
     occupancy,
@@ -222,6 +223,85 @@ def test_sans_echantillon_la_part_au_plafond_est_inconnue_pas_nulle() -> None:
 # =========================================================================
 # 4. L'API
 # =========================================================================
+
+
+# =========================================================================
+# 5. A renforcer : ce qui n'a plus de marge EN MOYENNE
+# =========================================================================
+
+
+def _lien(**surcharges):
+    base = {
+        "router_name": "pop-test",
+        "interface": "ether2",
+        "link_name": "BH-Nord",
+        "capacity_mbps": 1000.0,
+        "peak_rx_bps": 120_000_000.0,
+        "peak_tx_bps": 900_000_000.0,
+        "avg_bps": 850_000_000.0,
+        "samples": 120,
+        "peak_rx_at": NOW,
+        "peak_tx_at": NOW,
+    }
+    return link_row({**base, **surcharges})
+
+
+def _abonne(**surcharges):
+    base = {
+        "login": "dupont",
+        "plan_down_mbps": 100.0,
+        "bytes": 1.0,
+        "samples": 120,
+        "avg_bps": 92_000_000.0,
+        "peak_bps": 99_000_000.0,
+        "capped_samples": 60,
+    }
+    return usage_row({**base, **surcharges})
+
+
+def test_un_lien_qui_vit_a_85_pour_cent_est_a_renforcer() -> None:
+    """Le critere est la MOYENNE : une pointe a 100 % est normale un soir de
+    match, une moyenne a 85 % dit que la prochaine croissance se paiera en
+    latence."""
+    resultat = a_renforcer([_lien()], [])
+    assert [ligne["link_name"] for ligne in resultat["links"]] == ["BH-Nord"]
+    assert resultat["links"][0]["avg_share"] == 0.85
+
+
+def test_une_pointe_haute_sur_un_lien_calme_ne_declenche_rien() -> None:
+    """C'est exactement l'erreur a ne pas faire : acheter un backhaul parce
+    qu'un soir a 100 % s'est produit une fois."""
+    resultat = a_renforcer([_lien(avg_bps=200_000_000.0)], [])
+    assert resultat["links"] == []
+
+
+def test_une_moyenne_calculee_sur_trois_points_ne_justifie_rien() -> None:
+    """Sans minimum d'echantillons, trois mesures prises pendant un pic
+    feraient acheter un backhaul."""
+    assert a_renforcer([_lien(samples=3)], [])["links"] == []
+
+
+def test_un_lien_sans_capacite_connue_n_est_pas_classe() -> None:
+    """On ne sait pas s'il a de la marge : le dire serait inventer."""
+    assert a_renforcer([_lien(capacity_mbps=None)], [])["links"] == []
+
+
+def test_un_abonne_qui_vit_dans_son_plan_est_une_vente_pas_un_renfort() -> None:
+    """Les deux listes sont separees : un lien sature se renforce, un abonne
+    sature se vend. Les melanger ferait passer une opportunite commerciale pour
+    un probleme d'ingenierie."""
+    resultat = a_renforcer([], [_abonne()])
+    assert resultat["links"] == []
+    assert [u["login"] for u in resultat["subscribers"]] == ["dupont"]
+    assert resultat["subscribers"][0]["avg_share"] == 0.92
+
+
+def test_le_classement_met_le_plus_charge_en_premier() -> None:
+    """La premiere ligne est celle qui coute le plus cher a laisser en l'etat."""
+    resultat = a_renforcer(
+        [_lien(link_name="calme", avg_bps=810_000_000.0), _lien(link_name="pire")], []
+    )
+    assert [ligne["link_name"] for ligne in resultat["links"]] == ["pire", "calme"]
 
 
 def test_api_rend_les_quatre_analyses(client: TestClient) -> None:

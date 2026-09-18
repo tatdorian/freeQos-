@@ -57,6 +57,20 @@ ETAT_CHARGE = "charge"
 ETAT_SATURE = "sature"
 ETAT_INCONNU = "capacite inconnue"
 
+# A RENFORCER : le critere est la MOYENNE, pas la pointe.
+#
+# Une pointe a 100 % ne prouve rien -- c'est meme ce qu'on attend d'un lien
+# correctement dimensionne un soir de match. Une MOYENNE au-dessus de 80 % sur
+# la periode dit autre chose : le lien n'a plus de marge, et la prochaine
+# croissance se paiera en latence pour tout le monde.
+#
+# Le seuil de 80 % et le minimum d'echantillons sont ceux qu'emploient les
+# outils du domaine ; ils sont repris ici parce qu'ils sont defendables, pas
+# parce qu'ils sont ecrits ailleurs. Sans minimum d'echantillons, trois mesures
+# prises pendant un pic feraient acheter un backhaul.
+SEUIL_RENFORT = 0.80
+ECHANTILLONS_MINIMUM = 10
+
 # Au-dela de cette part d'echantillons passes a plus de 90 % du plan, l'abonne
 # ne "profite" plus de son plan : il vit dedans. C'est un candidat a une offre
 # superieure -- ou le signe que son plan est mal taille.
@@ -169,6 +183,10 @@ def link_row(row: dict[str, Any]) -> dict[str, Any]:
         "avg_mbps": (
             round(float(row["avg_bps"]) / 1_000_000, 2) if row.get("avg_bps") is not None else None
         ),
+        "avg_share": occupancy(
+            float(row["avg_bps"]) if row.get("avg_bps") is not None else None, capacite
+        ),
+        "samples": int(row.get("samples") or 0),
         "share": part,
         "state": etat_du_lien(part),
     }
@@ -198,9 +216,50 @@ def usage_row(row: dict[str, Any]) -> dict[str, Any]:
             if row.get("peak_bps") is not None
             else None
         ),
+        "avg_mbps": (
+            round(float(row["avg_bps"]) / 1_000_000, 2) if row.get("avg_bps") is not None else None
+        ),
+        "avg_share": occupancy(
+            float(row["avg_bps"]) if row.get("avg_bps") is not None else None,
+            row.get("plan_down_mbps"),
+        ),
+        "samples": echantillons,
         "capped_share": part,
         # Vit dans son plan plutot qu'il n'en profite : candidat a une offre
         # superieure, ou plan mal taille. Le dire est plus utile que le chiffre.
         "at_plan_ceiling": bool(part is not None and part >= PART_AU_PLAFOND),
         "last_traffic_at": row.get("last_traffic_at"),
     }
+
+
+def a_renforcer(
+    liens: list[dict[str, Any]], abonnes: list[dict[str, Any]]
+) -> dict[str, list[dict[str, Any]]]:
+    """Ce qui n'a plus de marge : liens et abonnes au-dessus du seuil EN MOYENNE.
+
+    DEUX POPULATIONS, DEUX GESTES. Un LIEN sans marge se renforce -- on achete
+    de la capacite, on reequilibre des secteurs. Un ABONNE sans marge se vend --
+    il consomme ce qu'il a paye et en voudrait davantage. Les melanger dans un
+    seul classement ferait passer une opportunite commerciale pour un probleme
+    d'ingenierie.
+
+    Les deux listes sont ordonnees par occupation decroissante : la premiere
+    ligne est celle qui coute le plus cher a laisser en l'etat.
+    """
+    liens_charges = [
+        ligne
+        for ligne in liens
+        if ligne.get("avg_share") is not None
+        and ligne["avg_share"] >= SEUIL_RENFORT
+        and ligne.get("samples", 0) >= ECHANTILLONS_MINIMUM
+    ]
+    abonnes_charges = [
+        ligne
+        for ligne in abonnes
+        if ligne.get("avg_share") is not None
+        and ligne["avg_share"] >= SEUIL_RENFORT
+        and ligne.get("samples", 0) >= ECHANTILLONS_MINIMUM
+    ]
+    liens_charges.sort(key=lambda ligne: -float(ligne["avg_share"]))
+    abonnes_charges.sort(key=lambda ligne: -float(ligne["avg_share"]))
+    return {"links": liens_charges, "subscribers": abonnes_charges}

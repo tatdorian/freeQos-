@@ -322,7 +322,8 @@ class FakeRepository:
                 "capacity_mbps": 1000.0,
                 "peak_rx_bps": 120_000_000.0,
                 "peak_tx_bps": 960_000_000.0,
-                "avg_bps": 300_000_000.0,
+                "avg_bps": 880_000_000.0,
+                "samples": 200,
                 "peak_rx_at": NOW,
                 "peak_tx_at": NOW,
             }
@@ -338,6 +339,7 @@ class FakeRepository:
                 "plan_down_mbps": 100.0,
                 "samples": 100,
                 "peak_bps": 98_000_000.0,
+                "avg_bps": 88_000_000.0,
                 "capped_samples": 40,
                 "last_traffic_at": NOW,
                 "bytes": 42_000_000_000.0,

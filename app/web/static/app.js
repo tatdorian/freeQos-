@@ -1425,6 +1425,7 @@ async function scRecensement() {
     hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
     return;
   }
+
   const pops = data.pops || [];
   if (!pops.length) {
     hote.innerHTML = '<div class="empty">Aucun routeur collecte.</div>';
@@ -1870,9 +1871,88 @@ async function loadPops() {
   });
 }
 
+/** Sante des routeurs : ce qu'ils disent d'eux-memes, en direct.
+ *
+ *  Lue apres l'inventaire et sans le bloquer : c'est une commande par routeur,
+ *  et un routeur lent ne doit pas retarder la page ou l'on vient justement
+ *  d'ajouter un equipement. */
+async function loadRoutersHealth() {
+  const host = document.getElementById('routers-health');
+  let data;
+  try {
+    data = await api('/pops/health');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const routeurs = data.routers || [];
+  if (!routeurs.length) {
+    host.innerHTML = '<div class="empty">Aucun routeur collecte.</div>';
+    return;
+  }
+  host.innerHTML =
+    '<table><thead><tr><th>Routeur</th><th>PoP</th><th>Modele</th>' +
+    '<th class="num">CPU</th><th class="num">Memoire</th>' +
+    '<th class="num">Uptime</th><th>Version</th></tr></thead><tbody>' +
+    routeurs.map((r) => {
+      if (!r.reachable) {
+        return '<tr>' +
+          '<td class="login"><b>' + esc(r.router) + '</b></td>' +
+          '<td>' + esc(r.pop_name || '-') + '</td>' +
+          '<td colspan="5"><span class="badge crit">injoignable</span>' +
+            '<span class="hint">' + esc(r.error || '') + '</span></td>' +
+          '</tr>';
+      }
+      // Les seuils disent ce qui EMPECHE d'appliquer, pas ce qui est "beau" :
+      // au-dela de 80 % de CPU, RouterOS commence a retarder ses reponses API.
+      const cpu = r.cpu_load_pct;
+      const ram = r.memory_used_pct;
+      const badge = (v, chaud, brulant) => v === null || v === undefined
+        ? '<span class="hint">-</span>'
+        : '<span class="badge ' + (v >= brulant ? 'crit' : v >= chaud ? 'warn' : 'ok') + '">' +
+          esc(Math.round(v)) + ' %</span>';
+      return '<tr>' +
+        '<td class="login"><b>' + esc(r.router) + '</b>' +
+          (r.identity && r.identity !== r.router
+            ? '<span class="hint" style="display:block">' + esc(r.identity) + '</span>'
+            : '') + '</td>' +
+        '<td>' + esc(r.pop_name || '-') + '</td>' +
+        '<td>' + esc(r.board_name || '-') +
+          (r.cpu_count ? ' <span class="hint">' + esc(r.cpu_count) + ' coeur(s)</span>' : '') +
+          '</td>' +
+        '<td class="num">' + badge(cpu, 70, 85) + '</td>' +
+        // Sans memoire totale, RouterOS ne permet aucun pourcentage : on montre
+        // alors la memoire libre seule, plutot qu'un tiret suivi d'un chiffre
+        // qui se lirait comme un nombre negatif.
+        '<td class="num">' +
+          (ram === null || ram === undefined
+            ? (r.free_memory
+              ? '<span class="hint">' + esc(bytesText(r.free_memory)) + ' libres</span>'
+              : '<span class="hint">-</span>')
+            : badge(ram, 80, 90) +
+              (r.free_memory ? '<span class="hint" style="display:block">' +
+                esc(bytesText(r.free_memory)) + ' libres</span>' : '')) + '</td>' +
+        '<td class="num">' + esc(uptime(r.uptime_s)) + '</td>' +
+        '<td style="color:var(--faint)">' + esc(r.version || '-') + '</td>' +
+        '</tr>';
+    }).join('') + '</tbody></table>';
+}
+
+/** Octets en unite lisible. Les memoires de routeur se comptent en Mio. */
+function bytesText(octets) {
+  const n = Number(octets) || 0;
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(1) + ' Gio';
+  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(0) + ' Mio';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' Kio';
+  return n + ' o';
+}
+
 async function loadRouters() {
   await loadPops();
   await loadAntennas();
+  // La sante interroge les routeurs un par un : lancee sans attendre, pour ne
+  // pas retarder la page ou l'on vient d'ajouter un equipement.
+  loadRoutersHealth();
   const data = await api('/pops/routers');
   state.routers = data.routers;
 
@@ -2247,9 +2327,57 @@ async function loadCapacity() {
     statCard(t.ratio && t.ratio > 20 ? 'crit' : (t.ratio && t.ratio > 5 ? 'warn' : ''),
       'Survente du reseau', t.ratio === null || t.ratio === undefined ? '-' : t.ratio + ':1', '',
       'un chiffre de reseau : regardez PoP par PoP') +
-    statCard(t.subscribers_at_ceiling ? 'warn' : '', 'Abonnes a leur plafond',
-      String(t.subscribers_at_ceiling || 0), '',
+    statCard(t.links_to_reinforce ? 'crit' : '', 'Liens sans marge',
+      String(t.links_to_reinforce || 0), '',
+      'au-dessus de 80 % en moyenne') +
+    statCard(t.subscribers_to_upsell ? 'warn' : '', 'Abonnes a leur plafond',
+      String(t.subscribers_to_upsell || 0), '',
       (t.silent || 0) + ' ligne(s) muette(s)');
+
+  // A RENFORCER : la partie actionnable, donc la premiere. Deux tableaux
+  // separes -- un lien se renforce, un abonne se vend.
+  const renfort = data.reinforce || { links: [], subscribers: [] };
+  const tableauRenfort = (titre, lignes, colonnes, ligneHtml, vide) =>
+    '<h3 style="margin:.8rem 0 .4rem;font-size:.95rem">' + titre + '</h3>' +
+    (lignes.length
+      ? '<div class="table-wrap"><table><thead><tr>' + colonnes + '</tr></thead><tbody>' +
+        lignes.map(ligneHtml).join('') + '</tbody></table></div>'
+      : '<div class="empty">' + vide + '</div>');
+  document.getElementById('capacity-reinforce').innerHTML =
+    tableauRenfort(
+      'Liens sans marge',
+      renfort.links || [],
+      '<th>Lien</th><th>Port</th><th class="num">Capacite</th>' +
+        '<th class="num">Occupation moyenne</th><th class="num">Pointe</th>' +
+        '<th class="num" title="Nombre de mesures : une moyenne sur trois points ne ' +
+        'justifie pas d\'acheter un backhaul">Mesures</th>',
+      (l) => '<tr>' +
+        '<td><b>' + esc(l.link_name || l.interface) + '</b> ' +
+          '<span class="hint">sur ' + esc(l.router_name) + '</span></td>' +
+        '<td class="login">' + esc(l.interface) + '</td>' +
+        '<td class="num">' + (l.capacity_mbps === null ? '-' : mbps(l.capacity_mbps)) + '</td>' +
+        '<td class="num"><b>' + partPct(l.avg_share) + '</b></td>' +
+        '<td class="num">' + partPct(l.share) + '</td>' +
+        '<td class="num" style="color:var(--faint)">' + esc(l.samples) + '</td>' +
+        '</tr>',
+      'Aucun lien au-dessus de 80 % en moyenne. Les pointes peuvent etre hautes ' +
+        'sans que la capacite soit en cause.') +
+    tableauRenfort(
+      'Abonnes a leur plafond',
+      renfort.subscribers || [],
+      '<th>Abonne</th><th>PoP</th><th class="num">Plan</th>' +
+        '<th class="num">Consommation moyenne</th><th class="num">Part du temps au plafond</th>' +
+        '<th class="num">Volume</th>',
+      (u) => '<tr>' +
+        '<td class="login"><b>' + esc(u.login) + '</b>' +
+          (u.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
+        '<td>' + esc(u.pop_name || '-') + '</td>' +
+        '<td class="num">' + (u.plan_down_mbps ? mbps(u.plan_down_mbps) : '-') + '</td>' +
+        '<td class="num"><b>' + partPct(u.avg_share) + '</b></td>' +
+        '<td class="num">' + partPct(u.capped_share) + '</td>' +
+        '<td class="num">' + esc(u.gigabytes) + ' Go</td>' +
+        '</tr>',
+      'Aucun abonne au-dessus de 80 % de son plan en moyenne.');
 
   const pops = data.pops || [];
   document.getElementById('capacity-pops').innerHTML = !pops.length
