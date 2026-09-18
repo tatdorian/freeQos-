@@ -75,6 +75,8 @@ from app.services.pop_match import explain as explain_pop
 from app.services.pop_match import resolve_pop
 from app.services.qoe_loop import ACTION_UNKNOWN, SectorState, decide_sector
 from app.services.registry import RouterRegistry
+from app.services.vlan_sites import VlanSite, routers_for_site
+from app.services.vlan_sites import site_key as _cle_site
 
 logger = logging.getLogger(__name__)
 
@@ -1047,9 +1049,15 @@ class ShapingService:
         # dit ce qui est vrai a l'instant ou l'on ecrit.
         sessions = {s.login: s for s in await collector.collect()}
 
+        # Les sites que CE routeur dessert : le sien, et tous les VLAN qui
+        # portent des clients derriere lui. Compare a une egalite de nom, c'est
+        # ce qui empeche un abonne range dans un site de VLAN de disparaitre de
+        # l'etat desire -- donc de cesser d'etre shape sans que rien ne le dise.
+        sites_du_routeur = await self._sites_of_router(router_name, pop_name)
+
         abonnes: list[SubscriberTarget] = []
         for ligne in await self.metrics.subscriber_latest(limit=5000, order_by="login"):
-            if ligne.get("pop_name") != pop_name:
+            if _cle_site(str(ligne.get("pop_name") or "")) not in sites_du_routeur:
                 continue
             # Les clients a IP fixe sont traites plus bas, a partir de leur
             # fiche : la ligne de metriques dirait 'pas de session' et les
@@ -1155,11 +1163,12 @@ class ShapingService:
         Un inventaire illisible ne doit pas faire echouer le plan des abonnes
         PPPoE : on journalise et on continue avec ce qu'on a.
         """
-        routeurs = self.registry.collectors
         retenus: list[StaticClient] = []
         for client in await self._static_clients_all():
-            match = resolve_pop(client.pop_name, routeurs)
-            if any(c.name == collector.name for c in match.collectors):
+            # Passe par le SITE et non par le seul nom de PoP : depuis qu'un
+            # VLAN qui porte des clients est un site, une fiche peut tres bien
+            # etre declaree sur "Francophonie", qui est un VLAN de ce routeur.
+            if collector.name in await self._routers_for_site(client.pop_name):
                 retenus.append(client)
         return retenus
 
@@ -2329,13 +2338,72 @@ class ShapingService:
         # "PoP Francophonie" (porte par le routeur) deux sites differents :
         # poser un plafond sur cet abonne repondait alors "aucun routeur ne le
         # porte", sans que rien ne dise pourquoi.
-        routeurs = self.registry.collectors
         retenus: list[str] = []
         for pop in pops:
-            for collector in resolve_pop(str(pop), routeurs).collectors:
-                if collector.name not in retenus:
-                    retenus.append(collector.name)
+            for nom in await self._routers_for_site(str(pop)):
+                if nom not in retenus:
+                    retenus.append(nom)
         return retenus
+
+    async def _sites_of_router(self, router_name: str, pop_name: str) -> set[str]:
+        """Les sites desservis par ce routeur, sous forme comparable.
+
+        Son propre PoP y figure toujours -- meme si le referentiel ne le
+        connait pas encore, un routeur dessert son site. S'y ajoutent les sites
+        de VLAN que le referentiel lui attribue.
+        """
+        sites = {_cle_site(pop_name)}
+        for ligne in await self._pop_sites():
+            if str(ligne.get("router_name") or "") == router_name:
+                sites.add(_cle_site(str(ligne["name"])))
+        return sites
+
+    async def _pop_sites(self) -> list[dict[str, Any]]:
+        """Les sites du referentiel, avec le routeur qui dessert chacun.
+
+        Vide si les metriques ne sont pas la : on retombe alors sur le seul
+        rapprochement par NOM, c'est-a-dire sur le comportement d'avant les
+        sites de VLAN. Une base muette ne doit pas faire disparaitre des
+        abonnes de l'etat desire.
+        """
+        if self.metrics is None or not hasattr(self.metrics, "pop_sites"):
+            return []
+        try:
+            return list(await self.metrics.pop_sites())
+        except Exception:  # noqa: BLE001
+            logger.exception("Sites illisibles : rapprochement par nom seulement")
+            return []
+
+    async def _routers_for_site(self, pop_name: str) -> list[str]:
+        """Quels routeurs desservent ce site, site de VLAN compris.
+
+        POURQUOI CE DETOUR. Depuis qu'un VLAN qui porte des clients est un site,
+        le nom d'un site n'est plus forcement le nom d'un PoP de routeur :
+        "Francophonie" peut etre un VLAN de NAS-BASSORA. Le rapprochement par
+        NOM, seul, ne trouverait alors aucun routeur -- et l'abonne cesserait
+        silencieusement d'etre shape, ce qui est precisement le defaut que la
+        reconnaissance des VLAN ne doit pas introduire.
+
+        Le referentiel repond en premier : c'est LUI qui sait quel routeur
+        dessert quel site. La tolerance de nom reste derriere, pour tous les
+        sites qui n'ont pas de routeur declare.
+        """
+        routeurs = self.registry.collectors
+        sites = [
+            VlanSite(
+                name=str(ligne["name"]),
+                router_name=str(ligne["router_name"]),
+                vlan_interface=str(ligne.get("vlan_interface") or ""),
+                vlan_id=ligne.get("vlan_id"),
+            )
+            for ligne in await self._pop_sites()
+            if ligne.get("router_name")
+        ]
+        connus = {c.name for c in routeurs}
+        par_site = [nom for nom in routers_for_site(pop_name, sites) if nom in connus]
+        if par_site:
+            return par_site
+        return [c.name for c in resolve_pop(pop_name, routeurs).collectors]
 
     # ----------------------------------------------------------------- plan
     async def plan(

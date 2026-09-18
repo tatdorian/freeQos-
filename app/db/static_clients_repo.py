@@ -337,6 +337,34 @@ class VlanSightingsRepository:
             )
         return {row["reference"]: dict(row) for row in rows}
 
+    async def vlan_sites(self, *, max_age_s: float | None = None) -> list[dict[str, Any]]:
+        """Les VLAN sur lesquels QUELQUE CHOSE a ete vu, un par routeur.
+
+        Rend l'interface la plus recemment observee pour chaque couple
+        (routeur, VLAN) : c'est de la que vient le NOM du site. Un VLAN sur
+        lequel plus rien ne parle depuis longtemps n'est plus un site vivant --
+        d'ou le filtre d'age, le meme que pour les candidats.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT v.router_name,
+                       v.vlan_id,
+                       (array_agg(v.vlan_interface ORDER BY v.last_seen DESC))[1]
+                           AS vlan_interface,
+                       count(*)      AS addresses_seen,
+                       max(v.last_seen) AS last_seen
+                  FROM vlan_sightings v
+                 WHERE v.vlan_interface IS NOT NULL
+                   AND ($1::float IS NULL
+                        OR v.last_seen > now() - make_interval(secs => $1::float))
+                 GROUP BY v.router_name, v.vlan_id
+                 ORDER BY v.router_name, v.vlan_id
+                """,
+                max_age_s,
+            )
+        return [dict(row) for row in rows]
+
     async def prune(self, *, older_than_s: float) -> int:
         """Oublie ce qui n'a plus parle depuis longtemps.
 

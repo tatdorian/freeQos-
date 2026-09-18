@@ -138,9 +138,19 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     # pas ce qui manquait pour les relier -- et le job, lui, jetait ces
     # messages en silence.
     derniere = container.shaping.last_snapshot
+    # Positions des cases QUI N'ONT PAS D'EQUIPEMENT : les abonnes de l'arbre,
+    # calcules a l'affichage. Sans cette carte, elles reviendraient a leur place
+    # automatique au premier rechargement -- ce qui revient a ne pas pouvoir les
+    # deplacer du tout.
+    try:
+        layout = await repo.node_layout()
+    except Exception:  # noqa: BLE001 - un arbre sans positions vaut mieux que pas d'arbre
+        logger.exception("Positions libres illisibles")
+        layout = {}
     return {
         "nodes": noeuds,
         "links": liens,
+        "layout": layout,
         # Le compte des liens est celui des CABLES, pas des observations : un
         # cable vu par ses deux bouts a deux lignes, dont l'une est marquee
         # miroir. Les compter toutes annoncait plus de liens que le reseau n'en

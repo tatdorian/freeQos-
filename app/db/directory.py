@@ -9,11 +9,12 @@ sessions, ce serait le goulot d'etranglement).
 from __future__ import annotations
 
 import logging
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import asyncpg
 
 from app.models import KIND_PPPOE, Plan
+from app.services.vlan_sites import SITE_ROUTEUR
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,16 @@ logger = logging.getLogger(__name__)
 class Directory(Protocol):
     """Contrat du referentiel, implemente par PostgreSQL et par un double memoire."""
 
-    async def ensure_pop(self, name: str, router_host: str | None = None) -> int: ...
+    async def ensure_pop(
+        self,
+        name: str,
+        router_host: str | None = None,
+        *,
+        kind: str = SITE_ROUTEUR,
+        router_name: str | None = None,
+        vlan_id: int | None = None,
+        vlan_interface: str | None = None,
+    ) -> int: ...
 
     async def ensure_subscriber(
         self,
@@ -55,6 +65,9 @@ class PgDirectory:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
         self._pop_cache: dict[str, int] = {}
+        # Ce que la ligne portait au dernier UPSERT : un site dont rien n'a
+        # change n'a pas besoin d'etre reecrit a chaque cycle.
+        self._pop_state: dict[str, tuple[Any, ...]] = {}
         self._subscriber_cache: dict[str, int] = {}
         # Ce que la ligne portait au dernier UPSERT : sert a n'ecrire que
         # lorsque quelque chose a reellement change.
@@ -63,28 +76,56 @@ class PgDirectory:
 
     def clear_cache(self) -> None:
         self._pop_cache.clear()
+        self._pop_state.clear()
         self._subscriber_cache.clear()
         self._backhaul_cache.clear()
 
-    async def ensure_pop(self, name: str, router_host: str | None = None) -> int:
-        cached = self._pop_cache.get(name)
-        if cached is not None:
-            return cached
+    async def ensure_pop(
+        self,
+        name: str,
+        router_host: str | None = None,
+        *,
+        kind: str = SITE_ROUTEUR,
+        router_name: str | None = None,
+        vlan_id: int | None = None,
+        vlan_interface: str | None = None,
+    ) -> int:
+        """Le site, cree au besoin. Un site de VLAN dit quel routeur le dessert.
+
+        ``router_name`` n'est pas un ornement : c'est par lui qu'un abonne range
+        dans un site de VLAN retrouve le routeur qui doit le brider. Un site
+        sans routeur serait un site dont les abonnes ne sont jamais shapes.
+        """
+        signature = (kind, router_name, vlan_id, vlan_interface, router_host)
+        if self._pop_cache.get(name) is not None and self._pop_state.get(name) == signature:
+            return self._pop_cache[name]
         async with self._pool.acquire() as conn:
             pop_id = await conn.fetchval(
                 """
-                INSERT INTO pops (name, router_host)
-                VALUES ($1, $2)
+                INSERT INTO pops (name, router_host, kind, router_name, vlan_id, vlan_interface)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (name) DO UPDATE
-                   SET router_host = COALESCE(EXCLUDED.router_host, pops.router_host),
-                       updated_at  = now()
+                   SET router_host    = COALESCE(EXCLUDED.router_host, pops.router_host),
+                       -- Un site deja connu comme site de ROUTEUR le reste : un
+                       -- homonyme de VLAN ne doit pas le degrader.
+                       kind           = CASE WHEN pops.kind = 'router' THEN pops.kind
+                                             ELSE EXCLUDED.kind END,
+                       router_name    = COALESCE(EXCLUDED.router_name, pops.router_name),
+                       vlan_id        = COALESCE(EXCLUDED.vlan_id, pops.vlan_id),
+                       vlan_interface = COALESCE(EXCLUDED.vlan_interface, pops.vlan_interface),
+                       updated_at     = now()
                 RETURNING id
                 """,
                 name,
                 router_host,
+                kind,
+                router_name,
+                vlan_id,
+                vlan_interface,
             )
         pop_id = int(pop_id)
         self._pop_cache[name] = pop_id
+        self._pop_state[name] = signature
         return pop_id
 
     async def ensure_subscriber(
@@ -233,6 +274,8 @@ class InMemoryDirectory:
         self.plans: dict[int, Plan] = {}
         self.kinds: dict[int, str] = {}
         self.last_seen: dict[int, tuple[str | None, object]] = {}
+        self.pop_details: dict[str, dict[str, Any]] = {}
+        self.subscriber_pop: dict[str, int | None] = {}
         self._next_id = 1
 
     def _allocate(self) -> int:
@@ -240,7 +283,24 @@ class InMemoryDirectory:
         self._next_id += 1
         return value
 
-    async def ensure_pop(self, name: str, router_host: str | None = None) -> int:
+    async def ensure_pop(
+        self,
+        name: str,
+        router_host: str | None = None,
+        *,
+        kind: str = SITE_ROUTEUR,
+        router_name: str | None = None,
+        vlan_id: int | None = None,
+        vlan_interface: str | None = None,
+    ) -> int:
+        # Ce que le site PORTE est garde ici aussi : les tests doivent pouvoir
+        # verifier qu'un site de VLAN nomme bien le routeur qui le dessert.
+        self.pop_details[name] = {
+            "kind": kind,
+            "router_name": router_name,
+            "vlan_id": vlan_id,
+            "vlan_interface": vlan_interface,
+        }
         return self.pops.setdefault(name, self._allocate())
 
     async def ensure_subscriber(
@@ -252,6 +312,7 @@ class InMemoryDirectory:
         kind: str = KIND_PPPOE,
     ) -> int:
         subscriber_id = self.subscribers.setdefault(login, self._allocate())
+        self.subscriber_pop[login] = pop_id
         self.kinds[subscriber_id] = kind
         if plan is not None:
             self.plans[subscriber_id] = plan

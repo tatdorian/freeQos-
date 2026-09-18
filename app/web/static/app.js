@@ -1165,6 +1165,24 @@ function renderDecouverte(data) {
 /** Libelle de la limite appliquee, et d'ou elle vient.
  *  Afficher le plan RADIUS quand une surcharge existe serait mensonger : ce
  *  n'est pas ce que le routeur applique. */
+/** Le site d'un abonne, en disant s'il vient d'un VLAN.
+ *
+ *  Un VLAN qui porte des clients EST un site : chez un operateur radio il
+ *  porte un village ou un relais, le routeur n'en est que la tete. Le dire
+ *  evite la question suivante -- "et ce site-la, il est sur quel routeur ?". */
+function popCell(r, siteParNom) {
+  const nom = r.pop_name || '-';
+  const site = siteParNom && siteParNom[r.pop_name];
+  if (!site || site.kind !== 'vlan') return esc(nom);
+  const titre = 'VLAN ' + (site.vlan_id !== null && site.vlan_id !== undefined
+    ? site.vlan_id + ' ' : '') + '(' + (site.vlan_interface || '?') + ')' +
+    (site.router_name ? ' sur ' + site.router_name : '');
+  return '<span title="' + esc(titre) + '">' + esc(nom) +
+    '<span class="badge" style="margin-left:.35rem">VLAN' +
+    (site.vlan_id !== null && site.vlan_id !== undefined ? ' ' + site.vlan_id : '') +
+    '</span></span>';
+}
+
 /** Le plafond est-il TENU par le routeur ? Pastille, couleur, explication.
  *
  *  C'EST LA CORRECTION DE FOND DE CETTE PAGE. Elle affichait "100 kbps impose"
@@ -1300,11 +1318,19 @@ async function loadSubscribers() {
   const bloatParId = {};
   if (bloat) (bloat.subscribers || []).forEach((b) => { bloatParId[b.subscriber_id] = b; });
 
+  // Ce que chaque site EST : site de routeur ou site de VLAN. Sert a la
+  // colonne PoP, qui doit dire d'ou vient le site sans le faire chercher.
+  const siteParNom = {};
+  pops.forEach((p) => { siteParNom[p.name] = p; });
+
   // Le filtre PoP repond a "voir les connexions depuis un PoP".
   const select = document.getElementById('sub-pop');
   if (select.dataset.filled !== String(pops.length)) {
+    // Un site issu d'un VLAN se signale : l'exploitant doit savoir qu'il
+    // regarde un VLAN d'un routeur et non un site a lui.
     select.innerHTML = '<option value="">Tous les PoPs</option>' +
-      pops.map((p) => '<option value="' + p.id + '">' + esc(p.name) +
+      pops.map((p) => '<option value="' + p.id + '">' +
+        (p.kind === 'vlan' ? 'VLAN · ' : '') + esc(p.name) +
         ' (' + p.subscriber_count + ')</option>').join('');
     select.dataset.filled = String(pops.length);
     select.value = state.subPop || '';
@@ -1374,7 +1400,7 @@ async function loadSubscribers() {
             'cet abonne n\'a jamais ete mesure, ou son PoP n\'est plus collecte">jamais mesure</span>') +
           '</td>' +
         '<td>' + kindBadge(r.kind) + '</td>' +
-        '<td>' + esc(r.pop_name || '-') + '</td>' +
+        '<td>' + popCell(r, siteParNom) + '</td>' +
         '<td class="num" data-limite="' + esc(r.login) + '">' +
           limitCell(r, plafondParLogin[r.login]) + '</td>' +
         '<td class="num" style="color:var(--down)">' +
@@ -3291,11 +3317,20 @@ function topoAutoLayout(model) {
     if (!rowOf.has(n.key)) rowOf.set(n.key, leaf++);
   });
 
+  // Positions des cases SANS equipement (abonnes de l'arbre). Elles n'ont pas
+  // de ligne en base a porter leur pos_x : sans cette carte, elles
+  // reviendraient a leur place automatique au premier rechargement, ce qui
+  // revient a ne pas pouvoir les deplacer du tout.
+  const libres = (topo.data && topo.data.layout) || {};
+
   model.nodesByKey.forEach((n) => {
     const autoX = MX + n.depth * COL;
     const autoY = MY + rowOf.get(n.key) * ROWH;
-    n.x = n.pos_x != null ? Number(n.pos_x) : autoX;
-    n.y = n.pos_y != null ? Number(n.pos_y) : autoY;
+    const libre = libres[n.key];
+    const px = n.pos_x != null ? n.pos_x : (libre ? libre.pos_x : null);
+    const py = n.pos_y != null ? n.pos_y : (libre ? libre.pos_y : null);
+    n.x = px != null ? Number(px) : autoX;
+    n.y = py != null ? Number(py) : autoY;
   });
 }
 
@@ -3528,22 +3563,26 @@ function bindTopoDrag(svg, model) {
       ev.preventDefault();
       const key = g.dataset.node;
       const node = model.nodesByKey.get(key);
+      if (!node) return;
+
+      // LES CASES D'ABONNES SE DEPLACENT, MAIS NE SE RATTACHENT PAS.
+      //
+      // Elles n'ont pas d'equipement derriere elles : les glisser sous une
+      // autre case ne voudrait rien dire -- un abonne pend a son PoP, c'est la
+      // collecte qui le dit, pas un glisser-deposer. Les ranger, en revanche,
+      // est exactement ce qu'on veut pouvoir faire : un arbre ou chacun met ses
+      // clients la ou il les a sur le terrain se lit d'un coup d'oeil.
+      const libre = !!node.synthetic;
+
       // L'agregat d'abonnes se DEPLIE au clic : c'est la seule facon de savoir
       // QUI est derriere un compte, sans imposer des centaines de cases par
-      // defaut.
-      if (node && node.expandable) {
-        const rouvrir = () => {
-          window.removeEventListener('pointerup', rouvrir);
-          if (topo.abosOuverts.has(key)) topo.abosOuverts.delete(key);
-          else topo.abosOuverts.add(key);
-          renderTopoCanvas();
-        };
-        window.addEventListener('pointerup', rouvrir);
-        return;
-      }
-      // Les autres cases synthetiques (abonnes deplies) ne sont ni deplacables
-      // ni rattachables : elles suivent leur PoP.
-      if (!node || node.synthetic) return;
+      // defaut. Il se deplace quand meme -- c'est le MOUVEMENT qui distingue
+      // les deux gestes, pas la nature de la case.
+      const deplier = () => {
+        if (topo.abosOuverts.has(key)) topo.abosOuverts.delete(key);
+        else topo.abosOuverts.add(key);
+        renderTopoCanvas();
+      };
 
       // En mode "creer un lien", un clic choisit une extremite : pas de drag.
       if (topo.linkMode) {
@@ -3570,6 +3609,11 @@ function bindTopoDrag(svg, model) {
         node.x = nx;
         node.y = ny;
         g.setAttribute('transform', 'translate(' + nx + ',' + ny + ')');
+
+        // Une case libre ne se rattache pas : inutile de chercher une cible,
+        // et surtout de la souligner comme si le depot allait faire quelque
+        // chose.
+        if (libre) return;
 
         // Cible de rattachement : la case survolee par le CENTRE de celle qu'on
         // traine, hors elle-meme et hors ses descendants (cela ferait un cycle).
@@ -3599,7 +3643,11 @@ function bindTopoDrag(svg, model) {
           ?.classList.remove('drop-target');
         topo.dragging = false;
 
-        if (!moved) { topoNodeClick(key); return; }
+        if (!moved) {
+          if (node.expandable) deplier();
+          else topoNodeClick(key);
+          return;
+        }
         try {
           if (dropTarget && dropTarget !== node.parentKey) {
             await api('/topology/nodes/' + encodeURIComponent(key) + '/parent',
@@ -3615,6 +3663,10 @@ function bindTopoDrag(svg, model) {
             // reviendrait a sa place.
             const brut = (topo.data.nodes || []).find((d) => d.key === key);
             if (brut) { brut.pos_x = node.x; brut.pos_y = node.y; }
+            if (libre) {
+              if (!topo.data.layout) topo.data.layout = {};
+              topo.data.layout[key] = { pos_x: node.x, pos_y: node.y };
+            }
             renderTopoCanvas();   // redessine les aretes vers la nouvelle position
           }
         } catch (err) { alert(err.message); await loadTopology(); }
@@ -3886,16 +3938,24 @@ function renderTopoPanel() {
 async function resetTopoLayout() {
   if (!topo.data || !confirm('Remettre la disposition automatique ?\n\n' +
     'Les positions et rattachements poses a la main seront effaces.')) return;
+  const remiseAZero = (cle) => api('/topology/nodes/' + encodeURIComponent(cle) + '/layout',
+    { method: 'PATCH', body: JSON.stringify({ x: null, y: null }) });
   try {
     await Promise.all((topo.data.nodes || []).map((n) => Promise.all([
-      api('/topology/nodes/' + encodeURIComponent(n.key) + '/layout',
-        { method: 'PATCH', body: JSON.stringify({ x: null, y: null }) }),
+      remiseAZero(n.key),
       n.parent_override
         ? api('/topology/nodes/' + encodeURIComponent(n.key) + '/parent',
             { method: 'PATCH', body: JSON.stringify({ parent_key: null }) })
         : Promise.resolve(),
     ])));
-    await loadTopology();
+    // Les cases d'abonnes aussi : elles ne sont pas dans 'nodes' (elles n'ont
+    // pas d'equipement derriere elles), et les oublier aurait laisse une
+    // disposition "automatique" ou les clients restaient ranges a la main.
+    await Promise.all(Object.keys(topo.data.layout || {}).map(remiseAZero));
+    // refresh() et non loadTopology() : c'est la vue ACTIVE qu'il faut
+    // redessiner, sinon l'arbre garde a l'ecran des positions qui n'existent
+    // plus en base.
+    await refresh();
   } catch (err) { alert(err.message); }
 }
 

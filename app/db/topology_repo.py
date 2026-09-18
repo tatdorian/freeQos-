@@ -440,12 +440,66 @@ class TopologyRepository:
         """Range une case a l'endroit ou l'operateur l'a laissee tomber.
 
         Purement cosmetique : deplacer une case ne touche aucun equipement.
+
+        DEUX SORTES DE CASES. Celles qui ont un equipement derriere elles
+        portent leur position sur leur propre ligne. Les cases d'ABONNES, elles,
+        sont calculees a l'affichage : aucune ligne ne les attend, et c'est pour
+        cela qu'elles etaient les seules qu'on ne pouvait pas deplacer. Leur
+        position vit donc dans ``topology_layout``, a part -- plutot que de
+        fabriquer de faux equipements dans la topologie, qui apparaitraient
+        ensuite partout ou l'on compte des equipements.
         """
         async with self._pool.acquire() as conn:
             resultat = await conn.execute(
                 "UPDATE topology_nodes SET pos_x = $2, pos_y = $3 WHERE key = $1", key, x, y
             )
-        return not resultat.endswith(" 0")
+            if not resultat.endswith(" 0"):
+                return True
+            if x is None and y is None:
+                # Remettre une case libre en automatique, c'est OUBLIER sa
+                # position, pas en enregistrer une vide : une ligne nulle
+                # resterait la pour toujours sans rien dire.
+                await conn.execute("DELETE FROM topology_layout WHERE key = $1", key)
+                return True
+            await conn.execute(
+                """
+                INSERT INTO topology_layout (key, pos_x, pos_y)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (key) DO UPDATE
+                   SET pos_x = EXCLUDED.pos_x,
+                       pos_y = EXCLUDED.pos_y,
+                       updated_at = now()
+                """,
+                key,
+                x,
+                y,
+            )
+        return True
+
+    async def node_layout(self) -> dict[str, dict[str, float | None]]:
+        """Les positions des cases sans equipement ('abos:<pop>|<login>').
+
+        Rendu a part de ``nodes()`` : ces cles ne designent aucun equipement, et
+        les melanger aux noeuds ferait apparaitre des abonnes dans les
+        inventaires, les comptages et les recherches d'equipement.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("SELECT key, pos_x, pos_y FROM topology_layout")
+        return {
+            str(r["key"]): {"pos_x": r["pos_x"], "pos_y": r["pos_y"]}
+            for r in rows
+            if r["pos_x"] is not None and r["pos_y"] is not None
+        }
+
+    async def forget_layout(self, keys: Sequence[str]) -> int:
+        """Oublie des positions devenues sans objet (abonne parti, PoP renomme)."""
+        if not keys:
+            return 0
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                "DELETE FROM topology_layout WHERE key = ANY($1::text[])", list(keys)
+            )
+        return int(resultat.rsplit(" ", 1)[-1] or 0)
 
     async def set_node_parent(self, key: str, parent_key: str | None) -> bool:
         """Force le parent d'une case (glisser-deposer un lien).

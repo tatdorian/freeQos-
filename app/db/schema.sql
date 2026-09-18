@@ -501,6 +501,28 @@ ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS config_parent TEXT;
 -- Position posee a la main dans l'editeur d'arbre, et parent force en glissant
 -- une case sous une autre. NULL = disposition/orientation automatique. Ces
 -- champs ne changent que l'arbre AFFICHE : ils ne pilotent aucun routeur.
+-- Un PoP peut venir d'un ROUTEUR declare ou d'un VLAN qui porte des clients.
+-- Un VLAN, chez un operateur radio, porte un village ou un relais : le routeur
+-- n'en est que la tete. Ces colonnes sont ce qui permet a un site de VLAN de
+-- dire quel routeur le dessert -- sans quoi ses abonnes ne seraient rattaches a
+-- aucun routeur, donc jamais shapes.
+-- Position des cases qui n'existent PAS dans topology_nodes : les abonnes de
+-- l'arbre, calcules a l'affichage depuis la liste des abonnes. Elles n'ont pas
+-- d'equipement derriere elles, donc pas de ligne a porter leur position -- et
+-- c'est pour cela qu'elles etaient les seules a ne pas pouvoir etre deplacees.
+-- La cle est celle que l'arbre leur donne ('abos:<pop>|<login>').
+CREATE TABLE IF NOT EXISTS topology_layout (
+    key        TEXT PRIMARY KEY,
+    pos_x      DOUBLE PRECISION,
+    pos_y      DOUBLE PRECISION,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE pops ADD COLUMN IF NOT EXISTS kind            TEXT NOT NULL DEFAULT 'router';
+ALTER TABLE pops ADD COLUMN IF NOT EXISTS router_name     TEXT;
+ALTER TABLE pops ADD COLUMN IF NOT EXISTS vlan_id         INTEGER;
+ALTER TABLE pops ADD COLUMN IF NOT EXISTS vlan_interface  TEXT;
+
 ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS pos_x           DOUBLE PRECISION;
 ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS pos_y           DOUBLE PRECISION;
 ALTER TABLE topology_nodes ADD COLUMN IF NOT EXISTS parent_override TEXT;
