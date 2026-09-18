@@ -574,11 +574,17 @@ def test_analyse_distingue_les_files_tierces(
 
 
 # ---------------------------------------------------------------- politique
-def test_fixer_un_debit_n_ecrit_pas_sur_le_routeur(
+def test_fixer_un_debit_rend_compte_de_ce_qui_a_ete_ecrit(
     client: TestClient, routeur: FakeRouterOsClient
 ) -> None:
-    """Cliquer pour changer la bande passante enregistre une intention.
-    L'ecriture est un second geste, explicite."""
+    """Fixer un plafond le POSE, et la reponse dit ce qui a ete fait.
+
+    L'ancien contrat -- enregistrer une intention, ecrire dans un second geste
+    -- laissait l'interface afficher "100 kbps impose" sur une ligne qui passait
+    dix fois plus. Le plafond part maintenant sur le routeur au moment de la
+    saisie, et quand il ne peut pas partir (ici : enforcement coupe), la reponse
+    le NOMME au lieu de laisser croire au contraire.
+    """
     reponse = client.put(
         "/api/v1/shaping/policies",
         json={
@@ -590,9 +596,23 @@ def test_fixer_un_debit_n_ecrit_pas_sur_le_routeur(
     )
 
     assert reponse.status_code == 200
-    assert "plan" in reponse.json()["next_step"]
-    # Aucune commande n'a ete envoyee.
+    corps = reponse.json()
+    assert corps["policy"]["max_down_mbps"] == 300
+    # L'enforcement est coupe dans ce bac a sable : rien n'est ecrit, et c'est dit.
+    assert corps["enforcement"]["state"] == "file-a-poser"
+    assert "enforcement" in corps["enforcement"]["reason"]
     assert client.container.shaping._write_clients == {}  # type: ignore[attr-defined]
+
+
+def test_fixer_un_debit_sans_poser_reste_possible(client: TestClient) -> None:
+    """``apply_now=false`` garde l'ancien comportement : enregistrer, rien de plus."""
+    corps = client.put(
+        "/api/v1/shaping/policies?apply_now=false",
+        json={"scope": "subscriber", "target_key": "dupont", "max_down_mbps": 12},
+    ).json()
+
+    assert corps["policy"]["max_down_mbps"] == 12
+    assert corps["enforcement"] is None
 
 
 def test_validation_des_debits(client: TestClient) -> None:
@@ -911,8 +931,11 @@ def test_boost_enregistre_meme_si_ecriture_coupee(
     ).json()
 
     assert body["boost"]["down_mbps"] == 200
-    assert body["applied"]["ok"] is False
-    assert "lecture seule" in body["applied"]["detail"] or "desactive" in body["applied"]["detail"]
+    # Le rapport est celui de la pose immediate : il nomme l'obstacle plutot
+    # que de rendre un compteur a zero sans explication.
+    assert body["applied"]["state"] == "file-a-poser"
+    assert "desactive" in body["applied"]["reason"]
+    assert body["applied"]["applied"] == 0
 
 
 def test_boost_pousse_quand_l_ecriture_est_permise(
@@ -928,7 +951,8 @@ def test_boost_pousse_quand_l_ecriture_est_permise(
         json={"login": "dupont", "duration_minutes": 30, "multiplier": 4},
     ).json()
 
-    assert body["applied"]["ok"] is True
+    assert body["applied"]["state"] == "file-posee"
+    assert body["applied"]["applied"] >= 1
     # La commande poussee porte bien le debit boostee : 100 x 4 = 400 Mbps.
     commandes = [a.command for a in ecriture.executed]
     assert any("400000000" in c for c in commandes)

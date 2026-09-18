@@ -980,6 +980,32 @@ function sharedCapacityBlock(node) {
       : 'Sous l\'enveloppe : pas de sur-souscription sur ce parent.') + '</div>';
 }
 
+/** Ce que la pose immediate a REELLEMENT fait, rendu tel quel.
+ *
+ *  On ne resume pas en "enregistre" : c'est precisement ce raccourci qui
+ *  laissait croire un abonne bride alors que rien n'etait parti sur le
+ *  routeur. Le motif rendu par le controleur est affiche sans reformulation. */
+function poseText(pose) {
+  if (!pose) return '<div class="notice ok">Enregistre.</div>';
+  const ok = pose.state === 'file-posee' || pose.state === 'file-retiree';
+  const classe = ok ? 'ok' : (pose.state === 'file-a-poser' ? 'warn' : 'err');
+  const titres = {
+    'file-posee': 'Plafond pose sur le routeur',
+    'file-retiree': 'File retiree du routeur',
+    'file-a-poser': 'Enregistre, mais RIEN n\'a ete ecrit',
+    'ecarte': 'Aucune file posee',
+    'conflit': 'Conflit sur le routeur',
+    'sans-routeur': 'Aucun routeur ne porte cette cible',
+    'erreur': 'Echec de l\'ecriture',
+  };
+  return '<div class="notice ' + classe + '"><strong>' +
+    esc(titres[pose.state] || pose.state || 'Enregistre') +
+    (pose.applied ? ' (' + pose.applied + ' commande(s))' : '') + '</strong>' +
+    (pose.reason ? '<span class="hint">' + esc(pose.reason) + '</span>' : '') +
+    (pose.router ? '<span class="hint">Routeur : ' + esc(pose.router) + '</span>' : '') +
+    '</div>';
+}
+
 /** Valeur Mbps pre-remplie dans un champ (nombre propre, sans zeros inutiles). */
 function bestUnitMbps(mbpsValue) {
   const n = Number(mbpsValue);
@@ -991,7 +1017,7 @@ async function saveClientRate(client) {
   const down = document.getElementById('lq-d').value;
   const up = document.getElementById('lq-u').value;
   try {
-    await api('/shaping/policies', {
+    const reponse = await api('/shaping/policies', {
       method: 'PUT',
       body: JSON.stringify({
         scope: 'subscriber', target_key: client.login,
@@ -1000,7 +1026,7 @@ async function saveClientRate(client) {
         enabled: true, note: 'impose depuis Files live',
       }),
     });
-    if (host) host.innerHTML = '<div class="notice ok">Override enregistre. Visible dans le plan Shaping.</div>';
+    if (host) host.innerHTML = poseText(reponse.enforcement);
     await loadExec();
   } catch (err) {
     if (host) host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
@@ -1139,13 +1165,46 @@ function renderDecouverte(data) {
 /** Libelle de la limite appliquee, et d'ou elle vient.
  *  Afficher le plan RADIUS quand une surcharge existe serait mensonger : ce
  *  n'est pas ce que le routeur applique. */
-function limitCell(r) {
+/** Le plafond est-il TENU par le routeur ? Pastille, couleur, explication.
+ *
+ *  C'EST LA CORRECTION DE FOND DE CETTE PAGE. Elle affichait "100 kbps impose"
+ *  sur un abonne mesure a 497 kbps : elle montrait une INTENTION enregistree en
+ *  base en la presentant comme un FAIT applique sur le reseau. Desormais la
+ *  colonne dit laquelle des deux on regarde. */
+function limitProof(etat) {
+  if (!etat) return '';
+  if (etat.enforced) {
+    // Discret : le cas normal ne doit pas crier. La pastille sert surtout a
+    // montrer que la verification a bien eu lieu.
+    return '<span class="badge ok" style="margin-left:.35rem" title="' +
+      esc(etat.detail || 'plafond en vigueur') + '">tenu</span>';
+  }
+  const libelles = {
+    'contourne': 'fasttrack',
+    'file-absente': 'aucune file',
+    'file-masquee': 'file masquee',
+    'file-desactivee': 'file coupee',
+    'debit-different': 'autre debit',
+  };
+  // Impossible a confondre avec "impose" : c'est exactement la confusion qu'on
+  // repare. Un plafond enregistre que le reseau ne tient pas doit se lire comme
+  // un defaut, pas comme un reglage.
+  return '<span class="badge crit" style="margin-left:.35rem" title="' +
+    esc(etat.detail || '') + '">NON TENU &middot; ' +
+    esc(libelles[etat.verdict] || etat.verdict) + '</span>';
+}
+
+/** Libelle de la limite appliquee, et d'ou elle vient.
+ *  Afficher le plan RADIUS quand une surcharge existe serait mensonger : ce
+ *  n'est pas ce que le routeur applique. */
+function limitCell(r, etat) {
   const down = r.effective_down_mbps;
   const up = r.effective_up_mbps;
   if (!down && !up) return '<span style="color:var(--faint)">-</span>';
 
   const texte = esc(mbps(down || 0) + ' / ' + mbps(up || 0));
-  if (r.limit_source === 'plan') return texte;
+  const sceau = limitProof(etat);
+  if (r.limit_source === 'plan') return texte + sceau;
 
   const marque = r.limit_source === 'boost'
     ? '<span class="boost-pill" style="margin-left:.4rem">boost</span>'
@@ -1157,7 +1216,57 @@ function limitCell(r) {
   const couleur = r.limit_source === 'boost' ? '#a78bfa' : 'var(--warn)';
 
   return '<span title="' + esc(plan + (note ? ' — ' + note : '')) + '">' +
-    '<span style="color:' + couleur + '">' + texte + '</span>' + marque + '</span>';
+    '<span style="color:' + couleur + '">' + texte + '</span>' + marque + sceau + '</span>';
+}
+
+/** Ce qui empeche les plafonds de tenir, en haut de la liste des abonnes.
+ *
+ *  Le fasttrack passe avant tout le reste : tant qu'il est actif, AUCUNE file
+ *  simple du routeur ne bride quoi que ce soit. Poser des plafonds un par un
+ *  sans le savoir, c'est passer la journee a corriger ce qui n'est pas casse. */
+function renderLimitsAlert(plafonds) {
+  const hote = document.getElementById('limits-alert');
+  if (!hote) return;
+  if (!plafonds) { hote.innerHTML = ''; return; }
+
+  const morceaux = [];
+  (plafonds.routers || []).forEach((rt) => {
+    const ft = rt.fasttrack || {};
+    if (ft.active === true) {
+      morceaux.push('<div class="notice err"><strong>' + esc(rt.router) +
+        ' : le fasttrack contourne les files.</strong>' +
+        '<span class="hint">' + esc(ft.detail || '') + '</span>' +
+        (ft.remedy ? '<span class="hint">A passer sur le routeur : <code>' +
+          esc(ft.remedy) + '</code></span>' : '') + '</div>');
+    } else if (ft.active === null) {
+      morceaux.push('<div class="notice warn"><strong>' + esc(rt.router) +
+        ' : fasttrack non verifie.</strong><span class="hint">' +
+        esc(ft.detail || '') + '</span></div>');
+    }
+    if (rt.error) {
+      morceaux.push('<div class="notice warn"><strong>' + esc(rt.router) +
+        ' : plafonds non verifies.</strong><span class="hint">' +
+        esc(rt.error) + '</span></div>');
+    }
+  });
+
+  // Le detail des files qui fuient, hors fasttrack (deja dit plus haut).
+  const fuites = [];
+  (plafonds.routers || []).forEach((rt) => {
+    (rt.queues || []).forEach((q) => {
+      if (!q.enforced && q.verdict !== 'contourne') fuites.push({ routeur: rt.router, q: q });
+    });
+  });
+  if (fuites.length) {
+    morceaux.push('<div class="notice warn"><strong>' + fuites.length +
+      ' plafond(s) decides ne sont pas appliques par le reseau.</strong>' +
+      fuites.slice(0, 8).map((f) => '<span class="hint"><code>' +
+        esc(f.q.login || f.q.name) + '</code> sur ' + esc(f.routeur) + ' : ' +
+        esc(f.q.detail || f.q.verdict) + '</span>').join('') +
+      (fuites.length > 8 ? '<span class="hint">... et ' + (fuites.length - 8) +
+        ' autre(s).</span>' : '') + '</div>');
+  }
+  hote.innerHTML = morceaux.join('');
 }
 
 async function loadSubscribers() {
@@ -1169,12 +1278,25 @@ async function loadSubscribers() {
   // PoP, pas seulement ceux qui ont deja produit une mesure. Un abonne declare
   // et jamais vu est facture comme les autres ; l'omettre le rendait
   // indiscernable d'un abonne qui n'existe pas.
-  const [rows, pops, boosts, bloat] = await Promise.all([
+  const [rows, pops, boosts, bloat, plafonds] = await Promise.all([
     api('/subscribers/latest?limit=200&include_unmeasured=true' + query),
     api('/pops'),
     api('/shaping/boosts').catch(() => []),
     api('/bufferbloat?minutes=60' + bloatQuery).catch(() => null),
+    // Verifie SUR LE ROUTEUR que chaque plafond s'applique vraiment. Sans lui,
+    // la colonne Limite ne montrait qu'une ligne de base de donnees.
+    api('/shaping/limits').catch(() => null),
   ]);
+
+  // Etat reel du plafond, par login. Le rapprochement se fait sur le login que
+  // l'audit rattache a chaque file, pas sur le nom de file : c'est l'abonne que
+  // l'exploitant cherche.
+  const plafondParLogin = {};
+  if (plafonds) {
+    (plafonds.routers || []).forEach((rt) => {
+      (rt.queues || []).forEach((q) => { if (q.login) plafondParLogin[q.login] = q; });
+    });
+  }
 
   // Note de bufferbloat par abonne : latence a vide vs sous charge, calculee en
   // correlant RTT et debit deja collectes.
@@ -1217,7 +1339,11 @@ async function loadSubscribers() {
     // de laisser une colonne vide passer pour un reseau sain.
     compte += ' · bufferbloat indisponible : sonde de latence coupee';
   }
-  document.getElementById('sub-count').textContent = compte;
+  document.getElementById('sub-count').textContent = compte +
+    (plafonds && plafonds.leaking
+      ? ' \u00b7 ' + plafonds.leaking + ' plafond(s) NON tenu(s)'
+      : '');
+  renderLimitsAlert(plafonds);
 
   const host = document.getElementById('subscribers-table');
   if (!rows.length) {
@@ -1255,7 +1381,7 @@ async function loadSubscribers() {
           '</td>' +
         '<td>' + kindBadge(r.kind) + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td>' +
-        '<td class="num">' + limitCell(r) + '</td>' +
+        '<td class="num">' + limitCell(r, plafondParLogin[r.login]) + '</td>' +
         '<td class="num" style="color:var(--down)">' +
           (mesure ? esc(bpsText(r.tx_bps)) : trou) + '</td>' +
         '<td>' + (mesure ? meter(r.tx_bps, limiteDown) : '') + '</td>' +
@@ -4078,8 +4204,9 @@ async function openBandwidthEditor(scope, cible) {
       '</div>' +
     '</form>' +
     '<p class="empty" style="text-align:left;padding:.8rem 0 0">' +
-      'Enregistrer ne touche a aucun routeur. Passez ensuite par l\'onglet ' +
-      'Shaping pour voir les commandes exactes, puis les appliquer.</p>' +
+      'Enregistrer POSE le plafond sur le routeur immediatement. Le resultat ' +
+      'exact de l\'ecriture s\'affiche ici : si rien n\'a pu partir ' +
+      '(enforcement coupe, abonne hors ligne), c\'est dit.</p>' +
     '</div>';
 
   root.querySelector('.drawer-backdrop').addEventListener('click', closeDrawer);
@@ -4088,7 +4215,7 @@ async function openBandwidthEditor(scope, cible) {
   document.getElementById('bw-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      await api('/shaping/policies', {
+      const reponse = await api('/shaping/policies', {
         method: 'PUT',
         body: JSON.stringify({
           scope: scope, target_key: cle,
@@ -4099,9 +4226,7 @@ async function openBandwidthEditor(scope, cible) {
           note: document.getElementById('bw-note').value || null,
         }),
       });
-      document.getElementById('bw-result').innerHTML =
-        '<div class="notice ok">Enregistre. Ouvrez l\'onglet Shaping pour voir ' +
-        'les commandes qui en decoulent.</div>';
+      document.getElementById('bw-result').innerHTML = poseText(reponse.enforcement);
       await refresh();
     } catch (err) {
       document.getElementById('bw-result').innerHTML =
@@ -4271,6 +4396,7 @@ async function loadShaping() {
   }
   await refreshEnforcement();
   await loadPoints();
+  await loadLimits();
   // Le journal n'est lu que si le detail technique est ouvert : c'est une
   // lecture de plus pour une question qu'on ne se pose pas tous les jours.
   if (document.getElementById('shaping-technique').open) await loadAudit();
@@ -4337,6 +4463,102 @@ function renderPoint(point, profondeur) {
  *  ne fait que regarder. Le bandeau du haut dit quand la derniere passe a eu
  *  lieu -- sans lui, une page qui n'a aucun bouton se lit comme une page qui ne
  *  fait rien. */
+/** Verifie SUR LE ROUTEUR que chaque plafond decide s'applique vraiment.
+ *
+ *  La carte du shaping repond a "ou ca bride". Ce panneau repond a la question
+ *  qui vient juste apres, et qu'aucun ecran ne posait : "est-ce que ca bride
+ *  VRAIMENT ?". Trois etats etaient jusqu'ici confondus -- ce que le controleur
+ *  veut poser, ce qu'il a ecrit, ce que le reseau applique. Le troisieme est le
+ *  seul que l'abonne ressente. */
+/** Rend lisible un ``max-limit`` RouterOS ("100000/100000", "100M/500M").
+ *
+ *  RouterOS ecrit MONTANT/DESCENDANT, du point de vue de la cible. Laisser les
+ *  bits par seconde bruts oblige a compter les zeros pour repondre a "est-ce
+ *  que c'est le bon chiffre ?" -- exactement la question posee ici. */
+function maxLimitText(brut) {
+  if (brut === null || brut === undefined || brut === '') return '-';
+  const morceaux = String(brut).split('/');
+  if (morceaux.length !== 2) return esc(String(brut));
+  const lire = (m) => {
+    const texte = String(m).trim().toLowerCase();
+    const mult = { k: 1e3, m: 1e6, g: 1e9 }[texte.slice(-1)];
+    const n = mult ? parseFloat(texte) * mult : parseFloat(texte);
+    return Number.isFinite(n) ? n : null;
+  };
+  const up = lire(morceaux[0]);
+  const down = lire(morceaux[1]);
+  if (up === null || down === null) return esc(String(brut));
+  const mot = (n) => (n > 0 ? bpsText(n) : 'illimite');
+  return '<span title="' + esc(String(brut)) + '">&uarr; ' + esc(mot(up)) +
+    ' &nbsp;&darr; ' + esc(mot(down)) + '</span>';
+}
+
+async function loadLimits() {
+  const host = document.getElementById('shaping-limits');
+  if (!host) return;
+  const routeur = document.getElementById('shaping-router').value;
+  let data;
+  try {
+    data = await api('/shaping/limits' + (routeur ? '?router=' + encodeURIComponent(routeur) : ''));
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+
+  const total = (data.enforced || 0) + (data.leaking || 0);
+  const entete = data.leaking
+    ? '<div class="notice err"><strong>' + data.leaking + ' plafond(s) sur ' + total +
+      ' ne sont PAS tenus par le reseau.</strong><span class="hint">Une file qui existe et ' +
+      'porte le bon debit peut ne rien brider : c\'est ce que ce tableau va chercher, ' +
+      'directement sur le routeur.</span></div>'
+    : (total
+        ? '<div class="notice ok"><strong>Les ' + total + ' plafonds decides sont tenus par ' +
+          'le reseau.</strong><span class="hint">Verifie file par file sur le routeur : ' +
+          'debit conforme, file active, non masquee, et aucun fasttrack pour la contourner.' +
+          '</span></div>'
+        : '<div class="empty">Aucun plafond a verifier : aucune file n\'est encore ' +
+          'attendue sur ce perimetre.</div>');
+
+  const routeurs = (data.routers || []).map((rt) => {
+    if (rt.error) {
+      return '<div class="notice warn"><strong>' + esc(rt.router) + '</strong>' +
+        '<span class="hint">' + esc(rt.error) + '</span></div>';
+    }
+    const ft = rt.fasttrack || {};
+    let bandeau = '';
+    if (ft.active === true) {
+      bandeau = '<div class="notice err"><strong>Fasttrack actif : aucune file simple de ce ' +
+        'routeur ne bride quoi que ce soit.</strong><span class="hint">' + esc(ft.detail || '') +
+        '</span>' + (ft.remedy ? '<span class="hint"><code>' + esc(ft.remedy) + '</code></span>'
+          : '') + '</div>';
+    } else if (ft.active === null) {
+      bandeau = '<div class="notice warn"><strong>Fasttrack non verifie.</strong>' +
+        '<span class="hint">' + esc(ft.detail || '') + '</span></div>';
+    }
+    const fuites = (rt.queues || []).filter((q) => !q.enforced);
+    const tableau = fuites.length
+      ? '<div class="table-wrap"><table><thead><tr><th>File</th><th>Abonne</th>' +
+        '<th>Cible</th><th class="num">Voulu</th><th class="num">Sur le routeur</th>' +
+        '<th>Pourquoi ca ne bride pas</th></tr></thead><tbody>' +
+        fuites.map((q) => '<tr>' +
+          '<td class="login">' + esc(q.name) + '</td>' +
+          '<td>' + esc(q.login || '-') + '</td>' +
+          '<td>' + esc(q.target || '-') + '</td>' +
+          '<td class="num">' + maxLimitText(q.wanted) + '</td>' +
+          '<td class="num">' + maxLimitText(q.seen) + '</td>' +
+          '<td>' + esc(q.detail || q.verdict) + '</td>' +
+          '</tr>').join('') + '</tbody></table></div>'
+      : '<p class="empty" style="text-align:left">Tous les plafonds de ce routeur sont tenus.</p>';
+    return '<div class="card" style="margin-bottom:.8rem">' +
+      '<h3 style="margin:0 0 .4rem">' + esc(rt.router) +
+      '<span class="hint" style="display:inline;font-weight:400;margin-left:.5rem">' +
+      (rt.enforced || 0) + ' tenu(s), ' + (rt.leaking || 0) + ' non tenu(s)</span></h3>' +
+      bandeau + tableau + '</div>';
+  }).join('');
+
+  host.innerHTML = entete + routeurs;
+}
+
 async function loadPoints() {
   const host = document.getElementById('shaping-points');
   const routeur = document.getElementById('shaping-router').value;
@@ -4833,14 +5055,33 @@ async function show(view) {
   await refresh();
 }
 
+/** Un echec de chargement doit SE VOIR.
+ *
+ *  Il n'etait ecrit que dans la console : l'onglet restait vide, ou fige sur
+ *  ses anciennes lignes, et un ecran vide se lit comme "il n'y a rien" alors
+ *  qu'il faut lire "je n'ai pas pu savoir". Les deux n'appellent pas le meme
+ *  geste, et le second se diagnostique en dix secondes quand il est dit. */
+function appError(message) {
+  const banniere = document.getElementById('app-error');
+  if (!message) { banniere.hidden = true; banniere.innerHTML = ''; return; }
+  banniere.hidden = false;
+  banniere.innerHTML = '<div class="notice err">' +
+    '<strong>Cet onglet n\'a pas pu etre charge.</strong> ' + esc(message) +
+    '<span class="hint">Ce qui est affiche peut dater. Verifiez ' +
+    '<a href="/health" target="_blank">/health</a> et l\'onglet Reglages ; si le ' +
+    'probleme a suivi une mise a jour, rechargez la page (Ctrl+Maj+R).</span></div>';
+}
+
 let refreshing = false;
 async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
     await LOADERS[state.view]();
+    appError(null);
   } catch (err) {
     console.error('Rafraichissement impossible :', err);
+    appError(err && err.message ? err.message : String(err));
   } finally {
     refreshing = false;
   }

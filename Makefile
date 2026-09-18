@@ -15,7 +15,8 @@ down: ## Arrete la stack (les donnees sont conservees)
 update: ## Recupere le code a jour et redemarre l'app (donnees conservees)
 	git pull --ff-only
 	docker compose up -d --build
-	@echo "Application a jour. Videz le cache du navigateur (Ctrl+Maj+R) : app.js est mis en cache."
+	@echo "Application a jour. Le navigateur recharge l'interface tout seul :"
+	@echo "app.js et app.css portent une empreinte de leur contenu."
 
 reset-db: ## EFFACE la base (mesures, inventaire, topologie) et redemarre a vide
 	@echo "Cette commande EFFACE toutes les donnees : mesures, routeurs declares,"

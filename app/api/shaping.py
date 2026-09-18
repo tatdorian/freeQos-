@@ -600,9 +600,25 @@ async def list_policies(
 
 
 @router.put("/shaping/policies", summary="Fixer le debit d'un lien ou d'un abonne")
-async def set_policy(payload: PolicyInput, container: ContainerDep) -> dict[str, Any]:
-    """Enregistre la surcharge. N'ecrit RIEN sur le routeur : il faut ensuite
-    demander un plan puis l'appliquer."""
+async def set_policy(
+    payload: PolicyInput,
+    container: ContainerDep,
+    apply_now: Annotated[bool, Query()] = True,
+) -> dict[str, Any]:
+    """Enregistre le plafond ET LE POSE TOUT DE SUITE sur le routeur.
+
+    POURQUOI CE N'EST PLUS UN SIMPLE ENREGISTREMENT. Jusqu'ici, fixer un debit
+    n'ecrivait qu'une ligne en base : il fallait ensuite demander un plan, puis
+    l'appliquer a la main -- ou attendre la reconciliation, qui ne passe que si
+    l'enforcement est actif. Entre-temps, l'interface affichait "100 kbps
+    impose" sur un abonne qui passait 497 kbps. Elle presentait une INTENTION
+    comme un FAIT, ce qui est la pire chose qu'un controleur puisse faire.
+
+    Desormais la reponse porte ``enforcement``, qui dit ce qui a REELLEMENT ete
+    ecrit, sur quel routeur, ou ce qui l'en a empeche (enforcement coupe, abonne
+    hors ligne, file masquee...). ``apply_now=false`` retrouve l'ancien
+    comportement pour un appel qui veut seulement enregistrer.
+    """
     repo = _require_topology(container)
     enregistre = await repo.upsert_policy(
         scope=payload.scope,
@@ -613,20 +629,82 @@ async def set_policy(payload: PolicyInput, container: ContainerDep) -> dict[str,
         note=payload.note,
         updated_by="ui",
     )
+    pose = None
+    if apply_now:
+        pose = await _poser_le_plafond(container, payload.scope, payload.target_key)
     return {
         "policy": enregistre,
-        "next_step": "POST /shaping/plan pour voir les commandes qui en decoulent",
+        "enforcement": pose,
+        "next_step": "GET /shaping/limits pour verifier que le plafond est bien tenu",
     }
 
 
 @router.delete("/shaping/policies/{scope}/{target_key:path}", summary="Retirer une surcharge")
 async def delete_policy(
-    scope: Literal["link", "subscriber"], target_key: str, container: ContainerDep
+    scope: Literal["link", "subscriber"],
+    target_key: str,
+    container: ContainerDep,
+    apply_now: Annotated[bool, Query()] = True,
 ) -> dict[str, Any]:
+    """Retire le plafond ET remet le routeur d'accord avec la nouvelle regle.
+
+    Retirer une surcharge ne veut pas dire supprimer la file : l'abonne retombe
+    sur son plan souscrit, et c'est CE debit-la qu'il faut pousser. Laisser
+    l'ancien plafond en place sur le routeur aurait bride un client a qui on
+    vient de rendre son debit -- une panne d'autant plus difficile a voir que
+    l'interface, elle, affichait deja le bon chiffre.
+    """
     supprime = await _require_topology(container).delete_policy(scope, target_key)
     if not supprime:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Surcharge inconnue")
-    return {"deleted": True}
+    pose = None
+    if apply_now:
+        pose = await _poser_le_plafond(container, scope, target_key, removing=True)
+    return {"deleted": True, "enforcement": pose}
+
+
+async def _poser_le_plafond(
+    container: ContainerDep, scope: str, target_key: str, *, removing: bool = False
+) -> dict[str, Any]:
+    """Ecrit le plafond sur le routeur concerne, sans jamais faire echouer la saisie.
+
+    La surcharge est DEJA enregistree quand on arrive ici : un routeur muet ne
+    doit pas faire perdre la saisie a l'exploitant. Le rapport rendu dit alors
+    ce qui n'a pas pu etre ecrit, et la reconciliation rattrapera.
+    """
+    try:
+        return await container.shaping.enforce_policy(
+            scope, target_key, author="ui", removing=removing
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Pose immediate impossible pour %s '%s'", scope, target_key)
+        return {
+            "state": "erreur",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "applied": 0,
+            "routers": [],
+        }
+
+
+@router.get("/shaping/limits", summary="Les plafonds poses sont-ils reellement tenus ?")
+async def limit_audit(
+    container: ContainerDep,
+    router_name: Annotated[str | None, Query(alias="router")] = None,
+) -> dict[str, Any]:
+    """Verifie sur le routeur que chaque plafond decide s'applique VRAIMENT.
+
+    Trois questions differentes, souvent confondues : ce que le controleur VEUT
+    poser (le plan), ce qu'il a ECRIT (le journal), et ce que le reseau APPLIQUE
+    (ici). Une file peut exister, porter le bon debit -- et ne rien brider :
+
+    - le FASTTRACK fait sauter les files simples aux connexions etablies ;
+    - une file MASQUEE par une autre placee plus haut ne recoit aucun trafic ;
+    - une file DESACTIVEE a la main se lit normalement et ne bride rien ;
+    - un ECART de debit signale un plafond change mais jamais repousse.
+
+    Lecture seule.
+    """
+    return await container.shaping.limit_audit(router_name)
 
 
 # ------------------------------------------------- boucle fermee QoE (phase 4)
@@ -942,28 +1020,18 @@ async def clear_boost(
 async def _apply_for_subscriber(
     container: ContainerDep, login: str, *, author: str | None = None
 ) -> dict[str, Any] | None:
-    """Applique le plan du routeur qui porte cet abonne, si l'ecriture est permise.
+    """Pose le debit de CET abonne sur le routeur qui le porte.
 
-    Ne leve pas : poser un boost doit reussir meme quand l'enforcement est
-    coupe. Le retour dit alors pourquoi rien n'a ete pousse.
+    Meme chemin que la saisie d'un plafond : plan complet du routeur, puis
+    restriction a la chaine de cette seule file. Un boost n'a aucune raison de
+    reecrire les files des voisins, et le rapport rendu nomme ce qui a empeche
+    l'ecriture quand rien n'est pousse (enforcement coupe, abonne hors ligne,
+    file masquee) au lieu d'un simple compteur a zero.
+
+    Ne leve pas : poser un boost doit reussir meme quand l'ecriture est coupee.
     """
-    routeurs = await container.shaping._routers_for_logins({login})  # noqa: SLF001
-    if not routeurs:
-        return {"ok": False, "detail": "aucun routeur ne porte cet abonne"}
-    if not container.shaping.enforcement_enabled:
-        return {
-            "ok": False,
-            "detail": (
-                "enforcement desactive : le boost est enregistre mais rien n'a ete "
-                "pousse sur le routeur"
-            ),
-        }
     try:
-        # Sans purge : cette application est automatique, elle n'a pas ete
-        # relue. Elle doit poser le nouveau debit de cet abonne, pas decider de
-        # supprimer les files des autres.
-        plan = await container.shaping.plan_router(routeurs[0], prune=False)
-        applique = await container.shaping.apply(plan, dry_run=False, author=author)
-        return applique.to_dict()
+        return await container.shaping.enforce_subscriber(login=login, author=author or "ui")
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Application impossible pour l'abonne '%s'", login)
         return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}

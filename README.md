@@ -81,8 +81,15 @@ Quatre gestes, du plus doux au plus radical. Prenez le premier qui suffit.
 make update      # récupère le code et redémarre l'app — AUCUNE donnée perdue
 ```
 
-L'interface est un fichier statique que le navigateur met en cache : après une mise à jour,
-rechargez la page **en forçant** (`Ctrl+Maj+R`), sinon vous continuez de voir l'ancienne.
+L'interface se recharge toute seule après une mise à jour : `app.js` et `app.css` sont
+servis avec une **empreinte de leur contenu**, donc le navigateur ne peut pas servir
+l'ancienne version. Le `Ctrl+Maj+R` d'autrefois n'est plus nécessaire — et il l'était
+d'autant plus qu'un script périmé face à une API à jour produit un onglet vide, un symptôme
+qui n'oriente vers rien.
+
+Et si un onglet ne se charge pas, il le **dit** : un bandeau nomme l'erreur au lieu de
+laisser un écran vide, qui se lirait comme « il n'y a rien » alors qu'il faut lire « je
+n'ai pas pu savoir ».
 
 **Nettoyer l'arbre sans rien perdre d'autre.** Le graphe n'efface jamais rien tout seul —
 c'est voulu, pour qu'un équipement momentanément invisible (fade radio, redémarrage, lecture
@@ -629,8 +636,44 @@ différentes.
 # Brider un abonné à 512/128 kbps
 curl -X PUT localhost:8000/api/v1/shaping/policies -H 'Content-Type: application/json' \
   -d '{"scope":"subscriber","target_key":"dupont","max_down_kbps":512,"max_up_kbps":128}'
-# → /queue/simple/… max-limit=128000/512000
+# → /queue/simple/… max-limit=128000/512000, poussé tout de suite sur le routeur.
+#   La réponse porte "enforcement" : ce qui a réellement été écrit, ou ce qui l'a empêché.
 ```
+
+**Le plafond part au moment de la saisie.** Il ne suffisait pas de l'enregistrer : tant
+qu'il fallait un second geste — demander un plan, puis l'appliquer — ou attendre la
+réconciliation, l'interface affichait « 100 kbps imposé » sur un abonné qui passait dix
+fois plus. Elle présentait une **intention** comme un **fait**. Fixer un débit écrit
+maintenant la file correspondante (et elle seule : plan complet du routeur, puis
+restriction à la chaîne de cette file), et la réponse dit ce qui a été écrit, sur quel
+routeur, ou ce qui l'en a empêché.
+
+### Un plafond posé est-il réellement tenu ?
+
+Trois questions différentes, souvent confondues : ce que le contrôleur **veut** poser (le
+plan), ce qu'il a **écrit** (le journal), et ce que le réseau **applique**. Seule la
+troisième se ressent chez l'abonné, et sur RouterOS une file peut exister, porter le bon
+débit, se lire sans erreur — et ne rien brider du tout :
+
+| Cause | Ce qu'on voit | Ce qui se passe |
+| --- | --- | --- |
+| **FastTrack** | file normale, compteur qui n'avance pas | `action=fasttrack-connection` fait sauter aux connexions établies le reste du chemin, **files simples comprises**. Active par défaut dans le pare-feu d'usine |
+| **File masquée** | deux files, chacune avec son débit | RouterOS n'applique que la **première** file qui vise une cible ; celles qui suivent sont décoratives |
+| **File désactivée** | débit parfaitement lisible | `disabled=yes` ne bride rien |
+| **Écart de débit** | interface et routeur ne disent pas la même chose | plafond changé en base, jamais repoussé |
+
+`GET /api/v1/shaping/limits` va chercher ces quatre causes **sur le routeur**, file par
+file. Le résultat alimente l'onglet *Shaping* (« Les plafonds sont-ils réellement
+tenus ? ») et la colonne *Limite* de l'onglet *Abonnés*, où un plafond que le réseau ne
+tient pas s'affiche **NON TENU** avec sa cause — impossible à confondre avec le badge
+« imposé », qui ne dit que l'intention.
+
+Le contrôleur **ne touche pas au pare-feu** : le fasttrack porte une décision de
+performance qui n'est pas la sienne. Il le nomme, dit ce qu'il coûte, et donne la ligne à
+coller (`/ip firewall filter disable [find action=fasttrack-connection]`). En revanche il
+corrige ce qui lui appartient : une file désactivée à la main est **réactivée** par la
+réconciliation, et une file masquée par une autre est signalée comme conflit plutôt que
+maquillée en plafond conforme.
 
 **Coup de boost temporaire.** Bouton *Boost* sur un abonné (onglet Abonnés ou arbre
 réseau) : une durée, un facteur (×2, ×3, ×5) ou un débit explicite — en kbps, Mbps ou Gbps —, un motif. Le boost est
@@ -1300,7 +1343,8 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `GET` | `/api/v1/topology/routers/{name}/export` | Config complète (`/export`) + son analyse |
 | `GET` | `/api/v1/shaping/points` | **La carte du shaping** : où ça bride sur le réseau, à combien, et pourquoi pas ailleurs |
 | `GET` | `/api/v1/shaping/state` | Ce qui est **déjà** configuré sur les routeurs |
-| `PUT` · `DELETE` | `/api/v1/shaping/policies` | Fixer / retirer un débit imposé |
+| `PUT` · `DELETE` | `/api/v1/shaping/policies` | Fixer / retirer un débit imposé — **posé sur le routeur immédiatement** (`apply_now=false` pour seulement enregistrer) |
+| `GET` | `/api/v1/shaping/limits` | **Les plafonds sont-ils réellement tenus ?** Vérification file par file sur le routeur |
 | `POST` | `/api/v1/shaping/plan` | Commandes exactes, **sans rien envoyer** |
 | `POST` | `/api/v1/shaping/apply` | Exécution (`dry_run` par défaut) |
 | `GET` · `PUT` | `/api/v1/shaping/enforcement` | Lire / basculer l'autorisation d'écriture |

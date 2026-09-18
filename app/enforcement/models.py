@@ -180,8 +180,15 @@ class QueueSpec:
             champs["parent"] = self.parent
         if self.queue:
             champs["queue"] = self.queue
-        if self.disabled:
-            champs["disabled"] = "yes"
+        # ``disabled`` est TOUJOURS ecrit, meme a "no".
+        #
+        # Une file desactivee a la main sur le routeur ne bride plus rien, et
+        # son debit, lui, reste parfaitement lisible. Tant que le champ etait
+        # omis quand on la voulait active, la comparaison ne portait pas dessus :
+        # le controleur lisait le bon ``max-limit``, concluait "file conforme",
+        # et l'abonne passait sans plafond. Le rendre explicite fait que la
+        # reconciliation la REACTIVE.
+        champs["disabled"] = "yes" if self.disabled else "no"
         return champs
 
 

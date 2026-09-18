@@ -69,6 +69,7 @@ from app.enforcement.routeros import (
     apply_plan,
 )
 from app.models import KIND_STATIC, StaticClient
+from app.services.limit_audit import audit_router
 from app.services.pop_match import explain as explain_pop
 from app.services.pop_match import resolve_pop
 from app.services.qoe_loop import ACTION_UNKNOWN, SectorState, decide_sector
@@ -1495,6 +1496,219 @@ class ShapingService:
         rapport["router"] = principal["router"]
         return rapport
 
+    # ------------------------------------------------ plafonds reellement tenus
+    async def limit_audit(self, router_name: str | None = None) -> dict[str, Any]:
+        """Les plafonds decides sont-ils REELLEMENT tenus par le reseau ?
+
+        Ni le plan ("ce que je veux ecrire") ni le journal ("ce que j'ai ecrit")
+        ne repondent a cette question. Une file peut exister, porter le bon
+        debit, se lire sans erreur -- et ne rien brider : fasttrack actif, file
+        masquee par une autre, file desactivee a la main. Chacune de ces causes
+        est silencieuse sur RouterOS. C'est ici qu'on va les chercher.
+
+        Lecture seule. Ce qui CORRIGE, c'est l'application immediate d'un
+        plafond et la boucle de reconciliation ; ce qui se lit ici, c'est
+        l'ecart entre ce qui est decide et ce que le reseau applique vraiment.
+        """
+        noms = [router_name] if router_name else [c.name for c in self.registry.collectors]
+        routeurs: list[dict[str, Any]] = []
+        for nom in noms:
+            try:
+                routeurs.append(await self._audit_un_routeur(nom))
+            except Exception as exc:  # noqa: BLE001 - un PoP muet n'annule pas les autres
+                logger.exception("Audit des plafonds impossible sur %s", nom)
+                routeurs.append(
+                    {
+                        "router": nom,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "queues": [],
+                        "fasttrack": {"active": None, "rules": [], "detail": "routeur non lu"},
+                        "enforced": 0,
+                        "leaking": 0,
+                        "counts": {},
+                    }
+                )
+        return {
+            "enforcement_enabled": self._enforcement_enabled,
+            "last_reconcile": self.last_reconcile,
+            "routers": routeurs,
+            "enforced": sum(int(r.get("enforced") or 0) for r in routeurs),
+            "leaking": sum(int(r.get("leaking") or 0) for r in routeurs),
+        }
+
+    async def _audit_un_routeur(self, router_name: str) -> dict[str, Any]:
+        """L'audit d'un routeur, sur le MEME etat desire que l'ecriture."""
+        collector = self._collector(router_name)
+        liens, abonnes = await self.build_targets(router_name)
+        etat = await self._inspect_one(collector)
+        _, files, _ = desired_state(
+            links=liens,
+            subscribers=abonnes,
+            safety_factor=self.settings.shaping_safety_factor,
+            floor_mbps=self.settings.shaping_floor_mbps,
+            target_mode=self.settings.subscriber_queue_target,
+            queue_unmeasured_links=self.settings.shaping_queue_for_detected_links,
+        )
+        rapport = audit_router(
+            router_name=router_name,
+            desired=files,
+            rows=etat.simple_queues,
+            firewall=await self._firewall_rules(collector),
+        )
+        # Qui est derriere chaque file : l'exploitant cherche un ABONNE, pas un
+        # nom de file. Le rapprochement se fait sur le nom calcule, celui-la
+        # meme qui sert de cle de reconciliation.
+        par_file = {a.queue_name: a for a in abonnes}
+        for ligne in rapport["queues"]:
+            abonne = par_file.get(str(ligne["name"]))
+            if abonne is not None:
+                ligne["login"] = abonne.login
+                ligne["kind"] = abonne.kind
+        return rapport
+
+    @staticmethod
+    async def _firewall_rules(collector: MikrotikCollector) -> list[dict[str, Any]] | None:
+        """Regles de pare-feu, ou [] si le compte n'a pas le droit de les lire.
+
+        Un compte en lecture seule tres restreint peut se voir refuser
+        ``/ip/firewall/filter``. Ce n'est pas une raison de faire echouer
+        l'audit : on rend ``None``, que le verdict distingue soigneusement d'une
+        liste vide. "Je n'ai pas pu lire" et "il n'y a rien" sont deux reponses
+        differentes, et les confondre ferait chercher la panne ailleurs.
+        """
+        client = collector._client  # noqa: SLF001
+        timeout = max(collector.config.timeout_s * 4, 10.0)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(client.firewall_filters), timeout=timeout
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("Pare-feu illisible sur %s : fasttrack non verifie", collector.name)
+            return None
+
+    async def enforce_subscriber(
+        self,
+        *,
+        login: str,
+        author: str,
+        removing: bool = False,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Pose TOUT DE SUITE le plafond de cet abonne, PPPoE ou a IP fixe.
+
+        POURQUOI. Un plafond saisi dans l'interface n'etait qu'une ligne en base
+        jusqu'au passage suivant de la reconciliation -- et, enforcement coupe,
+        jusqu'a jamais. Entre les deux, l'exploitant lisait "100 kbps impose" sur
+        une ligne qui passait 497 kbps : l'interface affichait une INTENTION en
+        la presentant comme un FAIT. Ecrire au moment de la saisie supprime cette
+        fenetre, et le rapport rendu ici dit ce qui a reellement ete ecrit, ou ce
+        qui l'a empeche.
+
+        Le mecanisme est celui, deja eprouve, de la declaration d'un client a IP
+        fixe : plan complet du routeur -- il faut les parents et les types CAKE
+        -- puis RESTRICTION a la chaine de cette seule file. Fixer le debit d'un
+        abonne n'ecrit donc pas les files des autres.
+        """
+        nom_file = self.queue_name_for(login)
+        routeurs = await self._routers_for_logins({login})
+        rapport: dict[str, Any] = {
+            "login": login,
+            "queue": nom_file,
+            "enforcement_enabled": self._enforcement_enabled,
+            "applied": 0,
+            "routers": [],
+        }
+        if not routeurs:
+            rapport["state"] = self.ETAT_SANS_ROUTEUR
+            rapport["reason"] = (
+                "aucun routeur ne porte cet abonne : ni echantillon de mesure, ni "
+                "fiche d'inventaire ne le rattachent a un PoP connu"
+            )
+            rapport["router"] = None
+            return rapport
+        for router_name in routeurs:
+            rapport["routers"].append(
+                await self._enforce_one(
+                    router_name,
+                    reference=login,
+                    queue_name=nom_file,
+                    author=author,
+                    removing=removing,
+                    dry_run=dry_run,
+                )
+            )
+        rapport["applied"] = sum(int(r["applied"]) for r in rapport["routers"])
+        principal = self._etat_principal(rapport["routers"])
+        rapport["state"] = principal["state"]
+        rapport["reason"] = principal["reason"]
+        rapport["router"] = principal["router"]
+        return rapport
+
+    async def enforce_link(
+        self,
+        *,
+        link_key: str,
+        author: str,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Pose tout de suite l'enveloppe d'un lien, pour les memes raisons.
+
+        Un plafond de lien est encore plus sensible qu'un plafond d'abonne : il
+        borne tout ce qui passe derriere. Le laisser en attente d'un cycle,
+        c'est laisser le lien saturer pendant ce temps-la.
+        """
+        rapport: dict[str, Any] = {
+            "link_key": link_key,
+            "enforcement_enabled": self._enforcement_enabled,
+            "applied": 0,
+            "routers": [],
+        }
+        if self.repository is None:
+            rapport["state"] = self.ETAT_ERREUR
+            rapport["reason"] = "topologie indisponible : le lien ne peut pas etre retrouve"
+            rapport["router"] = None
+            return rapport
+        liens = await self.repository.links()
+        lien = next((ligne for ligne in liens if ligne.get("key") == link_key), None)
+        if lien is None:
+            rapport["state"] = self.ETAT_SANS_ROUTEUR
+            rapport["reason"] = f"aucun lien connu sous la cle '{link_key}'"
+            rapport["router"] = None
+            return rapport
+        nom = str(lien.get("target_name") or lien.get("interface") or link_key)
+        nom_file = f"{PREFIX}parent-{slugify(nom)}"
+        rapport["queue"] = nom_file
+        router_name = str(lien.get("discovered_by") or "")
+        if not router_name:
+            rapport["state"] = self.ETAT_SANS_ROUTEUR
+            rapport["reason"] = "ce lien n'est rattache a aucun routeur connu"
+            rapport["router"] = None
+            return rapport
+        rapport["routers"].append(
+            await self._enforce_one(
+                router_name,
+                reference=nom,
+                queue_name=nom_file,
+                author=author,
+                removing=False,
+                dry_run=dry_run,
+            )
+        )
+        rapport["applied"] = sum(int(r["applied"]) for r in rapport["routers"])
+        principal = self._etat_principal(rapport["routers"])
+        rapport["state"] = principal["state"]
+        rapport["reason"] = principal["reason"]
+        rapport["router"] = principal["router"]
+        return rapport
+
+    async def enforce_policy(
+        self, scope: str, target_key: str, *, author: str, removing: bool = False
+    ) -> dict[str, Any]:
+        """Applique le plafond qui vient d'etre saisi, quel qu'en soit le sujet."""
+        if scope == "link":
+            return await self.enforce_link(link_key=target_key, author=author)
+        return await self.enforce_subscriber(login=target_key, author=author, removing=removing)
+
     def _plan_impossible(self) -> str | None:
         """Ce qui empeche de planifier, ou None.
 
@@ -1588,11 +1802,19 @@ class ShapingService:
             ligne["state"] = self.ETAT_ERREUR
             ligne["reason"] = "; ".join(str(o.detail) for o in rates if o.detail)
             return ligne
-        ligne["state"] = self.ETAT_RETIREE if removing else self.ETAT_POSEE
+        # L'etat vient de ce qui a ete FAIT, pas de l'intention.
+        #
+        # Retirer une surcharge n'efface pas forcement la file : l'abonne
+        # retombe sur son plan souscrit, et la commande envoyee est alors un
+        # 'set' vers ce debit-la. Annoncer "file retiree" parce qu'on a demande
+        # un plan avec purge laisserait croire l'abonne sans plafond alors qu'il
+        # vient d'en recevoir un autre.
+        retiree = any(
+            action.verb == "remove" and action.name == queue_name for action in restreint.actions
+        )
+        ligne["state"] = self.ETAT_RETIREE if retiree else self.ETAT_POSEE
         ligne["reason"] = (
-            "file retiree du routeur"
-            if removing
-            else f"{resultat.applied} commande(s) appliquee(s)"
+            "file retiree du routeur" if retiree else f"{resultat.applied} commande(s) appliquee(s)"
         )
         return ligne
 
@@ -2029,7 +2251,19 @@ class ShapingService:
                         pops.add(client.pop_name)
             except Exception:  # noqa: BLE001
                 logger.exception("Inventaire statique illisible, PoPs deduits des metriques seules")
-        return [c.name for c in self.registry.collectors if c.config.effective_pop_name in pops]
+        # Rapprochement TOLERANT, le meme que pour l'inventaire statique.
+        #
+        # Une egalite de chaine faisait de "francophonie" (saisi a la main) et
+        # "PoP Francophonie" (porte par le routeur) deux sites differents :
+        # poser un plafond sur cet abonne repondait alors "aucun routeur ne le
+        # porte", sans que rien ne dise pourquoi.
+        routeurs = self.registry.collectors
+        retenus: list[str] = []
+        for pop in pops:
+            for collector in resolve_pop(str(pop), routeurs).collectors:
+                if collector.name not in retenus:
+                    retenus.append(collector.name)
+        return retenus
 
     # ----------------------------------------------------------------- plan
     async def plan(

@@ -707,6 +707,50 @@ def test_interface_se_rend(client: TestClient) -> None:
         assert vue in html
 
 
+def test_les_fichiers_statiques_portent_une_empreinte(client: TestClient) -> None:
+    """LE CACHE DU NAVIGATEUR EST UN PIEGE, PAS UN DETAIL.
+
+    Servi sans empreinte, ``app.js`` reste en cache apres une mise a jour :
+    l'exploitant execute l'ANCIEN script contre la NOUVELLE API, et le symptome
+    -- un onglet qui ne montre plus rien -- n'oriente pas vers le cache. Demander
+    un Ctrl+Maj+R dans la documentation, c'est demander de s'en souvenir.
+    """
+    html = client.get("/").text
+    assert "/static/app.js?v=" in html
+    assert "/static/app.css?v=" in html
+
+
+def test_l_empreinte_suit_le_contenu_du_fichier(tmp_path, monkeypatch) -> None:
+    """Elle doit changer quand le fichier change, et RESTER STABLE sinon :
+    une empreinte qui bouge a chaque affichage annulerait le cache au lieu de
+    l'invalider au bon moment."""
+    from app.web import ui
+
+    fichier = tmp_path / "app.js"
+    fichier.write_text("console.log(1);", encoding="utf-8")
+    monkeypatch.setattr(ui, "STATIC_DIR", tmp_path)
+
+    premiere = ui._empreinte("app.js")
+    assert premiere == ui._empreinte("app.js")
+
+    fichier.write_text("console.log(2);", encoding="utf-8")
+    assert ui._empreinte("app.js") != premiere
+
+
+def test_un_fichier_statique_absent_ne_casse_pas_la_page(tmp_path, monkeypatch) -> None:
+    """Une empreinte est un confort ; l'interface doit s'afficher sans elle."""
+    from app.web import ui
+
+    monkeypatch.setattr(ui, "STATIC_DIR", tmp_path / "vide")
+    assert ui._empreinte("app.js") == "0"
+
+
+def test_l_interface_porte_un_bandeau_d_echec(client: TestClient) -> None:
+    """Un onglet qui n'a pas pu se charger doit le DIRE : vide, il se lit comme
+    un reseau sans abonnes alors qu'il faut lire "je n'ai pas pu savoir"."""
+    assert 'id="app-error"' in client.get("/").text
+
+
 def test_interface_sans_dependance_externe(client: TestClient) -> None:
     """Un controleur souverain doit s'afficher sur une VM coupee d'internet."""
     for chemin in ("/", "/static/app.css", "/static/app.js"):
