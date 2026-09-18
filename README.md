@@ -648,6 +648,50 @@ maintenant la file correspondante (et elle seule : plan complet du routeur, puis
 restriction à la chaîne de cette file), et la réponse dit ce qui a été écrit, sur quel
 routeur, ou ce qui l'en a empêché.
 
+### Un VLAN qui porte des clients est un site
+
+Chez un opérateur radio, un VLAN ne découpe pas un réseau au hasard : il porte un village,
+un relais, une zone. Le routeur n'en est que la tête. Tant que le contrôleur ne connaissait
+que le site du **routeur**, tous les clients de tous les VLAN d'un même NAS tombaient dans
+un seul sac : impossible de filtrer « les abonnés de Francophonie », de dire lequel des
+sites sature, ou de lire l'arbre. Le découpage existait sur le terrain et dans la
+configuration ; il manquait seulement dans le référentiel.
+
+**Ce qui devient un site.** Uniquement un VLAN sur lequel au moins un client est déclaré ou
+vu. Un VLAN de gestion, de transit ou de supervision ne porte pas d'abonné : en faire un
+site remplirait la liste des PoP de lignes vides.
+
+**Le nom vient de l'interface**, c'est-à-dire de ce que vous avez vous-même écrit sur le
+routeur — donc de ce que vous reconnaîtrez :
+
+| Interface | Site |
+| --- | --- |
+| `vlan-francophonie` | Francophonie |
+| `vlan-zone-nord` | Zone Nord |
+| `vlan101`, `ether1.101` | VLAN 101 |
+
+Une fiche de client ne porte qu'un numéro de VLAN ; c'est l'observation ARP qui connaît le
+nom de l'interface. Les deux sont rapprochés, pour qu'un même VLAN ne donne pas deux sites.
+
+**Le piège, nommé et verrouillé.** Ranger un abonné dans un site de VLAN change son
+`pop_name`, or le rapprochement abonné → routeur se faisait par **égalité** de ce nom avec
+le PoP du routeur. Tel quel, reconnaître les VLAN aurait fait sortir ces abonnés de l'état
+désiré : plus de file, aucune erreur, et une interface qui continue d'afficher leur
+plafond. Le référentiel porte donc, pour chaque site, le **routeur qui le dessert**
+(`pops.router_name`), et c'est par lui que le shaping retrouve ses abonnés. Un site sans
+routeur serait un site dont les abonnés ne sont jamais bridés.
+
+### Les étiquettes des clients se déplacent dans l'arbre
+
+Les cases d'abonnés étaient les seules de l'arbre qu'on ne pouvait pas bouger : elles sont
+calculées à l'affichage depuis la liste des abonnés, donc aucune ligne de topologie
+n'attendait leur position. Elle vit maintenant dans `topology_layout`, à part — plutôt que
+dans de faux équipements qui apparaîtraient ensuite dans tous les comptages.
+
+Elles se **rangent**, mais ne se **rattachent** pas : un abonné pend à son PoP, et c'est la
+collecte qui le dit, pas un glisser-déposer. « Réinitialiser la disposition » les oublie
+comme les autres.
+
 ### Un plafond posé est-il réellement tenu ?
 
 Trois questions différentes, souvent confondues : ce que le contrôleur **veut** poser (le

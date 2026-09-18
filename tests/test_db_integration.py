@@ -2594,3 +2594,118 @@ async def test_la_liste_des_abonnes_porte_tout_l_effectif_du_pop(
     assert sorted(r["login"] for r in par_nature) == ["jamais-vu", "vu"]
     par_recherche = await repo.subscriber_latest(limit=50, include_unmeasured=True, search="jamais")
     assert [r["login"] for r in par_recherche] == ["jamais-vu"]
+
+
+async def test_position_libre_d_une_case_sans_equipement(database: Database) -> None:
+    """Les etiquettes d'abonnes se rangent, alors qu'aucun equipement ne les porte.
+
+    Elles sont calculees a l'affichage depuis la liste des abonnes : aucune
+    ligne de topologie ne les attend, et c'est pour cela qu'elles etaient les
+    seules cases de l'arbre qu'on ne pouvait pas deplacer. Leur position vit
+    donc a part, plutot que dans de faux equipements qui apparaitraient ensuite
+    dans tous les comptages.
+    """
+    from app.db.topology_repo import TopologyRepository
+
+    repo = TopologyRepository(database.pool)
+    cle = "abos:router:NAS-BASSORA|test-ba"
+
+    assert await repo.set_node_position(cle, 822.0, 142.0) is True
+
+    layout = await repo.node_layout()
+    assert layout[cle] == {"pos_x": 822.0, "pos_y": 142.0}
+
+    # Remettre en automatique OUBLIE la position : une ligne nulle resterait la
+    # pour toujours sans rien dire.
+    assert await repo.set_node_position(cle, None, None) is True
+    assert cle not in await repo.node_layout()
+
+
+async def test_un_site_de_vlan_dit_quel_routeur_le_dessert(database: Database) -> None:
+    """Le referentiel doit porter le routeur d'un site de VLAN.
+
+    C'est par lui que le shaping retrouve le routeur d'un abonne range dans un
+    VLAN. Un site sans routeur serait un site dont les abonnes ne sont jamais
+    brides -- et rien ne le dirait.
+    """
+    from app.db.directory import PgDirectory
+    from app.db.repository import MetricsRepository
+
+    directory = PgDirectory(database.pool)
+    await directory.ensure_pop(
+        "Francophonie",
+        "10.10.0.11",
+        kind="vlan",
+        router_name="NAS-BASSORA",
+        vlan_id=101,
+        vlan_interface="vlan-francophonie",
+    )
+
+    sites = {s["name"]: s for s in await MetricsRepository(database.pool).pop_sites()}
+
+    assert sites["Francophonie"]["router_name"] == "NAS-BASSORA"
+    assert sites["Francophonie"]["kind"] == "vlan"
+    assert sites["Francophonie"]["vlan_id"] == 101
+
+
+async def test_un_site_de_routeur_ne_se_degrade_pas_en_site_de_vlan(
+    database: Database,
+) -> None:
+    """Un homonyme de VLAN ne doit pas transformer un site de routeur en VLAN :
+    le site declare par l'exploitant reste la verite."""
+    from app.db.directory import PgDirectory
+    from app.db.repository import MetricsRepository
+
+    directory = PgDirectory(database.pool)
+    await directory.ensure_pop("BASSORA", "10.10.0.11", router_name="NAS-BASSORA")
+    directory.clear_cache()
+    await directory.ensure_pop("BASSORA", None, kind="vlan", router_name="NAS-BASSORA", vlan_id=7)
+
+    sites = {s["name"]: s for s in await MetricsRepository(database.pool).pop_sites()}
+
+    assert sites["BASSORA"]["kind"] == "router"
+
+
+async def test_les_vlan_observes_donnent_leur_nom_aux_sites(
+    database: Database, now: datetime
+) -> None:
+    """Le NOM d'un site de VLAN vient du terrain, pas de la fiche du client.
+
+    La fiche ne porte qu'un numero ; c'est l'observation ARP qui connait
+    l'interface, donc le nom que l'exploitant a lui-meme ecrit sur son routeur.
+    Ce SQL est ce qui fait le pont entre les deux -- une interface par couple
+    (routeur, VLAN), la plus recemment vue.
+    """
+    observations = VlanSightingsRepository(database.pool)
+    await observations.record(
+        [
+            _vue("10.0.0.3", vlan_interface="vlan-francophonie", vlan_id=101),
+            _vue("10.0.0.4", vlan_interface="vlan-francophonie", vlan_id=101),
+            _vue("10.0.1.5", vlan_interface="vlan-mairie", vlan_id=102),
+            # Meme VLAN, autre routeur : deux sites, pas un.
+            _vue("10.0.2.6", router_name="pop-sud", vlan_interface="vlan101", vlan_id=101),
+        ],
+        seen_at=now,
+    )
+
+    sites = await observations.vlan_sites()
+
+    par_cle = {(s["router_name"], s["vlan_id"]): s for s in sites}
+    assert len(sites) == 3
+    assert par_cle[("pop-nord", 101)]["vlan_interface"] == "vlan-francophonie"
+    assert par_cle[("pop-nord", 101)]["addresses_seen"] == 2
+    assert par_cle[("pop-sud", 101)]["vlan_interface"] == "vlan101"
+
+
+async def test_un_vlan_muet_depuis_longtemps_n_est_plus_un_site(
+    database: Database, now: datetime
+) -> None:
+    """Un VLAN sur lequel plus rien ne parle n'est plus un site vivant."""
+    observations = VlanSightingsRepository(database.pool)
+    await observations.record(
+        [_vue("10.0.0.3", vlan_interface="vlan-francophonie", vlan_id=101)],
+        seen_at=now - timedelta(days=3),
+    )
+
+    assert await observations.vlan_sites(max_age_s=3600) == []
+    assert len(await observations.vlan_sites()) == 1

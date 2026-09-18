@@ -40,6 +40,7 @@ from app.models import (
 from app.services.pop_match import resolve_pop
 from app.services.rates import RateTracker
 from app.services.rtt import RttProber
+from app.services.vlan_sites import SITE_VLAN, VlanSite, sites_from
 
 logger = logging.getLogger(__name__)
 
@@ -100,16 +101,24 @@ class StaticClientsProvider(Protocol):
 class VlanSightingsProvider(Protocol):
     """Contrat du depot des observations ARP.
 
-    Volontairement en ECRITURE SEULE du point de vue du service de collecte :
-    il enregistre ce qu'il a vu et oublie ce qui est perime, mais ne relit
-    jamais les candidats. C'est structurel, pas cosmetique -- rien dans la
-    boucle de collecte ou de planification ne doit pouvoir consommer un
-    candidat pour en faire un abonne.
+    LA REGLE, INCHANGEE : aucune adresse observee ne peut devenir un abonne. Le
+    service enregistre ce qu'il a vu, oublie ce qui est perime, et ne lit JAMAIS
+    les candidats -- c'est structurel, pas cosmetique. Une detection qui se
+    transformerait en fiche toute seule ferait naitre des abonnes que personne
+    n'a vendus.
+
+    ``vlan_sites`` ne l'entame pas : il ne rend aucune adresse, aucune MAC,
+    aucun candidat. Il rend le NOM des VLAN sur lesquels quelque chose a parle,
+    et rien d'autre. Ce nom sert a appeler un site par le nom que l'exploitant a
+    lui-meme ecrit sur son routeur, au lieu de "VLAN 101" -- il ne cree aucun
+    abonne, il en range.
     """
 
     async def record(self, sightings: Sequence[VlanSighting], *, seen_at: datetime) -> int: ...
 
     async def prune(self, *, older_than_s: float) -> int: ...
+
+    async def vlan_sites(self, *, max_age_s: float | None = None) -> list[dict[str, Any]]: ...
 
 
 class CollectionService:
@@ -380,6 +389,12 @@ class CollectionService:
                 else:
                     compteurs[nom] = mesure
 
+        # Les VLAN qui portent des clients sont des SITES a part entiere. Chez un
+        # operateur radio, un VLAN porte un village ou un relais ; le routeur
+        # n'en est que la tete. Tant que seul le site du routeur existait, tous
+        # les clients de tous les VLAN d'un meme NAS tombaient dans un seul sac.
+        sites_vlan = await self._sites_vlan(clients, par_client)
+
         for client in clients:
             match = par_client[client.reference]
             collector = match.collectors[0] if match.collectors else None
@@ -387,11 +402,24 @@ class CollectionService:
             # cela, une difference de casse ferait naitre un PoP fantome en base,
             # et les mesures du client iraient s'y ranger au lieu du vrai site.
             pop_name = match.pop_name or client.pop_name
+            site = sites_vlan.get(client.reference)
             try:
-                pop_id = await self.directory.ensure_pop(
-                    pop_name,
-                    collector.config.host if collector is not None else None,
-                )
+                if site is not None:
+                    pop_id = await self.directory.ensure_pop(
+                        site.name,
+                        collector.config.host if collector is not None else None,
+                        kind=SITE_VLAN,
+                        router_name=site.router_name,
+                        vlan_id=site.vlan_id,
+                        vlan_interface=site.vlan_interface,
+                    )
+                    pop_name = site.name
+                else:
+                    pop_id = await self.directory.ensure_pop(
+                        pop_name,
+                        collector.config.host if collector is not None else None,
+                        router_name=collector.name if collector is not None else None,
+                    )
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{client.reference}: PoP non resolu: {exc}")
                 continue
@@ -475,6 +503,60 @@ class CollectionService:
     # ------------------------------------------------------------------
     # Detection des clients sur VLAN routee
     # ------------------------------------------------------------------
+    async def _sites_vlan(
+        self, clients: Sequence[StaticClient], par_client: dict[str, Any]
+    ) -> dict[str, VlanSite]:
+        """``reference du client -> site de son VLAN``, quand il en a un.
+
+        LE NOM VIENT DU TERRAIN. La fiche d'un client ne porte qu'un numero de
+        VLAN ; c'est l'observation ARP qui connait le nom de l'interface, donc
+        le nom du site. Les deux sont rapproches ici, une fois, plutot que dans
+        chaque appelant.
+
+        Un inventaire sans VLAN, ou des observations illisibles, ne font rien
+        echouer : on retombe simplement sur le site du routeur, c'est-a-dire sur
+        le comportement d'avant.
+        """
+        avec_vlan = [c for c in clients if c.vlan is not None]
+        if not avec_vlan:
+            return {}
+
+        vues: list[dict[str, Any]] = []
+        if self.sightings is not None:
+            try:
+                vues = await self.sightings.vlan_sites(
+                    max_age_s=self.settings.vlan_sighting_retention_s
+                )
+            except Exception:  # noqa: BLE001 - un site sans nom vaut mieux qu'un cycle perdu
+                logger.exception("VLAN observes illisibles : sites nommes d'apres le numero seul")
+
+        # Le routeur de chaque client, pour que son site sache qui le dessert.
+        declares = [
+            {
+                "reference": c.reference,
+                "vlan": c.vlan,
+                "router_name": (
+                    par_client[c.reference].collectors[0].name
+                    if par_client[c.reference].collectors
+                    else None
+                ),
+            }
+            for c in avec_vlan
+        ]
+        sites = sites_from(vues, declares)
+
+        par_reference: dict[str, VlanSite] = {}
+        for ligne in declares:
+            routeur, tag = ligne["router_name"], ligne["vlan"]
+            if not routeur or tag is None:
+                continue
+            trouve = next(
+                (s for s in sites if s.router_name == routeur and s.vlan_id == int(tag)), None
+            )
+            if trouve is not None:
+                par_reference[str(ligne["reference"])] = trouve
+        return par_reference
+
     async def detect_vlan_clients(self) -> RunResult:
         """Repere qui parle sur les VLAN routees, pour AIDER a la declaration.
 

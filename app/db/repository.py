@@ -57,12 +57,31 @@ class MetricsRepository:
             records = await conn.fetch(
                 """
                 SELECT p.id, p.name, p.router_host, p.created_at,
+                       p.kind, p.router_name, p.vlan_id, p.vlan_interface,
                        (SELECT count(*) FROM subscribers s WHERE s.pop_id = p.id)
                            AS subscriber_count,
                        (SELECT count(*) FROM backhauls b WHERE b.pop_id = p.id)
                            AS backhaul_count
                   FROM pops p
                  ORDER BY p.name
+                """
+            )
+        return _rows(records)
+
+    async def pop_sites(self) -> list[dict[str, Any]]:
+        """Les sites et le ROUTEUR qui dessert chacun. Sans compteur, sans jointure.
+
+        C'est la table de correspondance dont le shaping a besoin : un abonne
+        range dans un site de VLAN doit retrouver le routeur qui le bride. La
+        version complete (``list_pops``) compte les abonnes et les backhauls,
+        ce qui n'a pas sa place dans un chemin appele a chaque plan.
+        """
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                SELECT name, kind, router_name, vlan_id, vlan_interface
+                  FROM pops
+                 ORDER BY name
                 """
             )
         return _rows(records)
