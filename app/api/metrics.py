@@ -61,7 +61,7 @@ async def list_subscribers(
     )
 
 
-@router.get("/subscribers/latest", summary="Dernier echantillon par abonne (top talkers)")
+@router.get("/subscribers/latest", summary="Les abonnes d'un PoP et leur derniere mesure")
 async def subscribers_latest(
     repo: RepositoryDep,
     pop_id: Annotated[int | None, Query()] = None,
@@ -72,9 +72,32 @@ async def subscribers_latest(
     ] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     order_by: Annotated[Literal["total", "down", "up", "login"], Query()] = "total",
+    include_unmeasured: Annotated[
+        bool,
+        Query(
+            description=(
+                "Inclure les abonnes declares qui n'ont AUCUNE mesure : jamais "
+                "connectes, PoP plus collecte, ou simplement hors ligne depuis "
+                "l'origine. Leurs debits sortent a null, jamais a zero."
+            )
+        ),
+    ] = False,
 ) -> list[dict[str, Any]]:
+    """L'effectif d'un PoP, avec la derniere mesure de chacun quand elle existe.
+
+    Par defaut, seuls les abonnes MESURES sont rendus : c'est ce que demande un
+    classement par debit. ``include_unmeasured=true`` rend tout l'effectif --
+    la liste des abonnes qu'il y a sur le PoP, y compris ceux dont on n'a
+    encore rien vu passer. Un abonne facture qui n'apparait nulle part est
+    indiscernable d'un abonne qui n'existe pas.
+    """
     return await repo.subscriber_latest(
-        pop_id=pop_id, search=search, kind=kind, limit=limit, order_by=order_by
+        pop_id=pop_id,
+        search=search,
+        kind=kind,
+        limit=limit,
+        order_by=order_by,
+        include_unmeasured=include_unmeasured,
     )
 
 
