@@ -808,6 +808,50 @@ class MikrotikCollector:
         valides = [t for t in times if t is not None]
         return min(valides) if valides else None
 
+    async def health(self) -> dict[str, Any]:
+        """Etat de sante du routeur : charge CPU, memoire, uptime, version.
+
+        POURQUOI CETTE LECTURE EST SEPAREE DE ``probe``. Une sonde complete
+        verifie aussi les droits d'ecriture et correle les sessions : c'est un
+        diagnostic qu'on declenche a la main. La sante, elle, se regarde en
+        continu -- un routeur a 95 % de CPU n'appliquera pas les files qu'on lui
+        envoie, et le savoir AVANT de chercher pourquoi un abonne n'est pas
+        bride epargne une demi-heure.
+
+        Une seule commande de lecture, ``/system/resource``.
+        """
+        timeout = max(self.config.timeout_s, 5.0)
+        return await asyncio.wait_for(asyncio.to_thread(self.health_sync), timeout=timeout)
+
+    def health_sync(self) -> dict[str, Any]:
+        resource = self._client.system_resource()
+        libre = parse_counter(resource.get("free-memory"))
+        total = parse_counter(resource.get("total-memory"))
+        return {
+            "router": self.name,
+            "pop_name": self.config.effective_pop_name,
+            "host": self.config.host,
+            "reachable": True,
+            "identity": _as_str(resource.get("identity")) or self._client.identity(),
+            "version": _as_str(resource.get("version")),
+            "board_name": _as_str(resource.get("board-name")),
+            "uptime_s": parse_routeros_uptime(resource.get("uptime")),
+            "cpu_load_pct": parse_counter(resource.get("cpu-load")),
+            "cpu_count": parse_counter(resource.get("cpu-count")),
+            "free_memory": libre,
+            "total_memory": total,
+            # La part UTILISEE, calculee ici et pas dans l'interface : deux
+            # implementations du meme rapport divergent toujours. None quand
+            # RouterOS ne donne pas le total -- un pourcentage sans denominateur
+            # serait invente.
+            "memory_used_pct": (
+                round((total - libre) / total * 100, 1)
+                if libre is not None and total not in (None, 0)
+                else None
+            ),
+            "free_hdd": parse_counter(resource.get("free-hdd-space")),
+        }
+
     async def probe(self) -> dict[str, Any]:
         """Teste la connexion et renvoie de quoi identifier le routeur.
 

@@ -234,9 +234,12 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   l'un des deux bouts — le badge *interrogé* de la colonne *Vers* signale l'autre bout.
   Sans lui, un réseau **en étoile** faisait disparaître tous les PoPs derrière le cœur :
   chacun n'a qu'un câble, celui qui monte, donc chacun se retrouvait du côté replié.
-- **Équipements** — ajout d'un routeur ou d'une antenne **via leur API** ; chaque ajout
-  **analyse la configuration et (re)construit l'arbre tout seul**. Inventaire des sites et
-  routeurs en bas de page.
+- **Équipements** — **santé des routeurs** lue en direct (charge CPU, mémoire, uptime,
+  version) : un routeur à 95 % de CPU n'appliquera pas les files qu'on lui envoie, et un
+  routeur qui vient de redémarrer a perdu les siennes — deux causes de « mon abonné n'est
+  pas bridé » qui n'ont rien à voir avec le contrôleur. Puis l'ajout d'un routeur ou d'une
+  antenne **via leur API** ; chaque ajout **analyse la configuration et (re)construit
+  l'arbre tout seul**. Inventaire des sites et routeurs en bas de page.
 - **Capacité** — la seule page qui regarde la **durée** plutôt que l'instant : **à
   renforcer** (ce qui n'a plus de marge *en moyenne*, liens et abonnés séparément), ce qui
   est **vendu** sur chaque PoP rapporté à ce qui le **porte**, l'occupation des liens avec
@@ -1274,6 +1277,7 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `GET` · `PUT` | `/api/v1/rtt` | Lire / basculer la sonde de latence (sans variable d'environnement) |
 | `GET` | `/api/v1/network/tree` | Arbre PoP → backhauls, capacité et charge |
 | `GET` | `/api/v1/capacity` | **Capacité** : survente par PoP, occupation des liens et heure de pointe, volumes consommés, lignes muettes |
+| `GET` | `/api/v1/pops/health` | **Santé des routeurs** : CPU, mémoire, uptime, version — lu en direct |
 | `GET` | `/api/v1/pops/routers` | Inventaire des routeurs (fichier + base) |
 | `POST` | `/api/v1/pops/routers/test` | Teste une connexion **sans rien enregistrer** |
 | `POST` | `/api/v1/pops/routers` | Enregistre un routeur |

@@ -1871,9 +1871,88 @@ async function loadPops() {
   });
 }
 
+/** Sante des routeurs : ce qu'ils disent d'eux-memes, en direct.
+ *
+ *  Lue apres l'inventaire et sans le bloquer : c'est une commande par routeur,
+ *  et un routeur lent ne doit pas retarder la page ou l'on vient justement
+ *  d'ajouter un equipement. */
+async function loadRoutersHealth() {
+  const host = document.getElementById('routers-health');
+  let data;
+  try {
+    data = await api('/pops/health');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const routeurs = data.routers || [];
+  if (!routeurs.length) {
+    host.innerHTML = '<div class="empty">Aucun routeur collecte.</div>';
+    return;
+  }
+  host.innerHTML =
+    '<table><thead><tr><th>Routeur</th><th>PoP</th><th>Modele</th>' +
+    '<th class="num">CPU</th><th class="num">Memoire</th>' +
+    '<th class="num">Uptime</th><th>Version</th></tr></thead><tbody>' +
+    routeurs.map((r) => {
+      if (!r.reachable) {
+        return '<tr>' +
+          '<td class="login"><b>' + esc(r.router) + '</b></td>' +
+          '<td>' + esc(r.pop_name || '-') + '</td>' +
+          '<td colspan="5"><span class="badge crit">injoignable</span>' +
+            '<span class="hint">' + esc(r.error || '') + '</span></td>' +
+          '</tr>';
+      }
+      // Les seuils disent ce qui EMPECHE d'appliquer, pas ce qui est "beau" :
+      // au-dela de 80 % de CPU, RouterOS commence a retarder ses reponses API.
+      const cpu = r.cpu_load_pct;
+      const ram = r.memory_used_pct;
+      const badge = (v, chaud, brulant) => v === null || v === undefined
+        ? '<span class="hint">-</span>'
+        : '<span class="badge ' + (v >= brulant ? 'crit' : v >= chaud ? 'warn' : 'ok') + '">' +
+          esc(Math.round(v)) + ' %</span>';
+      return '<tr>' +
+        '<td class="login"><b>' + esc(r.router) + '</b>' +
+          (r.identity && r.identity !== r.router
+            ? '<span class="hint" style="display:block">' + esc(r.identity) + '</span>'
+            : '') + '</td>' +
+        '<td>' + esc(r.pop_name || '-') + '</td>' +
+        '<td>' + esc(r.board_name || '-') +
+          (r.cpu_count ? ' <span class="hint">' + esc(r.cpu_count) + ' coeur(s)</span>' : '') +
+          '</td>' +
+        '<td class="num">' + badge(cpu, 70, 85) + '</td>' +
+        // Sans memoire totale, RouterOS ne permet aucun pourcentage : on montre
+        // alors la memoire libre seule, plutot qu'un tiret suivi d'un chiffre
+        // qui se lirait comme un nombre negatif.
+        '<td class="num">' +
+          (ram === null || ram === undefined
+            ? (r.free_memory
+              ? '<span class="hint">' + esc(bytesText(r.free_memory)) + ' libres</span>'
+              : '<span class="hint">-</span>')
+            : badge(ram, 80, 90) +
+              (r.free_memory ? '<span class="hint" style="display:block">' +
+                esc(bytesText(r.free_memory)) + ' libres</span>' : '')) + '</td>' +
+        '<td class="num">' + esc(uptime(r.uptime_s)) + '</td>' +
+        '<td style="color:var(--faint)">' + esc(r.version || '-') + '</td>' +
+        '</tr>';
+    }).join('') + '</tbody></table>';
+}
+
+/** Octets en unite lisible. Les memoires de routeur se comptent en Mio. */
+function bytesText(octets) {
+  const n = Number(octets) || 0;
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(1) + ' Gio';
+  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(0) + ' Mio';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' Kio';
+  return n + ' o';
+}
+
 async function loadRouters() {
   await loadPops();
   await loadAntennas();
+  // La sante interroge les routeurs un par un : lancee sans attendre, pour ne
+  // pas retarder la page ou l'on vient d'ajouter un equipement.
+  loadRoutersHealth();
   const data = await api('/pops/routers');
   state.routers = data.routers;
 
