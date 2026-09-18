@@ -27,7 +27,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Query
 
 from app.api.deps import RepositoryDep
-from app.services.capacity import link_row, pop_capacity_row, usage_row
+from app.services.capacity import a_renforcer, link_row, pop_capacity_row, usage_row
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,11 @@ async def capacity(
     maximum noye dans une semaine ne dit plus a quelle heure il tombe), un
     volume sur une semaine (un jour depend trop du week-end), un silence sur
     plusieurs jours (une coupure d'une nuit n'est pas un depart).
+
+    ``reinforce`` classe ce qui n'a plus de marge EN MOYENNE, liens et abonnes
+    separement : un lien sature se renforce, un abonne sature se vend. Les
+    confondre ferait passer une opportunite commerciale pour un probleme
+    d'ingenierie.
     """
     pops = await repo.capacity_by_pop(hours=hours)
     liens = await repo.link_occupancy(hours=hours, limit=limit)
@@ -64,6 +69,7 @@ async def capacity(
 
     vendu = sum(ligne["sold_down_mbps"] for ligne in lignes_pops)
     capacite = sum(ligne["capacity_mbps"] or 0.0 for ligne in lignes_pops)
+    renfort = a_renforcer(lignes_liens, lignes_usage)
     return {
         "window": {"hours": hours, "usage_hours": usage_hours, "silent_days": silent_days},
         "totals": {
@@ -75,9 +81,14 @@ async def capacity(
             "ratio": round(vendu / capacite, 2) if capacite else None,
             "subscribers_at_ceiling": sum(1 for u in lignes_usage if u["at_plan_ceiling"]),
             "silent": len(muets),
+            "links_to_reinforce": len(renfort["links"]),
+            "subscribers_to_upsell": len(renfort["subscribers"]),
         },
         "pops": lignes_pops,
         "links": lignes_liens,
         "usage": lignes_usage,
         "silent": muets,
+        # Ce qui n'a plus de marge EN MOYENNE : un lien a renforcer n'est pas un
+        # lien qui a touche son plafond une fois, c'est un lien qui y vit.
+        "reinforce": renfort,
     }

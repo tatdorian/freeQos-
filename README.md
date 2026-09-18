@@ -237,9 +237,10 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
 - **Équipements** — ajout d'un routeur ou d'une antenne **via leur API** ; chaque ajout
   **analyse la configuration et (re)construit l'arbre tout seul**. Inventaire des sites et
   routeurs en bas de page.
-- **Capacité** — la seule page qui regarde la **durée** plutôt que l'instant : ce qui est
-  **vendu** sur chaque PoP rapporté à ce qui le **porte**, l'occupation des liens avec leur
-  **heure de pointe**, les abonnés classés par **volume** consommé (pas par débit de
+- **Capacité** — la seule page qui regarde la **durée** plutôt que l'instant : **à
+  renforcer** (ce qui n'a plus de marge *en moyenne*, liens et abonnés séparément), ce qui
+  est **vendu** sur chaque PoP rapporté à ce qui le **porte**, l'occupation des liens avec
+  leur **heure de pointe**, les abonnés classés par **volume** consommé (pas par débit de
   l'instant), et les **lignes muettes** — déclarées, mais plus rien depuis des jours. Ce
   sont les chiffres qui servent à dimensionner, pas à dépanner. En lecture seule.
 

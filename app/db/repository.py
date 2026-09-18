@@ -702,6 +702,9 @@ class MetricsRepository:
                            max(rx_bps)                                          AS peak_rx_bps,
                            max(tx_bps)                                          AS peak_tx_bps,
                            avg(greatest(coalesce(rx_bps, 0), coalesce(tx_bps, 0))) AS avg_bps,
+                           -- Le nombre de mesures : une moyenne sur trois points
+                           -- ne justifie pas d'acheter un backhaul.
+                           count(*)                                             AS samples,
                            (array_agg(ts ORDER BY rx_bps DESC NULLS LAST))[1]   AS peak_rx_at,
                            (array_agg(ts ORDER BY tx_bps DESC NULLS LAST))[1]   AS peak_tx_at
                       FROM interface_metrics
@@ -764,6 +767,7 @@ class MetricsRepository:
                        s.plan_down_mbps,
                        count(*)                                        AS samples,
                        max(m.tx_bps)                                   AS peak_bps,
+                       avg(m.tx_bps)                                   AS avg_bps,
                        count(*) FILTER (
                            WHERE s.plan_down_mbps IS NOT NULL
                              AND m.tx_bps >= $3 * s.plan_down_mbps * 1000000

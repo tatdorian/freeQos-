@@ -1425,6 +1425,7 @@ async function scRecensement() {
     hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
     return;
   }
+
   const pops = data.pops || [];
   if (!pops.length) {
     hote.innerHTML = '<div class="empty">Aucun routeur collecte.</div>';
@@ -2247,9 +2248,57 @@ async function loadCapacity() {
     statCard(t.ratio && t.ratio > 20 ? 'crit' : (t.ratio && t.ratio > 5 ? 'warn' : ''),
       'Survente du reseau', t.ratio === null || t.ratio === undefined ? '-' : t.ratio + ':1', '',
       'un chiffre de reseau : regardez PoP par PoP') +
-    statCard(t.subscribers_at_ceiling ? 'warn' : '', 'Abonnes a leur plafond',
-      String(t.subscribers_at_ceiling || 0), '',
+    statCard(t.links_to_reinforce ? 'crit' : '', 'Liens sans marge',
+      String(t.links_to_reinforce || 0), '',
+      'au-dessus de 80 % en moyenne') +
+    statCard(t.subscribers_to_upsell ? 'warn' : '', 'Abonnes a leur plafond',
+      String(t.subscribers_to_upsell || 0), '',
       (t.silent || 0) + ' ligne(s) muette(s)');
+
+  // A RENFORCER : la partie actionnable, donc la premiere. Deux tableaux
+  // separes -- un lien se renforce, un abonne se vend.
+  const renfort = data.reinforce || { links: [], subscribers: [] };
+  const tableauRenfort = (titre, lignes, colonnes, ligneHtml, vide) =>
+    '<h3 style="margin:.8rem 0 .4rem;font-size:.95rem">' + titre + '</h3>' +
+    (lignes.length
+      ? '<div class="table-wrap"><table><thead><tr>' + colonnes + '</tr></thead><tbody>' +
+        lignes.map(ligneHtml).join('') + '</tbody></table></div>'
+      : '<div class="empty">' + vide + '</div>');
+  document.getElementById('capacity-reinforce').innerHTML =
+    tableauRenfort(
+      'Liens sans marge',
+      renfort.links || [],
+      '<th>Lien</th><th>Port</th><th class="num">Capacite</th>' +
+        '<th class="num">Occupation moyenne</th><th class="num">Pointe</th>' +
+        '<th class="num" title="Nombre de mesures : une moyenne sur trois points ne ' +
+        'justifie pas d\'acheter un backhaul">Mesures</th>',
+      (l) => '<tr>' +
+        '<td><b>' + esc(l.link_name || l.interface) + '</b> ' +
+          '<span class="hint">sur ' + esc(l.router_name) + '</span></td>' +
+        '<td class="login">' + esc(l.interface) + '</td>' +
+        '<td class="num">' + (l.capacity_mbps === null ? '-' : mbps(l.capacity_mbps)) + '</td>' +
+        '<td class="num"><b>' + partPct(l.avg_share) + '</b></td>' +
+        '<td class="num">' + partPct(l.share) + '</td>' +
+        '<td class="num" style="color:var(--faint)">' + esc(l.samples) + '</td>' +
+        '</tr>',
+      'Aucun lien au-dessus de 80 % en moyenne. Les pointes peuvent etre hautes ' +
+        'sans que la capacite soit en cause.') +
+    tableauRenfort(
+      'Abonnes a leur plafond',
+      renfort.subscribers || [],
+      '<th>Abonne</th><th>PoP</th><th class="num">Plan</th>' +
+        '<th class="num">Consommation moyenne</th><th class="num">Part du temps au plafond</th>' +
+        '<th class="num">Volume</th>',
+      (u) => '<tr>' +
+        '<td class="login"><b>' + esc(u.login) + '</b>' +
+          (u.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
+        '<td>' + esc(u.pop_name || '-') + '</td>' +
+        '<td class="num">' + (u.plan_down_mbps ? mbps(u.plan_down_mbps) : '-') + '</td>' +
+        '<td class="num"><b>' + partPct(u.avg_share) + '</b></td>' +
+        '<td class="num">' + partPct(u.capped_share) + '</td>' +
+        '<td class="num">' + esc(u.gigabytes) + ' Go</td>' +
+        '</tr>',
+      'Aucun abonne au-dessus de 80 % de son plan en moyenne.');
 
   const pops = data.pops || [];
   document.getElementById('capacity-pops').innerHTML = !pops.length
