@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>freeQoS</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d1117'/%3E%3Cpath d='M3 11 L6 6 L9 9 L13 4' stroke='%2338bdf8' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="/static/app.css?v={{ css_version }}">
 </head>
 <body>
   <header class="top">
@@ -23,6 +23,12 @@
     </nav>
     <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
   </header>
+
+  <!-- UN ECHEC DE CHARGEMENT DOIT SE VOIR. Sans ce bandeau, une API en erreur
+       laissait l'onglet vide ou fige sur ses anciennes lignes : indiscernable
+       d'un reseau sans abonnes, et la cause n'etait visible que dans la console
+       du navigateur. -->
+  <div id="app-error" hidden></div>
 
   <main>
     <!-- ------------------------------------------------ tableau de bord -->
@@ -617,6 +623,6 @@
   </main>
 
   <div id="drawer-root"></div>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ js_version }}"></script>
 </body>
 </html>

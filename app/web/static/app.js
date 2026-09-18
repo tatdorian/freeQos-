@@ -4833,14 +4833,33 @@ async function show(view) {
   await refresh();
 }
 
+/** Un echec de chargement doit SE VOIR.
+ *
+ *  Il n'etait ecrit que dans la console : l'onglet restait vide, ou fige sur
+ *  ses anciennes lignes, et un ecran vide se lit comme "il n'y a rien" alors
+ *  qu'il faut lire "je n'ai pas pu savoir". Les deux n'appellent pas le meme
+ *  geste, et le second se diagnostique en dix secondes quand il est dit. */
+function appError(message) {
+  const banniere = document.getElementById('app-error');
+  if (!message) { banniere.hidden = true; banniere.innerHTML = ''; return; }
+  banniere.hidden = false;
+  banniere.innerHTML = '<div class="notice err">' +
+    '<strong>Cet onglet n\'a pas pu etre charge.</strong> ' + esc(message) +
+    '<span class="hint">Ce qui est affiche peut dater. Verifiez ' +
+    '<a href="/health" target="_blank">/health</a> et l\'onglet Reglages ; si le ' +
+    'probleme a suivi une mise a jour, rechargez la page (Ctrl+Maj+R).</span></div>';
+}
+
 let refreshing = false;
 async function refresh() {
   if (refreshing) return;
   refreshing = true;
   try {
     await LOADERS[state.view]();
+    appError(null);
   } catch (err) {
     console.error('Rafraichissement impossible :', err);
+    appError(err && err.message ? err.message : String(err));
   } finally {
     refreshing = false;
   }

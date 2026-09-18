@@ -81,8 +81,15 @@ Quatre gestes, du plus doux au plus radical. Prenez le premier qui suffit.
 make update      # récupère le code et redémarre l'app — AUCUNE donnée perdue
 ```
 
-L'interface est un fichier statique que le navigateur met en cache : après une mise à jour,
-rechargez la page **en forçant** (`Ctrl+Maj+R`), sinon vous continuez de voir l'ancienne.
+L'interface se recharge toute seule après une mise à jour : `app.js` et `app.css` sont
+servis avec une **empreinte de leur contenu**, donc le navigateur ne peut pas servir
+l'ancienne version. Le `Ctrl+Maj+R` d'autrefois n'est plus nécessaire — et il l'était
+d'autant plus qu'un script périmé face à une API à jour produit un onglet vide, un symptôme
+qui n'oriente vers rien.
+
+Et si un onglet ne se charge pas, il le **dit** : un bandeau nomme l'erreur au lieu de
+laisser un écran vide, qui se lirait comme « il n'y a rien » alors qu'il faut lire « je
+n'ai pas pu savoir ».
 
 **Nettoyer l'arbre sans rien perdre d'autre.** Le graphe n'efface jamais rien tout seul —
 c'est voulu, pour qu'un équipement momentanément invisible (fade radio, redémarrage, lecture
