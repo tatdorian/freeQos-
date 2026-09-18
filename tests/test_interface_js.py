@@ -61,3 +61,34 @@ def test_aucune_fonction_n_est_declaree_deux_fois() -> None:
         + ", ".join(f"{nom} ({n} fois)" for nom, n in sorted(doublons.items()))
         + ". La derniere declaration ecrase les precedentes pour tout le fichier."
     )
+
+
+def test_le_plan_ne_part_jamais_avec_un_routeur_vide() -> None:
+    """LE DEFAUT VU EN PRODUCTION. Avec "Tous les PoP", le selecteur vaut la
+    chaine vide ; on envoyait ``router: ""``, l'API refusait, et son erreur de
+    validation brute s'affichait en pleine page :
+
+        [{"type":"string_too_short","loc":["body","router"],...}]
+
+    Ce que l'exploitant demande dans ce cas n'a pourtant rien d'ambigu : le plan
+    de chaque routeur. On les calcule donc tous.
+    """
+    source = APP_JS.read_text()
+    debut = source.index("async function computePlan()")
+    corps = source[debut : source.index("\n}\n", debut)]
+
+    # La liste des routeurs est batie depuis les options, et les valeurs vides
+    # sont ecartees avant tout appel.
+    assert "filter(Boolean)" in corps
+    # Et l'appel se fait sur un routeur nomme, jamais sur le choix brut.
+    assert "JSON.stringify({ router: routeur })" in corps
+    assert "JSON.stringify({ router: choisi })" not in corps
+
+
+def test_les_erreurs_de_validation_sont_rendues_lisibles() -> None:
+    """Un message d'erreur qu'il faut dechiffrer ne vaut guere mieux que pas de
+    message : FastAPI rend un tableau d'objets, on en fait une phrase."""
+    source = APP_JS.read_text()
+
+    assert "function validationText(" in source
+    assert "validationText(detail)" in source

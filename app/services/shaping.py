@@ -1635,6 +1635,11 @@ class ShapingService:
             desired=files,
             rows=etat.simple_queues,
             firewall=await self._firewall_rules(collector),
+            enforcement_enabled=self._enforcement_enabled,
+            # "Pas encore passee" n'est pas "en panne". Sur un site qu'on vient
+            # d'ajouter, les files partent au prochain tour de reconciliation :
+            # le dire evite de lire une panne la ou il n'y a qu'une attente.
+            deja_reconcilie=self._deja_reconcilie(router_name),
         )
         # Qui est derriere chaque file : l'exploitant cherche un ABONNE, pas un
         # nom de file. Le rapprochement se fait sur le nom calcule, celui-la
@@ -1646,6 +1651,20 @@ class ShapingService:
                 ligne["login"] = abonne.login
                 ligne["kind"] = abonne.kind
         return rapport
+
+    def _deja_reconcilie(self, router_name: str) -> bool | None:
+        """La boucle de reconciliation est-elle passee sur CE routeur ?
+
+        None quand on ne peut pas le savoir (aucune trace) : on ne conclura
+        alors rien, plutot que d'affirmer l'un ou l'autre.
+        """
+        passe = self.last_reconcile
+        if not passe:
+            return False
+        routeurs = passe.get("routers")
+        if not isinstance(routeurs, list):
+            return None
+        return router_name in routeurs
 
     @staticmethod
     async def _firewall_rules(collector: MikrotikCollector) -> list[dict[str, Any]] | None:
