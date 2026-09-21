@@ -904,6 +904,15 @@ CREATE TABLE IF NOT EXISTS ip_intel (
     last_seen   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Localisation. AJOUTEE APRES COUP : CREATE TABLE IF NOT EXISTS ne touche pas
+-- une table deja presente, une installation existante ne recevrait donc jamais
+-- ces colonnes. Elles restent vides tant que la geolocalisation n'est pas
+-- activee -- c'est un appel sortant, et il se decide.
+ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS city      TEXT;
+ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS region    TEXT;
+ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS latitude  DOUBLE PRECISION;
+ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+
 CREATE INDEX IF NOT EXISTS idx_ip_intel_service ON ip_intel (service);
 CREATE INDEX IF NOT EXISTS idx_ip_intel_category ON ip_intel (category);
 -- La file d'attente de l'enrichissement : les adresses jamais resolues, les

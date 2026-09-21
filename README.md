@@ -1499,6 +1499,21 @@ Une fois l'export posé, comptez une quinzaine de secondes avant qu'un flux term
 n'apparaisse (`inactive-flow-timeout`) : le routeur ne peut pas exporter un flux avant de
 le considérer fini.
 
+### « autre, 3 Kio » — mais **avec qui** ?
+
+Le tableau par usage agrège justement ce détail, et celui par adresse fond tous les
+clients ensemble. **Cliquer une famille d'usage** ouvre *Qui parle à qui* : une ligne par
+conversation `client ↔ destination`, avec le service reconnu, le port, le volume, le
+**débit moyen** sur la période, et le **débit en direct** pour les conversations qui se
+tiennent à cet instant.
+
+Un volume seul ne dit rien : « 3 Kio » sur une heure et « 3 Kio » en deux secondes
+n'appellent pas la même réaction. La colonne *En direct* n'est remplie que pour les
+conversations présentes dans la fenêtre en cours — la période dit ce qui **s'est passé**,
+la fenêtre ce qui **se passe**.
+
+Un clic sur l'adresse ouvre sa fiche complète (ci-dessous).
+
 ### Ce que le collecteur fait des flux
 
 | Étape | Règle |
@@ -1537,7 +1552,17 @@ Twitch, un CDN, un fournisseur de nuage — et c'est de là que se posent les re
 |---|---|---|
 | **Catalogue embarqué** | Les blocs publiés par les opérateurs de service eux-mêmes (Netflix, Google, Twitch, Meta, les CDN…) | Rien. Instantané, et **fonctionne sur une VM coupée d'internet** |
 | **Nom inverse (PTR)** | Suit un service qui **change de préfixe**, distingue YouTube du reste de Google, reconnaît un cache hébergé chez vous | Une requête DNS par adresse **nouvelle**, mise en cache ensuite |
-| **RDAP** | Organisation, numéro d'AS, pays, bloc annoncé | Un appel HTTP sortant. **Coupé par défaut** : c'est le seul trafic que ce contrôleur émettrait vers l'extérieur |
+| **RDAP** | Organisation, numéro d'AS, pays, bloc annoncé | Un appel HTTP sortant. **Coupé par défaut** |
+| **Géolocalisation** | Pays, région, ville, coordonnées | Une base MaxMind **locale** si `IPFINDER_GEOIP_DB` la désigne (aucun appel sortant), sinon un service HTTP. **Coupé par défaut** |
+
+> **Les deux dernières sont coupées par défaut, et pas seulement par sobriété.** Les
+> interroger revient à **envoyer à un tiers les adresses que vos clients atteignent** —
+> c'est une information sur eux, pas sur vous. La base locale (`pip install ".[geoip]"` +
+> un fichier GeoLite2) donne la même réponse sans que rien ne sorte : c'est la seule forme
+> recommandable sans réserve.
+>
+> Chaque source est isolée : un résolveur qui casse, un registre qui limite le débit ou un
+> service de localisation en panne ne coûte jamais le verdict que les autres ont rendu.
 
 L'ordre de priorité n'est pas l'ordre du tableau : **le nom inverse l'emporte sur le bloc**.
 Un cache Open Connect hébergé chez l'opérateur n'est dans aucun bloc publié — et c'est
@@ -1827,7 +1852,8 @@ le dit.
 | `GET` | `/api/v1/netflow/subscribers/{id}/series` | Volume d'un abonné dans le temps |
 | `GET` | `/api/v1/netflow/hosts` | Adresses vues, rattachées à **aucune** fiche (aide à la saisie) |
 | `POST` | `/api/v1/netflow/flush` | Écrire la fenêtre en cours tout de suite |
-| `GET` | `/api/v1/netflow/connections` | **Connexions clients en cours** : la fenêtre en mémoire, la seule vue en direct |
+| `GET` | `/api/v1/netflow/connections` | **Connexions clients en cours** : la fenêtre en mémoire, la seule vue en direct (filtre `app`) |
+| `GET` | `/api/v1/netflow/pairs` | **Qui parle à qui** : une ligne par conversation, sur la période, avec celles en cours marquées |
 | `GET` | `/api/v1/netflow/destinations` | Adresses atteintes sur la période, déjà nommées, + la répartition par service |
 | `GET` | `/api/v1/netflow/destinations/{ip}` | **Fiche d'une adresse** : nom inverse, service et à quel titre, organisation, AS, pays, et qui la joint |
 | `POST` | `/api/v1/netflow/destinations/{ip}/resolve` | Relancer l'analyse d'une adresse |
@@ -1928,7 +1954,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 1311 tests, dont 1221 sans aucune infrastructure
+make test        # 1321 tests, dont 1231 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

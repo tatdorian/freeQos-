@@ -358,6 +358,7 @@ async def resolve_destination(address: str, container: ContainerDep) -> dict[str
 async def connections(
     container: ContainerDep,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    app: Annotated[str | None, Query(max_length=64, description="Famille d'usage")] = None,
 ) -> dict[str, Any]:
     """Ce qui se passe DANS LA FENETRE EN COURS, avant meme son ecriture.
 
@@ -368,7 +369,14 @@ async def connections(
     panne, et l'interface le dit.
     """
     service = _service(container)
-    lignes = service.live_connections(limit)
+    # Le filtre est applique AVANT la limite : sinon demander "autre" sur une
+    # fenetre dominee par le web rendrait cent lignes de web et zero de ce
+    # qu'on a demande.
+    lignes = [
+        ligne
+        for ligne in service.live_connections(100_000)
+        if app is None or ligne.get("app") == app
+    ][:limit]
     ids = [int(ligne["subscriber_id"]) for ligne in lignes if ligne.get("subscriber_id")]
     adresses = [str(ligne["address"]) for ligne in lignes]
 
@@ -409,7 +417,59 @@ async def connections(
     return {
         "window_open": service.listening,
         "tracked": service.track_destinations,
+        # La duree d'accumulation : des octets sans duree ne sont qu'un volume,
+        # et l'interface a besoin d'un debit.
+        "window_seconds": round(service.window_seconds, 1),
         "connections": lignes,
+    }
+
+
+@router.get("/netflow/pairs", summary="Qui parle a qui : client et adresse atteinte")
+async def pairs(
+    container: ContainerDep,
+    minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
+    app: Annotated[str | None, Query(max_length=64, description="Famille d'usage")] = None,
+    client: Annotated[str | None, Query(max_length=64)] = None,
+    service: Annotated[str | None, Query(max_length=64)] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> dict[str, Any]:
+    """Une ligne par CONVERSATION, sur la periode, et ce qui se passe maintenant.
+
+    C'est la reponse a "cette famille d'usage pese 3 Kio -- mais avec qui ?".
+    Le tableau par usage agrege justement ce detail ; celui par adresse fond
+    tous les clients ensemble. Le couple est la seule forme qui montre la
+    conversation.
+
+    ``live`` porte la meme liste lue dans la fenetre EN COURS : l'interface
+    marque les conversations qui se tiennent a cet instant.
+    """
+    lignes = await _destinations(container).pairs(
+        minutes=minutes,
+        app=app,
+        client=_valide_adresse(client) if client else None,
+        service=service,
+        limit=limit,
+    )
+    collecteur = container.netflow
+    directes = (
+        [
+            ligne
+            for ligne in collecteur.live_connections(100_000)
+            if app is None or ligne.get("app") == app
+        ]
+        if collecteur is not None
+        else []
+    )
+    return {
+        "minutes": minutes,
+        "app": app,
+        "pairs": lignes,
+        "live": [(str(d["client"]), str(d["address"])) for d in directes],
+        "live_bytes": {
+            f"{d['client']}|{d['address']}": int(d["down_bytes"]) + int(d["up_bytes"])
+            for d in directes
+        },
+        "window_seconds": round(collecteur.window_seconds, 1) if collecteur is not None else 0.0,
     }
 
 
