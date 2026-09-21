@@ -48,6 +48,10 @@ class FakeRouterOsClient:
         self.firewall_address_list_rows: list[dict[str, Any]] = []
         self.firewall_mangle_rows: list[dict[str, Any]] = []
         self.raise_on_firewall: Exception | None = None
+        # Export NetFlow : le reglage du routeur, et ses collecteurs declares.
+        self.traffic_flow_row: dict[str, Any] = {"enabled": "false", "interfaces": ""}
+        self.traffic_flow_target_rows: list[dict[str, Any]] = []
+        self.raise_on_traffic_flow: Exception | None = None
         self.queue_type_rows: list[dict[str, Any]] = []
         self.queue_tree_rows: list[dict[str, Any]] = []
         self.raise_on_neighbors: Exception | None = None
@@ -208,6 +212,16 @@ class FakeRouterOsClient:
         if self.raise_on_firewall is not None:
             raise self.raise_on_firewall
         return [dict(row) for row in self.firewall_mangle_rows]
+
+    def traffic_flow(self) -> dict[str, Any]:
+        if self.raise_on_traffic_flow is not None:
+            raise self.raise_on_traffic_flow
+        return dict(self.traffic_flow_row)
+
+    def traffic_flow_targets(self) -> list[dict[str, Any]]:
+        if self.raise_on_traffic_flow is not None:
+            raise self.raise_on_traffic_flow
+        return [dict(row) for row in self.traffic_flow_target_rows]
 
     def queue_trees(self) -> list[dict[str, Any]]:
         if self.raise_on_queues is not None:

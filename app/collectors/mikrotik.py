@@ -142,6 +142,10 @@ class RouterOsReadClient(Protocol):
 
     def firewall_mangle(self) -> list[dict[str, Any]]: ...
 
+    def traffic_flow(self) -> dict[str, Any]: ...
+
+    def traffic_flow_targets(self) -> list[dict[str, Any]]: ...
+
     def queue_types(self) -> list[dict[str, Any]]: ...
 
     def queue_trees(self) -> list[dict[str, Any]]: ...
@@ -507,6 +511,18 @@ class LibrouterosReadClient:
         files.
         """
         return self._query("/ip/firewall/mangle")
+
+    def traffic_flow(self) -> dict[str, Any]:
+        """Reglage d'export NetFlow du routeur : actif, et sur quelles interfaces.
+
+        Une seule ligne : c'est un reglage global, pas une collection.
+        """
+        rows = self._query("/ip/traffic-flow")
+        return dict(rows[0]) if rows else {}
+
+    def traffic_flow_targets(self) -> list[dict[str, Any]]:
+        """Collecteurs vers lesquels ce routeur exporte deja ses flux."""
+        return self._query("/ip/traffic-flow/target")
 
     def queue_types(self) -> list[dict[str, Any]]:
         return self._query("/queue/type")

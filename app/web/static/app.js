@@ -612,27 +612,19 @@ function renderExecNotice(rttState, error, st) {
   const state = st || {};
   let html = '';
   if (error) {
-    html += '<div class="notice err"><b>Chargement partiel.</b> ' + esc(error.message) +
-      '<span class="hint">Une source n\'a pas repondu (base indisponible, ou endpoint ' +
-      'absent d\'un deploiement plus ancien). Le reste de l\'onglet reste affiche.</span></div>';
+    html += '<div class="notice err"><b>Chargement partiel.</b> ' +
+      esc(error.message) + '</div>';
   }
   if (state.noNodes && !error) {
-    html += '<div class="notice"><b>Aucun noeud.</b> Connectez un routeur dans l\'onglet ' +
-      '<b>Equipements</b> : ses PoPs et leurs files apparaitront ici. ' +
-      'Ajoutez une antenne pour la capacite partagee, et activez la <b>Sonde RTT</b> ' +
-      'ci-dessus pour RTT / QoO / bufferbloat.</div>';
+    html += '<div class="notice"><b>Aucun noeud.</b> Connectez un routeur dans ' +
+      'l\'onglet <b>Equipements</b>.</div>';
   }
   if (state.topoOnly && !error) {
-    html += '<div class="notice"><b>Reseau affiche d\'apres la topologie.</b> Les routeurs ' +
-      'connectes sont la, mais aucun abonne n\'est encore mesure : debit, RTT et QoO restent ' +
-      'en <code>n/d</code> tant qu\'aucun circuit ne passe (et que la <b>Sonde RTT</b> ci-dessus ' +
-      'n\'est pas activee). Ils se rempliront au prochain cycle de collecte.</div>';
+    html += '<div class="notice"><b>Topologie seule : aucun abonne mesure.</b></div>';
   }
   if (rttState && !rttState.enabled) {
-    html += '<div class="notice"><b>Sonde RTT coupee.</b> RTT, QoO et bufferbloat resteront ' +
-      'vides tant qu\'elle n\'est pas activee (case <b>Sonde RTT</b> ci-dessus). Elle envoie ' +
-      'des <code>/ping</code> depuis le PoP ; le compte de lecture doit avoir la policy ' +
-      '<code>test</code>. Aucune variable d\'environnement necessaire.</div>';
+    html += '<div class="notice"><b>Sonde RTT coupee.</b> RTT, QoO et bufferbloat ' +
+      'restent vides.</div>';
   }
   notice.innerHTML = html;
 }
@@ -1137,40 +1129,32 @@ function flowNotice(html) {
   document.getElementById('flow-notice').innerHTML = html || '';
 }
 
-/** Ce qui EMPECHE de mesurer, dit en clair.
+/** Ce qui EMPECHE de mesurer.
  *
- *  Un tableau vide a trois causes opposees -- collecteur coupe, aucun exporteur
- *  qui parle, ou des flux recus dont on ne sait pas lire le modele -- et elles
- *  n'appellent pas le meme geste. Un ecran vide les confond toutes les trois. */
+ *  Un tableau vide a plusieurs causes opposees -- collecteur coupe, aucun
+ *  exporteur qui parle, modeles jamais envoyes -- et un ecran vide les confond
+ *  toutes. Chaque cas nomme le fait et s'arrete la : le bouton "Configurer"
+ *  est juste en dessous pour celui qui se corrige d'un clic. */
 function flowDiagnostic(etat) {
   if (!etat.enabled) {
-    return '<div class="notice err"><strong>Le collecteur NetFlow est coupe.</strong> ' +
-      'Posez <code>NETFLOW_ENABLED=true</code> et redemarrez : c\'est un port a ' +
-      'ouvrir, il ne peut pas se basculer a chaud comme un reglage de base.</div>';
+    return '<div class="notice err"><b>Collecteur NetFlow coupe.</b> ' +
+      '<code>NETFLOW_ENABLED=true</code> puis redemarrage.</div>';
   }
   if (!etat.listening) {
-    return '<div class="notice err"><strong>Le collecteur n\'ecoute pas.</strong> ' +
+    return '<div class="notice err"><b>Le collecteur n\'ecoute pas.</b> ' +
       esc(etat.last_error || 'cause inconnue') + '</div>';
   }
   if (!etat.packets_received) {
-    return '<div class="notice"><strong>Aucun datagramme recu sur ' +
-      esc(etat.bind) + '.</strong><span class="hint">Configurez l\'export sur vos ' +
-      'equipements. Sur RouterOS : <code>/ip/traffic-flow set enabled=yes</code> puis ' +
-      '<code>/ip/traffic-flow/target add dst-address=&lt;ce collecteur&gt; port=' +
-      esc(String(etat.bind).split(':').pop()) + ' version=9</code>.</span></div>';
+    return '<div class="notice warn"><b>Aucun datagramme recu sur ' +
+      esc(etat.bind) + '.</b> Configurez l\'export ci-dessous.</div>';
   }
   if (etat.flows_seen && !etat.flows_matched) {
-    return '<div class="notice warn"><strong>Des flux arrivent, mais aucun ne ' +
-      'correspond a un abonne.</strong><span class="hint">' +
-      esc(etat.declared_prefixes) + ' bloc(s) declare(s). Verifiez que les adresses ' +
-      'de vos clients sont bien saisies, et que NETFLOW_CUSTOMER_NETWORKS couvre ' +
-      'votre plan d\'adressage.</span></div>';
+    return '<div class="notice warn"><b>Flux recus, aucun rattache a un abonne.</b> ' +
+      esc(etat.declared_prefixes) + ' bloc(s) declare(s).</div>';
   }
   if (etat.orphan_records && !etat.templates_known) {
-    return '<div class="notice warn"><strong>Flux recus, modeles jamais envoyes.</strong>' +
-      '<span class="hint">En v9 et en IPFIX, les donnees sont illisibles sans le ' +
-      'modele qui les decrit. L\'exporteur doit le reemettre periodiquement ' +
-      '(RouterOS : <code>template-refresh</code>).</span></div>';
+    return '<div class="notice warn"><b>Flux recus, modeles jamais envoyes</b> ' +
+      '(RouterOS : <code>template-refresh</code>).</div>';
   }
   return '';
 }
@@ -1194,6 +1178,7 @@ async function loadTraffic() {
   renderFlowApps(apps);
   renderFlowHosts(hotes);
   renderFlowExporters(exporteurs);
+  renderFlowExport(await api('/netflow/export').catch(() => null));
 
   const compte = document.getElementById('flow-count');
   if (compte) {
@@ -1383,13 +1368,107 @@ async function declareExporter(event) {
   const sortie = document.getElementById('exporter-result');
   try {
     await api('/netflow/exporters', { method: 'POST', body: JSON.stringify(charge) });
-    sortie.innerHTML = '<div class="notice ok">Exporteur declare. Les flux de la ' +
-      'minute en cours sont deja comptes sur ce point de mesure.</div>';
+    sortie.innerHTML = '<div class="notice ok">Exporteur declare.</div>';
     document.getElementById('exporter-form').reset();
     await loadTraffic();
   } catch (err) {
     sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
   }
+}
+
+/** L'export NetFlow, tel qu'il est pose sur chaque routeur.
+ *
+ *  LE CONTROLEUR LE POSE LUI-MEME. Demander deux commandes a la main sur chaque
+ *  PoP revenait a garantir qu'un PoP serait oublie -- et un PoP oublie ne se
+ *  signale pas : ses abonnes apparaissent simplement comme s'ils ne
+ *  consommaient rien. */
+function renderFlowExport(etat) {
+  const hote = document.getElementById('flow-export');
+  const pastille = document.getElementById('flow-export-state');
+  if (!etat) {
+    hote.innerHTML = '<div class="empty">Etat indisponible.</div>';
+    pastille.textContent = '';
+    return;
+  }
+  pastille.textContent = etat.enforcement_enabled
+    ? etat.configured + ' / ' + (etat.routers || []).length + ' routeur(s)'
+    : 'ecriture desactivee';
+  const lignes = etat.routers || [];
+  hote.innerHTML = !lignes.length
+    ? '<div class="empty">Aucun routeur dans l\'inventaire.</div>'
+    : '<table><thead><tr><th>Routeur</th><th>Collecteur annonce</th>' +
+      '<th>Interfaces</th><th>Etat</th><th></th></tr></thead><tbody>' +
+      lignes.map((r) => '<tr>' +
+        '<td><b>' + esc(r.router) + '</b> <span class="hint">' + esc(r.host) + '</span></td>' +
+        '<td class="login">' + (r.collector
+          ? esc(r.collector) + ':' + esc(etat.port) : '<span class="hint">-</span>') + '</td>' +
+        '<td>' + esc(r.interfaces || '-') + '</td>' +
+        '<td><span class="badge ' +
+          (r.configured ? 'ok' : (r.state === 'erreur' ? 'crit' : 'warn')) +
+          '">' + esc(r.state) + '</span></td>' +
+        '<td style="color:var(--faint)">' + esc(r.reason || '') + '</td>' +
+        '</tr>').join('') + '</tbody></table>';
+}
+
+async function applyFlowExport(dryRun) {
+  const sortie = document.getElementById('flow-export-result');
+  sortie.innerHTML = '<div class="notice">Lecture des routeurs...</div>';
+  try {
+    const rapport = await api('/netflow/export/apply?dry_run=' + (dryRun ? 'true' : 'false'),
+      { method: 'POST' });
+    const classe = rapport.state === 'erreur' ? 'err'
+      : (rapport.state === 'pose' ? 'ok' : 'warn');
+    sortie.innerHTML = '<div class="notice ' + classe + '"><b>' + esc(rapport.state) + '</b> - ' +
+      esc(rapport.applied) + ' commande(s) appliquee(s)' +
+      (rapport.dry_run ? ' <span class="hint">(simulation)</span>' : '') + '</div>' +
+      (rapport.routers || []).filter((r) => (r.actions || []).length || r.state === 'erreur')
+        .map((r) => '<div class="ip-card"><h3>' + esc(r.router) + ' <span class="hint">' +
+          esc(r.state) + '</span></h3>' +
+          ((r.actions || []).length
+            ? '<div class="login" style="font-size:.75rem;line-height:1.7">' +
+              r.actions.map((a) => esc(a)).join('<br>') + '</div>'
+            : '<span class="hint">' + esc(r.reason || '') + '</span>') + '</div>').join('');
+    await loadTraffic();
+  } catch (err) {
+    sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+}
+
+/* ----------------------------------------------------------------- API */
+
+/** Les points d'entree que cette application expose, et la cle pour y entrer.
+ *
+ *  Le contrat est celui de Preseem : un integrateur qui parlait deja a Preseem
+ *  change l'URL de base et la cle, rien d'autre. */
+const API_ENDPOINTS = [
+  ['PUT', '/model/v1/accounts/{id}', 'Client'],
+  ['PUT', '/model/v1/packages/{id}', 'Forfait'],
+  ['PUT', '/model/v1/sites/{id}', 'Site'],
+  ['PUT', '/model/v1/access_points/{id}', 'Secteur radio'],
+  ['PUT', '/model/v1/services/{id}', 'Ligne vendue'],
+  ['GET', '/model/v1/{collection}', 'Lire une collection'],
+  ['DELETE', '/model/v1/{collection}/{id}', 'Retirer une fiche'],
+  ['GET', '/usage/v1/services', 'Consommation, tous services'],
+  ['GET', '/usage/v1/services/{id}', "Consommation d'un service"],
+];
+
+async function loadApi() {
+  document.getElementById('api-base').textContent = location.origin;
+  document.getElementById('api-endpoints').innerHTML =
+    '<table><thead><tr><th>Methode</th><th>Chemin</th><th>Objet</th></tr></thead><tbody>' +
+    API_ENDPOINTS.map(([verbe, chemin, objet]) =>
+      '<tr><td><b>' + esc(verbe) + '</b></td>' +
+      '<td class="login">' + esc(chemin) + '</td>' +
+      '<td>' + esc(objet) + '</td></tr>').join('') +
+    '</tbody></table>';
+  document.getElementById('api-sample').textContent =
+    'curl -u <cle>: -X PUT ' + location.origin + '/model/v1/services/abo-42 \\\n' +
+    "  -H 'content-type: application/json' \\\n" +
+    '  -d \'{"name":"Dupont","address":"10.20.0.10/32","download_mbps":100,' +
+    '"upload_mbps":20,"account":"cli-7","package":"fibre-100"}\'';
+  await loadApiKeys();
+  const lignes = document.querySelectorAll('#keys-table tbody tr').length;
+  document.getElementById('api-count').textContent = lignes + ' cle(s)';
 }
 
 /* ------------------------------------------------------------ cles d'API */
@@ -1405,8 +1484,7 @@ async function loadApiKeys() {
     return;
   }
   if (!rows.length) {
-    host.innerHTML = '<div class="empty">Aucune cle. Sans cle, l\'API publique ' +
-      'refuse tout : c\'est voulu.</div>';
+    host.innerHTML = '<div class="empty">Aucune cle.</div>';
     return;
   }
   host.innerHTML = '<table><thead><tr><th>Nom</th><th>Prefixe</th><th>Portees</th>' +
@@ -1439,8 +1517,7 @@ async function loadApiKeys() {
   });
   host.querySelectorAll('[data-key-del]').forEach((b) => {
     b.addEventListener('click', async () => {
-      if (!confirm('Revoquer cette cle definitivement ? Le systeme qui s\'en sert ' +
-                   'recevra un 401 des la prochaine requete.')) return;
+      if (!confirm('Revoquer cette cle ?')) return;
       try {
         await api('/api-keys/' + b.dataset.keyDel, { method: 'DELETE' });
         await loadApiKeys();
@@ -1449,11 +1526,11 @@ async function loadApiKeys() {
   });
 }
 
-/** Cree la cle et AFFICHE SON SECRET UNE SEULE FOIS.
+/** Cree la cle et affiche son secret UNE SEULE FOIS.
  *
- *  Il n'est nulle part ailleurs : la base n'en garde que l'empreinte. Le dire
- *  gros ici est la difference entre une integration qui marche et un appel au
- *  support une heure plus tard. */
+ *  Il n'existe nulle part ailleurs : la base n'en garde que l'empreinte. C'est
+ *  le seul message de cette interface qui a le droit de crier -- une page
+ *  rechargee sans avoir copie le secret oblige a tout recommencer. */
 async function createApiKey(event) {
   event.preventDefault();
   const sortie = document.getElementById('key-result');
@@ -1466,13 +1543,12 @@ async function createApiKey(event) {
         scopes: portee === 'write' ? ['read', 'write'] : ['read'],
       }),
     });
-    sortie.innerHTML = '<div class="notice ok"><strong>Cle creee. Copiez-la ' +
-      'maintenant : elle ne sera plus jamais affichee.</strong>' +
+    sortie.innerHTML = '<div class="notice ok"><strong>Copiez cette cle : elle ne ' +
+      'sera plus affichee.</strong>' +
       '<pre style="user-select:all;white-space:pre-wrap;word-break:break-all">' +
       esc(cle.secret) + '</pre>' +
-      '<span class="hint">Exemple d\'appel :<br>' +
       '<code>curl -u ' + esc(cle.secret) + ': ' + esc(location.origin) +
-      '/model/v1/services</code></span></div>';
+      '/model/v1/services</code></div>';
     document.getElementById('key-form').reset();
     await loadApiKeys();
   } catch (err) {
@@ -2120,13 +2196,9 @@ async function scDiagnostic() {
         ? '<div class="notice err" style="margin-top:.5rem">' +
           '<strong>Ecartees : ni VLAN declaree, ni sous-reseau desservi.</strong> ' +
           horsVlan.map(([nom, n]) => '<code>' + esc(nom) + '</code> (' + esc(n) + ')').join(', ') +
-          '<span class="hint">Ces adresses parlent sur une interface qui n\'est pas une ' +
-          'VLAN declaree, ET ne tombent dans aucun sous-reseau porte par ce routeur ' +
-          '(' + esc((r.reseaux_clients || []).join(', ') || 'aucun lu dans /ip/address') + '). ' +
-          'Un client derriere un <b>pont en filtrage VLAN</b> est bien vu, lui, tant que ' +
-          'son adresse tombe dans l\'un de ces sous-reseaux. Si la liste est vide, c\'est ' +
-          '<code>/ip/address</code> qu\'il faut regarder : sans elle, seul le nom des ' +
-          'interfaces sert de critere.</span>' +
+          '<span class="hint">Sous-reseaux desservis : ' +
+          esc((r.reseaux_clients || []).join(', ') || 'aucun lu dans /ip/address') +
+          '</span>' +
           '</div>'
         : '') +
       '</div>';
@@ -2448,18 +2520,13 @@ async function openSubscriber(id) {
           '<b>' + esc(data.bufferbloat.idle_ms) + ' ms</b> a vide a <b>' +
           esc(data.bufferbloat.loaded_ms) + ' ms</b> quand le lien se remplit, ' +
           'soit <b>+' + esc(data.bufferbloat.bloat_ms) + ' ms</b> de bufferbloat ' +
-          '(note ' + esc(data.bufferbloat.grade) + ').' +
-          '<span class="hint">Deduit en correlant RTT (sonde active) et debit du ' +
-          'meme echantillon, sur ' + esc(data.bufferbloat.samples) + ' point(s). ' +
-          'Shaper legerement sous la capacite du lien fait tomber ce chiffre : la ' +
-          'file se forme alors dans CAKE, ou elle est geree, pas dans le buffer radio.' +
-          '</span></div>'
+          '(note ' + esc(data.bufferbloat.grade) + ', ' +
+          esc(data.bufferbloat.samples) + ' point(s)).</div>'
         : data.points.some((p) => p.rtt_ms_avg !== null && p.rtt_ms_avg !== undefined)
           ? '<div class="notice">Latence sur la fenetre : moyenne ' +
             rtt(Math.max(...data.points.map((p) => p.rtt_ms_avg || 0))) +
             ', pire ' + rtt(Math.max(...data.points.map((p) => p.rtt_ms_max || 0))) +
-            '<span class="hint">Sonde active depuis le PoP. Pas encore assez de ' +
-            'charge sur la fenetre pour en deduire un bufferbloat.</span></div>'
+            '</div>'
           : '') +
       '<h2>Derniere heure</h2><div class="card"><div id="sub-chart"></div></div>';
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
@@ -2604,14 +2671,9 @@ async function loadRouters() {
   const notice = document.getElementById('pops-notice');
   let html = '';
   if (!data.secrets_available) {
-    html += '<div class="notice warn"><strong>Ajout depuis l\'interface indisponible.</strong> ' +
+    html += '<div class="notice warn"><b>Ajout depuis l\'interface indisponible.</b> ' +
       esc(data.secrets_reason || '') +
-      '<span class="hint">Sans cle, l\'API refuse d\'ecrire un mot de passe de routeur : ' +
-      'il ne sera jamais stocke en clair. Normalement la cle est generee toute seule ' +
-      'au premier demarrage dans <code>APP_SECRET_KEY_FILE</code> ; verifiez que ce ' +
-      'chemin est inscriptible (avec Docker, un volume doit etre monte sur ' +
-      '<code>/app/data</code>). Sinon, renseignez <code>APP_SECRET_KEY</code> ' +
-      'puis redemarrez.</span></div>';
+      '<span class="hint">Verifiez <code>APP_SECRET_KEY_FILE</code>.</span></div>';
   }
   (data.skipped || []).forEach((skip) => {
     // Ancien format (chaine) ou nouveau ({name, reason, source, ...}) : les deux.
@@ -2624,17 +2686,13 @@ async function loadRouters() {
     html += '<div class="notice err"><strong>' +
       (nom ? esc(nom) + ' : ecarte de la collecte.' : 'Inventaire incomplet.') +
       '</strong> ' + esc(raison) +
-      '<span class="hint">Tant que ce n\'est pas resolu, <b>rien n\'est lu sur ce ' +
-      'routeur</b> : ni topologie, ni abonnes, ni detection des clients a IP fixe. ' +
-      'Sa case reste dans l\'arbre, marquee « ecarte ».</span>' +
+      '<span class="hint">Rien n\'est lu sur ce routeur.</span>' +
       (source === 'db'
-        ? '<span class="hint">Declare en base : corrigez sa fiche ci-dessous ' +
-          '(resaisir le mot de passe suffit quand la cle de chiffrement a change).</span>'
+        ? '<span class="hint">Declare en base : corrigez sa fiche ci-dessous.</span>'
         : '') +
       (retirable ? '<div class="actions" style="margin-top:.5rem">' +
         '<button class="sm danger" data-hide-file="' + esc(nom) + '">Retirer definitivement</button>' +
-        '</div><span class="hint">« Retirer » ecarte ce routeur de l\'inventaire ' +
-        'sans toucher au fichier, et l\'avertissement disparait.</span>' : '') +
+        '</div>' : '') +
       '</div>';
   });
   // Routeurs fichier retires a la main : proposer de les restaurer.
@@ -2777,20 +2835,18 @@ async function buildTreeFromConfig(silencieux) {
   const bouton = document.getElementById('btn-build-tree');
   if (bouton) bouton.disabled = true;
   if (!silencieux && notice) {
-    notice.innerHTML = '<div class="notice">Analyse de la configuration sur chaque equipement ' +
-      '(/ip/neighbor, /interface, capacite radio)...</div>';
+    notice.innerHTML = '<div class="notice">Analyse en cours...</div>';
   }
   try {
     const r = await api('/topology/discover', { method: 'POST' });
     const compte = document.getElementById('build-count');
     if (compte) compte.textContent = r.nodes + ' equipement(s), ' + r.links + ' lien(s)';
     if (notice) {
-      notice.innerHTML = '<div class="notice ok"><strong>Arbre construit.</strong> ' +
-        r.nodes + ' equipement(s) et ' + r.links + ' lien(s) deduits de la configuration.' +
+      notice.innerHTML = '<div class="notice ok"><b>Arbre construit.</b> ' +
+        r.nodes + ' equipement(s), ' + r.links + ' lien(s).' +
         (r.warnings && r.warnings.length
           ? '<span class="hint">' + r.warnings.map(esc).join('<br>') + '</span>' : '') +
-        '<span class="hint">Ouvrez l\'onglet Arbre reseau pour voir et reorganiser ' +
-        'l\'arbre au glisser-deposer.</span></div>';
+        '</div>';
     }
     return r;
   } catch (err) {
@@ -2861,10 +2917,8 @@ async function saveRouter(event) {
   button.disabled = true;
   try {
     const created = await api('/pops/routers', { method: 'POST', body: JSON.stringify(formPayload()) });
-    showFormResult('<div class="notice ok"><strong>' + esc(created.name) +
-      ' enregistre.</strong><span class="hint">Sa configuration est analysee tout de ' +
-      'suite pour construire l\'arbre ; il est ensuite interroge a chaque cycle, sans ' +
-      'redemarrage.</span></div>');
+    showFormResult('<div class="notice ok"><b>' + esc(created.name) +
+      ' enregistre.</b></div>');
     document.getElementById('router-form').reset();
     document.getElementById('f-username').value = 'qos-ro';
     document.getElementById('f-port').value = '8728';
@@ -3027,31 +3081,23 @@ function renderServiceNotice(etat, intel) {
   const hote = document.getElementById('svc-notice');
   const messages = [];
   if (!etat.enabled) {
-    messages.push('<div class="notice warn"><b>Le collecteur NetFlow est coupe.</b> ' +
-      'Aucune connexion ne peut etre observee. Il s\'active par <code>NETFLOW_ENABLED</code> ' +
-      '(l\'ecoute d\'un port ne se bascule pas depuis une page web).</div>');
+    messages.push('<div class="notice warn"><b>Collecteur NetFlow coupe.</b></div>');
   } else if (!etat.listening) {
     messages.push('<div class="notice err"><b>Le collecteur n\'ecoute pas.</b> ' +
       esc(etat.last_error || 'port occupe ou droits insuffisants') + '</div>');
   } else if (!etat.packets_received) {
-    messages.push('<div class="notice"><b>Aucun datagramme recu.</b> ' +
-      'Le controleur ecoute sur <code>' + esc(etat.bind) + '</code> mais aucun routeur ' +
-      'n\'exporte encore vers lui. Configurez l\'export sur vos PoPs et la sortie ' +
-      'internet, puis declarez-les dans l\'onglet Trafic.</div>');
+    messages.push('<div class="notice warn"><b>Aucun datagramme recu sur ' +
+      esc(etat.bind) + '.</b> Onglet Trafic &gt; Export sur les routeurs.</div>');
   }
   if (etat.enabled && etat.track_destinations === false) {
-    messages.push('<div class="notice warn"><b>Le suivi des destinations est desactive.</b> ' +
-      'Les volumes restent mesures, mais plus rien n\'est rattache a un service. ' +
-      'Reglages &gt; Services.</div>');
+    messages.push('<div class="notice warn"><b>Suivi des destinations desactive.</b></div>');
   }
   if (intel && intel.enabled === false) {
-    messages.push('<div class="notice warn"><b>L\'identification est desactivee.</b> ' +
-      'Les adresses sont vues mais pas nommees.</div>');
+    messages.push('<div class="notice warn"><b>Identification desactivee.</b></div>');
   }
   if (intel && intel.pending > 0) {
-    messages.push('<div class="notice"><b>' + esc(intel.pending) + ' adresse(s) en attente ' +
-      'de nom.</b> Elles seront nommees au fil des passages ; celles qui tombent dans ' +
-      'un bloc publie sont deja reconnues sans attendre.</div>');
+    messages.push('<div class="notice">' + esc(intel.pending) +
+      ' adresse(s) en attente de nom.</div>');
   }
   hote.innerHTML = messages.join('');
 }
@@ -3090,9 +3136,7 @@ function renderLiveConnections(data) {
   const hote = document.getElementById('svc-live');
   const lignes = (data && data.connections) || [];
   if (!lignes.length) {
-    hote.innerHTML = '<div class="empty">Aucune connexion dans la fenetre en cours. ' +
-      'La fenetre vient peut-etre d\'etre ecrite : elle se remplit a nouveau dans ' +
-      'les secondes qui viennent.</div>';
+    hote.innerHTML = '<div class="empty">Aucune connexion dans la fenetre en cours.</div>';
     return;
   }
   hote.innerHTML = '<table><thead><tr><th>Abonne</th><th>Destination</th>' +
@@ -3150,8 +3194,7 @@ function renderServiceTable(services) {
 function renderDestinations(lignes) {
   const hote = document.getElementById('svc-destinations');
   if (!lignes.length) {
-    hote.innerHTML = '<div class="empty">Aucune adresse atteinte sur cette periode, ' +
-      'ou aucune ne correspond au filtre.</div>';
+    hote.innerHTML = '<div class="empty">Aucune adresse atteinte.</div>';
     return;
   }
   hote.innerHTML = '<table><thead><tr><th>Adresse</th><th>Nom inverse</th>' +
@@ -3233,12 +3276,7 @@ function renderDestinationCard(fiche) {
       fait('Vue pour la premiere fois', totaux.first_seen ? esc(depuis(totaux.first_seen)) : null) +
       fait('Vue la derniere fois', totaux.last_seen ? esc(depuis(totaux.last_seen)) : null) +
     '</div>' +
-    (source === 'inconnu' || !service
-      ? '<p class="empty" style="text-align:left;padding:.6rem 0 0">' +
-        'Aucune source ne nomme cette adresse : elle n\'est dans aucun bloc publie ' +
-        'connu, et son nom inverse est absent ou muet. C\'est le cas le plus ' +
-        'frequent sur internet, pas une anomalie.</p>'
-      : '') +
+    '' +
     '<div class="actions" style="margin-top:.7rem">' +
       '<button class="sm" id="svc-detail-resolve">Relancer l\'analyse</button>' +
       '<button class="sm" id="svc-detail-restrict">Restreindre cette adresse</button>' +
@@ -3291,8 +3329,7 @@ function renderRules(data) {
     ? 'ecriture active'
     : 'ecriture desactivee : rien ne sera pose';
   if (!regles.length) {
-    hote.innerHTML = '<div class="empty">Aucune restriction. Rien n\'est bloque ni ' +
-      'plafonne par service.</div>';
+    hote.innerHTML = '<div class="empty">Aucune restriction.</div>';
     return;
   }
   hote.innerHTML = '<table><thead><tr><th>Regle</th><th>Effet</th><th>Vise</th>' +
@@ -3352,9 +3389,8 @@ function applyNotice(html) {
 async function deleteRule(id) {
   try {
     await api('/traffic-rules/' + id, { method: 'DELETE' });
-    applyNotice('<div class="notice ok">Regle supprimee. <b>Ce qui est pose sur les ' +
-      'routeurs n\'a pas ete retire</b> : lancez une pose pour que la reconciliation ' +
-      'le nettoie, ou attendez le passage automatique.</div>');
+    applyNotice('<div class="notice ok">Regle supprimee. Posez pour nettoyer les ' +
+      'routeurs, ou attendez le passage automatique.</div>');
     await loadServices();
   } catch (err) {
     applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
@@ -3389,8 +3425,7 @@ async function previewRule(id) {
         '<div><span>Routeurs</span>' +
           esc((vue.routers || []).join(', ') || 'aucun') + '</div>' +
       '</div>' +
-      '<p class="empty" style="text-align:left;padding:.6rem 0 .3rem">' +
-        'Extrait de la liste qui serait posee :</p>' +
+      '<p class="empty" style="text-align:left;padding:.6rem 0 .3rem">Extrait :</p>' +
       '<div class="login" style="font-size:.75rem;line-height:1.6">' +
         esc((vue.addresses || []).join('  ')) +
         (vue.address_count > (vue.addresses || []).length
@@ -3535,8 +3570,7 @@ async function submitRule(event) {
   try {
     const regle = await api('/traffic-rules', { method: 'POST', body: JSON.stringify(corps) });
     ruleNotice('<div class="notice ok">Regle <b>' + esc(regle.name) + '</b> enregistree. ' +
-      '<b>Rien n\'a encore ete ecrit sur les routeurs</b> : verifiez ce qu\'elle vise, ' +
-      'puis posez-la.</div>');
+      'Rien n\'est ecrit tant qu\'elle n\'est pas posee.</div>');
     document.getElementById('svc-rule-form').reset();
     document.getElementById('svc-rule-limits').hidden = true;
     document.getElementById('svc-rule-logins-field').hidden = true;
@@ -5647,8 +5681,7 @@ async function loadPoints() {
       ((c['conflit'] || 0) ? ' &middot; ' + esc(c['conflit']) + ' conflit(s)' : '') +
       '</div>';
     if (!(r.points || []).length) {
-      return entete + '<div class="empty">Aucun point de shaping sur ce routeur : ni lien ' +
-        'decouvert, ni abonne a brider.</div>';
+      return entete + '<div class="empty">Aucun point de shaping sur ce routeur.</div>';
     }
     return entete + '<div class="table-wrap"><table><thead><tr>' +
       '<th>Point du reseau</th><th>Cible</th><th class="num">Plafond</th>' +
@@ -5680,10 +5713,8 @@ async function refreshEnforcement() {
   // est passee : ne reste ici que ce qu'il ne peut pas dire.
   const notice = document.getElementById('shaping-notice');
   notice.innerHTML = etat.locked
-    ? '<div class="notice"><strong>Ecriture verrouillee.</strong> ' +
-      '<code>ENFORCEMENT_LOCKED=true</code> : l\'interrupteur est sans effet, seul un ' +
-      'redemarrage avec <code>ENFORCEMENT_ENABLED</code> modifie peut autoriser ' +
-      'l\'ecriture.</div>'
+    ? '<div class="notice"><b>Ecriture verrouillee</b> ' +
+      '(<code>ENFORCEMENT_LOCKED=true</code>).</div>'
     : '';
   state.enforcementReason = (etat.last_change && etat.last_change.reason) || null;
 }
@@ -6074,7 +6105,6 @@ async function loadSettings() {
       '<tr><td><code>' + esc(e.name) + '</code></td><td>' + esc(e.why) + '</td></tr>')
       .join('') + '</tbody></table>';
 
-  await loadApiKeys();
   // Le shaping n'a plus d'onglet : il vit ici, replie. On ne lit les routeurs
   // que si l'exploitant ouvre le bloc -- sinon ouvrir les Reglages
   // interrogerait tout le parc pour rien.
@@ -6133,6 +6163,7 @@ const LOADERS = {
   subscribers: loadSubscribers,
   pops: loadRouters,
   services: loadServices,
+  api: loadApi,
   settings: loadSettings,
 };
 
@@ -6198,6 +6229,10 @@ document.getElementById('flow-range').addEventListener('change', loadTraffic);
 document.getElementById('flow-vantage').addEventListener('change', loadTraffic);
 document.getElementById('exporter-form').addEventListener('submit', declareExporter);
 document.getElementById('key-form').addEventListener('submit', createApiKey);
+document.getElementById('flow-export-dry')
+  .addEventListener('click', () => applyFlowExport(true));
+document.getElementById('flow-export-apply')
+  .addEventListener('click', () => applyFlowExport(false));
 
 // Les deux blocs replies qui ont remplace les onglets Topologie et Shaping :
 // on ne charge leur contenu que lorsqu'ils s'ouvrent. C'est ce qui rend leur

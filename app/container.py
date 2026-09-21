@@ -59,6 +59,7 @@ from app.services.collection import (
 )
 from app.services.crypto import KeySource, SecretBox, load_or_create_key
 from app.services.intel import JOB_INTEL, IntelService
+from app.services.netflow_export import JOB_NETFLOW_EXPORT, NetflowExportService
 from app.services.netflow_service import JOB_NETFLOW, NetflowService
 from app.services.registry import RouterRegistry
 from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
@@ -172,6 +173,7 @@ class Container:
     destinations_repo: DestinationsRepository | None = None
     traffic_rules_repo: TrafficRulesRepository | None = None
     netflow: NetflowService | None = None
+    netflow_export: NetflowExportService | None = None
     intel: IntelService | None = None
     restrictions: RestrictionService | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
@@ -449,6 +451,26 @@ async def build_container(settings: Settings) -> Container:
         )
         await netflow.flush()
 
+    # Pose l'export NetFlow sur les routeurs. Sans lui, le collecteur ecoute
+    # dans le vide et le message "aucun datagramme recu" demandait deux
+    # commandes a la main sur chaque PoP -- donc un PoP oublie qui se tait sans
+    # que rien ne le signale.
+    netflow_export = NetflowExportService(
+        shaping=shaping,
+        registry=registry,
+        exporters_repo=exporters_repo,
+        port=settings.netflow_port,
+        version=settings.netflow_export_version,
+        interfaces=settings.netflow_export_interfaces,
+        collector_address=settings.netflow_collector_address,
+        enabled=settings.netflow_export_auto,
+    )
+
+    async def ensure_netflow_export() -> None:
+        netflow_export.enabled = settings.netflow_export_auto
+        netflow_export.collector_address = settings.netflow_collector_address
+        await netflow_export.ensure()
+
     async def resolve_intel() -> None:
         intel.apply_runtime(
             enabled=settings.ipfinder_enabled,
@@ -475,6 +497,7 @@ async def build_container(settings: Settings) -> Container:
     # reprogrammer un job qui EXISTE, sinon la cadence saisie ne pilote rien et
     # rallumer la fonction demanderait un redemarrage.
     scheduler.add_job(JOB_INTEL, settings.ipfinder_interval_s, resolve_intel)
+    scheduler.add_job(JOB_NETFLOW_EXPORT, settings.netflow_export_interval_s, ensure_netflow_export)
     scheduler.add_job(JOB_RESTRICTIONS, settings.restrictions_interval_s, reconcile_restrictions)
 
     # Changer une cadence depuis l'interface doit reprogrammer la boucle, pas
@@ -508,6 +531,7 @@ async def build_container(settings: Settings) -> Container:
         destinations_repo=destinations_repo,
         traffic_rules_repo=traffic_rules_repo,
         netflow=netflow,
+        netflow_export=netflow_export,
         intel=intel,
         restrictions=restrictions,
     )

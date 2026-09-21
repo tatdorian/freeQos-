@@ -18,6 +18,7 @@
       <a href="#/subscribers" data-view="subscribers">Abonnes</a>
       <a href="#/pops"      data-view="pops">Equipements</a>
       <a href="#/services"  data-view="services">Services</a>
+      <a href="#/api"       data-view="api">API</a>
       <a href="#/settings"  data-view="settings">Reglages</a>
     </nav>
     <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
@@ -72,7 +73,7 @@
           <option value="60" selected>1 heure</option>
           <option value="360">6 heures</option>
         </select>
-        <label class="chk" title="Active RTT, QoO et bufferbloat (/ping depuis le PoP). Se pilote ici, sans variable d'environnement.">
+        <label class="chk" title="Sonde de latence (/ping depuis le PoP)">
           <input type="checkbox" id="rtt-toggle"> Sonde RTT
         </label>
         <span class="spacer"></span>
@@ -89,21 +90,12 @@
       </div>
 
       <h2>Files par noeud</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .6rem">
-        Cliquez un noeud (ou depliez vers ses clients) pour l'ouvrir dans les
-        panneaux ci-dessus. <b>RETR / MARKS / DROPS</b> restent en
-        &laquo;&nbsp;n/d&nbsp;&raquo; : ces compteurs de qdisc n'existent que dans
-        le chemin des paquets, hors de portee d'un controleur hors-bande.
-      </p>
       <div class="table-wrap" id="exec-nodes"></div>
 
       <h2>Heatmap global</h2>
       <div class="card" id="exec-heatmap"></div>
 
       <h2>Flux du reseau (Sankey)</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .6rem">
-        La largeur d'un flux est proportionnelle a son debit descendant mesure.
-      </p>
       <div class="card" id="exec-sankey"></div>
     </section>
 
@@ -130,7 +122,7 @@
           <option value="10080">7 jours</option>
         </select>
         <select id="flow-vantage" style="width:auto"
-                title="D'ou le trafic est regarde. Le meme octet est vu aux deux endroits : on n'en compte qu'un.">
+                title="Point de comptage">
           <option value="">Point de comptage par defaut</option>
           <option value="edge">En amont du coeur (sortie internet)</option>
           <option value="pop">Au PoP</option>
@@ -143,50 +135,31 @@
       <div class="grid stats" id="flow-stats"></div>
 
       <h2>Qui consomme</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Volume mesure sur la periode, par abonne. <b>Les octets ne sont comptes
-        qu'a un seul endroit</b> : un flux traverse le PoP puis la sortie
-        internet, et les deux l'exportent &mdash; les additionner doublerait la
-        consommation de tout le monde.
-      </p>
       <div class="table-wrap" id="flow-top"></div>
 
       <h2>De quoi est fait ce trafic</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Familles d'usage deduites du numero de port. Volontairement grossier :
-        le chiffrement generalise fait que la video en flux se presente en 443
-        comme le reste du web, et pretendre les separer serait mentir.
-      </p>
       <div class="table-wrap" id="flow-apps"></div>
 
       <h2>Adresses vues, non declarees</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        <b>Aide a la saisie, pas un inventaire.</b> Une adresse qui parle sur une
-        VLAN peut etre un client, une imprimante, une camera ou l'equipement d'un
-        autre operateur : toutes laissent la meme trace, et aucune ne dit quel
-        debit a ete vendu. Les clients VLAN se declarent a la main, dans l'onglet
-        Abonnes.
-      </p>
       <div class="table-wrap" id="flow-hosts"></div>
 
+      <h2>Export sur les routeurs</h2>
+      <div class="table-wrap" id="flow-export"></div>
+      <div class="toolbar" style="margin-top:.6rem">
+        <button class="sm" id="flow-export-dry">Simuler</button>
+        <button class="sm primary" id="flow-export-apply">Configurer</button>
+        <span class="spacer"></span>
+        <span class="mode" id="flow-export-state"></span>
+      </div>
+      <div id="flow-export-result"></div>
+
       <h2>Exporteurs</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Declarez ici <b>d'ou</b> chaque equipement regarde le reseau. Un
-        exporteur qui envoie sans etre declare apparait quand meme, marque
-        <code>unknown</code> : un PoP mal configure doit se voir, pas disparaitre
-        en silence. <b>L'echantillonnage</b> doit correspondre a ce qui est
-        configure sur l'equipement &mdash; sinon les octets sont faux d'un
-        facteur mille sans que rien ne le montre.
-      </p>
       <div class="table-wrap" id="flow-exporters"></div>
       <form class="stack" id="exporter-form" autocomplete="off">
         <div class="row-3">
           <div class="field">
             <label for="exp-address">Adresse de l'exporteur</label>
             <input id="exp-address" required maxlength="64" placeholder="10.10.0.1">
-            <span class="help">
-              L'adresse SOURCE des datagrammes, pas celle du collecteur.
-            </span>
           </div>
           <div class="field">
             <label for="exp-name">Nom</label>
@@ -205,17 +178,10 @@
               <option value="edge">En amont du coeur (sortie internet)</option>
               <option value="pop" selected>Au PoP</option>
             </select>
-            <span class="help">
-              Le meme octet est vu aux deux endroits : le comptage n'en retient
-              qu'un seul.
-            </span>
           </div>
           <div class="field">
             <label for="exp-sampling">Echantillonnage (1 = tout)</label>
             <input id="exp-sampling" type="number" min="1" max="100000" value="1">
-            <span class="help">
-              Doit correspondre a la configuration de l'equipement.
-            </span>
           </div>
           <div class="field actions" style="align-content:end">
             <button type="submit" class="primary">Declarer</button>
@@ -242,15 +208,6 @@
         <span class="mode" id="net-count"></span>
       </div>
       <div id="topo-notice"></div>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Vrai arbre reseau, editable : <b>glissez une case</b> pour la deplacer,
-        <b>deposez-la sur une autre</b> pour la rattacher. Chaque lien porte son
-        debit mesure, chaque PoP ses abonnes. <b>Les etiquettes des clients se
-        deplacent aussi</b> — elles se rangent, mais ne se rattachent pas : un
-        abonne pend a son PoP, et c'est la collecte qui le dit, pas un
-        glisser-deposer. La disposition et les rattachements sont enregistres —
-        ils ne changent que l'arbre AFFICHE, aucun equipement n'est reconfigure.
-      </p>
       <div class="topo-editor">
         <div id="topo-canvas" class="topo-canvas"></div>
         <aside id="topo-panel" class="topo-panel"></aside>
@@ -260,7 +217,7 @@
            pas un : c'est le MEME graphe, lu en lignes plutot qu'en cases. Replie
            ici, il reste a un clic sans encombrer la navigation. -->
       <details id="net-links-block">
-        <summary>Tableau des liens : debit mesure, capacite, origine de la mesure</summary>
+        <summary>Liens : debit, capacite, source</summary>
 
       <div class="toolbar">
         <span class="mode">Tableau des liens &middot; l'arbre est dans l'onglet Arbre reseau</span>
@@ -272,13 +229,6 @@
            joignable, ou le seul dont les compteurs sont lus : trois causes
            opposees derriere le meme ecran. -->
       <div id="topo-sources"></div>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Le debit vient des compteurs du PORT qui porte le lien
-        (<code>/interface</code>, deux lectures successives) :
-        <b>&rarr;</b> ce que le routeur emet vers l'equipement d'en face,
-        <b>&larr;</b> ce qu'il en recoit. <b>Debit</b> ouvre l'historique et
-        permet de demander une mesure instantanee au routeur.
-      </p>
       <div class="table-wrap" id="topo-links"></div>
       </details>
     </section>
@@ -302,13 +252,6 @@
            l'un est ce que l'operateur a SAISI, l'autre ce que le controleur a
            OBSERVE. Les melanger ferait croire a une decouverte. -->
       <div id="sc-panel" hidden>
-        <p class="empty" style="text-align:left;padding:0 0 .8rem">
-          Ces clients n'ouvrent pas de session PPPoE : rien sur le reseau ne dit
-          qu'une adresse leur appartient, ni quel debit ils ont souscrit. Cette
-          fiche est donc la <b>seule source</b>, et elle est saisie a la main.
-          Une fois declares, ils deviennent des abonnes comme les autres : meme
-          plan, memes surcharges, memes boosts, meme file.
-        </p>
 
         <!-- Candidats detectes. Volontairement AU-DESSUS du formulaire : c'est
              le point de depart naturel du travail (regarder ce qui parle, puis
@@ -318,36 +261,18 @@
              haut parce que c'est la question du jour ("qu'est-ce que j'ai
              vendu sur cette VLAN"), et non "qu'est-ce qui parle dessus". -->
         <h3 style="margin:.2rem 0 .4rem">Clients par VLAN</h3>
-        <p class="empty" style="text-align:left;padding:0 0 .6rem">
-          Ce que vous avez <b>declare</b>, VLAN par VLAN. Rien n'arrive ici tout
-          seul : un client sur VLAN routee n'ouvre pas de session, RADIUS ne le
-          decrit pas, et rien sur le reseau ne dit quel debit lui a ete vendu.
-          Le formulaire ci-dessous est la seule porte d'entree.
-        </p>
         <div class="table-wrap" id="sc-vlans"></div>
 
         <details id="sc-candidates-block">
-          <summary>Aide a la saisie : adresses vues, non declarees</summary>
-          <p class="empty" style="text-align:left;padding:0 0 .6rem">
-            Adresses vues vivre dans un sous-reseau que le PoP dessert, hors
-            abonnes PPPoE deja identifies. Sept sources sont croisees
-            (<code>/ip/arp</code>, baux DHCP, table de ponts, routes, files
-            posees, voisinage, sessions) : un client derriere un <b>pont en
-            filtrage VLAN</b> ou joignable par un bloc route apparait ici comme
-            les autres. <b>Ce ne sont pas des clients pour autant</b> : une
-            imprimante, une camera ou l'equipement d'un autre operateur laissent
-            la meme trace. Aucun n'est faconne et aucun n'a de plan &mdash;
-            <b>Declarer</b> pre-remplit la fiche, vous saisissez le debit
-            souscrit, vous seul le connaissez.
-          </p>
+          <summary>Adresses vues, non declarees</summary>
           <div class="table-wrap" id="sc-candidates"></div>
           <div class="actions" style="margin-top:.4rem">
             <button class="sm" id="sc-recensement"
-                    title="Croise sept sources sur chaque routeur du PoP : ARP, baux DHCP, sessions PPPoE, table de ponts, routes, files posees, voisinage">
+                    title="Recensement du PoP">
               Recenser le PoP (toutes sources)
             </button>
             <button class="sm" id="sc-diag"
-                    title="Lit /ip/arp en direct et dit, ligne par ligne, ce qui a ecarte chaque adresse">
+                    title="Diagnostic des candidats">
               Un client manque ? Voir pourquoi
             </button>
           </div>
@@ -359,11 +284,6 @@
             <div class="field">
               <label for="sc-reference">Reference</label>
               <input id="sc-reference" required maxlength="64" placeholder="mairie-vitre">
-              <span class="help">
-                Identite stable, qui sert d'identifiant d'abonne. N'y mettez ni
-                l'IP ni le VLAN : elle doit survivre a un changement d'adresse,
-                sinon le client perd ses surcharges et son historique.
-              </span>
             </div>
             <div class="field">
               <label for="sc-label">Nom affiche</label>
@@ -380,30 +300,15 @@
             <div class="field">
               <label for="sc-address">Adresse ou sous-reseau</label>
               <input id="sc-address" required maxlength="64" placeholder="10.0.0.5 ou 10.0.0.0/29">
-              <span class="help">
-                Un sous-reseau est conserve tel quel : un client a qui vous avez
-                vendu un /29 voit son bloc entier plafonne, pas sa seule
-                premiere adresse.
-              </span>
             </div>
             <div class="field">
               <label for="sc-vlan">VLAN</label>
               <input id="sc-vlan" type="number" min="1" max="4094" placeholder="812">
-              <span class="help">
-                A renseigner pour un client sur VLAN routee : c'est ce qui le
-                range dans le tableau ci-dessus. Laissez vide pour un client qui
-                n'est pas sur une VLAN dediee.
-              </span>
             </div>
             <div class="field">
               <label for="sc-sector">Secteur (cle de topologie)</label>
               <input id="sc-sector" maxlength="128" list="sc-sector-list" placeholder="optionnel">
               <datalist id="sc-sector-list"></datalist>
-              <span class="help">
-                Sous quel secteur compter ce client quand un lien sature. Aucun
-                caller-id n'existe pour lui : ce rattachement est declare, pas
-                observe.
-              </span>
             </div>
           </div>
 
@@ -419,10 +324,6 @@
             <div class="field">
               <label for="sc-cpe">MAC du CPE</label>
               <input id="sc-cpe" maxlength="32" placeholder="optionnel">
-              <span class="help">
-                Elle survit a un changement d'adresse et permet de rapprocher le
-                client du voisinage radio.
-              </span>
             </div>
           </div>
 
@@ -434,7 +335,7 @@
           </div>
 
           <div class="actions">
-            <label class="chk" title="Un client inactif garde sa fiche, mais sa file est retiree au plan suivant">
+            <label class="chk" title="Retire la file au plan suivant">
               <input type="checkbox" id="sc-enabled" checked> Actif
             </label>
             <span class="spacer"></span>
@@ -460,22 +361,10 @@
         <span class="spacer"></span>
         <span class="mode" id="build-count"></span>
       </div>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Ajoutez un routeur ou une antenne <b>via son API</b> : le controleur lit
-        sa configuration (<code>/ip/neighbor</code>, <code>/interface</code>,
-        capacite radio) et <b>construit l'arbre reseau tout seul</b>. Chaque ajout
-        relance l'analyse ; l'arbre se voit dans l'onglet Arbre reseau.
-      </p>
       <div id="build-notice"></div>
       <div id="pops-notice"></div>
 
       <h2>Sante des routeurs</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .6rem">
-        Ce que les routeurs disent d'eux-memes, en direct. Un routeur a 95 % de
-        CPU n'appliquera pas les files qu'on lui envoie, et un routeur qui vient
-        de redemarrer a perdu les siennes : deux causes de &laquo; mon abonne
-        n'est pas bride &raquo; qui n'ont rien a voir avec le controleur.
-      </p>
       <div class="table-wrap" id="routers-health"></div>
 
       <h2>Connecter un routeur (PoP)</h2>
@@ -485,7 +374,6 @@
             <div class="field">
               <label for="f-name">Nom du PoP</label>
               <input id="f-name" name="name" required placeholder="pop-nord">
-              <span class="help">Identifiant unique, sert de cle pour les metriques.</span>
             </div>
             <div class="field">
               <label for="f-host">Adresse de management</label>
@@ -501,7 +389,6 @@
             <div class="field">
               <label for="f-username">Compte (lecture seule)</label>
               <input id="f-username" name="username" value="qos-ro" required>
-              <span class="help">policy=read,api,test</span>
             </div>
             <div class="field">
               <label for="f-password">Mot de passe</label>
@@ -514,10 +401,6 @@
                 <option value="core">Coeur de reseau</option>
                 <option value="gateway">Gateway (egress)</option>
               </select>
-              <span class="help">
-                Determine sa place dans l'arbre : la gateway au sommet, puis le
-                coeur, puis les PoPs.
-              </span>
             </div>
           </div>
 
@@ -525,14 +408,6 @@
             <div class="field">
               <label for="f-loopback">Loopback</label>
               <input id="f-loopback" name="loopback" placeholder="10.255.0.1 (optionnel)">
-              <span class="help">
-                <b>L'identite du routeur dans la topologie.</b> Unique par
-                construction, et independante des interfaces : un nom change,
-                une MAC depend du port, et un /30 de liaison appartient aux deux
-                bouts &mdash; seul le loopback designe CE routeur. Laisse vide,
-                il est deduit (interface <code>lo</code>, ou router-id) et
-                affiche dans l'arbre pour que vous puissiez le corriger.
-              </span>
             </div>
           </div>
 
@@ -544,7 +419,6 @@
             <div class="field">
               <label for="f-pattern">Motif d'interface PPPoE</label>
               <input id="f-pattern" name="pppoe_interface_pattern" value="&lt;pppoe-{login}&gt;">
-              <span class="help">Porte les compteurs d'octets.</span>
             </div>
             <div class="field">
               <label for="f-timeout">Delai de garde (s)</label>
@@ -570,11 +444,6 @@
       </div>
 
       <h2>Antennes Ubiquiti (capacite radio)</h2>
-      <p class="help" style="margin:-.4rem 0 .8rem">
-        Interrogees directement sur leur API airOS locale, sans UISP. La capacite
-        lue devient le debit parent du shaping du lien. Ajouter une antenne ici
-        suffit&nbsp;: aucune variable d'environnement, aucun redemarrage.
-      </p>
       <div id="antennas-notice"></div>
       <div class="table-wrap" id="antennas-table"></div>
 
@@ -585,12 +454,10 @@
             <div class="field">
               <label for="a-name">Nom du lien</label>
               <input id="a-name" name="name" required placeholder="bh-nord">
-              <span class="help">Identifiant unique du backhaul.</span>
             </div>
             <div class="field">
               <label for="a-pop">PoP rattache</label>
               <input id="a-pop" name="pop_name" required placeholder="PoP Nord">
-              <span class="help">Doit correspondre au libelle d'un site.</span>
             </div>
             <div class="field">
               <label for="a-host">Adresse de l'antenne</label>
@@ -619,7 +486,6 @@
             <div class="field">
               <label for="a-key">Cle stable / MAC</label>
               <input id="a-key" name="device_key" placeholder="DC:9F:DB:.. (optionnel)">
-              <span class="help">Sert a rattacher la radio dans le graphe.</span>
             </div>
             <div class="field">
               <label for="a-timeout">Delai de garde (s)</label>
@@ -629,7 +495,6 @@
               <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-top:1.6rem">
                 <input type="checkbox" id="a-tls" name="verify_tls"> Verifier le certificat TLS
               </label>
-              <span class="help">A laisser decoche : airOS a un certificat auto-signe.</span>
             </div>
           </div>
 
@@ -645,10 +510,6 @@
       </div>
 
       <h2>Inventaire</h2>
-      <p class="help" style="margin:-.4rem 0 .8rem">
-        Ce qui est deja interroge. La <b>Connexion a distance</b> en donne l'etat
-        de joignabilite en un coup d'oeil.
-      </p>
       <h2 style="text-transform:none;font-size:.75rem">Sites connus</h2>
       <div class="table-wrap" id="pops-table"></div>
       <h2 style="text-transform:none;font-size:.75rem">Routeurs interroges</h2>
@@ -685,42 +546,16 @@
       <div class="grid stats" id="svc-stats"></div>
 
       <h2>Connexions en cours</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        La fenetre <b>en cours</b>, lue dans la memoire du collecteur : c'est la
-        seule vue reellement en direct. Tout le reste de cette page vient de la
-        base, donc au mieux de la minute precedente. Ce tableau se vide a chaque
-        ecriture de fenetre puis se remplit &mdash; ce n'est pas une panne.
-      </p>
       <div class="table-wrap" id="svc-live"></div>
 
       <h2>De quels services vient le trafic</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Identification par <b>adresse</b>, <b>nom inverse</b> et, si vous
-        l'activez, par le <b>registre</b>. Jamais par le contenu. La part
-        <code>non identifie</code> est affichee comme les autres : une page qui
-        ne montrerait que ce qu'elle sait nommer laisserait croire que tout est
-        reconnu.
-      </p>
       <div class="table-wrap" id="svc-services"></div>
 
       <h2>Adresses atteintes</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Cliquez une adresse pour sa fiche complete : nom inverse, service
-        reconnu et <b>a quel titre</b>, organisation, AS, pays, et la liste
-        nominative des abonnes qui la joignent.
-      </p>
       <div class="table-wrap" id="svc-destinations"></div>
       <div id="svc-detail"></div>
 
       <h2>Restrictions de trafic</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Une restriction vise un <b>service</b> ou une <b>famille</b>, pas une
-        liste d'adresses figee : son ensemble est recalcule a chaque passage
-        depuis le catalogue <b>et</b> depuis ce que NetFlow a decouvert. Un
-        serveur nouveau rejoint donc la liste posee sur le routeur tout seul.
-        <b>Enregistrer une regle n'ecrit rien</b> : la pose est un geste separe,
-        et elle reste soumise a l'interrupteur d'ecriture.
-      </p>
       <div class="table-wrap" id="svc-rules"></div>
       <div class="toolbar" style="margin-top:.6rem">
         <button class="sm" id="svc-apply-dry">Simuler la pose</button>
@@ -759,27 +594,15 @@
             <div class="field">
               <label for="svc-rule-services">Services vises</label>
               <select id="svc-rule-services" multiple size="6"></select>
-              <span class="help">
-                Plusieurs choix possibles. Un service sans bloc publie n'est
-                reconnu qu'au nom inverse : sa liste part vide et se remplit a
-                mesure que les clients l'atteignent.
-              </span>
             </div>
             <div class="field">
               <label for="svc-rule-categories">Familles visees</label>
               <select id="svc-rule-categories" multiple size="6"></select>
-              <span class="help">
-                Choisir une famille revient a choisir tous ses services.
-              </span>
             </div>
             <div class="field">
               <label for="svc-rule-prefixes">Blocs saisis a la main</label>
               <textarea id="svc-rule-prefixes" rows="6"
                         placeholder="45.57.0.0/17&#10;198.38.96.0/19"></textarea>
-              <span class="help">
-                Un par ligne, en plus des services choisis. IPv4 seulement :
-                les listes de <code>/ip/firewall</code> ne portent pas l'IPv6.
-              </span>
             </div>
           </div>
 
@@ -806,12 +629,6 @@
                 </select>
               </div>
             </div>
-            <div class="field">
-              <span class="help" style="align-content:end">
-                Un sens laisse vide n'est pas plafonne : on ne pose ni marquage
-                ni file de ce cote.
-              </span>
-            </div>
           </div>
 
           <div class="row-3">
@@ -819,7 +636,6 @@
               <label for="svc-rule-logins">Abonnes vises</label>
               <textarea id="svc-rule-logins" rows="3"
                         placeholder="dupont&#10;martin"></textarea>
-              <span class="help">Un login par ligne.</span>
             </div>
             <div class="field">
               <label for="svc-rule-protocol">Protocole (facultatif)</label>
@@ -833,7 +649,6 @@
             <div class="field">
               <label for="svc-rule-ports">Port du service (facultatif)</label>
               <input id="svc-rule-ports" maxlength="64" placeholder="443 ou 6881-6999">
-              <span class="help">Exige un protocole.</span>
             </div>
           </div>
 
@@ -852,15 +667,46 @@
       </details>
 
       <details id="svc-catalogue-block" style="margin-top:1rem">
-        <summary>Ce que le controleur sait reconnaitre</summary>
-        <p class="empty" style="text-align:left;padding:.6rem 0">
-          Les blocs publies sont embarques : ils fonctionnent sans acces
-          internet et repondent instantanement. Le nom inverse vient les
-          completer pour ce qui n'y est pas &mdash; un cache heberge chez vous,
-          un serveur loue chez un tiers.
-        </p>
+        <summary>Catalogue des services</summary>
         <div class="table-wrap" id="svc-catalogue"></div>
       </details>
+    </section>
+
+    <!-- ------------------------------------------------------------ api -->
+    <section id="view-api">
+      <div class="toolbar">
+        <span class="mode" id="api-base"></span>
+        <span class="spacer"></span>
+        <span class="mode" id="api-count"></span>
+      </div>
+
+      <h2>Creer une cle</h2>
+      <form class="stack" id="key-form" autocomplete="off">
+        <div class="row-3">
+          <div class="field">
+            <label for="key-name">Nom</label>
+            <input id="key-name" required maxlength="128" placeholder="Facturation Splynx">
+          </div>
+          <div class="field">
+            <label for="key-scope">Portee</label>
+            <select id="key-scope">
+              <option value="read">Lecture</option>
+              <option value="write">Lecture et ecriture</option>
+            </select>
+          </div>
+          <div class="field actions" style="align-content:end">
+            <button type="submit" class="primary">Creer</button>
+          </div>
+        </div>
+      </form>
+      <div id="key-result"></div>
+      <div class="table-wrap" id="keys-table"></div>
+
+      <h2>Points d'entree</h2>
+      <div class="table-wrap" id="api-endpoints"></div>
+
+      <h2>Exemple</h2>
+      <div class="table-wrap"><pre id="api-sample"></pre></div>
     </section>
 
     <!-- ------------------------------------------------------- reglages -->
@@ -870,57 +716,10 @@
         <span class="spacer"></span>
         <span class="mode" id="settings-count"></span>
       </div>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Ces reglages vivent en <b>base</b>, pas dans l'environnement : ce qui est
-        fixe ici fait foi et <b>prend effet sans redemarrage</b> — les options de
-        shaping et CAKE au prochain plan, les cadences au prochain tour de boucle.
-        <b>Defaut</b> signifie qu'aucune valeur n'a ete posee : c'est la valeur
-        d'origine qui s'applique.
-      </p>
       <div id="settings-notice"></div>
       <div id="settings-groups"></div>
       <h2>Ce qui reste hors de portee de l'interface</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .6rem">
-        Il faut connaitre ces valeurs <b>avant</b> de pouvoir ouvrir la base :
-        les y chercher serait circulaire. Elles restent donc dans l'environnement.
-      </p>
       <div class="table-wrap" id="settings-bootstrap"></div>
-
-      <!-- ------------------------------------------------ cles d'API -->
-      <h2>Cles d'API</h2>
-      <p class="empty" style="text-align:left;padding:0 0 .8rem">
-        Pour qu'un systeme de facturation pousse ses clients et lise leur
-        consommation. L'API parle le <b>meme contrat que Preseem</b>
-        (<code>PUT /model/v1/services/&lt;id&gt;</code>, authentification Basic
-        avec la cle en nom d'utilisateur) : un integrateur change l'URL de base
-        et la cle, rien d'autre. <b>Le secret n'est affiche qu'une fois</b>, a la
-        creation : la base n'en garde que l'empreinte.
-      </p>
-      <form class="stack" id="key-form" autocomplete="off">
-        <div class="row-3">
-          <div class="field">
-            <label for="key-name">A quoi sert cette cle</label>
-            <input id="key-name" required maxlength="128" placeholder="Facturation Splynx">
-            <span class="help">
-              Le nom sert a savoir laquelle retirer sans rien casser, le jour ou
-              il faudra en retirer une.
-            </span>
-          </div>
-          <div class="field">
-            <label for="key-scope">Portee</label>
-            <select id="key-scope">
-              <option value="read">Lecture seule</option>
-              <option value="write">Lecture et ecriture</option>
-            </select>
-            <span class="help">Une cle qui ecrit lit forcement.</span>
-          </div>
-          <div class="field actions" style="align-content:end">
-            <button type="submit" class="primary">Creer la cle</button>
-          </div>
-        </div>
-      </form>
-      <div id="key-result"></div>
-      <div class="table-wrap" id="keys-table"></div>
 
       <!-- --------------------------------------------- shaping et ecriture -->
       <h2>Shaping et ecriture sur les routeurs</h2>
@@ -953,7 +752,7 @@
            rester verifiable -- mais replie : ce n'est pas la question de tous
            les jours. -->
       <details id="shaping-technique">
-        <summary>Detail technique : analyse brute, plan calcule, journal des commandes</summary>
+        <summary>Analyse brute, plan, journal</summary>
         <div class="actions" style="margin:.6rem 0">
           <button class="sm" id="btn-inspect">Analyser l'existant</button>
           <button class="sm" id="btn-plan">Calculer le plan (sans envoyer)</button>

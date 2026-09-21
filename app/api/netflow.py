@@ -23,6 +23,7 @@ from app.db.flows_repo import (
 )
 from app.services import ipfinder
 from app.services.intel import IntelService
+from app.services.netflow_export import NetflowExportService
 from app.services.netflow_service import NetflowService
 
 logger = logging.getLogger(__name__)
@@ -121,6 +122,15 @@ def _intel(container: ContainerDep) -> IntelService:
             detail="Enrichissement des adresses indisponible",
         )
     return container.intel
+
+
+def _export(container: ContainerDep) -> NetflowExportService:
+    if container.netflow_export is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Configuration de l'export indisponible",
+        )
+    return container.netflow_export
 
 
 def _valide_adresse(value: str) -> str:
@@ -425,3 +435,30 @@ async def intel_run(
     service = _intel(container)
     traites = await service.resolve_pending(limit)
     return {"resolved": traites, "status": await service.status()}
+
+
+@router.get("/netflow/export", summary="Export NetFlow configure sur les routeurs")
+async def export_status(container: ContainerDep) -> dict[str, Any]:
+    """Qui exporte deja vers ce collecteur, et qui ne le fait pas encore.
+
+    L'adresse annoncee est calculee PAR ROUTEUR : c'est celle que le systeme
+    utiliserait pour le joindre. Sur un controleur multi-interfaces, une valeur
+    unique serait fausse pour une partie du parc.
+    """
+    return await _export(container).status()
+
+
+@router.post("/netflow/export/apply", summary="Poser l'export NetFlow sur les routeurs")
+async def export_apply(
+    container: ContainerDep,
+    dry_run: Annotated[bool, Query(description="Simulation : rien n'est ecrit")] = True,
+    router: Annotated[str | None, Query(max_length=128)] = None,
+) -> dict[str, Any]:
+    """Ecrit ``/ip/traffic-flow`` et sa cible sur les routeurs qui en manquent.
+
+    Une cible qui pointe vers un AUTRE collecteur n'est jamais touchee :
+    envoyer ses flux a deux endroits est un choix legitime.
+    """
+    return await _export(container).apply_all(
+        author="ui:netflow-export", dry_run=dry_run, router_name=router
+    )

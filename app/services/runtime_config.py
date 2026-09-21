@@ -34,6 +34,7 @@ from typing import Any
 
 from app.config import Settings
 from app.services.intel import JOB_INTEL
+from app.services.netflow_export import JOB_NETFLOW_EXPORT
 from app.services.restrictions import JOB_RESTRICTIONS
 
 # Cadence minimale : une valeur nulle ou negative ferait tourner la boucle du
@@ -461,6 +462,18 @@ REGLAGES: tuple[Reglage, ...] = (
         "Cadence a laquelle les restrictions sont reconciliees sur les routeurs. "
         "C'est ce passage qui ajoute aux listes les adresses nouvellement "
         "decouvertes d'un service restreint.",
+    ),
+    Reglage(
+        "netflow_export_auto",
+        "services",
+        "bool",
+        "Poser l'export NetFlow sur les routeurs automatiquement. Reste soumis "
+        "a l'interrupteur d'ecriture.",
+    ),
+    _cadence(
+        "netflow_export_interval_s",
+        JOB_NETFLOW_EXPORT,
+        "Cadence a laquelle l'export NetFlow des routeurs est verifie et repose.",
     ),
     Reglage(
         "restriction_address_limit",
