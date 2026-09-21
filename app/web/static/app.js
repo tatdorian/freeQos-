@@ -3012,6 +3012,21 @@ function protoName(numero) {
   return PROTOCOLES[n] || (n ? String(n) : '-');
 }
 
+/** Le client d'une ligne : son login s'il est declare, son adresse sinon.
+ *
+ *  UNE MACHINE SANS FICHE RESTE VISIBLE. Elle n'a pas d'abonne -- un poste de
+ *  supervision, une camera, un routeur -- mais elle joint bien quelque chose,
+ *  et c'est la question posee. La masquer faisait disparaitre le ping qu'on
+ *  venait de lancer pour verifier que la mesure marche. */
+function clientCell(ligne) {
+  if (ligne.login) {
+    return '<a href="#" data-svc-sub="' + esc(ligne.subscriber_id) + '">' +
+      esc(ligne.login) + '</a>';
+  }
+  return '<code>' + esc(ligne.client || '?') + '</code>' +
+    ' <span class="hint">non declare</span>';
+}
+
 function svcBadge(categorie) {
   if (!categorie) return '<span class="badge">non identifie</span>';
   return '<span class="badge ' + (SVC_CATEGORIES[categorie] || '') + '">' +
@@ -3139,14 +3154,12 @@ function renderLiveConnections(data) {
     hote.innerHTML = '<div class="empty">Aucune connexion dans la fenetre en cours.</div>';
     return;
   }
-  hote.innerHTML = '<table><thead><tr><th>Abonne</th><th>Destination</th>' +
+  hote.innerHTML = '<table><thead><tr><th>Client</th><th>Destination</th>' +
     '<th>Service</th><th>Famille</th><th class="num">Port</th><th>Proto</th>' +
     '<th class="num">Descendant</th><th class="num">Montant</th><th></th>' +
     '</tr></thead><tbody>' +
     lignes.map((c) =>
-      '<tr><td class="login">' + (c.login
-        ? '<a href="#" data-svc-sub="' + esc(c.subscriber_id) + '">' + esc(c.login) + '</a>'
-        : '<span class="hint">#' + esc(c.subscriber_id) + '</span>') + '</td>' +
+      '<tr><td class="login">' + clientCell(c) + '</td>' +
       '<td><a href="#" data-svc-ip="' + esc(c.address) + '"><code>' + esc(c.address) +
         '</code></a>' + (c.hostname
           ? '<br><span class="hint">' + esc(c.hostname) + '</span>' : '') + '</td>' +
@@ -3169,7 +3182,7 @@ function renderServiceTable(services) {
   }
   const total = services.reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
   hote.innerHTML = '<table><thead><tr><th>Service</th><th>Famille</th>' +
-    '<th class="num">Adresses</th><th class="num">Abonnes</th>' +
+    '<th class="num">Adresses</th><th class="num">Clients</th>' +
     '<th class="num">Descendant</th><th class="num">Montant</th><th>Part</th>' +
     '<th></th></tr></thead><tbody>' +
     services.map((r) => {
@@ -3178,7 +3191,7 @@ function renderServiceTable(services) {
         '<td><b>' + esc(r.service || 'non identifie') + '</b></td>' +
         '<td>' + svcBadge(r.category) + '</td>' +
         '<td class="num">' + esc(r.addresses) + '</td>' +
-        '<td class="num">' + esc(r.subscribers) + '</td>' +
+        '<td class="num">' + esc(r.clients) + '</td>' +
         '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
         '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
         '<td style="min-width:140px">' + meter(somme, total || 1, '') + '</td>' +
@@ -3198,7 +3211,7 @@ function renderDestinations(lignes) {
     return;
   }
   hote.innerHTML = '<table><thead><tr><th>Adresse</th><th>Nom inverse</th>' +
-    '<th>Service</th><th>Famille</th><th class="num">Abonnes</th>' +
+    '<th>Service</th><th>Famille</th><th class="num">Clients</th>' +
     '<th class="num">Descendant</th><th class="num">Montant</th><th>Vue</th>' +
     '</tr></thead><tbody>' +
     lignes.map((d) =>
@@ -3208,7 +3221,7 @@ function renderDestinations(lignes) {
         ? esc(d.hostname) : '<span class="hint">-</span>') + '</td>' +
       '<td>' + svcName(d) + '</td>' +
       '<td>' + svcBadge(d.category) + '</td>' +
-      '<td class="num">' + esc(d.subscribers) + '</td>' +
+      '<td class="num">' + esc(d.clients) + '</td>' +
       '<td class="num">' + bytesText(d.down_bytes) + '</td>' +
       '<td class="num">' + bytesText(d.up_bytes) + '</td>' +
       '<td>' + esc(depuis(d.last_seen)) + '</td></tr>').join('') +
@@ -3270,7 +3283,7 @@ function renderDestinationCard(fiche) {
       fait('AS', intel.asn ? 'AS' + esc(intel.asn) : null) +
       fait('Pays', intel.country ? esc(intel.country) : null) +
       fait('Bloc', esc(intel.network || catalogue.matched_prefix || '')) +
-      fait('Abonnes', esc(totaux.subscribers || 0)) +
+      fait('Clients', esc(totaux.clients || 0)) +
       fait('Descendant', bytesText(totaux.down_bytes)) +
       fait('Montant', bytesText(totaux.up_bytes)) +
       fait('Vue pour la premiere fois', totaux.first_seen ? esc(depuis(totaux.first_seen)) : null) +
@@ -3283,14 +3296,13 @@ function renderDestinationCard(fiche) {
       '<span class="mode">' + esc(intel.attempts || 0) + ' tentative(s)</span>' +
     '</div>' +
     '<h3 style="margin-top:.9rem">Qui joint cette adresse</h3>' +
-    ((fiche.subscribers || []).length
-      ? '<div class="table-wrap"><table><thead><tr><th>Abonne</th><th>PoP</th>' +
+    ((fiche.clients || []).length
+      ? '<div class="table-wrap"><table><thead><tr><th>Client</th><th>PoP</th>' +
         '<th class="num">Port</th><th>Proto</th><th>Usage</th>' +
         '<th class="num">Descendant</th><th class="num">Montant</th><th>Vu</th>' +
         '</tr></thead><tbody>' +
-        fiche.subscribers.map((s) => '<tr>' +
-          '<td class="login"><a href="#" data-svc-sub="' + esc(s.subscriber_id) + '">' +
-            esc(s.login) + '</a>' +
+        fiche.clients.map((s) => '<tr>' +
+          '<td class="login">' + clientCell(s) +
             (s.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
           '<td>' + esc(s.pop_name || '-') + '</td>' +
           '<td class="num">' + esc(s.port || '-') + '</td>' +
@@ -3300,7 +3312,7 @@ function renderDestinationCard(fiche) {
           '<td class="num">' + bytesText(s.up_bytes) + '</td>' +
           '<td>' + esc(depuis(s.last_seen)) + '</td></tr>').join('') +
         '</tbody></table></div>'
-      : '<div class="empty">Aucun abonne n\'a joint cette adresse sur la periode.</div>') +
+      : '<div class="empty">Personne n\'a joint cette adresse sur la periode.</div>') +
     '</div>';
 
   const detail = document.getElementById('svc-detail');

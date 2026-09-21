@@ -41,6 +41,7 @@ class DestinationsRepository:
         *,
         minutes: int = 60,
         subscriber_id: int | None = None,
+        client: str | None = None,
         service: str | None = None,
         category: str | None = None,
         search: str | None = None,
@@ -68,6 +69,7 @@ class DestinationsRepository:
                        i.asn,
                        i.country,
                        i.resolved_at,
+                       count(DISTINCT d.client)            AS clients,
                        count(DISTINCT d.subscriber_id)     AS subscribers,
                        sum(d.down_bytes)::bigint           AS down_bytes,
                        sum(d.up_bytes)::bigint             AS up_bytes,
@@ -81,6 +83,7 @@ class DestinationsRepository:
                 LEFT JOIN ip_intel i ON i.address = d.address
                 WHERE d.last_seen >= now() - make_interval(mins => $1)
                   AND ($2::bigint IS NULL OR d.subscriber_id = $2)
+                  AND ($7::inet IS NULL OR d.client = $7)
                   AND ($3::text IS NULL OR i.service = $3)
                   AND ($4::text IS NULL OR i.category = $4)
                   AND ($5::text IS NULL
@@ -98,6 +101,7 @@ class DestinationsRepository:
                 category,
                 search,
                 limit,
+                client,
             )
         return [dict(row) for row in rows]
 
@@ -115,6 +119,7 @@ class DestinationsRepository:
                 SELECT i.service,
                        i.category,
                        count(DISTINCT d.address)       AS addresses,
+                       count(DISTINCT d.client)        AS clients,
                        count(DISTINCT d.subscriber_id) AS subscribers,
                        sum(d.down_bytes)::bigint       AS down_bytes,
                        sum(d.up_bytes)::bigint         AS up_bytes,
@@ -145,7 +150,8 @@ class DestinationsRepository:
             )
             abonnes = await conn.fetch(
                 """
-                SELECT d.subscriber_id,
+                SELECT host(d.client) AS client,
+                       d.subscriber_id,
                        s.login,
                        s.kind,
                        p.name AS pop_name,
@@ -159,8 +165,11 @@ class DestinationsRepository:
                        d.first_seen,
                        d.last_seen
                 FROM flow_destinations d
-                JOIN subscribers s ON s.id = d.subscriber_id
-                LEFT JOIN pops p   ON p.id = s.pop_id
+                -- JOINTURE EXTERNE, et c'est tout l'interet : une machine sans
+                -- fiche d'abonne doit apparaitre avec son adresse plutot que de
+                -- disparaitre de la liste de ceux qui joignent cette adresse.
+                LEFT JOIN subscribers s ON s.id = d.subscriber_id
+                LEFT JOIN pops p        ON p.id = s.pop_id
                 WHERE d.address = $1::inet
                   AND d.last_seen >= now() - make_interval(mins => $2)
                 ORDER BY (d.down_bytes + d.up_bytes) DESC
@@ -174,6 +183,7 @@ class DestinationsRepository:
                 SELECT coalesce(sum(down_bytes), 0)::bigint AS down_bytes,
                        coalesce(sum(up_bytes), 0)::bigint   AS up_bytes,
                        coalesce(sum(flows), 0)::bigint      AS flows,
+                       count(DISTINCT client)               AS clients,
                        count(DISTINCT subscriber_id)        AS subscribers,
                        min(first_seen)                      AS first_seen,
                        max(last_seen)                       AS last_seen
@@ -186,7 +196,7 @@ class DestinationsRepository:
             "address": address,
             "intel": dict(intel) if intel is not None else None,
             "totals": dict(totaux) if totaux is not None else {},
-            "subscribers": [dict(row) for row in abonnes],
+            "clients": [dict(row) for row in abonnes],
         }
 
     async def get_intel(self, address: str) -> dict[str, Any] | None:

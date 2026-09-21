@@ -57,7 +57,8 @@ class FauxDestinations:
                 "service": "netflix",
                 "category": "streaming",
                 "addresses": 3,
-                "subscribers": 2,
+                "clients": 2,
+                "subscribers": 1,
                 "down_bytes": 900_000,
                 "up_bytes": 12_000,
                 "last_seen": MAINTENANT,
@@ -68,9 +69,15 @@ class FauxDestinations:
         return {
             "address": address,
             "intel": self.intel.get(address),
-            "totals": {"down_bytes": 900_000, "up_bytes": 12_000, "subscribers": 1},
-            "subscribers": [
+            "totals": {
+                "down_bytes": 900_000,
+                "up_bytes": 12_000,
+                "clients": 2,
+                "subscribers": 1,
+            },
+            "clients": [
                 {
+                    "client": "10.0.0.2",
                     "subscriber_id": 1,
                     "login": "dupont",
                     "kind": "pppoe",
@@ -83,7 +90,22 @@ class FauxDestinations:
                     "flows": 40,
                     "first_seen": MAINTENANT,
                     "last_seen": MAINTENANT,
-                }
+                },
+                {
+                    "client": "10.9.9.9",
+                    "subscriber_id": None,
+                    "login": None,
+                    "kind": None,
+                    "pop_name": None,
+                    "port": 0,
+                    "protocol": 1,
+                    "app": "diagnostic",
+                    "down_bytes": 84,
+                    "up_bytes": 84,
+                    "flows": 1,
+                    "first_seen": MAINTENANT,
+                    "last_seen": MAINTENANT,
+                },
             ],
         }
 
@@ -220,7 +242,8 @@ def destinations() -> FauxDestinations:
             "asn": None,
             "country": None,
             "resolved_at": MAINTENANT,
-            "subscribers": 2,
+            "clients": 2,
+            "subscribers": 1,
             "down_bytes": 900_000,
             "up_bytes": 12_000,
             "flows": 40,
@@ -293,8 +316,10 @@ def test_les_connexions_en_cours_viennent_de_la_memoire_du_collecteur(
     ligne = corps["connections"][0]
     assert ligne["address"] == "45.57.12.34"
     assert ligne["down_bytes"] == 900_000
-    # L'identifiant est traduit en login : '#1' n'aide personne.
+    # L'identifiant est traduit en login : '#1' n'aide personne. L'adresse du
+    # client est rendue en plus, pour les machines qui n'ont pas de fiche.
     assert ligne["login"] == "dupont"
+    assert ligne["client"] == "10.0.0.2"
     assert ligne["pop_name"] == "PoP Test"
     # La fenetre n'a pas ete consommee par la lecture.
     assert netflow.aggregator.destinations_in_window == 1
@@ -319,9 +344,14 @@ def test_les_destinations_rendent_aussi_la_repartition_par_service(client: TestC
 
 
 def test_la_fiche_d_une_adresse_dit_qui_la_joint(client: TestClient) -> None:
+    """Y COMPRIS CE QUI N'A PAS DE FICHE. Une machine non declaree joint bien
+    cette adresse : la masquer ferait disparaitre de la liste ce qu'on vient
+    justement de lancer pour verifier."""
     corps = client.get("/api/v1/netflow/destinations/45.57.12.34").json()
     assert corps["address"] == "45.57.12.34"
-    assert corps["subscribers"][0]["login"] == "dupont"
+    assert corps["clients"][0]["login"] == "dupont"
+    assert corps["clients"][1]["client"] == "10.9.9.9"
+    assert corps["clients"][1]["login"] is None
     # Le verdict du catalogue est recalcule a la volee, meme sans rien en base.
     assert corps["catalogue"]["service"] == "netflix"
     assert corps["catalogue"]["matched_prefix"] == "45.57.0.0/17"
@@ -566,3 +596,47 @@ async def test_l_etat_dit_combien_d_adresses_attendent() -> None:
     etat = await service.status()
     assert etat["pending"] == 0
     assert etat["resolved"] == 2
+
+
+async def test_une_machine_sans_fiche_apparait_dans_les_connexions_en_cours(
+    settings: Settings, destinations: FauxDestinations, restrictions: RestrictionService
+) -> None:
+    """LE CAS QUI A REVELE L'ANGLE MORT : un ping lance depuis un poste qui
+    n'est pas un abonne declare. Le flux traverse le reseau, le collecteur le
+    voit, et l'interface doit le montrer -- sous l'adresse du poste."""
+    netflow = NetflowService(
+        enabled=True,
+        # L'espace client se declare SUR LE SERVICE : c'est lui qui le repose
+        # sur l'agregateur au demarrage, et le poser sur l'agregateur seul
+        # serait efface.
+        customer_networks=("10.0.0.0/8",),
+        aggregator=FlowAggregator(index=PrefixIndex.build([("10.0.0.0/29", 1)])),
+    )
+    netflow.aggregator.add(
+        Flow(src="10.9.9.9", dst="45.57.12.34", protocol=1, octets=84, packets=1),
+        vantage="edge",
+    )
+    conteneur = SimpleNamespace(
+        settings=settings,
+        netflow=netflow,
+        flows_repo=FauxFlows(),
+        destinations_repo=destinations,
+        traffic_rules_repo=restrictions.rules_repo,
+        restrictions=restrictions,
+        intel=IntelService(destinations=destinations, rdns_enabled=False),  # type: ignore[arg-type]
+        exporters_repo=None,
+    )
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: conteneur
+
+    with TestClient(app) as http:
+        corps = http.get("/api/v1/netflow/connections").json()
+
+    assert len(corps["connections"]) == 1
+    ligne = corps["connections"][0]
+    assert ligne["client"] == "10.9.9.9"
+    assert ligne["login"] is None
+    assert ligne["address"] == "45.57.12.34"
+    assert ligne["service"] == "netflix"

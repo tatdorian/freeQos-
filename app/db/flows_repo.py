@@ -212,24 +212,33 @@ class FlowsRepository:
             if batch.destinations:
                 await conn.executemany(
                     """
-                    INSERT INTO flow_destinations (subscriber_id, address, port, protocol,
-                                                   app, down_bytes, up_bytes, flows,
-                                                   first_seen, last_seen)
-                    SELECT $1, $2::inet, $3, $4, $5, $6, $7, $8, $9, $9
-                    WHERE EXISTS (SELECT 1 FROM subscribers WHERE id = $1)
-                    ON CONFLICT (subscriber_id, address) DO UPDATE
+                    INSERT INTO flow_destinations (client, address, subscriber_id, port,
+                                                   protocol, app, down_bytes, up_bytes,
+                                                   flows, first_seen, last_seen)
+                    SELECT $1::inet, $2::inet,
+                           -- Sous-requete et non valeur brute : un abonne peut
+                           -- disparaitre entre la mesure et l'ecriture, et une
+                           -- violation de cle etrangere ferait perdre la fenetre
+                           -- ENTIERE. Ici, il devient simplement NULL -- la
+                           -- mesure survit a la fiche.
+                           (SELECT id FROM subscribers WHERE id = $3),
+                           $4, $5, $6, $7, $8, $9, $10, $10
+                    ON CONFLICT (client, address) DO UPDATE
                        SET down_bytes = flow_destinations.down_bytes + EXCLUDED.down_bytes,
                            up_bytes   = flow_destinations.up_bytes + EXCLUDED.up_bytes,
                            flows      = flow_destinations.flows + EXCLUDED.flows,
                            port       = EXCLUDED.port,
                            protocol   = EXCLUDED.protocol,
                            app        = EXCLUDED.app,
+                           subscriber_id = COALESCE(EXCLUDED.subscriber_id,
+                                                    flow_destinations.subscriber_id),
                            last_seen  = EXCLUDED.last_seen
                     """,
                     [
                         (
-                            d.subscriber_id,
+                            d.client,
                             d.address,
+                            d.subscriber_id,
                             d.port,
                             d.protocol,
                             d.app,

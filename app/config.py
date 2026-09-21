@@ -339,6 +339,12 @@ class Settings(BaseSettings):
     netflow_export_interval_s: float = 600.0
     netflow_export_version: int = 9
     netflow_export_interfaces: str = "all"
+    # CE QUI DECIDE EN COMBIEN DE TEMPS UN FLUX DEVIENT VISIBLE. Le defaut
+    # RouterOS n'exporte un flux ENCORE ACTIF qu'au bout de trente minutes : un
+    # streaming en cours n'apparait pas avant une demi-heure, et le routeur
+    # s'affiche pourtant comme parfaitement configure.
+    netflow_export_active_timeout: str = "1m"
+    netflow_export_inactive_timeout: str = "15s"
     # Adresse annoncee aux routeurs. VIDE = deduite routeur par routeur, en
     # demandant au noyau quelle adresse source il utiliserait pour joindre ce
     # routeur. Sur un controleur multi-interfaces, une valeur saisie a la main

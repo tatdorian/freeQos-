@@ -49,7 +49,14 @@ class FakeRouterOsClient:
         self.firewall_mangle_rows: list[dict[str, Any]] = []
         self.raise_on_firewall: Exception | None = None
         # Export NetFlow : le reglage du routeur, et ses collecteurs declares.
-        self.traffic_flow_row: dict[str, Any] = {"enabled": "false", "interfaces": ""}
+        # Les defauts REELS de RouterOS : export coupe, et surtout un flux encore
+        # actif qui n'est exporte qu'au bout de trente minutes.
+        self.traffic_flow_row: dict[str, Any] = {
+            "enabled": "false",
+            "interfaces": "",
+            "active-flow-timeout": "30m",
+            "inactive-flow-timeout": "15s",
+        }
         self.traffic_flow_target_rows: list[dict[str, Any]] = []
         self.raise_on_traffic_flow: Exception | None = None
         self.queue_type_rows: list[dict[str, Any]] = []

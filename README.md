@@ -1452,6 +1452,14 @@ quotas, et la question « de quoi est fait le trafic qui sature ce secteur ».
    unique serait fausse pour une partie du parc, et les flux partiraient dans le
    vide sans que rien ne le signale.
 
+   **Les délais d'export sont posés eux aussi**, et c'est ce qui décide en combien de
+   temps un flux devient visible. Le défaut RouterOS n'exporte un flux **encore actif**
+   qu'au bout de **trente minutes** : une session de streaming, une visio, un
+   téléchargement n'apparaissent pas avant une demi-heure, alors que le routeur s'affiche
+   comme parfaitement configuré. Le contrôleur pose `active-flow-timeout=1m` et
+   `inactive-flow-timeout=15s` — un ping apparaît donc une quinzaine de secondes après
+   coup, pas une demi-heure.
+
    Comme toute écriture, celle-ci passe par `ENFORCEMENT_ENABLED`, un plan
    affichable et l'audit. Une cible déjà posée vers **un autre** collecteur n'est
    jamais touchée : envoyer ses flux à deux endroits est un choix légitime.
@@ -1530,6 +1538,17 @@ de nom » est une réponse, et la majorité d'internet est dans ce cas. Sans cel
 redemandée à chaque passage, pour toujours (`IPFINDER_MAX_ATTEMPTS` borne les tentatives).
 
 ### Ce que l'onglet montre
+
+> **Une machine sans fiche d'abonné compte aussi.** L'observation est « cette adresse a
+> joint celle-là » ; le rattachement à un abonné est une *interprétation*, qui peut
+> manquer (poste de supervision, caméra, routeur) ou changer (session PPPoE qui se
+> reconnecte ailleurs). Exiger une fiche rendait invisible tout ce qui n'en a pas — à
+> commencer par le ping qu'on lance pour vérifier que la mesure marche. La ligne apparaît
+> alors sous l'adresse du client, marquée `non déclaré`.
+>
+> Le filtre reste `NETFLOW_CUSTOMER_NETWORKS` : sans lui, le trafic de transit ferait de
+> ce tableau un annuaire d'internet. Si vos clients ont des adresses publiques, ajoutez
+> leurs blocs à ce réglage.
 
 | Bloc | Ce qu'il répond | D'où il vient |
 |---|---|---|
@@ -1867,7 +1886,7 @@ abonné atteint, et depuis quand » :
 
 | Table | Contenu | Durée de vie |
 |---|---|---|
-| `flow_destinations` | Le couple (abonné, adresse atteinte) : volumes cumulés, dernier port et protocole vus, `first_seen`/`last_seen` | **Mesure** : purgée par `NETFLOW_DESTINATION_RETENTION_S` |
+| `flow_destinations` | Le couple (**adresse du client**, adresse atteinte) : volumes cumulés, dernier port et protocole vus, `first_seen`/`last_seen`. `subscriber_id` est *nullable* — une machine sans fiche est mesurée comme les autres | **Mesure** : purgée par `NETFLOW_DESTINATION_RETENTION_S` |
 | `ip_intel` | Ce qu'on sait de l'adresse : nom inverse, service, famille, organisation, AS, pays, et **à quel titre** on le sait | **Connaissance** : conservée. Réapprendre à chaque purge que 45.57.12.34 est Netflix serait une requête DNS pour rien |
 
 Une ligne `ip_intel` est créée avec `resolved_at` à NULL **au moment où un client atteint
@@ -1888,7 +1907,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 1299 tests, dont 1209 sans aucune infrastructure
+make test        # 1307 tests, dont 1217 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

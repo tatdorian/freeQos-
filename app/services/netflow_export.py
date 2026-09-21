@@ -90,6 +90,50 @@ def _vrai(value: Any) -> bool:
     return str(value).strip().lower() in {"true", "yes", "1"}
 
 
+def _duree_en_s(value: Any) -> float | None:
+    """Une duree RouterOS ('1m', '30s', '00:01:00') en secondes.
+
+    RouterOS relit une duree dans SA forme, pas dans celle qu'on a ecrite :
+    ``1m`` peut revenir en ``00:01:00``. Comparer les chaines ferait voir un
+    ecart a chaque passage, donc une reecriture perpetuelle du meme reglage.
+    """
+    texte = str(value or "").strip().lower()
+    if not texte:
+        return None
+    if ":" in texte:
+        morceaux = texte.split(":")
+        try:
+            valeurs = [float(m) for m in morceaux]
+        except ValueError:
+            return None
+        total = 0.0
+        for valeur in valeurs:
+            total = total * 60 + valeur
+        return total
+    unites = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    total = 0.0
+    nombre = ""
+    for caractere in texte:
+        if caractere.isdigit() or caractere == ".":
+            nombre += caractere
+        elif caractere in unites and nombre:
+            total += float(nombre) * unites[caractere]
+            nombre = ""
+        else:
+            return None
+    if nombre:
+        total += float(nombre)
+    return total
+
+
+def _meme_duree(actuel: Any, voulu: Any) -> bool:
+    gauche = _duree_en_s(actuel)
+    droite = _duree_en_s(voulu)
+    if gauche is None or droite is None:
+        return str(actuel or "") == str(voulu or "")
+    return gauche == droite
+
+
 @dataclass
 class RouterExportState:
     """Ce qu'un routeur exporte aujourd'hui, et ce qu'il lui manque."""
@@ -99,6 +143,8 @@ class RouterExportState:
     collector: str | None = None
     enabled: bool = False
     interfaces: str = ""
+    active_timeout: str = ""
+    inactive_timeout: str = ""
     targets: list[dict[str, Any]] = field(default_factory=list)
     ours: dict[str, Any] | None = None
     state: str = ETAT_A_POSER
@@ -111,6 +157,8 @@ class RouterExportState:
             "collector": self.collector,
             "enabled": self.enabled,
             "interfaces": self.interfaces,
+            "active_timeout": self.active_timeout,
+            "inactive_timeout": self.inactive_timeout,
             "targets": self.targets,
             "configured": self.ours is not None and self.enabled,
             "state": self.state,
@@ -126,6 +174,17 @@ class NetflowExportService:
     port: int = 2055
     version: int = 9
     interfaces: str = "all"
+    #: Delai au bout duquel un flux ENCORE ACTIF est quand meme exporte.
+    #:
+    #: Le defaut RouterOS est de TRENTE MINUTES. Une session de streaming, un
+    #: telechargement, une visio : rien de tout cela n'apparait avant une
+    #: demi-heure, alors que c'est precisement ce qu'on veut voir en direct.
+    active_flow_timeout: str = "1m"
+    #: Delai au bout duquel un flux TERMINE est exporte. Le defaut (15 s) est
+    #: deja correct ; on l'ecrit quand meme pour que la valeur soit connue
+    #: plutot que subie -- c'est ce delai qui decide en combien de temps un ping
+    #: apparait dans l'interface.
+    inactive_flow_timeout: str = "15s"
     #: Adresse annoncee aux routeurs. Vide = deduite par routeur (le cas normal).
     collector_address: str | None = None
     enabled: bool = True
@@ -160,6 +219,8 @@ class NetflowExportService:
 
         etat.enabled = _vrai(reglage.get("enabled"))
         etat.interfaces = str(reglage.get("interfaces") or "")
+        etat.active_timeout = str(reglage.get("active-flow-timeout") or "")
+        etat.inactive_timeout = str(reglage.get("inactive-flow-timeout") or "")
         etat.targets = [
             {
                 "dst_address": str(c.get("dst-address") or ""),
@@ -186,16 +247,22 @@ class NetflowExportService:
             ),
             None,
         )
-        if etat.enabled and etat.ours is not None:
+        lent = not _meme_duree(etat.active_timeout, self.active_flow_timeout)
+        if etat.enabled and etat.ours is not None and not lent:
             etat.state = ETAT_POSE
             etat.reason = f"exporte vers {etat.collector}:{self.port}"
         else:
             etat.state = ETAT_A_POSER
-            etat.reason = (
-                "l'export est coupe sur ce routeur"
-                if not etat.enabled
-                else "aucune cible ne pointe vers ce collecteur"
-            )
+            if not etat.enabled:
+                etat.reason = "l'export est coupe sur ce routeur"
+            elif etat.ours is None:
+                etat.reason = "aucune cible ne pointe vers ce collecteur"
+            else:
+                # LE PIEGE LE PLUS COUTEUX DE TRAFFIC-FLOW. Avec le defaut de
+                # RouterOS, un flux encore actif n'est exporte qu'au bout de
+                # trente minutes : tout se passe comme si le streaming en cours
+                # n'existait pas.
+                etat.reason = f"flux actifs exportes seulement apres {etat.active_timeout or '?'}"
         return etat
 
     async def states(self) -> list[RouterExportState]:
@@ -218,25 +285,37 @@ class NetflowExportService:
         if etat.collector is None or etat.state == ETAT_ERREUR:
             return plan
 
-        if not etat.enabled or (self.interfaces and etat.interfaces != self.interfaces):
-            champs = {"enabled": "yes"}
-            if self.interfaces:
-                champs["interfaces"] = self.interfaces
+        voulu: dict[str, str] = {"enabled": "yes"}
+        if self.interfaces:
+            voulu["interfaces"] = self.interfaces
+        if self.active_flow_timeout:
+            voulu["active-flow-timeout"] = self.active_flow_timeout
+        if self.inactive_flow_timeout:
+            voulu["inactive-flow-timeout"] = self.inactive_flow_timeout
+
+        actuel = {
+            "enabled": "yes" if etat.enabled else "no",
+            "interfaces": etat.interfaces,
+            "active-flow-timeout": etat.active_timeout,
+            "inactive-flow-timeout": etat.inactive_timeout,
+        }
+        # Les delais sont compares en SECONDES : RouterOS relit '1m' la ou on a
+        # ecrit '60s', et comparer les chaines produirait un ecart a chaque
+        # passage, donc une reecriture perpetuelle du meme reglage.
+        ecarts = {
+            cle: (actuel.get(cle) or None, valeur)
+            for cle, valeur in voulu.items()
+            if not _meme_duree(actuel.get(cle), valeur)
+        }
+        if ecarts:
             plan.actions.append(
                 PlanAction(
                     verb="set",
                     path=PATH_FLOW,
-                    fields=champs,
+                    fields={cle: apres for cle, (_, apres) in ecarts.items()},
                     name=f"{collector.name} : export NetFlow",
-                    reason="l'export de flux doit etre actif pour que le PoP soit mesure",
-                    changes={
-                        "enabled": ("yes" if etat.enabled else "no", "yes"),
-                        **(
-                            {"interfaces": (etat.interfaces or None, self.interfaces)}
-                            if self.interfaces and etat.interfaces != self.interfaces
-                            else {}
-                        ),
-                    },
+                    reason="l'export de flux doit etre actif, et exporter sans attendre",
+                    changes=ecarts,
                 )
             )
 

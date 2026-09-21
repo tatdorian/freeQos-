@@ -317,6 +317,7 @@ class NetflowService:
         """
         return [
             {
+                "client": d.client,
                 "subscriber_id": d.subscriber_id,
                 "address": d.address,
                 "port": d.port,

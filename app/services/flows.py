@@ -230,19 +230,25 @@ class HostCounters:
 
 @dataclass
 class DestinationCounters:
-    """Ce qu'un abonne a atteint sur internet, et combien.
+    """Ce qu'une machine du reseau a atteint sur internet, et combien.
 
-    L'ADRESSE DISTANTE EST LA DONNEE UTILE ICI, a l'inverse de ``HostCounters``
-    qui retient le cote CLIENT. Les deux listes ne se recouvrent pas : l'une
-    aide a declarer des clients, l'autre dit ce que les clients declares font.
+    LA CLE EST L'ADRESSE DU CLIENT, PAS SON IDENTIFIANT D'ABONNE. C'est la
+    correction d'un angle mort qui se voyait tout de suite a l'usage : un ping
+    lance depuis un poste de supervision, un routeur, une camera -- n'importe
+    quoi qui n'est pas une fiche d'abonne declaree -- ne laissait AUCUNE trace,
+    alors que le flux traversait bien le reseau. L'observation est "cette
+    adresse a joint celle-la" ; le rattachement a un abonne est une
+    interpretation, qui peut manquer (machine non declaree) ou changer (une
+    session PPPoE qui se reconnecte sur une autre adresse).
 
     ``port`` et ``protocol`` sont ceux du DERNIER flux vu vers cette adresse.
     Ils expliquent la ligne (443, 53, 3478...) ; ils ne la decoupent pas -- un
     meme serveur atteint sur deux ports reste une seule destination.
     """
 
-    subscriber_id: int
+    client: str
     address: str
+    subscriber_id: int | None = None
     port: int = 0
     protocol: int = 0
     app: str = AUTRE
@@ -296,7 +302,7 @@ class FlowAggregator:
     _subs: dict[tuple[int, str], SubscriberCounters] = field(default_factory=dict)
     _apps: dict[tuple[int, str], AppCounters] = field(default_factory=dict)
     _hosts: dict[tuple[str, int | None], HostCounters] = field(default_factory=dict)
-    _dests: dict[tuple[int, str], DestinationCounters] = field(default_factory=dict)
+    _dests: dict[tuple[str, str], DestinationCounters] = field(default_factory=dict)
     flows_seen: int = 0
     flows_matched: int = 0
     #: Destinations ecartees faute de place dans la fenetre. Un compteur qui
@@ -343,21 +349,32 @@ class FlowAggregator:
             self._credit(source, vantage, up_bytes=octets, up_packets=paquets)
             self._credit_app(source, classify(flow), up_bytes=octets)
 
-        if source is not None or destination is not None:
+        rattache = source is not None or destination is not None
+        if rattache:
             self.flows_matched += 1
-            if self.track_destinations:
-                # LE SENS EST CELUI DE L'ABONNE, ici aussi. Un flux qui ARRIVE
-                # chez lui vient de l'adresse distante (descendant) ; un flux
-                # qui PART de chez lui y va (montant). Le meme flux peut faire
-                # les deux quand deux abonnes se parlent -- et dans ce cas
-                # l'autre bout n'est pas une destination internet, il est
-                # ecarte par is_routable.
-                if destination is not None:
-                    self._note_destination(destination, flow.src, flow, octets, descendant=True)
-                if source is not None:
-                    self._note_destination(source, flow.dst, flow, octets, descendant=False)
-            return
-        if self.track_hosts:
+
+        if self.track_destinations:
+            # LE SENS EST CELUI DU CLIENT. Un flux qui ARRIVE chez lui vient de
+            # l'adresse distante (descendant) ; un flux qui en PART y va
+            # (montant). Le meme flux peut faire les deux quand deux machines du
+            # reseau se parlent -- et dans ce cas l'autre bout n'est pas une
+            # destination internet, il est ecarte par is_routable.
+            #
+            # UNE MACHINE NON DECLAREE COMPTE AUSSI. Elle n'a pas d'abonne, mais
+            # elle a une adresse, et c'est tout ce qu'il faut pour dire ce
+            # qu'elle joint. Exiger une fiche d'abonne rendait invisible tout ce
+            # qui n'en a pas : un poste de supervision, un routeur, une camera --
+            # et le ping qu'on vient de lancer pour verifier que ca marche.
+            if destination is not None or (not rattache and self._is_customer(flow.dst)):
+                self._note_destination(
+                    flow.dst, flow.src, flow, octets, descendant=True, subscriber_id=destination
+                )
+            if source is not None or (not rattache and self._is_customer(flow.src)):
+                self._note_destination(
+                    flow.src, flow.dst, flow, octets, descendant=False, subscriber_id=source
+                )
+
+        if not rattache and self.track_hosts:
             self._note_host(flow, octets, exporter=exporter, pop_name=pop_name)
 
     def _credit(
@@ -393,26 +410,38 @@ class FlowAggregator:
         compteurs.up_bytes += up_bytes
 
     def _note_destination(
-        self, subscriber_id: int, remote: str, flow: Flow, octets: int, *, descendant: bool
+        self,
+        client: str,
+        remote: str,
+        flow: Flow,
+        octets: int,
+        *,
+        descendant: bool,
+        subscriber_id: int | None = None,
     ) -> None:
         """Retient l'autre bout de la conversation, s'il est sur internet.
 
         ``is_routable`` ecarte tout ce qui est prive, lien-local, multicast ou
-        reserve : deux abonnes qui se parlent, un DNS interne, la supervision du
-        PoP. Sans ce filtre, la liste des "services atteints" se remplirait de
-        l'infrastructure de l'exploitant, et chaque adresse interne declencherait
-        une requete de nom inverse pour rien.
+        reserve : deux machines du reseau qui se parlent, un DNS interne, la
+        supervision du PoP. Sans ce filtre, la liste des "services atteints" se
+        remplirait de l'infrastructure de l'exploitant, et chaque adresse interne
+        declencherait une requete de nom inverse pour rien.
         """
         if not ipfinder.is_routable(remote):
             return
-        cle = (subscriber_id, remote)
+        cle = (client, remote)
         compteurs = self._dests.get(cle)
         if compteurs is None:
             if len(self._dests) >= self.destination_limit:
                 self.destinations_dropped += 1
                 return
-            compteurs = DestinationCounters(subscriber_id=subscriber_id, address=remote)
+            compteurs = DestinationCounters(client=client, address=remote)
             self._dests[cle] = compteurs
+        # Le rattachement peut apparaitre APRES la premiere vue : une session
+        # PPPoE qui s'ouvre, une fiche saisie dans la minute. On le prend des
+        # qu'il existe, sans jamais l'effacer sur un flux ou il manquait.
+        if subscriber_id is not None:
+            compteurs.subscriber_id = subscriber_id
         compteurs.port = service_port(flow) or compteurs.port
         compteurs.protocol = flow.protocol or compteurs.protocol
         compteurs.app = classify(flow)

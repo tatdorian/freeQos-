@@ -462,6 +462,8 @@ async def build_container(settings: Settings) -> Container:
         port=settings.netflow_port,
         version=settings.netflow_export_version,
         interfaces=settings.netflow_export_interfaces,
+        active_flow_timeout=settings.netflow_export_active_timeout,
+        inactive_flow_timeout=settings.netflow_export_inactive_timeout,
         collector_address=settings.netflow_collector_address,
         enabled=settings.netflow_export_auto,
     )

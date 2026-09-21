@@ -292,6 +292,7 @@ async def destinations(
     container: ContainerDep,
     minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
     subscriber_id: Annotated[int | None, Query(ge=1)] = None,
+    client: Annotated[str | None, Query(max_length=64, description="Adresse du client")] = None,
     service: Annotated[str | None, Query(max_length=64)] = None,
     category: Annotated[str | None, Query(max_length=64)] = None,
     q: Annotated[
@@ -305,6 +306,7 @@ async def destinations(
         "destinations": await repo.top(
             minutes=minutes,
             subscriber_id=subscriber_id,
+            client=_valide_adresse(client) if client else None,
             service=service,
             category=category,
             search=q,
@@ -367,7 +369,7 @@ async def connections(
     """
     service = _service(container)
     lignes = service.live_connections(limit)
-    ids = [int(ligne["subscriber_id"]) for ligne in lignes]
+    ids = [int(ligne["subscriber_id"]) for ligne in lignes if ligne.get("subscriber_id")]
     adresses = [str(ligne["address"]) for ligne in lignes]
 
     abonnes: dict[int, dict[str, Any]] = {}
@@ -378,7 +380,10 @@ async def connections(
         connaissances = await container.destinations_repo.intel_for(adresses)
 
     for ligne in lignes:
-        fiche = abonnes.get(int(ligne["subscriber_id"])) or {}
+        # UNE MACHINE SANS FICHE RESTE AFFICHEE, sous son adresse. Elle n'a pas
+        # d'abonne -- un poste de supervision, une camera, un routeur -- mais
+        # elle joint bien quelque chose, et c'est la question posee.
+        fiche = abonnes.get(int(ligne["subscriber_id"] or 0)) or {}
         ligne["login"] = fiche.get("login")
         ligne["kind"] = fiche.get("kind")
         ligne["pop_name"] = fiche.get("pop_name")
