@@ -97,7 +97,10 @@ async def database():
             "airos_antennas, pops, "
             "topology_nodes, topology_links, subscriber_attachments, "
             "shaping_policies, enforcement_audit, runtime_flags, runtime_settings, "
-            "static_clients, vlan_sightings "
+            "static_clients, vlan_sightings, "
+            "api_keys, model_accounts, model_packages, model_sites, "
+            "model_access_points, netflow_exporters, flow_metrics, "
+            "flow_app_metrics, flow_hosts "
             "RESTART IDENTITY CASCADE"
         )
     yield db
@@ -2709,3 +2712,497 @@ async def test_un_vlan_muet_depuis_longtemps_n_est_plus_un_site(
 
     assert await observations.vlan_sites(max_age_s=3600) == []
     assert len(await observations.vlan_sites()) == 1
+
+
+# =========================================================================
+# API PUBLIQUE ET TRAFIC : le SQL que les doubles memoire ne verifient pas
+# =========================================================================
+
+
+async def test_les_cles_d_api_ne_stockent_jamais_le_secret(database: Database) -> None:
+    from app.db.api_keys_repo import ApiKeysRepository
+    from app.services.api_keys import hash_key
+
+    depot = ApiKeysRepository(database.pool)
+    fiche, secret = await depot.create(name="facturation", scopes=["write"], created_by="test")
+    assert fiche["scopes"] == ["read", "write"]
+
+    async with database.pool.acquire() as conn:
+        stocke = await conn.fetchval("SELECT key_hash FROM api_keys WHERE id = $1", fiche["id"])
+    assert stocke == hash_key(secret)
+    assert secret not in stocke
+
+    assert (await depot.authenticate(secret)) is not None
+    assert (await depot.authenticate(secret + "x")) is None
+
+    await depot.set_enabled(fiche["id"], enabled=False)
+    assert (await depot.authenticate(secret)) is None
+
+
+async def test_un_service_de_l_api_devient_un_client_declare(database: Database) -> None:
+    """LE POINT LE PLUS STRUCTURANT DU MODELE : l'API n'a pas sa propre table de
+    clients. Elle ecrit dans l'inventaire que l'interface montre deja."""
+    from app.db.model_repo import ModelRepository
+
+    depot = ModelRepository(database.pool)
+    await depot.put_site("tour-nord", {"name": "PoP Nord"})
+    await depot.put_access_point("sect-n1", {"name": "Secteur N1", "tower": "tour-nord"})
+    await depot.put_package(
+        "pack-100", {"name": "100/20", "down_speed": 100_000, "up_speed": 20_000}
+    )
+    await depot.put_account("cust-41", {"name": "Mairie de Vitre"})
+
+    fiche = await depot.put_service(
+        "svc-4321",
+        {
+            "account": "cust-41",
+            "package": "pack-100",
+            "parent_device_id": "sect-n1",
+            "attachments": [
+                {"cpe_mac": "00:10:0b:6e:4c:ff", "network_prefixes": ["10.0.0.0/29", "10.0.1.5"]},
+            ],
+        },
+    )
+    # Le PoP remonte par la chaine service -> point d'acces -> site.
+    assert fiche["pop_name"] == "PoP Nord"
+    assert fiche["down_speed"] == 100_000
+    assert fiche["attachments"][0]["network_prefixes"] == ["10.0.0.0/29", "10.0.1.5/32"]
+
+    async with database.pool.acquire() as conn:
+        ligne = await conn.fetchrow(
+            "SELECT source, pop_name, plan_down_mbps, cpe_mac, extra_prefixes "
+            "FROM static_clients WHERE reference = 'svc-4321'"
+        )
+    assert ligne["source"] == "api"
+    assert ligne["pop_name"] == "PoP Nord"
+    assert ligne["plan_down_mbps"] == 100.0  # 100 000 kbit/s convertis a la frontiere
+    assert ligne["cpe_mac"] == "00:10:0B:6E:4C:FF"
+
+    # Le PUT est idempotent : la facturation doit pouvoir rejouer son inventaire.
+    await depot.put_service(
+        "svc-4321", {"package": "pack-100", "attachments": [{"network_prefixes": ["10.0.0.0/29"]}]}
+    )
+    assert len(await depot.list_services()) == 1
+
+
+async def test_l_api_n_ecrase_pas_une_fiche_saisie_a_la_main(database: Database) -> None:
+    from app.db.model_repo import ModelConflictError, ModelRepository
+    from app.db.static_clients_repo import StaticClientsRepository
+
+    saisie = StaticClientsRepository(database.pool)
+    await saisie.create(
+        {
+            "reference": "mairie-vitre",
+            "pop_name": "PoP Nord",
+            "address": "10.0.0.5",
+            "vlan": 812,
+            "plan_down_mbps": 50,
+            "plan_up_mbps": 10,
+        }
+    )
+    depot = ModelRepository(database.pool)
+    with pytest.raises(ModelConflictError):
+        await depot.put_service(
+            "mairie-vitre", {"attachments": [{"network_prefixes": ["10.9.9.9"]}]}
+        )
+    with pytest.raises(ModelConflictError):
+        await depot.delete_service("mairie-vitre")
+
+    async with database.pool.acquire() as conn:
+        intacte = await conn.fetchrow(
+            "SELECT source, host(address) AS address FROM static_clients "
+            "WHERE reference = 'mairie-vitre'"
+        )
+    assert intacte["source"] == "manual"
+    assert intacte["address"] == "10.0.0.5"
+
+
+async def test_les_clients_sont_ranges_par_vlan(database: Database) -> None:
+    from app.db.static_clients_repo import StaticClientsRepository
+
+    depot = StaticClientsRepository(database.pool)
+    for reference, vlan in (("c1", 812), ("c2", 812), ("c3", 900)):
+        await depot.create(
+            {
+                "reference": reference,
+                "pop_name": "PoP Nord",
+                "address": f"10.0.{vlan % 250}.{len(reference)}",
+                "vlan": vlan,
+                "plan_down_mbps": 50,
+                "plan_up_mbps": 10,
+            }
+        )
+    await depot.create(
+        {
+            "reference": "sans-vlan",
+            "pop_name": "PoP Nord",
+            "address": "10.5.0.1",
+            "plan_down_mbps": 20,
+            "plan_up_mbps": 5,
+        }
+    )
+    lignes = {r["vlan"]: r for r in await depot.by_vlan()}
+    assert set(lignes) == {812, 900}  # la fiche sans VLAN n'y figure pas
+    assert lignes[812]["clients"] == 2
+    assert lignes[812]["vendu_down_mbps"] == 100.0
+    assert lignes[812]["depuis_api"] == 0
+
+
+async def test_une_fenetre_de_trafic_s_ecrit_et_se_relit(database: Database, now: datetime) -> None:
+    from app.db.flows_repo import FlowsRepository
+    from app.services.flows import AppCounters, FlushBatch, HostCounters, SubscriberCounters
+
+    async with database.pool.acquire() as conn:
+        pop_id = await conn.fetchval("INSERT INTO pops (name) VALUES ('PoP Nord') RETURNING id")
+        abonne = await conn.fetchval(
+            "INSERT INTO subscribers (login, kind, pop_id) VALUES ('dupont', 'pppoe', $1) "
+            "RETURNING id",
+            pop_id,
+        )
+
+    depot = FlowsRepository(database.pool)
+    lot = FlushBatch(
+        ts=now,
+        subscribers=[
+            SubscriberCounters(abonne, "edge", down_bytes=1000, up_bytes=200, flows=3),
+            # LE MEME OCTET, VU AU PoP : il ne doit pas se fondre dans le precedent.
+            SubscriberCounters(abonne, "pop", down_bytes=1000, up_bytes=200, flows=3),
+        ],
+        apps=[AppCounters(abonne, "web", down_bytes=900, up_bytes=100)],
+        hosts=[
+            HostCounters("172.16.9.9", 812, exporter="10.10.0.1", pop_name="PoP Nord", up_bytes=90),
+            # Sans etiquette VLAN : le cas le plus COURANT cote sortie internet.
+            HostCounters("172.16.9.10", None, exporter="10.10.0.2", down_bytes=40),
+        ],
+    )
+    assert await depot.write_batch(lot) == 2
+
+    # Rejouer la meme fenetre CUMULE, ne duplique pas.
+    await depot.write_batch(lot)
+
+    totaux = await depot.totals(minutes=60, vantage="edge")
+    assert totaux["down_bytes"] == 2000
+    assert totaux["subscribers"] == 1
+
+    top = await depot.top_subscribers(minutes=60, vantage="edge", limit=10)
+    assert top[0]["login"] == "dupont"
+    assert top[0]["down_bytes"] == 2000
+
+    usages = await depot.applications(minutes=60)
+    assert usages[0]["app"] == "web"
+
+    serie = await depot.subscriber_series(
+        subscriber_id=abonne,
+        start=now - timedelta(minutes=5),
+        end=now + timedelta(minutes=5),
+        bucket_seconds=60,
+        vantage="edge",
+    )
+    assert sum(int(p["down_bytes"]) for p in serie) == 2000
+
+    hotes = await depot.hosts(limit=10)
+    par_adresse = {h["address"]: h for h in hotes}
+    assert par_adresse["172.16.9.9"]["vlan_id"] == 812
+    # La sentinelle 0 est retraduite en absence d'etiquette.
+    assert par_adresse["172.16.9.10"]["vlan_id"] is None
+    assert par_adresse["172.16.9.10"]["down_bytes"] == 80
+
+    vlans = await depot.vlans()
+    assert [v["vlan_id"] for v in vlans] == [812]
+
+
+async def test_un_hote_declare_disparait_de_l_aide_a_la_saisie(database: Database) -> None:
+    """LA LISTE EST RELUE A CHAQUE APPEL, PAS GRAVEE A L'ECRITURE.
+
+    Declarer un client doit le faire disparaitre TOUT DE SUITE, pas au prochain
+    flush : sinon l'exploitant le redeclare, ou croit que sa saisie n'a rien fait.
+    """
+    from app.db.flows_repo import FlowsRepository
+    from app.db.static_clients_repo import StaticClientsRepository
+    from app.services.flows import FlushBatch, HostCounters
+
+    depot = FlowsRepository(database.pool)
+    await depot.write_batch(
+        FlushBatch(
+            ts=_maintenant(),
+            subscribers=[],
+            apps=[],
+            hosts=[HostCounters("10.0.0.2", 812, up_bytes=10)],
+        )
+    )
+    assert [h["address"] for h in await depot.hosts(limit=10)] == ["10.0.0.2"]
+
+    await StaticClientsRepository(database.pool).create(
+        {
+            "reference": "nouveau",
+            "pop_name": "PoP Nord",
+            "address": "10.0.0.0/29",
+            "vlan": 812,
+            "plan_down_mbps": 50,
+            "plan_up_mbps": 10,
+        }
+    )
+    assert await depot.hosts(limit=10) == []
+
+
+async def test_les_blocs_declares_alimentent_l_index_de_rattachement(
+    database: Database,
+) -> None:
+    from app.db.flows_repo import FlowsRepository
+    from app.db.model_repo import ModelRepository
+    from app.db.static_clients_repo import StaticClientsRepository
+    from app.services.flows import PrefixIndex
+
+    async with database.pool.acquire() as conn:
+        pppoe = await conn.fetchval(
+            "INSERT INTO subscribers (login, kind, last_ip) "
+            "VALUES ('dupont', 'pppoe', '10.20.0.10') RETURNING id"
+        )
+    await StaticClientsRepository(database.pool).create(
+        {
+            "reference": "mairie",
+            "pop_name": "PoP Nord",
+            "address": "10.0.0.0/29",
+            "plan_down_mbps": 50,
+            "plan_up_mbps": 10,
+        }
+    )
+    async with database.pool.acquire() as conn:
+        fixe = await conn.fetchval(
+            "INSERT INTO subscribers (login, kind) VALUES ('mairie', 'static') RETURNING id"
+        )
+    # Un service de l'API porte plusieurs prefixes : tous doivent compter.
+    await ModelRepository(database.pool).put_service(
+        "svc-1", {"attachments": [{"network_prefixes": ["10.30.0.0/30", "10.31.0.0/30"]}]}
+    )
+    async with database.pool.acquire() as conn:
+        service = await conn.fetchval(
+            "INSERT INTO subscribers (login, kind) VALUES ('svc-1', 'static') RETURNING id"
+        )
+
+    entrees = await FlowsRepository(database.pool).subscriber_prefixes()
+    index = PrefixIndex.build(entrees)
+    assert index.lookup("10.20.0.10") == pppoe
+    assert index.lookup("10.0.0.3") == fixe
+    assert index.lookup("10.30.0.1") == service
+    assert index.lookup("10.31.0.1") == service  # le prefixe additionnel aussi
+    assert index.lookup("8.8.8.8") is None
+
+
+async def test_un_exporteur_inconnu_s_inscrit_tout_seul(database: Database) -> None:
+    """IL DOIT SE VOIR. Un PoP qui exporte vers un collecteur qui l'ignore en
+    silence reste invisible pendant des semaines."""
+    from app.db.flows_repo import NetflowExportersRepository
+
+    depot = NetflowExportersRepository(database.pool)
+    await depot.record_activity({"10.10.0.1": {"version": "v9", "packets": 3, "flows": 40}})
+    lignes = await depot.list_all()
+    assert lignes[0]["address"] == "10.10.0.1"
+    assert lignes[0]["vantage"] == "unknown"
+    assert lignes[0]["flows_seen"] == 40
+
+    # L'activite s'ACCUMULE, elle ne remplace pas.
+    await depot.record_activity({"10.10.0.1": {"version": "v9", "packets": 2, "flows": 10}})
+    assert (await depot.list_all())[0]["flows_seen"] == 50
+
+    # Declarer ensuite ne perd pas les compteurs deja observes.
+    fiche = await depot.declare(
+        {
+            "address": "10.10.0.1",
+            "name": "Sortie internet",
+            "vantage": "edge",
+            "sampling_rate": 1000,
+        }
+    )
+    assert fiche["vantage"] == "edge"
+    assert fiche["flows_seen"] == 50
+
+
+async def test_une_fenetre_survit_a_un_abonne_disparu(database: Database, now: datetime) -> None:
+    """UNE FICHE SUPPRIMEE ENTRE LA MESURE ET L'ECRITURE NE DOIT PAS EMPORTER LA
+    FENETRE ENTIERE -- donc le trafic de tous les autres."""
+    from app.db.flows_repo import FlowsRepository
+    from app.services.flows import FlushBatch, SubscriberCounters
+
+    async with database.pool.acquire() as conn:
+        vivant = await conn.fetchval(
+            "INSERT INTO subscribers (login, kind) VALUES ('vivant', 'pppoe') RETURNING id"
+        )
+    depot = FlowsRepository(database.pool)
+    ecrites = await depot.write_batch(
+        FlushBatch(
+            ts=now,
+            subscribers=[
+                SubscriberCounters(vivant, "edge", down_bytes=500),
+                SubscriberCounters(vivant + 9999, "edge", down_bytes=700),
+            ],
+            apps=[],
+            hosts=[],
+        )
+    )
+    assert ecrites == 2  # le lot est accepte en entier
+    totaux = await depot.totals(minutes=60, vantage="edge")
+    assert totaux["down_bytes"] == 500  # seule la ligne de l'abonne vivant est posee
+
+
+async def test_la_consommation_se_lit_par_periode(database: Database, now: datetime) -> None:
+    from app.db.flows_repo import FlowsRepository
+    from app.services.flows import FlushBatch, SubscriberCounters
+
+    async with database.pool.acquire() as conn:
+        abonne = await conn.fetchval(
+            "INSERT INTO subscribers (login, kind) VALUES ('svc-1', 'static') RETURNING id"
+        )
+        await conn.execute(
+            "INSERT INTO static_clients (reference, pop_name, address, source, account_ref) "
+            "VALUES ('svc-1', 'PoP Nord', '10.0.0.5', 'api', 'cust-41')"
+        )
+    depot = FlowsRepository(database.pool)
+    for recul in (0, 3600):
+        await depot.write_batch(
+            FlushBatch(
+                ts=now - timedelta(seconds=recul),
+                subscribers=[SubscriberCounters(abonne, "edge", down_bytes=1000, up_bytes=100)],
+                apps=[],
+                hosts=[],
+            )
+        )
+
+    debut, fin = now - timedelta(days=1), now + timedelta(minutes=1)
+    total = await depot.usage(start=debut, end=fin, vantage="edge")
+    assert len(total) == 1
+    assert total[0]["down_bytes"] == 2000
+    assert total[0]["account"] == "cust-41"
+
+    par_heure = await depot.usage(start=debut, end=fin, vantage="edge", bucket="hour")
+    assert len(par_heure) == 2
+
+    par_mois = await depot.usage(start=debut, end=fin, vantage="edge", bucket="month")
+    assert sum(int(p["down_bytes"]) for p in par_mois) == 2000
+
+    # L'autre point de mesure ne doit RIEN rendre : le compter aussi doublerait
+    # la facture.
+    assert await depot.usage(start=debut, end=fin, vantage="pop") == []
+
+
+async def test_le_point_d_acces_du_facturier_n_usurpe_pas_un_secteur(
+    database: Database,
+) -> None:
+    """``parent_device_id`` EST UN IDENTIFIANT EXTERNE, PAS UNE CLE DE TOPOLOGIE.
+
+    Le recopier dans ``sector_key`` paraitrait utile et serait nuisible : le
+    planificateur lit ``client.sector_key or rattachement_automatique``, donc une
+    valeur qui ne designe aucun noeud MASQUE le rattachement reel -- celui que
+    la jointure caller-id / UISP a etabli -- sans jamais rien rattacher elle-meme.
+    Le client se retrouverait pendu a la racine, hors du partage du secteur qu'il
+    sature pourtant.
+    """
+    from app.db.model_repo import ModelRepository
+
+    await ModelRepository(database.pool).put_service(
+        "svc-9",
+        {
+            "parent_device_id": "sect-n1",
+            "attachments": [{"network_prefixes": ["10.0.0.5"]}],
+        },
+    )
+    async with database.pool.acquire() as conn:
+        ligne = await conn.fetchrow(
+            "SELECT sector_key, access_point_ref FROM static_clients WHERE reference = 'svc-9'"
+        )
+    assert ligne["access_point_ref"] == "sect-n1"
+    assert ligne["sector_key"] is None
+
+    # Un appelant qui NOMME une cle de topologie, lui, est suivi.
+    await ModelRepository(database.pool).put_service(
+        "svc-10",
+        {
+            "parent_device_id": "sect-n1",
+            "sector_key": "mac:AA:BB:CC:DD:EE:FF",
+            "attachments": [{"network_prefixes": ["10.0.0.6"]}],
+        },
+    )
+    async with database.pool.acquire() as conn:
+        secteur = await conn.fetchval(
+            "SELECT sector_key FROM static_clients WHERE reference = 'svc-10'"
+        )
+    assert secteur == "mac:AA:BB:CC:DD:EE:FF"
+
+
+async def test_la_mac_du_cpe_est_normalisee_a_la_modification(database: Database) -> None:
+    from app.db.static_clients_repo import StaticClientsRepository
+
+    depot = StaticClientsRepository(database.pool)
+    fiche = await depot.create(
+        {
+            "reference": "mairie",
+            "pop_name": "PoP Nord",
+            "address": "10.0.0.5",
+            "cpe_mac": "aa-bb-cc-dd-ee-ff",
+            "plan_down_mbps": 50,
+            "plan_up_mbps": 10,
+        }
+    )
+    assert fiche["cpe_mac"] == "AA:BB:CC:DD:EE:FF"
+    modifiee = await depot.update(fiche["id"], {"cpe_mac": "11-22-33-44-55-66"})
+    assert modifiee["cpe_mac"] == "11:22:33:44:55:66"
+
+
+async def test_un_client_declare_sur_une_seule_adresse_n_est_plus_propose(
+    database: Database,
+) -> None:
+    """``<<=`` ET NON ``<<`` : L'OPERATEUR STRICT EXCLUT L'EGALITE.
+
+    Un client declare sur une adresse unique porte un /32. Avec l'operateur
+    strict, ``10.0.0.5 << 10.0.0.5/32`` est FAUX : la fiche existait, la file
+    etait posee, et l'adresse restait malgre tout proposee comme "non declaree",
+    indefiniment. L'exploitant la redeclarait, ou concluait que sa saisie
+    n'avait servi a rien.
+    """
+    from app.db.flows_repo import FlowsRepository
+    from app.db.static_clients_repo import StaticClientsRepository
+    from app.services.flows import FlushBatch, HostCounters
+
+    depot = FlowsRepository(database.pool)
+    await depot.write_batch(
+        FlushBatch(
+            ts=_maintenant(),
+            subscribers=[],
+            apps=[],
+            hosts=[
+                HostCounters("10.0.0.5", 812, up_bytes=10),
+                HostCounters("10.0.1.5", None, up_bytes=10),
+                HostCounters("10.20.0.10", None, up_bytes=10),
+                HostCounters("172.16.9.9", 900, up_bytes=10),
+            ],
+        )
+    )
+    assert len(await depot.hosts(limit=10)) == 4
+
+    saisie = StaticClientsRepository(database.pool)
+    # Adresse unique : c'est le cas que l'operateur strict manquait.
+    await saisie.create(
+        {
+            "reference": "unique",
+            "pop_name": "PoP Nord",
+            "address": "10.0.0.5",
+            "plan_down_mbps": 50,
+            "plan_up_mbps": 10,
+        }
+    )
+    # Prefixe ADDITIONNEL d'un service de l'API : il compte comme le premier.
+    from app.db.model_repo import ModelRepository
+
+    await ModelRepository(database.pool).put_service(
+        "svc-2",
+        {"attachments": [{"network_prefixes": ["10.9.0.0/30", "10.0.1.5"]}]},
+    )
+    # Abonne PPPoE : son adresse de session compte aussi.
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO subscribers (login, kind, last_ip) "
+            "VALUES ('dupont', 'pppoe', '10.20.0.10')"
+        )
+
+    restants = [h["address"] for h in await depot.hosts(limit=10)]
+    assert restants == ["172.16.9.9"], f"encore proposes a tort : {restants}"

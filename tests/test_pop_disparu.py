@@ -272,8 +272,12 @@ async def test_un_collecteur_present_produit_bien_une_observation() -> None:
     )
     await registre.reload()
     depot = DepotObservations()
+    # La detection ARP est coupee par defaut (les clients VLAN se declarent a la
+    # main) : ce test-ci l'exerce, il l'allume donc explicitement.
+    reglages = _settings()
+    reglages.vlan_detect_enabled = True
     service = CollectionService(
-        _settings(),
+        reglages,
         collectors=registre.collectors,
         backhaul_provider=MockBackhaulProvider(),
         plan_provider=MockPlanProvider(),

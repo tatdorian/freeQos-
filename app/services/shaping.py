@@ -1882,7 +1882,7 @@ class ShapingService:
             ligne["state"] = self.ETAT_A_POSER
             ligne["reason"] = (
                 "l'enforcement est desactive : la file est calculee, rien n'est ecrit "
-                "tant qu'il ne sera pas actif (onglet Shaping)"
+                "tant qu'il ne sera pas actif (Reglages > Shaping et ecriture)"
                 if not self._enforcement_enabled
                 else "simulation : rien n'a ete ecrit"
             )
@@ -2043,7 +2043,7 @@ class ShapingService:
                     "file a poser : elle sera ecrite a la prochaine reconciliation"
                     if self._enforcement_enabled
                     else "l'enforcement est desactive : rien ne sera ecrit tant qu'il ne "
-                    "sera pas actif (onglet Shaping)"
+                    "sera pas actif (Reglages > Shaping et ecriture)"
                 ),
                 "applied": 0,
                 "actions": actions,
@@ -2484,7 +2484,7 @@ class ShapingService:
         if not dry_run and not self._enforcement_enabled:
             raise EnforcementDisabledError(
                 "Le controleur est en lecture seule. Activez l'enforcement depuis "
-                "l'onglet Shaping, ou passez ENFORCEMENT_ENABLED a true."
+                "Reglages > Shaping et ecriture, ou passez ENFORCEMENT_ENABLED a true."
             )
 
         client: RouterOsWriteClient | None = None

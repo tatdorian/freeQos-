@@ -68,6 +68,14 @@ class StaticClientInput(BaseModel):
     )
     plan_down_mbps: float | None = Field(default=None, gt=0, le=100_000)
     plan_up_mbps: float | None = Field(default=None, gt=0, le=100_000)
+    cpe_mac: str | None = Field(
+        default=None,
+        max_length=32,
+        description=(
+            "MAC du CPE, facultative. Elle survit a un changement d'adresse et "
+            "permet de rapprocher le client du voisinage radio."
+        ),
+    )
     enabled: bool = True
     note: str | None = Field(default=None, max_length=512)
 
@@ -83,6 +91,7 @@ class StaticClientUpdate(BaseModel):
     sector_key: str | None = Field(default=None, max_length=128)
     plan_down_mbps: float | None = Field(default=None, gt=0, le=100_000)
     plan_up_mbps: float | None = Field(default=None, gt=0, le=100_000)
+    cpe_mac: str | None = Field(default=None, max_length=32)
     enabled: bool | None = None
     note: str | None = Field(default=None, max_length=512)
 
@@ -161,6 +170,44 @@ async def list_static_clients(
         fiche["seen_vlan_interface"] = vu["vlan_interface"] if vu else None
         fiche["seen_router"] = vu["router_name"] if vu else None
     return fiches
+
+
+@router.get(
+    "/static-clients/vlans",
+    summary="Clients declares, ranges par VLAN",
+)
+async def clients_par_vlan(container: ContainerDep) -> dict[str, Any]:
+    """Ce qui est DECLARE sur chaque VLAN, et ce qui y parle sans l'etre.
+
+    LES CLIENTS SUR VLAN SE SAISISSENT A LA MAIN. C'est la seule source qui
+    existe : ils n'ouvrent pas de session, RADIUS ne les connait pas, et rien
+    sur le reseau ne dit quel debit a ete vendu a quelle adresse. Une adresse
+    qui parle sur une VLAN peut etre un client, une imprimante, une camera ou
+    l'equipement d'un autre operateur -- toutes laissent exactement la meme
+    trace.
+
+    D'ou la forme de cette reponse : d'un cote ``vlans``, ce que l'exploitant a
+    declare ; de l'autre ``unmatched``, ce que les flux ont vu passer et que
+    personne n'a declare. La seconde liste est une AIDE A LA SAISIE. Rien n'y
+    devient une fiche tout seul, et il n'existe deliberement aucune route pour
+    promouvoir une ligne : declarer passe par ``POST /static-clients``, avec un
+    debit souscrit que seul un humain connait.
+    """
+    declares = await _require_repository(container).by_vlan()
+    non_rattaches: list[dict[str, Any]] = []
+    if container.flows_repo is not None:
+        try:
+            non_rattaches = await container.flows_repo.hosts(limit=100)
+        except Exception:  # noqa: BLE001 - l'inventaire declare prime
+            logger.exception("Hotes non rattaches illisibles")
+    return {
+        "vlans": declares,
+        "unmatched": non_rattaches,
+        "note": (
+            "Les clients VLAN sont declares a la main. 'unmatched' ne liste que "
+            "des adresses vues dans les flux : ce ne sont pas des clients."
+        ),
+    }
 
 
 @router.get(

@@ -21,13 +21,17 @@ from app import __version__
 from app.api import (
     admin,
     antennas_admin,
+    api_keys,
     capacity,
     health,
     metrics,
+    model_v1,
+    netflow,
     pop_census,
     routers_admin,
     shaping,
     static_clients,
+    usage_v1,
 )
 from app.api import (
     settings as settings_api,
@@ -85,6 +89,28 @@ aucune route pour le promouvoir -- declarer passe par
 decroche -- jamais le plan souscrit d'un abonne. Meme garde-fous que les autres
 boucles automatiques : soumise a ``ENFORCEMENT_ENABLED``, jamais de purge, et le
 plan passe par le meme planificateur, donc reste diffable et auditable.
+
+**Ou ce controleur se place** : en amont du coeur, juste derriere la sortie
+internet, et au niveau du PoP -- aux deux extremites du reseau, jamais au milieu.
+Le coeur n'exporte rien et n'est pas interroge : la mesure ne lui ajoute aucune
+charge, ni a l'aller ni au retour. C'est l'interet du flux NetFlow exporte
+(quelques dizaines de kbit/s) sur un miroir de port, qui recopierait chaque octet
+sur le lien de collecte dans les deux sens.
+
+**Trafic (NetFlow v5 / v9 / IPFIX)** : le controleur ECOUTE les flux exportes et
+en tire du volume date, par abonne et par usage. Le meme octet etant vu aux deux
+points de mesure, chacun est enregistre AVEC sa mesure et la consommation se lit
+depuis un seul (``NETFLOW_ACCOUNTING_VANTAGE``). Ce que les flux montrent et qui
+n'est rattache a aucune fiche va dans une liste d'aide a la saisie -- jamais dans
+l'inventaire.
+
+**API publique, contrat compatible Preseem** (``/model/v1`` et ``/usage/v1``,
+cle en authentification Basic) : cinq collections -- ``accounts``, ``packages``,
+``sites``, ``access_points``, ``services`` -- en ``GET``, ``PUT /{id}`` idempotent
+et ``DELETE``. Un systeme de facturation qui parlait a Preseem change l'URL de
+base et la cle, rien d'autre. Un service ecrit par l'API atterrit dans le MEME
+inventaire que la saisie manuelle, marque ``source='api'``, et l'API n'ecrase
+jamais une fiche saisie a la main (409).
 """
 
 
@@ -126,6 +152,14 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     app.include_router(static_clients.router, prefix=settings.api_prefix)
     app.include_router(pop_census.router, prefix=settings.api_prefix)
     app.include_router(settings_api.router, prefix=settings.api_prefix)
+    app.include_router(netflow.router, prefix=settings.api_prefix)
+    app.include_router(api_keys.router, prefix=settings.api_prefix)
+    # API PUBLIQUE. Volontairement HORS du prefixe d'exploitation : son chemin
+    # est le contrat que les systemes de facturation connaissent deja
+    # (/model/v1, /usage/v1), et le deplacer suffirait a casser la
+    # compatibilite qui fait tout l'interet de ces routes.
+    app.include_router(model_v1.router)
+    app.include_router(usage_v1.router)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(ui_router)
 
@@ -147,7 +181,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"] if settings.app_env.lower() == "lab" else [],
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
 

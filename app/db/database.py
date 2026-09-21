@@ -204,6 +204,8 @@ class Database:
             "backhaul_metrics",
             "interface_metrics",
             "qoe_scores",
+            "flow_metrics",
+            "flow_app_metrics",
         )
         async with self.pool.acquire() as conn:
             for table in hypertables:

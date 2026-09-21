@@ -20,6 +20,59 @@ radio Ubiquiti). Alternative à Preseem, **hors-bande**.
 L'abstraction est prévue (les baselines sont des données de premier ordre), mais rien de
 la boucle locale ne vit dans ce dépôt.
 
+## Où cette application se place dans le réseau
+
+Elle n'est **jamais** dans le chemin des paquets. Elle se branche **en amont du cœur**,
+juste derrière la sortie internet, et **au niveau du PoP** — aux deux extrémités du
+réseau, jamais au milieu.
+
+```
+   Internet
+      │
+      ▼
+ ┌──────────┐   NetFlow (vantage 'edge')
+ │ Sortie   │ ─────────────────────────────┐
+ │ internet │                              │
+ └──────────┘                              │
+      │                                    ▼
+      ▼                            ┌────────────────┐
+ ┌──────────┐   rien à exporter,   │   freeQoS      │
+ │  CŒUR    │   rien à interroger  │  (hors-bande)  │
+ └──────────┘                      └────────────────┘
+      │                                    ▲
+      ▼                                    │
+ ┌──────────┐   NetFlow (vantage 'pop')    │
+ │   PoP    │ ─────────────────────────────┘
+ └──────────┘   + API RouterOS (lecture, puis files CAKE)
+      │
+      ▼
+   Abonnés
+```
+
+**Pourquoi ces deux points-là.** Ils voient tout ce qui compte, et rien d'autre :
+
+- **En amont du cœur** (`vantage='edge'`) : tout ce qui vient d'internet et tout ce qui y
+  va passe par là, **une seule fois**. C'est la mesure de référence de la consommation
+  d'un abonné.
+- **Au PoP** (`vantage='pop'`) : le même trafic, mais là où le dernier kilomètre commence
+  — donc avec l'étiquette VLAN et le secteur, qui n'existent plus ailleurs.
+
+**Pourquoi pas au milieu.** Le cœur n'exporte rien, n'est pas interrogé, et aucune sonde
+ne transite par lui. **La mesure ne lui ajoute aucune charge, ni à l'aller ni au retour.**
+C'est exactement ce qu'un miroir de port ne permet pas : il recopie chaque octet sur le
+lien de collecte, donc sur une sortie à 10 Gbit/s, c'est 10 Gbit/s de plus à transporter,
+dans les deux sens, à travers le cœur qu'on cherchait justement à épargner. Un export
+NetFlow tient dans quelques dizaines de kbit/s : un datagramme UDP résume des milliers de
+conversations.
+
+**Corollaire assumé : le même octet est vu deux fois.** Un flux qui traverse le PoP puis
+la sortie internet est exporté par les deux. Les additionner donnerait le double du trafic
+réel. Le **point de mesure** est donc enregistré *avec* la mesure — il fait partie de la
+clé primaire de `flow_metrics` — et la consommation se lit depuis **un seul**
+(`NETFLOW_ACCOUNTING_VANTAGE`, `edge` par défaut).
+
+---
+
 ## Les trois goulots à shaper
 
 1. **Dernier km par abonné**, sur le PoP — file CAKE par session PPPoE.
@@ -265,7 +318,8 @@ backhaul un abonné traverse, donc quelle file doit être son parent.
 
 #### La topologie se découvre toute seule
 
-Les onglets **Topologie** et **Arbre réseau** lisent le graphe en base. Ce graphe
+L'onglet **Arbre réseau** lit le graphe en base — l'arbre éditable, et le tableau
+des liens replié juste dessous. Ce graphe
 n'est écrit que par `discover()` — et il est désormais appelé par un **job
 périodique** (`discover_topology`, cadence `topology_refresh_interval_s`), pas
 seulement par le bouton « Relancer la découverte ».
@@ -519,7 +573,8 @@ légèrement **sous** la capacité réelle du lien (`SHAPING_SAFETY_FACTOR`, 90 
 pour que la file se forme dans CAKE — où on la contrôle — plutôt que dans le buffer de la
 radio, où on ne peut rien.
 
-**Autoriser l'écriture.** L'interrupteur de l'onglet Shaping bascule
+**Autoriser l'écriture.** L'interrupteur de *Réglages › Shaping et écriture sur les
+routeurs* bascule
 `ENFORCEMENT_ENABLED` **sans redémarrage** : la variable d'environnement ne sert plus
 qu'à l'amorçage, ensuite c'est la base qui fait foi et la bascule survit au redémarrage.
 Activer demande une confirmation et un motif, tracé dans le journal ; couper est immédiat
@@ -533,7 +588,7 @@ qu'un débit saisi dans l'interface **plafonne vraiment**, et qu'une reconnexion
 laisse pas une file posée sur l'adresse d'hier. Déclarer un client à IP fixe applique en
 plus **immédiatement**, sans attendre son passage.
 
-**L'onglet Shaping montre donc la CARTE, pas les commandes.** La question de l'exploitant
+**Ce panneau montre donc la CARTE, pas les commandes.** La question de l'exploitant
 n'est pas « quelles commandes as-tu envoyées » — c'est **où ça bride, et à combien**. La
 page rend l'arbre que RouterOS applique réellement : chaque lien parent porte les abonnés
 qui passent par lui, avec son plafond et **d'où vient ce plafond** (capacité mesurée,
@@ -754,7 +809,8 @@ Toute commande envoyée, y compris simulée, est journalisée dans `enforcement_
 visible dans l'interface.
 
 **Droits nécessaires sur RouterOS.** L'enforcement exige les politiques `write` et `api`.
-L'onglet Shaping → *Analyser l'existant* affiche le verdict lu sur le routeur : le compte
+*Réglages › Shaping et écriture › Analyser l'existant* affiche le verdict lu sur le
+routeur : le compte
 peut écrire, ne peut pas (avec la politique manquante), ou c'est indéterminable.
 
 Si votre compte les a déjà, il n'y a **rien à faire**. Sinon :
@@ -1345,6 +1401,161 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 
 > L'authentification de l'API n'est pas encore activée : les endpoints sont anonymes.
 
+## Trafic : NetFlow
+
+**Ce qu'il apporte.** Les compteurs d'une file RouterOS comptent ce qui traverse *cette*
+file : ils repartent de zéro à chaque reconnexion PPPoE, ne survivent pas au redémarrage
+du routeur, et ne disent rien du trafic d'un client dont la file n'existe pas encore.
+NetFlow donne du **volume daté**, par abonné et par usage, sur tout ce qui passe — y
+compris ce qu'on ne bride pas. C'est ce qui rend possibles la facturation au volume, les
+quotas, et la question « de quoi est fait le trafic qui sature ce secteur ».
+
+**Trois versions décodées**, sans dépendance externe : **NetFlow v5**, **NetFlow v9** et
+**IPFIX (v10)**, y compris les modèles à champs constructeur et à longueur variable.
+
+### Mettre en route
+
+1. Ouvrir le collecteur : `NETFLOW_ENABLED=true` (puis redémarrer — ouvrir une socket
+   n'est pas un réglage qu'on bascule depuis une page web). Port par défaut : `2055/udp`.
+2. Configurer l'export sur les équipements. Sur RouterOS 7 :
+
+   ```
+   /ip/traffic-flow set enabled=yes interfaces=all
+   /ip/traffic-flow/target add dst-address=<le collecteur> port=2055 version=9
+   ```
+
+3. **Déclarer d'où chaque exporteur regarde**, dans *Trafic › Exporteurs* : `edge` (en
+   amont du cœur) ou `pop`. Un exporteur qui envoie sans être déclaré apparaît quand même,
+   marqué `unknown` — un PoP mal configuré doit **se voir**, pas disparaître en silence.
+4. Si l'équipement échantillonne, le dire (`sampling_rate`). Sans cela, un routeur en
+   1:1000 rapporte un millième du trafic réel, et **rien ne le montre** : les chiffres
+   restent plausibles, juste mille fois trop petits.
+
+### Ce que le collecteur fait des flux
+
+| Étape | Règle |
+|---|---|
+| **À qui appartient l'octet** | Le préfixe déclaré **le plus précis** qui contient l'adresse. Un `/32` à l'intérieur d'un `/29` désigne un autre abonné, et c'est lui qui gagne. |
+| **Dans quel sens** | Déduit de l'**abonné**, jamais du numéro d'interface : destination dans son bloc = descendant, source dans son bloc = montant. Lire le sens sur l'interface obligerait à connaître le câblage de chaque exporteur, et se tromperait au premier recâblage. |
+| **Où c'est compté** | Le point de mesure fait partie de la clé. `edge` et `pop` ne se mélangent jamais. |
+| **Quand c'est écrit** | Une ligne par abonné et par fenêtre (60 s par défaut), pas une par flux. Un export de sortie internet porte des milliers de conversations par seconde. |
+| **Ce qui n'est rattaché à rien** | Va dans une liste d'**hôtes vus**, qui sert à la saisie et à rien d'autre — et seulement si l'adresse tombe dans `NETFLOW_CUSTOMER_NETWORKS`, sinon chaque serveur contacté sur internet y apparaîtrait. |
+
+**Un tableau vide a trois causes opposées** — collecteur coupé, rien qui parle, ou des flux
+reçus dont on ne sait pas lire le modèle — et elles n'appellent pas le même geste.
+`GET /api/v1/netflow/status` les distingue, et l'onglet *Trafic* affiche le diagnostic en
+clair plutôt qu'un écran vide.
+
+> **`orphan_records` qui monte puis se stabilise est normal.** En v9 et en IPFIX les
+> données sont illisibles sans le modèle qui les décrit, et ce modèle arrive dans un
+> datagramme séparé, réémis toutes les quelques minutes. Un compteur qui monte **sans
+> cesse** veut dire que l'exporteur n'envoie jamais ses modèles (`template-refresh`).
+
+---
+
+## Clients par VLAN : déclarés à la main
+
+Un client sur VLAN routée **n'ouvre aucune session**, RADIUS ne le décrit pas, et rien sur
+le réseau ne dit quel débit lui a été vendu. La saisie n'est pas un pis-aller en attendant
+une intégration : **c'est la seule source qui existe**.
+
+Ce que les flux — ou la table ARP — montrent, ce sont des **adresses qui parlent**. Une
+imprimante, une caméra ou l'équipement d'un autre opérateur y ont exactement la même
+apparence qu'un client professionnel. Une liste automatique donne donc l'illusion d'un
+inventaire sans en être un, et fait perdre du temps à trier plutôt qu'à saisir.
+
+Conséquences concrètes :
+
+- `VLAN_DETECT_ENABLED` est **à `false` par défaut**. L'activer ajoute une lecture de
+  `/ip/arp` par routeur, purement consultative.
+- *Abonnés › Inventaire des clients à IP fixe* montre en tête **ce qui est déclaré**,
+  rangé par VLAN (`GET /api/v1/static-clients/vlans`).
+- Les adresses non rattachées sont reléguées dans un bloc replié, et dans l'onglet
+  *Trafic*. **Déclarer** pré-remplit l'adresse et le VLAN ; la référence et le débit
+  souscrit restent à saisir — eux, personne ne les devine.
+- Aucune route ne « promeut » un candidat. Déclarer passe par `POST /api/v1/static-clients`.
+
+---
+
+## API publique : remplacer Preseem sans réécrire l'intégration
+
+Ce qui coûte cher dans une bascule, ce n'est pas le contrôleur : c'est **tout ce qui lui
+parle**. Splynx, UISP/UCRM, Powercode, Visp et les développements maison poussent déjà leur
+inventaire vers l'API « model » de Preseem. freeQoS en **reprend la forme telle quelle** :
+un intégrateur change l'URL de base et la clé, rien d'autre.
+
+```bash
+# Créer la clé : Réglages › Clés d'API (le secret n'est affiché qu'une fois)
+
+# Un client, un forfait, un site, un secteur, une ligne vendue
+curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/accounts/cust-41 \
+     -H 'Content-Type: application/json' \
+     -d '{"name": "Mairie de Vitré"}'
+
+curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/packages/pack-100 \
+     -H 'Content-Type: application/json' \
+     -d '{"name": "100/20", "down_speed": 100000, "up_speed": 20000}'
+
+curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/sites/tour-nord \
+     -H 'Content-Type: application/json' -d '{"name": "PoP Nord"}'
+
+curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/access_points/sect-n1 \
+     -H 'Content-Type: application/json' \
+     -d '{"name": "Secteur N1", "tower": "tour-nord", "ip_address": "10.10.5.2"}'
+
+curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/services/svc-4321 \
+     -H 'Content-Type: application/json' \
+     -d '{"account": "cust-41", "package": "pack-100",
+          "parent_device_id": "sect-n1",
+          "attachments": [{"cpe_mac": "00:10:0b:6e:4c:ff",
+                           "network_prefixes": ["10.0.0.0/29"]}]}'
+
+# La consommation, en octets
+curl -u "$CLE:" 'https://freeqos.exemple.net/usage/v1/services?bucket=month'
+```
+
+| | |
+|---|---|
+| **Base** | `/model/v1` (référentiel) et `/usage/v1` (consommation) |
+| **Authentification** | `Authorization: Basic base64(<clé>:)` — la clé tient lieu de nom d'utilisateur, mot de passe vide. `Bearer` et `X-API-Key` sont acceptés aussi. |
+| **Collections** | `accounts`, `packages`, `sites`, `access_points`, `services` |
+| **Méthodes** | `GET` (liste / fiche), `PUT /{id}` (crée ou remplace), `DELETE /{id}` |
+| **Unités** | **kbit/s**, comme Preseem. La conversion vers les Mbit/s internes se fait à la frontière, et nulle part ailleurs. |
+| **Portées** | `read` (les `GET`) et `write` (y ajoute `PUT` et `DELETE`) |
+
+**Pourquoi `PUT` et pas `POST`.** La facturation est la source de vérité, et elle
+resynchronise : elle doit pouvoir **rejouer son inventaire entier** sans se demander ce
+qui existe déjà. `PUT` sur un identifiant choisi par l'appelant est la seule forme qui
+rende ce rejeu inoffensif.
+
+**Ce qui est refusé, et pourquoi.**
+
+- L'identifiant de l'URI fait foi. Un corps qui en porte un autre est un **400** : deviner
+  lequel des deux est le bon reviendrait à écrire au hasard sur le réseau d'un opérateur.
+- Un service qui reprend l'identifiant d'une fiche **saisie à la main** est un **409**.
+  L'API ne prend jamais la main sur un geste humain. L'inverse reste possible et assumé :
+  un exploitant corrige à la main une fiche venue de l'API, et la synchronisation suivante
+  le dira.
+- Un service sans préfixe réseau est un **400** : sans adresse, rien ne peut être bridé, et
+  accepter la fiche ferait croire à une ligne configurée.
+
+**Où atterrit un service.** Dans `static_clients`, l'inventaire que l'interface montre déjà
+— marqué `source='api'`. Pas de seconde table de clients : ce serait deux vérités sur le
+même client, et une file sur le routeur qui ne saurait plus laquelle suivre. Le service est
+**shapé dans la foulée** de son écriture, et la réponse porte `enforcement` : ce qui a été
+écrit, ou ce qui l'en a empêché.
+
+> Un service peut porter plusieurs préfixes. **Le premier est la cible de la file** (une
+> file vise une cible) ; tous comptent dans la mesure de trafic.
+
+**Les clés.** Le secret est tiré une fois, montré une fois, et la base n'en garde que
+l'empreinte SHA-256 — y compris pour celui qui l'a créée. Une clé perdue se révoque et se
+remplace. Un refus ne dit jamais *pourquoi* (inconnue, désactivée, expirée) : distinguer
+les cas donnerait gratuitement un oracle à qui essaie des clés au hasard. Le journal, lui,
+le dit.
+
+---
+
 ## API
 
 | Méthode | Chemin | Description |
@@ -1396,9 +1607,36 @@ détail des changements. La vérification TLS vers chaque routeur est configurab
 | `DELETE` | `/api/v1/shaping/boosts/{login}` | Retirer un boost avant échéance |
 | `DELETE` | `/api/v1/pops/{id}` | Retirer un site et tout son historique |
 | `GET` | `/api/v1/shaping/audit` | Journal des commandes envoyées |
+| `GET` | `/api/v1/static-clients/vlans` | **Clients déclarés, rangés par VLAN** + ce qui parle sans être déclaré |
+| `GET` | `/api/v1/netflow/status` | État du collecteur de flux, et ce qui empêche de mesurer |
+| `GET` · `POST` | `/api/v1/netflow/exporters` | Équipements qui exportent, et **d'où ils regardent** (`edge` / `pop`) |
+| `PATCH` · `DELETE` | `/api/v1/netflow/exporters/{id}` | Corriger / retirer un exporteur |
+| `GET` | `/api/v1/netflow/top` | Qui consomme, et combien, sur la période |
+| `GET` | `/api/v1/netflow/applications` | Répartition du trafic par famille d'usage |
+| `GET` | `/api/v1/netflow/subscribers/{id}/series` | Volume d'un abonné dans le temps |
+| `GET` | `/api/v1/netflow/hosts` | Adresses vues, rattachées à **aucune** fiche (aide à la saisie) |
+| `POST` | `/api/v1/netflow/flush` | Écrire la fenêtre en cours tout de suite |
+| `GET` · `POST` | `/api/v1/api-keys` | Clés d'API (le secret n'est rendu **qu'à la création**) |
+| `PATCH` · `DELETE` | `/api/v1/api-keys/{id}` | Désactiver / révoquer une clé |
 | `GET` | `/api/v1/status` · `/status/runs` · `/status/counters` | Exploitation |
 | `POST` | `/api/v1/jobs/{job}/run` | Rejoue un cycle de **lecture** hors cadence |
 | `GET` | `/` | Tableau de bord |
+
+### API publique (clé requise) — contrat compatible Preseem
+
+Volontairement **hors** du préfixe d'exploitation : ce chemin est le contrat que les
+systèmes de facturation connaissent déjà, et le déplacer suffirait à casser la
+compatibilité qui fait tout l'intérêt de ces routes.
+
+| Méthode | Chemin | Description |
+|---|---|---|
+| `GET` | `/model/v1` | Collections disponibles — vérifie une clé d'un seul appel |
+| `GET` | `/model/v1/{collection}` | Liste (`accounts`, `packages`, `sites`, `access_points`, `services`) |
+| `GET` | `/model/v1/{collection}/{id}` | Fiche |
+| `PUT` | `/model/v1/{collection}/{id}` | Crée ou remplace (idempotent). Un service est **shapé dans la foulée** |
+| `DELETE` | `/model/v1/{collection}/{id}` | Retire |
+| `GET` | `/usage/v1/services` | Consommation de tous les services, en octets (`bucket=total\|hour\|day\|month`) |
+| `GET` | `/usage/v1/services/{id}` | Consommation d'un service |
 
 Documentation interactive : `/docs`.
 

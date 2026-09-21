@@ -236,6 +236,9 @@ def build_service(
     depot: DepotObservations | None,
     inventaire: InventaireMemoire | None = None,
 ) -> tuple[CollectionService, InMemoryMetricsWriter, InMemoryDirectory]:
+    # La detection ARP est COUPEE par defaut (les clients VLAN se declarent a
+    # la main) : ces tests-ci l'exercent, ils l'allument donc explicitement.
+    settings.vlan_detect_enabled = True
     collectors = [MikrotikCollector(cfg, client=client) for cfg in settings.routers]
     writer = InMemoryMetricsWriter()
     directory = InMemoryDirectory()
@@ -340,9 +343,10 @@ async def test_un_candidat_ne_produit_jamais_de_cible_de_shaping(
 async def test_la_detection_peut_etre_coupee(
     settings: Settings, routeur_vlan: FakeRouterOsClient
 ) -> None:
-    settings.vlan_detect_enabled = False
     depot = DepotObservations()
     service, _, _ = build_service(settings, routeur_vlan, depot)
+    # Apres build_service, qui l'allume : c'est la coupure qu'on teste ici.
+    settings.vlan_detect_enabled = False
 
     resultat = await service.detect_vlan_clients()
 
@@ -546,6 +550,7 @@ class DepotTopologie:
 
 @pytest.fixture
 def api(settings: Settings):
+    settings.vlan_detect_enabled = True
     inventaire = InventaireApi()
     depot = DepotApi([_candidat(), _candidat(address="10.20.0.9")])
     container = build_container(

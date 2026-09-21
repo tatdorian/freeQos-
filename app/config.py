@@ -18,6 +18,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.services.flows import RESEAUX_CLIENTS_PAR_DEFAUT
+
 
 class MissingSecretError(RuntimeError):
     """Un secret reference par la config est absent de l'environnement."""
@@ -250,16 +252,62 @@ class Settings(BaseSettings):
     inventory_refresh_interval_s: float = 60.0
 
     # --- Detection des clients sur VLAN routee (aide a la saisie) ---
-    # Lecture de /ip/arp pour reperer qui parle sur les VLAN sans PPPoE. La
-    # cadence est lache a dessein : c'est une aide a la DECLARATION, pas une
-    # metrique. Rien de ce qu'elle trouve n'est jamais shape.
-    vlan_detect_enabled: bool = True
+    #
+    # COUPEE PAR DEFAUT, ET C'EST UN CHOIX. Les clients sur VLAN routee se
+    # DECLARENT A LA MAIN : ils n'ouvrent aucune session, RADIUS ne les decrit
+    # pas, et rien sur le reseau ne dit quel debit a ete vendu a quelle adresse.
+    # Une adresse qui parle sur une VLAN peut etre un client, une imprimante,
+    # une camera ou l'equipement d'un autre operateur : toutes laissent la meme
+    # trace. Une liste automatique donne donc l'illusion d'un inventaire sans en
+    # etre un, et fait perdre du temps a trier plutot qu'a saisir.
+    #
+    # L'activer ajoute une lecture de /ip/arp par routeur : une AIDE a la
+    # declaration, rien de plus. Rien de ce qu'elle trouve n'est jamais shape.
+    # Les flux NetFlow rendent le meme service sans rien demander aux routeurs
+    # (cf. GET /netflow/hosts).
+    vlan_detect_enabled: bool = False
     vlan_detect_interval_s: float = 300.0
     # Au-dela, une adresse qui s'est tue n'est plus une piste : on l'oublie.
     vlan_sighting_retention_s: float = 86_400.0
     # Plafond de candidats remontes a l'interface ET poses dans le graphe. Une
     # VLAN bavarde ne doit pas noyer l'arbre sous des centaines de cases.
     vlan_candidate_limit: int = 200
+
+    # --- NetFlow : mesure du trafic sans etre sur le chemin des paquets ---
+    #
+    # OU LE CONTROLEUR SE PLACE. Il ecoute, il ne sonde rien. Les exporteurs
+    # sont declares AUX DEUX EXTREMITES du reseau et jamais au milieu :
+    #
+    #   - en amont du coeur, a la sortie internet (vantage 'edge') : tout ce qui
+    #     vient d'internet et tout ce qui y va passe la, une seule fois ;
+    #   - au PoP (vantage 'pop') : le meme trafic, mais la ou l'etiquette VLAN
+    #     et le secteur existent encore.
+    #
+    # Le coeur, entre les deux, n'exporte rien et n'est pas interroge : la
+    # mesure ne lui ajoute aucune charge, ni a l'aller ni au retour. C'est tout
+    # l'interet du flux exporte -- un miroir de port recopierait chaque octet
+    # sur le lien de collecte, dans les deux sens.
+    netflow_enabled: bool = False
+    netflow_bind: str = "0.0.0.0"  # noqa: S104 - un collecteur ecoute sur tous les liens
+    netflow_port: int = 2055
+    # Fin de fenetre : on ecrit UNE ligne par abonne et par fenetre, pas une par
+    # flux. Descendre sous 30 s multiplie les lignes sans rien apprendre de plus.
+    netflow_flush_interval_s: float = 60.0
+    # LE MEME OCTET EST VU DEUX FOIS (au PoP puis a la sortie internet). Les
+    # additionner doublerait la consommation de chacun : la lecture ne retient
+    # qu'un point de mesure, et c'est celui-ci.
+    netflow_accounting_vantage: Literal["edge", "pop"] = "edge"
+    # Espace d'adressage ou vivent les clients. Sert a decider si une adresse non
+    # rattachee merite d'etre proposee a la saisie : sans ce filtre, chaque
+    # serveur contacte sur internet apparaitrait comme un candidat.
+    netflow_customer_networks: list[str] = Field(
+        default_factory=lambda: list(RESEAUX_CLIENTS_PAR_DEFAUT)
+    )
+    # Retenir les adresses non rattachees. C'est ce qui alimente l'aide a la
+    # declaration des clients VLAN. A false, on ne garde que les abonnes connus.
+    netflow_track_hosts: bool = True
+    netflow_host_limit: int = 500
+    netflow_host_retention_s: float = 86_400.0
 
     # --- Sonde de latence (phase 3 amorcee) ---
     # DESACTIVEE par defaut : c'est une sonde ACTIVE (/ping depuis le routeur),
