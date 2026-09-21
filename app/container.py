@@ -404,8 +404,26 @@ async def build_container(settings: Settings) -> Container:
         track_destinations=settings.netflow_track_destinations,
         destination_limit=settings.netflow_destination_limit,
         destination_retention_s=settings.netflow_destination_retention_s,
+        infrastructure_networks=tuple(settings.netflow_infrastructure_networks),
     )
+
+    def adresses_d_exploitation() -> list[str]:
+        """Ce qui appartient au reseau, pas aux clients.
+
+        Le controleur lui-meme, les routeurs qu'il interroge, et les exporteurs
+        declares. Cette liste se deduit de l'inventaire : elle suit le parc sans
+        que personne n'ait a la tenir.
+        """
+        adresses: list[str] = []
+        for collector in registry.collectors:
+            adresses.append(collector.config.host)
+            if collector.config.loopback:
+                adresses.append(collector.config.loopback)
+        adresses.extend(netflow.exporters)
+        return adresses
+
     await netflow.start()
+    netflow.set_infrastructure(adresses_d_exploitation())
 
     # Met un nom sur les adresses que NetFlow decouvre. Il ne touche jamais a la
     # reception : celle-ci se contente d'INSCRIRE l'adresse, et cette boucle-ci
@@ -452,6 +470,7 @@ async def build_container(settings: Settings) -> Container:
             destination_limit=settings.netflow_destination_limit,
             destination_retention_s=settings.netflow_destination_retention_s,
         )
+        netflow.set_infrastructure(adresses_d_exploitation())
         await netflow.flush()
 
     # Pose l'export NetFlow sur les routeurs. Sans lui, le collecteur ecoute

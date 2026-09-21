@@ -567,6 +567,81 @@ def match_prefix(address: str) -> Verdict:
     )
 
 
+#: Suffixes a deux etiquettes : le domaine enregistrable y compte trois
+#: etiquettes, pas deux. Sans cette liste, ``abo.wanadoo.fr`` serait lu comme
+#: ``wanadoo.fr`` (correct), mais ``bbc.co.uk`` deviendrait ``co.uk`` -- le nom
+#: du registre, pas celui de l'organisation.
+SUFFIXES_COMPOSES: frozenset[str] = frozenset(
+    {
+        "co.uk",
+        "org.uk",
+        "gov.uk",
+        "ac.uk",
+        "net.uk",
+        "sch.uk",
+        "com.au",
+        "net.au",
+        "org.au",
+        "edu.au",
+        "gov.au",
+        "co.nz",
+        "net.nz",
+        "org.nz",
+        "com.br",
+        "net.br",
+        "org.br",
+        "gov.br",
+        "co.jp",
+        "ne.jp",
+        "or.jp",
+        "ac.jp",
+        "go.jp",
+        "co.in",
+        "net.in",
+        "org.in",
+        "gov.in",
+        "com.cn",
+        "net.cn",
+        "org.cn",
+        "gov.cn",
+        "co.za",
+        "org.za",
+        "net.za",
+        "com.mx",
+        "com.ar",
+        "com.tr",
+        "com.sg",
+        "com.hk",
+        "com.tw",
+    }
+)
+
+
+def registrable_domain(hostname: str | None) -> str | None:
+    """Le domaine sous lequel le nom inverse est enregistre.
+
+    ``lfbn-lyo-1-878-160.w86-194.abo.wanadoo.fr`` ne dit rien a personne ;
+    ``wanadoo.fr`` dit Orange. C'est la forme qu'un exploitant reconnait d'un
+    coup d'oeil, et celle qu'il tapera dans un moteur de recherche s'il ne la
+    reconnait pas.
+
+    Ce n'est PAS la liste publique des suffixes (PSL) : l'embarquer ferait
+    entrer plusieurs milliers d'entrees a tenir a jour pour un gain marginal.
+    Les suffixes composes les plus courants suffisent, et le reste retombe sur
+    les deux dernieres etiquettes -- ce qui est juste dans l'immense majorite
+    des cas.
+    """
+    if not hostname:
+        return None
+    nom = hostname.strip().rstrip(".").lower()
+    etiquettes = [e for e in nom.split(".") if e]
+    if len(etiquettes) < 2:
+        return None
+    if len(etiquettes) >= 3 and ".".join(etiquettes[-2:]) in SUFFIXES_COMPOSES:
+        return ".".join(etiquettes[-3:])
+    return ".".join(etiquettes[-2:])
+
+
 def match_hostname(hostname: str | None) -> Verdict:
     """Verdict rendu par le nom inverse.
 

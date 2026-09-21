@@ -60,6 +60,12 @@ RESEAUX_CLIENTS_PAR_DEFAUT: tuple[str, ...] = (
     "fd00::/8",
 )
 
+#: Reseaux d'EXPLOITATION par defaut : aucun. Le controleur les apprend tout
+#: seul (son adresse, celle des routeurs declares, celle des exporteurs) ; ce
+#: reglage sert a en ajouter que l'inventaire ne connait pas -- un lien de
+#: transit, un reseau de supervision.
+RESEAUX_INFRASTRUCTURE_PAR_DEFAUT: tuple[str, ...] = ()
+
 #: Familles d'usage, volontairement grossieres. L'inspection fine de protocole
 #: n'a pas sa place dans un controleur de debit : la seule question a laquelle
 #: ce tableau doit repondre est "de quoi est fait le trafic qui sature ce
@@ -106,6 +112,41 @@ PORTS: dict[int, str] = {
 }
 
 AUTRE = "autre"
+
+#: Ports du PLAN DE GESTION. Un flux qui les porte n'est pas une conversation
+#: de client : c'est le reseau qui s'administre lui-meme.
+#:
+#: SANS CE FILTRE, la liste "qui parle a qui" se remplit de ce que le
+#: controleur fait lui-meme -- il interroge les routeurs en 8728, recoit leurs
+#: flux en 2055 -- et de ce que les routeurs se disent entre eux (BFD, BGP).
+#: Ce trafic est reel, il est meme le plus regulier du reseau, et il noie
+#: exactement ce qu'on venait chercher : le ping d'un client vers un site.
+#:
+#: SSH et telnet n'y sont PAS. Un client a parfaitement le droit de s'en
+#: servir, et les ecarter masquerait son trafic.
+PORTS_INFRASTRUCTURE: frozenset[int] = frozenset(
+    {
+        161,  # SNMP
+        162,  # SNMP trap
+        179,  # BGP
+        514,  # syslog
+        646,  # LDP
+        1645,  # RADIUS (historique)
+        1646,
+        1812,  # RADIUS
+        1813,
+        2055,  # NetFlow
+        3784,  # BFD
+        3785,
+        4739,  # IPFIX
+        4784,  # BFD multihop
+        8291,  # Winbox
+        8728,  # API RouterOS
+        8729,  # API RouterOS (TLS)
+        9995,  # NetFlow (autres collecteurs)
+        9996,
+    }
+)
 
 
 def classify(flow: Flow) -> str:
@@ -294,6 +335,12 @@ class FlowAggregator:
     #: Retenir l'adresse DISTANTE atteinte par chaque abonne. C'est ce qui
     #: alimente "qui se connecte a quoi" et, de la, les restrictions.
     track_destinations: bool = True
+    #: Adresses du reseau d'exploitation : le collecteur, les routeurs declares,
+    #: tout ce qui n'est pas un client. Renseigne par le service a chaque
+    #: fenetre, depuis l'inventaire et les exporteurs declares.
+    infrastructure_networks: tuple[IpNetwork, ...] = ()
+    #: Ports du plan de gestion. Vide = ne rien ecarter.
+    infrastructure_ports: frozenset[int] = PORTS_INFRASTRUCTURE
     #: Plafond de destinations retenues par fenetre. Un seul abonne qui fait du
     #: p2p peut toucher des milliers d'adresses en une minute : sans plafond,
     #: une fenetre de collecte deviendrait une fenetre d'ecriture en base.
@@ -309,6 +356,10 @@ class FlowAggregator:
     #: monte dit que destination_limit est trop bas -- sinon on croirait que ces
     #: abonnes n'atteignent rien.
     destinations_dropped: int = 0
+    #: Flux ecartes de "qui parle a qui" parce qu'ils relevent de
+    #: l'exploitation. Compte, et non tu : un chiffre enorme ici veut dire que
+    #: le filtre est trop large, et il faut pouvoir s'en apercevoir.
+    destinations_infra: int = 0
 
     @staticmethod
     def parse_networks(values: Sequence[str]) -> tuple[IpNetwork, ...]:
@@ -427,7 +478,20 @@ class FlowAggregator:
         remplirait de l'infrastructure de l'exploitant, et chaque adresse interne
         declencherait une requete de nom inverse pour rien.
         """
-        if not ipfinder.is_routable(remote):
+        if not ipfinder.is_routable(remote) or self._is_customer(remote):
+            # Ni internet, ni une destination : deux machines du reseau qui se
+            # parlent. Ce n'est pas un rejet, c'est une absence de sujet -- et
+            # ca ne se compte donc pas comme du trafic ecarte.
+            return
+        # EXPLOITATION. Soit l'un des bouts appartient au reseau lui-meme, soit
+        # le port de service releve du plan de gestion : un routeur peut
+        # parfaitement joindre une adresse publique pour s'administrer.
+        if (
+            self._is_infrastructure(remote)
+            or self._is_infrastructure(client)
+            or service_port(flow) in self.infrastructure_ports
+        ):
+            self.destinations_infra += 1
             return
         cle = (client, remote)
         compteurs = self._dests.get(cle)
@@ -497,6 +561,35 @@ class FlowAggregator:
                 compteurs.down_bytes += octets
             else:
                 compteurs.up_bytes += octets
+
+    def _is_internet(self, address: str) -> bool:
+        """L'adresse designe-t-elle vraiment l'autre bout, sur internet ?
+
+        TROIS EXCLUSIONS, ET CHACUNE A SA RAISON :
+
+        - le NON-ROUTABLE (prive, lien-local, multicast). La CGNAT
+          (100.64.0.0/10) y echappe pourtant : la bibliotheque standard la dit
+          privee, et un operateur y met ses clients. C'est precisement le cas ou
+          il faut trancher nous-memes, avec l'espace client declare ;
+        - l'ESPACE CLIENT. Deux clients qui se parlent ne sont une destination
+          ni pour l'un ni pour l'autre, et la conversation apparaissait DEUX
+          FOIS, une par sens ;
+        - l'INFRASTRUCTURE. Le collecteur et les routeurs declares s'adressent
+          en permanence : c'est le trafic le plus regulier du reseau, et il
+          noyait ce qu'on venait chercher.
+        """
+        if not ipfinder.is_routable(address):
+            return False
+        return not self._is_customer(address) and not self._is_infrastructure(address)
+
+    def _is_infrastructure(self, address: str) -> bool:
+        if not self.infrastructure_networks:
+            return False
+        try:
+            adresse = ipaddress.ip_address(address)
+        except ValueError:
+            return False
+        return any(adresse in reseau for reseau in self.infrastructure_networks)
 
     def _is_customer(self, address: str) -> bool:
         if not self.customer_networks:

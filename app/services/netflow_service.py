@@ -101,6 +101,9 @@ class NetflowService:
     track_destinations: bool = True
     destination_limit: int = 2_000
     destination_retention_s: float = 604_800.0
+    #: Reseaux d'exploitation declares a la main, en plus de ceux que le
+    #: controleur apprend seul (ses routeurs, ses exporteurs, lui-meme).
+    infrastructure_networks: tuple[str, ...] = ()
 
     decoder: NetflowDecoder = field(default_factory=NetflowDecoder)
     aggregator: FlowAggregator = field(default_factory=FlowAggregator)
@@ -122,6 +125,9 @@ class NetflowService:
         self.aggregator.track_hosts = self.track_hosts
         self.aggregator.track_destinations = self.track_destinations
         self.aggregator.destination_limit = self.destination_limit
+        self.aggregator.infrastructure_networks = FlowAggregator.parse_networks(
+            list(self.infrastructure_networks)
+        )
 
     def apply_runtime(
         self,
@@ -236,6 +242,22 @@ class NetflowService:
             logger.warning("Index des abonnes non relu : %s", exc)
             return
         self.aggregator.set_index(PrefixIndex.build(entrees))
+
+    def set_infrastructure(self, prefixes: list[str]) -> None:
+        """Declare ce qui appartient au reseau d'exploitation.
+
+        C'EST CE QUI NETTOIE "QUI PARLE A QUI". Le controleur interroge les
+        routeurs, recoit leurs flux, et les routeurs se parlent entre eux : ce
+        trafic est le plus regulier du reseau, et il noyait le ping d'un client
+        vers un site. On l'ecarte de la liste des conversations -- pas des
+        volumes, qui restent mesures tels quels.
+
+        Les adresses viennent de l'inventaire et des exporteurs declares : elles
+        suivent donc le parc sans que personne ne tienne une liste a jour.
+        """
+        self.aggregator.infrastructure_networks = FlowAggregator.parse_networks(
+            [*self.infrastructure_networks, *prefixes]
+        )
 
     async def refresh_exporters(self) -> None:
         if self.exporters_repo is None:
@@ -372,5 +394,7 @@ class NetflowService:
             "track_destinations": self.track_destinations,
             "destinations_window": self.aggregator.destinations_in_window,
             "destinations_dropped": self.aggregator.destinations_dropped,
+            "destinations_infra": self.aggregator.destinations_infra,
+            "infrastructure_networks": len(self.aggregator.infrastructure_networks),
             "last_error": self.last_error,
         }

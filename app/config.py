@@ -327,6 +327,14 @@ class Settings(BaseSettings):
     # Au-dela, une destination qui ne repond plus est oubliee. SEULE LA MESURE
     # est purgee : ce qu'on a appris de l'adresse (son nom, son service) reste.
     netflow_destination_retention_s: float = 604_800.0
+    # Reseaux d'EXPLOITATION : ce qui appartient au reseau et non aux clients.
+    #
+    # Le controleur les apprend seul (son adresse, celles des routeurs declares
+    # et des exporteurs) ; ce reglage sert a en ajouter que l'inventaire ne
+    # connait pas -- un lien de transit, un reseau de supervision. Le trafic
+    # d'exploitation est ecarte de "qui parle a qui" : sans cela, l'interrogation
+    # des routeurs et le BFD entre eux noient le ping d'un client vers un site.
+    netflow_infrastructure_networks: list[str] = Field(default_factory=list)
 
     # --- Export NetFlow pose par le controleur lui-meme ---
     #
@@ -364,7 +372,10 @@ class Settings(BaseSettings):
     #      droit de ne pas en vouloir.
     ipfinder_enabled: bool = True
     ipfinder_rdns_enabled: bool = True
-    ipfinder_rdap_enabled: bool = False
+    # ACTIVE lui aussi : c'est la seule source qui donne l'ORGANISATION et le
+    # numero d'AS, c'est-a-dire a qui appartient reellement l'adresse. Sans lui,
+    # une adresse hors catalogue et sans nom inverse reste anonyme.
+    ipfinder_rdap_enabled: bool = True
     ipfinder_rdap_url: str = "https://rdap.org/ip/"
     # Localisation : pays, region, ville, coordonnees.
     #
@@ -375,7 +386,12 @@ class Settings(BaseSettings):
     # IPFINDER_GEOIP_DB pointe une base MaxMind locale (.mmdb) : meme reponse,
     # aucun appel sortant. Des qu'elle est renseignee et lisible (paquet
     # 'geoip2' installe), elle est preferee au service HTTP.
-    ipfinder_geoip_enabled: bool = False
+    # ACTIVE. Le compromis est reel et assume : sans base locale, chaque adresse
+    # nouvelle est envoyee au service de geolocalisation. Poser
+    # IPFINDER_GEOIP_DB (pip install ".[geoip]" + un fichier GeoLite2) rend la
+    # meme reponse sans qu'aucun paquet ne sorte ; IPFINDER_GEOIP_ENABLED=false
+    # la coupe entierement.
+    ipfinder_geoip_enabled: bool = True
     ipfinder_geoip_url: str = "https://ipapi.co/{ip}/json/"
     ipfinder_geoip_db: str | None = None
     ipfinder_interval_s: float = 30.0

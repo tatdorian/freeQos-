@@ -1358,6 +1358,8 @@ async function loadFlowPairs() {
         '<td class="login">' + clientCell(r) + '</td>' +
         '<td><a href="#" data-pair-ip="' + esc(r.address) + '"><code>' +
           esc(r.address) + '</code></a>' +
+          (domaine(r.hostname)
+            ? '<br><b style="font-size:.75rem">' + esc(domaine(r.hostname)) + '</b>' : '') +
           (r.hostname ? '<br><span class="hint">' + esc(r.hostname) + '</span>' : '') + '</td>' +
         '<td>' + (r.service ? esc(r.service) : svcBadge(r.category)) + '</td>' +
         '<td class="num">' + esc(r.port || '-') + '</td>' +
@@ -3216,6 +3218,27 @@ function clientCell(ligne) {
     ' <span class="hint">non declare</span>';
 }
 
+/** Le domaine sous lequel un nom inverse est enregistre.
+ *
+ *  'lfbn-lyo-1-878-160.w86-194.abo.wanadoo.fr' ne dit rien a personne ;
+ *  'wanadoo.fr' dit Orange. C'est la forme qu'on reconnait d'un coup d'oeil.
+ *  Les suffixes a deux etiquettes (co.uk, com.au) comptent pour un. */
+const SUFFIXES_COMPOSES = new Set([
+  'co.uk', 'org.uk', 'gov.uk', 'ac.uk', 'net.uk',
+  'com.au', 'net.au', 'org.au', 'com.br', 'com.mx', 'com.ar',
+  'co.nz', 'co.jp', 'ne.jp', 'co.in', 'com.cn', 'co.za', 'com.tr',
+]);
+
+function domaine(nom) {
+  if (!nom) return null;
+  const parts = String(nom).trim().replace(/\.$/, '').toLowerCase().split('.').filter(Boolean);
+  if (parts.length < 2) return null;
+  if (parts.length >= 3 && SUFFIXES_COMPOSES.has(parts.slice(-2).join('.'))) {
+    return parts.slice(-3).join('.');
+  }
+  return parts.slice(-2).join('.');
+}
+
 function svcBadge(categorie) {
   if (!categorie) return '<span class="badge">non identifie</span>';
   return '<span class="badge ' + (SVC_CATEGORIES[categorie] || '') + '">' +
@@ -3473,7 +3496,6 @@ function ipCard(fiche, periodeSecondes, actions) {
   const octets = Number(totaux.down_bytes || 0) + Number(totaux.up_bytes || 0);
   // La localisation n'est remplie que si l'exploitant l'a autorisee : la
   // demander envoie a un tiers l'adresse que son client a jointe.
-  const lieu = [intel.city, intel.region, intel.country].filter(Boolean).join(', ');
   const position = (intel.latitude !== null && intel.latitude !== undefined)
     ? Number(intel.latitude).toFixed(3) + ', ' + Number(intel.longitude).toFixed(3)
     : null;
@@ -3483,12 +3505,17 @@ function ipCard(fiche, periodeSecondes, actions) {
     '<div class="ip-facts">' +
       fait('Service', service ? '<b>' + esc(service) + '</b>' : null) +
       fait('Reconnu par', source && source !== 'inconnu' ? esc(source) : null) +
+      fait('Domaine', domaine(intel.hostname)
+        ? '<b>' + esc(domaine(intel.hostname)) + '</b>' : null) +
       fait('Nom inverse', intel.hostname ? esc(intel.hostname) : null) +
       fait('Organisation', intel.org ? esc(intel.org) : null) +
       fait('AS', intel.asn ? 'AS' + esc(intel.asn) : null) +
-      fait('Localisation', lieu ? esc(lieu) : null) +
+      fait('Pays', intel.country ? esc(intel.country) : null) +
+      fait('Ville', intel.city ? esc(intel.city) : null) +
+      fait('Region', intel.region ? esc(intel.region) : null) +
       fait('Coordonnees', position ? '<code>' + esc(position) + '</code>' : null) +
-      fait('Bloc', esc(intel.network || catalogue.matched_prefix || '')) +
+      fait('Bloc annonce', esc(intel.network || catalogue.matched_prefix || '')) +
+      fait('Analysee', intel.resolved_at ? esc(depuis(intel.resolved_at)) : null) +
       fait('Clients', esc(totaux.clients || 0)) +
       fait('Descendant', bytesText(totaux.down_bytes)) +
       fait('Montant', bytesText(totaux.up_bytes)) +

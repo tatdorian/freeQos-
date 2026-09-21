@@ -1514,6 +1514,21 @@ la fenêtre ce qui **se passe**.
 
 Un clic sur l'adresse ouvre sa fiche complète (ci-dessous).
 
+**Le trafic d'exploitation en est écarté.** Le contrôleur interroge les routeurs (port
+8728), reçoit leurs flux (2055), et les routeurs se surveillent entre eux (BFD 3784, BGP
+179) : ce trafic est le plus régulier du réseau, et il noyait le ping d'un client vers un
+site. Trois règles le retirent de la liste des conversations :
+
+| Écarté | Pourquoi |
+|---|---|
+| Les deux bouts dans l'espace client | Deux clients qui se parlent ne sont une destination ni pour l'un ni pour l'autre — et la conversation apparaissait **deux fois**, une par sens. La CGNAT (`100.64.0.0/10`) échappait au filtre standard : la bibliothèque la dit privée, un opérateur y met ses clients |
+| Un bout est de l'infrastructure | Le contrôleur, les routeurs déclarés, les exporteurs. Cette liste se déduit de l'inventaire ; `NETFLOW_INFRASTRUCTURE_NETWORKS` en ajoute |
+| Le port de service est du plan de gestion | API RouterOS, NetFlow, BFD, BGP, SNMP, RADIUS, syslog, Winbox. **SSH et telnet n'y sont pas** : un client s'en sert légitimement |
+
+**Les volumes ne sont pas touchés** : on nettoie la liste des conversations, pas la
+mesure. Le nombre de flux écartés est rendu par `/netflow/status` — un chiffre énorme veut
+dire que le filtre est trop large, et il faut pouvoir s'en apercevoir.
+
 ### Ce que le collecteur fait des flux
 
 | Étape | Règle |
@@ -1555,11 +1570,22 @@ Twitch, un CDN, un fournisseur de nuage — et c'est de là que se posent les re
 | **RDAP** | Organisation, numéro d'AS, pays, bloc annoncé | Un appel HTTP sortant. **Coupé par défaut** |
 | **Géolocalisation** | Pays, région, ville, coordonnées | Une base MaxMind **locale** si `IPFINDER_GEOIP_DB` la désigne (aucun appel sortant), sinon un service HTTP. **Coupé par défaut** |
 
-> **Les deux dernières sont coupées par défaut, et pas seulement par sobriété.** Les
+La fiche d'une adresse donne : **domaine** (`wanadoo.fr` plutôt que
+`lfbn-lyo-1-878-160.w86-194.abo.wanadoo.fr`, illisible), nom inverse complet, service
+reconnu et *à quel titre*, organisation, AS, pays, ville, région, coordonnées, bloc
+annoncé, volume, débit moyen, et la liste nominative de qui la joint.
+
+> **RDAP et la géolocalisation sont actifs par défaut, et le compromis est réel.** Les
 > interroger revient à **envoyer à un tiers les adresses que vos clients atteignent** —
-> c'est une information sur eux, pas sur vous. La base locale (`pip install ".[geoip]"` +
-> un fichier GeoLite2) donne la même réponse sans que rien ne sorte : c'est la seule forme
-> recommandable sans réserve.
+> c'est une information sur eux. Deux façons de l'éviter : `IPFINDER_GEOIP_DB` pointant un
+> fichier GeoLite2 (`pip install ".[geoip]"`) donne la même réponse **sans qu'aucun paquet
+> ne sorte**, et `IPFINDER_GEOIP_ENABLED=false` / `IPFINDER_RDAP_ENABLED=false` coupe
+> entièrement.
+>
+> Ce que NetFlow **ne peut pas** donner : le nom de domaine que le client a demandé. Un
+> export de flux ne porte pas la requête DNS. Un ping vers `tatoulian.fr` se lit donc
+> « 188.114.97.2, Cloudflare » — le nom inverse et le domaine décrivent l'hébergeur, pas
+> le site visé.
 >
 > Chaque source est isolée : un résolveur qui casse, un registre qui limite le débit ou un
 > service de localisation en panne ne coûte jamais le verdict que les autres ont rendu.
@@ -1954,7 +1980,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 1321 tests, dont 1231 sans aucune infrastructure
+make test        # 1331 tests, dont 1241 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

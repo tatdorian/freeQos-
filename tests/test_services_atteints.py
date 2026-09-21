@@ -593,3 +593,120 @@ def test_un_ping_icmp_est_retenu_comme_le_reste() -> None:
     assert destination.address == "45.57.12.34"
     assert destination.app == "diagnostic"
     assert destination.port == 0
+
+
+# =========================================================================
+# 7. CE QUI EST DE L'EXPLOITATION N'EST PAS UNE CONVERSATION DE CLIENT
+# =========================================================================
+
+
+def agregateur_operateur(**kwargs: object) -> FlowAggregator:
+    """Un agregateur qui connait son reseau : espace client et exploitation."""
+    parametres: dict[str, object] = {
+        "index": PrefixIndex.build([("100.100.101.115/32", 1)]),
+        "customer_networks": FlowAggregator.parse_networks(["100.64.0.0/10", "172.16.0.0/12"]),
+        "infrastructure_networks": FlowAggregator.parse_networks(["11.11.11.0/24"]),
+    }
+    parametres.update(kwargs)
+    return FlowAggregator(**parametres)  # type: ignore[arg-type]
+
+
+def test_deux_clients_qui_se_parlent_ne_sont_pas_une_destination() -> None:
+    """LA CGNAT ECHAPPAIT AU FILTRE.
+
+    La bibliotheque standard dit 100.64.0.0/10 privee, mais un operateur y met
+    ses clients : ils tombaient donc dans "qui parle a qui", et la meme
+    conversation y apparaissait DEUX FOIS -- une par sens, puisque chaque bout
+    voyait l'autre comme sa destination.
+    """
+    agg = agregateur_operateur()
+    agg.add(flux("100.100.101.115", "100.100.101.113", protocol=1), vantage="pop")
+    agg.add(flux("100.100.101.113", "100.100.101.115", protocol=1), vantage="pop")
+
+    assert agg.flush(MAINTENANT).destinations == []
+
+
+def test_l_interrogation_des_routeurs_n_est_pas_du_trafic_client() -> None:
+    """Le controleur interroge les routeurs en 8728 et recoit leurs flux en
+    2055 : c'est le trafic le plus regulier du reseau, et il noyait le ping
+    d'un client vers un site."""
+    agg = agregateur_operateur()
+    agg.add(flux("100.100.101.115", "11.11.11.81", src_port=51000, dst_port=8728), vantage="pop")
+    agg.add(flux("100.100.101.115", "11.11.11.75", src_port=51000, dst_port=2055), vantage="pop")
+
+    assert agg.flush(MAINTENANT).destinations == []
+    assert agg.destinations_infra == 2
+
+
+def test_le_bfd_entre_routeurs_est_ecarte() -> None:
+    """Port 3784 : les routeurs se surveillent mutuellement. C'est du reseau
+    qui s'administre, pas un client qui consomme."""
+    agg = agregateur_operateur()
+    agg.add(flux("100.100.101.116", "8.8.4.4", src_port=3784, dst_port=3784), vantage="pop")
+    assert agg.flush(MAINTENANT).destinations == []
+
+
+def test_une_adresse_d_exploitation_n_est_jamais_un_client() -> None:
+    """Le conteneur du controleur parle aux routeurs : ce n'est pas un abonne,
+    et ses conversations n'ont rien a faire dans la liste."""
+    agg = agregateur_operateur(
+        customer_networks=FlowAggregator.parse_networks(["172.16.0.0/12"]),
+        infrastructure_networks=FlowAggregator.parse_networks(["172.18.0.0/16", "11.11.11.0/24"]),
+    )
+    agg.add(flux("172.18.0.3", "11.11.11.81", src_port=42765, dst_port=443), vantage="pop")
+    assert agg.flush(MAINTENANT).destinations == []
+
+
+def test_le_vrai_trafic_client_passe_toujours() -> None:
+    """LE TEST QUI COMPTE. Tout ce filtrage n'a de valeur que s'il laisse
+    passer ce qu'on venait chercher : un client qui joint un site."""
+    agg = agregateur_operateur()
+    agg.add(flux("100.100.101.115", "188.114.97.2", protocol=1, octets=132), vantage="pop")
+
+    destinations = agg.flush(MAINTENANT).destinations
+    assert len(destinations) == 1
+    assert destinations[0].address == "188.114.97.2"
+    assert destinations[0].client == "100.100.101.115"
+    assert agg.destinations_infra == 0
+
+
+def test_un_client_a_le_droit_d_utiliser_ssh() -> None:
+    """SSH N'EST PAS DANS LA LISTE DE GESTION, et c'est volontaire : un client
+    s'en sert legitimement, et l'ecarter masquerait son trafic."""
+    agg = agregateur_operateur()
+    agg.add(flux("100.100.101.115", "188.114.97.2", src_port=51000, dst_port=22), vantage="pop")
+    assert len(agg.flush(MAINTENANT).destinations) == 1
+
+
+def test_sans_reseaux_declares_rien_n_est_pris_pour_de_l_exploitation() -> None:
+    """Le filtre par adresse ne s'applique que si on lui a dit quoi ecarter :
+    une installation neuve ne doit pas perdre de trafic en silence."""
+    agg = agregateur(infrastructure_networks=())
+    agg.add(flux("10.0.0.2", "45.57.12.34"), vantage="edge")
+    assert len(agg.flush(MAINTENANT).destinations) == 1
+
+
+# =========================================================================
+# 8. METTRE UN NOM LISIBLE SUR UNE ADRESSE
+# =========================================================================
+
+
+def test_le_domaine_enregistrable_est_extrait_du_nom_inverse() -> None:
+    """'lfbn-lyo-1-878-160.w86-194.abo.wanadoo.fr' ne dit rien a personne ;
+    'wanadoo.fr' dit Orange. C'est la forme qu'on reconnait d'un coup d'oeil."""
+    assert ipfinder.registrable_domain("lfbn-lyo-1-878-160.w86-194.abo.wanadoo.fr") == "wanadoo.fr"
+    assert ipfinder.registrable_domain("vip-rdefy-prod-k8s.s0.fti.net") == "fti.net"
+    assert ipfinder.registrable_domain("ipv4-c001.1.oca.nflxvideo.net") == "nflxvideo.net"
+
+
+def test_un_suffixe_compose_compte_pour_un() -> None:
+    """Sans cette precaution, 'bbc.co.uk' deviendrait 'co.uk' -- le nom du
+    registre, pas celui de l'organisation."""
+    assert ipfinder.registrable_domain("www.bbc.co.uk") == "bbc.co.uk"
+    assert ipfinder.registrable_domain("a.b.example.com.au") == "example.com.au"
+
+
+def test_un_nom_inexploitable_ne_rend_pas_de_domaine() -> None:
+    assert ipfinder.registrable_domain("localhost") is None
+    assert ipfinder.registrable_domain(None) is None
+    assert ipfinder.registrable_domain("") is None
