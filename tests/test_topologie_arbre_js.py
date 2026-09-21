@@ -44,9 +44,9 @@ def harnais(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
     module = tmp_path_factory.mktemp("arbre") / "arbre.js"
     module.write_text(
-        # ``topo`` est l'etat global de l'editeur ; seuls les abonnes et l'etat
-        # des agregats deplies servent ici.
-        "const topo = { subs: [], abosOuverts: new Set() };\n"
+        # ``topo`` est l'etat global de l'editeur ; seuls les abonnes, l'etat
+        # des agregats deplies et les branches repliees servent ici.
+        "const topo = { subs: [], abosOuverts: new Set(), replies: new Set() };\n"
         "const TOPO_ABOS_MAX = 25;\n"
         + source[debut:fin]
         + "\nmodule.exports = { topo, topoBuildModel, topoAutoLayout };\n",
@@ -236,6 +236,75 @@ console.log(JSON.stringify({ collisions, cases: m.nodesByKey.size }));
     )
     assert res["collisions"] == 0
     assert res["cases"] == 5
+
+
+def test_replier_une_branche_retire_tout_ce_qui_pend_dessous(harnais: Path) -> None:
+    """Replier PoP Nord doit retirer le backhaul qui pend dessous, pas seulement
+    le PoP lui-meme : une branche a moitie repliee laisserait un trait vers une
+    case orpheline, et personne ne saurait de quoi elle depend."""
+    res = executer(
+        harnais,
+        GRAPHE
+        + """
+A.topo.replies.add('router:nord');
+const m = A.topoBuildModel(data);
+A.topoAutoLayout(m);
+const replies = [];
+m.nodesByKey.forEach((x) => { if (x.replie) replies.push(x.key); });
+console.log(JSON.stringify({
+  replies: replies.sort(),
+  nordVisible: m.nodesByKey.get('router:nord').replie === false,
+  nordPlace: Number.isFinite(m.nodesByKey.get('router:nord').x),
+}));
+""",
+    )
+    # Le backhaul pend sous PoP Nord : il disparait avec lui.
+    assert res["replies"] == ["mac:AA"]
+    # La case repliee, elle, reste dessinee : c'est elle qui porte la pastille
+    # permettant de rouvrir la branche.
+    assert res["nordVisible"] is True
+    assert res["nordPlace"] is True
+
+
+def test_deplier_rend_la_branche_a_l_arbre(harnais: Path) -> None:
+    """Le repli ne doit rien perdre : une branche rouverte retrouve ses cases
+    et leurs positions, sans avoir a recharger la page."""
+    res = executer(
+        harnais,
+        GRAPHE
+        + """
+A.topo.replies.add('router:nord');
+A.topoAutoLayout(A.topoBuildModel(data));
+A.topo.replies.delete('router:nord');
+const m = A.topoBuildModel(data);
+A.topoAutoLayout(m);
+const bh = m.nodesByKey.get('mac:AA');
+console.log(JSON.stringify({ replie: bh.replie, place: Number.isFinite(bh.x) }));
+""",
+    )
+    assert res["replie"] is False
+    assert res["place"] is True
+
+
+def test_deux_sous_arbres_voisins_ne_se_touchent_pas(harnais: Path) -> None:
+    """Colles, les feuilles d'une branche touchent celles de la suivante et
+    l'oeil ne voit plus ou l'une finit. PoP Nord porte un backhaul, PoP Sud non :
+    l'ecart entre les deux doit donc depasser une simple ligne."""
+    res = executer(
+        harnais,
+        GRAPHE
+        + """
+const m = A.topoBuildModel(data);
+A.topoAutoLayout(m);
+const ys = {};
+m.nodesByKey.forEach((x) => { ys[x.key] = x.y; });
+console.log(JSON.stringify({ ys }));
+""",
+    )
+    ecart = abs(res["ys"]["router:sud"] - res["ys"]["mac:AA"])
+    # ROWH vaut 74 : un ecart strictement superieur prouve l'air ajoute entre
+    # les deux sous-arbres.
+    assert ecart > 74
 
 
 def test_les_positions_enregistrees_sont_respectees(harnais: Path) -> None:
@@ -645,3 +714,307 @@ console.log(JSON.stringify({ cles: cles(m) }));
 """,
     )
     assert res["cles"] == ["router:pop"]
+
+
+# -------------------------------------------------------------------------
+# LE DESSIN LUI-MEME : la toile, l'echelle, le repli
+#
+# Les tests ci-dessus verifient la DISPOSITION (qui pend de qui, a quelle
+# place). Ceux-ci executent ``renderTopoCanvas`` et lisent le SVG produit :
+# c'est la seule facon de prouver que la toile de fond couvre vraiment le
+# dessin, et pas seulement la partie visible du cadre.
+# -------------------------------------------------------------------------
+
+DEBUT_DESSIN = "const TOPO_RANG = {"
+FIN_DESSIN = "function topoSelect("
+
+
+@pytest.fixture(scope="module")
+def harnais_dessin(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Extrait le rendu de l'arbre, avec juste ce qu'il faut de DOM pour tourner."""
+    source = APP_JS.read_text(encoding="utf-8")
+    debut = source.find(DEBUT_DESSIN)
+    fin = source.find(FIN_DESSIN)
+    assert debut != -1, f"repere introuvable dans app.js : {DEBUT_DESSIN}"
+    assert fin != -1, f"repere introuvable dans app.js : {FIN_DESSIN}"
+    assert debut < fin, "reperes dans le desordre : app.js a ete reorganise"
+
+    module = tmp_path_factory.mktemp("dessin") / "dessin.js"
+    module.write_text(
+        # Un DOM minuscule : le rendu n'a besoin que d'ecrire du HTML quelque
+        # part et de connaitre la taille du cadre. ``querySelector`` rend null,
+        # ce qui court-circuite proprement les branchements d'evenements.
+        """
+const boites = {};
+const elem = (id) => (boites[id] = boites[id] || {
+  id, innerHTML: '', textContent: '', clientWidth: 900, clientHeight: 500, style: {},
+  querySelector: () => null, querySelectorAll: () => [],
+});
+const document = { getElementById: elem };
+const window = { innerHeight: 900 };
+const TOPO_CADRE_MIN = 360;
+const esc = (v) => String(v == null ? '' : v)
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const bpsShort = () => '1G';
+const bpsText = () => '1 Gbps';
+const pct = (v, m) => (m ? (v / m) * 100 : 0);
+const severity = () => 'ok';
+const KIND_COLOR = { pop: 'var(--down)', core: 'var(--accent)', gateway: 'var(--accent)',
+  radio: 'var(--up)', unknown: 'var(--faint)' };
+const KIND_LABEL = { pop: 'PoP', core: 'Coeur', gateway: 'Gateway', radio: 'Radio' };
+const ICONE = { pop: 'POP', core: 'CORE', gateway: 'GW', radio: 'RF' };
+const NODE_W = 176;
+const NODE_H = 48;
+const TOPO_ABOS_MAX = 25;
+const topo = { data: null, subs: [], model: null, selected: null, rateOnly: false,
+  linkMode: false, linkSource: null, abosOuverts: new Set(), replies: new Set(), zoom: 1 };
+"""
+        + source[debut:fin]
+        + "\nmodule.exports = { topo, boites, renderTopoCanvas, setTopoZoom, topoFit };\n",
+        encoding="utf-8",
+    )
+    return module
+
+
+def dessiner(harnais_dessin: Path, script: str) -> dict:
+    return executer(harnais_dessin, script)
+
+
+def test_la_toile_couvre_tout_le_dessin_pas_seulement_le_cadre(harnais_dessin: Path) -> None:
+    """LA DEMANDE : la toile de fond doit s'etendre selon la place utilisee.
+
+    Un arbre plus grand que le cadre finissait sur du vide, parce que le
+    quadrillage etait peint sur le conteneur qui defile. On force ici une case
+    tres loin, puis on verifie que le rectangle de fond va bien jusque-la."""
+    res = dessiner(
+        harnais_dessin,
+        GRAPHE
+        + """
+const noeuds = nodes.map((x) => ({ ...x }));
+noeuds[4].pos_x = 2400; noeuds[4].pos_y = 1700;
+A.topo.data = { nodes: noeuds, links, counts: {} };
+A.renderTopoCanvas();
+const svg = A.boites['topo-canvas'].innerHTML;
+const fond = svg.match(/<rect class="topo-fond" width="([0-9.]+)" height="([0-9.]+)"/);
+const racine = svg.match(/<svg width="([0-9.]+)" height="([0-9.]+)"/);
+console.log(JSON.stringify({
+  fond: fond && { w: Number(fond[1]), h: Number(fond[2]) },
+  racine: racine && { w: Number(racine[1]), h: Number(racine[2]) },
+  motif: svg.indexOf('patternUnits="userSpaceOnUse"') !== -1,
+}));
+""",
+    )
+    assert res["motif"] is True, "le quadrillage n'est pas peint dans le dessin"
+    # La case la plus lointaine finit a 2400+176 et 1700+48 : le fond doit aller
+    # au-dela, sinon l'arbre deborde de sa propre toile.
+    assert res["fond"]["w"] >= 2400 + 176
+    assert res["fond"]["h"] >= 1700 + 48
+    # Et il couvre exactement le SVG, donc toute la zone parcourue en defilant.
+    assert res["fond"] == res["racine"]
+
+
+def test_un_petit_arbre_remplit_quand_meme_le_cadre(harnais_dessin: Path) -> None:
+    """L'inverse compte autant : trois cases ne doivent pas flotter sur un fond
+    minuscule entoure de vide. La toile fait au moins la taille du cadre, dont
+    le plancher est TOPO_CADRE_MIN (360 px)."""
+    res = dessiner(
+        harnais_dessin,
+        GRAPHE
+        + """
+A.topo.replies.clear();
+A.topo.data = { nodes, links, counts: {} };
+A.renderTopoCanvas();
+const svg = A.boites['topo-canvas'].innerHTML;
+const fond = svg.match(/<rect class="topo-fond" width="([0-9.]+)" height="([0-9.]+)"/);
+console.log(JSON.stringify({ w: Number(fond[1]), h: Number(fond[2]) }));
+""",
+    )
+    # clientWidth du faux cadre : 900 px. En hauteur, c'est le plancher du
+    # cadre qui commande, puisqu'il depasse ce petit arbre.
+    assert res["w"] >= 898
+    assert res["h"] >= 358
+
+
+def test_l_echelle_agrandit_le_dessin_sans_bouger_les_coordonnees(
+    harnais_dessin: Path,
+) -> None:
+    """Zoomer change la taille AFFICHEE, pas le repere du dessin : les positions
+    enregistrees, les cibles de depot et les aretes restent dans le meme
+    systeme de coordonnees."""
+    res = dessiner(
+        harnais_dessin,
+        GRAPHE
+        + """
+A.topo.replies.clear();
+A.topo.data = { nodes, links, counts: {} };
+A.setTopoZoom(2);
+const svg = A.boites['topo-canvas'].innerHTML;
+const m = svg.match(/<svg width="([0-9.]+)" height="([0-9.]+)" viewBox="0 0 ([0-9.]+) ([0-9.]+)"/);
+console.log(JSON.stringify({
+  zoom: A.topo.zoom,
+  affiche: { w: Number(m[1]), h: Number(m[2]) },
+  repere: { w: Number(m[3]), h: Number(m[4]) },
+  etiquette: A.boites['topo-zoom-level'].textContent,
+}));
+""",
+    )
+    assert res["zoom"] == 2
+    assert res["affiche"]["w"] == res["repere"]["w"] * 2
+    assert res["affiche"]["h"] == res["repere"]["h"] * 2
+    assert res["etiquette"] == "200 %"
+
+
+def test_l_echelle_reste_dans_des_bornes_utiles(harnais_dessin: Path) -> None:
+    """Une echelle libre finit a 5 % (illisible) ou a 12 (une seule case a
+    l'ecran) : dans les deux cas on a perdu l'arbre."""
+    res = dessiner(
+        harnais_dessin,
+        GRAPHE
+        + """
+A.topo.data = { nodes, links, counts: {} };
+A.setTopoZoom(50); const haut = A.topo.zoom;
+A.setTopoZoom(0.01); const bas = A.topo.zoom;
+A.setTopoZoom(1);
+console.log(JSON.stringify({ haut, bas }));
+""",
+    )
+    assert res["haut"] == 2
+    assert res["bas"] == 0.4
+
+
+def test_une_branche_repliee_n_est_plus_dessinee(harnais_dessin: Path) -> None:
+    """Replier doit retirer les cases ET leurs traits : un trait vers une case
+    absente serait pire que la case elle-meme."""
+    res = dessiner(
+        harnais_dessin,
+        GRAPHE
+        + """
+A.topo.zoom = 1;
+A.topo.replies.clear();
+A.topo.data = { nodes, links, counts: {} };
+A.renderTopoCanvas();
+const ouvert = A.boites['topo-canvas'].innerHTML;
+A.topo.replies.add('router:nord');
+A.renderTopoCanvas();
+const ferme = A.boites['topo-canvas'].innerHTML;
+const cases = (s) => (s.match(/class="topo-node[^"]*" data-node=/g) || []).length;
+const traits = (s) => (s.match(/class="topo-edge[ "]/g) || []).length;
+console.log(JSON.stringify({
+  casesOuvert: cases(ouvert), casesFerme: cases(ferme),
+  traitsOuvert: traits(ouvert), traitsFerme: traits(ferme),
+  backhaulOuvert: ouvert.indexOf('mac:AA') !== -1,
+  backhaulFerme: ferme.indexOf('mac:AA') !== -1,
+  pastille: ferme.indexOf('data-fold="router:nord"') !== -1,
+  compte: ferme.indexOf('>+1<') !== -1,
+}));
+""",
+    )
+    assert res["casesOuvert"] == 5
+    assert res["casesFerme"] == 4
+    assert res["traitsFerme"] < res["traitsOuvert"]
+    assert res["backhaulOuvert"] is True
+    assert res["backhaulFerme"] is False
+    # La case repliee garde sa pastille, et la pastille dit COMBIEN elle cache.
+    assert res["pastille"] is True
+    assert res["compte"] is True, "le repli doit annoncer le nombre de cases cachees"
+
+
+def test_la_legende_ne_liste_que_les_roles_dessines(harnais_dessin: Path) -> None:
+    """Replier PoP Nord retire le seul equipement radio : la legende ne doit
+    plus proposer « Radio », sinon on cherche une case qui n'est plus la."""
+    res = dessiner(
+        harnais_dessin,
+        GRAPHE
+        + """
+A.topo.replies.clear();
+A.topo.data = { nodes, links, counts: {} };
+A.renderTopoCanvas();
+const avant = A.boites['topo-legend'].innerHTML;
+A.topo.replies.add('router:nord');
+A.renderTopoCanvas();
+const apres = A.boites['topo-legend'].innerHTML;
+console.log(JSON.stringify({
+  radioAvant: avant.indexOf('Radio') !== -1,
+  radioApres: apres.indexOf('Radio') !== -1,
+  popApres: apres.indexOf('PoP') !== -1,
+}));
+""",
+    )
+    assert res["radioAvant"] is True
+    assert res["radioApres"] is False
+    assert res["popApres"] is True
+
+
+def test_tout_voir_ramene_l_arbre_dans_le_cadre(harnais_dessin: Path) -> None:
+    """« Tout voir » sert quand l'arbre deborde. Il ne doit jamais GROSSIR un
+    petit arbre : l'agrandir ne dirait rien de plus et rendrait tout flou."""
+    res = dessiner(
+        harnais_dessin,
+        GRAPHE
+        + """
+A.topo.replies.clear();
+const loin = nodes.map((x) => ({ ...x }));
+loin[4].pos_x = 3000; loin[4].pos_y = 40;
+A.topo.data = { nodes: loin, links, counts: {} };
+A.topo.zoom = 1;
+A.renderTopoCanvas();
+A.topoFit();
+const large = A.topo.zoom;
+
+// Deux etages seulement : 26 + 268 + 176 + 40 = 510 px, soit bien moins que
+// les 900 px du cadre. Le graphe complet, lui, fait 1046 px de large et
+// n'entre PAS -- s'en servir ici testerait l'inverse de ce qu'on veut.
+A.topo.data = { nodes: nodes.slice(0, 2), links: [links[3]], counts: {} };
+A.topo.zoom = 1;
+A.renderTopoCanvas();
+A.topoFit();
+const petit = A.topo.zoom;
+console.log(JSON.stringify({ large, petit }));
+""",
+    )
+    assert res["large"] < 1, "un arbre trop large doit etre reduit"
+    assert res["petit"] == 1, "un arbre qui tient deja ne doit pas etre grossi"
+
+
+def test_le_cadre_se_cale_sur_l_arbre_et_se_retracte(harnais_dessin: Path) -> None:
+    """LA DEMANDE, dans les deux sens : le fond s'etend selon la place utilisee.
+
+    Un grand arbre remplit le cadre jusqu'a la fenetre ; un arbre replie le rend
+    aussitot. Une hauteur deduite du cadre COURANT serait collante : une fois
+    grande, elle le resterait apres le repli, et on retrouverait le grand vide
+    qu'on cherche justement a supprimer."""
+    res = dessiner(
+        harnais_dessin,
+        GRAPHE
+        + """
+A.topo.zoom = 1;
+A.topo.replies.clear();
+const grand = nodes.map((x) => ({ ...x }));
+grand[4].pos_y = 1600;
+A.topo.data = { nodes: grand, links, counts: {} };
+A.renderTopoCanvas();
+const haut = A.boites['topo-canvas'].style.height;
+
+// Assez haut pour depasser le plancher, assez bas pour rester sous le
+// plafond : c'est la seule plage ou le cadre epouse vraiment le dessin.
+const moyen = nodes.map((x) => ({ ...x }));
+moyen[4].pos_y = 500;
+A.topo.data = { nodes: moyen, links, counts: {} };
+A.renderTopoCanvas();
+const normal = A.boites['topo-canvas'].style.height;
+
+A.topo.data = { nodes, links, counts: {} };
+A.topo.replies.add('router:core');
+A.renderTopoCanvas();
+const replie = A.boites['topo-canvas'].style.height;
+console.log(JSON.stringify({ haut, normal, replie }));
+""",
+    )
+    px = lambda v: float(str(v).removesuffix("px"))  # noqa: E731
+    # innerHeight vaut 900 dans le faux DOM : le cadre plafonne a 700.
+    assert px(res["haut"]) == 700
+    # L'arbre normal tient sous le plafond : le cadre epouse son etendue.
+    assert 360 < px(res["normal"]) < 700
+    # Et il SE RETRACTE au repli, jusqu'au plancher.
+    assert px(res["replie"]) == 360
+    assert px(res["replie"]) < px(res["normal"])

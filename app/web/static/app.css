@@ -59,13 +59,32 @@ header.top {
 .brand .dot.stale { background: var(--warn); box-shadow: 0 0 0 3px rgba(210,153,34,.18); }
 .brand .dot.down  { background: var(--crit); box-shadow: 0 0 0 3px rgba(248,81,73,.18); }
 
-nav.tabs { display: flex; gap: .25rem; flex: 1; }
+/* Neuf onglets ne tiennent pas sur un portable : ils defilent plutot que de
+   pousser le reste de la barre hors de l'ecran. */
+nav.tabs { display: flex; gap: .25rem; flex: 1; overflow-x: auto; scrollbar-width: none; }
+nav.tabs::-webkit-scrollbar { display: none; }
+/* Une zone qui defile sans le dire n'a pas l'air de defiler : on croit avoir vu
+   tous les onglets. Le dernier s'estompe au bord, ce qui annonce la suite. La
+   barre de defilement, elle, est masquee : elle trancherait sur le bandeau.
+   Quand les onglets tiennent, la place restante est vide et le fondu ne se voit
+   pas. */
+nav.tabs {
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent);
+}
 nav.tabs a {
   padding: .4rem .75rem; border-radius: 7px; color: var(--muted);
   font-weight: 500; font-size: .875rem; text-decoration: none;
+  /* Sans cela, les onglets se serrent puis CASSENT sur deux lignes des que la
+     fenetre retrecit : « Tableau de / bord » sur deux etages, et les derniers
+     rognes en plein mot. Ils gardent leur largeur et defilent. */
+  white-space: nowrap; flex: 0 0 auto;
 }
 nav.tabs a:hover { background: var(--surface); color: var(--text); text-decoration: none; }
-nav.tabs a.active { background: var(--surface-2); color: var(--text); }
+nav.tabs a.active {
+  background: var(--surface-2); color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
 
 .mode {
   font-size: .72rem; color: var(--muted); font-family: var(--mono);
@@ -73,7 +92,9 @@ nav.tabs a.active { background: var(--surface-2); color: var(--text); }
   white-space: nowrap;
 }
 
-main { padding: 1.25rem; max-width: 1500px; margin: 0 auto; }
+/* Une console d'exploitation se lit en largeur : tableaux a dix colonnes,
+   arbre reseau, heatmap. 1500px laissait deux bandes vides sur un 27 pouces. */
+main { padding: 1.25rem; max-width: 1760px; margin: 0 auto; }
 section { display: none; }
 section.active { display: block; }
 
@@ -267,9 +288,15 @@ select[multiple] { height: auto; padding: .3rem; }
 .drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
 .drawer-head h3 { margin: 0; font-size: 1rem; font-family: var(--mono); }
 
+/* La barre du haut se serre AVANT de devoir cacher quoi que ce soit : neuf
+   onglets plus la pastille de mode ne tiennent plus en dessous de ~1200px. */
+@media (max-width: 1200px) {
+  nav.tabs a { padding: .4rem .5rem; font-size: .82rem; }
+  header.top { gap: .9rem; }
+}
 @media (max-width: 760px) {
   .row-2, .row-3 { grid-template-columns: 1fr; }
-  nav.tabs a { padding: .4rem .5rem; font-size: .8rem; }
+  nav.tabs a { padding: .4rem .45rem; font-size: .8rem; }
   .mode { display: none; }
 }
 
@@ -373,13 +400,18 @@ tr.sub-row td { background: rgba(88,166,255,.04); font-size: .78rem; }
 .chk input { width: auto; }
 
 .topo-editor { display: flex; gap: .85rem; align-items: stretch; }
+/* LE CADRE SUIT LE DESSIN, ET LE QUADRILLAGE AVEC LUI.
+   Une hauteur figee (560px) gachait un grand ecran et noyait un portable ; et
+   le quadrillage, peint ici, s'arretait a la partie visible pendant que
+   l'arbre, lui, continuait. Le quadrillage est desormais dessine DANS le SVG,
+   a la taille exacte du contenu, et la hauteur du cadre est posee par le rendu
+   (renderTopoCanvas) d'apres l'etendue des cases, bornee par la fenetre.
+   Ce minimum ne sert donc qu'avant tout dessin : etat vide, ou message. */
 .topo-canvas {
-  flex: 1; min-width: 0; height: 560px; overflow: auto;
+  flex: 1; min-width: 0;
+  min-height: 360px;
+  overflow: auto;
   background: var(--surface);
-  background-image:
-    linear-gradient(var(--border) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border) 1px, transparent 1px);
-  background-size: 26px 26px;
   border: 1px solid var(--border); border-radius: var(--radius);
   position: relative;
 }
@@ -390,6 +422,10 @@ tr.sub-row td { background: rgba(88,166,255,.04); font-size: .78rem; }
   flex: 0 0 250px; background: var(--surface); border: 1px solid var(--border);
   border-radius: var(--radius); padding: .9rem; font-size: .82rem;
   align-self: flex-start;
+  /* Il decrit la case selectionnee : le perdre en defilant reviendrait a
+     devoir remonter pour lire ce qu'on vient de cliquer. */
+  position: sticky; top: 70px;
+  max-height: calc(100vh - 90px); overflow: auto;
 }
 .topo-panel .muted { color: var(--faint); }
 .topo-panel h4 { margin: 0 0 .5rem; font-size: .9rem; font-family: var(--mono); word-break: break-all; }
@@ -463,4 +499,100 @@ details[open] > summary {
   margin-bottom: .7rem;
   padding-bottom: .55rem;
   border-bottom: 1px solid var(--border);
+}
+
+/* ------------------------------------------------------ l'arbre, en detail
+   Ce qui rend un arbre d'operateur lisible n'est pas le dessin des cases mais
+   ce qu'on peut en RETIRER : replier une branche, reduire l'echelle, retrouver
+   quelle couleur porte quel role. */
+
+/* Pastille de repli, a droite de la case. Assez grande pour se cliquer au
+   doigt sans attraper la case, qui elle se glisse. */
+.topo-toggle { cursor: pointer; }
+.topo-toggle rect {
+  fill: var(--surface); stroke: var(--border-strong); stroke-width: 1;
+}
+.topo-toggle text {
+  fill: var(--muted); font-size: 10px; font-family: var(--mono); font-weight: 600;
+}
+.topo-toggle:hover rect { stroke: var(--accent); }
+.topo-toggle:hover text { fill: var(--text); }
+/* Une branche fermee se signale : sinon rien ne distingue une case sans
+   enfants d'une case dont on a masque tout le sous-arbre. */
+.topo-toggle.replie rect { fill: rgba(88,166,255,.14); stroke: var(--accent); }
+.topo-toggle.replie text { fill: var(--accent); }
+
+/* Le quadrillage est desormais peint dans le SVG : il ne doit jamais capter un
+   clic destine a une case ou a une arete. */
+.topo-fond { pointer-events: none; }
+
+.topo-node .box { transition: stroke .12s ease; }
+.topo-node:hover .box { stroke: var(--faint); }
+
+.topo-legend { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .6rem; }
+.topo-legend .chip {
+  display: inline-flex; align-items: center; gap: .35rem;
+  font-size: .7rem; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 999px; padding: .1rem .5rem;
+}
+.topo-legend .chip i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+
+/* Les trois boutons d'echelle forment un seul objet : colles, on les lit comme
+   un reglage, espaces ils se melangent aux actions de la barre. */
+.toolbar .zoom { display: inline-flex; align-items: center; gap: .3rem; }
+.toolbar .zoom .mode { min-width: 52px; text-align: center; }
+
+/* ------------------------------------------------------------- finitions
+   Rien de decoratif ici : ce sont les reperes qui manquaient pour se servir de
+   l'interface au clavier, distinguer une ligne survolee, et voir d'un coup
+   d'oeil qu'une liste deroulante en est une. */
+
+/* Un parcours au clavier doit se voir. Les champs ont deja leur propre halo :
+   un second contour par-dessus les doublerait. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; }
+
+button { transition: background .14s ease, border-color .14s ease, color .14s ease; }
+button:active:not(:disabled) { transform: translateY(1px); }
+
+/* Une liste deroulante doit se distinguer d'un champ de saisie. Le chevron est
+   ecrit en SVG dans la feuille de style : aucun fichier a telecharger, donc
+   rien a aller chercher sur internet depuis une VM de management. */
+select {
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b949e' stroke-width='1.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right .6rem center;
+  background-size: 10px 6px;
+  padding-right: 1.9rem;
+  cursor: pointer;
+}
+select[multiple] { background-image: none; padding-right: .6rem; cursor: auto; }
+
+.card { box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
+
+/* Suivre une ligne sur dix colonnes sans repere visuel est le defaut le plus
+   couteux d'un tableau large. Une teinte tres legere suffit. */
+tbody tr:hover td { background: rgba(255, 255, 255, .02); }
+
+/* Les barres de defilement claires du systeme trouaient le theme sombre. */
+* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong); border-radius: 6px; border: 2px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+
+/* Un poste regle sur "moins d'animations" le demande pour une raison. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important; transition-duration: .01ms !important;
+  }
+}
+
+@media (max-width: 980px) {
+  /* Le panneau de detail passe SOUS la toile plutot que de la reduire a une
+     colonne ou plus aucune case n'est lisible. */
+  .topo-editor { flex-direction: column; }
+  .topo-panel { flex: 1 1 auto; width: 100%; position: static; max-height: none; }
 }

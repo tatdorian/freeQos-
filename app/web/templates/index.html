@@ -219,8 +219,19 @@
              VRAIMENT disparu y reste. Voici le geste qui le retire. -->
         <button id="btn-topo-forget" class="sm">Oublier les equipements disparus</button>
         <span class="spacer"></span>
+        <!-- Un arbre d'operateur deborde toujours de l'ecran : l'echelle est ce
+             qui permet d'en voir la forme, puis d'y revenir de pres. -->
+        <span class="zoom">
+          <button id="btn-topo-zoom-out" class="sm" title="Reduire">&minus;</button>
+          <span class="mode" id="topo-zoom-level">100 %</span>
+          <button id="btn-topo-zoom-in" class="sm" title="Agrandir">+</button>
+          <button id="btn-topo-fit" class="sm">Tout voir</button>
+        </span>
         <span class="mode" id="net-count"></span>
       </div>
+      <!-- Construite a partir des cases REELLEMENT dessinees : une legende qui
+           annonce des roles absents fait chercher ce qui n'existe pas. -->
+      <div class="topo-legend" id="topo-legend"></div>
       <div id="topo-notice"></div>
       <div class="topo-editor">
         <div id="topo-canvas" class="topo-canvas"></div>
@@ -234,7 +245,6 @@
         <summary>Liens : debit, capacite, source</summary>
 
       <div class="toolbar">
-        <span class="mode">Tableau des liens &middot; l'arbre est dans l'onglet Arbre reseau</span>
         <span class="spacer"></span>
         <span class="mode" id="topo-links-count"></span>
       </div>

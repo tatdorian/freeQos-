@@ -1800,6 +1800,19 @@ const ICONE = {
   static: 'FIXE', candidate: '?IP',
 };
 
+/** Combien d'equipements et de liens porte ce graphe.
+ *
+ *  ``counts`` est un resume produit par le serveur : quand il manque, on
+ *  affichait 'undefined equipement(s)'. Les listes, elles, sont toujours la --
+ *  ce sont meme elles qui sont dessinees. */
+function topoCompte(data) {
+  const c = (data && data.counts) || {};
+  return {
+    noeuds: c.nodes != null ? c.nodes : ((data && data.nodes) || []).length,
+    liens: c.links != null ? c.links : ((data && data.links) || []).length,
+  };
+}
+
 /** Charge le graphe et les abonnes une seule fois, partage entre l'arbre
  *  editable et le tableau des liens, qui vivent tous deux dans l'onglet
  *  Arbre reseau. */
@@ -1820,10 +1833,12 @@ async function loadNetwork() {
   const data = await fetchTopo();
   const compte = document.getElementById('net-count');
   if (compte) {
-    compte.textContent = data.counts.nodes + ' equipement(s), ' + data.counts.links + ' lien(s)';
+    const n = topoCompte(data);
+    compte.textContent = n.noeuds + ' equipement(s), ' + n.liens + ' lien(s)';
   }
   renderDecouverte(data);
   renderTopoCanvas();
+  topoAjusterUneFois();
   renderTopoPanel();
   // Le tableau des liens, replie juste dessous : meme donnee, lue en lignes.
   await loadTopology();
@@ -1839,15 +1854,15 @@ function renderDecouverte(data) {
 
   // Un arbre vide a DEUX causes opposees : rien a decouvrir, ou rien n'a encore
   // ete decouvert. Les confondre laisse chercher au mauvais endroit.
-  if (!data.counts.nodes) {
+  // Les deux causes restent distinguees -- c'est le renseignement utile --
+  // mais sans le mode d'emploi : le bouton qui relance l'analyse est juste
+  // au-dessus, et l'onglet Equipements est dans la barre.
+  if (!topoCompte(data).noeuds) {
     hote.innerHTML = '<div class="notice' + (data.discovered_at ? '' : ' err') + '">' +
       (data.discovered_at
-        ? '<strong>Aucun equipement decouvert.</strong> La derniere analyse a bien ' +
-          'tourne (' + esc(clock(data.discovered_at)) + ') mais n\'a rien trouve : ' +
-          'verifiez que vos PoPs sont bien collectes dans l\'onglet Equipements.'
-        : '<strong>Aucune analyse n\'a encore tourne.</strong> Elle se declenche ' +
-          'toute seule au demarrage puis periodiquement ; vous pouvez aussi la ' +
-          'lancer maintenant avec « Relancer la decouverte ».') +
+        ? '<strong>Aucun equipement decouvert.</strong> Derniere analyse : ' +
+          esc(clock(data.discovered_at)) + '.'
+        : '<strong>Aucune analyse n\'a encore tourne.</strong>') +
       '</div>';
     return;
   }
@@ -4078,11 +4093,25 @@ const topo = {
   // Agregats d'abonnes ouverts, par cle. Replie par defaut : un PoP
   // d'operateur porte des centaines d'abonnes.
   abosOuverts: new Set(),
+  // Branches repliees, par cle. Un reseau d'operateur compte des dizaines de
+  // PoPs : pouvoir en fermer une est ce qui rend les autres lisibles.
+  replies: new Set(),
+  // Echelle d'affichage. Un arbre large ne tient pas sur un ecran ; le reduire
+  // pour en voir la forme vaut mieux que de defiler a l'aveugle.
+  zoom: 1,
+  // L'arbre a-t-il deja ete cadre une fois ? Au-dela, l'echelle appartient a
+  // l'exploitant : la recalculer a chaque rafraichissement effacerait son
+  // reglage toutes les trente secondes.
+  ajuste: false,
 };
 
 // Au-dela, l'arbre cesse d'etre lisible et ne renseigne plus sur rien :
 // le detail se lit dans l'onglet Abonnes, qui est fait pour ca.
 const TOPO_ABOS_MAX = 25;
+
+// Hauteur minimale du cadre. En dessous, l'arbre se lit par le trou d'une
+// serrure : mieux vaut un peu de fond libre sous un tout petit reseau.
+const TOPO_CADRE_MIN = 360;
 
 /** Le tableau technique des liens. Il avait son propre onglet ; il vit
  *  desormais replie sous l'arbre reseau, qui montre la MEME donnee en cases.
@@ -4531,17 +4560,40 @@ function topoAutoLayout(model) {
   let leaf = 0;
   const rowOf = new Map();
 
-  model.nodesByKey.forEach((n) => { n.children.sort(topoOrdreFratrie); });
+  model.nodesByKey.forEach((n) => { n.children.sort(topoOrdreFratrie); n.replie = false; });
+
+  // Replier une branche cache TOUT ce qui pend dessous : sans cela ses enfants
+  // garderaient une ligne (et un trait) alors que le repli dit justement qu'on
+  // ne veut pas les voir.
+  const cacher = (node, vus) => {
+    node.children.forEach((c) => {
+      if (vus.has(c.key)) return;
+      vus.add(c.key);
+      c.replie = true;
+      cacher(c, vus);
+    });
+  };
 
   const place = (node, depth, guard) => {
     if (guard.has(node.key)) return;   // securite anti-boucle
     guard.add(node.key);
     node.depth = depth;
-    if (!node.children.length) {
+    // ``topo.replies`` peut manquer quand la disposition est appelee hors de
+    // l'interface (harnais de test) : on ne veut pas que l'arbre en depende.
+    const replie = !!(topo.replies && topo.replies.has(node.key));
+    if (!node.children.length || replie) {
+      if (replie) cacher(node, new Set([node.key]));
       rowOf.set(node.key, leaf++);
       return;
     }
-    node.children.forEach((c) => place(c, depth + 1, guard));
+    node.children.forEach((c, i) => {
+      // De l'air entre deux sous-arbres voisins. Colles, les feuilles de l'un
+      // touchent celles de l'autre et plus rien ne dit ou une branche finit.
+      // Deux feuilles simples restent cote a cote : une liste d'abonnes ne
+      // gagne rien a etre aeree, elle se lit justement comme une liste.
+      if (i > 0 && (c.children.length || node.children[i - 1].children.length)) leaf += 0.6;
+      place(c, depth + 1, guard);
+    });
     const rows = node.children.map((c) => rowOf.get(c.key)).filter((r) => r !== undefined);
     // Centre sur la PLAGE des enfants (premier..dernier) : c'est ce qui donne
     // l'allure d'arbre, la moyenne tasserait le parent vers le sous-arbre le
@@ -4549,11 +4601,16 @@ function topoAutoLayout(model) {
     rowOf.set(node.key, rows.length ? (Math.min(...rows) + Math.max(...rows)) / 2 : leaf++);
   };
   const guard = new Set();
-  model.roots.sort(topoOrdreFratrie).forEach((r) => place(r, 0, guard));
+  model.roots.sort(topoOrdreFratrie).forEach((r, i) => {
+    // Deux racines ne sont pas le meme reseau : une ligne vide les separe.
+    if (i > 0) leaf += 1;
+    place(r, 0, guard);
+  });
   // Filet : une case qu'aucune racine n'atteint garde une ligne a elle, plutot
-  // que de s'empiler a l'origine avec les autres.
+  // que de s'empiler a l'origine avec les autres. Une case repliee sous une
+  // autre, elle, n'en veut pas : c'est le repli qui l'a retiree de l'arbre.
   model.nodesByKey.forEach((n) => {
-    if (!rowOf.has(n.key)) rowOf.set(n.key, leaf++);
+    if (!rowOf.has(n.key) && !n.replie) rowOf.set(n.key, leaf++);
   });
 
   // Positions des cases SANS equipement (abonnes de l'arbre). Elles n'ont pas
@@ -4563,6 +4620,7 @@ function topoAutoLayout(model) {
   const libres = (topo.data && topo.data.layout) || {};
 
   model.nodesByKey.forEach((n) => {
+    if (n.replie) return;   // rien a placer pour ce qu'on ne dessine pas
     const autoX = MX + n.depth * COL;
     const autoY = MY + rowOf.get(n.key) * ROWH;
     const libre = libres[n.key];
@@ -4588,30 +4646,52 @@ function renderTopoCanvas() {
   const host = document.getElementById('topo-canvas');
   const data = topo.data;
   if (!data || !data.nodes.length) {
-    host.innerHTML = '<div class="empty">Aucun equipement decouvert.<br>' +
-      'Lancez la decouverte : elle lit /ip/neighbor sur chaque PoP pour ' +
-      'construire l\'arbre.</div>';
+    // Rendre la hauteur a la feuille de style : sans cela le cadre garderait
+    // celle du dernier arbre dessine, et un message de trois mots flotterait
+    // au milieu d'une zone vide de 700 px.
+    host.style.height = '';
+    host.innerHTML = '<div class="empty">Aucun equipement decouvert.</div>';
     return;
   }
   const model = topoBuildModel(data);
   topoAutoLayout(model);
   topo.model = model;
 
-  let maxX = 0;
-  let maxY = 0;
-  model.nodesByKey.forEach((n) => {
-    maxX = Math.max(maxX, n.x + NODE_W);
-    maxY = Math.max(maxY, n.y + NODE_H);
-  });
-  const W = Math.max(host.clientWidth - 2, maxX + 30);
-  const H = Math.max(host.clientHeight - 2, maxY + 30);
+  const etendue = topoEtendue(model);
+  // LA TOILE SUIT LE CONTENU.
+  //
+  // Le quadrillage etait peint sur le conteneur qui DEFILE : il s'arretait donc
+  // a la partie visible, et l'arbre finissait sur du vide des qu'il depassait.
+  // Peint dans le SVG, a la taille du dessin, il s'etend exactement aussi loin
+  // que les cases -- et le cadre garde au minimum sa propre taille pour qu'un
+  // petit arbre ne flotte pas sur un fond tronque.
+  const zoom = topo.zoom || 1;
+  // Le CADRE se cale sur le dessin, dans les deux sens : il grandit avec
+  // l'arbre jusqu'a la hauteur de la fenetre, et ne laisse pas une grande
+  // zone vide sous un arbre de trois cases. La hauteur est calculee a partir
+  // du CONTENU et jamais de la taille courante du cadre : la deduire de
+  // ``clientHeight`` la rendrait collante (une fois grande, elle le resterait
+  // apres un repli).
+  const hMax = Math.max(TOPO_CADRE_MIN, window.innerHeight - 200);
+  const cadre = Math.min(Math.max(etendue.h * zoom + 2, TOPO_CADRE_MIN), hMax);
+  host.style.height = cadre + 'px';
+  const W = Math.max((host.clientWidth - 2) / zoom, etendue.w);
+  const H = Math.max((cadre - 2) / zoom, etendue.h);
 
-  const parts = ['<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '">'];
+  const parts = [
+    '<svg width="' + (W * zoom) + '" height="' + (H * zoom) +
+      '" viewBox="0 0 ' + W + ' ' + H + '">',
+    '<defs><pattern id="topo-grille" width="26" height="26" patternUnits="userSpaceOnUse">' +
+      '<path d="M 26 0 L 0 0 0 26" fill="none" stroke="var(--border)" stroke-width="1">' +
+      '</path></pattern></defs>',
+    '<rect class="topo-fond" width="' + W + '" height="' + H + '" fill="url(#topo-grille)">' +
+      '</rect>',
+  ];
 
   // Aretes d'abord (derriere les cases).
   parts.push('<g class="topo-edges">');
   model.nodesByKey.forEach((n) => {
-    if (!n.parentKey) return;
+    if (n.replie || !n.parentKey) return;
     const p = model.nodesByKey.get(n.parentKey);
     if (!p) return;
     const rates = n.synthRates || topoEdgeRates(n.edge);
@@ -4670,6 +4750,7 @@ function renderTopoCanvas() {
   // Cases.
   parts.push('<g class="topo-nodes">');
   model.nodesByKey.forEach((n) => {
+    if (n.replie) return;
     const color = KIND_COLOR[n.kind] || 'var(--faint)';
     let cls = 'topo-node';
     if (n.synthetic) cls += ' synthetic';
@@ -4687,6 +4768,22 @@ function renderTopoCanvas() {
         ? (n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : 'abonnes')
         : (n.addresses && n.addresses.length ? n.addresses.join(', ')
           : (n.address || n.platform || ''));
+    // Pastille de repli. Elle porte le COMPTE de ce qu'elle cache : une branche
+    // fermee doit dire ce qu'il y a dessous, sinon replier revient a faire
+    // disparaitre du reseau sans le signaler.
+    const replie = !!(topo.replies && topo.replies.has(n.key));
+    const pliable = !!n.children.length && !n.synthetic;
+    const sous = pliable ? topoDescendants(model, n.key).size : 0;
+    const pastille = pliable
+      ? '<g class="topo-toggle' + (replie ? ' replie' : '') + '" data-fold="' + esc(n.key) + '">' +
+          '<rect x="' + (NODE_W - 36) + '" y="' + (NODE_H / 2 - 9) +
+            '" width="30" height="18" rx="9"></rect>' +
+          '<text x="' + (NODE_W - 21) + '" y="' + (NODE_H / 2 + 4) + '" text-anchor="middle">' +
+            (replie ? '+' + sous : '\u2212') + '</text>' +
+          '<title>' + (replie ? 'Deplier ' + sous + ' case(s)' : 'Replier cette branche') +
+          '</title>' +
+        '</g>'
+      : '';
     parts.push(
       '<g class="' + cls + '" data-node="' + esc(n.key) +
         (n.synthetic ? '" data-synthetic="1' : '') + '" transform="translate(' +
@@ -4698,8 +4795,10 @@ function renderTopoCanvas() {
           esc(ICONE[n.kind] || '?') +
           // Le chevron dit que la case s'ouvre, et dans quel sens elle va.
           (n.expandable ? (n.expanded ? '  ▾ ouvert' : '  ▸ voir') : '') + '</text>' +
-        '<text class="title" x="13" y="31">' + esc(topoTrim(n.name, 20)) + '</text>' +
+        '<text class="title" x="13" y="31">' + esc(topoTrim(n.name, pliable ? 15 : 20)) +
+          '</text>' +
         (meta ? '<text class="meta" x="13" y="42">' + esc(topoTrim(meta, 26)) + '</text>' : '') +
+        pastille +
       '</g>');
   });
   parts.push('</g></svg>');
@@ -4707,6 +4806,84 @@ function renderTopoCanvas() {
   host.innerHTML = parts.join('');
   bindTopoDrag(host.querySelector('svg'), model);
   bindTopoEdges(host.querySelector('svg'));
+  bindTopoFolds(host.querySelector('svg'));
+  renderTopoLegend(model);
+}
+
+/** Rectangle occupe par les cases visibles, marge comprise. */
+function topoEtendue(model) {
+  let w = 0;
+  let h = 0;
+  model.nodesByKey.forEach((n) => {
+    if (n.replie) return;
+    w = Math.max(w, n.x + NODE_W);
+    h = Math.max(h, n.y + NODE_H);
+  });
+  return { w: w + 40, h: h + 40 };
+}
+
+/** Legende des couleurs, limitee aux natures REELLEMENT presentes dans
+ *  l'arbre : une legende qui annonce des roles absents fait chercher des cases
+ *  qui n'existent pas. */
+function renderTopoLegend(model) {
+  const host = document.getElementById('topo-legend');
+  if (!host) return;
+  const vus = new Set();
+  model.nodesByKey.forEach((n) => { if (!n.replie) vus.add(n.kind); });
+  const ordre = [...vus].sort(
+    (a, b) => ((TOPO_RANG[a] ?? 5) - (TOPO_RANG[b] ?? 5)) || a.localeCompare(b));
+  host.innerHTML = ordre.map((k) =>
+    '<span class="chip"><i style="background:' + (KIND_COLOR[k] || 'var(--faint)') + '"></i>' +
+    esc(KIND_LABEL[k] || k) + '</span>').join('');
+}
+
+/** Clic sur la pastille : replier ou deplier la branche. Le ``pointerdown`` est
+ *  arrete net, sinon le glisser-deposer de la case demarrerait sous le doigt et
+ *  le clic ne serait jamais reconnu. */
+function bindTopoFolds(svg) {
+  if (!svg) return;
+  svg.querySelectorAll('[data-fold]').forEach((el) => {
+    el.addEventListener('pointerdown', (e) => { e.stopPropagation(); });
+    el.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const key = el.dataset.fold;
+      if (topo.replies.has(key)) topo.replies.delete(key);
+      else topo.replies.add(key);
+      renderTopoCanvas();
+    });
+  });
+}
+
+/** Echelle de l'arbre : la reduire montre la forme d'ensemble, l'agrandir rend
+ *  les etiquettes lisibles. Bornee, pour qu'on ne perde jamais le dessin. */
+function setTopoZoom(z) {
+  topo.zoom = Math.min(2, Math.max(0.4, Math.round(z * 20) / 20));
+  const etiquette = document.getElementById('topo-zoom-level');
+  if (etiquette) etiquette.textContent = Math.round(topo.zoom * 100) + ' %';
+  if (topo.data) renderTopoCanvas();
+}
+
+/** A LA PREMIERE OUVERTURE, cadre l'arbre entier s'il deborde.
+ *
+ *  Arriver sur un arbre coupe a droite, sans que rien ne dise qu'il continue,
+ *  est le pire accueil : on croit voir le reseau alors qu'on en voit un
+ *  morceau. Une seule fois, ensuite l'echelle appartient a l'exploitant. */
+function topoAjusterUneFois() {
+  if (topo.ajuste || !topo.model) return;
+  topo.ajuste = true;
+  topoFit();
+}
+
+/** Ajuste l'echelle pour que tout l'arbre tienne dans le cadre, sans jamais
+ *  grossir au-dela de la taille reelle (agrandir un petit arbre le rendrait
+ *  flou sans rien apprendre). */
+function topoFit() {
+  const host = document.getElementById('topo-canvas');
+  if (!host || !topo.model) return;
+  const etendue = topoEtendue(topo.model);
+  if (!etendue.w || !etendue.h) return;
+  setTopoZoom(Math.min(
+    (host.clientWidth - 8) / etendue.w, (host.clientHeight - 8) / etendue.h, 1));
 }
 
 /** Clic sur une arete : retirer le lien. Un lien decouvert ou manuel porte une
@@ -4779,11 +4956,9 @@ function setTopoLinkNotice() {
   const notice = document.getElementById('topo-notice');
   if (!notice) return;
   if (!topo.linkMode) { notice.innerHTML = ''; return; }
-  notice.innerHTML = '<div class="notice"><b>Mode lien.</b> ' +
-    (topo.linkSource
-      ? 'Cliquez la case <b>enfant</b> a rattacher (ou re-cliquez pour annuler).'
-      : 'Cliquez la case <b>parent</b>, puis la case <b>enfant</b>.') +
-    ' Cliquez « Creer un lien » pour quitter ce mode.</div>';
+  notice.innerHTML = '<div class="notice">' +
+    (topo.linkSource ? 'Case <b>enfant</b> ?' : 'Case <b>parent</b>, puis case <b>enfant</b>.') +
+    '</div>';
 }
 
 function topoTrim(text, n) {
@@ -4831,6 +5006,9 @@ function bindTopoDrag(svg, model) {
       }
 
       const rect = svg.getBoundingClientRect();
+      // Les coordonnees du dessin ne sont plus celles de l'ecran des que
+      // l'echelle change : sans cette division, la case fuirait le pointeur.
+      const z = topo.zoom || 1;
       const start = { x: ev.clientX, y: ev.clientY };
       const origin = { x: node.x, y: node.y };
       let moved = false;
@@ -4842,8 +5020,8 @@ function bindTopoDrag(svg, model) {
       const descendants = topoDescendants(model, key);
 
       const onMove = (e) => {
-        const nx = origin.x + (e.clientX - start.x);
-        const ny = origin.y + (e.clientY - start.y);
+        const nx = origin.x + (e.clientX - start.x) / z;
+        const ny = origin.y + (e.clientY - start.y) / z;
         if (!moved && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4) moved = true;
         node.x = nx;
         node.y = ny;
@@ -4856,8 +5034,8 @@ function bindTopoDrag(svg, model) {
 
         // Cible de rattachement : la case survolee par le CENTRE de celle qu'on
         // traine, hors elle-meme et hors ses descendants (cela ferait un cycle).
-        const cx = e.clientX - rect.left;
-        const cy = e.clientY - rect.top;
+        const cx = (e.clientX - rect.left) / z;
+        const cy = (e.clientY - rect.top) / z;
         let cible = null;
         model.nodesByKey.forEach((other) => {
           if (other.key === key || descendants.has(other.key)) return;
@@ -4990,9 +5168,7 @@ function renderTopoPanel() {
   if (!host) return;
   const node = topo.selected && topo.model ? topo.model.nodesByKey.get(topo.selected) : null;
   if (!node) {
-    host.innerHTML = '<div class="muted">Cliquez une case pour la corriger : role, ' +
-      'rattachement, visibilite. Glissez-la pour la ranger, deposez-la sur une ' +
-      'autre pour la rattacher.</div>';
+    host.innerHTML = '<div class="muted">Aucune case selectionnee.</div>';
     return;
   }
   const parent = node.parentKey ? topo.model.nodesByKey.get(node.parentKey) : null;
@@ -5177,6 +5353,9 @@ function renderTopoPanel() {
 async function resetTopoLayout() {
   if (!topo.data || !confirm('Remettre la disposition automatique ?\n\n' +
     'Les positions et rattachements poses a la main seront effaces.')) return;
+  // Meme geste, meme promesse : l'echelle repart elle aussi sur le cadrage
+  // automatique, comme a la premiere ouverture.
+  topo.ajuste = false;
   const remiseAZero = (cle) => api('/topology/nodes/' + encodeURIComponent(cle) + '/layout',
     { method: 'PATCH', body: JSON.stringify({ x: null, y: null }) });
   try {
@@ -6599,6 +6778,11 @@ document.getElementById('topo-rate-only').addEventListener('change', (e) => {
   if (topo.data) { renderTopoCanvas(); renderTopologyLinks(topo.data.links); }
 });
 document.getElementById('btn-topo-reset').addEventListener('click', resetTopoLayout);
+document.getElementById('btn-topo-zoom-in').addEventListener('click',
+  () => setTopoZoom((topo.zoom || 1) + 0.1));
+document.getElementById('btn-topo-zoom-out').addEventListener('click',
+  () => setTopoZoom((topo.zoom || 1) - 0.1));
+document.getElementById('btn-topo-fit').addEventListener('click', topoFit);
 document.getElementById('btn-topo-forget').addEventListener('click', forgetStaleNodes);
 document.getElementById('btn-topo-link').addEventListener('click', (e) => {
   topo.linkMode = !topo.linkMode;
