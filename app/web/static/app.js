@@ -1129,13 +1129,14 @@ function flowNotice(html) {
   document.getElementById('flow-notice').innerHTML = html || '';
 }
 
-/** Ce qui EMPECHE de mesurer.
+/** Ce qui EMPECHE de mesurer, et le geste qui le corrige.
  *
  *  Un tableau vide a plusieurs causes opposees -- collecteur coupe, aucun
- *  exporteur qui parle, modeles jamais envoyes -- et un ecran vide les confond
- *  toutes. Chaque cas nomme le fait et s'arrete la : le bouton "Configurer"
- *  est juste en dessous pour celui qui se corrige d'un clic. */
-function flowDiagnostic(etat) {
+ *  routeur declare, ecriture interdite, export pose mais port non publie -- et
+ *  un ecran vide les confond toutes. Nommer le fait ne suffit pas : "configurez
+ *  l'export ci-dessous" laisse chercher OU et COMMENT. Chaque cas porte donc
+ *  son bouton, qui mene exactement au geste suivant. */
+function flowDiagnostic(etat, exportEtat) {
   if (!etat.enabled) {
     return '<div class="notice err"><b>Collecteur NetFlow coupe.</b> ' +
       '<code>NETFLOW_ENABLED=true</code> puis redemarrage.</div>';
@@ -1145,8 +1146,27 @@ function flowDiagnostic(etat) {
       esc(etat.last_error || 'cause inconnue') + '</div>';
   }
   if (!etat.packets_received) {
-    return '<div class="notice warn"><b>Aucun datagramme recu sur ' +
-      esc(etat.bind) + '.</b> Configurez l\'export ci-dessous.</div>';
+    const routeurs = (exportEtat && exportEtat.routers) || [];
+    const poses = routeurs.filter((r) => r.configured).length;
+    if (!routeurs.length) {
+      return '<div class="notice warn"><b>Aucun datagramme recu sur ' +
+        esc(etat.bind) + '.</b> Aucun routeur n\'est declare : rien ne peut ' +
+        'exporter. <a href="#/pops">Onglet Equipements</a></div>';
+    }
+    if (!poses) {
+      return '<div class="notice warn"><b>Aucun datagramme recu sur ' +
+        esc(etat.bind) + '.</b> ' + esc(routeurs.length) +
+        ' routeur(s) declare(s), aucun ne l\'exporte encore. ' +
+        '<button class="sm" data-goto-export>Configurer l\'export</button></div>';
+    }
+    // POSE MAIS MUET : le routeur envoie, et rien n'arrive. Le coupable le plus
+    // frequent n'est pas le routeur, c'est le chemin -- port UDP non publie par
+    // Docker, pare-feu, ou adresse annoncee injoignable depuis le PoP.
+    return '<div class="notice err"><b>Export pose sur ' + esc(poses) +
+      ' routeur(s), mais aucun datagramme n\'arrive sur ' + esc(etat.bind) + '.</b> ' +
+      'Le chemin est en cause, pas la configuration : port <code>' +
+      esc(String(etat.bind).split(':').pop()) + '/udp</code> publie ? ' +
+      'pare-feu entre le PoP et ce collecteur ?</div>';
   }
   if (etat.flows_seen && !etat.flows_matched) {
     return '<div class="notice warn"><b>Flux recus, aucun rattache a un abonne.</b> ' +
@@ -1172,13 +1192,24 @@ async function loadTraffic() {
     api('/netflow/exporters').catch(() => []),
   ]);
 
-  flowNotice(flowDiagnostic(etat));
+  const exportEtat = await api('/netflow/export').catch(() => null);
+  flowNotice(flowDiagnostic(etat, exportEtat));
   renderFlowStats(etat, top);
   renderFlowTop(top);
   renderFlowApps(apps);
   renderFlowHosts(hotes);
   renderFlowExporters(exporteurs);
-  renderFlowExport(await api('/netflow/export').catch(() => null));
+  renderFlowExport(exportEtat);
+
+  // Le bandeau porte un bouton qui mene au bloc d'export : sans lui, "ci-dessous"
+  // laisse chercher dans une page qui defile.
+  const raccourci = document.querySelector('[data-goto-export]');
+  if (raccourci) {
+    raccourci.addEventListener('click', () => {
+      const bloc = document.getElementById('flow-export');
+      bloc.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+  }
 
   const compte = document.getElementById('flow-count');
   if (compte) {
@@ -1394,8 +1425,20 @@ function renderFlowExport(etat) {
     ? etat.configured + ' / ' + (etat.routers || []).length + ' routeur(s)'
     : 'ecriture desactivee';
   const lignes = etat.routers || [];
-  hote.innerHTML = !lignes.length
-    ? '<div class="empty">Aucun routeur dans l\'inventaire.</div>'
+
+  // CE QUI BLOQUE LA POSE, AVANT LE TABLEAU. Cliquer "Configurer" pour recevoir
+  // "ecriture desactivee" est une boucle : autant le dire, avec l'interrupteur.
+  let bloquant = '';
+  if (!lignes.length) {
+    bloquant = '<div class="notice warn"><b>Aucun routeur declare.</b> ' +
+      '<a href="#/pops">Onglet Equipements</a></div>';
+  } else if (!etat.enforcement_enabled) {
+    bloquant = '<div class="notice warn"><b>Ecriture sur les routeurs desactivee.</b> ' +
+      '<button class="sm" id="flow-export-enable">Autoriser l\'ecriture</button></div>';
+  }
+
+  hote.innerHTML = bloquant + (!lignes.length
+    ? ''
     : '<table><thead><tr><th>Routeur</th><th>Collecteur annonce</th>' +
       '<th>Interfaces</th><th>Etat</th><th></th></tr></thead><tbody>' +
       lignes.map((r) => '<tr>' +
@@ -1407,7 +1450,34 @@ function renderFlowExport(etat) {
           (r.configured ? 'ok' : (r.state === 'erreur' ? 'crit' : 'warn')) +
           '">' + esc(r.state) + '</span></td>' +
         '<td style="color:var(--faint)">' + esc(r.reason || '') + '</td>' +
-        '</tr>').join('') + '</tbody></table>';
+        '</tr>').join('') + '</tbody></table>');
+
+  const autoriser = document.getElementById('flow-export-enable');
+  if (autoriser) autoriser.addEventListener('click', enableEnforcementForExport);
+}
+
+/** Autorise l'ecriture depuis l'onglet Trafic.
+ *
+ *  L'interrupteur vit dans les Reglages, et c'est sa place. Mais un exploitant
+ *  arrive ici parce qu'il veut voir son trafic : l'envoyer chercher un
+ *  interrupteur dans un autre onglet, sans dire lequel, est exactement le genre
+ *  de detour qui fait abandonner. La confirmation reste la meme : ce geste
+ *  autorise reellement des ecritures sur des equipements de production. */
+async function enableEnforcementForExport() {
+  if (!confirm("Autoriser l'ecriture sur les routeurs ?\n\n" +
+      'Seules les lignes marquees freeqos:managed sont touchees.')) return;
+  try {
+    await api('/shaping/enforcement', {
+      method: 'PUT',
+      body: JSON.stringify({
+        enabled: true, confirm: true, reason: 'configuration de l\'export NetFlow',
+      }),
+    });
+    await loadTraffic();
+  } catch (err) {
+    document.getElementById('flow-export-result').innerHTML =
+      '<div class="notice err">' + esc(err.message) + '</div>';
+  }
 }
 
 async function applyFlowExport(dryRun) {

@@ -1478,6 +1478,27 @@ quotas, et la question « de quoi est fait le trafic qui sature ce secteur ».
    1:1000 rapporte un millième du trafic réel, et **rien ne le montre** : les chiffres
    restent plausibles, juste mille fois trop petits.
 
+### « Aucun datagramme reçu » : les quatre causes
+
+Le bandeau de l'onglet *Trafic* nomme celle qui s'applique et donne le geste. Dans
+l'ordre où on les rencontre :
+
+| Ce que dit le bandeau | Ce qui manque | Le geste |
+|---|---|---|
+| *Aucun routeur n'est déclaré* | Rien ne peut exporter : l'inventaire est vide | **Équipements** › ajouter un routeur (API RouterOS, compte lecture) |
+| *N routeur(s) déclaré(s), aucun ne l'exporte* | L'export n'est pas encore posé | Bouton **Configurer l'export** — il descend au bloc *Export sur les routeurs* |
+| *Écriture sur les routeurs désactivée* | Le contrôleur est en lecture seule | Bouton **Autoriser l'écriture** dans ce même bloc (ou *Réglages › Shaping et écriture*) |
+| *Export posé sur N routeur(s), mais aucun datagramme n'arrive* | Le chemin réseau, **pas** la configuration | Port `2055/udp` publié ? pare-feu entre le PoP et le collecteur ? |
+
+La dernière est la plus trompeuse, et son coupable le plus fréquent est Docker :
+**sans le suffixe `/udp`**, `ports:` publie du TCP. Le routeur exporte, le collecteur
+écoute, et rien ne se rencontre — sans erreur nulle part. Le `docker-compose.yml` du dépôt
+publie bien `2055/udp`, et un test le verrouille.
+
+Une fois l'export posé, comptez une quinzaine de secondes avant qu'un flux terminé
+n'apparaisse (`inactive-flow-timeout`) : le routeur ne peut pas exporter un flux avant de
+le considérer fini.
+
 ### Ce que le collecteur fait des flux
 
 | Étape | Règle |
@@ -1907,7 +1928,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 1307 tests, dont 1217 sans aucune infrastructure
+make test        # 1311 tests, dont 1221 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et
