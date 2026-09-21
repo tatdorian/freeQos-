@@ -429,8 +429,13 @@ async def pairs(
     container: ContainerDep,
     minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
     app: Annotated[str | None, Query(max_length=64, description="Famille d'usage")] = None,
-    client: Annotated[str | None, Query(max_length=64)] = None,
+    client: Annotated[str | None, Query(max_length=64, description="Adresse du client")] = None,
     service: Annotated[str | None, Query(max_length=64)] = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    pop: Annotated[str | None, Query(max_length=128)] = None,
+    q: Annotated[
+        str | None, Query(max_length=128, description="Client, login, adresse, nom")
+    ] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> dict[str, Any]:
     """Une ligne par CONVERSATION, sur la periode, et ce qui se passe maintenant.
@@ -443,11 +448,15 @@ async def pairs(
     ``live`` porte la meme liste lue dans la fenetre EN COURS : l'interface
     marque les conversations qui se tiennent a cet instant.
     """
-    lignes = await _destinations(container).pairs(
+    repo = _destinations(container)
+    lignes = await repo.pairs(
         minutes=minutes,
         app=app,
         client=_valide_adresse(client) if client else None,
         service=service,
+        category=category,
+        pop=pop,
+        search=q,
         limit=limit,
     )
     collecteur = container.netflow
@@ -465,6 +474,9 @@ async def pairs(
         "app": app,
         "pairs": lignes,
         "live": [(str(d["client"]), str(d["address"])) for d in directes],
+        # Les valeurs REELLEMENT presentes : proposer un filtre qui ne rend rien
+        # est pire que ne pas le proposer.
+        "facets": await repo.pairs_facets(minutes=minutes),
         "live_bytes": {
             f"{d['client']}|{d['address']}": int(d["down_bytes"]) + int(d["up_bytes"])
             for d in directes

@@ -142,7 +142,12 @@
 
       <h2>Qui parle a qui</h2>
       <div class="toolbar">
-        <span class="mode" id="flow-pairs-filter"></span>
+        <input id="flow-pairs-search" placeholder="Client, login, adresse, nom"
+               maxlength="128" style="max-width:260px">
+        <select id="flow-pairs-pop" style="width:auto"></select>
+        <select id="flow-pairs-category" style="width:auto"></select>
+        <select id="flow-pairs-app" style="width:auto"></select>
+        <button class="sm" id="flow-pairs-reset">Tout voir</button>
         <span class="spacer"></span>
         <span class="mode" id="flow-pairs-count"></span>
       </div>

@@ -710,3 +710,21 @@ def test_un_nom_inexploitable_ne_rend_pas_de_domaine() -> None:
     assert ipfinder.registrable_domain("localhost") is None
     assert ipfinder.registrable_domain(None) is None
     assert ipfinder.registrable_domain("") is None
+
+
+def test_les_criteres_de_purge_couvrent_les_memes_cas_que_le_filtre() -> None:
+    """LE FILTRE A L'ECRITURE NE SUFFIT PAS.
+
+    Il empeche les nouvelles lignes, mais celles deja ecrites restent jusqu'a
+    expiration de la retention -- une semaine pendant laquelle la liste continue
+    d'afficher le BFD entre routeurs. Les deux doivent nommer les memes motifs,
+    sinon l'historique et le direct se contredisent.
+    """
+    from app.services.flows import PORTS_INFRASTRUCTURE
+
+    # Les ports que le filtre ecarte a l'ecriture sont exactement ceux que la
+    # purge recoit : c'est la meme constante, pas une liste recopiee.
+    assert 8728 in PORTS_INFRASTRUCTURE  # API RouterOS
+    assert 2055 in PORTS_INFRASTRUCTURE  # NetFlow
+    assert 3784 in PORTS_INFRASTRUCTURE  # BFD
+    assert 22 not in PORTS_INFRASTRUCTURE  # SSH : usage client legitime

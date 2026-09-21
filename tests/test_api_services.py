@@ -652,6 +652,14 @@ class FauxPaires(FauxDestinations):
         super().__init__()
         self.demandes: list[dict[str, Any]] = []
 
+    async def pairs_facets(self, **kwargs: Any) -> dict[str, list[str]]:
+        return {
+            "pops": ["PoP Test"],
+            "categories": ["streaming", "nuage"],
+            "services": ["netflix", "google"],
+            "apps": ["web", "diagnostic"],
+        }
+
     async def pairs(self, **kwargs: Any) -> list[dict[str, Any]]:
         self.demandes.append(dict(kwargs))
         app = kwargs.get("app")
@@ -768,3 +776,34 @@ def test_la_vue_en_direct_se_filtre_par_usage(settings: Settings, netflow: Netfl
     http, _ = client_avec_paires(settings, netflow)
     assert len(http.get("/api/v1/netflow/connections?app=web").json()["connections"]) == 1
     assert http.get("/api/v1/netflow/connections?app=diagnostic").json()["connections"] == []
+
+
+def test_les_conversations_se_filtrent_par_pop_et_par_categorie(
+    settings: Settings, netflow: NetflowService
+) -> None:
+    """RECHERCHER PAR CLIENT, PAR PoP, PAR FAMILLE.
+
+    Une liste de deux cents conversations n'est pas consultable : ce qu'on
+    cherche est toujours "ce PoP", "ce client", "ce service". Les filtres sont
+    la reponse, et ils se cumulent.
+    """
+    http, depot = client_avec_paires(settings, netflow)
+    http.get("/api/v1/netflow/pairs?pop=PoP%20Test&category=streaming&q=dupont")
+
+    demande = depot.demandes[0]
+    assert demande["pop"] == "PoP Test"
+    assert demande["category"] == "streaming"
+    assert demande["search"] == "dupont"
+
+
+def test_les_filtres_proposes_sont_ceux_qui_existent(
+    settings: Settings, netflow: NetflowService
+) -> None:
+    """Proposer tous les PoPs de l'inventaire ferait choisir un filtre qui ne
+    rend rien -- et on chercherait la panne plutot que le filtre."""
+    http, _ = client_avec_paires(settings, netflow)
+    facettes = http.get("/api/v1/netflow/pairs").json()["facets"]
+
+    assert facettes["pops"] == ["PoP Test"]
+    assert "streaming" in facettes["categories"]
+    assert "diagnostic" in facettes["apps"]
