@@ -17,6 +17,7 @@ CE QUE CES TESTS PROTEGENT
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -386,3 +387,25 @@ async def test_une_duree_relue_sous_une_autre_forme_ne_declenche_rien(
 
     assert etat.state == "pose"
     assert export.plan_for(collector, etat).is_empty
+
+
+# ================================================ le chemin jusqu'au collecteur
+
+
+def test_le_port_du_collecteur_est_publie_en_udp() -> None:
+    """LE PIEGE SILENCIEUX DE DOCKER.
+
+    Sans le suffixe ``/udp``, Docker publie du TCP : les datagrammes NetFlow
+    n'atteignent jamais le collecteur, et il n'y a d'erreur NULLE PART. Le
+    routeur exporte, le collecteur ecoute, et rien ne se rencontre -- le
+    symptome est un onglet vide, qui ressemble a un reseau sans trafic.
+    """
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert ":2055/udp" in compose
+
+
+def test_le_collecteur_ecoute_bien_en_udp() -> None:
+    """Le protocole du collecteur lui-meme : NetFlow est UDP, et un datagramme
+    perdu n'est jamais retransmis."""
+    source = Path("app/services/netflow_service.py").read_text(encoding="utf-8")
+    assert "create_datagram_endpoint" in source

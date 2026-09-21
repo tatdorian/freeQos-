@@ -188,3 +188,26 @@ def test_le_formulaire_de_client_porte_bien_le_champ_vlan() -> None:
     assert 'id="sc-vlan"' in HTML
     assert 'id="sc-vlans"' in HTML
     assert "loadVlanClients" in JS
+
+
+def test_le_diagnostic_netflow_mene_au_geste_suivant() -> None:
+    """« Configurez l'export ci-dessous » laisse chercher OU et COMMENT.
+
+    Chaque cause a son geste : aucun routeur declare renvoie aux Equipements,
+    aucun export pose donne le bouton qui y mene, et un export pose mais muet
+    designe le chemin reseau plutot que la configuration -- ce n'est pas le
+    meme probleme, et surtout pas la meme personne qui le corrige.
+    """
+    assert "data-goto-export" in JS
+    assert "Aucun routeur n\\'est declare" in JS
+    assert "flow-export-enable" in JS
+    # Le cas "pose mais rien n'arrive" doit nommer le port UDP : c'est le
+    # coupable le plus frequent, et il n'a rien a voir avec le routeur.
+    assert "udp" in JS
+
+
+def test_le_bloc_d_export_dit_ce_qui_empeche_de_poser() -> None:
+    """Cliquer « Configurer » pour recevoir « ecriture desactivee » est une
+    boucle : le blocage est annonce avant, avec l'interrupteur."""
+    assert "enableEnforcementForExport" in JS
+    assert "Ecriture sur les routeurs desactivee" in JS
