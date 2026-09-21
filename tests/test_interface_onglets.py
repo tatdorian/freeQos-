@@ -71,6 +71,38 @@ def test_l_onglet_trafic_existe_et_est_cable() -> None:
     assert "traffic: loadTraffic" in JS
 
 
+def test_l_onglet_capacite_a_disparu() -> None:
+    """DEMANDE EXPLICITE : l'onglet Capacite est retire de la navigation.
+
+    Comme pour Topologie et Shaping, c'est une operation a trois endroits. La
+    lecture, elle, reste servie par l'API (``/capacity``) : retirer un onglet
+    n'est pas supprimer une capacite, et un systeme tiers qui la consommait
+    continue de la lire.
+    """
+    assert "capacity" not in ONGLETS
+    assert 'id="view-capacity"' not in HTML
+    assert "loadCapacity" not in JS
+
+
+def test_l_onglet_services_existe_et_est_cable() -> None:
+    """QUI SE CONNECTE A QUOI. L'onglet qui remplace Capacite doit exister aux
+    trois endroits, sans quoi il s'ouvre sur une section qui ne se remplit
+    jamais -- ou pire, blanchit la page."""
+    assert "services" in ONGLETS
+    assert 'id="view-services"' in HTML
+    assert "services: loadServices" in JS
+
+
+def test_l_onglet_services_porte_ses_trois_promesses() -> None:
+    """Voir les connexions en cours, voir ce qui est atteint, et pouvoir
+    restreindre. Les trois blocs doivent etre la : un formulaire de restriction
+    sans tableau de connexions obligerait a deviner ce qu'on bride."""
+    for identifiant in ("svc-live", "svc-destinations", "svc-services", "svc-rules"):
+        assert f'id="{identifiant}"' in HTML, identifiant
+    assert 'id="svc-rule-form"' in HTML
+    assert "loadServices" in JS
+
+
 def test_chaque_onglet_a_sa_section_et_son_chargeur() -> None:
     """LES TROIS ENDROITS DOIVENT S'ACCORDER. Un onglet sans section renvoie
     ``show()`` sur le tableau de bord sans rien dire ; un onglet sans chargeur

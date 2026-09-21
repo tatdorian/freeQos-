@@ -30,6 +30,7 @@ from app.config import Settings
 from app.db.antennas_repo import AntennasRepository
 from app.db.api_keys_repo import ApiKeysRepository
 from app.db.database import Database
+from app.db.destinations_repo import DestinationsRepository
 from app.db.directory import Directory, PgDirectory
 from app.db.flows_repo import FlowsRepository, NetflowExportersRepository
 from app.db.model_repo import ModelRepository
@@ -38,6 +39,7 @@ from app.db.routers_repo import RoutersRepository
 from app.db.settings_repo import SettingsRepository
 from app.db.static_clients_repo import StaticClientsRepository, VlanSightingsRepository
 from app.db.topology_repo import TopologyRepository
+from app.db.traffic_rules_repo import TrafficRulesRepository
 from app.db.writer import MetricsWriter, PgMetricsWriter
 from app.models import Plan
 from app.scheduler import Scheduler
@@ -56,8 +58,10 @@ from app.services.collection import (
     CollectionService,
 )
 from app.services.crypto import KeySource, SecretBox, load_or_create_key
+from app.services.intel import JOB_INTEL, IntelService
 from app.services.netflow_service import JOB_NETFLOW, NetflowService
 from app.services.registry import RouterRegistry
+from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
 from app.services.rtt import RttProber
 from app.services.runtime_config import RuntimeConfig
 from app.services.shaping import ShapingService, discover_with_devices
@@ -165,7 +169,11 @@ class Container:
     model_repo: ModelRepository | None = None
     flows_repo: FlowsRepository | None = None
     exporters_repo: NetflowExportersRepository | None = None
+    destinations_repo: DestinationsRepository | None = None
+    traffic_rules_repo: TrafficRulesRepository | None = None
     netflow: NetflowService | None = None
+    intel: IntelService | None = None
+    restrictions: RestrictionService | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -253,6 +261,12 @@ async def build_container(settings: Settings) -> Container:
     model_repo = ModelRepository(database.pool)
     flows_repo = FlowsRepository(database.pool)
     exporters_repo = NetflowExportersRepository(database.pool)
+    # Ce que les clients atteignent, et ce qu'on en sait. Deux natures dans un
+    # seul depot : la mesure s'efface avec la retention, la connaissance reste.
+    destinations_repo = DestinationsRepository(database.pool)
+    # Les restrictions de trafic, telles qu'elles sont saisies. Aucune adresse
+    # n'y est figee : une regle est un critere, resolu a chaque passage.
+    traffic_rules_repo = TrafficRulesRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
@@ -376,6 +390,7 @@ async def build_container(settings: Settings) -> Container:
     netflow = NetflowService(
         flows_repo=flows_repo,
         exporters_repo=exporters_repo,
+        destinations_repo=destinations_repo,
         bind=settings.netflow_bind,
         port=settings.netflow_port,
         enabled=settings.netflow_enabled,
@@ -384,8 +399,40 @@ async def build_container(settings: Settings) -> Container:
         host_limit=settings.netflow_host_limit,
         track_hosts=settings.netflow_track_hosts,
         host_retention_s=settings.netflow_host_retention_s,
+        track_destinations=settings.netflow_track_destinations,
+        destination_limit=settings.netflow_destination_limit,
+        destination_retention_s=settings.netflow_destination_retention_s,
     )
     await netflow.start()
+
+    # Met un nom sur les adresses que NetFlow decouvre. Il ne touche jamais a la
+    # reception : celle-ci se contente d'INSCRIRE l'adresse, et cette boucle-ci
+    # vient lui chercher un nom a son rythme. Un resolveur DNS lent ne doit
+    # jamais faire perdre un datagramme.
+    intel = IntelService(
+        destinations=destinations_repo,
+        enabled=settings.ipfinder_enabled,
+        rdns_enabled=settings.ipfinder_rdns_enabled,
+        rdap_enabled=settings.ipfinder_rdap_enabled,
+        rdap_url=settings.ipfinder_rdap_url,
+        batch_size=settings.ipfinder_batch_size,
+        concurrency=settings.ipfinder_concurrency,
+        timeout_s=settings.ipfinder_timeout_s,
+        max_attempts=settings.ipfinder_max_attempts,
+    )
+
+    # Les restrictions de trafic. Elles ECRIVENT par le meme chemin que les
+    # files -- ShapingService.apply -- donc sous le meme drapeau, le meme
+    # coupe-circuit et le meme audit. Une restriction n'a aucun privilege qu'une
+    # file n'ait pas.
+    restrictions = RestrictionService(
+        shaping=shaping,
+        registry=registry,
+        rules_repo=traffic_rules_repo,
+        destinations=destinations_repo,
+        flows_repo=flows_repo,
+        address_limit=settings.restriction_address_limit,
+    )
 
     async def flush_netflow() -> None:
         # Les reglages de trafic sont pilotables a chaud depuis l'interface (ils
@@ -396,8 +443,25 @@ async def build_container(settings: Settings) -> Container:
             track_hosts=settings.netflow_track_hosts,
             host_limit=settings.netflow_host_limit,
             host_retention_s=settings.netflow_host_retention_s,
+            track_destinations=settings.netflow_track_destinations,
+            destination_limit=settings.netflow_destination_limit,
+            destination_retention_s=settings.netflow_destination_retention_s,
         )
         await netflow.flush()
+
+    async def resolve_intel() -> None:
+        intel.apply_runtime(
+            enabled=settings.ipfinder_enabled,
+            rdns_enabled=settings.ipfinder_rdns_enabled,
+            rdap_enabled=settings.ipfinder_rdap_enabled,
+            batch_size=settings.ipfinder_batch_size,
+            max_attempts=settings.ipfinder_max_attempts,
+        )
+        await intel.resolve_pending()
+
+    async def reconcile_restrictions() -> None:
+        restrictions.address_limit = settings.restriction_address_limit
+        await restrictions.reconcile()
 
     # TOUJOURS planifie, meme collecteur coupe -- exactement comme la sonde RTT.
     # Une cadence declaree dans les reglages doit piloter un job qui EXISTE :
@@ -406,6 +470,12 @@ async def build_container(settings: Settings) -> Container:
     # reprenne effet. Le job ne coute rien quand le collecteur est coupe : il
     # rend la main immediatement.
     scheduler.add_job(JOB_NETFLOW, settings.netflow_flush_interval_s, flush_netflow)
+    # Nommer les adresses nouvelles, et reconcilier les restrictions. TOUJOURS
+    # planifies, meme coupes : un reglage change depuis l'interface doit
+    # reprogrammer un job qui EXISTE, sinon la cadence saisie ne pilote rien et
+    # rallumer la fonction demanderait un redemarrage.
+    scheduler.add_job(JOB_INTEL, settings.ipfinder_interval_s, resolve_intel)
+    scheduler.add_job(JOB_RESTRICTIONS, settings.restrictions_interval_s, reconcile_restrictions)
 
     # Changer une cadence depuis l'interface doit reprogrammer la boucle, pas
     # seulement l'affichage : le scheduler relit interval_s a chaque tour.
@@ -435,7 +505,11 @@ async def build_container(settings: Settings) -> Container:
         model_repo=model_repo,
         flows_repo=flows_repo,
         exporters_repo=exporters_repo,
+        destinations_repo=destinations_repo,
+        traffic_rules_repo=traffic_rules_repo,
         netflow=netflow,
+        intel=intel,
+        restrictions=restrictions,
     )
 
 

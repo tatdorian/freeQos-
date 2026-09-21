@@ -138,6 +138,10 @@ class RouterOsReadClient(Protocol):
 
     def firewall_filters(self) -> list[dict[str, Any]]: ...
 
+    def firewall_address_list(self) -> list[dict[str, Any]]: ...
+
+    def firewall_mangle(self) -> list[dict[str, Any]]: ...
+
     def queue_types(self) -> list[dict[str, Any]]: ...
 
     def queue_trees(self) -> list[dict[str, Any]]: ...
@@ -483,6 +487,26 @@ class LibrouterosReadClient:
         pare-feu, il se contente de dire pourquoi ses files ne servent a rien.
         """
         return self._query("/ip/firewall/filter")
+
+    def firewall_address_list(self) -> list[dict[str, Any]]:
+        """Listes d'adresses nommees. Support des restrictions de trafic.
+
+        C'est le seul objet du pare-feu que le controleur ECRIT, et seulement
+        les entrees qui portent la marque ``freeqos:managed``. Une liste tenue
+        par l'exploitant (routage par politique, acces d'administration) est lue
+        mais jamais modifiee.
+        """
+        return self._query("/ip/firewall/address-list")
+
+    def firewall_mangle(self) -> list[dict[str, Any]]:
+        """Regles de marquage. Sert a plafonner UN trafic sans toucher au reste.
+
+        Un plafond par service se pose en deux temps : marquer les paquets
+        concernes ici, puis accrocher une file d'arbre a cette marque. C'est la
+        seule facon de plafonner cinquante blocs d'adresses sans poser cinquante
+        files.
+        """
+        return self._query("/ip/firewall/mangle")
 
     def queue_types(self) -> list[dict[str, Any]]:
         return self._query("/queue/type")
