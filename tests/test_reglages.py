@@ -266,3 +266,20 @@ def test_api_changer_une_cadence_reprogramme_le_job(client: TestClient) -> None:
     jobs = client.container.scheduler.status()  # type: ignore[attr-defined]
     job = next(j for j in jobs if j["job"] == "collect_subscribers")
     assert job["interval_s"] == 30.0
+
+
+def test_un_reglage_a_choix_est_declare_comme_tel() -> None:
+    """LE TYPE COMMANDE LE CONTROLE DE SAISIE.
+
+    Un reglage a choix declare en 'str' retombe sur le controle par defaut de
+    l'interface -- un champ NUMERIQUE. Pour une valeur qui vaut 'edge' ou 'pop',
+    le champ est inutilisable, et rien dans le code Python ne le signale.
+    """
+    from app.services.runtime_config import REGLAGES
+
+    for reglage in REGLAGES:
+        if reglage.choices:
+            assert reglage.kind == "choix", (
+                f"{reglage.name} propose des choix mais est declare '{reglage.kind}' : "
+                "l'interface le rendra comme un champ numerique"
+            )

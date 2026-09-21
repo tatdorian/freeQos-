@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 COLUMNS = """
     id, reference, label, pop_name, host(address) AS address,
     masklen(address) AS prefix_len, vlan, sector_key,
-    plan_down_mbps, plan_up_mbps, enabled, note, created_at, updated_at
+    plan_down_mbps, plan_up_mbps, enabled, note, created_at, updated_at,
+    source, account_ref, package_ref, access_point_ref, cpe_mac
 """
 
 CHAMPS_MODIFIABLES = (
@@ -49,7 +50,15 @@ CHAMPS_MODIFIABLES = (
     "plan_up_mbps",
     "enabled",
     "note",
+    "cpe_mac",
 )
+
+
+def _mac(value: Any) -> str | None:
+    """Normalise une MAC de CPE. Elle sert d'identite de secours quand
+    l'adresse change, et de jointure avec le voisinage radio."""
+    texte = str(value or "").strip().upper().replace("-", ":")
+    return texte or None
 
 
 class StaticClientNotFoundError(LookupError):
@@ -167,8 +176,8 @@ class StaticClientsRepository:
                     f"""
                     INSERT INTO static_clients (reference, label, pop_name, address, vlan,
                                                 sector_key, plan_down_mbps, plan_up_mbps,
-                                                enabled, note)
-                    VALUES ($1, $2, $3, $4::inet, $5, $6, $7, $8, $9, $10)
+                                                enabled, note, cpe_mac, source)
+                    VALUES ($1, $2, $3, $4::inet, $5, $6, $7, $8, $9, $10, $11, 'manual')
                     RETURNING {COLUMNS}
                     """,  # noqa: S608
                     payload["reference"],
@@ -181,6 +190,7 @@ class StaticClientsRepository:
                     payload.get("plan_up_mbps"),
                     payload.get("enabled", True),
                     payload.get("note"),
+                    _mac(payload.get("cpe_mac")),
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise DuplicateStaticClientError(
@@ -196,6 +206,11 @@ class StaticClientsRepository:
         }
         if "address" in fields:
             fields["address"] = normalise_address(fields["address"])
+        if "cpe_mac" in fields:
+            # Meme normalisation qu'a la creation : sans elle, une MAC saisie en
+            # minuscules ou avec des tirets ne se rapprocherait plus de celle du
+            # voisinage radio, et le client paraitrait introuvable.
+            fields["cpe_mac"] = _mac(fields["cpe_mac"])
         if not fields:
             return await self.get(client_id)
 
@@ -221,6 +236,38 @@ class StaticClientsRepository:
         if row is None:
             raise StaticClientNotFoundError(f"client statique {client_id} inconnu")
         return _to_row(row)
+
+    async def by_vlan(self) -> list[dict[str, Any]]:
+        """Les clients declares, groupes par VLAN.
+
+        LES CLIENTS SUR VLAN ROUTEE SE SAISISSENT A LA MAIN, et c'est la seule
+        facon correcte de les connaitre. Ils n'ouvrent aucune session, RADIUS ne
+        les decrit pas, et rien sur le reseau ne dit quel debit a ete vendu a
+        quelle adresse. Ce que les flux ou la table ARP montrent, ce sont des
+        ADRESSES QUI PARLENT -- une imprimante et un client professionnel y ont
+        exactement la meme apparence.
+
+        Cette vue est donc le miroir de la saisie, pas d'une decouverte : elle
+        rend ce que l'exploitant a declare, range par VLAN, pour qu'il voie d'un
+        coup d'oeil ce qui manque.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT vlan,
+                       count(*)                                        AS clients,
+                       count(*) FILTER (WHERE enabled)                 AS actifs,
+                       count(*) FILTER (WHERE source = 'api')          AS depuis_api,
+                       sum(coalesce(plan_down_mbps, 0))::float8        AS vendu_down_mbps,
+                       sum(coalesce(plan_up_mbps, 0))::float8          AS vendu_up_mbps,
+                       array_agg(DISTINCT pop_name)                    AS pops
+                FROM static_clients
+                WHERE vlan IS NOT NULL
+                GROUP BY vlan
+                ORDER BY vlan
+                """
+            )
+        return [dict(row) for row in rows]
 
     async def delete(self, client_id: int) -> None:
         """Retire la fiche. L'abonne materialise et son historique restent.

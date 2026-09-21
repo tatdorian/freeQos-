@@ -393,6 +393,11 @@ def build_container(
     antennas_repo: Any = None,
     static_clients_repo: Any = None,
     sightings_repo: Any = None,
+    api_keys_repo: Any = None,
+    model_repo: Any = None,
+    flows_repo: Any = None,
+    exporters_repo: Any = None,
+    netflow: Any = None,
     client: FakeRouterOsClient | None = None,
 ) -> Container:
     client = client or FakeRouterOsClient()
@@ -449,6 +454,11 @@ def build_container(
         antennas_repo=antennas_repo,
         static_clients_repo=static_clients_repo,
         sightings_repo=sightings_repo,
+        api_keys_repo=api_keys_repo,
+        model_repo=model_repo,
+        flows_repo=flows_repo,
+        exporters_repo=exporters_repo,
+        netflow=netflow,
     )
 
 

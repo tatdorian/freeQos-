@@ -298,7 +298,7 @@ REGLAGES: tuple[Reglage, ...] = (
         "topology_refresh_interval_s",
         "discover_topology",
         "Periode de redecouverte du graphe reseau. C'est ce job qui peuple les "
-        "onglets Topologie et Arbre reseau ; sans lui ils restent vides.",
+        "l'onglet Arbre reseau ; sans lui il reste vide.",
     ),
     _cadence(
         "qoe_loop_interval_s",
@@ -333,6 +333,50 @@ REGLAGES: tuple[Reglage, ...] = (
         "detection",
         "float",
         "Duree au-dela de laquelle une adresse qui ne parle plus est oubliee.",
+        minimum=60.0,
+        maximum=2_592_000.0,
+    ),
+    # --- Trafic (NetFlow) ---
+    #
+    # NETFLOW_ENABLED, NETFLOW_BIND et NETFLOW_PORT ne sont PAS ici : ouvrir une
+    # socket d'ecoute n'est pas un reglage qu'on bascule a chaud depuis une page
+    # web, et le faire croire serait pire que de ne pas l'offrir.
+    _cadence(
+        "netflow_flush_interval_s",
+        "netflow_flush",
+        "Periode d'ecriture des fenetres de trafic. Une ligne par abonne et par "
+        "fenetre : descendre sous 30 s multiplie les lignes sans rien apprendre.",
+    ),
+    Reglage(
+        "netflow_accounting_vantage",
+        "trafic",
+        "choix",
+        "D'ou la consommation est lue : 'edge' (en amont du coeur, a la sortie "
+        "internet) ou 'pop'. Le meme octet est exporte par les deux : les "
+        "additionner doublerait la consommation de chaque abonne.",
+        choices=("edge", "pop"),
+    ),
+    Reglage(
+        "netflow_track_hosts",
+        "trafic",
+        "bool",
+        "Retenir les adresses vues qui ne correspondent a aucune fiche. Aide a "
+        "la declaration des clients VLAN : rien n'en devient jamais un client.",
+    ),
+    Reglage(
+        "netflow_host_limit",
+        "trafic",
+        "int",
+        "Nombre maximum d'adresses non rattachees retenues par fenetre. Une VLAN "
+        "bavarde ne doit pas noyer l'aide a la saisie.",
+        minimum=1,
+        maximum=10_000,
+    ),
+    Reglage(
+        "netflow_host_retention_s",
+        "trafic",
+        "float",
+        "Duree au-dela de laquelle une adresse non rattachee qui s'est tue est oubliee.",
         minimum=60.0,
         maximum=2_592_000.0,
     ),

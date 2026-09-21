@@ -1110,6 +1110,376 @@ function renderExecSankey(host, subs) {
   host.innerHTML = parts.join('');
 }
 
+/* ---------------------------------------------------------------- trafic
+ *
+ *  OU LE CONTROLEUR SE PLACE, ET POURQUOI CET ONGLET DIT "point de mesure".
+ *
+ *  Il n'est jamais sur le chemin des paquets. Le volume ne peut donc venir que
+ *  de ce que les routeurs exportent deja : quelques dizaines de kbit/s de
+ *  resumes plutot qu'un miroir de port qui recopierait chaque octet sur le lien
+ *  de collecte, dans les deux sens, a travers le coeur.
+ *
+ *  Les exporteurs se declarent AUX DEUX EXTREMITES -- en amont du coeur (sortie
+ *  internet) et au PoP -- et jamais au milieu. Le meme octet est donc vu deux
+ *  fois : les additionner doublerait la consommation de chacun. Le point de
+ *  mesure fait partie de la mesure, et la lecture n'en retient qu'un.
+ */
+
+const FLOW = { minutes: 60, vantage: '' };
+
+const VANTAGE_LABEL = {
+  edge: 'en amont du coeur',
+  pop: 'au PoP',
+  unknown: 'non declare',
+};
+
+function flowNotice(html) {
+  document.getElementById('flow-notice').innerHTML = html || '';
+}
+
+/** Ce qui EMPECHE de mesurer, dit en clair.
+ *
+ *  Un tableau vide a trois causes opposees -- collecteur coupe, aucun exporteur
+ *  qui parle, ou des flux recus dont on ne sait pas lire le modele -- et elles
+ *  n'appellent pas le meme geste. Un ecran vide les confond toutes les trois. */
+function flowDiagnostic(etat) {
+  if (!etat.enabled) {
+    return '<div class="notice err"><strong>Le collecteur NetFlow est coupe.</strong> ' +
+      'Posez <code>NETFLOW_ENABLED=true</code> et redemarrez : c\'est un port a ' +
+      'ouvrir, il ne peut pas se basculer a chaud comme un reglage de base.</div>';
+  }
+  if (!etat.listening) {
+    return '<div class="notice err"><strong>Le collecteur n\'ecoute pas.</strong> ' +
+      esc(etat.last_error || 'cause inconnue') + '</div>';
+  }
+  if (!etat.packets_received) {
+    return '<div class="notice"><strong>Aucun datagramme recu sur ' +
+      esc(etat.bind) + '.</strong><span class="hint">Configurez l\'export sur vos ' +
+      'equipements. Sur RouterOS : <code>/ip/traffic-flow set enabled=yes</code> puis ' +
+      '<code>/ip/traffic-flow/target add dst-address=&lt;ce collecteur&gt; port=' +
+      esc(String(etat.bind).split(':').pop()) + ' version=9</code>.</span></div>';
+  }
+  if (etat.flows_seen && !etat.flows_matched) {
+    return '<div class="notice warn"><strong>Des flux arrivent, mais aucun ne ' +
+      'correspond a un abonne.</strong><span class="hint">' +
+      esc(etat.declared_prefixes) + ' bloc(s) declare(s). Verifiez que les adresses ' +
+      'de vos clients sont bien saisies, et que NETFLOW_CUSTOMER_NETWORKS couvre ' +
+      'votre plan d\'adressage.</span></div>';
+  }
+  if (etat.orphan_records && !etat.templates_known) {
+    return '<div class="notice warn"><strong>Flux recus, modeles jamais envoyes.</strong>' +
+      '<span class="hint">En v9 et en IPFIX, les donnees sont illisibles sans le ' +
+      'modele qui les decrit. L\'exporteur doit le reemettre periodiquement ' +
+      '(RouterOS : <code>template-refresh</code>).</span></div>';
+  }
+  return '';
+}
+
+async function loadTraffic() {
+  FLOW.minutes = Number(document.getElementById('flow-range').value) || 60;
+  FLOW.vantage = document.getElementById('flow-vantage').value || '';
+
+  const suffixe = '?minutes=' + FLOW.minutes + (FLOW.vantage ? '&vantage=' + FLOW.vantage : '');
+  const [etat, top, apps, hotes, exporteurs] = await Promise.all([
+    api('/netflow/status'),
+    api('/netflow/top' + suffixe + '&limit=25').catch(() => null),
+    api('/netflow/applications?minutes=' + FLOW.minutes).catch(() => []),
+    api('/netflow/hosts?limit=60').catch(() => ({ hosts: [], vlans: [] })),
+    api('/netflow/exporters').catch(() => []),
+  ]);
+
+  flowNotice(flowDiagnostic(etat));
+  renderFlowStats(etat, top);
+  renderFlowTop(top);
+  renderFlowApps(apps);
+  renderFlowHosts(hotes);
+  renderFlowExporters(exporteurs);
+
+  const compte = document.getElementById('flow-count');
+  if (compte) {
+    compte.textContent = etat.listening
+      ? etat.bind + ' · ' + etat.packets_received + ' datagramme(s)'
+      : 'collecteur a l\'arret';
+  }
+}
+
+function renderFlowStats(etat, top) {
+  const totaux = (top && top.totals) || {};
+  const descendant = Number(totaux.down_bytes) || 0;
+  const montant = Number(totaux.up_bytes) || 0;
+  const vus = etat.flows_seen || 0;
+  const rattaches = etat.flows_matched || 0;
+  const part = vus ? Math.round((rattaches / vus) * 100) : 0;
+  document.getElementById('flow-stats').innerHTML =
+    statCard('down', 'Descendant', bytesText(descendant), '',
+      'sur ' + FLOW.minutes + ' min') +
+    statCard('up', 'Montant', bytesText(montant), '',
+      'sur ' + FLOW.minutes + ' min') +
+    statCard('', 'Abonnes vus', String(totaux.subscribers || 0), '',
+      (top && top.vantage ? 'compte ' + esc(VANTAGE_LABEL[top.vantage] || top.vantage) : '')) +
+    statCard(part < 50 ? 'warn' : '', 'Flux rattaches', String(part), '%',
+      rattaches + ' sur ' + vus + ' depuis le demarrage');
+}
+
+function renderFlowTop(top) {
+  const host = document.getElementById('flow-top');
+  const lignes = (top && top.subscribers) || [];
+  if (!lignes.length) {
+    host.innerHTML = '<div class="empty">Aucun volume mesure sur cette periode.</div>';
+    return;
+  }
+  host.innerHTML = '<table><thead><tr><th>Abonne</th><th>PoP</th><th>Nature</th>' +
+    '<th class="num">Descendant</th><th class="num">Montant</th>' +
+    '<th class="num">Plan</th><th class="num">Flux</th><th>Vu</th></tr></thead><tbody>' +
+    lignes.map((r) =>
+      '<tr><td><a href="#" data-flow-sub="' + esc(r.subscriber_id) + '">' +
+        esc(r.login) + '</a></td>' +
+      '<td>' + esc(r.pop_name || '-') + '</td>' +
+      '<td>' + kindBadge(r.kind) + '</td>' +
+      '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
+      '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
+      '<td class="num">' + (r.plan_down_mbps
+        ? esc(r.plan_down_mbps) + '/' + esc(r.plan_up_mbps || '?') + ' Mbps' : '-') + '</td>' +
+      '<td class="num">' + esc(r.flows) + '</td>' +
+      '<td>' + esc(depuis(r.last_ts)) + '</td></tr>').join('') +
+    '</tbody></table>';
+  host.querySelectorAll('[data-flow-sub]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      openSubscriber(Number(a.dataset.flowSub));
+    });
+  });
+}
+
+function renderFlowApps(apps) {
+  const host = document.getElementById('flow-apps');
+  if (!apps || !apps.length) {
+    host.innerHTML = '<div class="empty">Rien a repartir : aucun flux sur cette periode.</div>';
+    return;
+  }
+  const total = apps.reduce((s, a) => s + Number(a.down_bytes || 0) + Number(a.up_bytes || 0), 0);
+  host.innerHTML = '<table><thead><tr><th>Usage</th><th class="num">Descendant</th>' +
+    '<th class="num">Montant</th><th>Part</th></tr></thead><tbody>' +
+    apps.map((a) => {
+      const somme = Number(a.down_bytes || 0) + Number(a.up_bytes || 0);
+      return '<tr><td>' + esc(a.app) + '</td>' +
+        '<td class="num">' + bytesText(a.down_bytes) + '</td>' +
+        '<td class="num">' + bytesText(a.up_bytes) + '</td>' +
+        '<td style="min-width:140px">' + meter(somme, total || 1, '') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+}
+
+/** Les adresses vues qui ne correspondent a aucune fiche.
+ *
+ *  A LIRE COMME UNE PISTE. Une imprimante, une camera ou l'equipement d'un
+ *  autre operateur laissent exactement la meme trace qu'un client, et rien dans
+ *  un flux ne dit quel debit a ete vendu. Le bouton ne cree donc rien : il
+ *  emmene vers le formulaire de declaration, ou un humain saisit le plan. */
+function renderFlowHosts(data) {
+  const host = document.getElementById('flow-hosts');
+  const lignes = (data && data.hosts) || [];
+  if (!lignes.length) {
+    host.innerHTML = '<div class="empty">Aucune adresse non rattachee. ' +
+      'Soit tout est declare, soit rien ne parle sur vos VLAN clients.</div>';
+    return;
+  }
+  host.innerHTML = '<table><thead><tr><th>Adresse</th><th>VLAN</th><th>PoP</th>' +
+    '<th>Exporteur</th><th class="num">Descendant</th><th class="num">Montant</th>' +
+    '<th>Vue</th><th></th></tr></thead><tbody>' +
+    lignes.map((h) =>
+      '<tr><td><code>' + esc(h.address) + '</code></td>' +
+      '<td>' + (h.vlan_id ? esc(h.vlan_id) : '<span class="faint">-</span>') + '</td>' +
+      '<td>' + esc(h.pop_name || '-') + '</td>' +
+      '<td>' + esc(h.exporter || '-') + '</td>' +
+      '<td class="num">' + bytesText(h.down_bytes) + '</td>' +
+      '<td class="num">' + bytesText(h.up_bytes) + '</td>' +
+      '<td>' + esc(depuis(h.last_seen)) + '</td>' +
+      '<td><button class="sm" data-declare-host="' + esc(h.address) + '"' +
+        ' data-declare-vlan="' + esc(h.vlan_id || '') + '"' +
+        ' data-declare-pop="' + esc(h.pop_name || '') + '">Declarer</button></td>' +
+      '</tr>').join('') + '</tbody></table>';
+  host.querySelectorAll('[data-declare-host]').forEach((b) => {
+    b.addEventListener('click', () => {
+      location.hash = '#/subscribers';
+      // Le panneau d'inventaire est replie par defaut : l'ouvrir, sinon le
+      // formulaire pre-rempli serait invisible et le geste paraitrait sans effet.
+      const panneau = document.getElementById('sc-panel');
+      if (panneau) panneau.hidden = false;
+      scRemplirFormulaire({
+        reference: '',
+        address: b.dataset.declareHost,
+        vlan: b.dataset.declareVlan ? Number(b.dataset.declareVlan) : null,
+        pop_name: b.dataset.declarePop || '',
+      });
+      scNotice('<span class="warn">Adresse reprise du trafic observe. ' +
+        'Saisissez la reference et le debit souscrit : eux, personne ne les devine.</span>');
+    });
+  });
+}
+
+function renderFlowExporters(rows) {
+  const host = document.getElementById('flow-exporters');
+  if (!rows || !rows.length) {
+    host.innerHTML = '<div class="empty">Aucun exporteur. Declarez-en un ci-dessous, ' +
+      'ou configurez l\'export sur un routeur : il apparaitra tout seul, marque ' +
+      '<code>unknown</code>.</div>';
+    return;
+  }
+  host.innerHTML = '<table><thead><tr><th>Adresse</th><th>Nom</th><th>Point de mesure</th>' +
+    '<th>PoP</th><th class="num">Echantillon.</th><th class="num">Datagrammes</th>' +
+    '<th class="num">Flux</th><th>Version</th><th>Vu</th><th></th></tr></thead><tbody>' +
+    rows.map((e) => {
+      const inconnu = e.vantage === 'unknown';
+      return '<tr><td><code>' + esc(e.address) + '</code></td>' +
+        '<td>' + esc(e.name || '-') + '</td>' +
+        '<td><span class="badge ' + (inconnu ? 'warn' : 'ok') + '">' +
+          esc(VANTAGE_LABEL[e.vantage] || e.vantage) + '</span></td>' +
+        '<td>' + esc(e.pop_name || '-') + '</td>' +
+        '<td class="num">' + (e.sampling_rate > 1 ? '1:' + esc(e.sampling_rate) : 'tout') + '</td>' +
+        '<td class="num">' + esc(e.packets_seen) + '</td>' +
+        '<td class="num">' + esc(e.flows_seen) + '</td>' +
+        '<td>' + esc(e.last_version || '-') + '</td>' +
+        '<td>' + esc(depuis(e.last_seen)) + '</td>' +
+        '<td><button class="sm" data-exp-edit="' + esc(e.address) + '"' +
+          ' data-exp-name="' + esc(e.name || '') + '"' +
+          ' data-exp-vantage="' + esc(e.vantage) + '"' +
+          ' data-exp-pop="' + esc(e.pop_name || '') + '"' +
+          ' data-exp-sampling="' + esc(e.sampling_rate) + '">Modifier</button> ' +
+          '<button class="sm" data-exp-del="' + esc(e.id) + '">Retirer</button></td>' +
+        '</tr>';
+    }).join('') + '</tbody></table>';
+
+  host.querySelectorAll('[data-exp-edit]').forEach((b) => {
+    b.addEventListener('click', () => {
+      document.getElementById('exp-address').value = b.dataset.expEdit;
+      document.getElementById('exp-name').value = b.dataset.expName;
+      document.getElementById('exp-vantage').value =
+        b.dataset.expVantage === 'edge' ? 'edge' : 'pop';
+      document.getElementById('exp-pop').value = b.dataset.expPop;
+      document.getElementById('exp-sampling').value = b.dataset.expSampling;
+    });
+  });
+  host.querySelectorAll('[data-exp-del]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      if (!confirm('Retirer cet exporteur de la liste ? Ses flux repasseront en ' +
+                   '"non declare" s\'il continue d\'envoyer.')) return;
+      try {
+        await api('/netflow/exporters/' + b.dataset.expDel, { method: 'DELETE' });
+        await loadTraffic();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+async function declareExporter(event) {
+  event.preventDefault();
+  const charge = {
+    address: document.getElementById('exp-address').value.trim(),
+    name: document.getElementById('exp-name').value.trim() || null,
+    vantage: document.getElementById('exp-vantage').value,
+    pop_name: document.getElementById('exp-pop').value.trim() || null,
+    sampling_rate: Number(document.getElementById('exp-sampling').value) || 1,
+  };
+  const sortie = document.getElementById('exporter-result');
+  try {
+    await api('/netflow/exporters', { method: 'POST', body: JSON.stringify(charge) });
+    sortie.innerHTML = '<div class="notice ok">Exporteur declare. Les flux de la ' +
+      'minute en cours sont deja comptes sur ce point de mesure.</div>';
+    document.getElementById('exporter-form').reset();
+    await loadTraffic();
+  } catch (err) {
+    sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+}
+
+/* ------------------------------------------------------------ cles d'API */
+
+async function loadApiKeys() {
+  const host = document.getElementById('keys-table');
+  if (!host) return;
+  let rows;
+  try {
+    rows = await api('/api-keys');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  if (!rows.length) {
+    host.innerHTML = '<div class="empty">Aucune cle. Sans cle, l\'API publique ' +
+      'refuse tout : c\'est voulu.</div>';
+    return;
+  }
+  host.innerHTML = '<table><thead><tr><th>Nom</th><th>Prefixe</th><th>Portees</th>' +
+    '<th>Etat</th><th>Creee</th><th>Derniere utilisation</th><th></th></tr></thead><tbody>' +
+    rows.map((k) =>
+      '<tr><td>' + esc(k.name) + '</td>' +
+      '<td><code>fqos_' + esc(k.prefix) + '_…</code></td>' +
+      '<td>' + esc((k.scopes || []).join(', ')) + '</td>' +
+      '<td><span class="badge ' + (k.enabled ? 'ok' : 'warn') + '">' +
+        (k.enabled ? 'active' : 'desactivee') + '</span></td>' +
+      '<td>' + esc(clock(k.created_at)) + '</td>' +
+      '<td>' + (k.last_used_at ? esc(depuis(k.last_used_at)) :
+        '<span class="faint">jamais</span>') + '</td>' +
+      '<td><button class="sm" data-key-toggle="' + esc(k.id) + '"' +
+        ' data-key-enabled="' + (k.enabled ? '1' : '') + '">' +
+        (k.enabled ? 'Desactiver' : 'Reactiver') + '</button> ' +
+        '<button class="sm" data-key-del="' + esc(k.id) + '">Revoquer</button></td>' +
+      '</tr>').join('') + '</tbody></table>';
+
+  host.querySelectorAll('[data-key-toggle]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      try {
+        await api('/api-keys/' + b.dataset.keyToggle, {
+          method: 'PATCH',
+          body: JSON.stringify({ enabled: !b.dataset.keyEnabled }),
+        });
+        await loadApiKeys();
+      } catch (err) { alert(err.message); }
+    });
+  });
+  host.querySelectorAll('[data-key-del]').forEach((b) => {
+    b.addEventListener('click', async () => {
+      if (!confirm('Revoquer cette cle definitivement ? Le systeme qui s\'en sert ' +
+                   'recevra un 401 des la prochaine requete.')) return;
+      try {
+        await api('/api-keys/' + b.dataset.keyDel, { method: 'DELETE' });
+        await loadApiKeys();
+      } catch (err) { alert(err.message); }
+    });
+  });
+}
+
+/** Cree la cle et AFFICHE SON SECRET UNE SEULE FOIS.
+ *
+ *  Il n'est nulle part ailleurs : la base n'en garde que l'empreinte. Le dire
+ *  gros ici est la difference entre une integration qui marche et un appel au
+ *  support une heure plus tard. */
+async function createApiKey(event) {
+  event.preventDefault();
+  const sortie = document.getElementById('key-result');
+  const portee = document.getElementById('key-scope').value;
+  try {
+    const cle = await api('/api-keys', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: document.getElementById('key-name').value.trim(),
+        scopes: portee === 'write' ? ['read', 'write'] : ['read'],
+      }),
+    });
+    sortie.innerHTML = '<div class="notice ok"><strong>Cle creee. Copiez-la ' +
+      'maintenant : elle ne sera plus jamais affichee.</strong>' +
+      '<pre style="user-select:all;white-space:pre-wrap;word-break:break-all">' +
+      esc(cle.secret) + '</pre>' +
+      '<span class="hint">Exemple d\'appel :<br>' +
+      '<code>curl -u ' + esc(cle.secret) + ': ' + esc(location.origin) +
+      '/model/v1/services</code></span></div>';
+    document.getElementById('key-form').reset();
+    await loadApiKeys();
+  } catch (err) {
+    sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+}
+
 /* ---------------------------------------------------------- arbre reseau */
 
 const ICONE = {
@@ -1119,7 +1489,8 @@ const ICONE = {
 };
 
 /** Charge le graphe et les abonnes une seule fois, partage entre l'arbre
- *  editable (onglet Arbre reseau) et le tableau des liens (onglet Topologie). */
+ *  editable et le tableau des liens, qui vivent tous deux dans l'onglet
+ *  Arbre reseau. */
 async function fetchTopo() {
   const [data, subs] = await Promise.all([
     api('/topology'),
@@ -1132,8 +1503,7 @@ async function fetchTopo() {
 }
 
 /** Onglet Arbre reseau : le vrai arbre editable au glisser-deposer. C'est la
- *  meme vue que construisait l'onglet Topologie ; elle vit desormais ici, et
- *  Topologie ne garde que le tableau des liens. */
+ *  tableau des liens, qui avait son propre onglet, vit replie juste dessous. */
 async function loadNetwork() {
   const data = await fetchTopo();
   const compte = document.getElementById('net-count');
@@ -1143,6 +1513,8 @@ async function loadNetwork() {
   renderDecouverte(data);
   renderTopoCanvas();
   renderTopoPanel();
+  // Le tableau des liens, replie juste dessous : meme donnee, lue en lignes.
+  await loadTopology();
 }
 
 /** Ce que la DERNIERE decouverte a a dire, qu'elle vienne du job periodique ou
@@ -1481,7 +1853,7 @@ async function annoterLesPlafonds(rows) {
     data = await api('/shaping/limits');
   } catch (err) {
     // Silencieux a l'ecran : l'absence de verification n'est pas une panne de
-    // la page. Les pastilles restent simplement absentes, et l'onglet Shaping
+    // la page. Les pastilles restent simplement absentes, et Reglages > Shaping
     // porte le message complet.
     console.warn('Plafonds non verifies :', err);
     return;
@@ -1545,6 +1917,7 @@ function scRemplirFormulaire(fiche) {
   v('sc-sector', fiche ? fiche.sector_key : '');
   v('sc-down', fiche ? fiche.plan_down_mbps : '');
   v('sc-up', fiche ? fiche.plan_up_mbps : '');
+  v('sc-cpe', fiche ? fiche.cpe_mac : '');
   v('sc-note', fiche ? fiche.note : '');
   document.getElementById('sc-enabled').checked = fiche ? !!fiche.enabled : true;
   document.getElementById('sc-submit').textContent = fiche ? 'Enregistrer' : 'Declarer';
@@ -1574,6 +1947,8 @@ function scDepuisCandidat(candidat) {
 }
 
 async function loadCandidates() {
+  const bloc = document.getElementById('sc-candidates-block');
+  if (bloc && bloc.tagName === 'DETAILS' && !bloc.open) return;
   const host = document.getElementById('sc-candidates');
   let data;
   try {
@@ -1778,9 +2153,66 @@ function scPayload() {
     sector_key: txt('sc-sector'),
     plan_down_mbps: nb('sc-down'),
     plan_up_mbps: nb('sc-up'),
+    cpe_mac: txt('sc-cpe'),
     note: txt('sc-note'),
     enabled: document.getElementById('sc-enabled').checked,
   };
+}
+
+/** Ce qui est DECLARE sur chaque VLAN.
+ *
+ *  Le tableau rend la SAISIE, pas une decouverte. C'est la nuance qui compte :
+ *  un client sur VLAN routee n'ouvre pas de session, RADIUS ne le decrit pas,
+ *  et rien sur le reseau ne dit quel debit lui a ete vendu. Ce que les flux
+ *  montrent, ce sont des adresses qui parlent -- une imprimante et un client
+ *  professionnel y ont exactement la meme apparence. */
+async function loadVlanClients() {
+  const host = document.getElementById('sc-vlans');
+  if (!host) return;
+  let corps;
+  try {
+    corps = await api('/static-clients/vlans');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const lignes = corps.vlans || [];
+  const orphelins = (corps.unmatched || []).filter((h) => h.vlan_id).length;
+  if (!lignes.length) {
+    host.innerHTML = '<div class="empty">Aucun client declare sur une VLAN. ' +
+      (orphelins
+        ? esc(orphelins) + ' adresse(s) parlent pourtant sur des VLAN : elles sont ' +
+          'listees dans l\'onglet Trafic. Ce ne sont pas des clients tant que ' +
+          'personne ne les a declarees.'
+        : 'Renseignez le champ VLAN du formulaire ci-dessous pour en ranger un ici.') +
+      '</div>';
+    return;
+  }
+  const parVlan = new Map();
+  (corps.unmatched || []).forEach((h) => {
+    if (!h.vlan_id) return;
+    parVlan.set(h.vlan_id, (parVlan.get(h.vlan_id) || 0) + 1);
+  });
+  host.innerHTML = '<table><thead><tr><th>VLAN</th><th>PoP</th>' +
+    '<th class="num">Clients</th><th class="num">Actifs</th>' +
+    '<th class="num">Vendu (desc.)</th><th class="num">Vendu (mont.)</th>' +
+    '<th>Origine</th><th class="num">Non declares</th></tr></thead><tbody>' +
+    lignes.map((v) => {
+      const vus = parVlan.get(v.vlan) || 0;
+      return '<tr><td><b>' + esc(v.vlan) + '</b></td>' +
+        '<td>' + esc((v.pops || []).filter(Boolean).join(', ') || '-') + '</td>' +
+        '<td class="num">' + esc(v.clients) + '</td>' +
+        '<td class="num">' + esc(v.actifs) + '</td>' +
+        '<td class="num">' + esc(Math.round(v.vendu_down_mbps || 0)) + ' Mbps</td>' +
+        '<td class="num">' + esc(Math.round(v.vendu_up_mbps || 0)) + ' Mbps</td>' +
+        '<td>' + (v.depuis_api
+          ? '<span class="badge">' + esc(v.depuis_api) + ' via API</span> '
+          : '') + '<span class="badge ok">' + esc(v.clients - v.depuis_api) +
+          ' a la main</span></td>' +
+        '<td class="num">' + (vus
+          ? '<span class="badge warn">' + esc(vus) + '</span>'
+          : '<span class="faint">0</span>') + '</td></tr>';
+    }).join('') + '</tbody></table>';
 }
 
 async function loadStaticClients() {
@@ -1948,7 +2380,7 @@ async function scEnregistrer(event) {
     scRemplirFormulaire(null);
     // Declarer un client le retire de la liste des candidats : les deux
     // tableaux doivent etre relus ensemble, sinon il apparait aux deux endroits.
-    await Promise.all([loadStaticClients(), loadCandidates()]);
+    await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
     // La fiche modifiee change le plan : le tableau des abonnes doit suivre.
     await loadSubscribers();
   } catch (err) {
@@ -1968,7 +2400,7 @@ async function scSupprimer(id, fiches) {
     await api('/static-clients/' + encodeURIComponent(id), { method: 'DELETE' });
     if (scEdition && String(scEdition.id) === String(id)) scRemplirFormulaire(null);
     // Retirer une fiche peut faire REAPPARAITRE son adresse en candidat.
-    await Promise.all([loadStaticClients(), loadCandidates()]);
+    await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
     await loadSubscribers();
   } catch (err) {
     scNotice('<span class="badge crit">' + esc(err.message) + '</span>');
@@ -2357,7 +2789,7 @@ async function buildTreeFromConfig(silencieux) {
         r.nodes + ' equipement(s) et ' + r.links + ' lien(s) deduits de la configuration.' +
         (r.warnings && r.warnings.length
           ? '<span class="hint">' + r.warnings.map(esc).join('<br>') + '</span>' : '') +
-        '<span class="hint">Ouvrez l\'onglet Topologie pour voir et reorganiser ' +
+        '<span class="hint">Ouvrez l\'onglet Arbre reseau pour voir et reorganiser ' +
         'l\'arbre au glisser-deposer.</span></div>';
     }
     return r;
@@ -2870,11 +3302,17 @@ const topo = {
 // le detail se lit dans l'onglet Abonnes, qui est fait pour ca.
 const TOPO_ABOS_MAX = 25;
 
+/** Le tableau technique des liens. Il avait son propre onglet ; il vit
+ *  desormais replie sous l'arbre reseau, qui montre la MEME donnee en cases.
+ *
+ *  Il n'est charge que si le bloc est ouvert : c'est une lecture
+ *  supplementaire de l'inventaire pour une question qu'on ne se pose pas a
+ *  chaque rafraichissement. */
 async function loadTopology() {
-  // Onglet Topologie : le tableau technique des liens. L'arbre visuel, lui, vit
-  // dans l'onglet Arbre reseau (meme donnees, partagees via fetchTopo).
+  const bloc = document.getElementById('net-links-block');
+  if (bloc && !bloc.open) return;
   const [data, inventaire] = await Promise.all([
-    fetchTopo(),
+    topo.data ? Promise.resolve(topo.data) : fetchTopo(),
     api('/pops/routers').catch(() => null),
   ]);
   renderTopologySources(data, inventaire);
@@ -3673,7 +4111,7 @@ function bindTopoDrag(svg, model) {
               { method: 'PATCH', body: JSON.stringify({ parent_key: dropTarget }) });
             await api('/topology/nodes/' + encodeURIComponent(key) + '/layout',
               { method: 'PATCH', body: JSON.stringify({ x: node.x, y: node.y }) });
-            await loadTopology();
+            await loadNetwork();
           } else {
             await api('/topology/nodes/' + encodeURIComponent(key) + '/layout',
               { method: 'PATCH', body: JSON.stringify({ x: node.x, y: node.y }) });
@@ -3688,7 +4126,7 @@ function bindTopoDrag(svg, model) {
             }
             renderTopoCanvas();   // redessine les aretes vers la nouvelle position
           }
-        } catch (err) { alert(err.message); await loadTopology(); }
+        } catch (err) { alert(err.message); await loadNetwork(); }
       };
 
       window.addEventListener('pointermove', onMove);
@@ -3900,7 +4338,7 @@ function renderTopoPanel() {
     try {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '?kind=' + e.target.value,
         { method: 'PATCH' });
-      await loadTopology();
+      await loadNetwork();
     } catch (err) { alert(err.message); }
   });
   document.getElementById('topo-merge').addEventListener('click', async () => {
@@ -3910,20 +4348,20 @@ function renderTopoPanel() {
       await api('/topology/merge', { method: 'POST',
         body: JSON.stringify({ alias_key: node.key, canonical_key: cible }) });
       topo.selected = cible;  // la case fusionnee disparait : on suit la canonique
-      await loadTopology();
+      await loadNetwork();
     } catch (err) { alert(err.message); }
   });
   host.querySelectorAll('[data-unmerge]').forEach((b) => b.addEventListener('click', async () => {
     try {
       await api('/topology/merge/' + encodeURIComponent(b.dataset.unmerge), { method: 'DELETE' });
-      await loadTopology();
+      await loadNetwork();
     } catch (err) { alert(err.message); }
   }));
   host.querySelectorAll('[data-attach]').forEach((b) => b.addEventListener('click', async () => {
     try {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '/parent',
         { method: 'PATCH', body: JSON.stringify({ parent_key: b.dataset.attach }) });
-      await loadTopology();
+      await loadNetwork();
     } catch (err) { alert(err.message); }
   }));
   host.querySelectorAll('[data-merge-into]').forEach((b) => b.addEventListener('click', async () => {
@@ -3931,7 +4369,7 @@ function renderTopoPanel() {
     try {
       await api('/topology/merge', { method: 'POST',
         body: JSON.stringify({ alias_key: b.dataset.mergeInto, canonical_key: node.key }) });
-      await loadTopology();
+      await loadNetwork();
     } catch (err) { alert(err.message); }
   }));
   const detach = document.getElementById('topo-detach');
@@ -3939,7 +4377,7 @@ function renderTopoPanel() {
     try {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '/parent',
         { method: 'PATCH', body: JSON.stringify({ parent_key: null }) });
-      await loadTopology();
+      await loadNetwork();
     } catch (err) { alert(err.message); }
   });
   document.getElementById('topo-hide').addEventListener('click', async () => {
@@ -3947,7 +4385,7 @@ function renderTopoPanel() {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '/visibility',
         { method: 'PATCH', body: JSON.stringify({ hidden: true }) });
       topo.selected = null;
-      await loadTopology();
+      await loadNetwork();
     } catch (err) { alert(err.message); }
   });
 }
@@ -5105,6 +5543,7 @@ async function refreshHealth() {
 const GROUPE_TITRE = {
   shaping: 'Shaping', cake: 'CAKE (AQM)', enforcement: 'Garde-fous d\'ecriture',
   cadences: 'Cadences de collecte', detection: 'Detection des clients a IP fixe',
+  trafic: 'Trafic (NetFlow)',
 };
 
 /** Controle de saisie adapte au type du reglage. Un reglage "nullable" recoit
@@ -5140,7 +5579,7 @@ function settingRow(r) {
   const pose = r.source === 'db';
   const badge = pose
     ? '<span class="badge ok" title="Valeur posee ici, stockee en base">base</span>'
-    : 'PLACEHOLDER';
+    : '<span class="badge" title="Aucune valeur posee : le defaut s\'applique">defaut</span>';
   const defaut = r.default === null || r.default === undefined ? '—' : String(r.default);
   return '<tr>' +
     '<td><code>' + esc(r.name) + '</code>' +
@@ -5163,7 +5602,7 @@ async function loadSettings() {
       body.settings.length;
   }
 
-  const ordre = ['shaping', 'cake', 'enforcement', 'cadences'];
+  const ordre = ['shaping', 'cake', 'enforcement', 'trafic', 'cadences'];
   const groupes = Object.keys(body.groups)
     .sort((a, b) => ordre.indexOf(a) - ordre.indexOf(b));
   host.innerHTML = groupes.map((g) =>
@@ -5186,6 +5625,13 @@ async function loadSettings() {
     '</tr></thead><tbody>' + body.bootstrap_only.map((e) =>
       '<tr><td><code>' + esc(e.name) + '</code></td><td>' + esc(e.why) + '</td></tr>')
       .join('') + '</tbody></table>';
+
+  await loadApiKeys();
+  // Le shaping n'a plus d'onglet : il vit ici, replie. On ne lit les routeurs
+  // que si l'exploitant ouvre le bloc -- sinon ouvrir les Reglages
+  // interrogerait tout le parc pour rien.
+  const bloc = document.getElementById('settings-shaping');
+  if (bloc && bloc.open) await loadShaping();
 }
 
 function settingNotice(html) {
@@ -5234,10 +5680,9 @@ async function resetSetting(name) {
 const LOADERS = {
   dashboard: loadDashboard,
   exec: loadExec,
+  traffic: loadTraffic,
   network: loadNetwork,
   subscribers: loadSubscribers,
-  topology: loadTopology,
-  shaping: loadShaping,
   pops: loadRouters,
   capacity: loadCapacity,
   settings: loadSettings,
@@ -5299,6 +5744,23 @@ document.getElementById('range-select').addEventListener('change', (e) => {
   loadThroughput();
 });
 document.getElementById('btn-test').addEventListener('click', testConnection);
+
+/* ------------------------------------------------------- trafic et API */
+document.getElementById('flow-range').addEventListener('change', loadTraffic);
+document.getElementById('flow-vantage').addEventListener('change', loadTraffic);
+document.getElementById('exporter-form').addEventListener('submit', declareExporter);
+document.getElementById('key-form').addEventListener('submit', createApiKey);
+
+// Les deux blocs replies qui ont remplace les onglets Topologie et Shaping :
+// on ne charge leur contenu que lorsqu'ils s'ouvrent. C'est ce qui rend leur
+// disparition des onglets gratuite -- aucune lecture de plus tant que
+// personne ne les regarde.
+document.getElementById('net-links-block').addEventListener('toggle', (e) => {
+  if (e.target.open) loadTopology();
+});
+document.getElementById('settings-shaping').addEventListener('toggle', (e) => {
+  if (e.target.open) loadShaping();
+});
 document.getElementById('shaping-router').addEventListener('change', () => {
   loadPoints();
   loadLimits();
@@ -5369,10 +5831,13 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
   panneau.hidden = !panneau.hidden;
   if (!panneau.hidden) {
     scRemplirFormulaire(null);
-    await Promise.all([loadStaticClients(), loadCandidates()]);
+    await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
   }
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
+document.getElementById('sc-candidates-block').addEventListener('toggle', (e) => {
+  if (e.target.open) loadCandidates();
+});
 document.getElementById('sc-diag').addEventListener('click', scDiagnostic);
 document.getElementById('sc-recensement').addEventListener('click', scRecensement);
 document.getElementById('sc-cancel').addEventListener('click', () => scRemplirFormulaire(null));
@@ -5401,9 +5866,9 @@ setInterval(() => {
   // Vue Files live : ne pas ecraser un champ de debit en cours de saisie.
   if (state.view === 'exec' && document.activeElement &&
       document.activeElement.tagName === 'INPUT') return;
-  // Vue Shaping : la carte vit, mais pas pendant qu'on lit un plan calcule a la
-  // main -- le rafraichissement l'effacerait sous les yeux de l'exploitant.
-  if (state.view === 'shaping' && document.getElementById('shaping-technique').open) return;
+  // Trafic : ne pas ecraser un formulaire d'exporteur en cours de saisie.
+  if (state.view === 'traffic' && document.activeElement &&
+      document.activeElement.tagName === 'INPUT') return;
   refresh();
   // Le tiroir d'un lien suit le meme rythme : on regarde un debit justement
   // quand il bouge.

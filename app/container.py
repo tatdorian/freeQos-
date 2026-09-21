@@ -28,8 +28,11 @@ from app.collectors.uisp import (
 )
 from app.config import Settings
 from app.db.antennas_repo import AntennasRepository
+from app.db.api_keys_repo import ApiKeysRepository
 from app.db.database import Database
 from app.db.directory import Directory, PgDirectory
+from app.db.flows_repo import FlowsRepository, NetflowExportersRepository
+from app.db.model_repo import ModelRepository
 from app.db.repository import MetricsRepository
 from app.db.routers_repo import RoutersRepository
 from app.db.settings_repo import SettingsRepository
@@ -53,6 +56,7 @@ from app.services.collection import (
     CollectionService,
 )
 from app.services.crypto import KeySource, SecretBox, load_or_create_key
+from app.services.netflow_service import JOB_NETFLOW, NetflowService
 from app.services.registry import RouterRegistry
 from app.services.rtt import RttProber
 from app.services.runtime_config import RuntimeConfig
@@ -157,6 +161,11 @@ class Container:
     antennas_repo: AntennasRepository | None = None
     static_clients_repo: StaticClientsRepository | None = None
     sightings_repo: VlanSightingsRepository | None = None
+    api_keys_repo: ApiKeysRepository | None = None
+    model_repo: ModelRepository | None = None
+    flows_repo: FlowsRepository | None = None
+    exporters_repo: NetflowExportersRepository | None = None
+    netflow: NetflowService | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -237,6 +246,13 @@ async def build_container(settings: Settings) -> Container:
     # ici, jamais dans static_clients, pour qu'aucune detection ne puisse
     # devenir une fiche sans passer par un humain.
     sightings_repo = VlanSightingsRepository(database.pool)
+    # API publique : cles, modele de reseau (contrat Preseem) et mesures de
+    # trafic. Aucun secret d'equipement ici -- des identifiants externes, des
+    # debits et des octets.
+    api_keys_repo = ApiKeysRepository(database.pool)
+    model_repo = ModelRepository(database.pool)
+    flows_repo = FlowsRepository(database.pool)
+    exporters_repo = NetflowExportersRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
@@ -293,8 +309,8 @@ async def build_container(settings: Settings) -> Container:
         """Decouverte periodique du graphe.
 
         SANS CE JOB, la topologie n'existait que si quelqu'un cliquait
-        "Relancer la decouverte" : les onglets Topologie et Arbre reseau
-        restaient vides sur une installation neuve, quel que soit l'etat des
+        "Relancer la decouverte" : l'onglet Arbre reseau
+        restait vide sur une installation neuve, quel que soit l'etat des
         PoPs et de leur API. Le reglage topology_refresh_interval_s etait
         declare et ne pilotait rien.
 
@@ -354,6 +370,43 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_TOPOLOGY, settings.topology_refresh_interval_s, discover_topology)
 
+    # Collecteur NetFlow. Il ECOUTE : aucune sonde, aucun miroir de port, aucune
+    # charge ajoutee au coeur. Les exporteurs sont declares depuis l'interface,
+    # avec leur point de mesure ('edge' en amont du coeur, 'pop' au PoP).
+    netflow = NetflowService(
+        flows_repo=flows_repo,
+        exporters_repo=exporters_repo,
+        bind=settings.netflow_bind,
+        port=settings.netflow_port,
+        enabled=settings.netflow_enabled,
+        accounting_vantage=settings.netflow_accounting_vantage,
+        customer_networks=tuple(settings.netflow_customer_networks),
+        host_limit=settings.netflow_host_limit,
+        track_hosts=settings.netflow_track_hosts,
+        host_retention_s=settings.netflow_host_retention_s,
+    )
+    await netflow.start()
+
+    async def flush_netflow() -> None:
+        # Les reglages de trafic sont pilotables a chaud depuis l'interface (ils
+        # vivent en base comme les autres) : la fenetre suivante doit les
+        # prendre, sans redemarrage.
+        netflow.apply_runtime(
+            accounting_vantage=settings.netflow_accounting_vantage,
+            track_hosts=settings.netflow_track_hosts,
+            host_limit=settings.netflow_host_limit,
+            host_retention_s=settings.netflow_host_retention_s,
+        )
+        await netflow.flush()
+
+    # TOUJOURS planifie, meme collecteur coupe -- exactement comme la sonde RTT.
+    # Une cadence declaree dans les reglages doit piloter un job qui EXISTE :
+    # sinon la changer depuis l'interface ne reprogramme rien, en silence, et
+    # allumer NETFLOW_ENABLED demanderait un redemarrage pour que la cadence
+    # reprenne effet. Le job ne coute rien quand le collecteur est coupe : il
+    # rend la main immediatement.
+    scheduler.add_job(JOB_NETFLOW, settings.netflow_flush_interval_s, flush_netflow)
+
     # Changer une cadence depuis l'interface doit reprogrammer la boucle, pas
     # seulement l'affichage : le scheduler relit interval_s a chaque tour.
     runtime_config.on_interval_change = scheduler.set_interval
@@ -378,6 +431,11 @@ async def build_container(settings: Settings) -> Container:
         antennas_repo=antennas_repo,
         static_clients_repo=static_clients_repo,
         sightings_repo=sightings_repo,
+        api_keys_repo=api_keys_repo,
+        model_repo=model_repo,
+        flows_repo=flows_repo,
+        exporters_repo=exporters_repo,
+        netflow=netflow,
     )
 
 
@@ -439,6 +497,10 @@ async def _warn_if_secrets_orphaned(database: Database, key_file: Path | None) -
 
 async def shutdown_container(container: Container) -> None:
     await container.scheduler.stop()
+    if container.netflow is not None:
+        # Une derniere fenetre est ecrite a l'arret : sans elle, un redemarrage
+        # quotidien perdrait une minute de trafic par jour.
+        await container.netflow.stop()
     container.shaping.close()
     container.registry.close_all()
     await container.collection.aclose()

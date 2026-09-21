@@ -560,6 +560,236 @@ CREATE INDEX IF NOT EXISTS idx_shaping_boost_expiry
     ON shaping_policies (boost_expires_at)
     WHERE boost_expires_at IS NOT NULL;
 
+-- =============================================================================
+-- API PUBLIQUE ET INTEGRATION FACTURATION (compatible Preseem)
+--
+-- Le controleur doit pouvoir REMPLACER Preseem dans une chaine d'exploitation
+-- existante. Les systemes de facturation (Splynx, UISP/UCRM, Powercode, Visp,
+-- developpements maison) poussent deja leur inventaire vers l'API "model" de
+-- Preseem : cinq collections, une methode d'ecriture idempotente par
+-- identifiant, une cle d'API en authentification Basic.
+--
+-- On reprend ce contrat A L'IDENTIQUE. Un integrateur change l'URL de base et
+-- la cle, rien d'autre. C'est la seule facon de rendre la bascule rapide : la
+-- valeur n'est pas dans l'invention d'un modele, elle est dans le fait de
+-- n'avoir rien a reecrire cote facturation.
+-- =============================================================================
+
+-- Cles d'API. Le secret n'est JAMAIS stocke : seul son SHA-256 l'est, et il
+-- n'est montre qu'une fois, a la creation. Le prefixe (visible, non secret)
+-- sert a retrouver la ligne sans parcourir la table et a nommer la cle dans
+-- l'interface ("fqos_a1b2c3d4...") sans jamais la reveler.
+CREATE TABLE IF NOT EXISTS api_keys (
+    id           SERIAL PRIMARY KEY,
+    name         TEXT NOT NULL,
+    prefix       TEXT NOT NULL UNIQUE,
+    key_hash     TEXT NOT NULL,
+    -- 'read' donne les GET ; 'write' ajoute PUT et DELETE. Deux portees
+    -- suffisent : une integration de facturation ecrit, une supervision lit.
+    scopes       TEXT[] NOT NULL DEFAULT ARRAY['read']::TEXT[],
+    enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+    note         TEXT,
+    created_by   TEXT,
+    expires_at   TIMESTAMPTZ,
+    last_used_at TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Le CLIENT au sens facturation : une personne, une entreprise. Il peut porter
+-- plusieurs services (plusieurs sites, plusieurs lignes).
+CREATE TABLE IF NOT EXISTS model_accounts (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    attributes  JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- L'OFFRE souscrite (debits en kbit/s, comme Preseem). Un service peut porter
+-- ses propres debits ; sans eux, ceux du forfait s'appliquent.
+CREATE TABLE IF NOT EXISTS model_packages (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    down_kbps   BIGINT,
+    up_kbps     BIGINT,
+    attributes  JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Le SITE (un point haut, un PoP). Son nom est repris tel quel comme pop_name
+-- des clients qui en dependent : c'est la jointure avec le reste du controleur.
+CREATE TABLE IF NOT EXISTS model_sites (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    attributes  JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Le POINT D'ACCES radio, rattache a un site ('tower' chez Preseem). C'est le
+-- parent d'un service : les clients d'un meme secteur se partagent son
+-- enveloppe.
+CREATE TABLE IF NOT EXISTS model_access_points (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    site_id     TEXT,
+    ip_address  INET,
+    attributes  JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_ap_site ON model_access_points (site_id);
+
+-- -----------------------------------------------------------------------------
+-- Ce qu'un SERVICE devient chez nous
+--
+-- Un service Preseem est exactement ce que static_clients porte deja : une
+-- adresse (ou un bloc), un debit souscrit, un rattachement. On ne cree donc PAS
+-- une seconde table de clients -- ce serait deux verites, et la file posee sur
+-- le routeur ne saurait plus laquelle suivre. L'API ecrit dans l'inventaire
+-- existant, par les colonnes ajoutees ci-dessous.
+--
+-- 'source' dit QUI a ecrit la fiche. C'est ce qui permet a l'API de ne jamais
+-- ecraser silencieusement une saisie humaine, et a l'interface de montrer d'ou
+-- vient chaque ligne.
+-- -----------------------------------------------------------------------------
+ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS source           TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS account_ref      TEXT;
+ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS package_ref      TEXT;
+ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS access_point_ref TEXT;
+ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS site_ref         TEXT;
+ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS cpe_mac          TEXT;
+-- Un service peut porter plusieurs prefixes. Le premier est l'adresse shapee
+-- (une file vise une cible) ; les autres comptent dans la mesure de trafic.
+ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS extra_prefixes   JSONB NOT NULL DEFAULT '[]'::jsonb;
+
+DO $$
+BEGIN
+    ALTER TABLE static_clients ADD CONSTRAINT static_clients_source_check
+        CHECK (source IN ('manual', 'api'));
+EXCEPTION
+    WHEN duplicate_object THEN NULL;
+END
+$$;
+
+CREATE INDEX IF NOT EXISTS idx_static_clients_account ON static_clients (account_ref);
+CREATE INDEX IF NOT EXISTS idx_static_clients_vlan    ON static_clients (vlan);
+
+-- =============================================================================
+-- NETFLOW -- MESURE DU TRAFIC SANS ETRE SUR LE CHEMIN DES PAQUETS
+--
+-- OU CE CONTROLEUR SE PLACE, ET POURQUOI.
+--
+-- Il ne s'insere pas dans le chemin des paquets. Il se place EN AMONT DU COEUR,
+-- juste derriere la sortie internet, et AU PoP -- aux deux extremites du
+-- reseau, jamais au milieu. Ces deux points voient tout ce qui compte :
+--
+--   - en amont du coeur (vantage 'edge') : le trafic tel qu'il entre et sort du
+--     reseau. C'est la mesure de reference pour la consommation d'un abonne.
+--   - au PoP (vantage 'pop') : le meme trafic, mais vu la ou le dernier
+--     kilometre commence, donc avec le VLAN et le secteur.
+--
+-- Entre les deux, le coeur ne porte AUCUNE charge supplementaire : il
+-- n'exporte rien, on ne l'interroge pas, on ne fait transiter aucune sonde par
+-- lui. C'est tout l'interet du flux exporte plutot que du miroir de port -- un
+-- span doublerait le trafic sur le lien de collecte, dans les deux sens.
+--
+-- COROLLAIRE : LE MEME OCTET EST VU DEUX FOIS. Un flux qui traverse le PoP puis
+-- la sortie internet est exporte par les deux. Les additionner donnerait le
+-- double du trafic reel. On enregistre donc le point de mesure avec la mesure,
+-- et la consommation d'un abonne se lit depuis UN SEUL point (cf.
+-- NETFLOW_ACCOUNTING_VANTAGE).
+-- =============================================================================
+
+-- Qui a le droit d'exporter, et ce que ses chiffres veulent dire. Un exporteur
+-- inconnu est enregistre en 'unknown' plutot qu'ignore : il faut que
+-- l'exploitant VOIE qu'une machine exporte vers lui, sinon un PoP mal declare
+-- reste invisible pendant des semaines.
+CREATE TABLE IF NOT EXISTS netflow_exporters (
+    id             SERIAL PRIMARY KEY,
+    address        INET NOT NULL UNIQUE,
+    name           TEXT,
+    -- 'edge' = en amont du coeur (sortie internet) ; 'pop' = au PoP.
+    vantage        TEXT NOT NULL DEFAULT 'unknown'
+                   CHECK (vantage IN ('edge', 'pop', 'unknown')),
+    pop_name       TEXT,
+    -- Echantillonnage declare sur l'equipement (1 = tout). Les octets lus sont
+    -- multiplies par ce facteur : sans lui, un routeur en 1:1000 rapporterait
+    -- un millieme du trafic reel, ce qui ne se voit pas a l'oeil nu.
+    sampling_rate  INTEGER NOT NULL DEFAULT 1 CHECK (sampling_rate >= 1),
+    enabled        BOOLEAN NOT NULL DEFAULT TRUE,
+    note           TEXT,
+    last_version   TEXT,
+    last_seen      TIMESTAMPTZ,
+    packets_seen   BIGINT NOT NULL DEFAULT 0,
+    flows_seen     BIGINT NOT NULL DEFAULT 0,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Trafic agrege par abonne et par point de mesure. Le point de mesure est DANS
+-- la cle : melanger 'edge' et 'pop' dans une meme serie reviendrait a compter
+-- deux fois le meme octet.
+CREATE TABLE IF NOT EXISTS flow_metrics (
+    ts            TIMESTAMPTZ NOT NULL,
+    subscriber_id BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+    vantage       TEXT NOT NULL,
+    down_bytes    BIGINT NOT NULL DEFAULT 0,
+    up_bytes      BIGINT NOT NULL DEFAULT 0,
+    down_packets  BIGINT NOT NULL DEFAULT 0,
+    up_packets    BIGINT NOT NULL DEFAULT 0,
+    flows         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (subscriber_id, vantage, ts)
+);
+
+-- Repartition par usage. Volontairement GROSSIERE (une dizaine de familles) :
+-- l'inspection fine de protocole n'a pas sa place dans un controleur de debit,
+-- et le numero de port suffit a repondre a la seule question utile -- "de quoi
+-- est fait le trafic qui sature ce secteur".
+CREATE TABLE IF NOT EXISTS flow_app_metrics (
+    ts            TIMESTAMPTZ NOT NULL,
+    subscriber_id BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+    app           TEXT NOT NULL,
+    down_bytes    BIGINT NOT NULL DEFAULT 0,
+    up_bytes      BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (subscriber_id, app, ts)
+);
+
+-- Hotes vus dans les flux et rattaches a AUCUNE fiche.
+--
+-- C'est une AIDE A LA SAISIE, jamais un inventaire. Une adresse qui parle sur
+-- une VLAN peut etre un client, une imprimante, une camera ou l'equipement d'un
+-- autre operateur : rien dans un flux ne permet de trancher, et surtout rien
+-- n'y dit quel debit a ete vendu. Aucune ligne d'ici ne devient jamais une
+-- fiche toute seule -- un humain la declare, ou elle expire.
+CREATE TABLE IF NOT EXISTS flow_hosts (
+    address     INET NOT NULL,
+    -- 0 = AUCUNE ETIQUETTE VLAN, et non "VLAN inconnue". Un routeur purement L3
+    -- -- typiquement celui de la sortie internet -- n'en voit jamais, donc ce
+    -- cas est le plus courant, pas un cas limite.
+    --
+    -- Pourquoi une sentinelle plutot que NULL : la cle primaire interdit NULL,
+    -- et un index unique ordinaire considere deux NULL comme DISTINCTS -- il
+    -- laisserait donc proliferer une ligne par fenetre pour chaque adresse sans
+    -- VLAN. 0 n'est pas une VLAN valide (elles vont de 1 a 4094), la valeur est
+    -- donc sans ambiguite, et la lecture la retraduit en NULL.
+    vlan_id     INTEGER NOT NULL DEFAULT 0
+                CHECK (vlan_id = 0 OR vlan_id BETWEEN 1 AND 4094),
+    exporter    INET,
+    pop_name    TEXT,
+    down_bytes  BIGINT NOT NULL DEFAULT 0,
+    up_bytes    BIGINT NOT NULL DEFAULT 0,
+    first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (address, vlan_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_flow_hosts_seen ON flow_hosts (last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_flow_hosts_vlan ON flow_hosts (vlan_id);
+
 -- -----------------------------------------------------------------------------
 -- Hypertables + politiques (uniquement si TimescaleDB est disponible)
 -- -----------------------------------------------------------------------------
@@ -576,7 +806,8 @@ BEGIN
     END IF;
 
     FOREACH tbl IN ARRAY ARRAY['subscriber_metrics', 'backhaul_metrics',
-                               'interface_metrics', 'qoe_scores'] LOOP
+                               'interface_metrics', 'qoe_scores',
+                               'flow_metrics', 'flow_app_metrics'] LOOP
         BEGIN
             -- Signature historique, toujours supportee en 2.x.
             PERFORM create_hypertable(
