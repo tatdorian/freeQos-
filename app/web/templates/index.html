@@ -268,7 +268,7 @@
         </select>
         <input type="search" id="sub-search" placeholder="Filtrer par identifiant...">
         <span class="spacer"></span>
-        <button class="sm" id="sc-toggle">Inventaire des clients a IP fixe</button>
+        <button class="sm primary" id="sc-toggle">Ajouter un client</button>
         <span class="mode" id="sub-count"></span>
       </div>
 
@@ -277,53 +277,36 @@
            OBSERVE. Les melanger ferait croire a une decouverte. -->
       <div id="sc-panel" hidden>
 
-        <!-- Candidats detectes. Volontairement AU-DESSUS du formulaire : c'est
-             le point de depart naturel du travail (regarder ce qui parle, puis
-             declarer), et "Declarer" remplit le formulaire juste en dessous. -->
-        <!-- CLIENTS PAR VLAN : LA SAISIE EST LA SOURCE, PAS UNE DECOUVERTE.
-             Ce tableau rend ce qui a ete DECLARE sur chaque VLAN. Il est en
-             haut parce que c'est la question du jour ("qu'est-ce que j'ai
-             vendu sur cette VLAN"), et non "qu'est-ce qui parle dessus". -->
-        <h3 style="margin:.2rem 0 .4rem">Clients par VLAN</h3>
-        <div class="table-wrap" id="sc-vlans"></div>
-
-        <details id="sc-candidates-block">
-          <summary>Adresses vues, non declarees</summary>
-          <div class="table-wrap" id="sc-candidates"></div>
-          <div class="actions" style="margin-top:.4rem">
-            <button class="sm" id="sc-recensement"
-                    title="Recensement du PoP">
-              Recenser le PoP (toutes sources)
-            </button>
-            <button class="sm" id="sc-diag"
-                    title="Diagnostic des candidats">
-              Un client manque ? Voir pourquoi
-            </button>
-          </div>
-          <div id="sc-recensement-out"></div>
-          <div id="sc-diag-out"></div>
-        </details>
-        <form class="stack" id="sc-form" autocomplete="off">
+        <!-- LE FORMULAIRE D'ABORD.
+             Le panneau s'ouvrait sur deux tableaux, et la saisie arrivait
+             troisieme : le bouton promettait d'ajouter un client, et il fallait
+             defiler pour trouver ou le faire. Ce qu'on vient faire est en haut ;
+             ce qui existe deja se lit juste en dessous. -->
+        <h3 id="sc-form-title" style="margin:.2rem 0 .6rem">Ajouter un client</h3>
+        <form class="stack card" id="sc-form" autocomplete="off">
+          <!-- PoP et adresse des la premiere ligne : ce sont, avec la
+               reference, les trois seules valeurs sans lesquelles un client a
+               IP fixe n'existe pas. Le reste se remplit quand on l'a. -->
           <div class="row-3">
             <div class="field">
               <label for="sc-reference">Reference</label>
               <input id="sc-reference" required maxlength="64" placeholder="mairie-vitre">
             </div>
             <div class="field">
-              <label for="sc-label">Nom affiche</label>
-              <input id="sc-label" maxlength="128" placeholder="Mairie de Vitre">
-            </div>
-            <div class="field">
-              <label for="sc-pop">PoP</label>
+              <label for="sc-pop">PoP associe</label>
               <input id="sc-pop" required maxlength="128" list="sc-pop-list" placeholder="PoP Nord">
               <datalist id="sc-pop-list"></datalist>
+            </div>
+            <div class="field">
+              <label for="sc-address">Adresse IP ou sous-reseau</label>
+              <input id="sc-address" required maxlength="64" placeholder="10.0.0.5 ou 10.0.0.0/29">
             </div>
           </div>
 
           <div class="row-3">
             <div class="field">
-              <label for="sc-address">Adresse ou sous-reseau</label>
-              <input id="sc-address" required maxlength="64" placeholder="10.0.0.5 ou 10.0.0.0/29">
+              <label for="sc-label">Nom affiche</label>
+              <input id="sc-label" maxlength="128" placeholder="Mairie de Vitre">
             </div>
             <div class="field">
               <label for="sc-vlan">VLAN</label>
@@ -368,7 +351,39 @@
             <button type="submit" class="primary" id="sc-submit">Declarer</button>
           </div>
         </form>
+
+        <!-- Ce qui est DECLARE, juste sous la saisie : on voit le client
+             apparaitre a l'endroit ou on vient de le poser. -->
+        <h3 style="margin:1.4rem 0 .4rem">Clients a IP fixe declares</h3>
         <div class="table-wrap" id="sc-table"></div>
+
+        <!-- CLIENTS PAR VLAN : LA SAISIE EST LA SOURCE, PAS UNE DECOUVERTE.
+             Ce tableau rend ce qui a ete DECLARE sur chaque VLAN -- la question
+             "qu'est-ce que j'ai vendu sur cette VLAN", et non "qu'est-ce qui
+             parle dessus". -->
+        <h3 style="margin:1.4rem 0 .4rem">Clients par VLAN</h3>
+        <div class="table-wrap" id="sc-vlans"></div>
+
+        <!-- Les adresses vues et non declarees : le chemin INVERSE, qui part de
+             ce qui parle pour arriver au formulaire ci-dessus ("Declarer" le
+             pre-remplit). Replie, parce qu'on ajoute plus souvent un client
+             qu'on ne depouille une liste de candidats. -->
+        <details id="sc-candidates-block">
+          <summary>Adresses vues, non declarees</summary>
+          <div class="table-wrap" id="sc-candidates"></div>
+          <div class="actions" style="margin-top:.4rem">
+            <button class="sm" id="sc-recensement"
+                    title="Recensement du PoP">
+              Recenser le PoP (toutes sources)
+            </button>
+            <button class="sm" id="sc-diag"
+                    title="Diagnostic des candidats">
+              Un client manque ? Voir pourquoi
+            </button>
+          </div>
+          <div id="sc-recensement-out"></div>
+          <div id="sc-diag-out"></div>
+        </details>
       </div>
 
       <!-- Ce qui EMPECHE un plafond de tenir. Vide quand tout bride

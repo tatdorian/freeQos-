@@ -596,3 +596,15 @@ tbody tr:hover td { background: rgba(255, 255, 255, .02); }
   .topo-editor { flex-direction: column; }
   .topo-panel { flex: 1 1 auto; width: 100%; position: static; max-height: none; }
 }
+
+/* ---------------------------------------------- saisie d'un client a IP fixe
+   Trois champs etires sur 1700 px se lisent plus mal que trois champs de
+   taille normale : le formulaire garde une largeur d'oeil. Et ses colonnes
+   sont egales -- le 2fr/1fr/1fr de .row-3 donnait a la reference deux fois la
+   place de l'adresse, qui en a bien plus besoin. */
+#sc-form { max-width: 1120px; }
+#sc-form .row-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+/* Une pastille vide n'a rien a dire : elle ne doit pas dessiner un petit trait
+   gris a cote du bouton d'enregistrement. */
+.mode:empty { display: none; }

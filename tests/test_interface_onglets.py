@@ -281,3 +281,52 @@ def test_la_legende_ne_nomme_que_les_roles_presents() -> None:
     bloc = JS[JS.index("function renderTopoLegend(") : JS.index("function bindTopoFolds(")]
     assert "n.replie" in bloc
     assert "KIND_LABEL" in bloc
+
+
+# -------------------------------------------------------------------------
+# Les clients a IP fixe : on vient en AJOUTER un
+# -------------------------------------------------------------------------
+
+
+def test_le_bouton_annonce_l_ajout_pas_un_inventaire() -> None:
+    """« Inventaire des clients a IP fixe » decrivait un meuble, pas un geste.
+    Ce qu'on vient faire ici, c'est ajouter un client."""
+    assert "Ajouter un client" in HTML
+    assert "Inventaire des clients a IP fixe" not in HTML
+
+
+def test_la_saisie_est_en_haut_du_panneau() -> None:
+    """Le panneau s'ouvrait sur deux tableaux : le bouton promettait d'ajouter
+    un client, et il fallait defiler pour trouver ou le faire."""
+    panneau = HTML[HTML.index('<div id="sc-panel"') : HTML.index('id="limits-alert"')]
+    form = panneau.index('id="sc-form"')
+    assert form < panneau.index('id="sc-table"')
+    assert form < panneau.index('id="sc-vlans"')
+    assert form < panneau.index('id="sc-candidates-block"')
+
+
+def test_le_pop_et_l_adresse_sont_exiges_et_nommes() -> None:
+    """Un client a IP fixe sans PoP ne se rattache a rien, et sans adresse il ne
+    se reconnait dans aucun flux : les deux sont obligatoires, et leur intitule
+    doit dire lequel est lequel."""
+    champ = lambda i: HTML[HTML.index(f'id="{i}"') : HTML.index(f'id="{i}"') + 200]  # noqa: E731
+    assert "required" in champ("sc-pop")
+    assert "required" in champ("sc-address")
+    assert "PoP associe" in HTML
+    assert "Adresse IP ou sous-reseau" in HTML
+
+
+def test_le_formulaire_dit_s_il_ajoute_ou_s_il_modifie() -> None:
+    """Le meme formulaire sert aux deux. Sans titre qui change, on croyait
+    ajouter un client alors qu'on en ecrasait un autre."""
+    assert 'id="sc-form-title"' in HTML
+    assert "'Modifier '" in JS
+    assert "'Ajouter un client'" in JS
+
+
+def test_ouvrir_la_saisie_place_le_curseur_dedans() -> None:
+    """Un bouton qui dit « Ajouter un client » doit laisser le curseur dans le
+    premier champ, pas au-dessus d'un panneau a parcourir."""
+    bloc = JS[JS.index("document.getElementById('sc-toggle')") :][:900]
+    assert "reference.focus()" in bloc
+    assert "scrollIntoView" in bloc

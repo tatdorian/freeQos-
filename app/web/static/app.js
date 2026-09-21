@@ -1483,7 +1483,7 @@ function renderFlowHosts(data) {
   host.querySelectorAll('[data-declare-host]').forEach((b) => {
     b.addEventListener('click', () => {
       location.hash = '#/subscribers';
-      // Le panneau d'inventaire est replie par defaut : l'ouvrir, sinon le
+      // Le panneau de saisie est replie par defaut : l'ouvrir, sinon le
       // formulaire pre-rempli serait invisible et le geste paraitrait sans effet.
       const panneau = document.getElementById('sc-panel');
       if (panneau) panneau.hidden = false;
@@ -2249,6 +2249,12 @@ function scRemplirFormulaire(fiche) {
   document.getElementById('sc-enabled').checked = fiche ? !!fiche.enabled : true;
   document.getElementById('sc-submit').textContent = fiche ? 'Enregistrer' : 'Declarer';
   document.getElementById('sc-cancel').hidden = !fiche;
+  // Le meme formulaire sert a ajouter et a modifier. Sans titre qui change, on
+  // croyait ajouter un client alors qu'on en ecrasait un autre -- et la
+  // reference saisie remplacait silencieusement celle qu'on venait d'ouvrir.
+  const titre = document.getElementById('sc-form-title');
+  if (titre) titre.textContent = fiche ? 'Modifier ' + (fiche.reference || 'le client')
+    : 'Ajouter un client';
   scNotice('');
 }
 
@@ -2502,12 +2508,15 @@ async function loadVlanClients() {
   const lignes = corps.vlans || [];
   const orphelins = (corps.unmatched || []).filter((h) => h.vlan_id).length;
   if (!lignes.length) {
-    host.innerHTML = '<div class="empty">Aucun client declare sur une VLAN. ' +
+    // Le compte d'adresses orphelines reste : c'est un RENSEIGNEMENT (des
+    // machines parlent sur des VLAN sans etre declarees), pas un mode d'emploi.
+    // Le renvoi au formulaire, lui, disait « ci-dessous » alors qu'il est
+    // desormais au-dessus -- et n'apprenait rien.
+    host.innerHTML = '<div class="empty">Aucun client declare sur une VLAN.' +
       (orphelins
-        ? esc(orphelins) + ' adresse(s) parlent pourtant sur des VLAN : elles sont ' +
-          'listees dans l\'onglet Trafic. Ce ne sont pas des clients tant que ' +
-          'personne ne les a declarees.'
-        : 'Renseignez le champ VLAN du formulaire ci-dessous pour en ranger un ici.') +
+        ? ' ' + esc(orphelins) + ' adresse(s) parlent pourtant sur des VLAN sans ' +
+          'etre declarees.'
+        : '') +
       '</div>';
     return;
   }
@@ -2615,7 +2624,11 @@ async function loadStaticClients() {
     b.addEventListener('click', () => {
       const fiche = fiches.find((f) => String(f.id) === b.dataset.scEdit);
       scRemplirFormulaire(fiche);
-      document.getElementById('sc-reference').focus();
+      // Le formulaire est au-dessus de ce tableau : sans ce recentrage, cliquer
+      // « Modifier » ne montrerait rien du tout depuis le bas de la liste.
+      const reference = document.getElementById('sc-reference');
+      reference.focus();
+      reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
   });
   host.querySelectorAll('[data-sc-del]').forEach((b) => {
@@ -6834,10 +6847,16 @@ document.getElementById('sub-kind').addEventListener('change', (e) => {
 document.getElementById('sc-toggle').addEventListener('click', async () => {
   const panneau = document.getElementById('sc-panel');
   panneau.hidden = !panneau.hidden;
-  if (!panneau.hidden) {
-    scRemplirFormulaire(null);
-    await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
+  if (panneau.hidden) return;
+  scRemplirFormulaire(null);
+  // Le bouton annonce « Ajouter un client » : le curseur doit etre dans le
+  // premier champ, pas quelque part au-dessus d'un panneau a parcourir.
+  const reference = document.getElementById('sc-reference');
+  if (reference) {
+    reference.focus();
+    reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
+  await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
 document.getElementById('sc-candidates-block').addEventListener('toggle', (e) => {
