@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 INTEL_COLUMNS = """
     host(address) AS address, hostname, service, category, source, org, asn,
-    country, network, attempts, resolved_at, first_seen, last_seen
+    country, city, region, latitude, longitude, network, attempts, resolved_at,
+    first_seen, last_seen
 """
 
 
@@ -102,6 +103,65 @@ class DestinationsRepository:
                 search,
                 limit,
                 client,
+            )
+        return [dict(row) for row in rows]
+
+    async def pairs(
+        self,
+        *,
+        minutes: int = 60,
+        app: str | None = None,
+        client: str | None = None,
+        service: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        """QUI PARLE A QUI : une ligne par couple (client, adresse atteinte).
+
+        C'est la question que pose un exploitant devant une famille d'usage :
+        "autre, 3 Kio -- mais AVEC QUI ?". Le tableau par usage ne peut pas y
+        repondre, il agrege justement ce detail-la ; celui par adresse non plus,
+        il fond tous les clients ensemble. Le couple est la seule forme qui
+        montre la conversation.
+
+        Le login est rendu quand il existe, l'adresse du client sinon : une
+        machine non declaree parle autant que les autres.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT host(d.client)   AS client,
+                       host(d.address)  AS address,
+                       d.subscriber_id,
+                       s.login,
+                       s.kind,
+                       p.name AS pop_name,
+                       d.port,
+                       d.protocol,
+                       d.app,
+                       i.hostname,
+                       i.service,
+                       i.category,
+                       d.down_bytes,
+                       d.up_bytes,
+                       d.flows,
+                       d.first_seen,
+                       d.last_seen
+                FROM flow_destinations d
+                LEFT JOIN ip_intel i    ON i.address = d.address
+                LEFT JOIN subscribers s ON s.id = d.subscriber_id
+                LEFT JOIN pops p        ON p.id = s.pop_id
+                WHERE d.last_seen >= now() - make_interval(mins => $1)
+                  AND ($2::text IS NULL OR d.app = $2)
+                  AND ($3::inet IS NULL OR d.client = $3)
+                  AND ($4::text IS NULL OR i.service = $4)
+                ORDER BY (d.down_bytes + d.up_bytes) DESC
+                LIMIT $5
+                """,
+                minutes,
+                app,
+                client,
+                service,
+                limit,
             )
         return [dict(row) for row in rows]
 
@@ -274,8 +334,9 @@ class DestinationsRepository:
             await conn.executemany(
                 """
                 INSERT INTO ip_intel (address, hostname, service, category, source,
-                                      org, asn, country, network, attempts, resolved_at)
-                VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10)
+                                      org, asn, country, city, region, latitude,
+                                      longitude, network, attempts, resolved_at)
+                VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1, $14)
                 ON CONFLICT (address) DO UPDATE
                    SET hostname    = COALESCE(EXCLUDED.hostname, ip_intel.hostname),
                        service     = COALESCE(EXCLUDED.service, ip_intel.service),
@@ -284,6 +345,10 @@ class DestinationsRepository:
                        org         = COALESCE(EXCLUDED.org, ip_intel.org),
                        asn         = COALESCE(EXCLUDED.asn, ip_intel.asn),
                        country     = COALESCE(EXCLUDED.country, ip_intel.country),
+                       city        = COALESCE(EXCLUDED.city, ip_intel.city),
+                       region      = COALESCE(EXCLUDED.region, ip_intel.region),
+                       latitude    = COALESCE(EXCLUDED.latitude, ip_intel.latitude),
+                       longitude   = COALESCE(EXCLUDED.longitude, ip_intel.longitude),
                        network     = COALESCE(EXCLUDED.network, ip_intel.network),
                        attempts    = ip_intel.attempts + 1,
                        resolved_at = EXCLUDED.resolved_at,
@@ -299,6 +364,10 @@ class DestinationsRepository:
                         v.get("org"),
                         v.get("asn"),
                         v.get("country"),
+                        v.get("city"),
+                        v.get("region"),
+                        v.get("latitude"),
+                        v.get("longitude"),
                         v.get("network"),
                         v.get("resolved_at"),
                     )

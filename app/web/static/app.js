@@ -1117,7 +1117,7 @@ function renderExecSankey(host, subs) {
  *  mesure fait partie de la mesure, et la lecture n'en retient qu'un.
  */
 
-const FLOW = { minutes: 60, vantage: '' };
+const FLOW = { minutes: 60, vantage: '', app: null };
 
 const VANTAGE_LABEL = {
   edge: 'en amont du coeur',
@@ -1200,6 +1200,7 @@ async function loadTraffic() {
   renderFlowHosts(hotes);
   renderFlowExporters(exporteurs);
   renderFlowExport(exportEtat);
+  await loadFlowPairs();
 
   // Le bandeau porte un bouton qui mene au bloc d'export : sans lui, "ci-dessous"
   // laisse chercher dans une page qui defile.
@@ -1278,11 +1279,129 @@ function renderFlowApps(apps) {
     '<th class="num">Montant</th><th>Part</th></tr></thead><tbody>' +
     apps.map((a) => {
       const somme = Number(a.down_bytes || 0) + Number(a.up_bytes || 0);
-      return '<tr><td>' + esc(a.app) + '</td>' +
+      return '<tr><td><a href="#" data-flow-app="' + esc(a.app) + '">' +
+          esc(a.app) + '</a></td>' +
         '<td class="num">' + bytesText(a.down_bytes) + '</td>' +
         '<td class="num">' + bytesText(a.up_bytes) + '</td>' +
         '<td style="min-width:140px">' + meter(somme, total || 1, '') + '</td></tr>';
     }).join('') + '</tbody></table>';
+
+  // « autre, 3 Kio » ne dit pas AVEC QUI. Le tableau par usage agrege justement
+  // ce detail : ouvrir la famille est le seul chemin vers la conversation.
+  host.querySelectorAll('[data-flow-app]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      FLOW.app = FLOW.app === a.dataset.flowApp ? null : a.dataset.flowApp;
+      loadFlowPairs();
+    });
+  });
+}
+
+/** Un debit a partir d'un volume et d'une duree.
+ *
+ *  Des octets seuls ne disent pas si c'est un filet continu ou une rafale :
+ *  « 3 Kio » sur une heure et « 3 Kio » sur deux secondes n'appellent pas la
+ *  meme reaction. */
+function debit(octets, secondes) {
+  if (!secondes || secondes <= 0) return null;
+  return (Number(octets) || 0) * 8 / secondes;
+}
+
+function debitText(octets, secondes) {
+  const v = debit(octets, secondes);
+  return v === null ? '<span class="hint">-</span>' : bpsText(v);
+}
+
+/** QUI PARLE A QUI : une ligne par conversation.
+ *
+ *  Le tableau par usage agrege, celui par adresse fond tous les clients
+ *  ensemble. Le couple (client, destination) est la seule forme qui montre la
+ *  conversation -- et c'est ce qu'on vient chercher quand une famille d'usage
+ *  pese sans qu'on sache pourquoi. */
+async function loadFlowPairs() {
+  const hote = document.getElementById('flow-pairs');
+  const etiquette = document.getElementById('flow-pairs-filter');
+  etiquette.innerHTML = FLOW.app
+    ? 'usage : <b>' + esc(FLOW.app) + '</b> <a href="#" id="flow-pairs-clear">tout voir</a>'
+    : 'toutes familles';
+
+  let data;
+  try {
+    data = await api('/netflow/pairs?minutes=' + FLOW.minutes + '&limit=200' +
+      (FLOW.app ? '&app=' + encodeURIComponent(FLOW.app) : ''));
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const direct = new Set((data.live || []).map((c) => c[0] + '|' + c[1]));
+  const octetsDirect = data.live_bytes || {};
+  const fenetre = data.window_seconds || 0;
+  const periode = FLOW.minutes * 60;
+  const lignes = data.pairs || [];
+
+  document.getElementById('flow-pairs-count').textContent =
+    lignes.length + ' conversation(s) · ' + direct.size + ' en direct';
+
+  if (!lignes.length) {
+    hote.innerHTML = '<div class="empty">Aucune conversation sur cette periode.</div>';
+    return;
+  }
+  hote.innerHTML = '<table><thead><tr><th>Client</th><th>Destination</th>' +
+    '<th>Service</th><th class="num">Port</th><th>Proto</th><th>Usage</th>' +
+    '<th class="num">Descendant</th><th class="num">Montant</th>' +
+    '<th class="num">Debit moyen</th><th class="num">En direct</th>' +
+    '</tr></thead><tbody>' +
+    lignes.map((r) => {
+      const cle = r.client + '|' + r.address;
+      const vivant = direct.has(cle);
+      return '<tr>' +
+        '<td class="login">' + clientCell(r) + '</td>' +
+        '<td><a href="#" data-pair-ip="' + esc(r.address) + '"><code>' +
+          esc(r.address) + '</code></a>' +
+          (r.hostname ? '<br><span class="hint">' + esc(r.hostname) + '</span>' : '') + '</td>' +
+        '<td>' + (r.service ? esc(r.service) : svcBadge(r.category)) + '</td>' +
+        '<td class="num">' + esc(r.port || '-') + '</td>' +
+        '<td>' + esc(protoName(r.protocol)) + '</td>' +
+        '<td>' + esc(r.app || '-') + '</td>' +
+        '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
+        '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
+        '<td class="num">' +
+          debitText(Number(r.down_bytes || 0) + Number(r.up_bytes || 0), periode) + '</td>' +
+        '<td class="num">' + (vivant
+          ? '<b>' + debitText(octetsDirect[cle] || 0, fenetre) + '</b>'
+          : '<span class="hint">-</span>') + '</td>' +
+        '</tr>';
+    }).join('') + '</tbody></table>';
+
+  hote.querySelectorAll('[data-pair-ip]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      openPairAddress(a.dataset.pairIp);
+    });
+  });
+  const vider = document.getElementById('flow-pairs-clear');
+  if (vider) {
+    vider.addEventListener('click', (e) => {
+      e.preventDefault();
+      FLOW.app = null;
+      loadFlowPairs();
+    });
+  }
+}
+
+/** La fiche complete d'une adresse, depuis l'onglet Trafic. */
+async function openPairAddress(address) {
+  const hote = document.getElementById('flow-pair-detail');
+  hote.innerHTML = '<div class="ip-card">Lecture de <code>' + esc(address) + '</code>...</div>';
+  try {
+    const fiche = await api('/netflow/destinations/' + encodeURIComponent(address) +
+      '?minutes=' + Math.max(FLOW.minutes, 1440));
+    hote.innerHTML = ipCard(fiche, Math.max(FLOW.minutes, 1440) * 60, false);
+    brancherLiensServices(hote);
+    hote.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
 }
 
 /** Les adresses vues qui ne correspondent a aucune fiche.
@@ -3331,7 +3450,17 @@ async function openDestination(address) {
   hote.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
-function renderDestinationCard(fiche) {
+/** La fiche complete d'une adresse, rendue en HTML.
+ *
+ *  UNE SEULE IMPLEMENTATION pour les deux onglets. Elle etait ecrite dans
+ *  Services ; la rendre depuis Trafic en la recopiant aurait garanti que les
+ *  deux divergent au premier ajout de champ.
+ *
+ *  ``actions`` est faux quand la carte est ouverte hors de Services : les
+ *  boutons portent des identifiants, et deux cartes ouvertes en meme temps
+ *  auraient produit des doublons -- le second ecouteur ne se serait jamais
+ *  branche, sans rien dire. */
+function ipCard(fiche, periodeSecondes, actions) {
   const intel = fiche.intel || {};
   const catalogue = fiche.catalogue || {};
   const totaux = fiche.totals || {};
@@ -3341,9 +3470,15 @@ function renderDestinationCard(fiche) {
   const service = intel.service || catalogue.service;
   const famille = intel.category || catalogue.category;
   const source = intel.source || catalogue.source;
+  const octets = Number(totaux.down_bytes || 0) + Number(totaux.up_bytes || 0);
+  // La localisation n'est remplie que si l'exploitant l'a autorisee : la
+  // demander envoie a un tiers l'adresse que son client a jointe.
+  const lieu = [intel.city, intel.region, intel.country].filter(Boolean).join(', ');
+  const position = (intel.latitude !== null && intel.latitude !== undefined)
+    ? Number(intel.latitude).toFixed(3) + ', ' + Number(intel.longitude).toFixed(3)
+    : null;
 
-  document.getElementById('svc-detail').innerHTML =
-    '<div class="ip-card">' +
+  return '<div class="ip-card">' +
     '<h3><code>' + esc(fiche.address) + '</code> ' + svcBadge(famille) + '</h3>' +
     '<div class="ip-facts">' +
       fait('Service', service ? '<b>' + esc(service) + '</b>' : null) +
@@ -3351,25 +3486,29 @@ function renderDestinationCard(fiche) {
       fait('Nom inverse', intel.hostname ? esc(intel.hostname) : null) +
       fait('Organisation', intel.org ? esc(intel.org) : null) +
       fait('AS', intel.asn ? 'AS' + esc(intel.asn) : null) +
-      fait('Pays', intel.country ? esc(intel.country) : null) +
+      fait('Localisation', lieu ? esc(lieu) : null) +
+      fait('Coordonnees', position ? '<code>' + esc(position) + '</code>' : null) +
       fait('Bloc', esc(intel.network || catalogue.matched_prefix || '')) +
       fait('Clients', esc(totaux.clients || 0)) +
       fait('Descendant', bytesText(totaux.down_bytes)) +
       fait('Montant', bytesText(totaux.up_bytes)) +
+      fait('Bande passante moyenne', debitText(octets, periodeSecondes)) +
       fait('Vue pour la premiere fois', totaux.first_seen ? esc(depuis(totaux.first_seen)) : null) +
       fait('Vue la derniere fois', totaux.last_seen ? esc(depuis(totaux.last_seen)) : null) +
     '</div>' +
-    '' +
-    '<div class="actions" style="margin-top:.7rem">' +
-      '<button class="sm" id="svc-detail-resolve">Relancer l\'analyse</button>' +
-      '<button class="sm" id="svc-detail-restrict">Restreindre cette adresse</button>' +
-      '<span class="mode">' + esc(intel.attempts || 0) + ' tentative(s)</span>' +
-    '</div>' +
+    (actions
+      ? '<div class="actions" style="margin-top:.7rem">' +
+        '<button class="sm" id="svc-detail-resolve">Relancer l\'analyse</button>' +
+        '<button class="sm" id="svc-detail-restrict">Restreindre cette adresse</button>' +
+        '<span class="mode">' + esc(intel.attempts || 0) + ' tentative(s)</span>' +
+        '</div>'
+      : '') +
     '<h3 style="margin-top:.9rem">Qui joint cette adresse</h3>' +
     ((fiche.clients || []).length
       ? '<div class="table-wrap"><table><thead><tr><th>Client</th><th>PoP</th>' +
         '<th class="num">Port</th><th>Proto</th><th>Usage</th>' +
-        '<th class="num">Descendant</th><th class="num">Montant</th><th>Vu</th>' +
+        '<th class="num">Descendant</th><th class="num">Montant</th>' +
+        '<th class="num">Debit moyen</th><th>Vu</th>' +
         '</tr></thead><tbody>' +
         fiche.clients.map((s) => '<tr>' +
           '<td class="login">' + clientCell(s) +
@@ -3380,10 +3519,17 @@ function renderDestinationCard(fiche) {
           '<td>' + esc(s.app || '-') + '</td>' +
           '<td class="num">' + bytesText(s.down_bytes) + '</td>' +
           '<td class="num">' + bytesText(s.up_bytes) + '</td>' +
+          '<td class="num">' + debitText(
+            Number(s.down_bytes || 0) + Number(s.up_bytes || 0), periodeSecondes) + '</td>' +
           '<td>' + esc(depuis(s.last_seen)) + '</td></tr>').join('') +
         '</tbody></table></div>'
       : '<div class="empty">Personne n\'a joint cette adresse sur la periode.</div>') +
     '</div>';
+}
+
+function renderDestinationCard(fiche) {
+  document.getElementById('svc-detail').innerHTML =
+    ipCard(fiche, Math.max(SVC.minutes, 1440) * 60, true);
 
   const detail = document.getElementById('svc-detail');
   brancherLiensServices(detail);

@@ -640,3 +640,131 @@ async def test_une_machine_sans_fiche_apparait_dans_les_connexions_en_cours(
     assert ligne["login"] is None
     assert ligne["address"] == "45.57.12.34"
     assert ligne["service"] == "netflix"
+
+
+# ============================================ qui parle a qui, et a quel debit
+
+
+class FauxPaires(FauxDestinations):
+    """Ajoute la lecture par couple (client, destination)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.demandes: list[dict[str, Any]] = []
+
+    async def pairs(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.demandes.append(dict(kwargs))
+        app = kwargs.get("app")
+        toutes = [
+            {
+                "client": "10.0.0.2",
+                "address": "45.57.12.34",
+                "subscriber_id": 1,
+                "login": "dupont",
+                "kind": "pppoe",
+                "pop_name": "PoP Test",
+                "port": 443,
+                "protocol": 6,
+                "app": "web",
+                "hostname": "ipv4-c001.1.oca.nflxvideo.net",
+                "service": "netflix",
+                "category": "streaming",
+                "down_bytes": 900_000,
+                "up_bytes": 12_000,
+                "flows": 40,
+                "first_seen": MAINTENANT,
+                "last_seen": MAINTENANT,
+            },
+            {
+                "client": "10.9.9.9",
+                "address": "8.8.8.8",
+                "subscriber_id": None,
+                "login": None,
+                "kind": None,
+                "pop_name": None,
+                "port": 0,
+                "protocol": 1,
+                "app": "diagnostic",
+                "hostname": None,
+                "service": "google",
+                "category": "nuage",
+                "down_bytes": 84,
+                "up_bytes": 84,
+                "flows": 1,
+                "first_seen": MAINTENANT,
+                "last_seen": MAINTENANT,
+            },
+        ]
+        return [r for r in toutes if app is None or r["app"] == app]
+
+
+def client_avec_paires(
+    settings: Settings, netflow: NetflowService
+) -> tuple[TestClient, FauxPaires]:
+    depot = FauxPaires()
+    conteneur = SimpleNamespace(
+        settings=settings,
+        netflow=netflow,
+        flows_repo=FauxFlows(),
+        destinations_repo=depot,
+        traffic_rules_repo=None,
+        restrictions=None,
+        intel=IntelService(destinations=depot, rdns_enabled=False),  # type: ignore[arg-type]
+        exporters_repo=None,
+    )
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: conteneur
+    return TestClient(app), depot
+
+
+def test_une_famille_d_usage_s_ouvre_sur_ses_conversations(
+    settings: Settings, netflow: NetflowService
+) -> None:
+    """« autre, 3 Kio » ne dit pas AVEC QUI.
+
+    Le tableau par usage agrege justement ce detail, et celui par adresse fond
+    tous les clients ensemble : le couple est la seule forme qui montre la
+    conversation.
+    """
+    http, depot = client_avec_paires(settings, netflow)
+    corps = http.get("/api/v1/netflow/pairs?minutes=60&app=diagnostic").json()
+
+    assert depot.demandes[0]["app"] == "diagnostic"
+    assert len(corps["pairs"]) == 1
+    ligne = corps["pairs"][0]
+    assert ligne["client"] == "10.9.9.9"
+    assert ligne["address"] == "8.8.8.8"
+    # Une machine sans fiche parle autant que les autres.
+    assert ligne["login"] is None
+
+
+def test_les_conversations_en_cours_sont_marquees(
+    settings: Settings, netflow: NetflowService
+) -> None:
+    """La periode dit ce qui s'est passe, la fenetre en cours ce qui se passe.
+    Les confondre ferait lire un trafic termine comme un trafic actif."""
+    http, _ = client_avec_paires(settings, netflow)
+    corps = http.get("/api/v1/netflow/pairs?minutes=60").json()
+
+    # Le collecteur porte une conversation 10.0.0.2 -> 45.57.12.34 en memoire.
+    assert ["10.0.0.2", "45.57.12.34"] in corps["live"]
+    assert corps["live_bytes"]["10.0.0.2|45.57.12.34"] == 900_000
+
+
+def test_la_duree_de_la_fenetre_est_rendue(settings: Settings, netflow: NetflowService) -> None:
+    """SANS ELLE, PAS DE DEBIT. Des octets sans duree ne sont qu'un volume :
+    « 3 Kio » ne dit pas si c'est un filet continu ou une rafale."""
+    http, _ = client_avec_paires(settings, netflow)
+    assert "window_seconds" in http.get("/api/v1/netflow/pairs").json()
+    assert "window_seconds" in http.get("/api/v1/netflow/connections").json()
+
+
+def test_la_vue_en_direct_se_filtre_par_usage(settings: Settings, netflow: NetflowService) -> None:
+    """Le filtre porte AVANT la limite : sinon demander 'diagnostic' sur une
+    fenetre dominee par le web rendrait cent lignes de web et zero de ce qu'on
+    a demande."""
+    http, _ = client_avec_paires(settings, netflow)
+    assert len(http.get("/api/v1/netflow/connections?app=web").json()["connections"]) == 1
+    assert http.get("/api/v1/netflow/connections?app=diagnostic").json()["connections"] == []

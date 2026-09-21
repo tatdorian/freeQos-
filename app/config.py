@@ -366,6 +366,18 @@ class Settings(BaseSettings):
     ipfinder_rdns_enabled: bool = True
     ipfinder_rdap_enabled: bool = False
     ipfinder_rdap_url: str = "https://rdap.org/ip/"
+    # Localisation : pays, region, ville, coordonnees.
+    #
+    # COUPEE PAR DEFAUT, et pas seulement pour la sobriete : interroger un
+    # service de geolocalisation revient a LUI ENVOYER les adresses que vos
+    # clients atteignent. C'est une information sur eux.
+    #
+    # IPFINDER_GEOIP_DB pointe une base MaxMind locale (.mmdb) : meme reponse,
+    # aucun appel sortant. Des qu'elle est renseignee et lisible (paquet
+    # 'geoip2' installe), elle est preferee au service HTTP.
+    ipfinder_geoip_enabled: bool = False
+    ipfinder_geoip_url: str = "https://ipapi.co/{ip}/json/"
+    ipfinder_geoip_db: str | None = None
     ipfinder_interval_s: float = 30.0
     ipfinder_batch_size: int = 40
     ipfinder_concurrency: int = 8

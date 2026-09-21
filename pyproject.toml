@@ -22,6 +22,10 @@ dependencies = [
 
 [project.optional-dependencies]
 snmp = ["pysnmp>=6.2"]
+# Geolocalisation SANS APPEL SORTANT : lit une base MaxMind locale (.mmdb)
+# designee par IPFINDER_GEOIP_DB. C'est la seule forme de geolocalisation qui
+# n'envoie a personne les adresses que vos clients atteignent.
+geoip = ["geoip2>=4.8"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -62,5 +66,7 @@ files = ["app"]
 warn_unused_ignores = true
 
 [[tool.mypy.overrides]]
-module = ["librouteros.*", "asyncpg", "asyncpg.*"]
+# geoip2 est un extra facultatif : son absence ne doit pas faire echouer le
+# typage, exactement comme les bibliotheques sans stubs.
+module = ["librouteros.*", "asyncpg", "asyncpg.*", "geoip2.*"]
 ignore_missing_imports = true

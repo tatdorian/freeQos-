@@ -433,6 +433,14 @@ REGLAGES: tuple[Reglage, ...] = (
         "COUPE PAR DEFAUT : c'est le seul appel sortant du controleur.",
     ),
     Reglage(
+        "ipfinder_geoip_enabled",
+        "services",
+        "bool",
+        "Localiser les adresses atteintes (pays, region, ville). COUPE PAR "
+        "DEFAUT : sans base locale, cela envoie a un tiers les adresses que vos "
+        "clients atteignent.",
+    ),
+    Reglage(
         "ipfinder_batch_size",
         "services",
         "int",

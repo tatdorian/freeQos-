@@ -417,6 +417,9 @@ async def build_container(settings: Settings) -> Container:
         rdns_enabled=settings.ipfinder_rdns_enabled,
         rdap_enabled=settings.ipfinder_rdap_enabled,
         rdap_url=settings.ipfinder_rdap_url,
+        geoip_enabled=settings.ipfinder_geoip_enabled,
+        geoip_url=settings.ipfinder_geoip_url,
+        geoip_db=settings.ipfinder_geoip_db,
         batch_size=settings.ipfinder_batch_size,
         concurrency=settings.ipfinder_concurrency,
         timeout_s=settings.ipfinder_timeout_s,
@@ -480,6 +483,7 @@ async def build_container(settings: Settings) -> Container:
             rdap_enabled=settings.ipfinder_rdap_enabled,
             batch_size=settings.ipfinder_batch_size,
             max_attempts=settings.ipfinder_max_attempts,
+            geoip_enabled=settings.ipfinder_geoip_enabled,
         )
         await intel.resolve_pending()
 

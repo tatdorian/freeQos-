@@ -303,6 +303,19 @@ class NetflowService:
                 logger.debug("Purge des destinations impossible : %s", exc)
         return ecrites
 
+    @property
+    def window_seconds(self) -> float:
+        """Depuis combien de temps la fenetre en cours accumule.
+
+        C'EST CE QUI PERMET DE RENDRE UN DEBIT. Des octets sans duree ne sont
+        qu'un volume : "3 Kio" ne dit pas si c'est un filet continu ou une
+        rafale. La fenetre repart a chaque ecriture, donc la duree aussi.
+        """
+        depart = self.last_flush_at or self.started_at
+        if depart is None:
+            return 0.0
+        return max((datetime.now(tz=UTC) - depart).total_seconds(), 0.0)
+
     def live_connections(self, limit: int = 100) -> list[dict[str, Any]]:
         """Ce que les clients atteignent DANS LA FENETRE EN COURS.
 
