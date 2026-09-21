@@ -89,7 +89,7 @@ def _job_is_unhealthy(job: dict[str, Any]) -> tuple[bool, str | None]:
     return False, None
 
 
-@router.get("/health", summary="Liveness (le processus repond)")
+@router.get("/health", summary="Liveness (the process answers)")
 async def health() -> dict[str, object]:
     """Liveness pure : ne touche ni la base ni les collecteurs.
 
@@ -104,7 +104,7 @@ async def health() -> dict[str, object]:
     }
 
 
-@router.get("/health/ready", summary="Readiness (base + fraicheur de la donnee)")
+@router.get("/health/ready", summary="Readiness (database + data freshness)")
 async def readiness(container: ContainerDep, response: Response) -> dict[str, object]:
     db_ok = await container.database.ping()
     settings = container.settings

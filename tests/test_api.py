@@ -782,4 +782,4 @@ def test_suppression_d_un_pop_exige_confirmation(client: TestClient) -> None:
     """Effacer un site emporte tout son historique : ca ne s'improvise pas."""
     reponse = client.delete("/api/v1/pops/1")
     assert reponse.status_code == 400
-    assert "definitive" in reponse.json()["detail"]
+    assert "Permanent deletion" in reponse.json()["detail"]

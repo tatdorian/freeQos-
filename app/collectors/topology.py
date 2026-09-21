@@ -1480,8 +1480,8 @@ def attach_static_clients(
             # meme (l'operateur doit VOIR son client), simplement detache.
             if secteur:
                 snapshot.warnings.append(
-                    f"Client statique '{reference}' rattache a un secteur inconnu "
-                    f"'{secteur}' : verifiez la cle dans sa fiche."
+                    f"Static client '{reference}' attached to an unknown sector "
+                    f"'{secteur}': check the key in its record."
                 )
             continue
         snapshot.add_link(
@@ -1606,9 +1606,9 @@ def orient_from_config(
         if passerelle is None:
             if raison == "ambigu":
                 avertissements.append(
-                    f"{nom_routeur} : plusieurs routes par defaut a egalite. Un arbre "
-                    f"n'a qu'un parent et le controleur n'en inventera pas un ; "
-                    f"son rattachement reste deduit du graphe."
+                    f"{nom_routeur}: several default routes tied. A tree has only one "
+                    f"parent and the controller will not invent one; its attachment "
+                    f"stays inferred from the graph."
                 )
             continue
         parent = address_owner.get(passerelle)
@@ -1618,8 +1618,8 @@ def orient_from_config(
             continue
         if parent == cle:
             avertissements.append(
-                f"{nom_routeur} : sa route par defaut pointe vers lui-meme "
-                f"({passerelle}). Rattachement ignore."
+                f"{nom_routeur}: its default route points at itself "
+                f"({passerelle}). Attachment ignored."
             )
             continue
         noeud.config_parent = parent
@@ -1700,8 +1700,7 @@ def map_subscribers_to_sectors(
             rattaches += 1
     if sessions and not rattaches:
         snapshot.warnings.append(
-            "Aucun abonne rattache a un secteur radio : verifiez que les CPE "
-            "sont visibles dans UISP (la jointure se fait sur la MAC du "
-            "caller-id PPPoE)."
+            "No subscriber attached to a radio sector: check that the CPEs are "
+            "visible in UISP (the join is on the MAC of the PPPoE caller-id)."
         )
     return rattaches

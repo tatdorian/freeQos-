@@ -32,7 +32,7 @@ from app.services.restrictions import InvalidRuleError, RestrictionService, vali
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["restrictions de trafic"])
+router = APIRouter(tags=["traffic restrictions"])
 
 Action = Literal["block", "limit"]
 Scope = Literal["all", "subscribers"]
@@ -56,20 +56,20 @@ class RuleInput(BaseModel):
     prefixes: list[str] = Field(
         default_factory=list,
         max_length=200,
-        description="Blocs saisis a la main, en plus des services choisis",
+        description="Hand-entered prefixes, on top of the chosen services",
     )
     protocol: Protocol | None = None
     ports: str | None = Field(
         default=None,
         max_length=64,
-        description="Port ou plage cote service ('443', '6881-6999'). Exige un protocole.",
+        description="Port or range on the service side ('443', '6881-6999'). Requires a protocol.",
     )
     scope: Scope = "all"
     logins: list[str] = Field(default_factory=list, max_length=500)
     routers: list[str] = Field(
         default_factory=list,
         max_length=100,
-        description="Routeurs vises. Vide = tous ceux de l'inventaire actif.",
+        description="Target routers. Empty = every router of the active inventory.",
     )
     enabled: bool = True
     note: str | None = Field(default=None, max_length=1000)
@@ -112,7 +112,7 @@ def _repo(container: ContainerDep) -> TrafficRulesRepository:
     if container.traffic_rules_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Restrictions indisponibles (base non initialisee)",
+            detail="Restrictions unavailable (database not initialised)",
         )
     return container.traffic_rules_repo
 
@@ -121,7 +121,7 @@ def _service(container: ContainerDep) -> RestrictionService:
     if container.restrictions is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Service de restrictions indisponible",
+            detail="Restriction service unavailable",
         )
     return container.restrictions
 
@@ -135,7 +135,7 @@ def _valide(payload: dict[str, Any]) -> None:
         ) from exc
 
 
-@router.get("/traffic-rules", summary="Les restrictions enregistrees")
+@router.get("/traffic-rules", summary="The saved restrictions")
 async def list_rules(container: ContainerDep) -> dict[str, Any]:
     """Les regles, et l'etat de la derniere pose.
 
@@ -153,7 +153,7 @@ async def list_rules(container: ContainerDep) -> dict[str, Any]:
 @router.post(
     "/traffic-rules",
     status_code=status.HTTP_201_CREATED,
-    summary="Enregistrer une restriction (sans rien ecrire sur les routeurs)",
+    summary="Save a restriction (without writing anything to the routers)",
 )
 async def create_rule(payload: RuleInput, container: ContainerDep) -> dict[str, Any]:
     donnees = payload.model_dump()
@@ -164,7 +164,7 @@ async def create_rule(payload: RuleInput, container: ContainerDep) -> dict[str, 
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
 
-@router.patch("/traffic-rules/{rule_id}", summary="Modifier une restriction")
+@router.patch("/traffic-rules/{rule_id}", summary="Edit a restriction")
 async def update_rule(
     rule_id: Annotated[int, Path(ge=1)],
     payload: RuleUpdate,
@@ -191,7 +191,7 @@ async def update_rule(
 @router.delete(
     "/traffic-rules/{rule_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Supprimer une restriction",
+    summary="Delete a restriction",
 )
 async def delete_rule(rule_id: Annotated[int, Path(ge=1)], container: ContainerDep) -> None:
     """Retire la regle de la base.
@@ -208,7 +208,7 @@ async def delete_rule(rule_id: Annotated[int, Path(ge=1)], container: ContainerD
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
-@router.get("/traffic-rules/{rule_id}/preview", summary="Ce que cette regle vise aujourd'hui")
+@router.get("/traffic-rules/{rule_id}/preview", summary="What this rule targets today")
 async def preview_rule(
     rule_id: Annotated[int, Path(ge=1)],
     container: ContainerDep,
@@ -237,10 +237,10 @@ async def preview_rule(
     }
 
 
-@router.post("/traffic-rules/apply", summary="Poser les restrictions sur les routeurs")
+@router.post("/traffic-rules/apply", summary="Apply the restrictions on the routers")
 async def apply_rules(
     container: ContainerDep,
-    dry_run: Annotated[bool, Query(description="Simulation : rien n'est ecrit")] = True,
+    dry_run: Annotated[bool, Query(description="Dry run: nothing is written")] = True,
     router: Annotated[str | None, Query(max_length=128)] = None,
 ) -> dict[str, Any]:
     """Calcule le plan de chaque routeur, et l'applique si on le demande.

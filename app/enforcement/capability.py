@@ -101,7 +101,7 @@ def inspect_write_capability(
     if groupe.lower() in FULL_GROUPS:
         verdict.can_write = True
         verdict.policies = ["full"]
-        verdict.detail = f"groupe '{groupe}' : tous les droits"
+        verdict.detail = f"group '{groupe}': all rights"
         return verdict
 
     definition = next(
@@ -117,7 +117,7 @@ def inspect_write_capability(
     verdict.policies = _split_policies(definition.get("policy"))
     manquantes = [p for p in REQUIRED if p not in verdict.policies]
     verdict.can_write = not manquantes
-    verdict.detail = f"groupe '{groupe}' : {', '.join(verdict.policies) or 'aucune politique'}" + (
+    verdict.detail = f"group '{groupe}': {', '.join(verdict.policies) or 'no policy'}" + (
         f" — il manque {', '.join(manquantes)}" if manquantes else ""
     )
     return verdict

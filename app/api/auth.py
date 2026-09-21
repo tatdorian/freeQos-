@@ -81,7 +81,7 @@ def _repository(container: ContainerDep) -> ApiKeysRepository:
     if container.api_keys_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="API publique indisponible (base non initialisee)",
+            detail="Public API unavailable (database not initialised)",
         )
     return container.api_keys_repo
 
@@ -92,9 +92,8 @@ async def authenticate(request: Request, container: ContainerDep) -> ApiCaller:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=(
-                "Cle d'API absente. Presentez-la en Basic (cle en nom "
-                "d'utilisateur, mot de passe vide), en Bearer, ou dans "
-                "l'en-tete X-API-Key."
+                "API key missing. Present it as Basic (key as the username, "
+                "empty password), as Bearer, or in the X-API-Key header."
             ),
             headers=_CHALLENGE,
         )
@@ -102,7 +101,7 @@ async def authenticate(request: Request, container: ContainerDep) -> ApiCaller:
     if fiche is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Cle d'API invalide, desactivee ou expiree",
+            detail="API key invalid, disabled or expired",
             headers=_CHALLENGE,
         )
     return ApiCaller(
@@ -129,8 +128,8 @@ class RequireScope:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=(
-                    f"Cette cle n'a pas la portee '{self.scope}' "
-                    f"(portees accordees : {', '.join(caller.scopes)})"
+                    f"This key does not have the '{self.scope}' scope "
+                    f"(granted scopes: {', '.join(caller.scopes)})"
                 ),
             )
         return caller

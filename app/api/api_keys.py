@@ -21,18 +21,18 @@ from app.services.api_keys import SCOPES
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["cles d'api"])
+router = APIRouter(tags=["api keys"])
 
 
 class ApiKeyInput(BaseModel):
-    name: str = Field(min_length=1, max_length=128, description="A quoi sert cette cle")
+    name: str = Field(min_length=1, max_length=128, description="What this key is for")
     scopes: list[str] = Field(
         default_factory=lambda: ["read"],
         description=f"Portees accordees parmi {', '.join(SCOPES)}",
     )
     note: str | None = Field(default=None, max_length=512)
     expires_at: datetime | None = Field(
-        default=None, description="Echeance facultative (la cle cesse d'etre acceptee apres)"
+        default=None, description="Optional expiry (the key stops being accepted after it)"
     )
 
 
@@ -44,12 +44,12 @@ def _repo(container: ContainerDep) -> ApiKeysRepository:
     if container.api_keys_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Cles d'API indisponibles (base non initialisee)",
+            detail="API keys unavailable (database not initialised)",
         )
     return container.api_keys_repo
 
 
-@router.get("/api-keys", summary="Cles d'API enregistrees (jamais les secrets)")
+@router.get("/api-keys", summary="Registered API keys (never the secrets)")
 async def list_keys(container: ContainerDep) -> list[dict[str, Any]]:
     return await _repo(container).list_all()
 
@@ -57,7 +57,7 @@ async def list_keys(container: ContainerDep) -> list[dict[str, Any]]:
 @router.post(
     "/api-keys",
     status_code=status.HTTP_201_CREATED,
-    summary="Creer une cle (le secret n'est rendu qu'ici)",
+    summary="Create a key (the secret is returned here only)",
 )
 async def create_key(payload: ApiKeyInput, container: ContainerDep) -> dict[str, Any]:
     fiche, secret = await _repo(container).create(
@@ -78,7 +78,7 @@ async def create_key(payload: ApiKeyInput, container: ContainerDep) -> dict[str,
     }
 
 
-@router.patch("/api-keys/{key_id}", summary="Activer ou desactiver une cle")
+@router.patch("/api-keys/{key_id}", summary="Enable or disable a key")
 async def toggle_key(
     key_id: Annotated[int, Path(ge=1)], payload: ApiKeyToggle, container: ContainerDep
 ) -> dict[str, Any]:
@@ -91,7 +91,7 @@ async def toggle_key(
 @router.delete(
     "/api-keys/{key_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Revoquer une cle definitivement",
+    summary="Revoke a key for good",
 )
 async def delete_key(key_id: Annotated[int, Path(ge=1)], container: ContainerDep) -> None:
     try:

@@ -11,18 +11,16 @@ from app.api.deps import CollectionDep, RepositoryDep, TimeRangeDep
 router = APIRouter(tags=["metrics"])
 
 
-@router.get("/pops", summary="Liste des PoPs")
+@router.get("/pops", summary="List of PoPs")
 async def list_pops(repo: RepositoryDep) -> list[dict[str, Any]]:
     return await repo.list_pops()
 
 
-@router.delete("/pops/{pop_id}", summary="Retirer un PoP et ses donnees")
+@router.delete("/pops/{pop_id}", summary="Remove a PoP and its data")
 async def delete_pop(
     repo: RepositoryDep,
     pop_id: Annotated[int, Path(ge=1)],
-    confirm: Annotated[
-        bool, Query(description="Obligatoire : la suppression est definitive")
-    ] = False,
+    confirm: Annotated[bool, Query(description="Required: the deletion is permanent")] = False,
 ) -> dict[str, Any]:
     """Supprime le PoP, ses abonnes, ses backhauls et leur historique.
 
@@ -33,8 +31,8 @@ async def delete_pop(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Suppression definitive du PoP, de ses abonnes et de tout leur "
-                "historique de mesures : 'confirm' doit valoir true."
+                "Permanent deletion of the PoP, its subscribers and all their "
+                "measurement history: 'confirm' must be true."
             ),
         )
     try:
@@ -44,14 +42,14 @@ async def delete_pop(
     return {"deleted": True, "cascaded": supprime}
 
 
-@router.get("/subscribers", summary="Liste des abonnes")
+@router.get("/subscribers", summary="List of subscribers")
 async def list_subscribers(
     repo: RepositoryDep,
-    pop_id: Annotated[int | None, Query(description="Filtre par PoP")] = None,
-    search: Annotated[str | None, Query(description="Filtre sur l'identifiant d'abonne")] = None,
+    pop_id: Annotated[int | None, Query(description="Filter by PoP")] = None,
+    search: Annotated[str | None, Query(description="Filter on the subscriber identifier")] = None,
     kind: Annotated[
         Literal["pppoe", "static"] | None,
-        Query(description="Filtre par nature : abonne PPPoE ou client a IP fixe"),
+        Query(description="Filter by kind: PPPoE subscriber or static-IP client"),
     ] = None,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
@@ -61,14 +59,14 @@ async def list_subscribers(
     )
 
 
-@router.get("/subscribers/latest", summary="Les abonnes d'un PoP et leur derniere mesure")
+@router.get("/subscribers/latest", summary="The subscribers of a PoP and their last sample")
 async def subscribers_latest(
     repo: RepositoryDep,
     pop_id: Annotated[int | None, Query()] = None,
-    search: Annotated[str | None, Query(description="Filtre sur l'identifiant d'abonne")] = None,
+    search: Annotated[str | None, Query(description="Filter on the subscriber identifier")] = None,
     kind: Annotated[
         Literal["pppoe", "static"] | None,
-        Query(description="Filtre par nature : abonne PPPoE ou client a IP fixe"),
+        Query(description="Filter by kind: PPPoE subscriber or static-IP client"),
     ] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
     order_by: Annotated[Literal["total", "down", "up", "login"], Query()] = "total",
@@ -101,18 +99,18 @@ async def subscribers_latest(
     )
 
 
-@router.get("/subscribers/{subscriber_id}", summary="Fiche d'un abonne")
+@router.get("/subscribers/{subscriber_id}", summary="Record of one subscriber")
 async def get_subscriber(
     repo: RepositoryDep,
     subscriber_id: Annotated[int, Path(ge=1)],
 ) -> dict[str, Any]:
     subscriber = await repo.get_subscriber(subscriber_id)
     if subscriber is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Abonne inconnu")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown subscriber")
     return subscriber
 
 
-@router.get("/subscribers/{subscriber_id}/metrics", summary="Serie de debits d'un abonne")
+@router.get("/subscribers/{subscriber_id}/metrics", summary="Throughput series of a subscriber")
 async def subscriber_metrics(
     repo: RepositoryDep,
     window: TimeRangeDep,
@@ -120,7 +118,7 @@ async def subscriber_metrics(
 ) -> dict[str, Any]:
     subscriber = await repo.get_subscriber(subscriber_id)
     if subscriber is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Abonne inconnu")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown subscriber")
     points = await repo.subscriber_metrics(
         subscriber_id,
         start=window.start,
@@ -144,11 +142,11 @@ async def subscriber_metrics(
     }
 
 
-@router.get("/bufferbloat", summary="Note de bufferbloat (latence sous charge) par abonne")
+@router.get("/bufferbloat", summary="Bufferbloat grade (latency under load) per subscriber")
 async def bufferbloat(
     repo: RepositoryDep,
     collection: CollectionDep,
-    minutes: Annotated[int, Query(ge=5, le=60 * 24 * 7, description="Fenetre d'observation")] = 60,
+    minutes: Annotated[int, Query(ge=5, le=60 * 24 * 7, description="Observation window")] = 60,
     pop_id: Annotated[int | None, Query()] = None,
 ) -> dict[str, Any]:
     """Le bufferbloat est la latence AJOUTEE quand le lien se remplit.
@@ -174,18 +172,18 @@ async def bufferbloat(
     return resultat
 
 
-@router.get("/heatmap", summary="Heatmap executif : QoE / RTT / utilisation dans le temps")
+@router.get("/heatmap", summary="Executive heatmap: QoE / RTT / utilisation over time")
 async def heatmap(
     repo: RepositoryDep,
-    minutes: Annotated[int, Query(ge=5, le=60 * 24, description="Fenetre d'observation")] = 15,
-    buckets: Annotated[int, Query(ge=5, le=120, description="Nombre de colonnes")] = 20,
+    minutes: Annotated[int, Query(ge=5, le=60 * 24, description="Observation window")] = 15,
+    buckets: Annotated[int, Query(ge=5, le=120, description="Number of columns")] = 20,
 ) -> dict[str, Any]:
     """Bandes de cellules colorees facon LibreQoS. La ligne des retransmissions
     TCP est presente mais marquee indisponible : hors-bande, on ne l'invente pas."""
     return await repo.heatmap(minutes=minutes, buckets=buckets)
 
 
-@router.get("/backhauls", summary="Liste des backhauls radio")
+@router.get("/backhauls", summary="List of radio backhauls")
 async def list_backhauls(
     repo: RepositoryDep,
     pop_id: Annotated[int | None, Query()] = None,
@@ -193,7 +191,7 @@ async def list_backhauls(
     return await repo.list_backhauls(pop_id=pop_id)
 
 
-@router.get("/backhauls/latest", summary="Derniere capacite connue par backhaul")
+@router.get("/backhauls/latest", summary="Last known capacity per backhaul")
 async def backhauls_latest(
     repo: RepositoryDep,
     pop_id: Annotated[int | None, Query()] = None,
@@ -201,7 +199,7 @@ async def backhauls_latest(
     return await repo.backhaul_latest(pop_id=pop_id)
 
 
-@router.get("/backhauls/{backhaul_id}/metrics", summary="Serie de capacite d'un backhaul")
+@router.get("/backhauls/{backhaul_id}/metrics", summary="Capacity series of a backhaul")
 async def backhaul_metrics(
     repo: RepositoryDep,
     window: TimeRangeDep,
@@ -227,12 +225,12 @@ async def backhaul_metrics(
 # --------------------------------------------------------------------------
 
 
-@router.get("/overview", summary="Chiffres de tete du tableau de bord")
+@router.get("/overview", summary="Headline figures of the dashboard")
 async def overview(repo: RepositoryDep) -> dict[str, Any]:
     return await repo.overview()
 
 
-@router.get("/throughput", summary="Debit agrege du reseau dans le temps")
+@router.get("/throughput", summary="Aggregate network throughput over time")
 async def throughput(
     repo: RepositoryDep,
     window: TimeRangeDep,
@@ -253,6 +251,6 @@ async def throughput(
     }
 
 
-@router.get("/network/tree", summary="Arbre PoP -> backhauls, capacite et charge")
+@router.get("/network/tree", summary="PoP tree -> backhauls, capacity and load")
 async def network_tree(repo: RepositoryDep) -> list[dict[str, Any]]:
     return await repo.network_tree()

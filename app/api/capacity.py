@@ -31,18 +31,18 @@ from app.services.capacity import a_renforcer, link_row, pop_capacity_row, usage
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["capacite"])
+router = APIRouter(tags=["capacity"])
 
 
-@router.get("/capacity", summary="Capacite vendue, occupation des liens, usage reel")
+@router.get("/capacity", summary="Sold capacity, link occupancy, real usage")
 async def capacity(
     repo: RepositoryDep,
-    hours: Annotated[int, Query(ge=1, le=720, description="Fenetre des pointes")] = 24,
+    hours: Annotated[int, Query(ge=1, le=720, description="Peak window")] = 24,
     usage_hours: Annotated[
-        int, Query(ge=1, le=2160, description="Fenetre des volumes consommes")
+        int, Query(ge=1, le=2160, description="Window of consumed volumes")
     ] = 168,
     silent_days: Annotated[
-        int, Query(ge=1, le=365, description="Silence au-dela duquel une ligne est signalee")
+        int, Query(ge=1, le=365, description="Silence beyond which a row is flagged")
     ] = 7,
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
 ) -> dict[str, Any]:

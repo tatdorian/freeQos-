@@ -122,9 +122,8 @@ REGLAGES: tuple[Reglage, ...] = (
         "shaping_safety_factor",
         "shaping",
         "float",
-        "Part de la capacite mesuree reellement appliquee. On shape SOUS la "
-        "capacite reelle pour que la file se forme dans CAKE, pas dans le buffer "
-        "de la radio.",
+        "Share of the measured capacity actually applied. We shape BELOW the real "
+        "capacity so the queue builds inside CAKE, not in the radio buffer.",
         minimum=0.1,
         maximum=1.0,
     ),
@@ -132,7 +131,7 @@ REGLAGES: tuple[Reglage, ...] = (
         "shaping_floor_mbps",
         "shaping",
         "float",
-        "Plancher de debit d'un lien : un fade profond ne doit pas le couper a zero.",
+        "Rate floor of a link: a deep fade must not cut it to zero.",
         minimum=0.0,
         maximum=10_000.0,
     ),
@@ -140,31 +139,31 @@ REGLAGES: tuple[Reglage, ...] = (
         "shaping_prune",
         "shaping",
         "bool",
-        "Supprimer nos files devenues inutiles (abonne parti, lien retire). "
-        "A couper pendant une migration.",
+        "Delete our queues once they are useless (subscriber gone, link removed). "
+        "Turn it off during a migration.",
     ),
     Reglage(
         "shaping_adopt_foreign_queues",
         "shaping",
         "bool",
-        "Aligner le debit d'une file TIERCE deja posee sur la cible d'un abonne. "
-        "RouterOS n'applique que la premiere file d'une meme cible : sans cela, "
-        "la limite saisie serait purement decorative.",
+        "Align the rate of a THIRD-PARTY queue already set on a subscriber target. "
+        "RouterOS only applies the first queue of a given target: without this, "
+        "the limit entered would be purely decorative.",
     ),
     Reglage(
         "shaping_queue_for_detected_links",
         "shaping",
         "bool",
-        "Poser une file des la decouverte d'un lien, en illimite (0/0). Elle ne "
-        "bride rien mais sert de parent aux files des abonnes.",
+        "Write a queue as soon as a link is discovered, unlimited (0/0). It throttles "
+        "nothing but acts as the parent of the subscriber queues.",
     ),
     Reglage(
         "subscriber_queue_target",
         "shaping",
         "choix",
-        "Sur quoi accrocher la file d'un abonne. 'address' (conseille) vise "
-        "l'adresse de la session ; 'interface' est deconseille (RouterOS inverse "
-        "le sens des deux limites).",
+        "What a subscriber queue hangs on. 'address' (recommended) targets the "
+        "session address; 'interface' is discouraged (RouterOS swaps the two "
+        "limits).",
         choices=("address", "interface"),
     ),
     # --- CAKE ---
@@ -172,9 +171,9 @@ REGLAGES: tuple[Reglage, ...] = (
         "cake_overhead",
         "cake",
         "int",
-        "Encapsulation comptee par CAKE, en octets. PPPoE sur ethernet = 8 + 14. "
-        "Ajouter 4 par etiquette VLAN, 4 par label MPLS. Sous-estimer revient a "
-        "shaper au-dessus de la capacite du lien.",
+        "Encapsulation counted by CAKE, in bytes. PPPoE over ethernet = 8 + 14. "
+        "Add 4 per VLAN tag, 4 per MPLS label. Underestimating means shaping "
+        "above the link capacity.",
         minimum=0,
         maximum=200,
     ),
@@ -182,7 +181,7 @@ REGLAGES: tuple[Reglage, ...] = (
         "cake_rtt_ms",
         "cake",
         "int",
-        "RTT de reference de l'AQM, en millisecondes.",
+        "Reference RTT of the AQM, in milliseconds.",
         minimum=1,
         maximum=1000,
     ),
@@ -190,8 +189,8 @@ REGLAGES: tuple[Reglage, ...] = (
         "cake_diffserv",
         "cake",
         "choix",
-        "Classes de priorite selon le DSCP. 'diffserv4' protege la voix et le jeu ; "
-        "'besteffort' ignore le DSCP. Vide = defaut RouterOS.",
+        "Priority classes from the DSCP. 'diffserv4' protects voice and gaming; "
+        "'besteffort' ignores the DSCP. Empty = RouterOS default.",
         nullable=True,
         choices=("besteffort", "diffserv3", "diffserv4", "diffserv8", "precedence"),
     ),
@@ -199,7 +198,7 @@ REGLAGES: tuple[Reglage, ...] = (
         "cake_flowmode",
         "cake",
         "choix",
-        "Isolation des flux. 'triple-isolate' est le bon defaut general.",
+        "Flow isolation. 'triple-isolate' is the right general default.",
         nullable=True,
         choices=(
             "flow",
@@ -216,15 +215,15 @@ REGLAGES: tuple[Reglage, ...] = (
         "cake_nat",
         "cake",
         "bool",
-        "Resoudre la NAT pour isoler les hotes reels et non la seule IP publique. "
-        "DETERMINANT derriere du CGNAT ou du PPPoE.",
+        "Resolve NAT to isolate real hosts rather than the single public IP. "
+        "DECISIVE behind CGNAT or PPPoE.",
         nullable=True,
     ),
     Reglage(
         "cake_ack_filter",
         "cake",
         "choix",
-        "Allege les ACK sur un lien tres asymetrique.",
+        "Thins out ACKs on a very asymmetric link.",
         nullable=True,
         choices=("none", "filter", "filter-aggressive"),
     ),
@@ -232,15 +231,15 @@ REGLAGES: tuple[Reglage, ...] = (
         "cake_wash",
         "cake",
         "bool",
-        "Remet le DSCP a zero en sortie. NECESSAIRE quand le DSCP entrant n'est "
-        "pas fiable (marquage client arbitraire).",
+        "Resets the DSCP to zero on egress. REQUIRED when the incoming DSCP is not "
+        "trustworthy (arbitrary client marking).",
         nullable=True,
     ),
     Reglage(
         "cake_mpu",
         "cake",
         "int",
-        "Taille de paquet minimale facturee (cadrage ATM/PPPoE).",
+        "Minimum billed packet size (ATM/PPPoE framing).",
         nullable=True,
         minimum=0,
         maximum=256,
@@ -250,8 +249,8 @@ REGLAGES: tuple[Reglage, ...] = (
         "enforcement_max_actions",
         "enforcement",
         "int",
-        "Coupe-circuit : un plan plus gros que cela signale un etat desire mal "
-        "calcule, on s'arrete plutot que de reecrire tout un PoP.",
+        "Circuit breaker: a plan larger than this signals a badly computed desired "
+        "state; we stop rather than rewrite a whole PoP.",
         minimum=1,
         maximum=100_000,
     ),
@@ -259,75 +258,75 @@ REGLAGES: tuple[Reglage, ...] = (
         "require_separate_write_account",
         "enforcement",
         "bool",
-        "Exiger un compte d'ecriture DISTINCT (rw_username) plutot que de se fier "
-        "aux droits reels du compte configure.",
+        "Require a SEPARATE write account (rw_username) rather than trusting the "
+        "real rights of the configured account.",
     ),
     # --- Cadences (prises en compte au tour de boucle suivant) ---
     _cadence(
-        "subscriber_interval_s", "collect_subscribers", "Periode de collecte des sessions PPPoE."
+        "subscriber_interval_s", "collect_subscribers", "How often PPPoE sessions are collected."
     ),
     _cadence(
         "backhaul_interval_s",
         "collect_backhauls",
-        "Periode de lecture de la capacite des backhauls radio.",
+        "How often the capacity of radio backhauls is read.",
     ),
     _cadence(
         "link_interval_s",
         "collect_links",
-        "Periode de lecture des compteurs de ports (debit des liens).",
+        "How often port counters are read (link throughput).",
     ),
     _cadence(
-        "plan_refresh_interval_s", "refresh_plans", "Periode de rafraichissement des plans abonnes."
+        "plan_refresh_interval_s", "refresh_plans", "How often subscriber plans are refreshed."
     ),
     _cadence(
         "inventory_refresh_interval_s",
         "reload_inventory",
-        "Periode de rechargement de l'inventaire des routeurs.",
+        "How often the router inventory is reloaded.",
     ),
     _cadence(
-        "rtt_interval_s", "probe_rtt", "Periode de la sonde de latence (si elle est activee)."
+        "rtt_interval_s", "probe_rtt", "How often the latency probe runs (when it is enabled)."
     ),
     _cadence(
         "boost_check_interval_s",
         "expire_boosts",
-        "Periode de verification des boosts arrives a echeance.",
+        "How often expired boosts are checked.",
     ),
     _cadence(
         "shaping_reconcile_interval_s",
         "reconcile_shaping",
-        "Periode de reapplication automatique de l'etat desire sur les routeurs.",
+        "How often the desired state is automatically re-applied on the routers.",
     ),
     _cadence(
         "topology_refresh_interval_s",
         "discover_topology",
-        "Periode de redecouverte du graphe reseau. C'est ce job qui peuple les "
-        "l'onglet Arbre reseau ; sans lui il reste vide.",
+        "How often the network graph is re-discovered. This job fills the Network "
+        "tree tab; without it the tab stays empty.",
     ),
     _cadence(
         "qoe_loop_interval_s",
         "qoe_closed_loop",
-        "Periode de la boucle fermee QoE (resserrage d'un secteur qui decroche).",
+        "How often the closed QoE loop runs (tightening a sector that is dropping off).",
     ),
     _cadence(
         "vlan_detect_interval_s",
         "detect_vlan_clients",
-        "Periode de lecture de la table ARP pour reperer les clients sur VLAN "
-        "routee. Aide a la declaration : rien de ce qui est trouve n'est shape.",
+        "How often the ARP table is read to spot clients on routed VLANs. This is an "
+        "aid to declaration: nothing found here is ever shaped.",
     ),
     # --- Detection ---
     Reglage(
         "vlan_detect_enabled",
         "detection",
         "bool",
-        "Lire /ip/arp pour proposer les clients a IP fixe non declares. "
-        "Purement consultatif : aucun candidat n'est jamais façonne.",
+        "Read /ip/arp to suggest undeclared static-IP clients. Purely advisory: no "
+        "candidate is ever shaped.",
     ),
     Reglage(
         "vlan_candidate_limit",
         "detection",
         "int",
-        "Nombre maximum de candidats remontes a l'interface et poses dans le "
-        "graphe. Une VLAN bavarde ne doit pas rendre l'arbre illisible.",
+        "Maximum number of candidates reported to the interface and placed in the "
+        "graph. A chatty VLAN must not make the tree unreadable.",
         minimum=1,
         maximum=5_000,
     ),
@@ -335,7 +334,7 @@ REGLAGES: tuple[Reglage, ...] = (
         "vlan_sighting_retention_s",
         "detection",
         "float",
-        "Duree au-dela de laquelle une adresse qui ne parle plus est oubliee.",
+        "How long before an address that stopped talking is forgotten.",
         minimum=60.0,
         maximum=2_592_000.0,
     ),
@@ -347,31 +346,31 @@ REGLAGES: tuple[Reglage, ...] = (
     _cadence(
         "netflow_flush_interval_s",
         "netflow_flush",
-        "Periode d'ecriture des fenetres de trafic. Une ligne par abonne et par "
-        "fenetre : descendre sous 30 s multiplie les lignes sans rien apprendre.",
+        "How often traffic windows are written. One row per subscriber per window: "
+        "going below 30 s multiplies rows without learning anything.",
     ),
     Reglage(
         "netflow_accounting_vantage",
         "trafic",
         "choix",
-        "D'ou la consommation est lue : 'edge' (en amont du coeur, a la sortie "
-        "internet) ou 'pop'. Le meme octet est exporte par les deux : les "
-        "additionner doublerait la consommation de chaque abonne.",
+        "Where usage is read from: 'edge' (upstream of the core, at the internet "
+        "egress) or 'pop'. The same byte is exported by both: adding them up "
+        "would double every subscriber usage.",
         choices=("edge", "pop"),
     ),
     Reglage(
         "netflow_track_hosts",
         "trafic",
         "bool",
-        "Retenir les adresses vues qui ne correspondent a aucune fiche. Aide a "
-        "la declaration des clients VLAN : rien n'en devient jamais un client.",
+        "Keep the addresses seen that match no record. An aid to declaring VLAN "
+        "clients: none of them ever becomes a client on its own.",
     ),
     Reglage(
         "netflow_host_limit",
         "trafic",
         "int",
-        "Nombre maximum d'adresses non rattachees retenues par fenetre. Une VLAN "
-        "bavarde ne doit pas noyer l'aide a la saisie.",
+        "Maximum number of unmatched addresses kept per window. A chatty VLAN must "
+        "not drown the entry aid.",
         minimum=1,
         maximum=10_000,
     ),
@@ -379,7 +378,7 @@ REGLAGES: tuple[Reglage, ...] = (
         "netflow_host_retention_s",
         "trafic",
         "float",
-        "Duree au-dela de laquelle une adresse non rattachee qui s'est tue est oubliee.",
+        "How long before an unmatched address that went quiet is forgotten.",
         minimum=60.0,
         maximum=2_592_000.0,
     ),
@@ -388,16 +387,16 @@ REGLAGES: tuple[Reglage, ...] = (
         "netflow_track_destinations",
         "services",
         "bool",
-        "Retenir l'adresse DISTANTE atteinte par chaque abonne. C'est ce qui "
-        "alimente l'onglet Services et les restrictions. Le couper ne touche pas "
-        "a la mesure de volume par abonne.",
+        "Keep the REMOTE address each subscriber reaches. This feeds the Services "
+        "tab and the restrictions. Turning it off does not affect per-subscriber "
+        "volume measurement.",
     ),
     Reglage(
         "netflow_destination_limit",
         "services",
         "int",
-        "Nombre maximum de destinations retenues par fenetre. Un abonne en p2p "
-        "peut toucher des milliers d'adresses par minute.",
+        "Maximum number of destinations kept per window. A subscriber on p2p can "
+        "touch thousands of addresses per minute.",
         minimum=10,
         maximum=50_000,
     ),
@@ -405,8 +404,8 @@ REGLAGES: tuple[Reglage, ...] = (
         "netflow_destination_retention_s",
         "services",
         "float",
-        "Duree au-dela de laquelle une destination qui s'est tue est oubliee. "
-        "Seule la MESURE est purgee : le nom de l'adresse, lui, est conserve.",
+        "How long before a destination that went quiet is forgotten. Only the "
+        "MEASUREMENT is purged: the name of the address is kept.",
         minimum=300.0,
         maximum=7_776_000.0,
     ),
@@ -414,38 +413,38 @@ REGLAGES: tuple[Reglage, ...] = (
         "ipfinder_enabled",
         "services",
         "bool",
-        "Mettre un nom sur les adresses atteintes. A false, les volumes restent "
-        "mesures mais plus rien n'est identifie.",
+        "Put a name on the destinations reached. At false, volumes are still "
+        "measured but nothing is identified any more.",
     ),
     Reglage(
         "ipfinder_rdns_enabled",
         "services",
         "bool",
-        "Interroger le nom inverse (PTR) des adresses nouvelles. C'est ce qui "
-        "distingue YouTube du reste de Google, et ce qui reconnait un service "
-        "qui a change de prefixe.",
+        "Query the reverse name (PTR) of new addresses. This is what tells YouTube "
+        "apart from the rest of Google, and what recognises a service that "
+        "changed prefix.",
     ),
     Reglage(
         "ipfinder_rdap_enabled",
         "services",
         "bool",
-        "Interroger le registre (RDAP) pour l'organisation, l'AS et le pays. "
-        "COUPE PAR DEFAUT : c'est le seul appel sortant du controleur.",
+        "Query the registry (RDAP) for the organisation, the AS and the country. "
+        "OFF BY DEFAULT: this is the controller only outbound call.",
     ),
     Reglage(
         "ipfinder_geoip_enabled",
         "services",
         "bool",
-        "Localiser les adresses atteintes (pays, region, ville). COUPE PAR "
-        "DEFAUT : sans base locale, cela envoie a un tiers les adresses que vos "
-        "clients atteignent.",
+        "Locate the destinations reached (country, region, city). OFF BY DEFAULT: "
+        "without a local database, this sends the addresses your clients reach "
+        "to a third party.",
     ),
     Reglage(
         "ipfinder_batch_size",
         "services",
         "int",
-        "Adresses nommees par passage. Monter cette valeur vide la file plus "
-        "vite, au prix d'une rafale de requetes DNS.",
+        "Addresses named per pass. Raising this drains the queue faster, at the "
+        "cost of a burst of DNS queries.",
         minimum=1,
         maximum=1_000,
     ),
@@ -453,42 +452,42 @@ REGLAGES: tuple[Reglage, ...] = (
         "ipfinder_max_attempts",
         "services",
         "int",
-        "Tentatives avant d'abandonner une adresse sans nom inverse. La majorite "
-        "d'internet n'en a pas : insister ferait une requete perpetuelle.",
+        "Attempts before giving up on an address with no reverse name. Most of the "
+        "internet has none: insisting would make the query perpetual.",
         minimum=1,
         maximum=20,
     ),
     _cadence(
         "ipfinder_interval_s",
         JOB_INTEL,
-        "Cadence a laquelle les adresses nouvellement vues sont nommees.",
+        "How often newly seen addresses are named.",
     ),
     # --- Restrictions de trafic ---
     _cadence(
         "restrictions_interval_s",
         JOB_RESTRICTIONS,
-        "Cadence a laquelle les restrictions sont reconciliees sur les routeurs. "
-        "C'est ce passage qui ajoute aux listes les adresses nouvellement "
-        "decouvertes d'un service restreint.",
+        "How often restrictions are reconciled on the routers. This is the pass "
+        "that adds newly discovered addresses of a restricted service to the "
+        "lists.",
     ),
     Reglage(
         "netflow_export_auto",
         "services",
         "bool",
-        "Poser l'export NetFlow sur les routeurs automatiquement. Reste soumis "
-        "a l'interrupteur d'ecriture.",
+        "Configure the NetFlow export on the routers automatically. Still subject "
+        "to the write switch.",
     ),
     _cadence(
         "netflow_export_interval_s",
         JOB_NETFLOW_EXPORT,
-        "Cadence a laquelle l'export NetFlow des routeurs est verifie et repose.",
+        "How often the NetFlow export on the routers is checked and re-applied.",
     ),
     Reglage(
         "restriction_address_limit",
         "services",
         "int",
-        "Plafond d'adresses par restriction. Une liste que le routeur parcourt a "
-        "chaque paquet ne doit pas grossir sans limite.",
+        "Cap on addresses per restriction. A list the router walks on every packet "
+        "must not grow without bound.",
         minimum=10,
         maximum=50_000,
     ),

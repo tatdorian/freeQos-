@@ -315,7 +315,7 @@ def desired_state(
     reseaux_parents: list[tuple[Any, str]] = []
     for index, link in enumerate(links):
         if not link.enabled:
-            ecartes.append(PlanSkip(link.name, "shaping desactive pour ce lien"))
+            ecartes.append(PlanSkip(link.name, "shaping disabled for this link"))
             continue
         down = shaped_capacity(
             link.measured_capacity_mbps,
@@ -335,8 +335,8 @@ def desired_state(
             ecartes.append(
                 PlanSkip(
                     link.name,
-                    "aucune capacite connue, et les liens non mesures ne recoivent pas de file "
-                    "(reglage shaping_queue_for_detected_links)",
+                    "no known capacity, and unmeasured links get no queue "
+                    "(setting shaping_queue_for_detected_links)",
                 )
             )
             continue
@@ -354,8 +354,8 @@ def desired_state(
             ecartes.append(
                 PlanSkip(
                     link.name,
-                    f"la cible {cible_lien} est deja celle de '{cibles_liens[cible_lien]}' : "
-                    "RouterOS n'appliquerait que la premiere file",
+                    f"target {cible_lien} already belongs to '{cibles_liens[cible_lien]}': "
+                    "RouterOS would only apply the first queue",
                 )
             )
             continue
@@ -402,13 +402,13 @@ def desired_state(
 
     for subscriber in subscribers:
         if not subscriber.enabled:
-            ecartes.append(PlanSkip(subscriber.login, "shaping desactive pour cet abonne"))
+            ecartes.append(PlanSkip(subscriber.login, "shaping disabled for this subscriber"))
             continue
         down = subscriber.effective_down_at(now)
         up = subscriber.effective_up_at(now)
         if down is None and up is None:
             ecartes.append(
-                PlanSkip(subscriber.login, "aucun debit a appliquer (ni plan, ni surcharge)")
+                PlanSkip(subscriber.login, "no rate to apply (neither plan nor override)")
             )
             continue
 
@@ -420,7 +420,7 @@ def desired_state(
             ecartes.append(
                 PlanSkip(
                     subscriber.login,
-                    "aucune adresse en cours : abonne hors ligne, rien a brider",
+                    "no current address: subscriber offline, nothing to throttle",
                 )
             )
             continue
@@ -430,8 +430,8 @@ def desired_state(
             ecartes.append(
                 PlanSkip(
                     subscriber.login,
-                    f"adresse {cible} revendiquee aussi par {', '.join(autres)} : "
-                    "impossible de savoir qui est a jour, aucune file ecrite",
+                    f"address {cible} is also claimed by {', '.join(autres)}: "
+                    "no way to tell which one is current, no queue written",
                 )
             )
             continue
@@ -563,9 +563,9 @@ def masked_queues(rows: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
                     "by": nom_precedent,
                     "target": str(precedente.get("target") or ""),
                     "detail": (
-                        f"la file '{nom_precedent}' vise {precedente.get('target')} et la "
-                        f"precede dans la liste : RouterOS lui donne le trafic, "
-                        f"'{nom}' ne bride rien"
+                        f"queue '{nom_precedent}' targets {precedente.get('target')} and "
+                        f"comes before it in the list: RouterOS gives it the traffic, "
+                        f"'{nom}' throttles nothing"
                     ),
                 }
                 break
@@ -608,7 +608,7 @@ def build_plan(
                     path="/queue/type",
                     fields=champs,
                     name=spec.name,
-                    reason="type CAKE absent",
+                    reason="CAKE type missing",
                 )
             )
             continue
@@ -621,7 +621,7 @@ def build_plan(
                     fields={k: v for k, v in champs.items() if k != "name"},
                     target_id=str(existant.get(".id") or existant.get("id") or ""),
                     name=spec.name,
-                    reason="parametres CAKE differents",
+                    reason="CAKE parameters differ",
                     changes=changements,
                 )
             )
@@ -669,7 +669,7 @@ def build_plan(
                     path="/queue/simple",
                     fields=champs,
                     name=file_spec.name,
-                    reason="file absente",
+                    reason="queue missing",
                 )
             )
             continue
@@ -682,8 +682,8 @@ def build_plan(
                     path="/queue/simple",
                     detail=(
                         str(masque["detail"])
-                        + ". Tant que cette file la precede, le plafond ne peut pas "
-                        "etre tenu : il faut retirer ou reparenter l'une des deux."
+                        + ". While that queue comes first, the cap cannot be held: "
+                        "one of the two must be removed or re-parented."
                     ),
                 )
             )
@@ -695,9 +695,9 @@ def build_plan(
                     name=file_spec.name,
                     path="/queue/simple",
                     detail=(
-                        "une file de ce nom existe deja sans le marqueur "
-                        f"'{MANAGED_COMMENT}' : elle n'appartient pas au controleur "
-                        "et ne sera pas modifiee"
+                        "a queue by that name already exists without the "
+                        f"'{MANAGED_COMMENT}' marker: it does not belong to the "
+                        "controller and will not be modified"
                     ),
                 )
             )
@@ -712,7 +712,7 @@ def build_plan(
                     fields={k: v for k, v in champs.items() if k != "name"},
                     target_id=str(existante.get(".id") or existante.get("id") or ""),
                     name=file_spec.name,
-                    reason="debit ou parent different",
+                    reason="rate or parent differs",
                     changes=changements,
                 )
             )
@@ -734,7 +734,7 @@ def build_plan(
                     fields={"name": nom},
                     target_id=str(row.get(".id") or row.get("id") or ""),
                     name=nom,
-                    reason="plus dans l'etat desire",
+                    reason="no longer in the desired state",
                 )
             )
 
@@ -766,9 +766,9 @@ def _traiter_file_tierce(
                 name=spec.name,
                 path="/queue/simple",
                 detail=(
-                    f"la cible {spec.target} est visee par plusieurs files tierces "
-                    f"({noms}) : impossible de savoir laquelle shape reellement, "
-                    "aucune n'est modifiee"
+                    f"target {spec.target} is aimed at by several third-party queues "
+                    f"({noms}): no way to tell which one really shapes, "
+                    "none is modified"
                 ),
             )
         )
@@ -783,10 +783,10 @@ def _traiter_file_tierce(
                 name=spec.name,
                 path="/queue/simple",
                 detail=(
-                    f"la cible {spec.target} est deja visee par la file tierce "
-                    f"'{nom}' (sans le marqueur '{MANAGED_COMMENT}') : RouterOS "
-                    "n'appliquerait que la premiere des deux en silence, donc aucune "
-                    "file n'est ecrite tant que le conflit n'est pas resolu a la main"
+                    f"target {spec.target} is already aimed at by third-party queue "
+                    f"'{nom}' (without the '{MANAGED_COMMENT}' marker): RouterOS "
+                    "would silently apply only the first of the two, so no queue is "
+                    "written until the conflict is resolved by hand"
                 ),
             )
         )
@@ -804,7 +804,7 @@ def _traiter_file_tierce(
             fields={"max-limit": spec.max_limit},
             target_id=str(etrangere.get(".id") or etrangere.get("id") or ""),
             name=nom,
-            reason=f"file tierce deja posee sur {spec.target} : son debit est aligne",
+            reason=f"third-party queue already on {spec.target}: its rate is aligned",
             changes=changements,
         )
     )

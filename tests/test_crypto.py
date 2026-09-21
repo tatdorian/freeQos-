@@ -35,7 +35,7 @@ def test_valeur_en_clair_refusee() -> None:
     """Une valeur non chiffree en base est une anomalie : on refuse de l'utiliser
     plutot que de la rattraper silencieusement."""
     box = SecretBox(generate_key())
-    with pytest.raises(SecretUnavailableError, match="non chiffre"):
+    with pytest.raises(SecretUnavailableError, match="not encrypted"):
         box.decrypt("motdepasse-en-clair")
 
 
@@ -50,7 +50,7 @@ def test_sans_cle_indisponible_mais_pas_fatal() -> None:
 def test_cle_invalide_signalee_clairement() -> None:
     box = SecretBox("pas-une-cle-fernet")
     assert box.available is False
-    assert "invalide" in (box.unavailable_reason or "")
+    assert "invalid" in (box.unavailable_reason or "")
 
 
 def test_prefixe_permet_de_reperer_les_valeurs_chiffrees() -> None:

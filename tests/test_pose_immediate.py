@@ -325,7 +325,7 @@ async def test_un_client_sans_debit_dit_pourquoi_il_n_a_pas_de_file(
     )
 
     assert rapport["state"] == ShapingService.ETAT_ECARTE
-    assert "aucun debit" in rapport["reason"]
+    assert "no rate to apply" in rapport["reason"]
     assert ecriture.executed == []
 
 

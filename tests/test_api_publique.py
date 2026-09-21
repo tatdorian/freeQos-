@@ -331,7 +331,7 @@ def test_une_cle_desactivee_est_refusee_sans_le_dire(ecriture) -> None:
     client.patch(f"/api/v1/api-keys/{cles.lignes[0]['id']}", json={"enabled": False})
     reponse = client.get("/model/v1", headers=basic(secret))
     assert reponse.status_code == 401
-    assert "desactiv" in reponse.json()["detail"] or "invalide" in reponse.json()["detail"]
+    assert "disabled" in reponse.json()["detail"] or "invalid" in reponse.json()["detail"]
 
 
 def test_une_cle_expiree_ne_passe_plus(pieces) -> None:

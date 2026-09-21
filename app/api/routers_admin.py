@@ -28,8 +28,8 @@ router = APIRouter(tags=["pops"])
 
 
 class RouterInput(BaseModel):
-    name: str = Field(min_length=1, max_length=64, description="Identifiant unique du PoP")
-    host: str = Field(min_length=1, max_length=255, description="IP ou nom d'hote de management")
+    name: str = Field(min_length=1, max_length=64, description="Unique identifier of the PoP")
+    host: str = Field(min_length=1, max_length=255, description="Management IP or hostname")
     password: SecretStr = Field(min_length=1)
     port: int = Field(default=8728, ge=1, le=65535)
     username: str = Field(default="qos-ro", min_length=1, max_length=64)
@@ -72,7 +72,7 @@ def _require_repository(container: ContainerDep) -> RoutersRepository:
     if container.routers_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Inventaire dynamique indisponible (base non initialisee)",
+            detail="Dynamic inventory unavailable (database not initialised)",
         )
     return container.routers_repo
 
@@ -90,7 +90,7 @@ def _guard_secrets(container: ContainerDep) -> None:
         )
 
 
-@router.get("/pops/health", summary="Sante des routeurs collectes (CPU, memoire, uptime)")
+@router.get("/pops/health", summary="Health of the collected routers (CPU, memory, uptime)")
 async def routers_health(container: ContainerDep) -> dict[str, Any]:
     """Ce que les routeurs eux-memes disent de leur etat, en direct.
 
@@ -128,7 +128,7 @@ async def routers_health(container: ContainerDep) -> dict[str, Any]:
     }
 
 
-@router.get("/pops/routers", summary="Inventaire des routeurs (fichier + base)")
+@router.get("/pops/routers", summary="Router inventory (file + database)")
 async def list_routers(container: ContainerDep) -> dict[str, Any]:
     stored: list[dict[str, Any]] = []
     if container.routers_repo is not None:
@@ -177,7 +177,7 @@ async def list_routers(container: ContainerDep) -> dict[str, Any]:
 @router.delete(
     "/pops/routers/file/{name}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Retirer un routeur de l'inventaire fichier",
+    summary="Remove a router from the file inventory",
 )
 async def hide_file_router(container: ContainerDep, name: str) -> None:
     """Ecarte un routeur declare dans le fichier (ou ignore faute de secret).
@@ -192,7 +192,7 @@ async def hide_file_router(container: ContainerDep, name: str) -> None:
 
 @router.post(
     "/pops/routers/file/{name}/restore",
-    summary="Reafficher un routeur fichier precedemment retire",
+    summary="Show a previously removed file router again",
 )
 async def restore_file_router(container: ContainerDep, name: str) -> dict[str, Any]:
     repository = _require_repository(container)
@@ -201,7 +201,7 @@ async def restore_file_router(container: ContainerDep, name: str) -> dict[str, A
     return {"name": name, "restored": restored}
 
 
-@router.post("/pops/routers/test", summary="Tester une connexion sans l'enregistrer")
+@router.post("/pops/routers/test", summary="Test a connection without saving it")
 async def test_connection(payload: RouterInput, container: ContainerDep) -> dict[str, Any]:
     """Ouvre une session API en lecture seule et renvoie l'identite du routeur.
 
@@ -244,30 +244,30 @@ def _hint_for(exc: Exception, config: RouterConfig) -> str:
     text = f"{type(exc).__name__}: {exc}".lower()
     if "timeout" in text or "timed out" in text:
         return (
-            f"Aucune reponse sur {config.host}:{config.port}. Verifiez la route depuis "
-            f"cette machine (nc -zv {config.host} {config.port}) et que le service API "
-            "est actif : /ip service set api disabled=no"
+            f"No answer on {config.host}:{config.port}. Check the route from this "
+            f"machine (nc -zv {config.host} {config.port}) and that the API service "
+            "is on: /ip service set api disabled=no"
         )
     if "refused" in text:
         return (
-            f"Connexion refusee sur le port {config.port}. Le service API est "
-            "probablement desactive, ou restreint a d'autres adresses "
+            f"Connection refused on port {config.port}. The API service is "
+            "probably disabled, or restricted to other addresses "
             "(/ip service print)."
         )
     if "trap" in text or "cannot log in" in text or "invalid user" in text:
         return (
-            "Identifiants refuses. Verifiez le compte et que son groupe possede "
-            "les politiques 'api' et 'read' (policy=read,api,test)."
+            "Credentials refused. Check the account and that its group has the "
+            "'api' and 'read' policies (policy=read,api,test)."
         )
     if "ssl" in text or "certificate" in text:
-        return "Erreur TLS : verifiez que le service api-ssl est actif sur le port 8729."
-    return "Consultez les logs du controleur pour le detail."
+        return "TLS error: check that the api-ssl service is on, on port 8729."
+    return "See the controller logs for the details."
 
 
 @router.post(
     "/pops/routers",
     status_code=status.HTTP_201_CREATED,
-    summary="Enregistrer un routeur",
+    summary="Save a router",
 )
 async def create_router(payload: RouterInput, container: ContainerDep) -> dict[str, Any]:
     repository = _require_repository(container)
@@ -287,7 +287,7 @@ async def create_router(payload: RouterInput, container: ContainerDep) -> dict[s
     return created
 
 
-@router.patch("/pops/routers/{router_id}", summary="Modifier un routeur")
+@router.patch("/pops/routers/{router_id}", summary="Edit a router")
 async def update_router(
     payload: RouterUpdate,
     container: ContainerDep,
@@ -313,7 +313,7 @@ async def update_router(
 @router.delete(
     "/pops/routers/{router_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Retirer un routeur de l'inventaire",
+    summary="Remove a router from the inventory",
 )
 async def delete_router(
     container: ContainerDep,
@@ -327,7 +327,7 @@ async def delete_router(
     await _apply(container)
 
 
-@router.post("/pops/routers/{router_id}/probe", summary="Tester un routeur enregistre")
+@router.post("/pops/routers/{router_id}/probe", summary="Test a saved router")
 async def probe_router(
     container: ContainerDep,
     router_id: Annotated[int, Path(ge=1)],
@@ -342,7 +342,7 @@ async def probe_router(
     if collector is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Routeur non charge (desactive, ou secret illisible)",
+            detail="Router not loaded (disabled, or unreadable secret)",
         )
     try:
         result = await collector.probe()

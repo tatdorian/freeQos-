@@ -77,4 +77,4 @@ def test_description_dit_que_la_detection_ne_cree_rien() -> None:
     assert "/ip/arp" in description
     assert "candidat" in description
     # L'absence de faconnage doit etre dite, pas sous-entendue.
-    assert "jamais faconne" in description or "aucun candidat n'est jamais" in description
+    assert "never shaped" in description or "no candidate is ever shaped" in description

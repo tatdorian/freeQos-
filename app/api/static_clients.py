@@ -36,7 +36,7 @@ from app.db.static_clients_repo import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["clients statiques"])
+router = APIRouter(tags=["static clients"])
 
 
 class StaticClientInput(BaseModel):
@@ -54,7 +54,7 @@ class StaticClientInput(BaseModel):
     address: str = Field(
         min_length=1,
         max_length=64,
-        description="IP fixe (10.0.0.5) ou sous-reseau attribue au client (10.0.0.0/29)",
+        description="Static IP (10.0.0.5) or subnet assigned to the client (10.0.0.0/29)",
     )
     label: str | None = Field(default=None, max_length=128)
     vlan: int | None = Field(default=None, ge=1, le=4094)
@@ -100,7 +100,7 @@ def _require_repository(container: ContainerDep) -> StaticClientsRepository:
     if container.static_clients_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Inventaire des clients statiques indisponible (base non initialisee)",
+            detail="Static-client inventory unavailable (database not initialised)",
         )
     return container.static_clients_repo
 
@@ -142,7 +142,7 @@ async def _poser_la_file(
         }
 
 
-@router.get("/static-clients", summary="Inventaire des clients a IP fixe")
+@router.get("/static-clients", summary="Inventory of static-IP clients")
 async def list_static_clients(
     container: ContainerDep,
     pop_name: Annotated[str | None, Query(max_length=128)] = None,
@@ -174,7 +174,7 @@ async def list_static_clients(
 
 @router.get(
     "/static-clients/vlans",
-    summary="Clients declares, ranges par VLAN",
+    summary="Declared clients, grouped by VLAN",
 )
 async def clients_par_vlan(container: ContainerDep) -> dict[str, Any]:
     """Ce qui est DECLARE sur chaque VLAN, et ce qui y parle sans l'etre.
@@ -212,7 +212,7 @@ async def clients_par_vlan(container: ContainerDep) -> dict[str, Any]:
 
 @router.get(
     "/static-clients/candidates",
-    summary="Adresses detectees sur une VLAN routee, non declarees",
+    summary="Addresses detected on a routed VLAN, undeclared",
 )
 async def list_candidates(container: ContainerDep) -> dict[str, Any]:
     """Ce que le recensement montre et que l'inventaire ne connait pas.
@@ -230,7 +230,7 @@ async def list_candidates(container: ContainerDep) -> dict[str, Any]:
     if repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Detection indisponible (base non initialisee)",
+            detail="Detection unavailable (database not initialised)",
         )
     if not container.settings.vlan_detect_enabled:
         return {"enabled": False, "candidates": [], "count": 0}
@@ -243,7 +243,7 @@ async def list_candidates(container: ContainerDep) -> dict[str, Any]:
 
 @router.get(
     "/static-clients/candidates/diagnostic",
-    summary="Pourquoi un client sur VLAN est vu, ou ne l'est pas",
+    summary="Why a client on a VLAN is seen, or is not",
 )
 async def diagnose_candidates(
     container: ContainerDep,
@@ -269,9 +269,9 @@ async def diagnose_candidates(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
-                f"Aucun routeur collecte ne correspond a '{router_name}'. "
-                f"Un routeur ecarte de la collecte n'est lu nulle part : "
-                f"verifiez l'onglet Equipements."
+                f"No collected router matches '{router_name}'. "
+                f"A router dropped from collection is read nowhere: "
+                f"check the Devices tab."
             )
             if router_name
             else "Aucun routeur n'est collecte.",
@@ -294,7 +294,7 @@ async def diagnose_candidates(
 
 @router.get(
     "/static-clients/enforcement",
-    summary="Etat de la file de chaque client declare, et ce qui manque",
+    summary="Queue state of every declared client, and what is missing",
 )
 async def enforcement_state(container: ContainerDep) -> dict[str, Any]:
     """Repond a "j'ai declare ce client, pourquoi ne remonte-t-il pas ?".
@@ -321,7 +321,7 @@ async def enforcement_state(container: ContainerDep) -> dict[str, Any]:
 @router.post(
     "/static-clients",
     status_code=status.HTTP_201_CREATED,
-    summary="Declarer un client a IP fixe",
+    summary="Declare a static-IP client",
 )
 async def create_static_client(
     payload: StaticClientInput, container: ContainerDep
@@ -340,7 +340,7 @@ async def create_static_client(
     return created
 
 
-@router.patch("/static-clients/{client_id}", summary="Modifier un client a IP fixe")
+@router.patch("/static-clients/{client_id}", summary="Edit a static-IP client")
 async def update_static_client(
     payload: StaticClientUpdate,
     container: ContainerDep,
@@ -370,7 +370,7 @@ async def update_static_client(
 @router.delete(
     "/static-clients/{client_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Retirer un client de l'inventaire",
+    summary="Remove a client from the inventory",
 )
 async def delete_static_client(
     container: ContainerDep,

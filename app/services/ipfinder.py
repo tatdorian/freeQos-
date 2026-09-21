@@ -54,15 +54,15 @@ IpNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 # exploitant pose reellement une regle. Multiplier les nuances donnerait une
 # taxonomie plus jolie et des restrictions plus difficiles a ecrire.
 CAT_STREAMING = "streaming"
-CAT_SOCIAL = "reseaux sociaux"
-CAT_JEUX = "jeux"
-CAT_VISIO = "voix / visio"
+CAT_SOCIAL = "social networks"
+CAT_JEUX = "gaming"
+CAT_VISIO = "voice / video"
 CAT_CDN = "cdn"
-CAT_NUAGE = "nuage"
-CAT_SYSTEME = "mises a jour"
+CAT_NUAGE = "cloud"
+CAT_SYSTEME = "updates"
 CAT_DNS = "dns"
-CAT_MESSAGERIE = "messagerie"
-CAT_INCONNU = "inconnu"
+CAT_MESSAGERIE = "messaging"
+CAT_INCONNU = "unknown"
 
 CATEGORIES: tuple[str, ...] = (
     CAT_STREAMING,
@@ -80,9 +80,9 @@ CATEGORIES: tuple[str, ...] = (
 # dit 'nflxvideo.net' l'emporte sur un prefixe de CDN, parce qu'il nomme le
 # SERVICE alors que le prefixe ne nomme que l'hebergeur.
 SOURCE_CATALOGUE = "catalogue"
-SOURCE_RDNS = "nom inverse"
-SOURCE_RDAP = "registre"
-SOURCE_INCONNU = "inconnu"
+SOURCE_RDNS = "reverse name"
+SOURCE_RDAP = "registry"
+SOURCE_INCONNU = "unknown"
 
 
 @dataclass(frozen=True)
@@ -145,9 +145,9 @@ CATALOGUE: tuple[ServiceDef, ...] = (
         rdns=("nflxvideo.net", "nflxso.net", "nflximg.net", "nflxext.com", "netflix.com"),
         asns=(2906, 40027),
         note=(
-            "Les serveurs de cache Open Connect peuvent etre HEBERGES CHEZ VOUS "
-            "ou chez votre transitaire : leur adresse n'est alors pas dans ces "
-            "blocs, et c'est le nom inverse qui les trahit."
+            "Open Connect cache servers may be HOSTED ON YOUR OWN NETWORK "
+            "or at your transit provider: their address is then outside these "
+            "prefixes, and only the reverse name gives them away."
         ),
     ),
     ServiceDef(
@@ -159,9 +159,9 @@ CATALOGUE: tuple[ServiceDef, ...] = (
         # pas a le distinguer -- seul 'googlevideo.com' le fait.
         rdns=("googlevideo.com", "youtube.com", "ytimg.com", "youtu.be"),
         note=(
-            "Reconnu par le NOM INVERSE seulement. Les blocs de Google portent "
-            "aussi la recherche et Gmail : restreindre le bloc restreindrait "
-            "tout Google."
+            "Recognised by REVERSE NAME only. Google prefixes also carry "
+            "search and Gmail: restricting the prefix would restrict all of "
+            "Google."
         ),
     ),
     ServiceDef(
@@ -204,14 +204,14 @@ CATALOGUE: tuple[ServiceDef, ...] = (
         label="Disney+",
         category=CAT_STREAMING,
         rdns=("disney-plus.net", "dssott.com", "bamgrid.com", "disneyplus.com"),
-        note="Distribue par des CDN tiers : reconnu au nom inverse, pas au bloc.",
+        note="Served by third-party CDNs: recognised by reverse name, not by prefix.",
     ),
     ServiceDef(
         key="prime-video",
         label="Prime Video",
         category=CAT_STREAMING,
         rdns=("aiv-cdn.net", "aiv-delivery.net", "pv-cdn.net", "primevideo.com"),
-        note="Sert depuis l'infrastructure Amazon : seul le nom inverse le distingue.",
+        note="Served from Amazon infrastructure: only the reverse name tells it apart.",
     ),
     ServiceDef(
         key="spotify",
@@ -347,7 +347,7 @@ CATALOGUE: tuple[ServiceDef, ...] = (
             "live.com",
         ),
         asns=(8075, 8068, 8069),
-        note="Blocs Azure : ils portent aussi bien une mise a jour qu'un site tiers heberge.",
+        note="Azure prefixes: they carry updates as readily as any third-party site.",
     ),
     ServiceDef(
         key="apple",
@@ -375,8 +375,8 @@ CATALOGUE: tuple[ServiceDef, ...] = (
         rdns=("amazonaws.com", "cloudfront.net", "amazon.com"),
         asns=(16509, 14618),
         note=(
-            "Un bloc AWS porte tout et n'importe quoi, Prime Video compris. "
-            "Restreindre ce service restreint des milliers de sites tiers."
+            "An AWS prefix carries anything and everything, Prime Video included. "
+            "Restricting this service restricts thousands of third-party sites."
         ),
     ),
     ServiceDef(
@@ -404,8 +404,8 @@ CATALOGUE: tuple[ServiceDef, ...] = (
         rdns=("cloudflare.com", "cloudflare-dns.com"),
         asns=(13335,),
         note=(
-            "UN CDN N'EST PAS UN SERVICE. Le meme bloc sert un site de recettes, "
-            "un catalogue video et une API bancaire. Restreindre ici est brutal."
+            "A CDN IS NOT A SERVICE. The same prefix serves a recipe site, "
+            "a video catalogue and a banking API. Restricting here is brutal."
         ),
     ),
     ServiceDef(
@@ -415,7 +415,7 @@ CATALOGUE: tuple[ServiceDef, ...] = (
         prefixes=("2.16.0.0/13", "23.32.0.0/11", "23.192.0.0/11", "104.64.0.0/10", "184.24.0.0/13"),
         rdns=("akamaitechnologies.com", "akamaiedge.net", "akamai.net", "edgekey.net"),
         asns=(20940, 16625, 32787),
-        note="Meme avertissement que Cloudflare : un CDN porte tout le monde.",
+        note="Same warning as Cloudflare: a CDN carries everybody.",
     ),
     ServiceDef(
         key="fastly",
@@ -424,7 +424,7 @@ CATALOGUE: tuple[ServiceDef, ...] = (
         prefixes=("23.235.32.0/20", "146.75.0.0/16", "151.101.0.0/16", "199.232.0.0/16"),
         rdns=("fastly.net", "fastlylb.net"),
         asns=(54113,),
-        note="Meme avertissement que Cloudflare : un CDN porte tout le monde.",
+        note="Same warning as Cloudflare: a CDN carries everybody.",
     ),
     ServiceDef(
         key="dns-public",

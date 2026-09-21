@@ -436,7 +436,7 @@ async def test_un_loopback_partage_est_refuse_et_signale() -> None:
     snapshot = await service.discover()
 
     assert len(snapshot.nodes) == 2
-    assert any("doit etre unique" in a for a in snapshot.warnings)
+    assert any("must be unique" in a for a in snapshot.warnings)
     assert any("10.255.0.5" in a for a in snapshot.warnings)
 
 
@@ -454,7 +454,7 @@ async def test_un_routeur_sans_loopback_est_signale() -> None:
 
     snapshot = await service.discover()
 
-    assert any("aucun loopback trouve" in a for a in snapshot.warnings)
+    assert any("no loopback found" in a for a in snapshot.warnings)
 
 
 async def test_un_routeur_injoignable_garde_son_role_et_son_loopback() -> None:

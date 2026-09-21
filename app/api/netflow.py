@@ -28,7 +28,7 @@ from app.services.netflow_service import NetflowService
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["trafic (netflow)"])
+router = APIRouter(tags=["traffic (netflow)"])
 
 Vantage = Literal["edge", "pop", "unknown"]
 
@@ -37,7 +37,7 @@ class ExporterInput(BaseModel):
     address: str = Field(
         min_length=1,
         max_length=64,
-        description="Adresse IP depuis laquelle l'equipement exporte ses flux",
+        description="IP address the device exports its flows from",
     )
     name: str | None = Field(default=None, max_length=128)
     vantage: Vantage = Field(
@@ -67,7 +67,7 @@ class ExporterInput(BaseModel):
         try:
             return str(ipaddress.ip_address(value.strip()))
         except ValueError as exc:
-            raise ValueError(f"adresse invalide : {value}") from exc
+            raise ValueError(f"invalid address: {value}") from exc
 
 
 class ExporterUpdate(BaseModel):
@@ -83,7 +83,7 @@ def _service(container: ContainerDep) -> NetflowService:
     if container.netflow is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Collecteur NetFlow indisponible",
+            detail="NetFlow collector unavailable",
         )
     return container.netflow
 
@@ -92,7 +92,7 @@ def _flows(container: ContainerDep) -> FlowsRepository:
     if container.flows_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Mesures de trafic indisponibles (base non initialisee)",
+            detail="Traffic measurements unavailable (database not initialised)",
         )
     return container.flows_repo
 
@@ -101,7 +101,7 @@ def _exporters(container: ContainerDep) -> NetflowExportersRepository:
     if container.exporters_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Declaration des exporteurs indisponible (base non initialisee)",
+            detail="Exporter declaration unavailable (database not initialised)",
         )
     return container.exporters_repo
 
@@ -110,7 +110,7 @@ def _destinations(container: ContainerDep) -> DestinationsRepository:
     if container.destinations_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Destinations indisponibles (base non initialisee)",
+            detail="Destinations unavailable (database not initialised)",
         )
     return container.destinations_repo
 
@@ -119,7 +119,7 @@ def _intel(container: ContainerDep) -> IntelService:
     if container.intel is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Enrichissement des adresses indisponible",
+            detail="Address enrichment unavailable",
         )
     return container.intel
 
@@ -128,7 +128,7 @@ def _export(container: ContainerDep) -> NetflowExportService:
     if container.netflow_export is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Configuration de l'export indisponible",
+            detail="Export configuration unavailable",
         )
     return container.netflow_export
 
@@ -139,16 +139,16 @@ def _valide_adresse(value: str) -> str:
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"adresse invalide : {value}",
+            detail=f"invalid address: {value}",
         ) from exc
 
 
-@router.get("/netflow/status", summary="Etat du collecteur NetFlow")
+@router.get("/netflow/status", summary="State of the NetFlow collector")
 async def netflow_status(container: ContainerDep) -> dict[str, Any]:
     return _service(container).status()
 
 
-@router.get("/netflow/exporters", summary="Equipements qui exportent des flux")
+@router.get("/netflow/exporters", summary="Devices that export flows")
 async def list_exporters(container: ContainerDep) -> list[dict[str, Any]]:
     return list(await _exporters(container).list_all())
 
@@ -156,7 +156,7 @@ async def list_exporters(container: ContainerDep) -> list[dict[str, Any]]:
 @router.post(
     "/netflow/exporters",
     status_code=status.HTTP_201_CREATED,
-    summary="Declarer un exporteur (ou corriger sa declaration)",
+    summary="Declare an exporter (or fix its declaration)",
 )
 async def declare_exporter(payload: ExporterInput, container: ContainerDep) -> dict[str, Any]:
     fiche = await _exporters(container).declare(payload.model_dump())
@@ -166,7 +166,7 @@ async def declare_exporter(payload: ExporterInput, container: ContainerDep) -> d
     return dict(fiche)
 
 
-@router.patch("/netflow/exporters/{exporter_id}", summary="Modifier un exporteur")
+@router.patch("/netflow/exporters/{exporter_id}", summary="Edit an exporter")
 async def update_exporter(
     exporter_id: Annotated[int, Path(ge=1)],
     payload: ExporterUpdate,
@@ -184,7 +184,7 @@ async def update_exporter(
 @router.delete(
     "/netflow/exporters/{exporter_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Retirer un exporteur de la liste",
+    summary="Remove an exporter from the list",
 )
 async def delete_exporter(exporter_id: Annotated[int, Path(ge=1)], container: ContainerDep) -> None:
     try:
@@ -194,7 +194,7 @@ async def delete_exporter(exporter_id: Annotated[int, Path(ge=1)], container: Co
     await _service(container).refresh_exporters()
 
 
-@router.get("/netflow/top", summary="Qui consomme, et combien")
+@router.get("/netflow/top", summary="Who consumes, and how much")
 async def top_talkers(
     container: ContainerDep,
     minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
@@ -212,7 +212,7 @@ async def top_talkers(
     }
 
 
-@router.get("/netflow/applications", summary="Repartition du trafic par usage")
+@router.get("/netflow/applications", summary="Traffic breakdown by usage")
 async def applications(
     container: ContainerDep,
     minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
@@ -226,7 +226,7 @@ async def applications(
 
 @router.get(
     "/netflow/subscribers/{subscriber_id}/series",
-    summary="Volume dans le temps pour un abonne",
+    summary="Volume over time for a subscriber",
 )
 async def subscriber_series(
     subscriber_id: Annotated[int, Path(ge=1)],
@@ -246,7 +246,7 @@ async def subscriber_series(
 
 @router.get(
     "/netflow/hosts",
-    summary="Adresses vues dans les flux et rattachees a aucune fiche",
+    summary="Addresses seen in the flows and matched to no record",
 )
 async def unmatched_hosts(
     container: ContainerDep,
@@ -269,7 +269,7 @@ async def unmatched_hosts(
     }
 
 
-@router.post("/netflow/flush", summary="Ecrire la fenetre en cours tout de suite")
+@router.post("/netflow/flush", summary="Write the current window right away")
 async def flush_now(container: ContainerDep) -> dict[str, Any]:
     service = _service(container)
     ecrites = await service.flush()
@@ -287,16 +287,16 @@ async def flush_now(container: ContainerDep) -> dict[str, Any]:
 # le trafic est chiffre, il le reste.
 
 
-@router.get("/netflow/destinations", summary="Adresses atteintes par les clients")
+@router.get("/netflow/destinations", summary="Destinations reached by the clients")
 async def destinations(
     container: ContainerDep,
     minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
     subscriber_id: Annotated[int | None, Query(ge=1)] = None,
-    client: Annotated[str | None, Query(max_length=64, description="Adresse du client")] = None,
+    client: Annotated[str | None, Query(max_length=64, description="Client address")] = None,
     service: Annotated[str | None, Query(max_length=64)] = None,
     category: Annotated[str | None, Query(max_length=64)] = None,
     q: Annotated[
-        str | None, Query(max_length=128, description="Adresse, nom ou organisation")
+        str | None, Query(max_length=128, description="Address, name or organisation")
     ] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> dict[str, Any]:
@@ -318,7 +318,7 @@ async def destinations(
 
 @router.get(
     "/netflow/destinations/{address}",
-    summary="Fiche detaillee d'une adresse atteinte",
+    summary="Detailed record of a destination reached",
 )
 async def destination_detail(
     address: str,
@@ -342,7 +342,7 @@ async def destination_detail(
 
 @router.post(
     "/netflow/destinations/{address}/resolve",
-    summary="Relancer l'analyse d'une adresse",
+    summary="Analyse an address again",
 )
 async def resolve_destination(address: str, container: ContainerDep) -> dict[str, Any]:
     """Redemande le nom inverse et le registre pour cette adresse.
@@ -354,11 +354,11 @@ async def resolve_destination(address: str, container: ContainerDep) -> dict[str
     return await _intel(container).resolve_now(_valide_adresse(address))
 
 
-@router.get("/netflow/connections", summary="Connexions clients en cours")
+@router.get("/netflow/connections", summary="Live client connections")
 async def connections(
     container: ContainerDep,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
-    app: Annotated[str | None, Query(max_length=64, description="Famille d'usage")] = None,
+    app: Annotated[str | None, Query(max_length=64, description="Usage category")] = None,
 ) -> dict[str, Any]:
     """Ce qui se passe DANS LA FENETRE EN COURS, avant meme son ecriture.
 
@@ -424,17 +424,17 @@ async def connections(
     }
 
 
-@router.get("/netflow/pairs", summary="Qui parle a qui : client et adresse atteinte")
+@router.get("/netflow/pairs", summary="Who talks to whom: client and destination reached")
 async def pairs(
     container: ContainerDep,
     minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
-    app: Annotated[str | None, Query(max_length=64, description="Famille d'usage")] = None,
-    client: Annotated[str | None, Query(max_length=64, description="Adresse du client")] = None,
+    app: Annotated[str | None, Query(max_length=64, description="Usage category")] = None,
+    client: Annotated[str | None, Query(max_length=64, description="Client address")] = None,
     service: Annotated[str | None, Query(max_length=64)] = None,
     category: Annotated[str | None, Query(max_length=64)] = None,
     pop: Annotated[str | None, Query(max_length=128)] = None,
     q: Annotated[
-        str | None, Query(max_length=128, description="Client, login, adresse, nom")
+        str | None, Query(max_length=128, description="Client, login, address, name")
     ] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
 ) -> dict[str, Any]:
@@ -485,7 +485,7 @@ async def pairs(
     }
 
 
-@router.get("/netflow/catalogue", summary="Services que le controleur sait reconnaitre")
+@router.get("/netflow/catalogue", summary="Services the controller can recognise")
 async def catalogue() -> dict[str, Any]:
     """De quoi ecrire une restriction : les services connus et leurs familles.
 
@@ -499,12 +499,12 @@ async def catalogue() -> dict[str, Any]:
     }
 
 
-@router.get("/netflow/intel", summary="Etat de l'enrichissement des adresses")
+@router.get("/netflow/intel", summary="State of address enrichment")
 async def intel_status(container: ContainerDep) -> dict[str, Any]:
     return await _intel(container).status()
 
 
-@router.post("/netflow/intel/run", summary="Nommer tout de suite les adresses en attente")
+@router.post("/netflow/intel/run", summary="Name the pending addresses right away")
 async def intel_run(
     container: ContainerDep,
     limit: Annotated[int, Query(ge=1, le=500)] = 50,
@@ -514,7 +514,7 @@ async def intel_run(
     return {"resolved": traites, "status": await service.status()}
 
 
-@router.get("/netflow/export", summary="Export NetFlow configure sur les routeurs")
+@router.get("/netflow/export", summary="NetFlow export configured on the routers")
 async def export_status(container: ContainerDep) -> dict[str, Any]:
     """Qui exporte deja vers ce collecteur, et qui ne le fait pas encore.
 
@@ -525,10 +525,10 @@ async def export_status(container: ContainerDep) -> dict[str, Any]:
     return await _export(container).status()
 
 
-@router.post("/netflow/export/apply", summary="Poser l'export NetFlow sur les routeurs")
+@router.post("/netflow/export/apply", summary="Configure the NetFlow export on the routers")
 async def export_apply(
     container: ContainerDep,
-    dry_run: Annotated[bool, Query(description="Simulation : rien n'est ecrit")] = True,
+    dry_run: Annotated[bool, Query(description="Dry run: nothing is written")] = True,
     router: Annotated[str | None, Query(max_length=128)] = None,
 ) -> dict[str, Any]:
     """Ecrit ``/ip/traffic-flow`` et sa cible sur les routeurs qui en manquent.

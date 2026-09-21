@@ -25,18 +25,18 @@ from app.services.crypto import SecretUnavailableError
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["antennes"])
+router = APIRouter(tags=["antennas"])
 
 
 class AntennaInput(BaseModel):
-    name: str = Field(min_length=1, max_length=64, description="Identifiant unique de l'antenne")
-    pop_name: str = Field(min_length=1, max_length=128, description="PoP auquel rattacher le lien")
-    host: str = Field(min_length=1, max_length=255, description="IP de management de la radio")
+    name: str = Field(min_length=1, max_length=64, description="Unique identifier of the antenna")
+    pop_name: str = Field(min_length=1, max_length=128, description="PoP to attach the link to")
+    host: str = Field(min_length=1, max_length=255, description="Management IP of the radio")
     username: str = Field(default="ubnt", max_length=64)
     # Optionnel : bien des parcs laissent /status.cgi accessible en lecture.
     password: SecretStr | None = None
     verify_tls: bool = False
-    device_key: str | None = Field(default=None, max_length=128, description="Cle stable (MAC)")
+    device_key: str | None = Field(default=None, max_length=128, description="Stable key (MAC)")
     nominal_capacity_mbps: float | None = Field(default=None, ge=0, le=100_000)
     enabled: bool = True
     timeout_s: float = Field(default=10.0, ge=0.5, le=60.0)
@@ -61,7 +61,7 @@ def _require_repository(container: ContainerDep) -> AntennasRepository:
     if container.antennas_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Inventaire des antennes indisponible (base non initialisee)",
+            detail="Antenna inventory unavailable (database not initialised)",
         )
     return container.antennas_repo
 
@@ -74,7 +74,7 @@ def _guard_secrets(container: ContainerDep) -> None:
         )
 
 
-@router.get("/pops/antennas", summary="Antennes Ubiquiti interrogees en direct")
+@router.get("/pops/antennas", summary="Ubiquiti antennas polled live")
 async def list_antennas(container: ContainerDep) -> dict[str, Any]:
     stored: list[dict[str, Any]] = []
     if container.antennas_repo is not None:
@@ -116,22 +116,22 @@ def _hint_for(exc: Exception, target: AirOsTarget) -> str:
     text = f"{type(exc).__name__}: {exc}".lower()
     if "timeout" in text or "timed out" in text:
         return (
-            f"Aucune reponse de {target.host}. Verifiez la route depuis cette machine "
-            "et que l'interface web de l'antenne est joignable en HTTPS."
+            f"No answer from {target.host}. Check the route from this machine "
+            "and that the antenna web interface is reachable over HTTPS."
         )
     if "refused" in text:
-        return f"Connexion refusee par {target.host} : HTTPS desactive, ou port filtre."
+        return f"Connection refused by {target.host}: HTTPS disabled, or port filtered."
     if "401" in text or "403" in text or "login" in text:
-        return "Identifiants refuses : verifiez le compte airOS et son mot de passe."
+        return "Credentials refused: check the airOS account and its password."
     if "ssl" in text or "certificate" in text:
         return (
-            "Erreur TLS : l'antenne a un certificat auto-signe. Laissez 'verify_tls' "
-            "decoche pour ces radios."
+            "TLS error: the antenna has a self-signed certificate. Leave 'verify_tls' "
+            "unticked for these radios."
         )
-    return "Consultez les logs du controleur pour le detail."
+    return "See the controller logs for the details."
 
 
-@router.post("/pops/antennas/test", summary="Tester une antenne sans l'enregistrer")
+@router.post("/pops/antennas/test", summary="Test an antenna without saving it")
 async def test_antenna(payload: AntennaInput, container: ContainerDep) -> dict[str, Any]:
     target = AirOsTarget(
         key=payload.device_key or payload.name,
@@ -146,7 +146,7 @@ async def test_antenna(payload: AntennaInput, container: ContainerDep) -> dict[s
 @router.post(
     "/pops/antennas",
     status_code=status.HTTP_201_CREATED,
-    summary="Enregistrer une antenne",
+    summary="Save an antenna",
 )
 async def create_antenna(payload: AntennaInput, container: ContainerDep) -> dict[str, Any]:
     repository = _require_repository(container)
@@ -163,7 +163,7 @@ async def create_antenna(payload: AntennaInput, container: ContainerDep) -> dict
     return created
 
 
-@router.patch("/pops/antennas/{antenna_id}", summary="Modifier une antenne")
+@router.patch("/pops/antennas/{antenna_id}", summary="Edit an antenna")
 async def update_antenna(
     payload: AntennaUpdate,
     container: ContainerDep,
@@ -187,7 +187,7 @@ async def update_antenna(
 @router.delete(
     "/pops/antennas/{antenna_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Retirer une antenne",
+    summary="Remove an antenna",
 )
 async def delete_antenna(
     container: ContainerDep,
@@ -200,7 +200,7 @@ async def delete_antenna(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
 
-@router.post("/pops/antennas/{antenna_id}/probe", summary="Tester une antenne enregistree")
+@router.post("/pops/antennas/{antenna_id}/probe", summary="Test a saved antenna")
 async def probe_antenna(
     container: ContainerDep,
     antenna_id: Annotated[int, Path(ge=1)],
@@ -217,7 +217,7 @@ async def probe_antenna(
     if target is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Antenne non chargeable (secret illisible ?)",
+            detail="Antenna cannot be loaded (unreadable secret?)",
         )
     result = await _probe_target(target, stored.get("timeout_s") or 10.0)
     if result.get("reachable"):

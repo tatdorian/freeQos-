@@ -142,8 +142,8 @@ def fasttrack_verdict(regles: Sequence[FasttrackRule] | None) -> dict[str, Any]:
             "active": None,
             "rules": [],
             "detail": (
-                "pare-feu illisible avec ce compte : impossible de dire si le fasttrack "
-                "contourne les files. A verifier a la main "
+                "firewall unreadable with this account: cannot tell whether fasttrack "
+                "bypasses the queues. Check by hand "
                 "(/ip firewall filter print where action=fasttrack-connection)"
             ),
             "remedy": None,
@@ -152,20 +152,20 @@ def fasttrack_verdict(regles: Sequence[FasttrackRule] | None) -> dict[str, Any]:
         return {
             "active": False,
             "rules": [],
-            "detail": "aucune regle fasttrack active : les files simples voient tout le trafic",
+            "detail": "no active fasttrack rule: the simple queues see all the traffic",
             "remedy": None,
         }
     return {
         "active": True,
         "rules": [r.to_dict() for r in regles],
         "detail": (
-            f"{len(regles)} regle(s) fasttrack active(s) : les connexions etablies "
-            "SAUTENT les files simples. Tant qu'elles sont en place, aucun plafond "
-            "de ce routeur ne peut etre tenu, quelle que soit la file posee."
+            f"{len(regles)} active fasttrack rule(s): established connections "
+            "SKIP the simple queues. While they are in place, no cap on this "
+            "router can be held, whatever queue is written."
         ),
         "remedy": (
             "/ip firewall filter disable [find action=fasttrack-connection] "
-            "(a passer sur le routeur : le controleur ne touche pas au pare-feu)"
+            "(run it on the router: the controller does not touch the firewall)"
         ),
     }
 
@@ -226,15 +226,15 @@ def _motif_absence(enforcement_enabled: bool | None, deja_reconcilie: bool | Non
     """
     if enforcement_enabled is False:
         return (
-            "l'enforcement est coupe : la file est calculee mais rien n'est ecrit "
-            "tant qu'il ne sera pas actif (interrupteur en haut de cette page)"
+            "enforcement is off: the queue is computed but nothing is written "
+            "until it is on (switch at the top of this page)"
         )
     if deja_reconcilie is False:
         return (
-            "la reconciliation n'est pas encore passee sur ce routeur : la file part "
-            "au prochain tour. Normal sur un site qu'on vient d'ajouter"
+            "reconciliation has not run on this router yet: the queue goes out "
+            "on the next pass. Normal on a site just added"
         )
-    return "aucune file de ce nom sur le routeur : rien ne bride cet abonne"
+    return "no queue by that name on the router: nothing throttles this subscriber"
 
 
 def limit_state(
@@ -265,8 +265,8 @@ def limit_state(
     if str(spec.max_limit).strip() in SANS_LIMITE:
         etat.verdict = VERDICT_SANS_PLAFOND
         etat.detail = (
-            "cette file ne porte aucun plafond (capacite du lien inconnue) : il n'y a "
-            "rien a tenir. Declarez la capacite du lien pour qu'elle en porte un"
+            "this queue carries no cap (link capacity unknown): there is nothing "
+            "to hold. Declare the link capacity so it carries one"
         )
         ligne_existante = index.get(spec.name)
         if ligne_existante is not None:
@@ -285,13 +285,13 @@ def limit_state(
     if fasttrack:
         etat.verdict = VERDICT_CONTOURNE
         etat.detail = (
-            "la file est en place, mais le fasttrack fait sauter les files simples "
-            "aux connexions etablies : le plafond n'est pas tenu"
+            "the queue is in place, but fasttrack makes established connections "
+            "skip the simple queues: the cap is not held"
         )
         return etat
     if _vrai(ligne.get("disabled")):
         etat.verdict = VERDICT_DESACTIVEE
-        etat.detail = "file desactivee sur le routeur : elle ne bride rien"
+        etat.detail = "queue disabled on the router: it throttles nothing"
         return etat
     masque = masquees.get(spec.name)
     if masque is not None:
@@ -302,11 +302,11 @@ def limit_state(
     if normalise_field(etat.seen) != normalise_field(spec.max_limit):
         etat.verdict = VERDICT_ECART
         etat.detail = (
-            f"le routeur porte {etat.seen or '-'} la ou le controleur veut "
-            f"{spec.max_limit} : le plafond decide n'est pas celui qui s'applique"
+            f"the router carries {etat.seen or '-'} where the controller wants "
+            f"{spec.max_limit}: the decided cap is not the one applied"
         )
         return etat
-    etat.detail = f"plafond {spec.max_limit} bits/s en vigueur sur {spec.target}"
+    etat.detail = f"cap {spec.max_limit} bits/s in force on {spec.target}"
     return etat
 
 

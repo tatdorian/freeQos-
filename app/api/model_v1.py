@@ -52,7 +52,7 @@ from app.db.model_repo import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/model/v1", tags=["api publique (modele)"])
+router = APIRouter(prefix="/model/v1", tags=["public api (model)"])
 
 COLLECTIONS = (*TABLES.keys(), "services")
 
@@ -63,14 +63,14 @@ CollectionPath = Annotated[
         pattern="^(accounts|packages|sites|access_points|services)$",
     ),
 ]
-IdPath = Annotated[str, Path(min_length=1, max_length=128, description="Identifiant externe")]
+IdPath = Annotated[str, Path(min_length=1, max_length=128, description="External identifier")]
 
 
 def _repository(container: ContainerDep) -> ModelRepository:
     if container.model_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="API publique indisponible (base non initialisee)",
+            detail="Public API unavailable (database not initialised)",
         )
     return container.model_repo
 
@@ -85,7 +85,7 @@ def _translate(exc: Exception) -> HTTPException:
     raise exc
 
 
-@router.get("", summary="Collections disponibles")
+@router.get("", summary="Available collections")
 async def index(caller: ReadDep) -> dict[str, Any]:
     """Point d'entree lisible : un integrateur doit pouvoir verifier sa cle
     d'un seul appel, sans deviner un nom de collection."""
@@ -99,7 +99,7 @@ async def index(caller: ReadDep) -> dict[str, Any]:
     }
 
 
-@router.get("/{collection}", summary="Lister une collection")
+@router.get("/{collection}", summary="List a collection")
 async def list_collection(
     collection: CollectionPath, container: ContainerDep, caller: ReadDep
 ) -> list[dict[str, Any]]:
@@ -112,7 +112,7 @@ async def list_collection(
         raise _translate(exc) from exc
 
 
-@router.get("/{collection}/{object_id}", summary="Lire une fiche")
+@router.get("/{collection}/{object_id}", summary="Read a record")
 async def get_object(
     collection: CollectionPath, object_id: IdPath, container: ContainerDep, caller: ReadDep
 ) -> dict[str, Any]:
@@ -125,7 +125,7 @@ async def get_object(
         raise _translate(exc) from exc
 
 
-@router.put("/{collection}/{object_id}", summary="Creer ou remplacer une fiche")
+@router.put("/{collection}/{object_id}", summary="Create or replace a record")
 async def put_object(
     collection: CollectionPath,
     object_id: IdPath,
@@ -138,8 +138,8 @@ async def put_object(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"l'identifiant du corps ('{corps_id}') ne correspond pas a "
-                f"celui de l'URI ('{object_id}')"
+                f"the body identifier ('{corps_id}') does not match the one "
+                f"in the URI ('{object_id}')"
             ),
         )
     repo = _repository(container)
@@ -169,7 +169,7 @@ async def put_object(
 @router.delete(
     "/{collection}/{object_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    summary="Retirer une fiche",
+    summary="Remove a record",
 )
 async def delete_object(
     collection: CollectionPath,

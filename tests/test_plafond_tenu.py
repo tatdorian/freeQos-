@@ -65,7 +65,7 @@ def test_pare_feu_illisible_ne_se_lit_pas_comme_propre() -> None:
     """'Je n'ai pas pu lire' et 'il n'y a rien' sont deux reponses differentes."""
     verdict = fasttrack_verdict(None)
     assert verdict["active"] is None
-    assert "illisible" in verdict["detail"]
+    assert "unreadable" in verdict["detail"]
 
 
 def test_le_fasttrack_donne_la_commande_qui_le_corrige() -> None:
@@ -601,7 +601,7 @@ def test_une_file_sans_plafond_n_est_pas_un_plafond_non_tenu() -> None:
     assert etat.verdict == VERDICT_SANS_PLAFOND
     assert etat.enforced is False
     assert etat.is_cap is False
-    assert "capacite du lien inconnue" in etat.detail
+    assert "link capacity unknown" in etat.detail
 
 
 def test_les_files_sans_plafond_ne_gonflent_pas_l_alarme() -> None:
@@ -636,7 +636,7 @@ def test_enforcement_coupe_explique_la_file_absente() -> None:
 
     (ligne,) = rapport["queues"]
     assert ligne["verdict"] == VERDICT_ABSENTE
-    assert "enforcement est coupe" in ligne["detail"]
+    assert "enforcement is off" in ligne["detail"]
 
 
 def test_un_site_neuf_dit_que_la_reconciliation_n_est_pas_passee() -> None:
@@ -652,8 +652,8 @@ def test_un_site_neuf_dit_que_la_reconciliation_n_est_pas_passee() -> None:
     )
 
     (ligne,) = rapport["queues"]
-    assert "reconciliation n'est pas encore passee" in ligne["detail"]
-    assert "site qu'on vient d'ajouter" in ligne["detail"]
+    assert "reconciliation has not run" in ligne["detail"]
+    assert "a site just added" in ligne["detail"]
 
 
 def test_une_file_vraiment_manquante_reste_un_defaut() -> None:
@@ -669,7 +669,9 @@ def test_une_file_vraiment_manquante_reste_un_defaut() -> None:
     )
 
     (ligne,) = rapport["queues"]
-    assert ligne["detail"] == "aucune file de ce nom sur le routeur : rien ne bride cet abonne"
+    assert (
+        ligne["detail"] == "no queue by that name on the router: nothing throttles this subscriber"
+    )
 
 
 async def test_le_service_dit_si_la_reconciliation_a_touche_ce_routeur(

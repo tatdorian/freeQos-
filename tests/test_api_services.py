@@ -237,7 +237,7 @@ def destinations() -> FauxDestinations:
             "hostname": "ipv4-c001.1.oca.nflxvideo.net",
             "service": "netflix",
             "category": "streaming",
-            "source": "nom inverse",
+            "source": "reverse name",
             "org": None,
             "asn": None,
             "country": None,
@@ -360,7 +360,7 @@ def test_la_fiche_d_une_adresse_dit_qui_la_joint(client: TestClient) -> None:
 def test_une_adresse_invalide_est_refusee_proprement(client: TestClient) -> None:
     reponse = client.get("/api/v1/netflow/destinations/pas-une-adresse")
     assert reponse.status_code == 422
-    assert "invalide" in reponse.json()["detail"]
+    assert "invalid" in reponse.json()["detail"]
 
 
 def test_relancer_l_analyse_remet_l_adresse_dans_la_file(
@@ -575,7 +575,7 @@ async def test_le_nom_inverse_se_lit_sans_toucher_au_reseau_dans_les_tests() -> 
     await service.resolve_pending()
     verdict = file.enregistres[0]
     assert verdict["service"] == "netflix"
-    assert verdict["source"] == "nom inverse"
+    assert verdict["source"] == "reverse name"
     assert verdict["hostname"] == "ipv4-c001.1.oca.nflxvideo.net"
 
 

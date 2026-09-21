@@ -248,7 +248,7 @@ def test_un_amont_hors_inventaire_ne_produit_pas_de_parent() -> None:
 def test_un_routeur_ambigu_est_signale() -> None:
     snapshot = _deux_routeurs()
     _, alertes = orient_from_config(snapshot, {"pop": (None, "ambigu")}, {})
-    assert any("plusieurs routes par defaut" in a for a in alertes)
+    assert any("several default routes" in a for a in alertes)
 
 
 def test_une_route_qui_pointe_sur_soi_meme_est_refusee() -> None:
@@ -259,7 +259,7 @@ def test_une_route_qui_pointe_sur_soi_meme_est_refusee() -> None:
         {"10.9.9.9": router_node_key("pop")},
     )
     assert poses == 0
-    assert any("pointe vers lui-meme" in a for a in alertes)
+    assert any("points at itself" in a for a in alertes)
 
 
 def test_le_parent_prouve_suit_la_fusion_des_doublons() -> None:

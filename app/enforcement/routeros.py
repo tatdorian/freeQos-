@@ -244,7 +244,7 @@ async def apply_plan(
 
     for action in plan.actions:
         if dry_run:
-            resultat.outcomes.append(ActionOutcome(action=action, ok=True, detail="simule"))
+            resultat.outcomes.append(ActionOutcome(action=action, ok=True, detail="dry run"))
             continue
         try:
             retour = await asyncio.to_thread(client.execute, action)

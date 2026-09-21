@@ -250,19 +250,19 @@ class NetflowExportService:
         lent = not _meme_duree(etat.active_timeout, self.active_flow_timeout)
         if etat.enabled and etat.ours is not None and not lent:
             etat.state = ETAT_POSE
-            etat.reason = f"exporte vers {etat.collector}:{self.port}"
+            etat.reason = f"exports to {etat.collector}:{self.port}"
         else:
             etat.state = ETAT_A_POSER
             if not etat.enabled:
-                etat.reason = "l'export est coupe sur ce routeur"
+                etat.reason = "the export is off on this router"
             elif etat.ours is None:
-                etat.reason = "aucune cible ne pointe vers ce collecteur"
+                etat.reason = "no target points at this collector"
             else:
                 # LE PIEGE LE PLUS COUTEUX DE TRAFFIC-FLOW. Avec le defaut de
                 # RouterOS, un flux encore actif n'est exporte qu'au bout de
                 # trente minutes : tout se passe comme si le streaming en cours
                 # n'existait pas.
-                etat.reason = f"flux actifs exportes seulement apres {etat.active_timeout or '?'}"
+                etat.reason = f"active flows only exported after {etat.active_timeout or '?'}"
         return etat
 
     async def states(self) -> list[RouterExportState]:
@@ -314,7 +314,7 @@ class NetflowExportService:
                     path=PATH_FLOW,
                     fields={cle: apres for cle, (_, apres) in ecarts.items()},
                     name=f"{collector.name} : export NetFlow",
-                    reason="l'export de flux doit etre actif, et exporter sans attendre",
+                    reason="flow export must be on, and must export without waiting",
                     changes=ecarts,
                 )
             )
@@ -338,7 +338,7 @@ class NetflowExportService:
                     path=PATH_TARGET,
                     fields=champs,
                     name=f"{collector.name} : cible {etat.collector}:{self.port}",
-                    reason="ce routeur n'envoie encore ses flux a aucun collecteur connu",
+                    reason="this router does not send its flows to any known collector yet",
                 )
             )
         elif str(etat.ours.get("version") or "") != str(self.version):
@@ -349,7 +349,7 @@ class NetflowExportService:
                     target_id=str(etat.ours.get(".id") or ""),
                     fields={"version": str(self.version)},
                     name=f"{collector.name} : cible {etat.collector}:{self.port}",
-                    reason="version d'export alignee",
+                    reason="export version aligned",
                     changes={"version": (str(etat.ours.get("version") or ""), str(self.version))},
                 )
             )
