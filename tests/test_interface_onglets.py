@@ -211,3 +211,73 @@ def test_le_bloc_d_export_dit_ce_qui_empeche_de_poser() -> None:
     boucle : le blocage est annonce avant, avec l'interrupteur."""
     assert "enableEnforcementForExport" in JS
     assert "Ecriture sur les routeurs desactivee" in JS
+
+
+# -------------------------------------------------------------------------
+# L'arbre reseau : la toile, l'echelle, le repli
+# -------------------------------------------------------------------------
+
+CSS = (RACINE / "static" / "app.css").read_text(encoding="utf-8")
+
+
+def test_la_toile_est_peinte_dans_le_dessin_pas_sur_le_cadre() -> None:
+    """Le quadrillage etait peint sur le conteneur QUI DEFILE : il s'arretait a
+    la partie visible, et l'arbre finissait sur du vide des qu'il depassait.
+    Peint dans le SVG a la taille du contenu, il s'etend aussi loin que les
+    cases."""
+    assert "topo-grille" in JS
+    assert 'patternUnits="userSpaceOnUse"' in JS
+    assert 'fill="url(#topo-grille)"' in JS
+    # Et le cadre ne doit plus porter de quadrillage a lui, sinon les deux se
+    # superposeraient en decale des que l'on defile.
+    bloc = CSS[CSS.index(".topo-canvas {") : CSS.index(".topo-canvas svg")]
+    assert "linear-gradient" not in bloc
+
+
+def test_la_toile_suit_la_place_disponible() -> None:
+    """Une hauteur figee gachait un grand ecran et noyait un portable. Le cadre
+    est desormais cale sur l'etendue des cases, bornee par la fenetre."""
+    bloc = CSS[CSS.index(".topo-canvas {") : CSS.index(".topo-canvas svg")]
+    assert "560px" not in bloc
+    # Plus aucune hauteur imposee par la feuille de style : seul un plancher,
+    # pour l'etat vide.
+    assert "height:" not in bloc.replace("min-height:", "")
+    assert "min-height: 360px" in bloc
+    assert "TOPO_CADRE_MIN" in JS
+    assert "window.innerHeight - 200" in JS
+
+
+def test_l_arbre_offre_une_echelle_et_un_cadrage() -> None:
+    """Un reseau d'operateur deborde toujours de l'ecran : sans echelle, on
+    defile a l'aveugle sans jamais voir la forme d'ensemble."""
+    for ident in ("btn-topo-zoom-in", "btn-topo-zoom-out", "btn-topo-fit", "topo-zoom-level"):
+        assert f'id="{ident}"' in HTML
+    assert "function setTopoZoom(" in JS
+    assert "function topoFit(" in JS
+
+
+def test_le_glisser_deposer_tient_compte_de_l_echelle() -> None:
+    """A 50 %, un deplacement de 100 px a l'ecran vaut 200 px dans le dessin :
+    sans la division, la case fuirait le pointeur."""
+    bloc = JS[JS.index("function bindTopoDrag(") : JS.index("function topoDescendants(")]
+    assert "const z = topo.zoom || 1;" in bloc
+    assert "(e.clientX - start.x) / z" in bloc
+    assert "(e.clientX - rect.left) / z" in bloc
+
+
+def test_une_branche_se_replie_depuis_l_arbre() -> None:
+    """Replier est ce qui rend le reste lisible. La pastille porte le COMPTE de
+    ce qu'elle cache : fermer une branche ne doit pas faire disparaitre du
+    reseau en silence."""
+    assert "data-fold=" in JS
+    assert "function bindTopoFolds(" in JS
+    assert "topoDescendants(model, n.key).size" in JS
+
+
+def test_la_legende_ne_nomme_que_les_roles_presents() -> None:
+    """Une legende qui annonce des roles absents fait chercher des cases qui
+    n'existent pas."""
+    assert 'id="topo-legend"' in HTML
+    bloc = JS[JS.index("function renderTopoLegend(") : JS.index("function bindTopoFolds(")]
+    assert "n.replie" in bloc
+    assert "KIND_LABEL" in bloc
