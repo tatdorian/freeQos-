@@ -810,9 +810,19 @@ CREATE INDEX IF NOT EXISTS idx_flow_hosts_vlan ON flow_hosts (vlan_id);
 -- posee est "qu'est-ce que cet abonne atteint, et depuis quand", pas "combien
 -- d'octets a la minute pres vers ce serveur precis". Une ligne par couple, des
 -- compteurs cumules, une date de derniere vue -- et une purge par anciennete.
+-- LA CLE EST L'ADRESSE DU CLIENT, PAS SON IDENTIFIANT D'ABONNE.
+--
+-- L'observation est "cette adresse a joint celle-la". Le rattachement a une
+-- fiche d'abonne est une INTERPRETATION : elle peut manquer (machine non
+-- declaree) ou changer (session PPPoE qui se reconnecte ailleurs). Exiger un
+-- abonne rendait invisible tout ce qui n'en a pas -- un poste de supervision,
+-- un routeur, une camera, et le ping qu'on lance pour verifier que ca marche.
 CREATE TABLE IF NOT EXISTS flow_destinations (
-    subscriber_id BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+    client        INET NOT NULL,
     address       INET NOT NULL,
+    -- Nullable, et ON DELETE SET NULL : supprimer une fiche d'abonne ne doit
+    -- pas effacer la mesure de ce que son adresse a joint.
+    subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
     -- Dernier port de service vu (le plus petit des deux, cf. services/flows.py)
     -- et son protocole. Ils servent a expliquer la ligne, pas a la compter :
     -- un meme serveur peut etre atteint sur plusieurs ports.
@@ -824,11 +834,47 @@ CREATE TABLE IF NOT EXISTS flow_destinations (
     flows         BIGINT NOT NULL DEFAULT 0,
     first_seen    TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_seen     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (subscriber_id, address)
+    PRIMARY KEY (client, address)
 );
+
+-- Passage de l'ancienne forme (cle = abonne) a la nouvelle (cle = adresse du
+-- client). CREATE TABLE IF NOT EXISTS ne touche pas une table deja presente :
+-- sans ce bloc, une installation existante garderait la cle qui rend les
+-- machines non declarees invisibles.
+--
+-- La table est RECREEE plutot que migree colonne par colonne : les lignes
+-- anciennes n'ont pas d'adresse client a recuperer (elle n'etait pas stockee),
+-- donc rien ne serait conserve de toute facon. C'est de la mesure pure, avec
+-- une retention de quelques jours : elle se reconstruit a la fenetre suivante.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'flow_destinations' AND column_name = 'client'
+    ) THEN
+        RAISE NOTICE 'flow_destinations recree : la cle passe a (client, address).';
+        DROP TABLE flow_destinations;
+        CREATE TABLE flow_destinations (
+            client        INET NOT NULL,
+            address       INET NOT NULL,
+            subscriber_id BIGINT REFERENCES subscribers(id) ON DELETE SET NULL,
+            port          INTEGER NOT NULL DEFAULT 0,
+            protocol      INTEGER NOT NULL DEFAULT 0,
+            app           TEXT,
+            down_bytes    BIGINT NOT NULL DEFAULT 0,
+            up_bytes      BIGINT NOT NULL DEFAULT 0,
+            flows         BIGINT NOT NULL DEFAULT 0,
+            first_seen    TIMESTAMPTZ NOT NULL DEFAULT now(),
+            last_seen     TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (client, address)
+        );
+    END IF;
+END
+$$;
 
 CREATE INDEX IF NOT EXISTS idx_flow_destinations_seen ON flow_destinations (last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_flow_destinations_addr ON flow_destinations (address);
+CREATE INDEX IF NOT EXISTS idx_flow_destinations_sub  ON flow_destinations (subscriber_id);
 
 -- Ce qu'on sait d'une adresse atteinte.
 --

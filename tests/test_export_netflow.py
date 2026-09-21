@@ -78,6 +78,17 @@ def service(
     return export, collector
 
 
+def configure(**surcharges: str) -> dict[str, str]:
+    """Le reglage d'un routeur DEJA conforme a ce que le controleur veut."""
+    return {
+        "enabled": "true",
+        "interfaces": "all",
+        "active-flow-timeout": "1m",
+        "inactive-flow-timeout": "15s",
+        **surcharges,
+    }
+
+
 @pytest.fixture
 def client() -> FakeRouterOsClient:
     return FakeRouterOsClient()
@@ -99,7 +110,12 @@ async def test_un_routeur_sans_export_recoit_les_deux_commandes(
 
     reglage = next(a for a in plan.actions if a.path == PATH_FLOW)
     assert reglage.verb == "set"
-    assert reglage.fields == {"enabled": "yes", "interfaces": "all"}
+    assert reglage.fields["enabled"] == "yes"
+    assert reglage.fields["interfaces"] == "all"
+    # LE PIEGE LE PLUS COUTEUX : avec le defaut RouterOS (30 min), un flux
+    # encore actif -- un streaming en cours -- n'est exporte qu'une demi-heure
+    # plus tard. Tout se passe comme s'il n'existait pas.
+    assert reglage.fields["active-flow-timeout"] == "1m"
     # Un reglage global n'a pas de .id : en envoyer un ferait echouer une
     # commande parfaitement valide.
     assert reglage.target_id is None
@@ -137,7 +153,7 @@ async def test_un_routeur_joint_par_son_nom_n_impose_pas_d_adresse_source(
 async def test_un_routeur_deja_configure_ne_recoit_rien(client: FakeRouterOsClient) -> None:
     """LE CAS LE PLUS FREQUENT. Un plan non vide a chaque passage reecrirait la
     meme chose sur tout le parc, indefiniment."""
-    client.traffic_flow_row = {"enabled": "true", "interfaces": "all"}
+    client.traffic_flow_row = configure()
     client.traffic_flow_target_rows = [
         {".id": "*1", "dst-address": COLLECTEUR, "port": "2055", "version": "9"}
     ]
@@ -155,19 +171,21 @@ async def test_une_cible_vers_un_autre_collecteur_n_est_jamais_touchee(
 ) -> None:
     """Envoyer ses flux a deux endroits est un choix legitime. Le controleur
     ajoute le sien et laisse l'autre exactement en place."""
-    client.traffic_flow_row = {"enabled": "true", "interfaces": "all"}
+    client.traffic_flow_row = configure()
     client.traffic_flow_target_rows = [
         {".id": "*1", "dst-address": "198.51.100.7", "port": "2055", "version": "5"}
     ]
     export, collector = service(client)
     plan = export.plan_for(collector, await export.state_of(collector))
 
-    assert [a.verb for a in plan.actions] == ["add"]
-    assert not [a for a in plan.actions if a.verb in {"remove", "set"}]
+    cibles = [a for a in plan.actions if a.path == PATH_TARGET]
+    assert [a.verb for a in cibles] == ["add"]
+    # Rien ne modifie ni ne retire la cible de l'autre collecteur.
+    assert not [a for a in cibles if a.target_id]
 
 
 async def test_une_cible_a_la_mauvaise_version_est_alignee(client: FakeRouterOsClient) -> None:
-    client.traffic_flow_row = {"enabled": "true", "interfaces": "all"}
+    client.traffic_flow_row = configure()
     client.traffic_flow_target_rows = [
         {".id": "*7", "dst-address": COLLECTEUR, "port": "2055", "version": "5"}
     ]
@@ -183,7 +201,7 @@ async def test_une_cible_a_la_mauvaise_version_est_alignee(client: FakeRouterOsC
 async def test_un_export_coupe_a_la_main_est_rallume(client: FakeRouterOsClient) -> None:
     """La cible est la, mais l'export est coupe : rien ne sort du routeur, et
     l'interface le montrerait pourtant comme declare."""
-    client.traffic_flow_row = {"enabled": "false", "interfaces": "all"}
+    client.traffic_flow_row = configure(enabled="false")
     client.traffic_flow_target_rows = [
         {".id": "*1", "dst-address": COLLECTEUR, "port": "2055", "version": "9"}
     ]
@@ -324,3 +342,47 @@ async def test_une_passerelle_regarde_depuis_la_sortie_internet(
     await export.apply_all(author="test", dry_run=False)
 
     assert exporteurs.declares[0]["vantage"] == "edge"
+
+
+# ======================================================== les delais d'export
+
+
+async def test_un_export_trop_lent_est_corrige(client: FakeRouterOsClient) -> None:
+    """LE PIEGE LE PLUS COUTEUX DE TRAFFIC-FLOW.
+
+    Le defaut RouterOS n'exporte un flux ENCORE ACTIF qu'au bout de trente
+    minutes. Une session de streaming, une visio, un telechargement : rien
+    n'apparait avant une demi-heure, alors que c'est exactement ce que
+    l'exploitant regarde. Le routeur s'affiche pourtant comme configure.
+    """
+    client.traffic_flow_row = configure(**{"active-flow-timeout": "30m"})
+    client.traffic_flow_target_rows = [
+        {".id": "*1", "dst-address": COLLECTEUR, "port": "2055", "version": "9"}
+    ]
+    export, collector = service(client)
+    etat = await export.state_of(collector)
+    plan = export.plan_for(collector, etat)
+
+    assert etat.state == "a poser"
+    assert "30m" in etat.reason
+    reglage = next(a for a in plan.actions if a.path == PATH_FLOW)
+    assert reglage.fields == {"active-flow-timeout": "1m"}
+
+
+async def test_une_duree_relue_sous_une_autre_forme_ne_declenche_rien(
+    client: FakeRouterOsClient,
+) -> None:
+    """RouterOS relit une duree dans SA forme : ``1m`` peut revenir
+    ``00:01:00``. Comparer les chaines ferait reecrire le meme reglage a chaque
+    passage, indefiniment."""
+    client.traffic_flow_row = configure(
+        **{"active-flow-timeout": "00:01:00", "inactive-flow-timeout": "00:00:15"}
+    )
+    client.traffic_flow_target_rows = [
+        {".id": "*1", "dst-address": COLLECTEUR, "port": "2055", "version": "9"}
+    ]
+    export, collector = service(client)
+    etat = await export.state_of(collector)
+
+    assert etat.state == "pose"
+    assert export.plan_for(collector, etat).is_empty

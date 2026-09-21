@@ -517,3 +517,79 @@ def test_une_regle_complete_passe() -> None:
             "logins": ["dupont"],
         }
     )
+
+
+# =========================================================================
+# 6. CE QUI N'EST PAS UN ABONNE DECLARE COMPTE AUSSI
+# =========================================================================
+
+
+def test_une_machine_non_declaree_atteint_quand_meme_des_destinations() -> None:
+    """L'ANGLE MORT QUI SE VOYAIT DES LE PREMIER ESSAI.
+
+    Un ping lance depuis un poste de supervision, une camera, un routeur --
+    n'importe quoi qui n'est pas une fiche d'abonne -- ne laissait AUCUNE trace,
+    alors que le flux traversait bien le reseau et que le collecteur le voyait
+    passer. L'observation est "cette adresse a joint celle-la" ; le rattachement
+    a un abonne est une interpretation, pas une condition.
+    """
+    agg = agregateur()
+    # 10.9.9.9 n'est declare nulle part, mais il est dans l'espace client.
+    agg.add(flux("10.9.9.9", "45.57.12.34", octets=84, protocol=1), vantage="edge")
+
+    lot = agg.flush(MAINTENANT)
+    assert len(lot.destinations) == 1
+    destination = lot.destinations[0]
+    assert destination.client == "10.9.9.9"
+    assert destination.address == "45.57.12.34"
+    assert destination.subscriber_id is None
+    assert destination.up_bytes == 84
+
+
+def test_un_abonne_declare_reste_rattache_a_sa_fiche() -> None:
+    """Le rattachement n'est pas perdu au passage : il devient une donnee de
+    plus, pas la condition d'existence de la ligne."""
+    agg = agregateur()
+    agg.add(flux("45.57.12.34", "10.0.0.2", octets=5000), vantage="edge")
+
+    destination = agg.flush(MAINTENANT).destinations[0]
+    assert destination.client == "10.0.0.2"
+    assert destination.subscriber_id == 1
+
+
+def test_le_rattachement_arrive_apres_coup_sans_perdre_la_mesure() -> None:
+    """Une session PPPoE qui s'ouvre, une fiche saisie dans la minute : le
+    rattachement apparait APRES la premiere vue. Il est pris des qu'il existe,
+    et jamais efface par un flux ou il manquait."""
+    agg = agregateur()
+    agg.add(flux("10.0.0.2", "45.57.12.34", octets=100), vantage="edge")
+    # Le meme couple, vu sans index (par exemple un flux ou seul l'autre sens
+    # est rattache) : la ligne garde son abonne.
+    agg._dests[("10.0.0.2", "45.57.12.34")].subscriber_id = 1
+    agg.add(flux("10.0.0.2", "45.57.12.34", octets=100), vantage="edge")
+
+    assert agg.flush(MAINTENANT).destinations[0].subscriber_id == 1
+
+
+def test_une_machine_hors_de_l_espace_client_n_est_pas_suivie() -> None:
+    """SANS CE FILTRE, le transit ferait de ce tableau un annuaire d'internet :
+    chaque conversation entre deux adresses publiques qui traverse le reseau y
+    entrerait, et aucune ne concerne un client."""
+    agg = agregateur()
+    agg.add(flux("198.51.100.7", "45.57.12.34"), vantage="edge")
+    assert agg.flush(MAINTENANT).destinations == []
+
+
+def test_un_ping_icmp_est_retenu_comme_le_reste() -> None:
+    """Un ping n'a pas de port et pese quelques octets : rien de tout cela ne
+    doit le faire disparaitre. C'est le premier geste de verification de
+    n'importe quel exploitant."""
+    agg = agregateur()
+    agg.add(
+        flux("10.0.0.2", "45.57.12.34", protocol=1, src_port=0, dst_port=0, octets=84, packets=1),
+        vantage="edge",
+    )
+    destination = agg.flush(MAINTENANT).destinations[0]
+    assert destination.address == "45.57.12.34"
+    assert destination.app == "diagnostic"
+    assert destination.port == 0
