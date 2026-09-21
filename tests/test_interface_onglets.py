@@ -93,6 +93,47 @@ def test_l_onglet_services_existe_et_est_cable() -> None:
     assert "services: loadServices" in JS
 
 
+def test_l_onglet_api_existe_et_porte_la_creation_de_cles() -> None:
+    """LA SURFACE D'INTEGRATION A SON PROPRE ONGLET.
+
+    Les donnees sont poussees dans cette application depuis une autre interface :
+    la cle, les points d'entree et l'exemple d'appel sont ce qu'un integrateur
+    vient chercher. Les enterrer au fond des Reglages obligeait a savoir ou
+    regarder.
+    """
+    assert "api" in ONGLETS
+    assert 'id="view-api"' in HTML
+    assert "api: loadApi" in JS
+    assert 'id="key-form"' in HTML
+    assert 'id="api-endpoints"' in HTML
+
+
+def test_les_cles_ne_sont_plus_dans_les_reglages() -> None:
+    """Un formulaire a deux endroits, c'est un formulaire qu'on modifie a un
+    seul -- et l'autre se met a diverger sans que personne ne le voie."""
+    reglages = HTML[HTML.index('id="view-settings"') :]
+    assert 'id="key-form"' not in reglages
+
+
+def test_l_export_netflow_se_pose_depuis_l_onglet_trafic() -> None:
+    """Le message "aucun datagramme recu" n'a de valeur que s'il est suivi du
+    geste qui le corrige."""
+    assert 'id="flow-export"' in HTML
+    assert 'id="flow-export-apply"' in HTML
+    assert "applyFlowExport" in JS
+
+
+def test_l_interface_ne_fait_plus_la_lecon() -> None:
+    """DEMANDE EXPLICITE : plus de pages de prose au milieu de l'outil.
+
+    Les paragraphes d'explication et les blurbs sous les champs servaient de
+    documentation a l'endroit ou l'exploitant travaille. Ce qui reste nomme des
+    faits -- un etat, une erreur, une valeur -- et s'arrete la.
+    """
+    assert 'class="empty"' not in HTML
+    assert 'class="help"' not in HTML
+
+
 def test_l_onglet_services_porte_ses_trois_promesses() -> None:
     """Voir les connexions en cours, voir ce qui est atteint, et pouvoir
     restreindre. Les trois blocs doivent etre la : un formulaire de restriction

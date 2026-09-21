@@ -300,6 +300,10 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   pas bridé » qui n'ont rien à voir avec le contrôleur. Puis l'ajout d'un routeur ou d'une
   antenne **via leur API** ; chaque ajout **analyse la configuration et (re)construit
   l'arbre tout seul**. Inventaire des sites et routeurs en bas de page.
+- **API** — la surface d'intégration : créer une clé, la liste des points d'entrée
+  (`PUT /model/v1/services/{id}` et le reste du contrat Preseem) et un appel prêt à
+  copier. C'est ce qu'un système tiers vient chercher pour **pousser ses données dans
+  cette application** ; l'enterrer dans les Réglages obligeait à savoir où regarder.
 - **Services** — **qui se connecte à quoi**. Les connexions clients *en cours* (lues dans
   la mémoire du collecteur : la seule vue réellement en direct), les services d'où vient
   le trafic — Netflix, YouTube, Twitch, les CDN — et la fiche complète d'une adresse
@@ -312,6 +316,11 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
 > disponible sur `GET /api/v1/capacity`, pour un système tiers qui la consommait. Retirer
 > un onglet n'est pas supprimer une capacité — c'est retirer la place qu'il prenait dans
 > la navigation de tous les jours.
+
+**L'interface ne fait pas la leçon.** Les paragraphes d'explication et les blurbs sous
+les champs ont été retirés : ce qui reste nomme un fait — un état, une erreur, une
+valeur — et s'arrête là. Le *pourquoi* vit dans ce README et dans `/docs`, pas au
+milieu de l'écran où l'on travaille.
 
 Aucune dépendance externe : ni framework, ni CDN, ni chaîne de build. Les graphes sont du
 SVG généré à la main, pour que le contrôleur reste utilisable sur une VM de management
@@ -1433,7 +1442,20 @@ quotas, et la question « de quoi est fait le trafic qui sature ce secteur ».
    > En Docker, le port est publié **en UDP** (`2055:2055/udp`). Sans le suffixe `/udp`,
    > Docker publie du TCP et les datagrammes n'atteignent jamais le collecteur — sans la
    > moindre erreur nulle part, juste un onglet qui reste vide.
-2. Configurer l'export sur les équipements. Sur RouterOS 7 :
+2. **Rien à taper sur les routeurs.** Le contrôleur pose l'export lui-même —
+   `/ip/traffic-flow` et sa cible — sur chaque routeur de l'inventaire, et
+   revérifie périodiquement (`NETFLOW_EXPORT_INTERVAL_S`). *Trafic › Export sur les
+   routeurs* montre l'état et permet de simuler puis de poser à la demande.
+
+   L'adresse annoncée est calculée **par routeur** : celle que le système
+   utiliserait pour le joindre. Sur un contrôleur multi-interfaces, une valeur
+   unique serait fausse pour une partie du parc, et les flux partiraient dans le
+   vide sans que rien ne le signale.
+
+   Comme toute écriture, celle-ci passe par `ENFORCEMENT_ENABLED`, un plan
+   affichable et l'audit. Une cible déjà posée vers **un autre** collecteur n'est
+   jamais touchée : envoyer ses flux à deux endroits est un choix légitime.
+   À la main, si vous préférez :
 
    ```
    /ip/traffic-flow set enabled=yes interfaces=all
@@ -1441,7 +1463,8 @@ quotas, et la question « de quoi est fait le trafic qui sature ce secteur ».
    ```
 
 3. **Déclarer d'où chaque exporteur regarde**, dans *Trafic › Exporteurs* : `edge` (en
-   amont du cœur) ou `pop`. Un exporteur qui envoie sans être déclaré apparaît quand même,
+   amont du cœur) ou `pop`. Un routeur configuré automatiquement est déclaré dans la
+   foulée, avec le point de mesure déduit de son rôle. Un exporteur qui envoie sans être déclaré apparaît quand même,
    marqué `unknown` — un PoP mal configuré doit **se voir**, pas disparaître en silence.
 4. Si l'équipement échantillonne, le dire (`sampling_rate`). Sans cela, un routeur en
    1:1000 rapporte un millième du trafic réel, et **rien ne le montre** : les chiffres
@@ -1774,6 +1797,8 @@ le dit.
 | `PATCH` · `DELETE` | `/api/v1/traffic-rules/{id}` | Modifier / suspendre / supprimer une restriction |
 | `GET` | `/api/v1/traffic-rules/{id}/preview` | **Ce que la règle vise aujourd'hui** — elle grossit toute seule |
 | `POST` | `/api/v1/traffic-rules/apply` | Poser les restrictions (`dry_run` par défaut) |
+| `GET` | `/api/v1/netflow/export` | **Export NetFlow des routeurs** : qui exporte déjà, et vers quelle adresse |
+| `POST` | `/api/v1/netflow/export/apply` | Poser `/ip/traffic-flow` et sa cible (`dry_run` par défaut) |
 | `GET` · `POST` | `/api/v1/api-keys` | Clés d'API (le secret n'est rendu **qu'à la création**) |
 | `PATCH` · `DELETE` | `/api/v1/api-keys/{id}` | Désactiver / révoquer une clé |
 | `GET` | `/api/v1/status` · `/status/runs` · `/status/counters` | Exploitation |
@@ -1863,7 +1888,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 1280 tests, dont 1190 sans aucune infrastructure
+make test        # 1299 tests, dont 1209 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

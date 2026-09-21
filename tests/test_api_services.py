@@ -523,7 +523,7 @@ async def test_une_adresse_vue_est_nommee_au_passage_suivant() -> None:
 
 
 async def test_une_adresse_sans_nom_est_quand_meme_marquee_resolue() -> None:
-    """"Cette adresse n'a pas de nom" EST une reponse. Sans date de resolution,
+    """ "Cette adresse n'a pas de nom" EST une reponse. Sans date de resolution,
     la majorite d'internet -- qui n'a pas de nom inverse -- resterait en file et
     genererait une requete DNS perpetuelle."""
     file = FauxFile(["198.51.100.7"])

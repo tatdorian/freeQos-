@@ -328,6 +328,23 @@ class Settings(BaseSettings):
     # est purgee : ce qu'on a appris de l'adresse (son nom, son service) reste.
     netflow_destination_retention_s: float = 604_800.0
 
+    # --- Export NetFlow pose par le controleur lui-meme ---
+    #
+    # Sans export, le collecteur n'a rien a mesurer -- et poser deux commandes
+    # sur CHAQUE routeur a la main veut dire qu'un PoP oublie reste silencieux
+    # sans que rien ne le signale. Le controleur a deja un acces en ecriture
+    # gouverne et trace : il pose donc l'export lui-meme, sous les memes
+    # garde-fous (ENFORCEMENT_ENABLED, plan affichable, audit).
+    netflow_export_auto: bool = True
+    netflow_export_interval_s: float = 600.0
+    netflow_export_version: int = 9
+    netflow_export_interfaces: str = "all"
+    # Adresse annoncee aux routeurs. VIDE = deduite routeur par routeur, en
+    # demandant au noyau quelle adresse source il utiliserait pour joindre ce
+    # routeur. Sur un controleur multi-interfaces, une valeur saisie a la main
+    # serait fausse pour une partie du parc.
+    netflow_collector_address: str | None = None
+
     # --- ipfinder : qui se cache derriere une adresse atteinte ---
     #
     # Trois sources, par cout croissant :

@@ -147,8 +147,16 @@ class LibrouterosWriteClient:
                     resultat = chemin.add(**action.fields)
                     return {"id": str(resultat)}
                 if action.verb == "set":
-                    chemin.update(**{".id": action.target_id, **action.fields})
-                    return {"id": action.target_id}
+                    # SANS .id, C'EST UN REGLAGE GLOBAL et non une ligne d'une
+                    # collection : /ip/traffic-flow, par exemple, n'a qu'un seul
+                    # etat et RouterOS refuse un .id sur ce chemin. Envoyer un
+                    # .id vide echouerait la ou la commande est parfaitement
+                    # valide.
+                    if action.target_id:
+                        chemin.update(**{".id": action.target_id, **action.fields})
+                    else:
+                        chemin.update(**action.fields)
+                    return {"id": action.target_id or ""}
                 if action.verb == "remove":
                     chemin.remove(action.target_id)
                     return {"id": action.target_id}
