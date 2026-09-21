@@ -790,6 +790,125 @@ CREATE TABLE IF NOT EXISTS flow_hosts (
 CREATE INDEX IF NOT EXISTS idx_flow_hosts_seen ON flow_hosts (last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_flow_hosts_vlan ON flow_hosts (vlan_id);
 
+-- =============================================================================
+-- CE QU'UN CLIENT ATTEINT, ET QUI SE CACHE DERRIERE
+-- =============================================================================
+--
+-- NetFlow dit "10.20.0.10 a echange 4 Go avec 45.57.12.34". Tant que personne
+-- ne sait a qui appartient 45.57.12.34, ce chiffre ne repond a aucune question
+-- d'exploitation. Ces deux tables mettent un nom sur l'autre bout :
+--
+--   flow_destinations : QUI a parle a QUOI, combien, et par quel port.
+--   ip_intel          : ce qu'on sait de l'adresse atteinte (nom inverse,
+--                       service reconnu, organisation, AS, pays).
+--
+-- La separation est la meme que partout ailleurs : la MESURE s'efface avec la
+-- retention, la CONNAISSANCE se garde. Reapprendre a chaque purge que
+-- 45.57.12.34 est Netflix serait une requete DNS pour rien.
+
+-- Le couple (abonne, adresse atteinte). Pas de serie temporelle : la question
+-- posee est "qu'est-ce que cet abonne atteint, et depuis quand", pas "combien
+-- d'octets a la minute pres vers ce serveur precis". Une ligne par couple, des
+-- compteurs cumules, une date de derniere vue -- et une purge par anciennete.
+CREATE TABLE IF NOT EXISTS flow_destinations (
+    subscriber_id BIGINT NOT NULL REFERENCES subscribers(id) ON DELETE CASCADE,
+    address       INET NOT NULL,
+    -- Dernier port de service vu (le plus petit des deux, cf. services/flows.py)
+    -- et son protocole. Ils servent a expliquer la ligne, pas a la compter :
+    -- un meme serveur peut etre atteint sur plusieurs ports.
+    port          INTEGER NOT NULL DEFAULT 0,
+    protocol      INTEGER NOT NULL DEFAULT 0,
+    app           TEXT,
+    down_bytes    BIGINT NOT NULL DEFAULT 0,
+    up_bytes      BIGINT NOT NULL DEFAULT 0,
+    flows         BIGINT NOT NULL DEFAULT 0,
+    first_seen    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (subscriber_id, address)
+);
+
+CREATE INDEX IF NOT EXISTS idx_flow_destinations_seen ON flow_destinations (last_seen DESC);
+CREATE INDEX IF NOT EXISTS idx_flow_destinations_addr ON flow_destinations (address);
+
+-- Ce qu'on sait d'une adresse atteinte.
+--
+-- UNE LIGNE EST CREEE DES QU'UNE ADRESSE EST VUE POUR LA PREMIERE FOIS, avec
+-- resolved_at a NULL : c'est la file d'attente de l'enrichissement. Le job qui
+-- resout pioche exactement la-dedans, ce qui rend la decouverte DYNAMIQUE --
+-- une adresse nouvelle est nommee a la fenetre suivante, sans intervention.
+--
+-- 'attempts' existe pour qu'une adresse sans nom inverse (le cas le plus
+-- courant) ne soit pas redemandee indefiniment : au-dela d'un seuil on la
+-- laisse tranquille, et le verdict du catalogue -- s'il y en a un -- suffit.
+CREATE TABLE IF NOT EXISTS ip_intel (
+    address     INET PRIMARY KEY,
+    hostname    TEXT,
+    -- Cle du catalogue ('netflix', 'youtube'...) et sa famille ('streaming').
+    service     TEXT,
+    category    TEXT,
+    -- D'ou vient le verdict : 'catalogue', 'nom inverse', 'registre'.
+    source      TEXT NOT NULL DEFAULT 'inconnu',
+    org         TEXT,
+    asn         INTEGER,
+    country     TEXT,
+    network     TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    resolved_at TIMESTAMPTZ,
+    first_seen  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ip_intel_service ON ip_intel (service);
+CREATE INDEX IF NOT EXISTS idx_ip_intel_category ON ip_intel (category);
+-- La file d'attente de l'enrichissement : les adresses jamais resolues, les
+-- plus recentes d'abord. Index partiel -- il ne porte que ce qui reste a faire.
+CREATE INDEX IF NOT EXISTS idx_ip_intel_pending ON ip_intel (last_seen DESC)
+    WHERE resolved_at IS NULL;
+
+-- =============================================================================
+-- RESTRICTIONS DE TRAFIC
+-- =============================================================================
+--
+-- Une regle dit : "ce trafic-la, pour ces clients-la, est bloque (ou plafonne
+-- a tant)". Elle est DECLARATIVE : rien n'est ecrit sur un routeur par le seul
+-- fait de l'enregistrer. Comme pour les files, l'ecriture passe par un plan
+-- affichable, le drapeau ENFORCEMENT_ENABLED et l'audit.
+--
+-- CE QUI REND UNE REGLE VIVANTE. Sa cible n'est pas une liste d'adresses figee
+-- mais un CRITERE ('netflix', ou la famille 'streaming'). L'ensemble d'adresses
+-- est recalcule a chaque reconciliation depuis le catalogue ET depuis ce que
+-- NetFlow a decouvert : une adresse nouvelle rejoint donc la liste posee sur le
+-- routeur toute seule, sans que personne ne reecrive la regle.
+CREATE TABLE IF NOT EXISTS traffic_rules (
+    id              SERIAL PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    -- 'block' = rejet ; 'limit' = plafond de debit sur ce trafic seulement.
+    action          TEXT NOT NULL DEFAULT 'block'
+                    CHECK (action IN ('block', 'limit')),
+    limit_down_mbps DOUBLE PRECISION,
+    limit_up_mbps   DOUBLE PRECISION,
+    -- Criteres. Tous facultatifs, mais au moins un doit designer du trafic :
+    -- sinon la regle viserait TOUT, ce que le service refuse d'enregistrer.
+    services        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    categories      JSONB NOT NULL DEFAULT '[]'::jsonb,
+    prefixes        JSONB NOT NULL DEFAULT '[]'::jsonb,
+    protocol        TEXT,
+    ports           TEXT,
+    -- 'all' = tous les clients du routeur ; 'subscribers' = ceux listes.
+    scope           TEXT NOT NULL DEFAULT 'all'
+                    CHECK (scope IN ('all', 'subscribers')),
+    logins          JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Routeurs vises. Vide = tous ceux de l'inventaire actif.
+    routers         JSONB NOT NULL DEFAULT '[]'::jsonb,
+    enabled         BOOLEAN NOT NULL DEFAULT TRUE,
+    note            TEXT,
+    last_applied_at TIMESTAMPTZ,
+    last_state      TEXT,
+    last_detail     TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- -----------------------------------------------------------------------------
 -- Hypertables + politiques (uniquement si TimescaleDB est disponible)
 -- -----------------------------------------------------------------------------

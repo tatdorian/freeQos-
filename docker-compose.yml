@@ -36,6 +36,11 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-qos}:${POSTGRES_PASSWORD:-changeme}@timescaledb:5432/${POSTGRES_DB:-qos}
     ports:
       - "${APP_PORT:-8000}:8000"
+      # Ecoute NetFlow (v5, v9, IPFIX). EN UDP, et c'est le piege classique :
+      # sans le suffixe /udp, Docker publie du TCP et les datagrammes exportes
+      # par les routeurs n'atteignent jamais le collecteur -- sans la moindre
+      # erreur nulle part, juste un onglet Trafic qui reste vide.
+      - "${NETFLOW_PORT:-2055}:2055/udp"
     volumes:
       # Inventaire des routeurs monte en lecture seule (les mots de passe restent en env).
       - ./config:/app/config:ro

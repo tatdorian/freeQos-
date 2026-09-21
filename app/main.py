@@ -31,6 +31,7 @@ from app.api import (
     routers_admin,
     shaping,
     static_clients,
+    traffic_rules,
     usage_v1,
 )
 from app.api import (
@@ -104,6 +105,27 @@ depuis un seul (``NETFLOW_ACCOUNTING_VANTAGE``). Ce que les flux montrent et qui
 n'est rattache a aucune fiche va dans une liste d'aide a la saisie -- jamais dans
 l'inventaire.
 
+**Qui se connecte a quoi (ipfinder)** : pour chaque flux rattache a un abonne,
+l'adresse DISTANTE est retenue, puis NOMMEE -- catalogue de blocs publies embarque
+(Netflix, YouTube, Twitch, les CDN...), nom inverse (PTR), et registre (RDAP,
+coupe par defaut). Aucune inspection de contenu : le trafic est chiffre, il le
+reste. Une adresse jamais vue entre en file d'attente au moment ou un client
+l'atteint et est nommee au passage suivant : la decouverte est DYNAMIQUE, rien
+n'est a declarer. ``GET /netflow/connections`` montre la fenetre EN COURS (la
+seule vue en direct), ``/netflow/destinations`` ce qui est atteint sur la
+periode, et ``/netflow/destinations/{ip}`` la fiche complete d'une adresse.
+
+**Restrictions de trafic** (``/traffic-rules``) : bloquer ou plafonner un trafic
+designe par un SERVICE ou une FAMILLE ("netflix", "streaming"), pour tous les
+clients ou pour certains. Une regle n'est pas une liste d'adresses figee : son
+ensemble est recalcule a chaque reconciliation depuis le catalogue ET depuis ce
+que NetFlow a decouvert, donc un serveur nouveau rejoint la liste posee sur le
+routeur tout seul. L'ecriture pose une ``/ip/firewall/address-list`` et, selon
+l'action, des regles ``filter`` (rejet) ou ``mangle`` + ``queue tree`` (plafond).
+Elle passe par le MEME chemin que les files : ``ENFORCEMENT_ENABLED``, plan
+affichable, audit dans ``enforcement_audit``, et rien qui ne porte pas
+``freeqos:managed`` n'est touche.
+
 **API publique, contrat compatible Preseem** (``/model/v1`` et ``/usage/v1``,
 cle en authentification Basic) : cinq collections -- ``accounts``, ``packages``,
 ``sites``, ``access_points``, ``services`` -- en ``GET``, ``PUT /{id}`` idempotent
@@ -153,6 +175,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     app.include_router(pop_census.router, prefix=settings.api_prefix)
     app.include_router(settings_api.router, prefix=settings.api_prefix)
     app.include_router(netflow.router, prefix=settings.api_prefix)
+    app.include_router(traffic_rules.router, prefix=settings.api_prefix)
     app.include_router(api_keys.router, prefix=settings.api_prefix)
     # API PUBLIQUE. Volontairement HORS du prefixe d'exploitation : son chemin
     # est le contrat que les systemes de facturation connaissent deja

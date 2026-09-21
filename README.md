@@ -300,12 +300,18 @@ Cinq vues, thème sombre, à `http://localhost:8000/` :
   pas bridé » qui n'ont rien à voir avec le contrôleur. Puis l'ajout d'un routeur ou d'une
   antenne **via leur API** ; chaque ajout **analyse la configuration et (re)construit
   l'arbre tout seul**. Inventaire des sites et routeurs en bas de page.
-- **Capacité** — la seule page qui regarde la **durée** plutôt que l'instant : **à
-  renforcer** (ce qui n'a plus de marge *en moyenne*, liens et abonnés séparément), ce qui
-  est **vendu** sur chaque PoP rapporté à ce qui le **porte**, l'occupation des liens avec
-  leur **heure de pointe**, les abonnés classés par **volume** consommé (pas par débit de
-  l'instant), et les **lignes muettes** — déclarées, mais plus rien depuis des jours. Ce
-  sont les chiffres qui servent à dimensionner, pas à dépanner. En lecture seule.
+- **Services** — **qui se connecte à quoi**. Les connexions clients *en cours* (lues dans
+  la mémoire du collecteur : la seule vue réellement en direct), les services d'où vient
+  le trafic — Netflix, YouTube, Twitch, les CDN — et la fiche complète d'une adresse
+  atteinte : nom inverse, service **et à quel titre**, organisation, AS, pays, et la liste
+  nominative des abonnés qui la joignent. C'est aussi d'ici que se posent les
+  **restrictions de trafic**, parce que décider de brider un trafic se fait en le
+  regardant. Cf. [Qui se connecte à quoi](#qui-se-connecte-à-quoi-ipfinder).
+
+> L'onglet **Capacité** a été retiré de la navigation : la lecture qu'il servait reste
+> disponible sur `GET /api/v1/capacity`, pour un système tiers qui la consommait. Retirer
+> un onglet n'est pas supprimer une capacité — c'est retirer la place qu'il prenait dans
+> la navigation de tous les jours.
 
 Aucune dépendance externe : ni framework, ni CDN, ni chaîne de build. Les graphes sont du
 SVG généré à la main, pour que le contrôleur reste utilisable sur une VM de management
@@ -1415,8 +1421,18 @@ quotas, et la question « de quoi est fait le trafic qui sature ce secteur ».
 
 ### Mettre en route
 
-1. Ouvrir le collecteur : `NETFLOW_ENABLED=true` (puis redémarrer — ouvrir une socket
-   n'est pas un réglage qu'on bascule depuis une page web). Port par défaut : `2055/udp`.
+1. Rien à ouvrir : `NETFLOW_ENABLED` vaut **`true` par défaut**. Le collecteur *écoute* —
+   il n'émet rien, n'interroge aucun équipement, n'ajoute aucune charge au réseau ; tant
+   qu'aucun routeur n'exporte vers lui, il ne fait rien de plus qu'ouvrir un port UDP.
+   L'inverse coûtait cher : un datagramme non reçu ne se rattrape pas, et le trafic était
+   perdu **définitivement** pendant tout le temps où personne ne s'apercevait que le
+   drapeau existait. Port par défaut : `2055/udp` (le trio `ENABLED`/`BIND`/`PORT` reste
+   dans l'environnement — ouvrir une socket n'est pas un réglage qu'on bascule depuis une
+   page web).
+
+   > En Docker, le port est publié **en UDP** (`2055:2055/udp`). Sans le suffixe `/udp`,
+   > Docker publie du TCP et les datagrammes n'atteignent jamais le collecteur — sans la
+   > moindre erreur nulle part, juste un onglet qui reste vide.
 2. Configurer l'export sur les équipements. Sur RouterOS 7 :
 
    ```
@@ -1450,6 +1466,138 @@ clair plutôt qu'un écran vide.
 > données sont illisibles sans le modèle qui les décrit, et ce modèle arrive dans un
 > datagramme séparé, réémis toutes les quelques minutes. Un compteur qui monte **sans
 > cesse** veut dire que l'exporteur n'envoie jamais ses modèles (`template-refresh`).
+
+---
+
+## Qui se connecte à quoi (ipfinder)
+
+NetFlow dit « 10.20.0.10 a échangé 4 Go avec 45.57.12.34 ». Personne ne sait de tête à qui
+appartient 45.57.12.34 : **sans un nom, ce chiffre ne répond à aucune question
+d'exploitation**. L'onglet *Services* met un nom sur l'autre bout — Netflix, YouTube,
+Twitch, un CDN, un fournisseur de nuage — et c'est de là que se posent les restrictions.
+
+> **Aucune inspection de contenu.** Le trafic est chiffré, il le reste. On ne regarde que
+> l'adresse, son nom inverse et — si vous l'autorisez — ce que le registre en dit.
+
+### Trois sources, une seule est gratuite
+
+| Source | Ce qu'elle donne | Ce qu'elle coûte |
+|---|---|---|
+| **Catalogue embarqué** | Les blocs publiés par les opérateurs de service eux-mêmes (Netflix, Google, Twitch, Meta, les CDN…) | Rien. Instantané, et **fonctionne sur une VM coupée d'internet** |
+| **Nom inverse (PTR)** | Suit un service qui **change de préfixe**, distingue YouTube du reste de Google, reconnaît un cache hébergé chez vous | Une requête DNS par adresse **nouvelle**, mise en cache ensuite |
+| **RDAP** | Organisation, numéro d'AS, pays, bloc annoncé | Un appel HTTP sortant. **Coupé par défaut** : c'est le seul trafic que ce contrôleur émettrait vers l'extérieur |
+
+L'ordre de priorité n'est pas l'ordre du tableau : **le nom inverse l'emporte sur le bloc**.
+Un cache Open Connect hébergé chez l'opérateur n'est dans aucun bloc publié — et c'est
+justement le serveur qui porte le plus de trafic. Le champ `source` dit à quel titre
+l'adresse a été nommée, et l'interface l'affiche à côté du nom.
+
+### La découverte est dynamique, rien n'est à déclarer
+
+1. Un client atteint une adresse. Le collecteur l'**inscrit** (`ip_intel`, `resolved_at`
+   à NULL) — il ne résout rien lui-même : un résolveur lent ferait perdre des datagrammes,
+   et un datagramme UDP perdu ne se rattrape pas.
+2. Une boucle (`IPFINDER_INTERVAL_S`, 30 s par défaut) vient chercher un nom, par lots
+   bornés, **les adresses les plus récentes d'abord**.
+3. Si l'adresse relève d'un service restreint, la réconciliation l'ajoute à la liste posée
+   sur le routeur au passage suivant. **Personne ne réécrit la règle.**
+
+Une adresse **sans** nom inverse est quand même marquée résolue : « cette adresse n'a pas
+de nom » est une réponse, et la majorité d'internet est dans ce cas. Sans cela, elle serait
+redemandée à chaque passage, pour toujours (`IPFINDER_MAX_ATTEMPTS` borne les tentatives).
+
+### Ce que l'onglet montre
+
+| Bloc | Ce qu'il répond | D'où il vient |
+|---|---|---|
+| **Connexions en cours** | « Qu'est-ce que ce client fait *là, maintenant* » | L'agrégat **en mémoire** du collecteur : la seule vue réellement en direct. Elle se vide à chaque écriture de fenêtre puis se remplit — ce n'est pas une panne |
+| **De quels services vient le trafic** | « Qui fait du streaming sur ce secteur » | La base, sur la période choisie |
+| **Adresses atteintes** | La fiche complète d'une adresse : nom inverse, service **et à quel titre**, organisation, AS, pays, et **la liste nominative des abonnés qui la joignent** | La base + le catalogue, recalculé à la volée |
+
+La part `non identifié` est affichée **comme les autres**. Une page qui ne montrerait que
+ce qu'elle sait nommer laisserait croire que tout est reconnu, et la part réellement
+inconnue — souvent la plus grosse — disparaîtrait de la discussion.
+
+> **Un CDN n'est pas un service.** Cloudflare, Akamai et Fastly servent indifféremment un
+> site de recettes, un catalogue vidéo et une mise à jour système. Ils portent la famille
+> `cdn` et **jamais** `streaming` : une restriction posée dessus doit être un choix
+> conscient, pas une surprise.
+
+---
+
+## Restrictions de trafic
+
+Bloquer ou plafonner un trafic désigné par un **service** ou une **famille** — pour tous
+les clients, ou pour certains.
+
+```bash
+# Plafonner le streaming à 3 Mbps pour deux clients
+curl -s -X POST localhost:8000/api/v1/traffic-rules -H 'content-type: application/json' -d '{
+  "name": "Streaming bridé - forfait éco",
+  "action": "limit", "limit_down_mbps": 3,
+  "categories": ["streaming"],
+  "scope": "subscribers", "logins": ["dupont", "martin"]
+}'
+
+# Ce que la règle vise AUJOURD'HUI (elle grossit toute seule)
+curl -s localhost:8000/api/v1/traffic-rules/1/preview
+
+# Montrer le plan sans rien écrire, puis poser
+curl -s -X POST localhost:8000/api/v1/traffic-rules/apply
+curl -s -X POST 'localhost:8000/api/v1/traffic-rules/apply?dry_run=false'
+```
+
+### Une règle est un critère, pas une photo
+
+L'ensemble d'adresses est **recalculé à chaque passage**, depuis deux sources qui se
+complètent et dont aucune ne suffit :
+
+- les **blocs publiés** couvrent les serveurs qu'aucun client n'a encore atteints. Sans
+  eux, la toute première connexion vers chaque nouveau serveur passerait ;
+- les **adresses découvertes** couvrent ce qui est *hors* des blocs publiés — un cache
+  hébergé chez vous, un serveur loué chez un tiers. Sans elles, la règle laisserait passer
+  exactement le trafic le plus volumineux.
+
+Une adresse déjà contenue dans un bloc retenu n'est pas ajoutée : elle ne changerait rien
+et ferait grossir une liste que le routeur parcourt **à chaque paquet**
+(`RESTRICTION_ADDRESS_LIMIT` la borne).
+
+### Ce qui est réellement posé sur le routeur
+
+| Objet | Rôle |
+|---|---|
+| `/ip/firewall/address-list` | Les adresses du service visé. **Le seul objet qui bouge tout seul** : la réconciliation y pousse ce que NetFlow a découvert, et en retire ce qui n'en relève plus |
+| `/ip/firewall/filter` × 2 | *Bloquer* : une règle `drop` **par sens**. Une seule laisserait passer le retour — pour du streaming, cela revient à ne rien bloquer |
+| `/ip/firewall/mangle` + `/queue/tree` × 2 | *Plafonner* : marquage puis file accrochée à `global`. `/queue/simple` ne vise qu'une destination par file : plafonner cinquante blocs demanderait cinquante files par client |
+
+**Deux limites assumées.** L'**IPv6 n'est pas posé** — `/ip/firewall/address-list` est une
+table IPv4 ; les préfixes IPv6 d'une règle sont écartés et **le plan le dit** plutôt que de
+faire semblant. Et rien qui ne porte pas `freeqos:managed` n'est touché : une règle de
+pare-feu écrite par l'exploitant, une liste utilisée par son routage, le contrôleur ne les
+lit même pas.
+
+### Les garde-fous sont ceux des files, pas d'autres
+
+- **Enregistrer une règle n'écrit rien.** La pose est un geste séparé. Croire qu'un trafic
+  est bloqué alors qu'il ne l'est pas est l'erreur la plus coûteuse que ce produit puisse
+  induire : la colonne *dernière pose* est la seule chose qui distingue une règle **saisie**
+  d'une règle **posée**.
+- L'écriture passe par `ShapingService.apply` : donc par `ENFORCEMENT_ENABLED`, par le
+  coupe-circuit sur le nombre d'actions, et par l'audit `enforcement_audit`.
+- **Une règle sans critère est refusée à la saisie.** Sans service, famille ni bloc, elle
+  viserait tout internet — sur un routeur de sortie, l'appliquer couperait le réseau
+  entier, et la règle aurait l'air parfaitement normale dans la liste.
+- Suspendre une règle la **lève** réellement : elle n'est plus résolue, donc la
+  réconciliation retire d'elle-même ce qu'elle avait posé.
+- Supprimer une règle **ne nettoie pas le routeur en douce** : la réconciliation s'en charge
+  au passage suivant, ou tout de suite si vous le demandez. Supprimer une fiche ne doit pas
+  déclencher une écriture sur des équipements de production sans que personne ne l'ait
+  demandée.
+
+### Aucune règle ne se crée toute seule
+
+Voir passer du streaming ne dit pas qu'il faut le brider : c'est une décision commerciale,
+pas une déduction technique. Le contrôleur mesure, nomme et propose — il ne décide pas.
 
 ---
 
@@ -1616,6 +1764,16 @@ le dit.
 | `GET` | `/api/v1/netflow/subscribers/{id}/series` | Volume d'un abonné dans le temps |
 | `GET` | `/api/v1/netflow/hosts` | Adresses vues, rattachées à **aucune** fiche (aide à la saisie) |
 | `POST` | `/api/v1/netflow/flush` | Écrire la fenêtre en cours tout de suite |
+| `GET` | `/api/v1/netflow/connections` | **Connexions clients en cours** : la fenêtre en mémoire, la seule vue en direct |
+| `GET` | `/api/v1/netflow/destinations` | Adresses atteintes sur la période, déjà nommées, + la répartition par service |
+| `GET` | `/api/v1/netflow/destinations/{ip}` | **Fiche d'une adresse** : nom inverse, service et à quel titre, organisation, AS, pays, et qui la joint |
+| `POST` | `/api/v1/netflow/destinations/{ip}/resolve` | Relancer l'analyse d'une adresse |
+| `GET` | `/api/v1/netflow/catalogue` | Les services que le contrôleur sait reconnaître, et ce qu'il faut savoir avant de restreindre |
+| `GET` | `/api/v1/netflow/intel` · `POST /intel/run` | État de l'identification / nommer les adresses en attente tout de suite |
+| `GET` · `POST` | `/api/v1/traffic-rules` | **Restrictions de trafic** : lire / enregistrer une règle (**n'écrit rien sur les routeurs**) |
+| `PATCH` · `DELETE` | `/api/v1/traffic-rules/{id}` | Modifier / suspendre / supprimer une restriction |
+| `GET` | `/api/v1/traffic-rules/{id}/preview` | **Ce que la règle vise aujourd'hui** — elle grossit toute seule |
+| `POST` | `/api/v1/traffic-rules/apply` | Poser les restrictions (`dry_run` par défaut) |
 | `GET` · `POST` | `/api/v1/api-keys` | Clés d'API (le secret n'est rendu **qu'à la création**) |
 | `PATCH` · `DELETE` | `/api/v1/api-keys/{id}` | Désactiver / révoquer une clé |
 | `GET` | `/api/v1/status` · `/status/runs` · `/status/counters` | Exploitation |
@@ -1657,7 +1815,9 @@ et `hidden` portent la disposition posée à la main dans l'éditeur d'arbre),
 `subscriber_attachments`
 (abonné → secteur radio), `shaping_policies` (débits imposés à la main),
 `enforcement_audit` (journal des commandes envoyées), `runtime_flags` (drapeaux
-basculables à chaud, dont l'autorisation d'écriture).
+basculables à chaud, dont l'autorisation d'écriture), `traffic_rules` (les restrictions
+telles qu'elles sont **saisies** : un critère — un service, une famille, des blocs — et
+jamais une liste d'adresses figée).
 
 Le schéma comporte une section de **migrations de colonnes** (`ADD COLUMN IF NOT EXISTS`) :
 `CREATE TABLE IF NOT EXISTS` ne touche pas une table déjà présente, une installation
@@ -1674,6 +1834,20 @@ entrait dans la table.
 | `backhaul_metrics` | `ts`, `backhaul_id`, capacité (globale/down/up), `signal_dbm`, `airtime_pct`, MCS, `online` |
 | `interface_metrics` | `ts`, `router_name`, `interface`, débits et compteurs du port, `running`, `capacity_mbps` — la source du débit des liens |
 | `qoe_scores` | `ts`, `subscriber_id`, `score`, `components` — phase 3 |
+| `flow_metrics` · `flow_app_metrics` | Volume par abonné et par usage, **avec le point de mesure dans la clé** |
+
+**Ce que les clients atteignent**, en dehors des hypertables parce que la question posée
+n'est pas « combien d'octets à la minute près vers ce serveur » mais « qu'est-ce que cet
+abonné atteint, et depuis quand » :
+
+| Table | Contenu | Durée de vie |
+|---|---|---|
+| `flow_destinations` | Le couple (abonné, adresse atteinte) : volumes cumulés, dernier port et protocole vus, `first_seen`/`last_seen` | **Mesure** : purgée par `NETFLOW_DESTINATION_RETENTION_S` |
+| `ip_intel` | Ce qu'on sait de l'adresse : nom inverse, service, famille, organisation, AS, pays, et **à quel titre** on le sait | **Connaissance** : conservée. Réapprendre à chaque purge que 45.57.12.34 est Netflix serait une requête DNS pour rien |
+
+Une ligne `ip_intel` est créée avec `resolved_at` à NULL **au moment où un client atteint
+l'adresse** : c'est la file d'attente de l'identification, et c'est ce qui rend la
+découverte dynamique sans que personne n'ait rien à déclarer.
 
 Deux vues, `subscriber_latest` et `backhaul_latest`, donnent le dernier point par série.
 
@@ -1689,7 +1863,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 803 tests, dont 742 sans aucune infrastructure
+make test        # 1280 tests, dont 1190 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et
@@ -1709,6 +1883,15 @@ premier échec, idempotence du plan (rejouer ne produit rien), refus d'un boost 
 échéance, retour automatique au plan après expiration, et lecture des droits réels du
 compte (y compris le cas indéterminable, qui ne doit pas bloquer), conversion des unités
 et idempotence sur les petits débits (RouterOS relit `512k` là où on a écrit `512000`).
+
+Côté **services atteints et restrictions**, la couverture porte sur les quatre façons de
+se tromper qui coûtent le plus cher : nommer une adresse à tort (le suffixe de nom inverse
+doit tomber sur une frontière de label, un CDN ne devient jamais « streaming » tout seul),
+prendre l'infrastructure pour une destination (deux abonnés qui se parlent n'en sont une
+pour personne), poser une règle dont le sens est inversé — elle s'afficherait comme posée
+sans jamais rencontrer un paquet — et laisser une restriction figée : une adresse
+nouvellement découverte doit **entrer** dans la liste du routeur, et une adresse qui n'en
+relève plus doit en **sortir**.
 
 ### Tests d'intégration (optionnels)
 

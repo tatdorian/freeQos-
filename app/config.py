@@ -287,7 +287,14 @@ class Settings(BaseSettings):
     # mesure ne lui ajoute aucune charge, ni a l'aller ni au retour. C'est tout
     # l'interet du flux exporte -- un miroir de port recopierait chaque octet
     # sur le lien de collecte, dans les deux sens.
-    netflow_enabled: bool = False
+    # ACTIVE PAR DEFAUT. Le collecteur ECOUTE : il n'emet rien, n'interroge
+    # aucun equipement et n'ajoute aucune charge au reseau. Tant qu'aucun
+    # routeur n'exporte vers lui, il ne fait rien de plus qu'ouvrir un port UDP
+    # -- alors qu'a l'inverse, laisser l'ecoute coupee par defaut faisait perdre
+    # DEFINITIVEMENT le trafic exporte pendant tout le temps ou personne ne
+    # s'apercevait que le drapeau existait. Un datagramme non recu ne se
+    # rattrape pas.
+    netflow_enabled: bool = True
     netflow_bind: str = "0.0.0.0"  # noqa: S104 - un collecteur ecoute sur tous les liens
     netflow_port: int = 2055
     # Fin de fenetre : on ecrit UNE ligne par abonne et par fenetre, pas une par
@@ -308,6 +315,53 @@ class Settings(BaseSettings):
     netflow_track_hosts: bool = True
     netflow_host_limit: int = 500
     netflow_host_retention_s: float = 86_400.0
+    # Retenir l'adresse DISTANTE atteinte par chaque abonne. C'est ce qui
+    # alimente "qui se connecte a quoi" (onglet Services), l'enrichissement, et
+    # de la les restrictions de trafic. Le couper ne touche PAS a la mesure de
+    # volume par abonne, qui continue exactement comme avant.
+    netflow_track_destinations: bool = True
+    # Plafond de destinations retenues par fenetre. Un seul abonne en p2p peut
+    # toucher des milliers d'adresses en une minute ; sans plafond, une fenetre
+    # de collecte deviendrait une rafale d'ecritures en base.
+    netflow_destination_limit: int = 2_000
+    # Au-dela, une destination qui ne repond plus est oubliee. SEULE LA MESURE
+    # est purgee : ce qu'on a appris de l'adresse (son nom, son service) reste.
+    netflow_destination_retention_s: float = 604_800.0
+
+    # --- ipfinder : qui se cache derriere une adresse atteinte ---
+    #
+    # Trois sources, par cout croissant :
+    #   1. le CATALOGUE embarque (blocs publies par les operateurs de service).
+    #      Gratuit, instantane, fonctionne sans acces internet ;
+    #   2. le NOM INVERSE (PTR). Une requete DNS par adresse nouvelle. C'est ce
+    #      qui suit un service qui change de prefixe, et ce qui distingue
+    #      YouTube du reste de Google ;
+    #   3. RDAP. Organisation, AS, pays. COUPE PAR DEFAUT : c'est le seul appel
+    #      sortant que ce controleur emettrait, et un reseau souverain a le
+    #      droit de ne pas en vouloir.
+    ipfinder_enabled: bool = True
+    ipfinder_rdns_enabled: bool = True
+    ipfinder_rdap_enabled: bool = False
+    ipfinder_rdap_url: str = "https://rdap.org/ip/"
+    ipfinder_interval_s: float = 30.0
+    ipfinder_batch_size: int = 40
+    ipfinder_concurrency: int = 8
+    ipfinder_timeout_s: float = 2.0
+    # Au-dela, on cesse de redemander : la majorite d'internet n'a pas de nom
+    # inverse, et insister ferait une requete perpetuelle par adresse muette.
+    ipfinder_max_attempts: int = 3
+
+    # --- Restrictions de trafic ---
+    #
+    # La boucle qui rend une regle VIVANTE : elle recalcule les adresses de
+    # chaque restriction (catalogue + ce que NetFlow a decouvert) et pousse la
+    # difference sur les routeurs. Soumise a ENFORCEMENT_ENABLED comme toute
+    # ecriture ; elle ne fait rien tant qu'il est faux.
+    restrictions_interval_s: float = 300.0
+    # Plafond d'adresses par regle. Une liste que le routeur parcourt a chaque
+    # paquet ne doit pas grossir sans limite parce qu'un service a beaucoup de
+    # serveurs.
+    restriction_address_limit: int = 5_000
 
     # --- Sonde de latence (phase 3 amorcee) ---
     # DESACTIVEE par defaut : c'est une sonde ACTIVE (/ping depuis le routeur),

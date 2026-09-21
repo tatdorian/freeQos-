@@ -2917,185 +2917,633 @@ async function toggleRouter(id) {
 }
 
 
-/* ------------------------------------------------------------- capacite */
+/* -------------------------------------------------------------- services */
 
-/** Capacite : ce qui est vendu, ce qui porte, et l'usage entre les deux.
+/** QUI SE CONNECTE A QUOI.
  *
- *  Le reste de l'interface regarde l'INSTANT. Cette page regarde la DUREE :
- *  survente par PoP, occupation des liens et leur heure de pointe, volumes
- *  consommes, lignes muettes. Quatre questions qui servent a dimensionner, et
- *  dont la donnee dormait en base sans que personne ne la croise. */
-const CAPACITY_VERDICTS = {
-  'confortable': 'ok',
-  'a surveiller': 'warn',
-  'tendu': 'crit',
-  'capacite inconnue': '',
-  'rien de vendu': '',
+ *  Le reste de l'interface compte des octets. Cette page nomme l'autre bout :
+ *  quel service, quelle famille, quelle organisation. Elle ne lit jamais le
+ *  contenu -- le trafic est chiffre, il le reste -- seulement l'adresse, son
+ *  nom inverse et, si l'exploitant l'a autorise, le registre.
+ *
+ *  ELLE EST AUSSI L'ENDROIT OU L'ON RESTREINT, et ce n'est pas un hasard :
+ *  decider de brider un trafic se fait en regardant ce trafic, pas dans un
+ *  onglet separe ou l'on aurait perdu de vue ce que la regle designe. */
+const SVC = {
+  minutes: 60,
+  category: '',
+  search: '',
+  catalogue: null,
+  detail: null,
 };
-const CAPACITY_ETATS = { 'libre': 'ok', 'charge': 'warn', 'sature': 'crit', 'capacite inconnue': '' };
 
-function capacityBadge(libelle, table) {
-  return '<span class="badge ' + (table[libelle] || '') + '">' + esc(libelle) + '</span>';
+/** Familles, avec la teinte qui leur va. Le streaming est la raison d'etre de
+ *  cette page : il porte la couleur la plus visible. */
+const SVC_CATEGORIES = {
+  'streaming': 'crit',
+  'reseaux sociaux': 'warn',
+  'jeux': 'warn',
+  'voix / visio': 'ok',
+  'cdn': '',
+  'nuage': '',
+  'mises a jour': '',
+  'dns': '',
+  'messagerie': '',
+};
+
+const PROTOCOLES = { 1: 'icmp', 6: 'tcp', 17: 'udp', 47: 'gre', 50: 'esp', 58: 'icmpv6' };
+
+function protoName(numero) {
+  const n = Number(numero) || 0;
+  return PROTOCOLES[n] || (n ? String(n) : '-');
 }
 
-/** Une part deja normalisee (0 a 1) en pourcentage lisible.
+function svcBadge(categorie) {
+  if (!categorie) return '<span class="badge">non identifie</span>';
+  return '<span class="badge ' + (SVC_CATEGORIES[categorie] || '') + '">' +
+    esc(categorie) + '</span>';
+}
+
+/** Le service, avec la raison de le croire.
  *
- *  Nom distinct de pct() a dessein : celui-ci formate une part connue, pct()
- *  calcule un rapport valeur/plafond pour les jauges. Les deux ont coexiste
- *  sous le meme nom, et la seconde declaration ecrasait la premiere : toutes
- *  les jauges de l'interface tombaient. */
-function partPct(part) {
-  return part === null || part === undefined ? '-' : Math.round(part * 100) + ' %';
+ *  LA SOURCE COMPTE AUTANT QUE LE VERDICT. "Netflix d'apres son nom inverse"
+ *  et "Netflix d'apres un bloc publie" ne se contestent pas de la meme facon,
+ *  et un exploitant qui va bloquer ce trafic a le droit de savoir laquelle des
+ *  deux il regarde. */
+function svcName(ligne) {
+  if (!ligne.service) {
+    return '<span class="hint">non identifie</span>';
+  }
+  const source = ligne.source ? ' <span class="hint">' + esc(ligne.source) + '</span>' : '';
+  return '<b>' + esc(ligne.service) + '</b>' + source;
 }
 
-async function loadCapacity() {
-  const heures = document.getElementById('capacity-hours').value;
-  const volumes = document.getElementById('capacity-usage').value;
-  let data;
-  try {
-    data = await api('/capacity?hours=' + heures + '&usage_hours=' + volumes);
-  } catch (err) {
-    document.getElementById('capacity-pops').innerHTML =
-      '<div class="notice err">' + esc(err.message) + '</div>';
+async function loadServices() {
+  SVC.minutes = Number(document.getElementById('svc-range').value) || 60;
+  SVC.category = document.getElementById('svc-category').value || '';
+  SVC.search = document.getElementById('svc-search').value.trim();
+
+  if (SVC.catalogue === null) {
+    // Le catalogue ne bouge pas d'un rafraichissement a l'autre : une seule
+    // lecture par session suffit, et elle remplit les deux listes du
+    // formulaire de restriction.
+    SVC.catalogue = await api('/netflow/catalogue').catch(() => ({ services: [], categories: [] }));
+    renderCatalogue(SVC.catalogue);
+    fillRuleChoices(SVC.catalogue);
+    fillCategoryFilter(SVC.catalogue);
+  }
+
+  const suffixe = '?minutes=' + SVC.minutes +
+    (SVC.category ? '&category=' + encodeURIComponent(SVC.category) : '') +
+    (SVC.search ? '&q=' + encodeURIComponent(SVC.search) : '');
+
+  const [etat, intel, dest, live, regles] = await Promise.all([
+    api('/netflow/status'),
+    api('/netflow/intel').catch(() => null),
+    api('/netflow/destinations' + suffixe + '&limit=120')
+      .catch(() => ({ destinations: [], services: [] })),
+    api('/netflow/connections?limit=80').catch(() => ({ connections: [] })),
+    api('/traffic-rules').catch(() => ({ rules: [] })),
+  ]);
+
+  renderServiceNotice(etat, intel);
+  renderServiceStats(etat, intel, dest);
+  renderLiveConnections(live);
+  renderServiceTable(dest.services || []);
+  renderDestinations(dest.destinations || []);
+  renderRules(regles);
+
+  document.getElementById('svc-count').textContent = etat.listening
+    ? (dest.destinations || []).length + ' adresse(s) sur ' + SVC.minutes + ' min'
+    : 'collecteur a l\'arret';
+}
+
+/** Ce qui empeche cette page de repondre, dit en toutes lettres.
+ *
+ *  Un tableau vide se lit "il n'y a rien". Or il veut souvent dire "je ne peux
+ *  pas savoir" : collecteur coupe, suivi des destinations desactive,
+ *  enrichissement a l'arret. Les trois appellent des gestes differents. */
+function renderServiceNotice(etat, intel) {
+  const hote = document.getElementById('svc-notice');
+  const messages = [];
+  if (!etat.enabled) {
+    messages.push('<div class="notice warn"><b>Le collecteur NetFlow est coupe.</b> ' +
+      'Aucune connexion ne peut etre observee. Il s\'active par <code>NETFLOW_ENABLED</code> ' +
+      '(l\'ecoute d\'un port ne se bascule pas depuis une page web).</div>');
+  } else if (!etat.listening) {
+    messages.push('<div class="notice err"><b>Le collecteur n\'ecoute pas.</b> ' +
+      esc(etat.last_error || 'port occupe ou droits insuffisants') + '</div>');
+  } else if (!etat.packets_received) {
+    messages.push('<div class="notice"><b>Aucun datagramme recu.</b> ' +
+      'Le controleur ecoute sur <code>' + esc(etat.bind) + '</code> mais aucun routeur ' +
+      'n\'exporte encore vers lui. Configurez l\'export sur vos PoPs et la sortie ' +
+      'internet, puis declarez-les dans l\'onglet Trafic.</div>');
+  }
+  if (etat.enabled && etat.track_destinations === false) {
+    messages.push('<div class="notice warn"><b>Le suivi des destinations est desactive.</b> ' +
+      'Les volumes restent mesures, mais plus rien n\'est rattache a un service. ' +
+      'Reglages &gt; Services.</div>');
+  }
+  if (intel && intel.enabled === false) {
+    messages.push('<div class="notice warn"><b>L\'identification est desactivee.</b> ' +
+      'Les adresses sont vues mais pas nommees.</div>');
+  }
+  if (intel && intel.pending > 0) {
+    messages.push('<div class="notice"><b>' + esc(intel.pending) + ' adresse(s) en attente ' +
+      'de nom.</b> Elles seront nommees au fil des passages ; celles qui tombent dans ' +
+      'un bloc publie sont deja reconnues sans attendre.</div>');
+  }
+  hote.innerHTML = messages.join('');
+}
+
+function renderServiceStats(etat, intel, dest) {
+  const services = (dest.services || []);
+  const total = services.reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
+  const nomme = services
+    .filter((r) => r.service)
+    .reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
+  const streaming = services
+    .filter((r) => r.category === 'streaming')
+    .reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
+  const partNommee = total ? Math.round((nomme / total) * 100) : 0;
+
+  document.getElementById('svc-stats').innerHTML =
+    statCard('down', 'Streaming', bytesText(streaming), '',
+      total ? Math.round((streaming / total) * 100) + ' % du trafic identifie' : 'rien a mesurer') +
+    statCard('', 'Trafic nomme', String(partNommee), '%',
+      'le reste n\'a ni bloc connu ni nom inverse') +
+    statCard('', 'Adresses connues', String((intel && intel.resolved) || 0), '',
+      ((intel && intel.named) || 0) + ' rattachee(s) a un service') +
+    statCard(etat.destinations_dropped ? 'warn' : '', 'Fenetre en cours',
+      String(etat.destinations_window || 0), '',
+      etat.destinations_dropped
+        ? esc(etat.destinations_dropped) + ' ecartee(s) : plafond atteint'
+        : 'couples abonne/destination');
+}
+
+/** La fenetre EN COURS, lue dans la memoire du collecteur.
+ *
+ *  C'est la seule vue en direct du produit. Elle se vide a chaque ecriture de
+ *  fenetre puis se remplit : le dire evite qu'un tableau momentanement vide ne
+ *  soit lu comme une panne. */
+function renderLiveConnections(data) {
+  const hote = document.getElementById('svc-live');
+  const lignes = (data && data.connections) || [];
+  if (!lignes.length) {
+    hote.innerHTML = '<div class="empty">Aucune connexion dans la fenetre en cours. ' +
+      'La fenetre vient peut-etre d\'etre ecrite : elle se remplit a nouveau dans ' +
+      'les secondes qui viennent.</div>';
     return;
   }
-  const t = data.totals || {};
-  document.getElementById('capacity-count').textContent =
-    'pointes sur ' + data.window.hours + ' h, volumes sur ' +
-    Math.round(data.window.usage_hours / 24) + ' j';
+  hote.innerHTML = '<table><thead><tr><th>Abonne</th><th>Destination</th>' +
+    '<th>Service</th><th>Famille</th><th class="num">Port</th><th>Proto</th>' +
+    '<th class="num">Descendant</th><th class="num">Montant</th><th></th>' +
+    '</tr></thead><tbody>' +
+    lignes.map((c) =>
+      '<tr><td class="login">' + (c.login
+        ? '<a href="#" data-svc-sub="' + esc(c.subscriber_id) + '">' + esc(c.login) + '</a>'
+        : '<span class="hint">#' + esc(c.subscriber_id) + '</span>') + '</td>' +
+      '<td><a href="#" data-svc-ip="' + esc(c.address) + '"><code>' + esc(c.address) +
+        '</code></a>' + (c.hostname
+          ? '<br><span class="hint">' + esc(c.hostname) + '</span>' : '') + '</td>' +
+      '<td>' + svcName(c) + '</td>' +
+      '<td>' + svcBadge(c.category) + '</td>' +
+      '<td class="num">' + esc(c.port || '-') + '</td>' +
+      '<td>' + esc(protoName(c.protocol)) + '</td>' +
+      '<td class="num">' + bytesText(c.down_bytes) + '</td>' +
+      '<td class="num">' + bytesText(c.up_bytes) + '</td>' +
+      '<td>' + (c.pending ? '<span class="hint">a nommer</span>' : '') + '</td></tr>').join('') +
+    '</tbody></table>';
+  brancherLiensServices(hote);
+}
 
-  document.getElementById('capacity-cards').innerHTML =
-    statCard('', 'Vendu (descendant)', mbps(t.sold_down_mbps || 0), '',
-      'somme des plans souscrits') +
-    statCard('', 'Capacite mesuree', mbps(t.capacity_mbps || 0), '',
-      'derniere capacite connue des backhauls') +
-    statCard(t.ratio && t.ratio > 20 ? 'crit' : (t.ratio && t.ratio > 5 ? 'warn' : ''),
-      'Survente du reseau', t.ratio === null || t.ratio === undefined ? '-' : t.ratio + ':1', '',
-      'un chiffre de reseau : regardez PoP par PoP') +
-    statCard(t.links_to_reinforce ? 'crit' : '', 'Liens sans marge',
-      String(t.links_to_reinforce || 0), '',
-      'au-dessus de 80 % en moyenne') +
-    statCard(t.subscribers_to_upsell ? 'warn' : '', 'Abonnes a leur plafond',
-      String(t.subscribers_to_upsell || 0), '',
-      (t.silent || 0) + ' ligne(s) muette(s)');
+function renderServiceTable(services) {
+  const hote = document.getElementById('svc-services');
+  if (!services.length) {
+    hote.innerHTML = '<div class="empty">Aucun trafic mesure sur cette periode.</div>';
+    return;
+  }
+  const total = services.reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
+  hote.innerHTML = '<table><thead><tr><th>Service</th><th>Famille</th>' +
+    '<th class="num">Adresses</th><th class="num">Abonnes</th>' +
+    '<th class="num">Descendant</th><th class="num">Montant</th><th>Part</th>' +
+    '<th></th></tr></thead><tbody>' +
+    services.map((r) => {
+      const somme = Number(r.down_bytes || 0) + Number(r.up_bytes || 0);
+      return '<tr>' +
+        '<td><b>' + esc(r.service || 'non identifie') + '</b></td>' +
+        '<td>' + svcBadge(r.category) + '</td>' +
+        '<td class="num">' + esc(r.addresses) + '</td>' +
+        '<td class="num">' + esc(r.subscribers) + '</td>' +
+        '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
+        '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
+        '<td style="min-width:140px">' + meter(somme, total || 1, '') + '</td>' +
+        '<td>' + (r.service
+          ? '<button class="sm" data-svc-restrict="' + esc(r.service) + '">Restreindre</button>'
+          : '') + '</td></tr>';
+    }).join('') + '</tbody></table>';
+  hote.querySelectorAll('[data-svc-restrict]').forEach((b) => {
+    b.addEventListener('click', () => prefillRule(b.dataset.svcRestrict));
+  });
+}
 
-  // A RENFORCER : la partie actionnable, donc la premiere. Deux tableaux
-  // separes -- un lien se renforce, un abonne se vend.
-  const renfort = data.reinforce || { links: [], subscribers: [] };
-  const tableauRenfort = (titre, lignes, colonnes, ligneHtml, vide) =>
-    '<h3 style="margin:.8rem 0 .4rem;font-size:.95rem">' + titre + '</h3>' +
-    (lignes.length
-      ? '<div class="table-wrap"><table><thead><tr>' + colonnes + '</tr></thead><tbody>' +
-        lignes.map(ligneHtml).join('') + '</tbody></table></div>'
-      : '<div class="empty">' + vide + '</div>');
-  document.getElementById('capacity-reinforce').innerHTML =
-    tableauRenfort(
-      'Liens sans marge',
-      renfort.links || [],
-      '<th>Lien</th><th>Port</th><th class="num">Capacite</th>' +
-        '<th class="num">Occupation moyenne</th><th class="num">Pointe</th>' +
-        '<th class="num" title="Nombre de mesures : une moyenne sur trois points ne ' +
-        'justifie pas d\'acheter un backhaul">Mesures</th>',
-      (l) => '<tr>' +
-        '<td><b>' + esc(l.link_name || l.interface) + '</b> ' +
-          '<span class="hint">sur ' + esc(l.router_name) + '</span></td>' +
-        '<td class="login">' + esc(l.interface) + '</td>' +
-        '<td class="num">' + (l.capacity_mbps === null ? '-' : mbps(l.capacity_mbps)) + '</td>' +
-        '<td class="num"><b>' + partPct(l.avg_share) + '</b></td>' +
-        '<td class="num">' + partPct(l.share) + '</td>' +
-        '<td class="num" style="color:var(--faint)">' + esc(l.samples) + '</td>' +
-        '</tr>',
-      'Aucun lien au-dessus de 80 % en moyenne. Les pointes peuvent etre hautes ' +
-        'sans que la capacite soit en cause.') +
-    tableauRenfort(
-      'Abonnes a leur plafond',
-      renfort.subscribers || [],
-      '<th>Abonne</th><th>PoP</th><th class="num">Plan</th>' +
-        '<th class="num">Consommation moyenne</th><th class="num">Part du temps au plafond</th>' +
-        '<th class="num">Volume</th>',
-      (u) => '<tr>' +
-        '<td class="login"><b>' + esc(u.login) + '</b>' +
-          (u.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
-        '<td>' + esc(u.pop_name || '-') + '</td>' +
-        '<td class="num">' + (u.plan_down_mbps ? mbps(u.plan_down_mbps) : '-') + '</td>' +
-        '<td class="num"><b>' + partPct(u.avg_share) + '</b></td>' +
-        '<td class="num">' + partPct(u.capped_share) + '</td>' +
-        '<td class="num">' + esc(u.gigabytes) + ' Go</td>' +
-        '</tr>',
-      'Aucun abonne au-dessus de 80 % de son plan en moyenne.');
+function renderDestinations(lignes) {
+  const hote = document.getElementById('svc-destinations');
+  if (!lignes.length) {
+    hote.innerHTML = '<div class="empty">Aucune adresse atteinte sur cette periode, ' +
+      'ou aucune ne correspond au filtre.</div>';
+    return;
+  }
+  hote.innerHTML = '<table><thead><tr><th>Adresse</th><th>Nom inverse</th>' +
+    '<th>Service</th><th>Famille</th><th class="num">Abonnes</th>' +
+    '<th class="num">Descendant</th><th class="num">Montant</th><th>Vue</th>' +
+    '</tr></thead><tbody>' +
+    lignes.map((d) =>
+      '<tr><td><a href="#" data-svc-ip="' + esc(d.address) + '"><code>' +
+        esc(d.address) + '</code></a></td>' +
+      '<td class="login">' + (d.hostname
+        ? esc(d.hostname) : '<span class="hint">-</span>') + '</td>' +
+      '<td>' + svcName(d) + '</td>' +
+      '<td>' + svcBadge(d.category) + '</td>' +
+      '<td class="num">' + esc(d.subscribers) + '</td>' +
+      '<td class="num">' + bytesText(d.down_bytes) + '</td>' +
+      '<td class="num">' + bytesText(d.up_bytes) + '</td>' +
+      '<td>' + esc(depuis(d.last_seen)) + '</td></tr>').join('') +
+    '</tbody></table>';
+  brancherLiensServices(hote);
+}
 
-  const pops = data.pops || [];
-  document.getElementById('capacity-pops').innerHTML = !pops.length
-    ? '<div class="empty">Aucun PoP.</div>'
-    : '<table><thead><tr><th>PoP</th><th class="num">Abonnes</th>' +
-      '<th class="num">Vendu</th><th class="num">Capacite</th><th class="num">Survente</th>' +
-      '<th class="num">Pointe vue</th><th>Verdict</th></tr></thead><tbody>' +
-      pops.map((p) => '<tr>' +
-        '<td><b>' + esc(p.pop_name || '-') + '</b></td>' +
-        '<td class="num">' + esc(p.subscribers) + '</td>' +
-        '<td class="num">' + mbps(p.sold_down_mbps) + '</td>' +
-        '<td class="num">' + (p.capacity_mbps === null
-          ? '<span class="hint">non mesuree</span>' : mbps(p.capacity_mbps) + '') + '</td>' +
-        '<td class="num">' + (p.ratio === null ? '-' : esc(p.ratio) + ':1') + '</td>' +
-        '<td class="num">' + (p.peak_mbps === null ? '-'
-          : mbps(p.peak_mbps) + ' <span class="hint">' + partPct(p.peak_share) + '</span>') + '</td>' +
-        '<td>' + capacityBadge(p.verdict, CAPACITY_VERDICTS) + '</td>' +
+function brancherLiensServices(hote) {
+  hote.querySelectorAll('[data-svc-ip]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      openDestination(a.dataset.svcIp);
+    });
+  });
+  hote.querySelectorAll('[data-svc-sub]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      openSubscriber(Number(a.dataset.svcSub));
+    });
+  });
+}
+
+/** La fiche complete d'une adresse : ce qu'on sait, et QUI la joint. */
+async function openDestination(address) {
+  const hote = document.getElementById('svc-detail');
+  hote.innerHTML = '<div class="ip-card">Lecture de <code>' + esc(address) + '</code>...</div>';
+  let fiche;
+  try {
+    fiche = await api('/netflow/destinations/' + encodeURIComponent(address) +
+      '?minutes=' + Math.max(SVC.minutes, 1440));
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  SVC.detail = fiche;
+  renderDestinationCard(fiche);
+  hote.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function renderDestinationCard(fiche) {
+  const intel = fiche.intel || {};
+  const catalogue = fiche.catalogue || {};
+  const totaux = fiche.totals || {};
+  const fait = (libelle, valeur) =>
+    '<div><span>' + libelle + '</span>' + (valeur || '<span class="hint">-</span>') + '</div>';
+
+  const service = intel.service || catalogue.service;
+  const famille = intel.category || catalogue.category;
+  const source = intel.source || catalogue.source;
+
+  document.getElementById('svc-detail').innerHTML =
+    '<div class="ip-card">' +
+    '<h3><code>' + esc(fiche.address) + '</code> ' + svcBadge(famille) + '</h3>' +
+    '<div class="ip-facts">' +
+      fait('Service', service ? '<b>' + esc(service) + '</b>' : null) +
+      fait('Reconnu par', source && source !== 'inconnu' ? esc(source) : null) +
+      fait('Nom inverse', intel.hostname ? esc(intel.hostname) : null) +
+      fait('Organisation', intel.org ? esc(intel.org) : null) +
+      fait('AS', intel.asn ? 'AS' + esc(intel.asn) : null) +
+      fait('Pays', intel.country ? esc(intel.country) : null) +
+      fait('Bloc', esc(intel.network || catalogue.matched_prefix || '')) +
+      fait('Abonnes', esc(totaux.subscribers || 0)) +
+      fait('Descendant', bytesText(totaux.down_bytes)) +
+      fait('Montant', bytesText(totaux.up_bytes)) +
+      fait('Vue pour la premiere fois', totaux.first_seen ? esc(depuis(totaux.first_seen)) : null) +
+      fait('Vue la derniere fois', totaux.last_seen ? esc(depuis(totaux.last_seen)) : null) +
+    '</div>' +
+    (source === 'inconnu' || !service
+      ? '<p class="empty" style="text-align:left;padding:.6rem 0 0">' +
+        'Aucune source ne nomme cette adresse : elle n\'est dans aucun bloc publie ' +
+        'connu, et son nom inverse est absent ou muet. C\'est le cas le plus ' +
+        'frequent sur internet, pas une anomalie.</p>'
+      : '') +
+    '<div class="actions" style="margin-top:.7rem">' +
+      '<button class="sm" id="svc-detail-resolve">Relancer l\'analyse</button>' +
+      '<button class="sm" id="svc-detail-restrict">Restreindre cette adresse</button>' +
+      '<span class="mode">' + esc(intel.attempts || 0) + ' tentative(s)</span>' +
+    '</div>' +
+    '<h3 style="margin-top:.9rem">Qui joint cette adresse</h3>' +
+    ((fiche.subscribers || []).length
+      ? '<div class="table-wrap"><table><thead><tr><th>Abonne</th><th>PoP</th>' +
+        '<th class="num">Port</th><th>Proto</th><th>Usage</th>' +
+        '<th class="num">Descendant</th><th class="num">Montant</th><th>Vu</th>' +
+        '</tr></thead><tbody>' +
+        fiche.subscribers.map((s) => '<tr>' +
+          '<td class="login"><a href="#" data-svc-sub="' + esc(s.subscriber_id) + '">' +
+            esc(s.login) + '</a>' +
+            (s.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
+          '<td>' + esc(s.pop_name || '-') + '</td>' +
+          '<td class="num">' + esc(s.port || '-') + '</td>' +
+          '<td>' + esc(protoName(s.protocol)) + '</td>' +
+          '<td>' + esc(s.app || '-') + '</td>' +
+          '<td class="num">' + bytesText(s.down_bytes) + '</td>' +
+          '<td class="num">' + bytesText(s.up_bytes) + '</td>' +
+          '<td>' + esc(depuis(s.last_seen)) + '</td></tr>').join('') +
+        '</tbody></table></div>'
+      : '<div class="empty">Aucun abonne n\'a joint cette adresse sur la periode.</div>') +
+    '</div>';
+
+  const detail = document.getElementById('svc-detail');
+  brancherLiensServices(detail);
+  document.getElementById('svc-detail-resolve').addEventListener('click', async () => {
+    try {
+      await api('/netflow/destinations/' + encodeURIComponent(fiche.address) + '/resolve',
+        { method: 'POST' });
+      await openDestination(fiche.address);
+    } catch (err) {
+      detail.innerHTML += '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+  document.getElementById('svc-detail-restrict').addEventListener('click', () => {
+    prefillRule(null, fiche.address);
+  });
+}
+
+/* ------------------------------------------------------- restrictions */
+
+function renderRules(data) {
+  const hote = document.getElementById('svc-rules');
+  const regles = (data && data.rules) || [];
+  const etat = (data && data.status) || {};
+  document.getElementById('svc-rules-state').textContent = etat.enforcement_enabled
+    ? 'ecriture active'
+    : 'ecriture desactivee : rien ne sera pose';
+  if (!regles.length) {
+    hote.innerHTML = '<div class="empty">Aucune restriction. Rien n\'est bloque ni ' +
+      'plafonne par service.</div>';
+    return;
+  }
+  hote.innerHTML = '<table><thead><tr><th>Regle</th><th>Effet</th><th>Vise</th>' +
+    '<th>Pour qui</th><th>Etat</th><th>Derniere pose</th><th></th>' +
+    '</tr></thead><tbody>' +
+    regles.map((r) => {
+      const criteres = [].concat(r.services || [], r.categories || [],
+        (r.prefixes || []).length ? [(r.prefixes || []).length + ' bloc(s)'] : []);
+      return '<tr>' +
+        '<td><b>' + esc(r.name) + '</b>' +
+          (r.note ? '<br><span class="hint">' + esc(r.note) + '</span>' : '') + '</td>' +
+        '<td>' + (r.action === 'limit'
+          ? '<span class="badge warn">plafond ' +
+            (r.limit_down_mbps ? esc(mbps(r.limit_down_mbps)) : '-') + ' / ' +
+            (r.limit_up_mbps ? esc(mbps(r.limit_up_mbps)) : '-') + '</span>'
+          : '<span class="badge crit">bloque</span>') + '</td>' +
+        '<td>' + (criteres.length ? esc(criteres.join(', ')) : '<span class="hint">-</span>') +
+          (r.protocol ? ' <span class="hint">' + esc(r.protocol) +
+            (r.ports ? ':' + esc(r.ports) : '') + '</span>' : '') + '</td>' +
+        '<td>' + (r.scope === 'subscribers'
+          ? esc((r.logins || []).length) + ' abonne(s)' : 'tous') + '</td>' +
+        '<td>' + (r.enabled
+          ? '<span class="badge ok">active</span>' : '<span class="badge">suspendue</span>') +
+          '</td>' +
+        '<td>' + (r.last_applied_at
+          ? esc(r.last_state || '') + ' <span class="hint">' +
+            esc(depuis(r.last_applied_at)) + '</span>'
+          : '<span class="hint">jamais posee</span>') + '</td>' +
+        '<td class="actions">' +
+          '<button class="sm" data-rule-preview="' + esc(r.id) + '">Ce qu\'elle vise</button>' +
+          '<button class="sm" data-rule-toggle="' + esc(r.id) + '" data-rule-on="' +
+            (r.enabled ? '1' : '0') + '">' + (r.enabled ? 'Suspendre' : 'Activer') + '</button>' +
+          '<button class="sm danger" data-rule-del="' + esc(r.id) + '">Supprimer</button>' +
+        '</td></tr>';
+    }).join('') + '</tbody></table>';
+
+  hote.querySelectorAll('[data-rule-del]').forEach((b) => {
+    b.addEventListener('click', () => deleteRule(Number(b.dataset.ruleDel)));
+  });
+  hote.querySelectorAll('[data-rule-toggle]').forEach((b) => {
+    b.addEventListener('click', () =>
+      toggleRule(Number(b.dataset.ruleToggle), b.dataset.ruleOn !== '1'));
+  });
+  hote.querySelectorAll('[data-rule-preview]').forEach((b) => {
+    b.addEventListener('click', () => previewRule(Number(b.dataset.rulePreview)));
+  });
+}
+
+function ruleNotice(html) {
+  document.getElementById('svc-rule-result').innerHTML = html;
+}
+
+function applyNotice(html) {
+  document.getElementById('svc-apply-result').innerHTML = html;
+}
+
+async function deleteRule(id) {
+  try {
+    await api('/traffic-rules/' + id, { method: 'DELETE' });
+    applyNotice('<div class="notice ok">Regle supprimee. <b>Ce qui est pose sur les ' +
+      'routeurs n\'a pas ete retire</b> : lancez une pose pour que la reconciliation ' +
+      'le nettoie, ou attendez le passage automatique.</div>');
+    await loadServices();
+  } catch (err) {
+    applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
+  }
+}
+
+async function toggleRule(id, enabled) {
+  try {
+    await api('/traffic-rules/' + id, {
+      method: 'PATCH', body: JSON.stringify({ enabled }),
+    });
+    await loadServices();
+  } catch (err) {
+    applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
+  }
+}
+
+/** Ce que la regle vise A CET INSTANT.
+ *
+ *  Une regle est un critere, pas une liste : elle grossit toute seule a mesure
+ *  que NetFlow decouvre des serveurs. Avant de la poser, il faut pouvoir
+ *  regarder ce qu'elle couvre reellement -- surtout quand le critere est une
+ *  famille entiere ou un CDN, qui porte tout le monde. */
+async function previewRule(id) {
+  try {
+    const vue = await api('/traffic-rules/' + id + '/preview?limit=40');
+    applyNotice('<div class="ip-card"><h3>' + esc(vue.rule.name) + '</h3>' +
+      '<div class="ip-facts">' +
+        '<div><span>Adresses visees</span><b>' + esc(vue.address_count) + '</b></div>' +
+        '<div><span>Clients vises</span>' + (vue.rule.scope === 'subscribers'
+          ? esc(vue.client_count) + ' bloc(s)' : 'tous') + '</div>' +
+        '<div><span>Routeurs</span>' +
+          esc((vue.routers || []).join(', ') || 'aucun') + '</div>' +
+      '</div>' +
+      '<p class="empty" style="text-align:left;padding:.6rem 0 .3rem">' +
+        'Extrait de la liste qui serait posee :</p>' +
+      '<div class="login" style="font-size:.75rem;line-height:1.6">' +
+        esc((vue.addresses || []).join('  ')) +
+        (vue.address_count > (vue.addresses || []).length
+          ? ' <span class="hint">... et ' +
+            esc(vue.address_count - vue.addresses.length) + ' de plus</span>' : '') +
+      '</div></div>');
+  } catch (err) {
+    applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
+  }
+}
+
+async function applyRules(dryRun) {
+  applyNotice('<div class="notice">Calcul du plan...</div>');
+  try {
+    const rapport = await api('/traffic-rules/apply?dry_run=' + (dryRun ? 'true' : 'false'),
+      { method: 'POST' });
+    applyNotice(renderApplyReport(rapport));
+    await loadServices();
+  } catch (err) {
+    applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
+  }
+}
+
+/** Le compte rendu d'une pose, routeur par routeur.
+ *
+ *  ON MONTRE LES COMMANDES, pas un resume rassurant. C'est la meme regle que
+ *  pour les files : ce qui est affiche doit etre exactement ce qui serait
+ *  envoye, sinon l'exploitant valide autre chose que ce qu'il croit. */
+function renderApplyReport(rapport) {
+  const classe = rapport.state === 'erreur' ? 'err'
+    : (rapport.state === 'posee' ? 'ok' : 'warn');
+  const entete = '<div class="notice ' + classe + '"><b>' + esc(rapport.state) + '</b> — ' +
+    esc(rapport.rules) + ' regle(s) active(s), ' + esc(rapport.applied) +
+    ' commande(s) appliquee(s)' +
+    (rapport.dry_run ? ' <span class="hint">(simulation : rien n\'a ete ecrit)</span>' : '') +
+    (rapport.enforcement_enabled ? '' :
+      ' <span class="hint">l\'ecriture est desactivee (Reglages &gt; Shaping)</span>') +
+    '</div>';
+  const routeurs = (rapport.routers || []).map((r) =>
+    '<div class="ip-card"><h3>' + esc(r.router) + ' <span class="hint">' +
+      esc(r.state) + '</span></h3>' +
+    '<p class="empty" style="text-align:left;padding:0 0 .4rem">' + esc(r.reason) + '</p>' +
+    ((r.actions || []).length
+      ? '<div class="login" style="font-size:.75rem;line-height:1.7">' +
+        r.actions.map((a) => esc(a)).join('<br>') + '</div>'
+      : '<span class="hint">aucune commande</span>') +
+    ((r.skipped || []).length
+      ? '<p class="empty" style="text-align:left;padding:.5rem 0 0">' +
+        r.skipped.map((s) => '<b>' + esc(s.rule) + '</b> : ' + esc(s.reason)).join('<br>') +
+        '</p>' : '') +
+    ((r.conflicts || []).length
+      ? '<div class="notice err" style="margin-top:.5rem">' +
+        r.conflicts.map((c) => '<b>' + esc(c.rule) + '</b> : ' + esc(c.detail)).join('<br>') +
+        '</div>' : '') +
+    '</div>').join('');
+  return entete + routeurs;
+}
+
+function fillCategoryFilter(catalogue) {
+  const select = document.getElementById('svc-category');
+  select.innerHTML = '<option value="">Toutes les familles</option>' +
+    (catalogue.categories || []).map((c) =>
+      '<option value="' + esc(c) + '">' + esc(c) + '</option>').join('');
+}
+
+function fillRuleChoices(catalogue) {
+  document.getElementById('svc-rule-services').innerHTML =
+    (catalogue.services || []).map((s) =>
+      '<option value="' + esc(s.key) + '" title="' + esc(s.note || '') + '">' +
+        esc(s.label) + ' (' + esc(s.prefixes) + ' bloc' + (s.prefixes > 1 ? 's' : '') + ')' +
+      '</option>').join('');
+  document.getElementById('svc-rule-categories').innerHTML =
+    (catalogue.categories || []).map((c) =>
+      '<option value="' + esc(c) + '">' + esc(c) + '</option>').join('');
+}
+
+function renderCatalogue(catalogue) {
+  const services = catalogue.services || [];
+  document.getElementById('svc-catalogue').innerHTML = !services.length
+    ? '<div class="empty">Catalogue vide.</div>'
+    : '<table><thead><tr><th>Service</th><th>Famille</th><th class="num">Blocs publies</th>' +
+      '<th>Noms inverses</th><th>A savoir</th></tr></thead><tbody>' +
+      services.map((s) => '<tr>' +
+        '<td><b>' + esc(s.label) + '</b><br><span class="hint">' + esc(s.key) + '</span></td>' +
+        '<td>' + svcBadge(s.category) + '</td>' +
+        '<td class="num">' + esc(s.prefixes) +
+          (s.prefixes ? '' : ' <span class="hint">nom inverse seul</span>') + '</td>' +
+        '<td class="login" style="font-size:.72rem">' + esc((s.rdns || []).join(' ')) + '</td>' +
+        '<td style="font-size:.74rem;color:var(--muted)">' + esc(s.note || '') + '</td>' +
         '</tr>').join('') + '</tbody></table>';
+}
 
-  const liens = data.links || [];
-  document.getElementById('capacity-links').innerHTML = !liens.length
-    ? '<div class="empty">Aucun port mesure sur la periode.</div>'
-    : '<table><thead><tr><th>Lien</th><th>Port</th><th class="num">Capacite</th>' +
-      '<th class="num">Pointe</th><th class="num">Occupation</th><th>Heure de pointe</th>' +
-      '<th>Etat</th></tr></thead><tbody>' +
-      liens.map((l) => '<tr>' +
-        '<td><b>' + esc(l.link_name || l.interface) + '</b> ' +
-          '<span class="hint">sur ' + esc(l.router_name) + '</span></td>' +
-        '<td class="login">' + esc(l.interface) + '</td>' +
-        '<td class="num">' + (l.capacity_mbps === null ? '-' : mbps(l.capacity_mbps) + '') + '</td>' +
-        '<td class="num">' + (l.peak_mbps === null ? '-' : mbps(l.peak_mbps) + '') +
-          ' <span class="hint">' + esc(l.peak_direction) + '</span></td>' +
-        '<td class="num">' + partPct(l.share) + '</td>' +
-        '<td style="color:var(--faint)">' + (l.peak_at ? esc(clock(l.peak_at)) : '-') + '</td>' +
-        '<td>' + capacityBadge(l.state, CAPACITY_ETATS) + '</td>' +
-        '</tr>').join('') + '</tbody></table>';
+/** Ouvre le formulaire deja rempli depuis un service ou une adresse.
+ *
+ *  Le geste naturel est "je vois ce trafic, je veux le brider". Obliger a
+ *  retrouver le service dans une liste de trente entrees apres l'avoir vu a
+ *  l'ecran serait une perte seche. */
+function prefillRule(service, address) {
+  const bloc = document.getElementById('svc-rule-block');
+  bloc.open = true;
+  if (service) {
+    const select = document.getElementById('svc-rule-services');
+    Array.from(select.options).forEach((o) => { o.selected = (o.value === service); });
+    document.getElementById('svc-rule-name').value = 'Restriction ' + service;
+  }
+  if (address) {
+    document.getElementById('svc-rule-prefixes').value = address;
+    document.getElementById('svc-rule-name').value = 'Restriction ' + address;
+  }
+  bloc.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
 
-  const usage = data.usage || [];
-  document.getElementById('capacity-usage-table').innerHTML = !usage.length
-    ? '<div class="empty">Aucun volume mesure sur la periode.</div>'
-    : '<table><thead><tr><th>Abonne</th><th>PoP</th><th class="num">Volume</th>' +
-      '<th class="num">Plan</th><th class="num">Pointe</th>' +
-      '<th class="num" title="Part du temps passee a plus de 90 % du plan">Au plafond</th>' +
-      '</tr></thead><tbody>' +
-      usage.map((u) => '<tr>' +
-        '<td class="login"><b>' + esc(u.login) + '</b>' +
-          (u.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
-        '<td>' + esc(u.pop_name || '-') + '</td>' +
-        '<td class="num">' + esc(u.gigabytes) + ' Go</td>' +
-        '<td class="num">' + (u.plan_down_mbps ? mbps(u.plan_down_mbps) + '' : '-') + '</td>' +
-        '<td class="num">' + (u.peak_mbps === null ? '-' : mbps(u.peak_mbps) + '') + '</td>' +
-        '<td class="num">' + partPct(u.capped_share) +
-          (u.at_plan_ceiling
-            ? ' <span class="badge warn" title="Il ne profite plus de son plan, il vit dedans : ' +
-              'candidat a une offre superieure, ou plan mal taille">plafond</span>' : '') + '</td>' +
-        '</tr>').join('') + '</tbody></table>';
+function selectedValues(id) {
+  return Array.from(document.getElementById(id).selectedOptions).map((o) => o.value);
+}
 
-  const muets = data.silent || [];
-  document.getElementById('capacity-silent').innerHTML = !muets.length
-    ? '<div class="empty">Aucune ligne muette depuis ' + esc(data.window.silent_days) +
-      ' jours. Tout le monde consomme.</div>'
-    : '<table><thead><tr><th>Abonne</th><th>PoP</th><th class="num">Plan</th>' +
-      '<th>Derniere session</th><th>Dernier trafic</th></tr></thead><tbody>' +
-      muets.map((m) => '<tr>' +
-        '<td class="login"><b>' + esc(m.login) + '</b>' +
-          (m.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
-        '<td>' + esc(m.pop_name || '-') + '</td>' +
-        '<td class="num">' + (m.plan_down_mbps ? mbps(m.plan_down_mbps) + '' : '-') + '</td>' +
-        '<td style="color:var(--faint)">' + esc(depuis(m.last_seen)) + '</td>' +
-        '<td style="color:var(--faint)">' +
-          (m.last_traffic_at ? esc(depuis(m.last_traffic_at))
-            : '<span class="hint">jamais vu passer</span>') + '</td>' +
-        '</tr>').join('') + '</tbody></table>';
+function lignesNonVides(id) {
+  return document.getElementById(id).value
+    .split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+async function submitRule(event) {
+  event.preventDefault();
+  const action = document.getElementById('svc-rule-action').value;
+  const scope = document.getElementById('svc-rule-scope').value;
+  const corps = {
+    name: document.getElementById('svc-rule-name').value.trim(),
+    action,
+    services: selectedValues('svc-rule-services'),
+    categories: selectedValues('svc-rule-categories'),
+    prefixes: lignesNonVides('svc-rule-prefixes'),
+    scope,
+    logins: scope === 'subscribers' ? lignesNonVides('svc-rule-logins') : [],
+    protocol: document.getElementById('svc-rule-protocol').value || null,
+    ports: document.getElementById('svc-rule-ports').value.trim() || null,
+    note: document.getElementById('svc-rule-note').value.trim() || null,
+  };
+  if (action === 'limit') {
+    corps.limit_down_mbps = readRate('svc-rule-down', 'svc-rule-down-unit');
+    corps.limit_up_mbps = readRate('svc-rule-up', 'svc-rule-up-unit');
+  }
+  try {
+    const regle = await api('/traffic-rules', { method: 'POST', body: JSON.stringify(corps) });
+    ruleNotice('<div class="notice ok">Regle <b>' + esc(regle.name) + '</b> enregistree. ' +
+      '<b>Rien n\'a encore ete ecrit sur les routeurs</b> : verifiez ce qu\'elle vise, ' +
+      'puis posez-la.</div>');
+    document.getElementById('svc-rule-form').reset();
+    document.getElementById('svc-rule-limits').hidden = true;
+    document.getElementById('svc-rule-logins-field').hidden = true;
+    await loadServices();
+  } catch (err) {
+    ruleNotice('<div class="notice err">' + esc(err.message) + '</div>');
+  }
 }
 
 /* ---------------------------------------------------- antennes Ubiquiti */
@@ -5684,7 +6132,7 @@ const LOADERS = {
   network: loadNetwork,
   subscribers: loadSubscribers,
   pops: loadRouters,
-  capacity: loadCapacity,
+  services: loadServices,
   settings: loadSettings,
 };
 
@@ -5805,8 +6253,25 @@ document.getElementById('btn-topo-link').addEventListener('click', (e) => {
   setTopoLinkNotice();
 });
 document.getElementById('btn-build-tree').addEventListener('click', () => buildTreeFromConfig(false));
-document.getElementById('capacity-hours').addEventListener('change', loadCapacity);
-document.getElementById('capacity-usage').addEventListener('change', loadCapacity);
+/* ------------------------------------------------------------- services */
+document.getElementById('svc-range').addEventListener('change', loadServices);
+document.getElementById('svc-category').addEventListener('change', loadServices);
+// La recherche se declenche sur 'change' (validation ou perte de focus) et non
+// sur chaque frappe : une requete par caractere ferait autant de lectures de
+// base qu'il y a de lettres dans "nflxvideo".
+document.getElementById('svc-search').addEventListener('change', loadServices);
+document.getElementById('svc-rule-form').addEventListener('submit', submitRule);
+document.getElementById('svc-apply-dry').addEventListener('click', () => applyRules(true));
+document.getElementById('svc-apply').addEventListener('click', () => applyRules(false));
+// Les champs qui n'ont de sens que pour un effet ou une portee donnes restent
+// caches tant qu'ils ne servent pas : un formulaire qui montre tout montre
+// surtout ce qu'il ne faut pas remplir.
+document.getElementById('svc-rule-action').addEventListener('change', (e) => {
+  document.getElementById('svc-rule-limits').hidden = e.target.value !== 'limit';
+});
+document.getElementById('svc-rule-scope').addEventListener('change', (e) => {
+  document.getElementById('svc-rule-logins-field').hidden = e.target.value !== 'subscribers';
+});
 document.getElementById('exec-range').addEventListener('change', (e) => {
   state.execRange = Number(e.target.value);
   loadExec();

@@ -15,11 +15,14 @@ from fastapi import APIRouter, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import ContainerDep, TimeRangeDep
+from app.db.destinations_repo import DestinationsRepository
 from app.db.flows_repo import (
     ExporterNotFoundError,
     FlowsRepository,
     NetflowExportersRepository,
 )
+from app.services import ipfinder
+from app.services.intel import IntelService
 from app.services.netflow_service import NetflowService
 
 logger = logging.getLogger(__name__)
@@ -100,6 +103,34 @@ def _exporters(container: ContainerDep) -> NetflowExportersRepository:
             detail="Declaration des exporteurs indisponible (base non initialisee)",
         )
     return container.exporters_repo
+
+
+def _destinations(container: ContainerDep) -> DestinationsRepository:
+    if container.destinations_repo is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Destinations indisponibles (base non initialisee)",
+        )
+    return container.destinations_repo
+
+
+def _intel(container: ContainerDep) -> IntelService:
+    if container.intel is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Enrichissement des adresses indisponible",
+        )
+    return container.intel
+
+
+def _valide_adresse(value: str) -> str:
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"adresse invalide : {value}",
+        ) from exc
 
 
 @router.get("/netflow/status", summary="Etat du collecteur NetFlow")
@@ -233,3 +264,164 @@ async def flush_now(container: ContainerDep) -> dict[str, Any]:
     service = _service(container)
     ecrites = await service.flush()
     return {"written": ecrites, "status": service.status()}
+
+
+# ---------------------------------------------------------------------------
+# CE QUE LES CLIENTS ATTEIGNENT
+# ---------------------------------------------------------------------------
+#
+# NetFlow dit "cet abonne a echange 4 Go avec 45.57.12.34". Ces routes mettent
+# un nom sur l'autre bout, parce qu'une adresse brute ne repond a aucune
+# question d'exploitation. L'identification se fait sur l'ADRESSE, son nom
+# inverse et, si l'exploitant l'autorise, le registre -- jamais sur le contenu :
+# le trafic est chiffre, il le reste.
+
+
+@router.get("/netflow/destinations", summary="Adresses atteintes par les clients")
+async def destinations(
+    container: ContainerDep,
+    minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
+    subscriber_id: Annotated[int | None, Query(ge=1)] = None,
+    service: Annotated[str | None, Query(max_length=64)] = None,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    q: Annotated[
+        str | None, Query(max_length=128, description="Adresse, nom ou organisation")
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict[str, Any]:
+    repo = _destinations(container)
+    return {
+        "minutes": minutes,
+        "destinations": await repo.top(
+            minutes=minutes,
+            subscriber_id=subscriber_id,
+            service=service,
+            category=category,
+            search=q,
+            limit=limit,
+        ),
+        "services": await repo.by_service(minutes=minutes),
+    }
+
+
+@router.get(
+    "/netflow/destinations/{address}",
+    summary="Fiche detaillee d'une adresse atteinte",
+)
+async def destination_detail(
+    address: str,
+    container: ContainerDep,
+    minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 1440,
+) -> dict[str, Any]:
+    """Tout ce qu'on sait de cette adresse, et QUI la joint.
+
+    C'est la fiche qu'on ouvre avant de decider d'une restriction : le nom
+    inverse, le service reconnu et a quel titre, l'organisation, l'AS, le pays,
+    depuis quand elle est vue, et la liste nominative des abonnes concernes.
+    """
+    adresse = _valide_adresse(address)
+    fiche = await _destinations(container).detail(adresse, minutes=minutes)
+    # Le verdict du CATALOGUE est recalcule a la volee, meme si la base n'a rien
+    # retenu : il ne coute rien, et une adresse vue il y a trois secondes doit
+    # deja s'afficher comme "Netflix" sans attendre le passage de la boucle.
+    fiche["catalogue"] = ipfinder.match_prefix(adresse).to_dict()
+    return fiche
+
+
+@router.post(
+    "/netflow/destinations/{address}/resolve",
+    summary="Relancer l'analyse d'une adresse",
+)
+async def resolve_destination(address: str, container: ContainerDep) -> dict[str, Any]:
+    """Redemande le nom inverse et le registre pour cette adresse.
+
+    Sert quand un service change de nom inverse, ou apres une mise a jour du
+    catalogue : sans cela, le verdict deja pose resterait tel quel, puisque le
+    but de la file d'attente est justement de ne pas redemander sans fin.
+    """
+    return await _intel(container).resolve_now(_valide_adresse(address))
+
+
+@router.get("/netflow/connections", summary="Connexions clients en cours")
+async def connections(
+    container: ContainerDep,
+    limit: Annotated[int, Query(ge=1, le=500)] = 100,
+) -> dict[str, Any]:
+    """Ce qui se passe DANS LA FENETRE EN COURS, avant meme son ecriture.
+
+    Les autres routes lisent la base, donc au mieux la minute precedente. Celle
+    -ci lit l'agregat en memoire du collecteur : c'est la seule qui reponde a
+    "qu'est-ce que ce client fait la, maintenant". Elle est donc vide juste
+    apres un flush, et se remplit au fil de la fenetre -- ce n'est pas une
+    panne, et l'interface le dit.
+    """
+    service = _service(container)
+    lignes = service.live_connections(limit)
+    ids = [int(ligne["subscriber_id"]) for ligne in lignes]
+    adresses = [str(ligne["address"]) for ligne in lignes]
+
+    abonnes: dict[int, dict[str, Any]] = {}
+    if container.flows_repo is not None:
+        abonnes = await container.flows_repo.subscribers_by_id(ids)
+    connaissances: dict[str, dict[str, Any]] = {}
+    if container.destinations_repo is not None:
+        connaissances = await container.destinations_repo.intel_for(adresses)
+
+    for ligne in lignes:
+        fiche = abonnes.get(int(ligne["subscriber_id"])) or {}
+        ligne["login"] = fiche.get("login")
+        ligne["kind"] = fiche.get("kind")
+        ligne["pop_name"] = fiche.get("pop_name")
+        ligne["plan_down_mbps"] = fiche.get("plan_down_mbps")
+        connu = connaissances.get(str(ligne["address"]))
+        if connu is None:
+            # Pas encore enrichie : le catalogue repond quand meme, et tout de
+            # suite. Une adresse vue il y a deux secondes ne doit pas s'afficher
+            # "inconnue" alors qu'elle est dans un bloc publie.
+            connu = ipfinder.match_prefix(str(ligne["address"])).to_dict()
+            ligne["hostname"] = None
+            ligne["service"] = connu.get("service")
+            ligne["category"] = connu.get("category")
+            ligne["source"] = connu.get("source")
+            ligne["pending"] = True
+        else:
+            ligne["hostname"] = connu.get("hostname")
+            ligne["service"] = connu.get("service")
+            ligne["category"] = connu.get("category")
+            ligne["source"] = connu.get("source")
+            ligne["org"] = connu.get("org")
+            ligne["pending"] = connu.get("resolved_at") is None
+    return {
+        "window_open": service.listening,
+        "tracked": service.track_destinations,
+        "connections": lignes,
+    }
+
+
+@router.get("/netflow/catalogue", summary="Services que le controleur sait reconnaitre")
+async def catalogue() -> dict[str, Any]:
+    """De quoi ecrire une restriction : les services connus et leurs familles.
+
+    Le nombre de blocs publies est rendu avec chaque service, et la note dit ce
+    qu'il faut savoir avant de restreindre -- notamment qu'un CDN porte tout le
+    monde, et qu'un service sans bloc publie n'est reconnu qu'au nom inverse.
+    """
+    return {
+        "services": ipfinder.describe_catalogue(),
+        "categories": list(ipfinder.CATEGORIES),
+    }
+
+
+@router.get("/netflow/intel", summary="Etat de l'enrichissement des adresses")
+async def intel_status(container: ContainerDep) -> dict[str, Any]:
+    return await _intel(container).status()
+
+
+@router.post("/netflow/intel/run", summary="Nommer tout de suite les adresses en attente")
+async def intel_run(
+    container: ContainerDep,
+    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+) -> dict[str, Any]:
+    service = _intel(container)
+    traites = await service.resolve_pending(limit)
+    return {"resolved": traites, "status": await service.status()}

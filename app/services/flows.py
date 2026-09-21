@@ -5,8 +5,8 @@ donne des flux decodes, il rend des compteurs. C'est ce qui permet de tester le
 comptage -- la partie ou une erreur se paie en factures fausses -- sans monter
 un exporteur.
 
-TROIS DECISIONS STRUCTURANTES
------------------------------
+QUATRE DECISIONS STRUCTURANTES
+------------------------------
 
 1. LE SENS SE DEDUIT DE L'ABONNE, PAS DE L'INTERFACE. Un flux dont la
    DESTINATION tombe dans le bloc d'un client est du descendant pour lui ; dont
@@ -24,6 +24,12 @@ TROIS DECISIONS STRUCTURANTES
    d'autre. Une imprimante, une camera, un equipement d'un autre operateur
    laissent exactement la meme trace qu'un abonne : rien dans un flux ne dit
    quel debit a ete vendu, et c'est la seule chose qui compte pour brider.
+
+4. L'AUTRE BOUT EST RETENU, LUI AUSSI. Pour chaque flux rattache a un abonne,
+   l'adresse DISTANTE est notee : c'est elle qui, une fois nommee (cf.
+   ``services/ipfinder``), repond a "qui regarde Netflix sur ce secteur". Seules
+   les adresses reellement sur internet sont retenues -- deux abonnes qui se
+   parlent ne sont une destination ni pour l'un ni pour l'autre.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from app.collectors.netflow import Flow
+from app.services import ipfinder
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +128,17 @@ def classify(flow: Flow) -> str:
     if flow.protocol in (50, 51):
         return "vpn"  # ESP / AH
     return AUTRE
+
+
+def service_port(flow: Flow) -> int:
+    """Le port qui designe le SERVICE, pas le port ephemere du client.
+
+    Meme regle que ``classify`` -- le plus petit des deux -- et pour la meme
+    raison : le client tire son port au-dessus de 32768, le serveur ecoute en
+    dessous. Afficher le port ephemere ne dirait rien a personne.
+    """
+    ports = sorted({flow.src_port, flow.dst_port} - {0})
+    return ports[0] if ports else 0
 
 
 @dataclass
@@ -211,15 +229,43 @@ class HostCounters:
 
 
 @dataclass
+class DestinationCounters:
+    """Ce qu'un abonne a atteint sur internet, et combien.
+
+    L'ADRESSE DISTANTE EST LA DONNEE UTILE ICI, a l'inverse de ``HostCounters``
+    qui retient le cote CLIENT. Les deux listes ne se recouvrent pas : l'une
+    aide a declarer des clients, l'autre dit ce que les clients declares font.
+
+    ``port`` et ``protocol`` sont ceux du DERNIER flux vu vers cette adresse.
+    Ils expliquent la ligne (443, 53, 3478...) ; ils ne la decoupent pas -- un
+    meme serveur atteint sur deux ports reste une seule destination.
+    """
+
+    subscriber_id: int
+    address: str
+    port: int = 0
+    protocol: int = 0
+    app: str = AUTRE
+    down_bytes: int = 0
+    up_bytes: int = 0
+    flows: int = 0
+
+    @property
+    def total_bytes(self) -> int:
+        return self.down_bytes + self.up_bytes
+
+
+@dataclass
 class FlushBatch:
     ts: datetime
     subscribers: list[SubscriberCounters]
     apps: list[AppCounters]
     hosts: list[HostCounters]
+    destinations: list[DestinationCounters] = field(default_factory=list)
 
     @property
     def empty(self) -> bool:
-        return not (self.subscribers or self.apps or self.hosts)
+        return not (self.subscribers or self.apps or self.hosts or self.destinations)
 
 
 @dataclass
@@ -239,12 +285,24 @@ class FlowAggregator:
     #: pas noyer l'aide a la saisie sous des milliers d'adresses de passage.
     host_limit: int = 500
     track_hosts: bool = True
+    #: Retenir l'adresse DISTANTE atteinte par chaque abonne. C'est ce qui
+    #: alimente "qui se connecte a quoi" et, de la, les restrictions.
+    track_destinations: bool = True
+    #: Plafond de destinations retenues par fenetre. Un seul abonne qui fait du
+    #: p2p peut toucher des milliers d'adresses en une minute : sans plafond,
+    #: une fenetre de collecte deviendrait une fenetre d'ecriture en base.
+    destination_limit: int = 2_000
 
     _subs: dict[tuple[int, str], SubscriberCounters] = field(default_factory=dict)
     _apps: dict[tuple[int, str], AppCounters] = field(default_factory=dict)
     _hosts: dict[tuple[str, int | None], HostCounters] = field(default_factory=dict)
+    _dests: dict[tuple[int, str], DestinationCounters] = field(default_factory=dict)
     flows_seen: int = 0
     flows_matched: int = 0
+    #: Destinations ecartees faute de place dans la fenetre. Un compteur qui
+    #: monte dit que destination_limit est trop bas -- sinon on croirait que ces
+    #: abonnes n'atteignent rien.
+    destinations_dropped: int = 0
 
     @staticmethod
     def parse_networks(values: Sequence[str]) -> tuple[IpNetwork, ...]:
@@ -287,6 +345,17 @@ class FlowAggregator:
 
         if source is not None or destination is not None:
             self.flows_matched += 1
+            if self.track_destinations:
+                # LE SENS EST CELUI DE L'ABONNE, ici aussi. Un flux qui ARRIVE
+                # chez lui vient de l'adresse distante (descendant) ; un flux
+                # qui PART de chez lui y va (montant). Le meme flux peut faire
+                # les deux quand deux abonnes se parlent -- et dans ce cas
+                # l'autre bout n'est pas une destination internet, il est
+                # ecarte par is_routable.
+                if destination is not None:
+                    self._note_destination(destination, flow.src, flow, octets, descendant=True)
+                if source is not None:
+                    self._note_destination(source, flow.dst, flow, octets, descendant=False)
             return
         if self.track_hosts:
             self._note_host(flow, octets, exporter=exporter, pop_name=pop_name)
@@ -322,6 +391,57 @@ class FlowAggregator:
             self._apps[cle] = compteurs
         compteurs.down_bytes += down_bytes
         compteurs.up_bytes += up_bytes
+
+    def _note_destination(
+        self, subscriber_id: int, remote: str, flow: Flow, octets: int, *, descendant: bool
+    ) -> None:
+        """Retient l'autre bout de la conversation, s'il est sur internet.
+
+        ``is_routable`` ecarte tout ce qui est prive, lien-local, multicast ou
+        reserve : deux abonnes qui se parlent, un DNS interne, la supervision du
+        PoP. Sans ce filtre, la liste des "services atteints" se remplirait de
+        l'infrastructure de l'exploitant, et chaque adresse interne declencherait
+        une requete de nom inverse pour rien.
+        """
+        if not ipfinder.is_routable(remote):
+            return
+        cle = (subscriber_id, remote)
+        compteurs = self._dests.get(cle)
+        if compteurs is None:
+            if len(self._dests) >= self.destination_limit:
+                self.destinations_dropped += 1
+                return
+            compteurs = DestinationCounters(subscriber_id=subscriber_id, address=remote)
+            self._dests[cle] = compteurs
+        compteurs.port = service_port(flow) or compteurs.port
+        compteurs.protocol = flow.protocol or compteurs.protocol
+        compteurs.app = classify(flow)
+        compteurs.flows += 1
+        if descendant:
+            compteurs.down_bytes += octets
+        else:
+            compteurs.up_bytes += octets
+
+    @property
+    def destinations_in_window(self) -> int:
+        """Combien de couples (abonne, destination) la fenetre porte deja.
+
+        Compte sans trier ni copier : l'etat du collecteur est relu a chaque
+        affichage de l'interface, et il n'a pas a payer un tri pour rendre un
+        nombre.
+        """
+        return len(self._dests)
+
+    def live_destinations(self, limit: int = 100) -> list[DestinationCounters]:
+        """Ce qui est en cours DANS LA FENETRE COURANTE, sans rien ecrire.
+
+        C'est la seule vue reellement "en direct" du controleur : la base, elle,
+        ne connait que les fenetres deja ecrites, donc au mieux la minute
+        precedente. Un exploitant qui demande "qu'est-ce que ce client fait la,
+        maintenant" ne veut pas une reponse vieille d'une minute.
+        """
+        lignes = sorted(self._dests.values(), key=lambda d: d.total_bytes, reverse=True)
+        return lignes[:limit]
 
     def _note_host(
         self, flow: Flow, octets: int, *, exporter: str | None, pop_name: str | None
@@ -364,8 +484,10 @@ class FlowAggregator:
             subscribers=list(self._subs.values()),
             apps=list(self._apps.values()),
             hosts=list(self._hosts.values()),
+            destinations=list(self._dests.values()),
         )
         self._subs = {}
         self._apps = {}
         self._hosts = {}
+        self._dests = {}
         return lot

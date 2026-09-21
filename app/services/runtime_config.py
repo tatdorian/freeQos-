@@ -33,6 +33,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import Settings
+from app.services.intel import JOB_INTEL
+from app.services.restrictions import JOB_RESTRICTIONS
 
 # Cadence minimale : une valeur nulle ou negative ferait tourner la boucle du
 # scheduler a vide, sans jamais dormir.
@@ -379,6 +381,95 @@ REGLAGES: tuple[Reglage, ...] = (
         "Duree au-dela de laquelle une adresse non rattachee qui s'est tue est oubliee.",
         minimum=60.0,
         maximum=2_592_000.0,
+    ),
+    # --- Services atteints (ipfinder) ---
+    Reglage(
+        "netflow_track_destinations",
+        "services",
+        "bool",
+        "Retenir l'adresse DISTANTE atteinte par chaque abonne. C'est ce qui "
+        "alimente l'onglet Services et les restrictions. Le couper ne touche pas "
+        "a la mesure de volume par abonne.",
+    ),
+    Reglage(
+        "netflow_destination_limit",
+        "services",
+        "int",
+        "Nombre maximum de destinations retenues par fenetre. Un abonne en p2p "
+        "peut toucher des milliers d'adresses par minute.",
+        minimum=10,
+        maximum=50_000,
+    ),
+    Reglage(
+        "netflow_destination_retention_s",
+        "services",
+        "float",
+        "Duree au-dela de laquelle une destination qui s'est tue est oubliee. "
+        "Seule la MESURE est purgee : le nom de l'adresse, lui, est conserve.",
+        minimum=300.0,
+        maximum=7_776_000.0,
+    ),
+    Reglage(
+        "ipfinder_enabled",
+        "services",
+        "bool",
+        "Mettre un nom sur les adresses atteintes. A false, les volumes restent "
+        "mesures mais plus rien n'est identifie.",
+    ),
+    Reglage(
+        "ipfinder_rdns_enabled",
+        "services",
+        "bool",
+        "Interroger le nom inverse (PTR) des adresses nouvelles. C'est ce qui "
+        "distingue YouTube du reste de Google, et ce qui reconnait un service "
+        "qui a change de prefixe.",
+    ),
+    Reglage(
+        "ipfinder_rdap_enabled",
+        "services",
+        "bool",
+        "Interroger le registre (RDAP) pour l'organisation, l'AS et le pays. "
+        "COUPE PAR DEFAUT : c'est le seul appel sortant du controleur.",
+    ),
+    Reglage(
+        "ipfinder_batch_size",
+        "services",
+        "int",
+        "Adresses nommees par passage. Monter cette valeur vide la file plus "
+        "vite, au prix d'une rafale de requetes DNS.",
+        minimum=1,
+        maximum=1_000,
+    ),
+    Reglage(
+        "ipfinder_max_attempts",
+        "services",
+        "int",
+        "Tentatives avant d'abandonner une adresse sans nom inverse. La majorite "
+        "d'internet n'en a pas : insister ferait une requete perpetuelle.",
+        minimum=1,
+        maximum=20,
+    ),
+    _cadence(
+        "ipfinder_interval_s",
+        JOB_INTEL,
+        "Cadence a laquelle les adresses nouvellement vues sont nommees.",
+    ),
+    # --- Restrictions de trafic ---
+    _cadence(
+        "restrictions_interval_s",
+        JOB_RESTRICTIONS,
+        "Cadence a laquelle les restrictions sont reconciliees sur les routeurs. "
+        "C'est ce passage qui ajoute aux listes les adresses nouvellement "
+        "decouvertes d'un service restreint.",
+    ),
+    Reglage(
+        "restriction_address_limit",
+        "services",
+        "int",
+        "Plafond d'adresses par restriction. Une liste que le routeur parcourt a "
+        "chaque paquet ne doit pas grossir sans limite.",
+        minimum=10,
+        maximum=50_000,
     ),
 )
 

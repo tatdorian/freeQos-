@@ -42,6 +42,12 @@ class FakeRouterOsClient:
         self.ethernet_rows: list[dict[str, Any]] = []
         self.address_rows: list[dict[str, Any]] = []
         self.simple_queue_rows: list[dict[str, Any]] = []
+        # Pare-feu : lu pour le diagnostic fasttrack, ecrit pour les
+        # restrictions de trafic (address-list, filter, mangle).
+        self.firewall_filter_rows: list[dict[str, Any]] = []
+        self.firewall_address_list_rows: list[dict[str, Any]] = []
+        self.firewall_mangle_rows: list[dict[str, Any]] = []
+        self.raise_on_firewall: Exception | None = None
         self.queue_type_rows: list[dict[str, Any]] = []
         self.queue_tree_rows: list[dict[str, Any]] = []
         self.raise_on_neighbors: Exception | None = None
@@ -187,6 +193,21 @@ class FakeRouterOsClient:
         if self.raise_on_queues is not None:
             raise self.raise_on_queues
         return [dict(row) for row in self.queue_type_rows]
+
+    def firewall_filters(self) -> list[dict[str, Any]]:
+        if self.raise_on_firewall is not None:
+            raise self.raise_on_firewall
+        return [dict(row) for row in self.firewall_filter_rows]
+
+    def firewall_address_list(self) -> list[dict[str, Any]]:
+        if self.raise_on_firewall is not None:
+            raise self.raise_on_firewall
+        return [dict(row) for row in self.firewall_address_list_rows]
+
+    def firewall_mangle(self) -> list[dict[str, Any]]:
+        if self.raise_on_firewall is not None:
+            raise self.raise_on_firewall
+        return [dict(row) for row in self.firewall_mangle_rows]
 
     def queue_trees(self) -> list[dict[str, Any]]:
         if self.raise_on_queues is not None:

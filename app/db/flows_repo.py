@@ -209,6 +209,54 @@ class FlowsRepository:
                         for c in batch.apps
                     ],
                 )
+            if batch.destinations:
+                await conn.executemany(
+                    """
+                    INSERT INTO flow_destinations (subscriber_id, address, port, protocol,
+                                                   app, down_bytes, up_bytes, flows,
+                                                   first_seen, last_seen)
+                    SELECT $1, $2::inet, $3, $4, $5, $6, $7, $8, $9, $9
+                    WHERE EXISTS (SELECT 1 FROM subscribers WHERE id = $1)
+                    ON CONFLICT (subscriber_id, address) DO UPDATE
+                       SET down_bytes = flow_destinations.down_bytes + EXCLUDED.down_bytes,
+                           up_bytes   = flow_destinations.up_bytes + EXCLUDED.up_bytes,
+                           flows      = flow_destinations.flows + EXCLUDED.flows,
+                           port       = EXCLUDED.port,
+                           protocol   = EXCLUDED.protocol,
+                           app        = EXCLUDED.app,
+                           last_seen  = EXCLUDED.last_seen
+                    """,
+                    [
+                        (
+                            d.subscriber_id,
+                            d.address,
+                            d.port,
+                            d.protocol,
+                            d.app,
+                            d.down_bytes,
+                            d.up_bytes,
+                            d.flows,
+                            batch.ts,
+                        )
+                        for d in batch.destinations
+                    ],
+                )
+                # LA FILE D'ATTENTE DE L'ENRICHISSEMENT.
+                #
+                # Une adresse jamais vue entre ici avec resolved_at a NULL, et
+                # c'est exactement ce que le resolveur vient chercher. C'est ce
+                # qui rend la decouverte dynamique : personne n'a a declarer
+                # qu'une nouvelle adresse existe, le fait de l'avoir vue suffit.
+                # Une adresse deja connue ne voit que sa date bougee -- son
+                # verdict n'est pas recalcule pour rien.
+                await conn.executemany(
+                    """
+                    INSERT INTO ip_intel (address, first_seen, last_seen)
+                    VALUES ($1::inet, $2, $2)
+                    ON CONFLICT (address) DO UPDATE SET last_seen = EXCLUDED.last_seen
+                    """,
+                    [(d.address, batch.ts) for d in _adresses_uniques(batch.destinations)],
+                )
             if batch.hosts:
                 await conn.executemany(
                     """
@@ -268,6 +316,67 @@ class FlowsRepository:
                 sortie.append((str(row["prefix"]), int(row["id"])))
             for supplement in _as_list(row["extra_prefixes"]):
                 sortie.append((str(supplement), int(row["id"])))
+        return sortie
+
+    async def subscribers_by_id(self, ids: list[int]) -> dict[int, dict[str, Any]]:
+        """Login, nature et PoP de ces abonnes, indexes par identifiant.
+
+        La vue "en direct" vient de la memoire du collecteur, qui ne connait que
+        des identifiants. Afficher '#42' a un exploitant ne l'aide pas : il
+        raisonne en logins.
+        """
+        if not ids:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT s.id, s.login, s.kind, p.name AS pop_name,
+                       s.plan_down_mbps, s.plan_up_mbps
+                FROM subscribers s
+                LEFT JOIN pops p ON p.id = s.pop_id
+                WHERE s.id = ANY($1::bigint[])
+                """,
+                sorted(set(ids)),
+            )
+        return {int(row["id"]): dict(row) for row in rows}
+
+    async def prefixes_for_logins(self, logins: list[str]) -> dict[str, list[str]]:
+        """Les adresses de CES abonnes-la, par login.
+
+        Sert a borner une restriction a quelques clients. Les deux natures sont
+        reunies, comme partout ailleurs : l'adresse de la session en cours pour
+        un PPPoE, le bloc declare (et ses prefixes additionnels) pour un client
+        a IP fixe. Un login sans adresse connue rend une liste vide -- l'appelant
+        doit pouvoir dire "ce client n'a pas d'adresse, sa regle ne vise rien"
+        plutot que de poser une regle qui viserait tout le monde.
+        """
+        if not logins:
+            return {}
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT s.login,
+                       CASE WHEN c.address IS NOT NULL
+                            THEN host(c.address) || '/' || masklen(c.address)
+                            ELSE host(s.last_ip) || '/' ||
+                                 CASE WHEN family(s.last_ip) = 4 THEN 32 ELSE 128 END
+                       END AS prefix,
+                       c.extra_prefixes
+                FROM subscribers s
+                LEFT JOIN static_clients c
+                       ON c.reference = s.login AND c.enabled
+                WHERE s.login = ANY($1::text[])
+                  AND (c.address IS NOT NULL OR s.last_ip IS NOT NULL)
+                """,
+                logins,
+            )
+        sortie: dict[str, list[str]] = {login: [] for login in logins}
+        for row in rows:
+            login = str(row["login"])
+            if row["prefix"]:
+                sortie.setdefault(login, []).append(str(row["prefix"]))
+            for supplement in _as_list(row["extra_prefixes"]):
+                sortie.setdefault(login, []).append(str(supplement))
         return sortie
 
     async def top_subscribers(
@@ -493,6 +602,19 @@ class FlowsRepository:
                 older_than_s,
             )
         return int(resultat.rsplit(" ", 1)[-1] or 0)
+
+
+def _adresses_uniques(destinations: list[Any]) -> list[Any]:
+    """Une ligne par ADRESSE, pas par couple (abonne, adresse).
+
+    Dix abonnes qui regardent le meme serveur, c'est dix destinations et UNE
+    adresse a enrichir. Envoyer dix fois la meme ligne ferait dix conflits a
+    resoudre en base pour un seul nom a chercher.
+    """
+    vues: dict[str, Any] = {}
+    for destination in destinations:
+        vues.setdefault(destination.address, destination)
+    return list(vues.values())
 
 
 def _as_list(value: Any) -> list[Any]:

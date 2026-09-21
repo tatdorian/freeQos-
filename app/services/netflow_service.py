@@ -39,6 +39,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.collectors.netflow import NetflowDecoder, NetflowParseError
+from app.db.destinations_repo import DestinationsRepository
 from app.db.flows_repo import FlowsRepository, NetflowExportersRepository
 from app.services.flows import FlowAggregator, PrefixIndex
 
@@ -81,6 +82,10 @@ class NetflowProtocol(asyncio.DatagramProtocol):
 class NetflowService:
     flows_repo: FlowsRepository | None = None
     exporters_repo: NetflowExportersRepository | None = None
+    #: Sert uniquement a purger les destinations qui se sont tues. L'ECRITURE
+    #: des destinations passe par flows_repo, dans la meme transaction que le
+    #: reste de la fenetre : une fenetre a moitie ecrite serait pire qu'absente.
+    destinations_repo: DestinationsRepository | None = None
     bind: str = "0.0.0.0"  # noqa: S104 - un collecteur ecoute sur tous les liens
     port: int = 2055
     enabled: bool = False
@@ -89,6 +94,13 @@ class NetflowService:
     host_limit: int = 500
     track_hosts: bool = True
     host_retention_s: float = 86_400.0
+    #: Retenir l'adresse DISTANTE atteinte par chaque abonne : c'est ce qui
+    #: alimente "qui se connecte a quoi", l'enrichissement, et de la les
+    #: restrictions. Le couper ne coupe QUE cette partie -- la mesure de volume
+    #: par abonne continue exactement comme avant.
+    track_destinations: bool = True
+    destination_limit: int = 2_000
+    destination_retention_s: float = 604_800.0
 
     decoder: NetflowDecoder = field(default_factory=NetflowDecoder)
     aggregator: FlowAggregator = field(default_factory=FlowAggregator)
@@ -108,6 +120,8 @@ class NetflowService:
         )
         self.aggregator.host_limit = self.host_limit
         self.aggregator.track_hosts = self.track_hosts
+        self.aggregator.track_destinations = self.track_destinations
+        self.aggregator.destination_limit = self.destination_limit
 
     def apply_runtime(
         self,
@@ -116,6 +130,9 @@ class NetflowService:
         track_hosts: bool,
         host_limit: int,
         host_retention_s: float,
+        track_destinations: bool = True,
+        destination_limit: int = 2_000,
+        destination_retention_s: float = 604_800.0,
     ) -> None:
         """Reprend les reglages pilotables a chaud depuis l'interface.
 
@@ -130,6 +147,11 @@ class NetflowService:
         self.host_retention_s = host_retention_s
         self.aggregator.track_hosts = track_hosts
         self.aggregator.host_limit = host_limit
+        self.track_destinations = track_destinations
+        self.destination_limit = destination_limit
+        self.destination_retention_s = destination_retention_s
+        self.aggregator.track_destinations = track_destinations
+        self.aggregator.destination_limit = destination_limit
 
     # ------------------------------------------------------------ cycle de vie
     async def start(self) -> None:
@@ -271,7 +293,41 @@ class NetflowService:
                 await self.flows_repo.prune_hosts(older_than_s=self.host_retention_s)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Purge des hotes vus impossible : %s", exc)
+        if self.destinations_repo is not None and self.destination_retention_s > 0:
+            try:
+                # SEULE LA MESURE EST PURGEE. Ce qu'on a appris de l'adresse
+                # (son nom, son service) reste : le jour ou elle reapparait,
+                # elle est deja nommee.
+                await self.destinations_repo.prune(older_than_s=self.destination_retention_s)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Purge des destinations impossible : %s", exc)
         return ecrites
+
+    def live_connections(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Ce que les clients atteignent DANS LA FENETRE EN COURS.
+
+        La seule vue reellement en direct du controleur. La base, elle, ne
+        connait que les fenetres deja ecrites : au mieux la minute precedente.
+        "Qu'est-ce que ce client fait la, maintenant" ne se repond pas avec une
+        donnee vieille d'une minute.
+
+        Les identifiants d'abonnes ne sont PAS resolus ici : ce service ne
+        connait pas l'annuaire, et l'appelant (l'API) sait le faire sans
+        bloquer la reception.
+        """
+        return [
+            {
+                "subscriber_id": d.subscriber_id,
+                "address": d.address,
+                "port": d.port,
+                "protocol": d.protocol,
+                "app": d.app,
+                "down_bytes": d.down_bytes,
+                "up_bytes": d.up_bytes,
+                "flows": d.flows,
+            }
+            for d in self.aggregator.live_destinations(limit)
+        ]
 
     # ----------------------------------------------------------------- etat
     def status(self) -> dict[str, Any]:
@@ -299,5 +355,8 @@ class NetflowService:
             "declared_prefixes": len(self.aggregator.index),
             "exporters_known": len(self.exporters),
             "track_hosts": self.track_hosts,
+            "track_destinations": self.track_destinations,
+            "destinations_window": self.aggregator.destinations_in_window,
+            "destinations_dropped": self.aggregator.destinations_dropped,
             "last_error": self.last_error,
         }
