@@ -1529,6 +1529,24 @@ site. Trois règles le retirent de la liste des conversations :
 mesure. Le nombre de flux écartés est rendu par `/netflow/status` — un chiffre énorme veut
 dire que le filtre est trop large, et il faut pouvoir s'en apercevoir.
 
+**Le filtre nettoie aussi l'historique.** Refuser les nouvelles lignes ne suffit pas :
+celles déjà écrites resteraient jusqu'à expiration de la rétention — une semaine pendant
+laquelle la liste continue d'afficher le BFD entre routeurs. Chaque fenêtre repasse donc
+sur `flow_destinations` avec les mêmes trois motifs, pour que l'historique et le direct
+disent la même chose.
+
+### Chercher dans les conversations
+
+Deux cents conversations ne se consultent pas : ce qu'on cherche est toujours *ce PoP*,
+*ce client*, *ce service*. Quatre filtres se cumulent — **recherche** (adresse du client,
+login, adresse jointe, nom inverse, organisation, service), **PoP**, **catégorie**,
+**usage** — et chaque valeur du tableau est cliquable : on filtre ce qu'on voit plutôt que
+de le retrouver dans un menu.
+
+Les listes ne proposent **que ce qui existe** dans les données affichées. Offrir tous les
+PoPs de l'inventaire ferait choisir un filtre qui ne rend rien, et on chercherait la panne
+plutôt que le filtre.
+
 ### Ce que le collecteur fait des flux
 
 | Étape | Règle |
@@ -1879,7 +1897,7 @@ le dit.
 | `GET` | `/api/v1/netflow/hosts` | Adresses vues, rattachées à **aucune** fiche (aide à la saisie) |
 | `POST` | `/api/v1/netflow/flush` | Écrire la fenêtre en cours tout de suite |
 | `GET` | `/api/v1/netflow/connections` | **Connexions clients en cours** : la fenêtre en mémoire, la seule vue en direct (filtre `app`) |
-| `GET` | `/api/v1/netflow/pairs` | **Qui parle à qui** : une ligne par conversation, sur la période, avec celles en cours marquées |
+| `GET` | `/api/v1/netflow/pairs` | **Qui parle à qui** : une ligne par conversation, celles en cours marquées. Filtres `q`, `pop`, `category`, `app`, `service`, `client` |
 | `GET` | `/api/v1/netflow/destinations` | Adresses atteintes sur la période, déjà nommées, + la répartition par service |
 | `GET` | `/api/v1/netflow/destinations/{ip}` | **Fiche d'une adresse** : nom inverse, service et à quel titre, organisation, AS, pays, et qui la joint |
 | `POST` | `/api/v1/netflow/destinations/{ip}/resolve` | Relancer l'analyse d'une adresse |
@@ -1980,7 +1998,7 @@ si l'extension est absente.
 ## Tests
 
 ```bash
-make test        # 1331 tests, dont 1241 sans aucune infrastructure
+make test        # 1334 tests, dont 1244 sans aucune infrastructure
 ```
 
 Tout est mocké derrière des `Protocol` : faux routeur RouterOS (tables `/ppp/active` et

@@ -113,6 +113,9 @@ class DestinationsRepository:
         app: str | None = None,
         client: str | None = None,
         service: str | None = None,
+        category: str | None = None,
+        pop: str | None = None,
+        search: str | None = None,
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         """QUI PARLE A QUI : une ligne par couple (client, adresse atteinte).
@@ -154,16 +157,110 @@ class DestinationsRepository:
                   AND ($2::text IS NULL OR d.app = $2)
                   AND ($3::inet IS NULL OR d.client = $3)
                   AND ($4::text IS NULL OR i.service = $4)
+                  AND ($5::text IS NULL OR i.category = $5)
+                  AND ($6::text IS NULL OR p.name = $6)
+                  -- LA RECHERCHE PORTE SUR TOUT CE QUI IDENTIFIE UNE LIGNE :
+                  -- l'adresse du client, son login, l'adresse jointe, son nom
+                  -- inverse, son organisation. Un exploitant tape ce qu'il a
+                  -- sous les yeux, pas le champ ou ca se trouve.
+                  AND ($7::text IS NULL
+                       OR host(d.client) ILIKE '%' || $7 || '%'
+                       OR coalesce(s.login, '') ILIKE '%' || $7 || '%'
+                       OR host(d.address) ILIKE '%' || $7 || '%'
+                       OR coalesce(i.hostname, '') ILIKE '%' || $7 || '%'
+                       OR coalesce(i.org, '') ILIKE '%' || $7 || '%'
+                       OR coalesce(i.service, '') ILIKE '%' || $7 || '%')
                 ORDER BY (d.down_bytes + d.up_bytes) DESC
-                LIMIT $5
+                LIMIT $8
                 """,
                 minutes,
                 app,
                 client,
                 service,
+                category,
+                pop,
+                search,
                 limit,
             )
         return [dict(row) for row in rows]
+
+    async def pairs_facets(self, *, minutes: int = 60) -> dict[str, list[str]]:
+        """Les valeurs REELLEMENT presentes sur la periode, pour les filtres.
+
+        Proposer une liste figee -- tous les PoPs de l'inventaire, toutes les
+        familles du catalogue -- ferait choisir des filtres qui ne rendent rien.
+        On n'offre que ce qui existe dans les donnees affichees.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT DISTINCT p.name AS pop, i.category, i.service, d.app
+                FROM flow_destinations d
+                LEFT JOIN ip_intel i    ON i.address = d.address
+                LEFT JOIN subscribers s ON s.id = d.subscriber_id
+                LEFT JOIN pops p        ON p.id = s.pop_id
+                WHERE d.last_seen >= now() - make_interval(mins => $1)
+                """,
+                minutes,
+            )
+        sortie: dict[str, set[str]] = {
+            "pops": set(),
+            "categories": set(),
+            "services": set(),
+            "apps": set(),
+        }
+        for row in rows:
+            for cle, colonne in (
+                ("pops", "pop"),
+                ("categories", "category"),
+                ("services", "service"),
+                ("apps", "app"),
+            ):
+                valeur = row[colonne]
+                if valeur:
+                    sortie[cle].add(str(valeur))
+        return {cle: sorted(valeurs) for cle, valeurs in sortie.items()}
+
+    async def purge_infrastructure(
+        self,
+        *,
+        customer_networks: list[str],
+        infrastructure_networks: list[str],
+        ports: list[int],
+    ) -> int:
+        """Efface les conversations qui n'en sont pas.
+
+        LE FILTRE A L'ECRITURE NE SUFFIT PAS. Il empeche les nouvelles lignes,
+        mais celles deja ecrites restent jusqu'a expiration de la retention --
+        une semaine pendant laquelle la liste continue d'afficher le BFD entre
+        routeurs et l'interrogation du parc. Changer le filtre doit nettoyer ce
+        qu'il aurait refuse.
+
+        Trois motifs, les memes qu'a l'ecriture : une destination dans l'espace
+        client (deux machines du reseau qui se parlent), un bout dans
+        l'infrastructure, ou un port du plan de gestion.
+        """
+        if not (customer_networks or infrastructure_networks or ports):
+            return 0
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                """
+                DELETE FROM flow_destinations
+                 WHERE ($1::text[] IS NOT NULL
+                        AND address <<= ANY($1::text[]::inet[]))
+                    OR ($2::text[] IS NOT NULL
+                        AND (address <<= ANY($2::text[]::inet[])
+                             OR client <<= ANY($2::text[]::inet[])))
+                    OR ($3::int[] IS NOT NULL AND port = ANY($3::int[]))
+                """,
+                customer_networks or None,
+                infrastructure_networks or None,
+                ports or None,
+            )
+        efface = int(resultat.rsplit(" ", 1)[-1] or 0)
+        if efface:
+            logger.info("%d conversation(s) d'exploitation effacee(s) de l'historique", efface)
+        return efface
 
     async def by_service(self, *, minutes: int = 60, limit: int = 30) -> list[dict[str, Any]]:
         """Volume par service reconnu. C'est la reponse a "qui fait du streaming".

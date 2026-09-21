@@ -1117,7 +1117,7 @@ function renderExecSankey(host, subs) {
  *  mesure fait partie de la mesure, et la lecture n'en retient qu'un.
  */
 
-const FLOW = { minutes: 60, vantage: '', app: null };
+const FLOW = { minutes: 60, vantage: '', app: null, pop: '', category: '', search: '' };
 
 const VANTAGE_LABEL = {
   edge: 'en amont du coeur',
@@ -1318,36 +1318,58 @@ function debitText(octets, secondes) {
  *  ensemble. Le couple (client, destination) est la seule forme qui montre la
  *  conversation -- et c'est ce qu'on vient chercher quand une famille d'usage
  *  pese sans qu'on sache pourquoi. */
+/** Remplit un selecteur avec ce qui EXISTE dans les donnees.
+ *
+ *  Proposer tous les PoPs de l'inventaire et toutes les familles du catalogue
+ *  ferait choisir des filtres qui ne rendent rien -- et on chercherait la panne
+ *  plutot que le filtre. */
+function remplirFacette(id, libelle, valeurs, choisi) {
+  const select = document.getElementById(id);
+  const avant = select.value;
+  select.innerHTML = '<option value="">' + esc(libelle) + '</option>' +
+    (valeurs || []).map((v) =>
+      '<option value="' + esc(v) + '">' + esc(v) + '</option>').join('');
+  select.value = choisi || avant || '';
+}
+
 async function loadFlowPairs() {
   const hote = document.getElementById('flow-pairs');
-  const etiquette = document.getElementById('flow-pairs-filter');
-  etiquette.innerHTML = FLOW.app
-    ? 'usage : <b>' + esc(FLOW.app) + '</b> <a href="#" id="flow-pairs-clear">tout voir</a>'
-    : 'toutes familles';
+  const parametres = '?minutes=' + FLOW.minutes + '&limit=200' +
+    (FLOW.app ? '&app=' + encodeURIComponent(FLOW.app) : '') +
+    (FLOW.pop ? '&pop=' + encodeURIComponent(FLOW.pop) : '') +
+    (FLOW.category ? '&category=' + encodeURIComponent(FLOW.category) : '') +
+    (FLOW.search ? '&q=' + encodeURIComponent(FLOW.search) : '');
 
   let data;
   try {
-    data = await api('/netflow/pairs?minutes=' + FLOW.minutes + '&limit=200' +
-      (FLOW.app ? '&app=' + encodeURIComponent(FLOW.app) : ''));
+    data = await api('/netflow/pairs' + parametres);
   } catch (err) {
     hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
     return;
   }
+  const facettes = data.facets || {};
+  remplirFacette('flow-pairs-pop', 'Tous les PoPs', facettes.pops, FLOW.pop);
+  remplirFacette('flow-pairs-category', 'Toutes categories', facettes.categories, FLOW.category);
+  remplirFacette('flow-pairs-app', 'Tous usages', facettes.apps, FLOW.app);
   const direct = new Set((data.live || []).map((c) => c[0] + '|' + c[1]));
   const octetsDirect = data.live_bytes || {};
   const fenetre = data.window_seconds || 0;
   const periode = FLOW.minutes * 60;
   const lignes = data.pairs || [];
 
+  const filtre = [FLOW.search, FLOW.pop, FLOW.category, FLOW.app].filter(Boolean).length;
   document.getElementById('flow-pairs-count').textContent =
-    lignes.length + ' conversation(s) · ' + direct.size + ' en direct';
+    lignes.length + ' conversation(s) · ' + direct.size + ' en direct' +
+    (filtre ? ' · ' + filtre + ' filtre(s)' : '');
 
   if (!lignes.length) {
-    hote.innerHTML = '<div class="empty">Aucune conversation sur cette periode.</div>';
+    hote.innerHTML = '<div class="empty">' + (filtre
+      ? 'Aucune conversation ne correspond a ces filtres.'
+      : 'Aucune conversation sur cette periode.') + '</div>';
     return;
   }
-  hote.innerHTML = '<table><thead><tr><th>Client</th><th>Destination</th>' +
-    '<th>Service</th><th class="num">Port</th><th>Proto</th><th>Usage</th>' +
+  hote.innerHTML = '<table><thead><tr><th>Client</th><th>PoP</th><th>Destination</th>' +
+    '<th>Service</th><th>Categorie</th><th class="num">Port</th><th>Proto</th><th>Usage</th>' +
     '<th class="num">Descendant</th><th class="num">Montant</th>' +
     '<th class="num">Debit moyen</th><th class="num">En direct</th>' +
     '</tr></thead><tbody>' +
@@ -1356,12 +1378,21 @@ async function loadFlowPairs() {
       const vivant = direct.has(cle);
       return '<tr>' +
         '<td class="login">' + clientCell(r) + '</td>' +
+        '<td>' + (r.pop_name
+          ? '<a href="#" data-pair-pop="' + esc(r.pop_name) + '">' + esc(r.pop_name) + '</a>'
+          : '<span class="hint">-</span>') + '</td>' +
         '<td><a href="#" data-pair-ip="' + esc(r.address) + '"><code>' +
           esc(r.address) + '</code></a>' +
           (domaine(r.hostname)
             ? '<br><b style="font-size:.75rem">' + esc(domaine(r.hostname)) + '</b>' : '') +
           (r.hostname ? '<br><span class="hint">' + esc(r.hostname) + '</span>' : '') + '</td>' +
-        '<td>' + (r.service ? esc(r.service) : svcBadge(r.category)) + '</td>' +
+        '<td>' + (r.service
+          ? '<a href="#" data-pair-service="' + esc(r.service) + '">' + esc(r.service) + '</a>'
+          : '<span class="hint">non identifie</span>') + '</td>' +
+        '<td>' + (r.category
+          ? '<a href="#" data-pair-cat="' + esc(r.category) + '">' +
+            svcBadge(r.category) + '</a>'
+          : svcBadge(null)) + '</td>' +
         '<td class="num">' + esc(r.port || '-') + '</td>' +
         '<td>' + esc(protoName(r.protocol)) + '</td>' +
         '<td>' + esc(r.app || '-') + '</td>' +
@@ -1381,14 +1412,28 @@ async function loadFlowPairs() {
       openPairAddress(a.dataset.pairIp);
     });
   });
-  const vider = document.getElementById('flow-pairs-clear');
-  if (vider) {
-    vider.addEventListener('click', (e) => {
+  // Chaque valeur du tableau est un filtre : on clique ce qu'on voit plutot
+  // que de le retrouver dans un selecteur.
+  const filtrer = (attribut, champ) => {
+    hote.querySelectorAll('[' + attribut + ']').forEach((a) => {
+      a.addEventListener('click', (e) => {
+        e.preventDefault();
+        const valeur = a.getAttribute(attribut);
+        FLOW[champ] = FLOW[champ] === valeur ? '' : valeur;
+        loadFlowPairs();
+      });
+    });
+  };
+  filtrer('data-pair-pop', 'pop');
+  filtrer('data-pair-cat', 'category');
+  hote.querySelectorAll('[data-pair-service]').forEach((a) => {
+    a.addEventListener('click', (e) => {
       e.preventDefault();
-      FLOW.app = null;
+      document.getElementById('flow-pairs-search').value = a.dataset.pairService;
+      FLOW.search = a.dataset.pairService;
       loadFlowPairs();
     });
-  }
+  });
 }
 
 /** La fiche complete d'une adresse, depuis l'onglet Trafic. */
@@ -6484,6 +6529,27 @@ document.getElementById('flow-range').addEventListener('change', loadTraffic);
 document.getElementById('flow-vantage').addEventListener('change', loadTraffic);
 document.getElementById('exporter-form').addEventListener('submit', declareExporter);
 document.getElementById('key-form').addEventListener('submit', createApiKey);
+// Les filtres de "qui parle a qui". La recherche se declenche sur 'change'
+// (validation ou perte de focus) et non sur chaque frappe : une requete par
+// caractere ferait autant de lectures de base qu'il y a de lettres.
+document.getElementById('flow-pairs-search').addEventListener('change', (e) => {
+  FLOW.search = e.target.value.trim();
+  loadFlowPairs();
+});
+['pop', 'category', 'app'].forEach((champ) => {
+  document.getElementById('flow-pairs-' + champ).addEventListener('change', (e) => {
+    FLOW[champ] = e.target.value || (champ === 'app' ? null : '');
+    loadFlowPairs();
+  });
+});
+document.getElementById('flow-pairs-reset').addEventListener('click', () => {
+  FLOW.app = null;
+  FLOW.pop = '';
+  FLOW.category = '';
+  FLOW.search = '';
+  document.getElementById('flow-pairs-search').value = '';
+  loadFlowPairs();
+});
 document.getElementById('flow-export-dry')
   .addEventListener('click', () => applyFlowExport(true));
 document.getElementById('flow-export-apply')

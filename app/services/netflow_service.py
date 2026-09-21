@@ -323,6 +323,21 @@ class NetflowService:
                 await self.destinations_repo.prune(older_than_s=self.destination_retention_s)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Purge des destinations impossible : %s", exc)
+        if self.destinations_repo is not None and self.track_destinations:
+            try:
+                # L'HISTORIQUE DOIT DIRE LA MEME CHOSE QUE LE FILTRE. Sans ce
+                # passage, les lignes ecrites avant que le filtre n'existe
+                # resteraient affichees pendant toute la retention -- une
+                # semaine de BFD entre routeurs dans la liste des conversations.
+                await self.destinations_repo.purge_infrastructure(
+                    customer_networks=[str(r) for r in self.aggregator.customer_networks],
+                    infrastructure_networks=[
+                        str(r) for r in self.aggregator.infrastructure_networks
+                    ],
+                    ports=sorted(self.aggregator.infrastructure_ports),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Nettoyage des conversations d'exploitation impossible : %s", exc)
         return ecrites
 
     @property
