@@ -136,21 +136,17 @@
       <h2>Who consumes</h2>
       <div class="table-wrap" id="flow-top"></div>
 
-      <h2>What this traffic is made of</h2>
-      <div class="table-wrap" id="flow-apps"></div>
-
-      <h2>Who talks to whom</h2>
+      <h2>Who talks to whom, client by client</h2>
       <div class="toolbar">
         <input id="flow-pairs-search" placeholder="Client, login, address, name"
                maxlength="128" style="max-width:260px">
         <select id="flow-pairs-pop" style="width:auto"></select>
         <select id="flow-pairs-category" style="width:auto"></select>
-        <select id="flow-pairs-app" style="width:auto"></select>
         <button class="sm" id="flow-pairs-reset">Show all</button>
         <span class="spacer"></span>
         <span class="mode" id="flow-pairs-count"></span>
       </div>
-      <div class="table-wrap" id="flow-pairs"></div>
+      <div id="flow-pairs"></div>
       <div id="flow-pair-detail"></div>
 
       <h2>Addresses seen, undeclared</h2>
