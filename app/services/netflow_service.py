@@ -115,6 +115,10 @@ class NetflowService:
     started_at: datetime | None = None
     last_flush_at: datetime | None = None
     last_error: str | None = None
+    #: Debit mesure par NetFlow sur la DERNIERE fenetre ecrite, par abonne :
+    #: ``id -> (rx_bps, tx_bps, fin de fenetre)``. rx = ce que l'abonne emet,
+    #: tx = ce qu'il recoit, meme convention que les compteurs de files.
+    subscriber_rates: dict[int, tuple[float, float, datetime]] = field(default_factory=dict)
     _transport: asyncio.DatagramTransport | None = None
 
     def __post_init__(self) -> None:
@@ -289,7 +293,9 @@ class NetflowService:
             # la main tout de suite evite d'interroger la base toutes les
             # minutes pour une fenetre qui ne peut contenir que du vide.
             return 0
+        duree = self.window_seconds
         lot = self.aggregator.flush(datetime.now(tz=UTC))
+        self._note_rates(lot, duree)
         ecrites = 0
         if self.flows_repo is not None and not lot.empty:
             try:
@@ -339,6 +345,47 @@ class NetflowService:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Nettoyage des conversations d'exploitation impossible : %s", exc)
         return ecrites
+
+    def _note_rates(self, lot: Any, duree: float) -> None:
+        """Retient le debit de chaque abonne sur la fenetre qui se ferme.
+
+        Un meme flux peut etre vu a plusieurs points (sortie internet ET PoP) :
+        on garde le plus grand des points de vue, jamais leur somme, qui
+        compterait deux fois le meme octet.
+        """
+        if duree <= 0:
+            return
+        fin = datetime.now(tz=UTC)
+        par_abonne: dict[int, list[int]] = {}
+        for compteur in lot.subscribers:
+            cumul = par_abonne.setdefault(compteur.subscriber_id, [0, 0])
+            cumul[0] = max(cumul[0], int(compteur.up_bytes))
+            cumul[1] = max(cumul[1], int(compteur.down_bytes))
+        self.subscriber_rates = {
+            sid: (montant * 8 / duree, descendant * 8 / duree, fin)
+            for sid, (montant, descendant) in par_abonne.items()
+        }
+
+    def rate_for(self, subscriber_id: int, *, max_age_s: float = 300.0) -> tuple[float, float]:
+        """(rx_bps, tx_bps) mesures par NetFlow, ou (0, 0) si rien de recent.
+
+        ZERO ET NON "INCONNU" QUAND LE COLLECTEUR TOURNE : un abonne declare que
+        NetFlow n'a vu passer dans aucune fenetre recente n'a effectivement pas
+        consomme. Sans collecteur actif, l'appelant ne doit pas demander.
+        """
+        mesure = self.subscriber_rates.get(subscriber_id)
+        if mesure is None:
+            return (0.0, 0.0)
+        rx, tx, fin = mesure
+        if (datetime.now(tz=UTC) - fin).total_seconds() > max_age_s:
+            return (0.0, 0.0)
+        return (rx, tx)
+
+    @property
+    def measuring(self) -> bool:
+        """Le collecteur recoit-il reellement des flux ? Sans cela, un zero
+        de NetFlow se lirait comme une absence de trafic."""
+        return bool(self.enabled and self.packets_received and self.last_flush_at)
 
     @property
     def window_seconds(self) -> float:

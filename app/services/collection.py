@@ -151,6 +151,9 @@ class CollectionService:
         # Depot des observations ARP. Absent = detection coupee, et tout le
         # reste se comporte exactement comme avant.
         self.sightings = sightings
+        # Collecteur NetFlow, branche apres coup par le conteneur (il est cree
+        # plus tard). Source de secours du debit des clients a IP fixe.
+        self.netflow: Any = None
         self.directory = directory
         self.writer = writer
         self.backhauls = list(backhauls if backhauls is not None else settings.enabled_backhauls)
@@ -450,6 +453,15 @@ class CollectionService:
                 rx_bytes=octets[0],
                 tx_bytes=octets[1],
             )
+            rx_bps, tx_bps = rate.rx_bps, rate.tx_bps
+            if rx_bps is None and tx_bps is None and octets == (None, None):
+                # AUCUNE FILE NE LE COMPTE (pas encore posee, ecriture coupee,
+                # ou son trafic ne traverse pas le routeur de son PoP) : NetFlow
+                # l'a peut-etre vu passer. Mieux vaut ce debit, a la minute pres,
+                # que rien du tout pour un client qu'on vient d'ajouter.
+                netflow = self.netflow
+                if netflow is not None and netflow.measuring:
+                    rx_bps, tx_bps = netflow.rate_for(subscriber_id)
             rows.append(
                 (
                     subscriber_id,
@@ -465,8 +477,8 @@ class CollectionService:
                         uptime_s=None,
                         rx_bytes=octets[0],
                         tx_bytes=octets[1],
-                        rx_bps=rate.rx_bps,
-                        tx_bps=rate.tx_bps,
+                        rx_bps=rx_bps,
+                        tx_bps=tx_bps,
                         rtt_ms=(
                             self.rtt_prober.get(subscriber_id)
                             if self.rtt_prober is not None
