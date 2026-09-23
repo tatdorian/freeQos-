@@ -376,13 +376,13 @@ async function loadTopTalkers() {
   }
   host.innerHTML =
     '<table><thead><tr><th>Login</th><th>PoP</th><th class="num">Download</th>' +
-    '<th style="width:150px">vs limite</th><th class="num">Upload</th>' +
-    '<th class="num">Latence</th></tr></thead><tbody>' +
+    '<th style="width:150px">vs limit</th><th class="num">Upload</th>' +
+    '<th class="num">Latency</th></tr></thead><tbody>' +
     rows.map((r) => {
       const limiteDown = (r.effective_down_mbps || 0) * 1e6;
       return '<tr class="clickable" data-sub="' + r.subscriber_id + '">' +
         '<td class="login">' + esc(r.login) + '</td>' +
-        '<td>' + esc(r.pop_name || '-') + '</td>' +
+        '<td class="nowrap">' + esc(r.pop_name || '-') + '</td>' +
         '<td class="num" style="color:var(--down)">' + esc(bpsText(r.tx_bps)) + '</td>' +
         '<td>' + meter(r.tx_bps, limiteDown) + '</td>' +
         '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
@@ -1184,15 +1184,17 @@ async function loadTraffic() {
   FLOW.vantage = document.getElementById('flow-vantage').value || '';
 
   const suffixe = '?minutes=' + FLOW.minutes + (FLOW.vantage ? '&vantage=' + FLOW.vantage : '');
-  const [etat, top, hotes, exporteurs] = await Promise.all([
+  const [etat, top, hotes, exporteurs, points] = await Promise.all([
     api('/netflow/status'),
     api('/netflow/top' + suffixe + '&limit=25').catch(() => null),
     api('/netflow/hosts?limit=60').catch(() => ({ hosts: [], vlans: [] })),
     api('/netflow/exporters').catch(() => []),
+    api('/netflow/vantages?minutes=' + FLOW.minutes).catch(() => null),
   ]);
 
   const exportEtat = await api('/netflow/export').catch(() => null);
   flowNotice(flowDiagnostic(etat, exportEtat));
+  renderVantages(points, top);
   renderFlowStats(etat, top);
   renderFlowTop(top);
   renderFlowHosts(hotes);
@@ -1205,6 +1207,89 @@ async function loadTraffic() {
       ? etat.bind + ' · ' + etat.packets_received + ' datagram(s)'
       : 'collector stopped';
   }
+}
+
+/** Les deux points de mesure, cote a cote : la sortie internet et les PoP.
+ *
+ *  Ils voient le meme trafic a deux endroits. Les montrer ensemble dit tout
+ *  de suite si l'un manque, et lequel sert au decompte (on ne compte le meme
+ *  octet qu'une fois). */
+const VANTAGE_CARD = {
+  edge: {
+    title: 'Internet edge',
+    sub: 'Upstream of the core, where internet arrives',
+    icon: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>' +
+      '<path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/>',
+    missing: 'No router exports here yet. Give your internet gateway the ' +
+      '<b>Gateway</b> role in Devices: its export is then set up automatically.',
+  },
+  pop: {
+    title: 'PoPs',
+    sub: 'At each point of presence, next to the subscribers',
+    icon: '<rect x="3" y="5" width="18" height="6" rx="2"/><rect x="3" y="13" width="18" height="6" rx="2"/>' +
+      '<path d="M7 8h.01M7 16h.01"/>',
+    missing: 'No PoP exports yet. The export is set up automatically on each ' +
+      'PoP router once writing is enabled.',
+  },
+};
+
+function renderVantages(data, top) {
+  const hote = document.getElementById('flow-vantages');
+  if (!hote) return;
+  if (!data || !data.points) { hote.innerHTML = ''; return; }
+  const compte = (top && top.vantage) || data.accounting;
+  hote.innerHTML = data.points.map((p) => {
+    const carte = VANTAGE_CARD[p.vantage];
+    if (!carte) return '';
+    const t = p.totals || {};
+    const compteIci = p.vantage === compte;
+    const etat = p.active
+      ? (compteIci ? '<span class="badge file">Counting</span>'
+        : '<span class="badge ok">Receiving</span>')
+      : (p.exporters ? '<span class="badge warn">Silent</span>'
+        : '<span class="badge">No exporter</span>');
+    return '<div class="vantage' + (compteIci ? ' counting' : '') + '">' +
+      '<div class="vantage-head">' +
+        '<span class="vantage-icon"><svg viewBox="0 0 24 24">' + carte.icon + '</svg></span>' +
+        '<div class="vantage-title">' + carte.title +
+          '<span class="hint">' + carte.sub + '</span></div>' +
+        etat +
+      '</div>' +
+      (p.exporters || p.active
+        ? '<div class="vantage-figures">' +
+            '<div class="d"><span>Down</span><b>' + bytesText(t.down_bytes || 0) + '</b></div>' +
+            '<div class="u"><span>Up</span><b>' + bytesText(t.up_bytes || 0) + '</b></div>' +
+            '<div><span>Subscribers</span><b>' + esc(t.subscribers || 0) + '</b></div>' +
+            '<div><span>Exporters</span><b>' + esc(p.exporters) + '</b></div>' +
+          '</div>'
+        : '<div class="vantage-note">' + carte.missing + '</div>') +
+    '</div>';
+  }).join('');
+}
+
+/** Drapeau d'un pays a partir de son code ISO (FR -> drapeau francais).
+ *  Aucune image : les indicateurs regionaux Unicode suffisent. */
+function drapeau(code) {
+  const c = String(code || '').trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(c)) return '';
+  return '<span class="flag" title="' + c + '">' +
+    String.fromCodePoint(...[...c].map((l) => 0x1F1E6 + l.charCodeAt(0) - 65)) + '</span>';
+}
+
+/** Ville, pays, et drapeau d'une adresse localisee ; vide si inconnue. */
+function lieu(r) {
+  if (!r || !(r.country || r.city)) return '';
+  return '<span class="geo">' + drapeau(r.country) +
+    esc([r.city, r.country].filter(Boolean).join(', ')) + '</span>';
+}
+
+/** Lien vers la carte (OpenStreetMap), ouvert dans un nouvel onglet. */
+function lienCarte(lat, lon) {
+  if (lat === null || lat === undefined || lon === null || lon === undefined) return '';
+  const la = Number(lat).toFixed(4);
+  const lo = Number(lon).toFixed(4);
+  return '<a href="//www.openstreetmap.org/?mlat=' + la + '&mlon=' + lo +
+    '#map=9/' + la + '/' + lo + '" target="_blank" rel="noopener">Open map</a>';
 }
 
 function renderFlowStats(etat, top) {
@@ -1238,7 +1323,7 @@ function renderFlowTop(top) {
     lignes.map((r) =>
       '<tr><td><a href="#" data-flow-sub="' + esc(r.subscriber_id) + '">' +
         esc(r.login) + '</a></td>' +
-      '<td>' + esc(r.pop_name || '-') + '</td>' +
+      '<td class="nowrap">' + esc(r.pop_name || '-') + '</td>' +
       '<td>' + kindBadge(r.kind) + '</td>' +
       '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
       '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
@@ -1353,7 +1438,8 @@ async function loadFlowPairs() {
         esc(r.address) + '</code></a>' +
         (domaine(r.hostname)
           ? '<br><b style="font-size:.75rem">' + esc(domaine(r.hostname)) + '</b>' : '') +
-        (r.hostname ? '<br><span class="hint">' + esc(r.hostname) + '</span>' : '') + '</td>' +
+        (r.hostname ? '<br><span class="hint">' + esc(r.hostname) + '</span>' : '') +
+        (lieu(r) ? '<br>' + lieu(r) : '') + '</td>' +
       '<td>' + (r.service
         ? '<a href="#" data-pair-service="' + esc(r.service) + '">' + esc(r.service) + '</a>'
         : '<span class="hint">unidentified</span>') + '</td>' +
@@ -1520,7 +1606,7 @@ function renderFlowExporters(rows) {
         '<td>' + esc(e.name || '-') + '</td>' +
         '<td><span class="badge ' + (inconnu ? 'warn' : 'ok') + '">' +
           esc(VANTAGE_LABEL[e.vantage] || e.vantage) + '</span></td>' +
-        '<td>' + esc(e.pop_name || '-') + '</td>' +
+        '<td class="nowrap">' + esc(e.pop_name || '-') + '</td>' +
         '<td class="num">' + (e.sampling_rate > 1 ? '1:' + esc(e.sampling_rate) : 'all') + '</td>' +
         '<td class="num">' + esc(e.packets_seen) + '</td>' +
         '<td class="num">' + esc(e.flows_seen) + '</td>' +
@@ -2822,7 +2908,7 @@ async function loadRoutersHealth() {
       if (!r.reachable) {
         return '<tr>' +
           '<td class="login"><b>' + esc(r.router) + '</b></td>' +
-          '<td>' + esc(r.pop_name || '-') + '</td>' +
+          '<td class="nowrap">' + esc(r.pop_name || '-') + '</td>' +
           '<td colspan="5"><span class="badge crit">unreachable</span>' +
             '<span class="hint">' + esc(r.error || '') + '</span></td>' +
           '</tr>';
@@ -2840,7 +2926,7 @@ async function loadRoutersHealth() {
           (r.identity && r.identity !== r.router
             ? '<span class="hint" style="display:block">' + esc(r.identity) + '</span>'
             : '') + '</td>' +
-        '<td>' + esc(r.pop_name || '-') + '</td>' +
+        '<td class="nowrap">' + esc(r.pop_name || '-') + '</td>' +
         '<td>' + esc(r.board_name || '-') +
           (r.cpu_count ? ' <span class="hint">' + esc(r.cpu_count) + ' core(s)</span>' : '') +
           '</td>' +
@@ -3531,10 +3617,12 @@ function ipCard(fiche, periodeSecondes, actions) {
       fait('Reverse name', intel.hostname ? esc(intel.hostname) : null) +
       fait('Organisation', intel.org ? esc(intel.org) : null) +
       fait('AS', intel.asn ? 'AS' + esc(intel.asn) : null) +
-      fait('Country', intel.country ? esc(intel.country) : null) +
+      fait('Country', intel.country ? drapeau(intel.country) + esc(intel.country) : null) +
       fait('City', intel.city ? esc(intel.city) : null) +
       fait('Region', intel.region ? esc(intel.region) : null) +
-      fait('Coordinates', position ? '<code>' + esc(position) + '</code>' : null) +
+      fait('Coordinates', position
+        ? '<code>' + esc(position) + '</code> ' + lienCarte(intel.latitude, intel.longitude)
+        : null) +
       fait('Announced prefix', esc(intel.network || catalogue.matched_prefix || '')) +
       fait('Analysed', intel.resolved_at ? esc(depuis(intel.resolved_at)) : null) +
       fait('Clients', esc(totaux.clients || 0)) +
@@ -3561,7 +3649,7 @@ function ipCard(fiche, periodeSecondes, actions) {
         fiche.clients.map((s) => '<tr>' +
           '<td class="login">' + clientCell(s) +
             (s.kind === 'static' ? ' <span class="badge">static IP</span>' : '') + '</td>' +
-          '<td>' + esc(s.pop_name || '-') + '</td>' +
+          '<td class="nowrap">' + esc(s.pop_name || '-') + '</td>' +
           '<td class="num">' + esc(s.port || '-') + '</td>' +
           '<td>' + esc(protoName(s.protocol)) + '</td>' +
           '<td>' + esc(s.app || '-') + '</td>' +
@@ -6425,7 +6513,7 @@ async function refreshHealth() {
 const GROUPE_TITRE = {
   shaping: 'Shaping', cake: 'CAKE (AQM)', enforcement: 'Write safeguards',
   cadences: 'Collection cadences', detection: 'Static-IP client detection',
-  trafic: 'Traffic (NetFlow)',
+  trafic: 'Traffic (NetFlow)', services: 'Services and IP location',
 };
 
 /** Controle de saisie adapte au type du reglage. Un reglage "nullable" recoit
@@ -6577,6 +6665,12 @@ async function show(view) {
   document.getElementById('view-' + view).classList.add('active');
   document.querySelectorAll('nav.tabs a').forEach((a) =>
     a.classList.toggle('active', a.dataset.view === view));
+  // Le grand titre reprend l'intitule de l'onglet : on sait ou l'on est sans
+  // chercher l'onglet allume.
+  const lien = document.querySelector('nav.tabs a[data-view="' + view + '"]');
+  const titre = document.getElementById('page-title');
+  if (lien && titre) titre.textContent = lien.textContent.trim();
+  document.title = (lien ? lien.textContent.trim() + ' · ' : '') + 'freeQoS';
   await refresh();
 }
 
@@ -6614,6 +6708,38 @@ async function refresh() {
 
 function route() { show((location.hash || '#/dashboard').replace('#/', '')); }
 
+/* ------------------------------------------------------------ apparence */
+
+/** Clair, sombre, ou comme le systeme. Le choix est retenu dans ce navigateur
+ *  seulement : c'est une preference de poste, pas un reglage du controleur. */
+const THEMES = ['auto', 'light', 'dark'];
+const THEME_LABEL = { auto: 'Auto', light: 'Light', dark: 'Dark' };
+
+function themeActuel() {
+  try {
+    const t = localStorage.getItem('freeqos-theme');
+    return THEMES.includes(t) ? t : 'auto';
+  } catch (err) {
+    return 'auto';
+  }
+}
+
+function appliquerTheme(theme) {
+  if (theme === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = theme;
+  const bouton = document.getElementById('theme-toggle');
+  if (bouton) bouton.textContent = THEME_LABEL[theme];
+  try { localStorage.setItem('freeqos-theme', theme); } catch (err) { /* navigation privee */ }
+}
+
+appliquerTheme(themeActuel());
+document.getElementById('theme-toggle').addEventListener('click', () => {
+  const suivant = THEMES[(THEMES.indexOf(themeActuel()) + 1) % THEMES.length];
+  appliquerTheme(suivant);
+  // Les graphiques lisent leurs couleurs au dessin : on redessine.
+  refresh();
+});
+
 window.addEventListener('hashchange', route);
 window.addEventListener('resize', () => {
   if (state.view === 'dashboard' && state.lastPoints.length) {
@@ -6630,6 +6756,14 @@ document.getElementById('btn-test').addEventListener('click', testConnection);
 /* ------------------------------------------------------- trafic et API */
 document.getElementById('flow-range').addEventListener('change', loadTraffic);
 document.getElementById('flow-vantage').addEventListener('change', loadTraffic);
+document.querySelectorAll('#flow-vantage-seg button').forEach((b) => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#flow-vantage-seg button').forEach((x) =>
+      x.classList.toggle('active', x === b));
+    document.getElementById('flow-vantage').value = b.dataset.vantage;
+    loadTraffic();
+  });
+});
 document.getElementById('exporter-form').addEventListener('submit', declareExporter);
 document.getElementById('key-form').addEventListener('submit', createApiKey);
 // Les filtres de "qui parle a qui". La recherche se declenche sur 'change'
