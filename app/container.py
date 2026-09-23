@@ -423,6 +423,7 @@ async def build_container(settings: Settings) -> Container:
         return adresses
 
     await netflow.start()
+    collection.netflow = netflow
     netflow.set_infrastructure(adresses_d_exploitation())
 
     # Met un nom sur les adresses que NetFlow decouvre. Il ne touche jamais a la

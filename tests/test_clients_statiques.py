@@ -10,6 +10,9 @@ Ce fichier verrouille les trois promesses du chantier :
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -273,6 +276,52 @@ async def test_sans_file_le_client_existe_mais_sans_debit(settings: Settings) ->
     assert echantillon.rx_bps is None
     assert echantillon.tx_bps is None
     assert echantillon.rx_bytes is None
+
+
+async def test_sans_file_le_debit_vient_de_netflow(settings: Settings) -> None:
+    """Un client ajoute a la main dont aucune file ne compte le trafic (pas
+    encore posee, ou son trafic ne traverse pas le routeur de son PoP) prend
+    le debit que NetFlow a mesure sur la derniere fenetre."""
+    from app.services.flows import SubscriberCounters
+    from app.services.netflow_service import NetflowService
+
+    client = FakeRouterOsClient()
+    inventaire = InventaireMemoire([fiche()])
+    service, writer, directory = build_service(settings, client, inventaire)
+    await service.collect_subscribers()
+    sid = directory.subscribers["mairie-vitre"]
+
+    netflow = NetflowService(enabled=True)
+    netflow.packets_received = 10
+    netflow.last_flush_at = datetime.now(tz=UTC)
+    lot = SimpleNamespace(
+        subscribers=[
+            # Vu a deux points : on garde le plus grand, jamais la somme.
+            SubscriberCounters(sid, "edge", down_bytes=75_000, up_bytes=7_500),
+            SubscriberCounters(sid, "pop", down_bytes=60_000, up_bytes=7_500),
+        ]
+    )
+    netflow._note_rates(lot, 60.0)  # noqa: SLF001
+    service.netflow = netflow
+
+    await service.collect_subscribers()
+
+    echantillon = writer.subscriber_rows[-1][1]
+    assert echantillon.tx_bps == pytest.approx(10_000)  # 75 000 o * 8 / 60 s
+    assert echantillon.rx_bps == pytest.approx(1_000)
+
+
+async def test_netflow_coupe_ne_fait_pas_passer_le_client_a_zero(settings: Settings) -> None:
+    """Sans flux recus, le zero de NetFlow ne veut rien dire : le trou reste."""
+    from app.services.netflow_service import NetflowService
+
+    client = FakeRouterOsClient()
+    service, writer, _ = build_service(settings, client, InventaireMemoire([fiche()]))
+    service.netflow = NetflowService(enabled=True)
+
+    await service.collect_subscribers()
+
+    assert writer.subscriber_rows[-1][1].rx_bps is None
 
 
 async def test_un_inventaire_illisible_ne_casse_pas_le_cycle_pppoe(
