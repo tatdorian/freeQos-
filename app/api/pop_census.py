@@ -35,7 +35,7 @@ from app.collectors.pop_census import NATURE_CLIENT, NATURE_PPPOE, PopCensus
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["clients statiques"])
+router = APIRouter(tags=["static clients"])
 
 
 def _reseau_declare(fiche: dict[str, Any]) -> ipaddress.IPv4Network | ipaddress.IPv6Network | None:
@@ -100,7 +100,7 @@ async def _equipements_connus(container: ContainerDep) -> list[str]:
     return adresses
 
 
-@router.get("/pops/census", summary="Recensement des clients d'un PoP, toutes natures")
+@router.get("/pops/census", summary="Census of the clients of a PoP, every kind")
 async def census(
     container: ContainerDep,
     pop_name: Annotated[str | None, Query(max_length=128)] = None,
@@ -122,8 +122,8 @@ async def census(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=(
-                "Aucun routeur collecte ne correspond. Un routeur ecarte de la "
-                "collecte n'est lu nulle part : verifiez l'onglet Equipements."
+                "No collected router matches. A router dropped from collection "
+                "is read nowhere: check the Devices tab."
             ),
         )
 

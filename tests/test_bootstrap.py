@@ -123,8 +123,8 @@ def test_mauvaise_cle_donne_un_message_exploitable() -> None:
 
     message = str(exc.value)
     assert message.strip()
-    assert "cle" in message.lower()
-    assert "resaisissez" in message.lower()
+    assert "key" in message.lower()
+    assert "re-enter" in message.lower()
 
 
 # ----------------------------------------------------- indices de connexion

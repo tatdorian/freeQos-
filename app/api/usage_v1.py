@@ -35,7 +35,7 @@ from app.db.flows_repo import FlowsRepository
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/usage/v1", tags=["api publique (consommation)"])
+router = APIRouter(prefix="/usage/v1", tags=["public api (usage)"])
 
 Bucket = Literal["total", "hour", "day", "month"]
 
@@ -44,7 +44,7 @@ def _flows(container: ContainerDep) -> FlowsRepository:
     if container.flows_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Mesures de trafic indisponibles (base non initialisee)",
+            detail="Traffic measurements unavailable (database not initialised)",
         )
     return container.flows_repo
 
@@ -59,7 +59,7 @@ def _window(start: datetime | None, end: datetime | None, days: int) -> tuple[da
     if debut >= fin:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="'start' doit preceder 'end'",
+            detail="'start' must come before 'end'",
         )
     return debut, fin
 
@@ -85,7 +85,7 @@ def _render(lignes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
-@router.get("", summary="Ce que cette API rend")
+@router.get("", summary="What this API returns")
 async def index(caller: ReadDep) -> dict[str, Any]:
     return {
         "api": "freeqos-usage",
@@ -97,14 +97,14 @@ async def index(caller: ReadDep) -> dict[str, Any]:
     }
 
 
-@router.get("/services", summary="Consommation de tous les services")
+@router.get("/services", summary="Usage of every service")
 async def usage_all(
     container: ContainerDep,
     caller: ReadDep,
-    start: Annotated[datetime | None, Query(description="Debut (ISO 8601, UTC)")] = None,
-    end: Annotated[datetime | None, Query(description="Fin (ISO 8601, UTC)")] = None,
-    days: Annotated[int, Query(ge=1, le=366, description="Fenetre si 'start' absent")] = 30,
-    bucket: Annotated[Bucket, Query(description="Decoupage de la periode")] = "total",
+    start: Annotated[datetime | None, Query(description="Start (ISO 8601, UTC)")] = None,
+    end: Annotated[datetime | None, Query(description="End (ISO 8601, UTC)")] = None,
+    days: Annotated[int, Query(ge=1, le=366, description="Window when 'start' is absent")] = 30,
+    bucket: Annotated[Bucket, Query(description="Bucketing of the period")] = "total",
     vantage: Annotated[str | None, Query(description="edge | pop")] = None,
 ) -> dict[str, Any]:
     debut, fin = _window(start, end, days)
@@ -126,7 +126,7 @@ async def usage_all(
     }
 
 
-@router.get("/services/{service_id}", summary="Consommation d'un service")
+@router.get("/services/{service_id}", summary="Usage of one service")
 async def usage_one(
     service_id: Annotated[str, Path(min_length=1, max_length=128)],
     container: ContainerDep,

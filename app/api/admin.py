@@ -14,14 +14,14 @@ from pydantic import BaseModel
 from app.api.deps import CollectionDep, ContainerDep, RepositoryDep, SchedulerDep
 from app.services.tls import describe_tls
 
-router = APIRouter(tags=["exploitation"])
+router = APIRouter(tags=["operations"])
 
 
 class RttToggle(BaseModel):
     enabled: bool
 
 
-@router.get("/rtt", summary="Etat de la sonde de latence (RTT)")
+@router.get("/rtt", summary="State of the latency probe (RTT)")
 async def rtt_state(container: ContainerDep, collection: CollectionDep) -> dict[str, Any]:
     """La sonde RTT alimente RTT, QoO et bufferbloat de l'onglet Executif.
 
@@ -36,7 +36,7 @@ async def rtt_state(container: ContainerDep, collection: CollectionDep) -> dict[
     }
 
 
-@router.put("/rtt", summary="Activer ou couper la sonde de latence (RTT)")
+@router.put("/rtt", summary="Turn the latency probe (RTT) on or off")
 async def set_rtt(
     payload: RttToggle, container: ContainerDep, collection: CollectionDep
 ) -> dict[str, Any]:
@@ -53,7 +53,7 @@ async def set_rtt(
     return {"enabled": collection.rtt_enabled}
 
 
-@router.get("/status", summary="Etat du controleur et de ses cycles")
+@router.get("/status", summary="State of the controller and its cycles")
 async def status_view(
     container: ContainerDep,
     scheduler: SchedulerDep,
@@ -110,27 +110,27 @@ async def status_view(
     }
 
 
-@router.get("/status/runs", summary="Historique des cycles de collecte")
+@router.get("/status/runs", summary="History of the collection cycles")
 async def recent_runs(repo: RepositoryDep, limit: int = 20) -> list[dict[str, Any]]:
     return await repo.recent_runs(limit=min(max(limit, 1), 200))
 
 
-@router.get("/status/counters", summary="Compteurs globaux du referentiel")
+@router.get("/status/counters", summary="Global counters of the reference data")
 async def counters(repo: RepositoryDep) -> dict[str, Any]:
     return await repo.counters()
 
 
-@router.post("/jobs/{job_name}/run", summary="Rejoue un cycle de collecte immediatement")
+@router.post("/jobs/{job_name}/run", summary="Replay a collection cycle immediately")
 async def run_job(
     scheduler: SchedulerDep,
-    job_name: Annotated[str, Path(description="Nom du job, cf. /status")],
+    job_name: Annotated[str, Path(description="Job name, see /status")],
 ) -> dict[str, Any]:
     try:
         result = await scheduler.run_once(job_name)
     except KeyError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Job inconnu : {job_name} (disponibles : {scheduler.job_names()})",
+            detail=f"Unknown job: {job_name} (available: {scheduler.job_names()})",
         ) from None
     if result is None:
         return {"job": job_name, "ok": False, "detail": "Le job a leve une exception"}

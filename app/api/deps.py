@@ -22,7 +22,7 @@ def get_container(request: Request) -> Container:
     if container is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Application non initialisee",
+            detail="Application not initialised",
         )
     return container
 
@@ -49,13 +49,13 @@ class TimeRange:
 
 
 def time_range(
-    start: Annotated[datetime | None, Query(description="Debut (ISO 8601, UTC par defaut)")] = None,
-    end: Annotated[datetime | None, Query(description="Fin (ISO 8601, UTC par defaut)")] = None,
+    start: Annotated[datetime | None, Query(description="Start (ISO 8601, UTC by default)")] = None,
+    end: Annotated[datetime | None, Query(description="End (ISO 8601, UTC by default)")] = None,
     minutes: Annotated[
-        int, Query(ge=1, le=60 * 24 * 31, description="Fenetre glissante si start absent")
+        int, Query(ge=1, le=60 * 24 * 31, description="Sliding window when start is absent")
     ] = 60,
     bucket_seconds: Annotated[
-        int, Query(ge=1, le=86_400, description="Taille d'agregation en secondes")
+        int, Query(ge=1, le=86_400, description="Aggregation size in seconds")
     ] = 60,
 ) -> TimeRange:
     now = datetime.now(tz=UTC)
@@ -68,7 +68,7 @@ def time_range(
     if start >= end:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="'start' doit preceder 'end'",
+            detail="'start' must come before 'end'",
         )
     return TimeRange(start, end, bucket_seconds)
 

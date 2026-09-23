@@ -46,11 +46,10 @@ class SecretBox:
 
         if not key:
             self._error = (
-                "Aucune cle de chiffrement disponible : impossible d'enregistrer "
-                "un routeur depuis l'interface. Elle devrait etre generee "
-                "automatiquement au premier demarrage ; verifiez que "
-                "APP_SECRET_KEY_FILE pointe sur un chemin inscriptible, ou "
-                "renseignez APP_SECRET_KEY."
+                "No encryption key available: a router cannot be saved from the "
+                "interface. It should be generated automatically on the first "
+                "start; check that APP_SECRET_KEY_FILE points at a writable path, "
+                "or set APP_SECRET_KEY."
             )
             return
 
@@ -59,7 +58,7 @@ class SecretBox:
 
             self._fernet = Fernet(key.encode() if isinstance(key, str) else key)
         except Exception as exc:  # noqa: BLE001
-            self._error = f"APP_SECRET_KEY invalide ({exc}). Attendu : une cle Fernet."
+            self._error = f"APP_SECRET_KEY invalid ({exc}). Expected: a Fernet key."
 
     @property
     def available(self) -> bool:
@@ -71,7 +70,7 @@ class SecretBox:
 
     def _require(self) -> Fernet:
         if self._fernet is None:
-            raise SecretUnavailableError(self._error or "chiffrement indisponible")
+            raise SecretUnavailableError(self._error or "encryption unavailable")
         return self._fernet
 
     def encrypt(self, plaintext: str) -> str:
@@ -82,7 +81,7 @@ class SecretBox:
             # Refus explicite : une valeur en clair en base est une anomalie, pas
             # un cas a rattraper silencieusement.
             raise SecretUnavailableError(
-                "Secret non chiffre en base : refus de l'utiliser tel quel"
+                "Secret not encrypted in the database: refusing to use it as is"
             )
         from cryptography.fernet import InvalidToken
 
@@ -92,9 +91,9 @@ class SecretBox:
             # InvalidToken n'a pas de message : sans cette traduction, l'operateur
             # lirait "secret illisible :" suivi de rien du tout.
             raise SecretUnavailableError(
-                "dechiffrement impossible : la cle actuelle n'est pas celle qui a "
-                "servi a chiffrer ce secret. Restaurez le fichier de cle d'origine "
-                "ou resaisissez le mot de passe."
+                "cannot decrypt: the current key is not the one used to encrypt "
+                "this secret. Restore the original key file, or re-enter the "
+                "password."
             ) from exc
 
 

@@ -35,7 +35,7 @@ function validationText(detail) {
   if (!Array.isArray(detail)) return JSON.stringify(detail);
   const lignes = detail.map((e) => {
     const champ = Array.isArray(e.loc) ? e.loc.filter((l) => l !== 'body').join('.') : '';
-    return (champ ? champ + ' : ' : '') + (e.msg || e.type || 'valeur refusee');
+    return (champ ? champ + ' : ' : '') + (e.msg || e.type || 'value rejected');
   });
   return lignes.join(' ; ');
 }
@@ -127,12 +127,12 @@ function rtt(value) {
  *  pas "bon" : on l'affiche en gris, jamais en vert. */
 function bloatBadge(v) {
   if (!v || !v.grade) {
-    return '<span class="badge" title="Pas assez de charge sur la periode pour ' +
-      'mesurer le bufferbloat de cet abonne.">n/d</span>';
+    return '<span class="badge" title="Not enough load over the period to ' +
+      'measure this subscriber\'s bufferbloat.">n/a</span>';
   }
-  return '<span class="badge ' + esc(v.severity) + '" title="Latence a vide ' +
-    esc(v.idle_ms) + ' ms, sous charge ' + esc(v.loaded_ms) + ' ms, sur ' +
-    esc(v.samples) + ' echantillon(s)">' + esc(v.grade) + ' &middot; +' +
+  return '<span class="badge ' + esc(v.severity) + '" title="Idle latency ' +
+    esc(v.idle_ms) + ' ms, under load ' + esc(v.loaded_ms) + ' ms, over ' +
+    esc(v.samples) + ' sample(s)">' + esc(v.grade) + ' &middot; +' +
     esc(v.bloat_ms) + ' ms</span>';
 }
 
@@ -171,12 +171,12 @@ function depuis(ts) {
   if (!ts) return '-';
   const secondes = (Date.now() - new Date(ts).getTime()) / 1000;
   if (!isFinite(secondes) || secondes < 0) return '-';
-  if (secondes < 90) return 'a l\'instant';
+  if (secondes < 90) return 'just now';
   const minutes = Math.round(secondes / 60);
-  if (minutes < 90) return 'il y a ' + minutes + ' min';
+  if (minutes < 90) return minutes + ' min ago';
   const heures = Math.round(minutes / 60);
-  if (heures < 48) return 'il y a ' + heures + ' h';
-  return 'il y a ' + Math.round(heures / 24) + ' j';
+  if (heures < 48) return heures + ' h ago';
+  return Math.round(heures / 24) + ' d ago';
 }
 
 /* ------------------------------------------------------- graphe en aires */
@@ -197,10 +197,10 @@ function svgEl(name, attrs) {
  */
 function renderThroughput(container, points, options) {
   const opt = options || {};
-  const legende = opt.labels || { down: 'Download', up: 'Upload', extra: 'Abonnes' };
+  const legende = opt.labels || { down: 'Download', up: 'Upload', extra: 'Subscribers' };
   container.innerHTML = '';
   if (!points || points.length === 0) {
-    container.innerHTML = '<div class="empty">Aucune mesure sur la periode.</div>';
+    container.innerHTML = '<div class="empty">No measurement over this period.</div>';
     return;
   }
 
@@ -300,7 +300,7 @@ function showTooltip(event, point, down, up, legende) {
     tooltipEl.className = 'tooltip';
     document.body.appendChild(tooltipEl);
   }
-  const lib = legende || { down: 'Download', up: 'Upload', extra: 'Abonnes' };
+  const lib = legende || { down: 'Download', up: 'Upload', extra: 'Subscribers' };
   tooltipEl.innerHTML =
     '<div class="t">' + esc(new Date(point.bucket).toLocaleString('fr-FR')) + '</div>' +
     '<div class="row"><span style="color:var(--down)">' + esc(lib.down) + '</span><span>' + esc(bpsText(down)) + '</span></div>' +
@@ -343,14 +343,14 @@ async function loadDashboard() {
   const ratio = soldDown > 0 ? (overview.tx_bps / soldDown) * 100 : null;
 
   document.getElementById('stat-row').innerHTML =
-    statCard('down', 'Download', down.v, down.u, 'somme des sessions actives') +
-    statCard('up', 'Upload', up.v, up.u, 'somme des sessions actives') +
-    statCard('', 'Abonnes en ligne', overview.online || 0, '',
-      esc((overview.subscribers || 0) + ' connus') ) +
-    statCard('', 'Debit vendu', (overview.sold_down_mbps || 0).toFixed(0), 'Mbps',
-      ratio === null ? 'aucun plan connu' : 'utilise a ' + ratio.toFixed(0) + '%') +
-    statCard('', 'Capacite backhaul', (overview.backhaul_capacity_mbps || 0).toFixed(0), 'Mbps',
-      esc((overview.backhauls || 0) + ' lien(s) mesure(s)'));
+    statCard('down', 'Download', down.v, down.u, 'sum of active sessions') +
+    statCard('up', 'Upload', up.v, up.u, 'sum of active sessions') +
+    statCard('', 'Subscribers online', overview.online || 0, '',
+      esc((overview.subscribers || 0) + ' known') ) +
+    statCard('', 'Sold throughput', (overview.sold_down_mbps || 0).toFixed(0), 'Mbps',
+      ratio === null ? 'no known plan' : ratio.toFixed(0) + '% used') +
+    statCard('', 'Backhaul capacity', (overview.backhaul_capacity_mbps || 0).toFixed(0), 'Mbps',
+      esc((overview.backhauls || 0) + ' link(s) measured'));
 
   await loadThroughput();
   await loadTopTalkers();
@@ -371,7 +371,7 @@ async function loadTopTalkers() {
   const rows = await api('/subscribers/latest?limit=12');
   const host = document.getElementById('top-talkers');
   if (!rows.length) {
-    host.innerHTML = '<div class="empty">Aucune session active.<br>Connectez un PoP dans l\'onglet PoPs.</div>';
+    host.innerHTML = '<div class="empty">No active session.<br>Connect a PoP in the Devices tab.</div>';
     return;
   }
   host.innerHTML =
@@ -399,8 +399,8 @@ function renderBackhaulCards(tree) {
   tree.forEach((pop) => (pop.backhauls || []).forEach((b) => links.push({ pop, b })));
   const host = document.getElementById('backhaul-cards');
   if (!links.length) {
-    host.innerHTML = '<div class="card"><div class="empty">Aucun backhaul declare.<br>' +
-      'Section <code>backhauls</code> de l\'inventaire.</div></div>';
+    host.innerHTML = '<div class="card"><div class="empty">No backhaul declared.<br>' +
+      '<code>backhauls</code> section of the inventory.</div></div>';
     return;
   }
   host.innerHTML = links.map(({ pop, b }) => {
@@ -411,17 +411,17 @@ function renderBackhaulCards(tree) {
     return '<div class="card" style="margin-bottom:.7rem">' +
       '<div class="node-head" style="margin-bottom:.7rem">' +
         '<div class="node-title">' + esc(b.name) +
-          (b.online === false ? ' <span class="badge crit">hors ligne</span>' : '') +
+          (b.online === false ? ' <span class="badge crit">offline</span>' : '') +
           '<span class="host">' + esc(pop.name || '') + '</span></div>' +
         '<div class="node-metrics"><span>' + esc(mbps(capacity)) + '</span></div>' +
       '</div>' +
       '<div class="child" style="border:0;padding:.25rem 0">' +
-        '<span class="name" style="color:var(--muted)">Capacite vs nominal</span>' +
+        '<span class="name" style="color:var(--muted)">Capacity vs nominal</span>' +
         (fade === null ? '<span class="pct">-</span>'
           : meter(capacity, nominal, fade < 50 ? 'crit' : fade < 80 ? 'warn' : 'ok')) +
       '</div>' +
       '<div class="child" style="border:0;padding:.25rem 0">' +
-        '<span class="name" style="color:var(--muted)">Charge vs capacite</span>' +
+        '<span class="name" style="color:var(--muted)">Load vs capacity</span>' +
         meter(load, capacity) +
       '</div>' +
       '<div class="child" style="border:0;padding:.25rem 0;font-size:.75rem;color:var(--faint)">' +
@@ -456,13 +456,13 @@ function qoeOf(subscriberId) {
 function qooCell(note, rttMs) {
   if (note) {
     const detail = note.grade
-      ? 'bufferbloat ' + note.grade + ' (+' + note.bloat_ms + ' ms sous charge)'
-      : 'proxy latence : aucune charge a correler';
+      ? 'bufferbloat ' + note.grade + ' (+' + note.bloat_ms + ' ms under load)'
+      : 'latency proxy: no load to correlate';
     return sqCell(String(note.score), note.severity, detail);
   }
   const proxy = qoeScore(rttMs);
   return proxy == null ? sqCell('-', 'none')
-    : sqCell(String(proxy), qoeSev(proxy), 'proxy latence : aucune charge a correler');
+    : sqCell(String(proxy), qoeSev(proxy), 'latency proxy: no load to correlate');
 }
 function qoeSev(score) {
   if (score === null) return 'none';
@@ -597,7 +597,7 @@ async function loadExec() {
   renderHeatmap(document.getElementById('exec-heatmap'), heat);
   renderExecSankey(document.getElementById('exec-sankey'), subs);
   document.getElementById('exec-count').textContent =
-    exec.nodes.length + ' noeud(s), ' + subs.length + ' circuit(s)';
+    exec.nodes.length + ' node(s), ' + subs.length + ' circuit(s)';
   renderExecNotice(rttState, firstError, {
     noNodes: exec.nodes.length === 0,
     topoOnly: fromTopo && exec.nodes.length > 0,
@@ -616,22 +616,22 @@ function renderExecNotice(rttState, error, st) {
       esc(error.message) + '</div>';
   }
   if (state.noNodes && !error) {
-    html += '<div class="notice"><b>Aucun noeud.</b> Connectez un routeur dans ' +
-      'l\'onglet <b>Equipements</b>.</div>';
+    html += '<div class="notice"><b>No node.</b> Connect a router in the ' +
+      '<b>Devices</b> tab.</div>';
   }
   if (state.topoOnly && !error) {
-    html += '<div class="notice"><b>Topologie seule : aucun abonne mesure.</b></div>';
+    html += '<div class="notice"><b>Topology only: no subscriber measured.</b></div>';
   }
   if (rttState && !rttState.enabled) {
-    html += '<div class="notice"><b>Sonde RTT coupee.</b> RTT, QoO et bufferbloat ' +
-      'restent vides.</div>';
+    html += '<div class="notice"><b>RTT probe off.</b> RTT, QoO and bufferbloat ' +
+      'stay empty.</div>';
   }
   notice.innerHTML = html;
 }
 
 function renderHeatmap(host, heat) {
   if (!heat || !Array.isArray(heat.rows)) {
-    host.innerHTML = '<div class="empty">Heatmap indisponible pour le moment.</div>';
+    host.innerHTML = '<div class="empty">Heatmap unavailable for now.</div>';
     return;
   }
   host.innerHTML = heat.rows.map((row) => {
@@ -643,13 +643,13 @@ function renderHeatmap(host, heat) {
     const last = [...row.cells].reverse().find((c) => c.value !== null && c.value !== undefined);
     const cells = row.cells.map((c) => {
       let t = c.value !== null && c.value !== undefined
-        ? new Date(c.ts).toLocaleTimeString('fr-FR', { hour12: false }) + ' : ' +
+        ? new Date(c.ts).toLocaleTimeString('en-GB', { hour12: false }) + ' : ' +
           c.value + (row.unit ? ' ' + row.unit : '')
-        : 'pas de mesure';
+        : 'no measurement';
       // La ligne QoE dit si le pas repose sur une latence SOUS CHARGE reellement
       // mesuree ou sur le repli proxy : un chiffre qu'on croit mesure est pire
       // qu'un repli annonce.
-      if (c.basis === 'latency') t += ' (proxy latence : aucune charge a correler)';
+      if (c.basis === 'latency') t += ' (latency proxy: no load to correlate)';
       else if (c.basis) t += ' (bufferbloat ' + (c.grade || '?') + ', +' + c.bloat_ms + ' ms)';
       return '<span class="heat-cell ' + esc(c.severity) + '" title="' + esc(t) + '"></span>';
     }).join('');
@@ -667,7 +667,7 @@ function aggregateNodes(subs, childCounts) {
   const counts = childCounts || {};
   const parPop = new Map();
   subs.forEach((s) => {
-    const nom = s.pop_name || '(sans PoP)';
+    const nom = s.pop_name || '(no PoP)';
     if (!parPop.has(nom)) {
       parPop.set(nom, { name: nom, circuits: 0, tx: 0, rx: 0, effDown: 0, effUp: 0,
         confDown: 0, confUp: 0, rttMax: null, qoe: null, subs: [] });
@@ -701,7 +701,7 @@ function aggregateNodes(subs, childCounts) {
 function renderNodeTable(host) {
   const nodes = exec.nodes;
   if (!nodes.length) {
-    host.innerHTML = '<div class="empty">Aucun circuit actif.</div>';
+    host.innerHTML = '<div class="empty">No active circuit.</div>';
     return;
   }
   const rttSq = (ms) => (ms === null || ms === undefined)
@@ -849,7 +849,7 @@ function renderQueuePanels() {
 
   const sel = exec.selected;
   if (!selectionExists(sel)) {
-    const vide = '<div class="empty">Selectionnez un noeud ou un client dans le tableau.</div>';
+    const vide = '<div class="empty">Select a node or a client in the table.</div>';
     live.innerHTML = snap.innerHTML = det.innerHTML = vide;
     return;
   }
@@ -900,8 +900,8 @@ function renderQueuePanels() {
   // ---- Node Snapshot (jauge, ou n/d si aucune mesure)
   snap.innerHTML = '<h3>&#128200; Node Snapshot</h3>' +
     (synth
-      ? '<div class="empty">Aucune mesure pour ce noeud pour le moment ' +
-        '(affiche d\'apres la topologie).</div>'
+      ? '<div class="empty">No measurement for this node yet ' +
+        '(shown from the topology).</div>'
       : gaugeSvg(down, up, Math.max(effDown, down, 1), qoe));
 
   // ---- Node Details
@@ -933,23 +933,23 @@ function renderQueuePanels() {
           '"> U <input id="lq-u" type="number" min="0" step="any" value="' + esc(uPre) + '">' +
           '<button class="sm primary" id="lq-save">Save</button>' +
           '<button class="sm" id="lq-clear">Clear</button></div>' +
-        '<div class="lq-note">Debit en Mbps. Enregistrer pose un override sur cet abonne ' +
-          '(vu ensuite dans le plan Shaping). Retr / marks / drops : hors-bande, indisponibles.</div>' +
+        '<div class="lq-note">Rate in Mbps. Save writes an override on this subscriber ' +
+          '(visible afterwards in the Shaping plan). Retr / marks / drops: out-of-band, unavailable.</div>' +
         '<div class="actions" style="margin-top:.6rem">' +
-          '<button class="sm" id="lq-open">Ouvrir dans l\'arbre</button></div>' +
+          '<button class="sm" id="lq-open">Open in the tree</button></div>' +
         '<div id="lq-result"></div>'
       : sharedCapacityBlock(node) +
         '<div class="lq-note">' + (synth
-          ? '<b>Noeud issu de la topologie.</b> Aucun abonne mesure ici pour le moment : ' +
-            'ses files apparaitront au prochain cycle de collecte. Le debit du parent ' +
-            '(l\'enveloppe partagee) se regle deja sur son lien, bouton <b>Bande passante</b> ' +
-            'dans l\'arbre.'
-          : '<b>' + node.circuits + ' circuit(s).</b> Un noeud est un ' +
-            'agregat : depliez-le et selectionnez un client pour imposer un debit. Le debit ' +
-            'du parent (l\'enveloppe partagee) se regle sur son lien, bouton <b>Bande ' +
-            'passante</b> dans l\'arbre. Retr / marks / drops : hors-bande, indisponibles.') + '</div>' +
+          ? '<b>Node from the topology.</b> No subscriber measured here yet: ' +
+            'its queues will appear on the next collection cycle. The parent rate ' +
+            '(the shared envelope) is already set on its link, <b>Bandwidth</b> button ' +
+            'in the tree.'
+          : '<b>' + node.circuits + ' circuit(s).</b> A node is an ' +
+            'aggregate: unfold it and select a client to force a rate. The parent ' +
+            'rate (the shared envelope) is set on its link, <b>Bandwidth</b> ' +
+            'button in the tree. Retr / marks / drops: out-of-band, unavailable.') + '</div>' +
         '<div class="actions" style="margin-top:.6rem">' +
-          '<button class="sm" id="lq-open">Regler l\'enveloppe dans l\'arbre</button></div>');
+          '<button class="sm" id="lq-open">Set the envelope in the tree</button></div>');
 
   const open = document.getElementById('lq-open');
   if (open) open.addEventListener('click', () => { location.hash = '#/network'; });
@@ -969,22 +969,22 @@ function sharedCapacityBlock(node) {
   const soldDown = node.confDown / 1e6;                   // somme des plans
   const measured = node.tx / 1e6;
   if (!envDown) {
-    return '<div class="lq-note">Enveloppe partagee inconnue : aucun backhaul mesure ' +
-      'pour ce PoP. Ajoutez son antenne (onglet Equipements) ou fixez la sur son lien.</div>';
+    return '<div class="lq-note">Shared envelope unknown: no backhaul measured ' +
+      'for this PoP. Add its antenna (Devices tab) or set it on its link.</div>';
   }
   const ratio = soldDown / envDown;
   const sev = ratio <= 1 ? 'ok' : ratio <= 2 ? 'warn' : 'crit';
   return '<div class="lq-kv" style="margin-top:.6rem">' +
-    '<span class="k">Capacite partagee</span><span class="v">' + esc(mbps(envDown)) + '</span>' +
-    '<span class="k">Vendu (&Sigma; plans)</span><span class="v">' + esc(mbps(soldDown)) + '</span>' +
-    '<span class="k">Ecoule (mesure)</span><span class="v">' + esc(mbps(measured)) + '</span>' +
-    '<span class="k">Sur-souscription</span><span class="v">' +
+    '<span class="k">Shared capacity</span><span class="v">' + esc(mbps(envDown)) + '</span>' +
+    '<span class="k">Sold (&Sigma; plans)</span><span class="v">' + esc(mbps(soldDown)) + '</span>' +
+    '<span class="k">Flowing (measured)</span><span class="v">' + esc(mbps(measured)) + '</span>' +
+    '<span class="k">Oversubscription</span><span class="v">' +
       '<span class="sq ' + sev + '"></span>' + ratio.toFixed(1) + '&times;</span>' +
     '</div>' +
     '<div class="lq-note">' + (ratio > 1
-      ? 'Les plans vendus totalisent <b>' + ratio.toFixed(1) + '&times;</b> l\'enveloppe : ' +
-        'les circuits se partagent le parent sous charge (c\'est voulu, CAKE arbitre).'
-      : 'Sous l\'enveloppe : pas de sur-souscription sur ce parent.') + '</div>';
+      ? 'Sold plans total <b>' + ratio.toFixed(1) + '&times;</b> the envelope: ' +
+        'circuits share the parent under load (this is intended, CAKE arbitrates).'
+      : 'Under the envelope: no oversubscription on this parent.') + '</div>';
 }
 
 /** Ce que la pose immediate a REELLEMENT fait, rendu tel quel.
@@ -993,23 +993,23 @@ function sharedCapacityBlock(node) {
  *  laissait croire un abonne bride alors que rien n'etait parti sur le
  *  routeur. Le motif rendu par le controleur est affiche sans reformulation. */
 function poseText(pose) {
-  if (!pose) return '<div class="notice ok">Enregistre.</div>';
+  if (!pose) return '<div class="notice ok">Saved.</div>';
   const ok = pose.state === 'file-posee' || pose.state === 'file-retiree';
   const classe = ok ? 'ok' : (pose.state === 'file-a-poser' ? 'warn' : 'err');
   const titres = {
-    'file-posee': 'Plafond pose sur le routeur',
-    'file-retiree': 'File retiree du routeur',
-    'file-a-poser': 'Enregistre, mais RIEN n\'a ete ecrit',
-    'ecarte': 'Aucune file posee',
-    'conflit': 'Conflit sur le routeur',
-    'sans-routeur': 'Aucun routeur ne porte cette cible',
-    'erreur': 'Echec de l\'ecriture',
+    'file-posee': 'Cap written on the router',
+    'file-retiree': 'Queue removed from the router',
+    'file-a-poser': 'Saved, but NOTHING was written',
+    'ecarte': 'No queue written',
+    'conflit': 'Conflict on the router',
+    'sans-routeur': 'No router carries this target',
+    'erreur': 'Write failed',
   };
   return '<div class="notice ' + classe + '"><strong>' +
-    esc(titres[pose.state] || pose.state || 'Enregistre') +
-    (pose.applied ? ' (' + pose.applied + ' commande(s))' : '') + '</strong>' +
+    esc(titres[pose.state] || pose.state || 'Saved') +
+    (pose.applied ? ' (' + pose.applied + ' command(s))' : '') + '</strong>' +
     (pose.reason ? '<span class="hint">' + esc(pose.reason) + '</span>' : '') +
-    (pose.router ? '<span class="hint">Routeur : ' + esc(pose.router) + '</span>' : '') +
+    (pose.router ? '<span class="hint">Router: ' + esc(pose.router) + '</span>' : '') +
     '</div>';
 }
 
@@ -1030,7 +1030,7 @@ async function saveClientRate(client) {
         scope: 'subscriber', target_key: client.login,
         max_down_mbps: down === '' ? null : Number(down),
         max_up_mbps: up === '' ? null : Number(up),
-        enabled: true, note: 'impose depuis Files live',
+        enabled: true, note: 'forced from Live queues',
       }),
     });
     if (host) host.innerHTML = poseText(reponse.enforcement);
@@ -1055,7 +1055,7 @@ function renderExecSankey(host, subs) {
   const nodes = aggregateNodes(subs, {});
   const total = nodes.reduce((a, n) => a + n.tx, 0);
   if (!total) {
-    host.innerHTML = '<div class="empty">Aucun trafic descendant a representer.</div>';
+    host.innerHTML = '<div class="empty">No downstream traffic to draw.</div>';
     return;
   }
   const W = Math.max(360, host.clientWidth - 4);
@@ -1075,7 +1075,7 @@ function renderExecSankey(host, subs) {
   parts.push('<rect class="node" x="' + srcX + '" y="' + M + '" width="' + srcW +
     '" height="' + (H - 2 * M) + '" fill="var(--accent)"></rect>');
   parts.push('<text class="nlabel" x="' + (srcX + srcW + 4) + '" y="' + (M + 12) +
-    '" transform="rotate(90 ' + (srcX + srcW + 4) + ' ' + (M + 12) + ')">Reseau</text>');
+    '" transform="rotate(90 ' + (srcX + srcW + 4) + ' ' + (M + 12) + ')">Network</text>');
 
   let sy = M;
   nodes.forEach((n) => {
@@ -1120,9 +1120,9 @@ function renderExecSankey(host, subs) {
 const FLOW = { minutes: 60, vantage: '', app: null, pop: '', category: '', search: '' };
 
 const VANTAGE_LABEL = {
-  edge: 'en amont du coeur',
-  pop: 'au PoP',
-  unknown: 'non declare',
+  edge: 'upstream of the core',
+  pop: 'at the PoP',
+  unknown: 'undeclared',
 };
 
 function flowNotice(html) {
@@ -1138,42 +1138,42 @@ function flowNotice(html) {
  *  son bouton, qui mene exactement au geste suivant. */
 function flowDiagnostic(etat, exportEtat) {
   if (!etat.enabled) {
-    return '<div class="notice err"><b>Collecteur NetFlow coupe.</b> ' +
-      '<code>NETFLOW_ENABLED=true</code> puis redemarrage.</div>';
+    return '<div class="notice err"><b>NetFlow collector off.</b> ' +
+      '<code>NETFLOW_ENABLED=true</code> then restart.</div>';
   }
   if (!etat.listening) {
-    return '<div class="notice err"><b>Le collecteur n\'ecoute pas.</b> ' +
-      esc(etat.last_error || 'cause inconnue') + '</div>';
+    return '<div class="notice err"><b>The collector is not listening.</b> ' +
+      esc(etat.last_error || 'unknown cause') + '</div>';
   }
   if (!etat.packets_received) {
     const routeurs = (exportEtat && exportEtat.routers) || [];
     const poses = routeurs.filter((r) => r.configured).length;
     if (!routeurs.length) {
-      return '<div class="notice warn"><b>Aucun datagramme recu sur ' +
-        esc(etat.bind) + '.</b> Aucun routeur n\'est declare : rien ne peut ' +
-        'exporter. <a href="#/pops">Onglet Equipements</a></div>';
+      return '<div class="notice warn"><b>No datagram received on ' +
+        esc(etat.bind) + '.</b> No router is declared: nothing can ' +
+        'export. <a href="#/pops">Devices tab</a></div>';
     }
     if (!poses) {
-      return '<div class="notice warn"><b>Aucun datagramme recu sur ' +
+      return '<div class="notice warn"><b>No datagram received on ' +
         esc(etat.bind) + '.</b> ' + esc(routeurs.length) +
-        ' routeur(s) declare(s), aucun ne l\'exporte encore. ' +
-        '<button class="sm" data-goto-export>Configurer l\'export</button></div>';
+        ' router(s) declared, none exports yet. ' +
+        '<button class="sm" data-goto-export>Configure the export</button></div>';
     }
     // POSE MAIS MUET : le routeur envoie, et rien n'arrive. Le coupable le plus
     // frequent n'est pas le routeur, c'est le chemin -- port UDP non publie par
     // Docker, pare-feu, ou adresse annoncee injoignable depuis le PoP.
-    return '<div class="notice err"><b>Export pose sur ' + esc(poses) +
-      ' routeur(s), mais aucun datagramme n\'arrive sur ' + esc(etat.bind) + '.</b> ' +
-      'Le chemin est en cause, pas la configuration : port <code>' +
-      esc(String(etat.bind).split(':').pop()) + '/udp</code> publie ? ' +
-      'pare-feu entre le PoP et ce collecteur ?</div>';
+    return '<div class="notice err"><b>Export configured on ' + esc(poses) +
+      ' router(s), but no datagram reaches ' + esc(etat.bind) + '.</b> ' +
+      'The path is at fault, not the configuration: is port <code>' +
+      esc(String(etat.bind).split(':').pop()) + '/udp</code> published? ' +
+      'A firewall between the PoP and this collector?</div>';
   }
   if (etat.flows_seen && !etat.flows_matched) {
-    return '<div class="notice warn"><b>Flux recus, aucun rattache a un abonne.</b> ' +
-      esc(etat.declared_prefixes) + ' bloc(s) declare(s).</div>';
+    return '<div class="notice warn"><b>Flows received, none matched to a subscriber.</b> ' +
+      esc(etat.declared_prefixes) + ' prefix(es) declared.</div>';
   }
   if (etat.orphan_records && !etat.templates_known) {
-    return '<div class="notice warn"><b>Flux recus, modeles jamais envoyes</b> ' +
+    return '<div class="notice warn"><b>Flows received, templates never sent</b> ' +
       '(RouterOS : <code>template-refresh</code>).</div>';
   }
   return '';
@@ -1215,8 +1215,8 @@ async function loadTraffic() {
   const compte = document.getElementById('flow-count');
   if (compte) {
     compte.textContent = etat.listening
-      ? etat.bind + ' · ' + etat.packets_received + ' datagramme(s)'
-      : 'collecteur a l\'arret';
+      ? etat.bind + ' · ' + etat.packets_received + ' datagram(s)'
+      : 'collector stopped';
   }
 }
 
@@ -1228,26 +1228,26 @@ function renderFlowStats(etat, top) {
   const rattaches = etat.flows_matched || 0;
   const part = vus ? Math.round((rattaches / vus) * 100) : 0;
   document.getElementById('flow-stats').innerHTML =
-    statCard('down', 'Descendant', bytesText(descendant), '',
-      'sur ' + FLOW.minutes + ' min') +
-    statCard('up', 'Montant', bytesText(montant), '',
-      'sur ' + FLOW.minutes + ' min') +
-    statCard('', 'Abonnes vus', String(totaux.subscribers || 0), '',
-      (top && top.vantage ? 'compte ' + esc(VANTAGE_LABEL[top.vantage] || top.vantage) : '')) +
-    statCard(part < 50 ? 'warn' : '', 'Flux rattaches', String(part), '%',
-      rattaches + ' sur ' + vus + ' depuis le demarrage');
+    statCard('down', 'Downstream', bytesText(descendant), '',
+      'over ' + FLOW.minutes + ' min') +
+    statCard('up', 'Upstream', bytesText(montant), '',
+      'over ' + FLOW.minutes + ' min') +
+    statCard('', 'Subscribers seen', String(totaux.subscribers || 0), '',
+      (top && top.vantage ? 'counted ' + esc(VANTAGE_LABEL[top.vantage] || top.vantage) : '')) +
+    statCard(part < 50 ? 'warn' : '', 'Flows matched', String(part), '%',
+      rattaches + ' of ' + vus + ' since startup');
 }
 
 function renderFlowTop(top) {
   const host = document.getElementById('flow-top');
   const lignes = (top && top.subscribers) || [];
   if (!lignes.length) {
-    host.innerHTML = '<div class="empty">Aucun volume mesure sur cette periode.</div>';
+    host.innerHTML = '<div class="empty">No volume measured over this period.</div>';
     return;
   }
-  host.innerHTML = '<table><thead><tr><th>Abonne</th><th>PoP</th><th>Nature</th>' +
-    '<th class="num">Descendant</th><th class="num">Montant</th>' +
-    '<th class="num">Plan</th><th class="num">Flux</th><th>Vu</th></tr></thead><tbody>' +
+  host.innerHTML = '<table><thead><tr><th>Subscriber</th><th>PoP</th><th>Kind</th>' +
+    '<th class="num">Down</th><th class="num">Up</th>' +
+    '<th class="num">Plan</th><th class="num">Flows</th><th>Seen</th></tr></thead><tbody>' +
     lignes.map((r) =>
       '<tr><td><a href="#" data-flow-sub="' + esc(r.subscriber_id) + '">' +
         esc(r.login) + '</a></td>' +
@@ -1271,12 +1271,12 @@ function renderFlowTop(top) {
 function renderFlowApps(apps) {
   const host = document.getElementById('flow-apps');
   if (!apps || !apps.length) {
-    host.innerHTML = '<div class="empty">Rien a repartir : aucun flux sur cette periode.</div>';
+    host.innerHTML = '<div class="empty">Nothing to break down: no flow over this period.</div>';
     return;
   }
   const total = apps.reduce((s, a) => s + Number(a.down_bytes || 0) + Number(a.up_bytes || 0), 0);
-  host.innerHTML = '<table><thead><tr><th>Usage</th><th class="num">Descendant</th>' +
-    '<th class="num">Montant</th><th>Part</th></tr></thead><tbody>' +
+  host.innerHTML = '<table><thead><tr><th>Usage</th><th class="num">Down</th>' +
+    '<th class="num">Up</th><th>Share</th></tr></thead><tbody>' +
     apps.map((a) => {
       const somme = Number(a.down_bytes || 0) + Number(a.up_bytes || 0);
       return '<tr><td><a href="#" data-flow-app="' + esc(a.app) + '">' +
@@ -1348,9 +1348,9 @@ async function loadFlowPairs() {
     return;
   }
   const facettes = data.facets || {};
-  remplirFacette('flow-pairs-pop', 'Tous les PoPs', facettes.pops, FLOW.pop);
-  remplirFacette('flow-pairs-category', 'Toutes categories', facettes.categories, FLOW.category);
-  remplirFacette('flow-pairs-app', 'Tous usages', facettes.apps, FLOW.app);
+  remplirFacette('flow-pairs-pop', 'All PoPs', facettes.pops, FLOW.pop);
+  remplirFacette('flow-pairs-category', 'All categories', facettes.categories, FLOW.category);
+  remplirFacette('flow-pairs-app', 'All usages', facettes.apps, FLOW.app);
   const direct = new Set((data.live || []).map((c) => c[0] + '|' + c[1]));
   const octetsDirect = data.live_bytes || {};
   const fenetre = data.window_seconds || 0;
@@ -1359,19 +1359,19 @@ async function loadFlowPairs() {
 
   const filtre = [FLOW.search, FLOW.pop, FLOW.category, FLOW.app].filter(Boolean).length;
   document.getElementById('flow-pairs-count').textContent =
-    lignes.length + ' conversation(s) · ' + direct.size + ' en direct' +
+    lignes.length + ' conversation(s) · ' + direct.size + ' live' +
     (filtre ? ' · ' + filtre + ' filtre(s)' : '');
 
   if (!lignes.length) {
     hote.innerHTML = '<div class="empty">' + (filtre
-      ? 'Aucune conversation ne correspond a ces filtres.'
-      : 'Aucune conversation sur cette periode.') + '</div>';
+      ? 'No conversation matches these filters.'
+      : 'No conversation over this period.') + '</div>';
     return;
   }
   hote.innerHTML = '<table><thead><tr><th>Client</th><th>PoP</th><th>Destination</th>' +
-    '<th>Service</th><th>Categorie</th><th class="num">Port</th><th>Proto</th><th>Usage</th>' +
-    '<th class="num">Descendant</th><th class="num">Montant</th>' +
-    '<th class="num">Debit moyen</th><th class="num">En direct</th>' +
+    '<th>Service</th><th>Category</th><th class="num">Port</th><th>Proto</th><th>Usage</th>' +
+    '<th class="num">Down</th><th class="num">Up</th>' +
+    '<th class="num">Avg rate</th><th class="num">Live</th>' +
     '</tr></thead><tbody>' +
     lignes.map((r) => {
       const cle = r.client + '|' + r.address;
@@ -1388,7 +1388,7 @@ async function loadFlowPairs() {
           (r.hostname ? '<br><span class="hint">' + esc(r.hostname) + '</span>' : '') + '</td>' +
         '<td>' + (r.service
           ? '<a href="#" data-pair-service="' + esc(r.service) + '">' + esc(r.service) + '</a>'
-          : '<span class="hint">non identifie</span>') + '</td>' +
+          : '<span class="hint">unidentified</span>') + '</td>' +
         '<td>' + (r.category
           ? '<a href="#" data-pair-cat="' + esc(r.category) + '">' +
             svcBadge(r.category) + '</a>'
@@ -1439,7 +1439,7 @@ async function loadFlowPairs() {
 /** La fiche complete d'une adresse, depuis l'onglet Trafic. */
 async function openPairAddress(address) {
   const hote = document.getElementById('flow-pair-detail');
-  hote.innerHTML = '<div class="ip-card">Lecture de <code>' + esc(address) + '</code>...</div>';
+  hote.innerHTML = '<div class="ip-card">Reading <code>' + esc(address) + '</code>...</div>';
   try {
     const fiche = await api('/netflow/destinations/' + encodeURIComponent(address) +
       '?minutes=' + Math.max(FLOW.minutes, 1440));
@@ -1461,13 +1461,13 @@ function renderFlowHosts(data) {
   const host = document.getElementById('flow-hosts');
   const lignes = (data && data.hosts) || [];
   if (!lignes.length) {
-    host.innerHTML = '<div class="empty">Aucune adresse non rattachee. ' +
-      'Soit tout est declare, soit rien ne parle sur vos VLAN clients.</div>';
+    host.innerHTML = '<div class="empty">No unmatched address. ' +
+      'Either everything is declared, or nothing talks on your client VLANs.</div>';
     return;
   }
-  host.innerHTML = '<table><thead><tr><th>Adresse</th><th>VLAN</th><th>PoP</th>' +
-    '<th>Exporteur</th><th class="num">Descendant</th><th class="num">Montant</th>' +
-    '<th>Vue</th><th></th></tr></thead><tbody>' +
+  host.innerHTML = '<table><thead><tr><th>Address</th><th>VLAN</th><th>PoP</th>' +
+    '<th>Exporter</th><th class="num">Down</th><th class="num">Up</th>' +
+    '<th>Seen</th><th></th></tr></thead><tbody>' +
     lignes.map((h) =>
       '<tr><td><code>' + esc(h.address) + '</code></td>' +
       '<td>' + (h.vlan_id ? esc(h.vlan_id) : '<span class="faint">-</span>') + '</td>' +
@@ -1478,12 +1478,12 @@ function renderFlowHosts(data) {
       '<td>' + esc(depuis(h.last_seen)) + '</td>' +
       '<td><button class="sm" data-declare-host="' + esc(h.address) + '"' +
         ' data-declare-vlan="' + esc(h.vlan_id || '') + '"' +
-        ' data-declare-pop="' + esc(h.pop_name || '') + '">Declarer</button></td>' +
+        ' data-declare-pop="' + esc(h.pop_name || '') + '">Declare</button></td>' +
       '</tr>').join('') + '</tbody></table>';
   host.querySelectorAll('[data-declare-host]').forEach((b) => {
     b.addEventListener('click', () => {
       location.hash = '#/subscribers';
-      // Le panneau d'inventaire est replie par defaut : l'ouvrir, sinon le
+      // Le panneau de saisie est replie par defaut : l'ouvrir, sinon le
       // formulaire pre-rempli serait invisible et le geste paraitrait sans effet.
       const panneau = document.getElementById('sc-panel');
       if (panneau) panneau.hidden = false;
@@ -1493,8 +1493,8 @@ function renderFlowHosts(data) {
         vlan: b.dataset.declareVlan ? Number(b.dataset.declareVlan) : null,
         pop_name: b.dataset.declarePop || '',
       });
-      scNotice('<span class="warn">Adresse reprise du trafic observe. ' +
-        'Saisissez la reference et le debit souscrit : eux, personne ne les devine.</span>');
+      scNotice('<span class="warn">Address taken from observed traffic. ' +
+        'Enter the reference and the subscribed rate: nobody can guess those.</span>');
     });
   });
 }
@@ -1502,14 +1502,14 @@ function renderFlowHosts(data) {
 function renderFlowExporters(rows) {
   const host = document.getElementById('flow-exporters');
   if (!rows || !rows.length) {
-    host.innerHTML = '<div class="empty">Aucun exporteur. Declarez-en un ci-dessous, ' +
-      'ou configurez l\'export sur un routeur : il apparaitra tout seul, marque ' +
+    host.innerHTML = '<div class="empty">No exporter. Declare one below, ' +
+      'or configure the export on a router: it will appear on its own, marked ' +
       '<code>unknown</code>.</div>';
     return;
   }
-  host.innerHTML = '<table><thead><tr><th>Adresse</th><th>Nom</th><th>Point de mesure</th>' +
-    '<th>PoP</th><th class="num">Echantillon.</th><th class="num">Datagrammes</th>' +
-    '<th class="num">Flux</th><th>Version</th><th>Vu</th><th></th></tr></thead><tbody>' +
+  host.innerHTML = '<table><thead><tr><th>Address</th><th>Name</th><th>Vantage</th>' +
+    '<th>PoP</th><th class="num">Sampling</th><th class="num">Datagrams</th>' +
+    '<th class="num">Flows</th><th>Version</th><th>Seen</th><th></th></tr></thead><tbody>' +
     rows.map((e) => {
       const inconnu = e.vantage === 'unknown';
       return '<tr><td><code>' + esc(e.address) + '</code></td>' +
@@ -1517,7 +1517,7 @@ function renderFlowExporters(rows) {
         '<td><span class="badge ' + (inconnu ? 'warn' : 'ok') + '">' +
           esc(VANTAGE_LABEL[e.vantage] || e.vantage) + '</span></td>' +
         '<td>' + esc(e.pop_name || '-') + '</td>' +
-        '<td class="num">' + (e.sampling_rate > 1 ? '1:' + esc(e.sampling_rate) : 'tout') + '</td>' +
+        '<td class="num">' + (e.sampling_rate > 1 ? '1:' + esc(e.sampling_rate) : 'all') + '</td>' +
         '<td class="num">' + esc(e.packets_seen) + '</td>' +
         '<td class="num">' + esc(e.flows_seen) + '</td>' +
         '<td>' + esc(e.last_version || '-') + '</td>' +
@@ -1526,8 +1526,8 @@ function renderFlowExporters(rows) {
           ' data-exp-name="' + esc(e.name || '') + '"' +
           ' data-exp-vantage="' + esc(e.vantage) + '"' +
           ' data-exp-pop="' + esc(e.pop_name || '') + '"' +
-          ' data-exp-sampling="' + esc(e.sampling_rate) + '">Modifier</button> ' +
-          '<button class="sm" data-exp-del="' + esc(e.id) + '">Retirer</button></td>' +
+          ' data-exp-sampling="' + esc(e.sampling_rate) + '">Edit</button> ' +
+          '<button class="sm" data-exp-del="' + esc(e.id) + '">Remove</button></td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
 
@@ -1543,8 +1543,8 @@ function renderFlowExporters(rows) {
   });
   host.querySelectorAll('[data-exp-del]').forEach((b) => {
     b.addEventListener('click', async () => {
-      if (!confirm('Retirer cet exporteur de la liste ? Ses flux repasseront en ' +
-                   '"non declare" s\'il continue d\'envoyer.')) return;
+      if (!confirm('Remove this exporter from the list? Its flows will go back to ' +
+                   '"undeclared" if it keeps sending.')) return;
       try {
         await api('/netflow/exporters/' + b.dataset.expDel, { method: 'DELETE' });
         await loadTraffic();
@@ -1565,7 +1565,7 @@ async function declareExporter(event) {
   const sortie = document.getElementById('exporter-result');
   try {
     await api('/netflow/exporters', { method: 'POST', body: JSON.stringify(charge) });
-    sortie.innerHTML = '<div class="notice ok">Exporteur declare.</div>';
+    sortie.innerHTML = '<div class="notice ok">Exporter declared.</div>';
     document.getElementById('exporter-form').reset();
     await loadTraffic();
   } catch (err) {
@@ -1588,25 +1588,25 @@ function renderFlowExport(etat) {
     return;
   }
   pastille.textContent = etat.enforcement_enabled
-    ? etat.configured + ' / ' + (etat.routers || []).length + ' routeur(s)'
-    : 'ecriture desactivee';
+    ? etat.configured + ' / ' + (etat.routers || []).length + ' router(s)'
+    : 'writing disabled';
   const lignes = etat.routers || [];
 
   // CE QUI BLOQUE LA POSE, AVANT LE TABLEAU. Cliquer "Configurer" pour recevoir
   // "ecriture desactivee" est une boucle : autant le dire, avec l'interrupteur.
   let bloquant = '';
   if (!lignes.length) {
-    bloquant = '<div class="notice warn"><b>Aucun routeur declare.</b> ' +
-      '<a href="#/pops">Onglet Equipements</a></div>';
+    bloquant = '<div class="notice warn"><b>No router declared.</b> ' +
+      '<a href="#/pops">Devices tab</a></div>';
   } else if (!etat.enforcement_enabled) {
-    bloquant = '<div class="notice warn"><b>Ecriture sur les routeurs desactivee.</b> ' +
-      '<button class="sm" id="flow-export-enable">Autoriser l\'ecriture</button></div>';
+    bloquant = '<div class="notice warn"><b>Writing to the routers is disabled.</b> ' +
+      '<button class="sm" id="flow-export-enable">Allow writing</button></div>';
   }
 
   hote.innerHTML = bloquant + (!lignes.length
     ? ''
-    : '<table><thead><tr><th>Routeur</th><th>Collecteur annonce</th>' +
-      '<th>Interfaces</th><th>Etat</th><th></th></tr></thead><tbody>' +
+    : '<table><thead><tr><th>Router</th><th>Advertised collector</th>' +
+      '<th>Interfaces</th><th>State</th><th></th></tr></thead><tbody>' +
       lignes.map((r) => '<tr>' +
         '<td><b>' + esc(r.router) + '</b> <span class="hint">' + esc(r.host) + '</span></td>' +
         '<td class="login">' + (r.collector
@@ -1630,13 +1630,13 @@ function renderFlowExport(etat) {
  *  de detour qui fait abandonner. La confirmation reste la meme : ce geste
  *  autorise reellement des ecritures sur des equipements de production. */
 async function enableEnforcementForExport() {
-  if (!confirm("Autoriser l'ecriture sur les routeurs ?\n\n" +
-      'Seules les lignes marquees freeqos:managed sont touchees.')) return;
+  if (!confirm('Allow writing to the routers?\n\n' +
+      'Only lines marked freeqos:managed are touched.')) return;
   try {
     await api('/shaping/enforcement', {
       method: 'PUT',
       body: JSON.stringify({
-        enabled: true, confirm: true, reason: 'configuration de l\'export NetFlow',
+        enabled: true, confirm: true, reason: 'NetFlow export configuration',
       }),
     });
     await loadTraffic();
@@ -1648,7 +1648,7 @@ async function enableEnforcementForExport() {
 
 async function applyFlowExport(dryRun) {
   const sortie = document.getElementById('flow-export-result');
-  sortie.innerHTML = '<div class="notice">Lecture des routeurs...</div>';
+  sortie.innerHTML = '<div class="notice">Reading the routers...</div>';
   try {
     const rapport = await api('/netflow/export/apply?dry_run=' + (dryRun ? 'true' : 'false'),
       { method: 'POST' });
@@ -1677,34 +1677,34 @@ async function applyFlowExport(dryRun) {
  *  Le contrat est celui de Preseem : un integrateur qui parlait deja a Preseem
  *  change l'URL de base et la cle, rien d'autre. */
 const API_ENDPOINTS = [
-  ['PUT', '/model/v1/accounts/{id}', 'Client'],
-  ['PUT', '/model/v1/packages/{id}', 'Forfait'],
+  ['PUT', '/model/v1/accounts/{id}', 'Customer'],
+  ['PUT', '/model/v1/packages/{id}', 'Package'],
   ['PUT', '/model/v1/sites/{id}', 'Site'],
-  ['PUT', '/model/v1/access_points/{id}', 'Secteur radio'],
-  ['PUT', '/model/v1/services/{id}', 'Ligne vendue'],
-  ['GET', '/model/v1/{collection}', 'Lire une collection'],
-  ['DELETE', '/model/v1/{collection}/{id}', 'Retirer une fiche'],
-  ['GET', '/usage/v1/services', 'Consommation, tous services'],
-  ['GET', '/usage/v1/services/{id}', "Consommation d'un service"],
+  ['PUT', '/model/v1/access_points/{id}', 'Radio sector'],
+  ['PUT', '/model/v1/services/{id}', 'Sold line'],
+  ['GET', '/model/v1/{collection}', 'Read a collection'],
+  ['DELETE', '/model/v1/{collection}/{id}', 'Remove a record'],
+  ['GET', '/usage/v1/services', 'Usage, every service'],
+  ['GET', '/usage/v1/services/{id}', 'Usage of one service'],
 ];
 
 async function loadApi() {
   document.getElementById('api-base').textContent = location.origin;
   document.getElementById('api-endpoints').innerHTML =
-    '<table><thead><tr><th>Methode</th><th>Chemin</th><th>Objet</th></tr></thead><tbody>' +
+    '<table><thead><tr><th>Method</th><th>Path</th><th>Object</th></tr></thead><tbody>' +
     API_ENDPOINTS.map(([verbe, chemin, objet]) =>
       '<tr><td><b>' + esc(verbe) + '</b></td>' +
       '<td class="login">' + esc(chemin) + '</td>' +
       '<td>' + esc(objet) + '</td></tr>').join('') +
     '</tbody></table>';
   document.getElementById('api-sample').textContent =
-    'curl -u <cle>: -X PUT ' + location.origin + '/model/v1/services/abo-42 \\\n' +
+    'curl -u <key>: -X PUT ' + location.origin + '/model/v1/services/abo-42 \\\n' +
     "  -H 'content-type: application/json' \\\n" +
     '  -d \'{"name":"Dupont","address":"10.20.0.10/32","download_mbps":100,' +
     '"upload_mbps":20,"account":"cli-7","package":"fibre-100"}\'';
   await loadApiKeys();
   const lignes = document.querySelectorAll('#keys-table tbody tr').length;
-  document.getElementById('api-count').textContent = lignes + ' cle(s)';
+  document.getElementById('api-count').textContent = lignes + ' key(s)';
 }
 
 /* ------------------------------------------------------------ cles d'API */
@@ -1720,24 +1720,24 @@ async function loadApiKeys() {
     return;
   }
   if (!rows.length) {
-    host.innerHTML = '<div class="empty">Aucune cle.</div>';
+    host.innerHTML = '<div class="empty">No key.</div>';
     return;
   }
-  host.innerHTML = '<table><thead><tr><th>Nom</th><th>Prefixe</th><th>Portees</th>' +
-    '<th>Etat</th><th>Creee</th><th>Derniere utilisation</th><th></th></tr></thead><tbody>' +
+  host.innerHTML = '<table><thead><tr><th>Name</th><th>Prefix</th><th>Scopes</th>' +
+    '<th>State</th><th>Created</th><th>Last used</th><th></th></tr></thead><tbody>' +
     rows.map((k) =>
       '<tr><td>' + esc(k.name) + '</td>' +
       '<td><code>fqos_' + esc(k.prefix) + '_…</code></td>' +
       '<td>' + esc((k.scopes || []).join(', ')) + '</td>' +
       '<td><span class="badge ' + (k.enabled ? 'ok' : 'warn') + '">' +
-        (k.enabled ? 'active' : 'desactivee') + '</span></td>' +
+        (k.enabled ? 'enabled' : 'disabled') + '</span></td>' +
       '<td>' + esc(clock(k.created_at)) + '</td>' +
       '<td>' + (k.last_used_at ? esc(depuis(k.last_used_at)) :
-        '<span class="faint">jamais</span>') + '</td>' +
+        '<span class="faint">never</span>') + '</td>' +
       '<td><button class="sm" data-key-toggle="' + esc(k.id) + '"' +
         ' data-key-enabled="' + (k.enabled ? '1' : '') + '">' +
-        (k.enabled ? 'Desactiver' : 'Reactiver') + '</button> ' +
-        '<button class="sm" data-key-del="' + esc(k.id) + '">Revoquer</button></td>' +
+        (k.enabled ? 'Disable' : 'Re-enable') + '</button> ' +
+        '<button class="sm" data-key-del="' + esc(k.id) + '">Revoke</button></td>' +
       '</tr>').join('') + '</tbody></table>';
 
   host.querySelectorAll('[data-key-toggle]').forEach((b) => {
@@ -1753,7 +1753,7 @@ async function loadApiKeys() {
   });
   host.querySelectorAll('[data-key-del]').forEach((b) => {
     b.addEventListener('click', async () => {
-      if (!confirm('Revoquer cette cle ?')) return;
+      if (!confirm('Revoke this key?')) return;
       try {
         await api('/api-keys/' + b.dataset.keyDel, { method: 'DELETE' });
         await loadApiKeys();
@@ -1779,8 +1779,8 @@ async function createApiKey(event) {
         scopes: portee === 'write' ? ['read', 'write'] : ['read'],
       }),
     });
-    sortie.innerHTML = '<div class="notice ok"><strong>Copiez cette cle : elle ne ' +
-      'sera plus affichee.</strong>' +
+    sortie.innerHTML = '<div class="notice ok"><strong>Copy this key: it will not ' +
+      'be shown again.</strong>' +
       '<pre style="user-select:all;white-space:pre-wrap;word-break:break-all">' +
       esc(cle.secret) + '</pre>' +
       '<code>curl -u ' + esc(cle.secret) + ': ' + esc(location.origin) +
@@ -1834,7 +1834,7 @@ async function loadNetwork() {
   const compte = document.getElementById('net-count');
   if (compte) {
     const n = topoCompte(data);
-    compte.textContent = n.noeuds + ' equipement(s), ' + n.liens + ' lien(s)';
+    compte.textContent = n.noeuds + ' device(s), ' + n.liens + ' link(s)';
   }
   renderDecouverte(data);
   renderTopoCanvas();
@@ -1860,15 +1860,15 @@ function renderDecouverte(data) {
   if (!topoCompte(data).noeuds) {
     hote.innerHTML = '<div class="notice' + (data.discovered_at ? '' : ' err') + '">' +
       (data.discovered_at
-        ? '<strong>Aucun equipement decouvert.</strong> Derniere analyse : ' +
+        ? '<strong>No device discovered.</strong> Last run: ' +
           esc(clock(data.discovered_at)) + '.'
-        : '<strong>Aucune analyse n\'a encore tourne.</strong>') +
+        : '<strong>Discovery has never run.</strong>') +
       '</div>';
     return;
   }
   if (!avertissements.length) { hote.innerHTML = ''; return; }
   hote.innerHTML = '<div class="notice"><strong>' + esc(avertissements.length) +
-    ' remarque(s) de la derniere analyse' +
+    ' remark(s) from the last run' +
     (data.discovered_at ? ' (' + esc(clock(data.discovered_at)) + ')' : '') + '.</strong>' +
     avertissements.map((a) => '<span class="hint">' + esc(a) + '</span>').join('') +
     '</div>';
@@ -1890,7 +1890,7 @@ function popCell(r, siteParNom) {
   if (!site || site.kind !== 'vlan') return esc(nom);
   const titre = 'VLAN ' + (site.vlan_id !== null && site.vlan_id !== undefined
     ? site.vlan_id + ' ' : '') + '(' + (site.vlan_interface || '?') + ')' +
-    (site.router_name ? ' sur ' + site.router_name : '');
+    (site.router_name ? ' on ' + site.router_name : '');
   return '<span title="' + esc(titre) + '">' + esc(nom) +
     '<span class="badge" style="margin-left:.35rem">VLAN' +
     (site.vlan_id !== null && site.vlan_id !== undefined ? ' ' + site.vlan_id : '') +
@@ -1910,20 +1910,20 @@ function limitProof(etat) {
     // Discret : le cas normal ne doit pas crier. La pastille sert surtout a
     // montrer que la verification a bien eu lieu.
     return '<span class="badge ok" style="margin-left:.35rem" title="' +
-      esc(etat.detail || 'plafond en vigueur') + '">tenu</span>';
+      esc(etat.detail || 'cap in force') + '">held</span>';
   }
   const libelles = {
     'contourne': 'fasttrack',
-    'file-absente': 'aucune file',
-    'file-masquee': 'file masquee',
-    'file-desactivee': 'file coupee',
-    'debit-different': 'autre debit',
+    'file-absente': 'no queue',
+    'file-masquee': 'queue shadowed',
+    'file-desactivee': 'queue disabled',
+    'debit-different': 'different rate',
   };
   // Impossible a confondre avec "impose" : c'est exactement la confusion qu'on
   // repare. Un plafond enregistre que le reseau ne tient pas doit se lire comme
   // un defaut, pas comme un reglage.
   return '<span class="badge crit" style="margin-left:.35rem" title="' +
-    esc(etat.detail || '') + '">NON TENU &middot; ' +
+    esc(etat.detail || '') + '">NOT HELD &middot; ' +
     esc(libelles[etat.verdict] || etat.verdict) + '</span>';
 }
 
@@ -1941,10 +1941,10 @@ function limitCell(r, etat) {
 
   const marque = r.limit_source === 'boost'
     ? '<span class="boost-pill" style="margin-left:.4rem">boost</span>'
-    : '<span class="badge warn" style="margin-left:.4rem">impose</span>';
+    : '<span class="badge warn" style="margin-left:.4rem">forced</span>';
   const plan = r.plan_down_mbps
-    ? 'Plan : ' + mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0)
-    : 'Aucun plan RADIUS';
+    ? 'Plan: ' + mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0)
+    : 'No RADIUS plan';
   const note = r.policy_note || r.boost_reason;
   const couleur = r.limit_source === 'boost' ? '#a78bfa' : 'var(--warn)';
 
@@ -1967,18 +1967,18 @@ function renderLimitsAlert(plafonds) {
     const ft = rt.fasttrack || {};
     if (ft.active === true) {
       morceaux.push('<div class="notice err"><strong>' + esc(rt.router) +
-        ' : le fasttrack contourne les files.</strong>' +
+        ': fasttrack bypasses the queues.</strong>' +
         '<span class="hint">' + esc(ft.detail || '') + '</span>' +
-        (ft.remedy ? '<span class="hint">A passer sur le routeur : <code>' +
+        (ft.remedy ? '<span class="hint">Run on the router: <code>' +
           esc(ft.remedy) + '</code></span>' : '') + '</div>');
     } else if (ft.active === null) {
       morceaux.push('<div class="notice warn"><strong>' + esc(rt.router) +
-        ' : fasttrack non verifie.</strong><span class="hint">' +
+        ': fasttrack not verified.</strong><span class="hint">' +
         esc(ft.detail || '') + '</span></div>');
     }
     if (rt.error) {
       morceaux.push('<div class="notice warn"><strong>' + esc(rt.router) +
-        ' : plafonds non verifies.</strong><span class="hint">' +
+        ': caps not verified.</strong><span class="hint">' +
         esc(rt.error) + '</span></div>');
     }
   });
@@ -1995,12 +1995,12 @@ function renderLimitsAlert(plafonds) {
   });
   if (fuites.length) {
     morceaux.push('<div class="notice warn"><strong>' + fuites.length +
-      ' plafond(s) decides ne sont pas appliques par le reseau.</strong>' +
+      ' decided cap(s) are not applied by the network.</strong>' +
       fuites.slice(0, 8).map((f) => '<span class="hint"><code>' +
-        esc(f.q.login || f.q.name) + '</code> sur ' + esc(f.routeur) + ' : ' +
+        esc(f.q.login || f.q.name) + '</code> on ' + esc(f.routeur) + ': ' +
         esc(f.q.detail || f.q.verdict) + '</span>').join('') +
-      (fuites.length > 8 ? '<span class="hint">... et ' + (fuites.length - 8) +
-        ' autre(s).</span>' : '') + '</div>');
+      (fuites.length > 8 ? '<span class="hint">... and ' + (fuites.length - 8) +
+        ' other(s).</span>' : '') + '</div>');
   }
   hote.innerHTML = morceaux.join('');
 }
@@ -2046,7 +2046,7 @@ async function loadSubscribers() {
   if (select.dataset.filled !== String(pops.length)) {
     // Un site issu d'un VLAN se signale : l'exploitant doit savoir qu'il
     // regarde un VLAN d'un routeur et non un site a lui.
-    select.innerHTML = '<option value="">Tous les PoPs</option>' +
+    select.innerHTML = '<option value="">All PoPs</option>' +
       pops.map((p) => '<option value="' + p.id + '">' +
         (p.kind === 'vlan' ? 'VLAN · ' : '') + esc(p.name) +
         ' (' + p.subscriber_count + ')</option>').join('');
@@ -2064,21 +2064,21 @@ async function loadSubscribers() {
   const effectif = pops
     .filter((p) => !state.subPop || String(p.id) === String(state.subPop))
     .reduce((a, p) => a + (p.subscriber_count || 0), 0);
-  let compte = rows.length + ' abonne(s)' +
-    (effectif > rows.length ? ' sur ' + effectif + ' declare(s)' : '') +
-    (statiques ? ' dont ' + statiques + ' a IP fixe' : '') +
-    (sansMesure ? ' · ' + sansMesure + ' sans mesure' : '') +
-    (state.subPop ? ' sur ce PoP' : '');
+  let compte = rows.length + ' subscriber(s)' +
+    (effectif > rows.length ? ' of ' + effectif + ' declared' : '') +
+    (statiques ? ' incl. ' + statiques + ' static-IP' : '') +
+    (sansMesure ? ' · ' + sansMesure + ' unmeasured' : '') +
+    (state.subPop ? ' on this PoP' : '');
   if (bloat && bloat.summary && bloat.summary.measured) {
     const dist = bloat.summary.distribution || {};
     const mauvais = (dist.D || 0) + (dist.F || 0);
-    compte += ' · bufferbloat : ' + bloat.summary.measured + ' mesure(s)' +
-      (mauvais ? ', ' + mauvais + ' degrade(s)' : ', tous bons') +
-      (bloat.summary.worst_bloat_ms ? ' (pire +' + bloat.summary.worst_bloat_ms + ' ms)' : '');
+    compte += ' · bufferbloat: ' + bloat.summary.measured + ' measured' +
+      (mauvais ? ', ' + mauvais + ' degraded' : ', all good') +
+      (bloat.summary.worst_bloat_ms ? ' (worst +' + bloat.summary.worst_bloat_ms + ' ms)' : '');
   } else if (bloat && bloat.rtt_enabled === false) {
     // Sonde coupee : sans RTT la note ne PEUT pas exister. Le dire, plutot que
     // de laisser une colonne vide passer pour un reseau sain.
-    compte += ' · bufferbloat indisponible : sonde de latence coupee';
+    compte += ' · bufferbloat unavailable: latency probe off';
   }
   document.getElementById('sub-count').textContent = compte;
   state.subCompte = compte;
@@ -2087,20 +2087,20 @@ async function loadSubscribers() {
   if (!rows.length) {
     host.innerHTML = '<div class="empty">' +
       (state.subSearch || state.subPop || state.subKind
-        ? 'Aucun abonne ne correspond au filtre.'
-        : 'Aucun abonne. La liste porte tout l\'effectif des PoP, mesure ou non : ' +
-          'vide, elle signifie qu\'aucune session PPPoE n\'a encore ete vue et ' +
-          'qu\'aucun client a IP fixe n\'est declare.') + '</div>';
+        ? 'No subscriber matches the filter.'
+        : 'No subscriber. This list carries every subscriber of the PoPs, measured or ' +
+          'not: empty, it means no PPPoE session has been seen yet and ' +
+          'no static-IP client is declared.') + '</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Abonne</th><th>Nature</th><th>PoP</th>' +
-    '<th class="num" title="Debit reellement applique">Limite</th>' +
-    '<th class="num">Download</th><th style="width:140px">vs limite</th>' +
-    '<th class="num">Upload</th><th class="num">Latence</th>' +
-    '<th title="Latence ajoutee sous charge (A+ imperceptible, F injouable)">Bufferbloat</th>' +
+    '<table><thead><tr><th>Subscriber</th><th>Kind</th><th>PoP</th>' +
+    '<th class="num" title="Rate actually applied">Limit</th>' +
+    '<th class="num">Download</th><th style="width:140px">vs limit</th>' +
+    '<th class="num">Upload</th><th class="num">Latency</th>' +
+    '<th title="Latency added under load (A+ imperceptible, F unplayable)">Bufferbloat</th>' +
     '<th>Boost</th>' +
-    '<th class="num">Session</th><th class="num">Mesure</th>' +
+    '<th class="num">Session</th><th class="num">Sample</th>' +
     '<th class="sticky-actions"></th>' +
     '</tr></thead><tbody>' +
     rows.map((r) => {
@@ -2114,8 +2114,8 @@ async function loadSubscribers() {
       const trou = '<span style="color:var(--faint)">-</span>';
       return '<tr class="clickable" data-sub="' + r.subscriber_id + '">' +
         '<td class="login">' + esc(r.login) +
-          (mesure ? '' : '<span class="hint" style="display:block" title="Aucun echantillon : ' +
-            'cet abonne n\'a jamais ete mesure, ou son PoP n\'est plus collecte">jamais mesure</span>') +
+          (mesure ? '' : '<span class="hint" style="display:block" title="No sample: ' +
+            'this subscriber was never measured, or its PoP is no longer collected">never measured</span>') +
           '</td>' +
         '<td>' + kindBadge(r.kind) + '</td>' +
         '<td>' + popCell(r, siteParNom) + '</td>' +
@@ -2137,10 +2137,10 @@ async function loadSubscribers() {
         '<td class="num">' + (mesure ? esc(uptime(r.session_uptime_s)) : trou) + '</td>' +
         '<td class="num" style="color:var(--faint)">' +
           (mesure ? esc(clock(r.ts))
-            : '<span title="Derniere session connue">' + esc(depuis(r.last_seen)) + '</span>') +
+            : '<span title="Last known session">' + esc(depuis(r.last_seen)) + '</span>') +
           '</td>' +
         '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
-          '<button class="sm" data-bw="' + esc(r.login) + '">Debit</button>' +
+          '<button class="sm" data-bw="' + esc(r.login) + '">Rate</button>' +
           '<button class="sm" data-boost="' + esc(r.login) + '">Boost</button>' +
         '</div></td>' +
         '</tr>';
@@ -2182,7 +2182,7 @@ async function annoterLesPlafonds(rows) {
     // Silencieux a l'ecran : l'absence de verification n'est pas une panne de
     // la page. Les pastilles restent simplement absentes, et Reglages > Shaping
     // porte le message complet.
-    console.warn('Plafonds non verifies :', err);
+    console.warn('Caps not verified:', err);
     return;
   }
 
@@ -2205,7 +2205,7 @@ async function annoterLesPlafonds(rows) {
   const compteur = document.getElementById('sub-count');
   if (compteur && state.subCompte) {
     compteur.textContent = state.subCompte +
-      (data.leaking ? ' \u00b7 ' + data.leaking + ' plafond(s) NON tenu(s)' : '');
+      (data.leaking ? ' \u00b7 ' + data.leaking + ' cap(s) NOT HELD' : '');
   }
   renderLimitsAlert(data);
 }
@@ -2216,8 +2216,8 @@ async function annoterLesPlafonds(rows) {
    a IP fixe sans mesure n'a simplement pas encore de file posee. */
 function kindBadge(kind) {
   if (kind === 'static') {
-    return '<span class="badge" title="Client a IP fixe, declare a la main. ' +
-      'Pas de session : son adresse vient de sa fiche.">IP fixe</span>';
+    return '<span class="badge" title="Static-IP client, declared by hand. ' +
+      'No session: its address comes from its record.">static IP</span>';
   }
   return '<span class="badge ok" title="Session PPPoE decouverte sur le routeur">PPPoE</span>';
 }
@@ -2247,8 +2247,14 @@ function scRemplirFormulaire(fiche) {
   v('sc-cpe', fiche ? fiche.cpe_mac : '');
   v('sc-note', fiche ? fiche.note : '');
   document.getElementById('sc-enabled').checked = fiche ? !!fiche.enabled : true;
-  document.getElementById('sc-submit').textContent = fiche ? 'Enregistrer' : 'Declarer';
+  document.getElementById('sc-submit').textContent = fiche ? 'Save' : 'Declare';
   document.getElementById('sc-cancel').hidden = !fiche;
+  // Le meme formulaire sert a ajouter et a modifier. Sans titre qui change, on
+  // croyait ajouter un client alors qu'on en ecrasait un autre -- et la
+  // reference saisie remplacait silencieusement celle qu'on venait d'ouvrir.
+  const titre = document.getElementById('sc-form-title');
+  if (titre) titre.textContent = fiche ? 'Edit ' + (fiche.reference || 'the client')
+    : 'Add a client';
   scNotice('');
 }
 
@@ -2266,8 +2272,8 @@ function scDepuisCandidat(candidat) {
   v('sc-address', candidat.address);
   v('sc-vlan', candidat.vlan_id);
   v('sc-pop', candidat.pop_name);
-  scNotice('<span class="badge">Adresse, VLAN et PoP repris de la detection &middot; ' +
-    'reference et debit a saisir</span>');
+  scNotice('<span class="badge">Address, VLAN and PoP taken from detection &middot; ' +
+    'reference and rate to enter</span>');
   const reference = document.getElementById('sc-reference');
   reference.focus();
   reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -2285,19 +2291,19 @@ async function loadCandidates() {
     return;
   }
   if (!data.enabled) {
-    host.innerHTML = '<div class="empty">Detection desactivee ' +
-      '(reglage <code>vlan_detect_enabled</code>).</div>';
+    host.innerHTML = '<div class="empty">Detection disabled ' +
+      '(setting <code>vlan_detect_enabled</code>).</div>';
     return;
   }
   const rows = data.candidates || [];
   if (!rows.length) {
-    host.innerHTML = '<div class="empty">Aucune adresse non declaree sur les VLAN routees.</div>';
+    host.innerHTML = '<div class="empty">No undeclared address on the routed VLANs.</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Adresse</th><th>MAC</th><th class="num">VLAN</th>' +
-    '<th>Interface</th><th>PoP</th><th>Routeur</th>' +
-    '<th>Vu</th><th>Depuis</th><th class="sticky-actions"></th>' +
+    '<table><thead><tr><th>Address</th><th>MAC</th><th class="num">VLAN</th>' +
+    '<th>Interface</th><th>PoP</th><th>Router</th>' +
+    '<th>Seen</th><th>Since</th><th class="sticky-actions"></th>' +
     '</tr></thead><tbody>' +
     rows.map((c, i) =>
       '<tr>' +
@@ -2310,7 +2316,7 @@ async function loadCandidates() {
       '<td>' + esc(depuis(c.last_seen)) + '</td>' +
       '<td style="color:var(--faint)">' + esc(depuis(c.first_seen)) + '</td>' +
       '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
-        '<button class="sm primary" data-sc-declare="' + i + '">Declarer</button>' +
+        '<button class="sm primary" data-sc-declare="' + i + '">Declare</button>' +
       '</div></td>' +
       '</tr>').join('') + '</tbody></table>';
 
@@ -2332,7 +2338,7 @@ async function loadCandidates() {
  *  ou un adressage porte par un autre routeur. */
 async function scRecensement() {
   const hote = document.getElementById('sc-recensement-out');
-  hote.innerHTML = '<div class="empty">Lecture des routeurs (une quinzaine de tables par PoP)...</div>';
+  hote.innerHTML = '<div class="empty">Reading the routers (about fifteen tables per PoP)...</div>';
   let data;
   try {
     data = await api('/pops/census');
@@ -2343,7 +2349,7 @@ async function scRecensement() {
 
   const pops = data.pops || [];
   if (!pops.length) {
-    hote.innerHTML = '<div class="empty">Aucun routeur collecte.</div>';
+    hote.innerHTML = '<div class="empty">No router collected.</div>';
     return;
   }
   const declarations = [];
@@ -2360,7 +2366,7 @@ async function scRecensement() {
           ? '<span class="badge">PPPoE ' + esc(cl.login) + '</span>'
           : '<button class="sm primary" data-sc-census="' + (declarations.push({
               address: cl.address, vlan_id: cl.vlan_id, pop_name: pop.pop_name,
-            }) - 1) + '">Declarer</button>');
+            }) - 1) + '">Declare</button>');
       const vlan = cl.vlan_id === null || cl.vlan_id === undefined
         ? '-'
         : '<span title="' + esc(cl.vlan_source || '') + '">' + esc(cl.vlan_id) + '</span>';
@@ -2386,16 +2392,16 @@ async function scRecensement() {
 
     return '<div class="notice" style="margin-top:.6rem">' +
       '<strong>' + esc(pop.pop_name) + '</strong> &mdash; ' +
-      esc(c.clients || 0) + ' client(s) localise(s), dont ' +
-      esc(c.pppoe || 0) + ' en PPPoE. ' +
-      '<b>' + esc(c.non_declares || 0) + ' non declare(s) dans l\'inventaire.</b>' +
+      esc(c.clients || 0) + ' client(s) located, incl. ' +
+      esc(c.pppoe || 0) + ' over PPPoE. ' +
+      '<b>' + esc(c.non_declares || 0) + ' undeclared in the inventory.</b>' +
       '</div>' + erreurs + remarques +
       (lignes
         ? '<div class="table-wrap"><table><thead><tr>' +
-          '<th>Adresse</th><th>MAC</th><th class="num">VLAN</th><th>Interface / port</th>' +
-          '<th>Vu par</th><th>Nom connu</th><th>Routeur</th><th class="sticky-actions"></th>' +
+          '<th>Address</th><th>MAC</th><th class="num">VLAN</th><th>Interface / port</th>' +
+          '<th>Seen by</th><th>Known name</th><th>Router</th><th class="sticky-actions"></th>' +
           '</tr></thead><tbody>' + lignes + '</tbody></table></div>'
-        : '<div class="empty">Aucun client localise sur ce PoP.</div>');
+        : '<div class="empty">No client located on this PoP.</div>');
   }).join('');
 
   hote.querySelectorAll('[data-sc-census]').forEach((b) => {
@@ -2413,7 +2419,7 @@ async function scRecensement() {
  *  c'est la que se trouve la reponse. */
 async function scDiagnostic() {
   const hote = document.getElementById('sc-diag-out');
-  hote.innerHTML = '<div class="empty">Lecture de /ip/arp sur les routeurs...</div>';
+  hote.innerHTML = '<div class="empty">Reading /ip/arp on the routers...</div>';
   let data;
   try {
     data = await api('/static-clients/candidates/diagnostic');
@@ -2422,7 +2428,7 @@ async function scDiagnostic() {
     return;
   }
   if (!data.routers || !data.routers.length) {
-    hote.innerHTML = '<div class="empty">Aucun routeur collecte.</div>';
+    hote.innerHTML = '<div class="empty">No router collected.</div>';
     return;
   }
   hote.innerHTML = data.routers.map((r) => {
@@ -2436,19 +2442,19 @@ async function scDiagnostic() {
       .map(([m, n]) => '<span class="hint">' + esc(n) + ' &times; ' + esc(m) + '</span>')
       .join('');
     return '<div class="notice">' +
-      '<strong>' + esc(r.router) + '</strong> &mdash; ' + esc(r.kept) + ' retenue(s) sur ' +
-      esc(r.arp_rows) + ' entree(s) ARP.' +
-      '<span class="hint">VLAN declarees : ' +
-        esc((r.vlans_declares || []).join(', ') || 'aucune') +
+      '<strong>' + esc(r.router) + '</strong> &mdash; ' + esc(r.kept) + ' kept out of ' +
+      esc(r.arp_rows) + ' ARP entry(ies).' +
+      '<span class="hint">Declared VLANs: ' +
+        esc((r.vlans_declares || []).join(', ') || 'none') +
         ((r.interfaces_pppoe || []).length
-          ? ' &middot; exclues (PPPoE) : ' + esc(r.interfaces_pppoe.join(', ')) : '') +
+          ? ' &middot; excluded (PPPoE): ' + esc(r.interfaces_pppoe.join(', ')) : '') +
       '</span>' + motifs +
       (horsVlan.length
         ? '<div class="notice err" style="margin-top:.5rem">' +
-          '<strong>Ecartees : ni VLAN declaree, ni sous-reseau desservi.</strong> ' +
+          '<strong>Dropped: neither a declared VLAN nor a served subnet.</strong> ' +
           horsVlan.map(([nom, n]) => '<code>' + esc(nom) + '</code> (' + esc(n) + ')').join(', ') +
-          '<span class="hint">Sous-reseaux desservis : ' +
-          esc((r.reseaux_clients || []).join(', ') || 'aucun lu dans /ip/address') +
+          '<span class="hint">Served subnets: ' +
+          esc((r.reseaux_clients || []).join(', ') || 'none read from /ip/address') +
           '</span>' +
           '</div>'
         : '') +
@@ -2502,12 +2508,15 @@ async function loadVlanClients() {
   const lignes = corps.vlans || [];
   const orphelins = (corps.unmatched || []).filter((h) => h.vlan_id).length;
   if (!lignes.length) {
-    host.innerHTML = '<div class="empty">Aucun client declare sur une VLAN. ' +
+    // Le compte d'adresses orphelines reste : c'est un RENSEIGNEMENT (des
+    // machines parlent sur des VLAN sans etre declarees), pas un mode d'emploi.
+    // Le renvoi au formulaire, lui, disait « ci-dessous » alors qu'il est
+    // desormais au-dessus -- et n'apprenait rien.
+    host.innerHTML = '<div class="empty">No client declared on a VLAN.' +
       (orphelins
-        ? esc(orphelins) + ' adresse(s) parlent pourtant sur des VLAN : elles sont ' +
-          'listees dans l\'onglet Trafic. Ce ne sont pas des clients tant que ' +
-          'personne ne les a declarees.'
-        : 'Renseignez le champ VLAN du formulaire ci-dessous pour en ranger un ici.') +
+        ? ' ' + esc(orphelins) + ' address(es) do talk on VLANs without ' +
+          'being declared.'
+        : '') +
       '</div>';
     return;
   }
@@ -2517,9 +2526,9 @@ async function loadVlanClients() {
     parVlan.set(h.vlan_id, (parVlan.get(h.vlan_id) || 0) + 1);
   });
   host.innerHTML = '<table><thead><tr><th>VLAN</th><th>PoP</th>' +
-    '<th class="num">Clients</th><th class="num">Actifs</th>' +
-    '<th class="num">Vendu (desc.)</th><th class="num">Vendu (mont.)</th>' +
-    '<th>Origine</th><th class="num">Non declares</th></tr></thead><tbody>' +
+    '<th class="num">Clients</th><th class="num">Active</th>' +
+    '<th class="num">Sold (down)</th><th class="num">Sold (up)</th>' +
+    '<th>Origin</th><th class="num">Undeclared</th></tr></thead><tbody>' +
     lignes.map((v) => {
       const vus = parVlan.get(v.vlan) || 0;
       return '<tr><td><b>' + esc(v.vlan) + '</b></td>' +
@@ -2531,7 +2540,7 @@ async function loadVlanClients() {
         '<td>' + (v.depuis_api
           ? '<span class="badge">' + esc(v.depuis_api) + ' via API</span> '
           : '') + '<span class="badge ok">' + esc(v.clients - v.depuis_api) +
-          ' a la main</span></td>' +
+          ' by hand</span></td>' +
         '<td class="num">' + (vus
           ? '<span class="badge warn">' + esc(vus) + '</span>'
           : '<span class="faint">0</span>') + '</td></tr>';
@@ -2570,19 +2579,19 @@ async function loadStaticClients() {
   } catch (err) { /* le champ reste libre */ }
 
   if (!fiches.length) {
-    host.innerHTML = '<div class="empty">Aucun client a IP fixe declare.</div>';
+    host.innerHTML = '<div class="empty">No static-IP client declared.</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Reference</th><th>Nom</th><th>PoP</th>' +
-    '<th>Adresse</th><th class="num">VLAN</th><th>Secteur</th>' +
+    '<table><thead><tr><th>Reference</th><th>Name</th><th>PoP</th>' +
+    '<th>Address</th><th class="num">VLAN</th><th>Sector</th>' +
     '<th class="num">Plan</th>' +
-    '<th title="Derniere fois que cette adresse a parle, vu dans /ip/arp. ' +
-    'Un client silencieux ou joignable par un autre chemin reste vide : ' +
-    'ne pas savoir n\'est pas la meme chose qu\'etre absent.">Vu actif</th>' +
-    '<th>Etat</th>' +
-    '<th title="La file reellement posee sur le routeur, et ce qui manque quand ' +
-    'elle ne l\'est pas. Lu sur les routeurs, apres l\'affichage du tableau.">File</th>' +
+    '<th title="Last time this address talked, seen in /ip/arp. ' +
+    'A silent client, or one reachable by another path, stays empty: ' +
+    'not knowing is not the same as being absent.">Seen active</th>' +
+    '<th>State</th>' +
+    '<th title="The queue actually written on the router, and what is missing when ' +
+    'it is not. Read from the routers, after the table is shown.">Queue</th>' +
     '<th class="sticky-actions"></th>' +
     '</tr></thead><tbody>' +
     fiches.map((f) =>
@@ -2598,16 +2607,16 @@ async function loadStaticClients() {
           ? mbps(f.plan_down_mbps || 0) + ' / ' + mbps(f.plan_up_mbps || 0)
           : '-') + '</td>' +
       '<td' + (f.last_seen_at
-        ? ' title="' + esc((f.seen_mac || '') + ' sur ' + (f.seen_vlan_interface || '')) + '"'
+        ? ' title="' + esc((f.seen_mac || '') + ' on ' + (f.seen_vlan_interface || '')) + '"'
         : '') + '>' + esc(depuis(f.last_seen_at)) + '</td>' +
       '<td>' + (f.enabled
-        ? '<span class="badge ok">actif</span>'
+        ? '<span class="badge ok">active</span>'
         : '<span class="badge warn" title="Fiche conservee, file retiree au plan suivant">suspendu</span>') + '</td>' +
       '<td class="sc-file" data-sc-file="' + esc(f.reference) + '">' +
-        '<span class="hint">lecture...</span></td>' +
+        '<span class="hint">reading...</span></td>' +
       '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
-        '<button class="sm" data-sc-edit="' + esc(f.id) + '">Modifier</button>' +
-        '<button class="sm" data-sc-del="' + esc(f.id) + '">Retirer</button>' +
+        '<button class="sm" data-sc-edit="' + esc(f.id) + '">Edit</button>' +
+        '<button class="sm" data-sc-del="' + esc(f.id) + '">Remove</button>' +
       '</div></td>' +
       '</tr>').join('') + '</tbody></table>';
 
@@ -2615,7 +2624,11 @@ async function loadStaticClients() {
     b.addEventListener('click', () => {
       const fiche = fiches.find((f) => String(f.id) === b.dataset.scEdit);
       scRemplirFormulaire(fiche);
-      document.getElementById('sc-reference').focus();
+      // Le formulaire est au-dessus de ce tableau : sans ce recentrage, cliquer
+      // « Modifier » ne montrerait rien du tout depuis le bas de la liste.
+      const reference = document.getElementById('sc-reference');
+      reference.focus();
+      reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
     });
   });
   host.querySelectorAll('[data-sc-del]').forEach((b) => {
@@ -2654,13 +2667,13 @@ async function scEtatDesFiles(host) {
  *  Ils repondent tous a la meme question, celle qu'on se pose apres avoir
  *  declare un client : est-ce qu'il est bride, et sinon qu'est-ce qui manque ? */
 const SC_ETATS = {
-  'file-posee': ['ok', 'File posee'],
-  'file-retiree': ['', 'File retiree'],
-  'file-a-poser': ['warn', 'File a poser'],
-  'ecarte': ['warn', 'Aucune file'],
-  'sans-routeur': ['crit', 'PoP sans routeur'],
-  'conflit': ['crit', 'Conflit'],
-  'erreur': ['crit', 'Erreur'],
+  'file-posee': ['ok', 'Queue written'],
+  'file-retiree': ['', 'Queue removed'],
+  'file-a-poser': ['warn', 'Queue pending'],
+  'ecarte': ['warn', 'No queue'],
+  'sans-routeur': ['crit', 'PoP with no router'],
+  'conflit': ['crit', 'Conflict'],
+  'erreur': ['crit', 'Error'],
 };
 
 function scBadgeEtat(etat) {
@@ -2675,10 +2688,10 @@ function scBadgeEtat(etat) {
  *  n'y avait aucune difference visible. C'est ce rapport qui la fait. */
 function scEnforcement(rapport) {
   if (!rapport) return '';
-  const routeur = rapport.router ? ' sur <code>' + esc(rapport.router) + '</code>' : '';
+  const routeur = rapport.router ? ' on <code>' + esc(rapport.router) + '</code>' : '';
   const rapproche = rapport.pop_resolution === 'normalise'
-    ? '<span class="hint">PoP saisi <code>' + esc(rapport.pop_declared || '') +
-      '</code>, rapproche de <code>' + esc(rapport.pop_name || '') + '</code>.</span>'
+    ? '<span class="hint">PoP entered <code>' + esc(rapport.pop_declared || '') +
+      '</code>, matched to <code>' + esc(rapport.pop_name || '') + '</code>.</span>'
     : '';
   return ' ' + scBadgeEtat(rapport.state) + routeur +
     '<span class="hint">' + esc(rapport.reason || '') + '</span>' + rapproche;
@@ -2695,10 +2708,10 @@ async function scEnregistrer(event) {
       fiche = await api('/static-clients/' + encodeURIComponent(scEdition.id), {
         method: 'PATCH', body: JSON.stringify(payload),
       });
-      scNotice('<span class="badge ok">Fiche mise a jour</span>' + scEnforcement(fiche.enforcement));
+      scNotice('<span class="badge ok">Record updated</span>' + scEnforcement(fiche.enforcement));
     } else {
       fiche = await api('/static-clients', { method: 'POST', body: JSON.stringify(payload) });
-      scNotice('<span class="badge ok">Client declare</span>' + scEnforcement(fiche.enforcement));
+      scNotice('<span class="badge ok">Client declared</span>' + scEnforcement(fiche.enforcement));
     }
     scRemplirFormulaire(null);
     // Declarer un client le retire de la liste des candidats : les deux
@@ -2716,9 +2729,9 @@ async function scEnregistrer(event) {
 async function scSupprimer(id, fiches) {
   const fiche = (fiches || []).find((f) => String(f.id) === String(id));
   const nom = fiche ? (fiche.label || fiche.reference) : id;
-  if (!confirm('Retirer "' + nom + '" de l\'inventaire ?\n\n' +
-      'Son historique de mesures est conserve. Sa file est retiree du routeur ' +
-      'immediatement, et elle seule.')) return;
+  if (!confirm('Remove "' + nom + '" from the inventory?\n\n' +
+      'Its measurement history is kept. Its queue is removed from the router ' +
+      'immediately, and only that one.')) return;
   try {
     await api('/static-clients/' + encodeURIComponent(id), { method: 'DELETE' });
     if (scEdition && String(scEdition.id) === String(id)) scRemplirFormulaire(null);
@@ -2741,7 +2754,7 @@ async function openSubscriber(id) {
     const s = data.subscriber;
     root.querySelector('.drawer').innerHTML =
       '<div class="drawer-head"><h3>' + esc(s.login) + '</h3>' +
-      '<button class="sm" id="drawer-close">Fermer</button></div>' +
+      '<button class="sm" id="drawer-close">Close</button></div>' +
       '<div class="grid stats" style="margin-bottom:1rem">' +
         statCard('', 'PoP', esc(s.pop_name || '-'), '', '') +
         statCard('', 'Limite appliquee',
@@ -2752,40 +2765,40 @@ async function openSubscriber(id) {
           s.limit_source === 'boost'
             ? '<span class="boost-pill">boost</span>'
             : s.limit_source === 'override'
-              ? '<span class="badge warn">impose</span> plan : ' +
+              ? '<span class="badge warn">forced</span> plan: ' +
                 esc(mbps(s.plan_down_mbps || 0))
-              : esc(s.plan_source || 'plan RADIUS')) +
-        statCard('', 'Cible de la file', esc(s.last_ip ? s.last_ip + '/32' : '-'), '',
+              : esc(s.plan_source || 'RADIUS plan')) +
+        statCard('', 'Queue target', esc(s.last_ip ? s.last_ip + '/32' : '-'), '',
           s.last_ip
-            ? 'adresse de la session'
-            : '<span style="color:var(--warn)">hors ligne : aucune file</span>') +
+            ? 'session address'
+            : '<span style="color:var(--warn)">offline: no queue</span>') +
         statCard('', 'Bufferbloat',
-          data.bufferbloat ? esc(data.bufferbloat.grade) : 'n/d', '',
+          data.bufferbloat ? esc(data.bufferbloat.grade) : 'n/a', '',
           data.bufferbloat
-            ? 'a vide ' + esc(data.bufferbloat.idle_ms) + ' ms, sous charge ' +
+            ? 'idle ' + esc(data.bufferbloat.idle_ms) + ' ms, under load ' +
               esc(data.bufferbloat.loaded_ms) + ' ms'
-            : 'charge insuffisante pour mesurer') +
+            : 'not enough load to measure') +
       '</div>' +
       (data.bufferbloat
-        ? '<div class="notice"><b>Latence sous charge.</b> La latence passe de ' +
-          '<b>' + esc(data.bufferbloat.idle_ms) + ' ms</b> a vide a <b>' +
-          esc(data.bufferbloat.loaded_ms) + ' ms</b> quand le lien se remplit, ' +
-          'soit <b>+' + esc(data.bufferbloat.bloat_ms) + ' ms</b> de bufferbloat ' +
-          '(note ' + esc(data.bufferbloat.grade) + ', ' +
+        ? '<div class="notice"><b>Latency under load.</b> Latency goes from ' +
+          '<b>' + esc(data.bufferbloat.idle_ms) + ' ms</b> idle to <b>' +
+          esc(data.bufferbloat.loaded_ms) + ' ms</b> when the link fills up, ' +
+          'that is <b>+' + esc(data.bufferbloat.bloat_ms) + ' ms</b> of bufferbloat ' +
+          '(grade ' + esc(data.bufferbloat.grade) + ', ' +
           esc(data.bufferbloat.samples) + ' point(s)).</div>'
         : data.points.some((p) => p.rtt_ms_avg !== null && p.rtt_ms_avg !== undefined)
-          ? '<div class="notice">Latence sur la fenetre : moyenne ' +
+          ? '<div class="notice">Latency over the window: average ' +
             rtt(Math.max(...data.points.map((p) => p.rtt_ms_avg || 0))) +
-            ', pire ' + rtt(Math.max(...data.points.map((p) => p.rtt_ms_max || 0))) +
+            ', worst ' + rtt(Math.max(...data.points.map((p) => p.rtt_ms_max || 0))) +
             '</div>'
           : '') +
-      '<h2>Derniere heure</h2><div class="card"><div id="sub-chart"></div></div>';
+      '<h2>Last hour</h2><div class="card"><div id="sub-chart"></div></div>';
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
     renderThroughput(document.getElementById('sub-chart'),
       data.points.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_bps_max, rx_bps: p.rx_bps_max, subscribers: p.samples })));
   } catch (err) {
     root.querySelector('.drawer').innerHTML =
-      '<div class="drawer-head"><h3>Erreur</h3><button class="sm" id="drawer-close">Fermer</button></div>' +
+      '<div class="drawer-head"><h3>Error</h3><button class="sm" id="drawer-close">Close</button></div>' +
       '<div class="notice err">' + esc(err.message) + '</div>';
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
   }
@@ -2802,12 +2815,12 @@ async function loadPops() {
   const pops = await api('/pops');
   const host = document.getElementById('pops-table');
   if (!pops.length) {
-    host.innerHTML = '<div class="empty">Aucun site. Ils apparaissent des qu\'un ' +
-      'routeur remonte des sessions.</div>';
+    host.innerHTML = '<div class="empty">No site. They appear as soon as a ' +
+      'router reports sessions.</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Site</th><th>Routeur</th><th class="num">Abonnes</th>' +
+    '<table><thead><tr><th>Site</th><th>Router</th><th class="num">Subscribers</th>' +
     '<th class="num">Backhauls</th><th></th></tr></thead><tbody>' +
     pops.map((p) => '<tr>' +
       '<td><strong>' + esc(p.name) + '</strong></td>' +
@@ -2822,10 +2835,10 @@ async function loadPops() {
     const pop = pops.find((p) => String(p.id) === b.dataset.delPop);
     b.addEventListener('click', async () => {
       if (!confirm('Supprimer definitivement "' + pop.name + '" ?\n\n' +
-          pop.subscriber_count + ' abonne(s) et ' + pop.backhaul_count +
-          ' backhaul(s) seront effaces, ainsi que TOUT leur historique de mesures.\n\n' +
-          'Retirez aussi le routeur de l\'inventaire, sinon le site sera recree ' +
-          'au prochain cycle.')) return;
+          pop.subscriber_count + ' subscriber(s) and ' + pop.backhaul_count +
+          ' backhaul(s) will be erased, along with ALL their measurement history.\n\n' +
+          'Remove the router from the inventory too, otherwise the site is recreated ' +
+          'on the next cycle.')) return;
       try {
         await api('/pops/' + pop.id + '?confirm=true', { method: 'DELETE' });
         await loadRouters();
@@ -2850,19 +2863,19 @@ async function loadRoutersHealth() {
   }
   const routeurs = data.routers || [];
   if (!routeurs.length) {
-    host.innerHTML = '<div class="empty">Aucun routeur collecte.</div>';
+    host.innerHTML = '<div class="empty">No router collected.</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Routeur</th><th>PoP</th><th>Modele</th>' +
-    '<th class="num">CPU</th><th class="num">Memoire</th>' +
+    '<table><thead><tr><th>Router</th><th>PoP</th><th>Model</th>' +
+    '<th class="num">CPU</th><th class="num">Memory</th>' +
     '<th class="num">Uptime</th><th>Version</th></tr></thead><tbody>' +
     routeurs.map((r) => {
       if (!r.reachable) {
         return '<tr>' +
           '<td class="login"><b>' + esc(r.router) + '</b></td>' +
           '<td>' + esc(r.pop_name || '-') + '</td>' +
-          '<td colspan="5"><span class="badge crit">injoignable</span>' +
+          '<td colspan="5"><span class="badge crit">unreachable</span>' +
             '<span class="hint">' + esc(r.error || '') + '</span></td>' +
           '</tr>';
       }
@@ -2881,7 +2894,7 @@ async function loadRoutersHealth() {
             : '') + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td>' +
         '<td>' + esc(r.board_name || '-') +
-          (r.cpu_count ? ' <span class="hint">' + esc(r.cpu_count) + ' coeur(s)</span>' : '') +
+          (r.cpu_count ? ' <span class="hint">' + esc(r.cpu_count) + ' core(s)</span>' : '') +
           '</td>' +
         '<td class="num">' + badge(cpu, 70, 85) + '</td>' +
         // Sans memoire totale, RouterOS ne permet aucun pourcentage : on montre
@@ -2922,9 +2935,9 @@ async function loadRouters() {
   const notice = document.getElementById('pops-notice');
   let html = '';
   if (!data.secrets_available) {
-    html += '<div class="notice warn"><b>Ajout depuis l\'interface indisponible.</b> ' +
+    html += '<div class="notice warn"><b>Adding from the interface is unavailable.</b> ' +
       esc(data.secrets_reason || '') +
-      '<span class="hint">Verifiez <code>APP_SECRET_KEY_FILE</code>.</span></div>';
+      '<span class="hint">Check <code>APP_SECRET_KEY_FILE</code>.</span></div>';
   }
   (data.skipped || []).forEach((skip) => {
     // Ancien format (chaine) ou nouveau ({name, reason, source, ...}) : les deux.
@@ -2935,23 +2948,23 @@ async function loadRouters() {
     // declare en base enverrait l'exploitant vers un bouton sans effet.
     const retirable = nom && source !== 'db';
     html += '<div class="notice err"><strong>' +
-      (nom ? esc(nom) + ' : ecarte de la collecte.' : 'Inventaire incomplet.') +
+      (nom ? esc(nom) + ': dropped from collection.' : 'Incomplete inventory.') +
       '</strong> ' + esc(raison) +
-      '<span class="hint">Rien n\'est lu sur ce routeur.</span>' +
+      '<span class="hint">Nothing is read from this router.</span>' +
       (source === 'db'
-        ? '<span class="hint">Declare en base : corrigez sa fiche ci-dessous.</span>'
+        ? '<span class="hint">Declared in the database: fix its record below.</span>'
         : '') +
       (retirable ? '<div class="actions" style="margin-top:.5rem">' +
-        '<button class="sm danger" data-hide-file="' + esc(nom) + '">Retirer definitivement</button>' +
+        '<button class="sm danger" data-hide-file="' + esc(nom) + '">Remove for good</button>' +
         '</div>' : '') +
       '</div>';
   });
   // Routeurs fichier retires a la main : proposer de les restaurer.
   (data.hidden || []).forEach((h) => {
-    html += '<div class="notice"><strong>' + esc(h.name) + '</strong> est retire de ' +
-      'l\'inventaire fichier.' +
+    html += '<div class="notice"><strong>' + esc(h.name) + '</strong> is removed from ' +
+      'the file inventory.' +
       '<div class="actions" style="margin-top:.5rem">' +
-      '<button class="sm" data-restore-file="' + esc(h.name) + '">Restaurer</button>' +
+      '<button class="sm" data-restore-file="' + esc(h.name) + '">Restore</button>' +
       '</div></div>';
   });
   notice.innerHTML = html;
@@ -2963,34 +2976,34 @@ async function loadRouters() {
 
   const host = document.getElementById('routers-table');
   if (!state.routers.length) {
-    host.innerHTML = '<div class="empty">Aucun routeur. Utilisez le formulaire ci-dessous.</div>';
+    host.innerHTML = '<div class="empty">No router. Use the form below.</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>PoP</th><th>Adresse</th><th>Compte</th><th>Source</th>' +
-    '<th>Etat</th><th>Modele</th><th></th></tr></thead><tbody>' +
+    '<table><thead><tr><th>PoP</th><th>Address</th><th>Account</th><th>Source</th>' +
+    '<th>State</th><th>Model</th><th></th></tr></thead><tbody>' +
     state.routers.map((r) => {
-      let badge = '<span class="badge">jamais teste</span>';
+      let badge = '<span class="badge">never tested</span>';
       if (r.last_error) {
         // Un secret illisible ou une fiche invalide ne sont pas une panne du
         // routeur : il est ECARTE de la collecte, ce qui se corrige ici et non
         // sur l'equipement. Les confondre envoie chercher au mauvais endroit.
         const ecarte = /secret illisible|fiche invalide/.test(r.last_error);
         badge = '<span class="badge crit" title="' + esc(r.last_error) + '">' +
-          (ecarte ? 'ecarte' : 'en echec') + '</span>';
+          (ecarte ? 'dropped' : 'failing') + '</span>';
       }
-      else if (r.last_ok_at) badge = '<span class="badge ok">joignable</span>';
-      else if (r.source === 'file') badge = '<span class="badge ok">actif</span>';
+      else if (r.last_ok_at) badge = '<span class="badge ok">reachable</span>';
+      else if (r.source === 'file') badge = '<span class="badge ok">active</span>';
       // HORS COLLECTE : present dans l'inventaire, mais absent des collecteurs.
       // C'est le signal le plus direct, et le seul qui ne depende pas de
       // deviner la cause : rien n'est lu sur ce routeur, donc il n'a ni case
       // decouverte dans l'arbre, ni abonnes, ni detection de clients.
       if (r.active === false && r.enabled !== false) {
         badge = '<span class="badge crit" title="' + esc(r.last_error ||
-          'Ce routeur figure dans l\'inventaire mais n\'est pas collecte.') +
-          '">hors collecte</span>';
+          'This router is in the inventory but is not collected.') +
+          '">not collected</span>';
       }
-      if (r.enabled === false) badge = '<span class="badge">desactive</span>';
+      if (r.enabled === false) badge = '<span class="badge">disabled</span>';
 
       return '<tr>' +
         '<td><strong>' + esc(r.name) + '</strong>' +
@@ -2998,21 +3011,21 @@ async function loadRouters() {
         '<td class="login">' + esc(r.host) + ':' + esc(r.port) + '</td>' +
         '<td class="login">' + esc(r.username) + '</td>' +
         '<td>' + (r.source === 'file'
-          ? '<span class="badge file">inventaire fichier</span>'
+          ? '<span class="badge file">file inventory</span>'
           : '<span class="badge">interface</span>') + '</td>' +
         '<td>' + badge + '</td>' +
         '<td style="font-size:.76rem;color:var(--muted)">' +
           esc(r.board_name || '-') + (r.routeros_version ? ' &middot; ' + esc(r.routeros_version) : '') + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' +
           '<button class="sm" data-config="' + esc(r.name) +
-            '" title="Voir la config complete (/export) que le controleur lit">Config</button>' +
+            '" title="See the full config (/export) the controller reads">Config</button>' +
           (r.editable
-            ? '<button class="sm" data-probe="' + r.id + '">Tester</button>' +
-              '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Desactiver' : 'Activer') + '</button>' +
-              '<button class="sm danger" data-del="' + r.id + '">Retirer</button>'
+            ? '<button class="sm" data-probe="' + r.id + '">Test</button>' +
+              '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button>' +
+              '<button class="sm danger" data-del="' + r.id + '">Remove</button>'
             : '<span style="font-size:.72rem;color:var(--faint);margin-right:.4rem">routers.yml</span>' +
               '<button class="sm danger" data-hide-file="' + esc(r.name) +
-              '" title="Ecarter ce routeur fichier sans editer le YAML">Retirer</button>') +
+              '" title="Drop this file router without editing the YAML">Remove</button>') +
         '</div></td></tr>';
     }).join('') + '</tbody></table>' +
     '<div id="router-export"></div>';
@@ -3034,7 +3047,7 @@ async function loadRouters() {
 async function showRouterExport(name) {
   const host = document.getElementById('router-export');
   if (!host) return;
-  host.innerHTML = '<div class="muted">Lecture de la config de ' + esc(name) + '…</div>';
+  host.innerHTML = '<div class="muted">Reading the config of ' + esc(name) + '…</div>';
   try {
     const r = await api('/topology/routers/' + encodeURIComponent(name) + '/export');
     const p = r.parsed || {};
@@ -3043,11 +3056,11 @@ async function showRouterExport(name) {
     const adrs = (p.addresses || []).length;
     const coms = Object.keys(p.comments || {}).length;
     host.innerHTML =
-      '<div class="notice" style="margin-top:.6rem"><b>Config de ' + esc(name) + '</b> — ' +
-        adrs + ' adresse(s), ' + (p.tunnels || []).length + ' tunnel(s), ' + coms +
-        ' commentaire(s). <b>Tunnels :</b> ' + tuns +
-        (r.export ? '' : '<span class="hint">L\'API n\'a pas renvoyé d\'export sur cette ' +
-          'version : la découverte se rabat sur le structuré (/ip/address, voisins).</span>') +
+      '<div class="notice" style="margin-top:.6rem"><b>Config of ' + esc(name) + '</b> — ' +
+        adrs + ' address(es), ' + (p.tunnels || []).length + ' tunnel(s), ' + coms +
+        ' comment(s). <b>Tunnels:</b> ' + tuns +
+        (r.export ? '' : '<span class="hint">The API returned no export on this ' +
+          'version: discovery falls back to the structured data (/ip/address, neighbours).</span>') +
       '</div>' +
       (r.export
         ? '<pre class="export-pre">' + esc(r.export) + '</pre>'
@@ -3061,9 +3074,9 @@ async function showRouterExport(name) {
  *  Le fichier gagne par defaut ; ce masquage explicite est la seule facon,
  *  cote interface, de retirer un routeur fichier — et il est reversible. */
 async function hideFileRouter(name) {
-  if (!confirm('Retirer "' + name + '" de l\'inventaire ?\n\n' +
-    'Le routeur est ecarte (interrogation et avertissements), sans modifier ' +
-    'config/routers.yml. Vous pourrez le restaurer.')) return;
+  if (!confirm('Remove "' + name + '" from the inventory?\n\n' +
+    'The router is dropped (polling and warnings), without changing ' +
+    'config/routers.yml. You will be able to restore it.')) return;
   try {
     await api('/pops/routers/file/' + encodeURIComponent(name), { method: 'DELETE' });
     await loadRouters();
@@ -3086,15 +3099,15 @@ async function buildTreeFromConfig(silencieux) {
   const bouton = document.getElementById('btn-build-tree');
   if (bouton) bouton.disabled = true;
   if (!silencieux && notice) {
-    notice.innerHTML = '<div class="notice">Analyse en cours...</div>';
+    notice.innerHTML = '<div class="notice">Analysis running...</div>';
   }
   try {
     const r = await api('/topology/discover', { method: 'POST' });
     const compte = document.getElementById('build-count');
-    if (compte) compte.textContent = r.nodes + ' equipement(s), ' + r.links + ' lien(s)';
+    if (compte) compte.textContent = r.nodes + ' device(s), ' + r.links + ' link(s)';
     if (notice) {
-      notice.innerHTML = '<div class="notice ok"><b>Arbre construit.</b> ' +
-        r.nodes + ' equipement(s), ' + r.links + ' lien(s).' +
+      notice.innerHTML = '<div class="notice ok"><b>Tree built.</b> ' +
+        r.nodes + ' device(s), ' + r.links + ' link(s).' +
         (r.warnings && r.warnings.length
           ? '<span class="hint">' + r.warnings.map(esc).join('<br>') + '</span>' : '') +
         '</div>';
@@ -3135,24 +3148,24 @@ async function testConnection() {
   const button = document.getElementById('btn-test');
   const payload = formPayload();
   if (!payload.name || !payload.host || !payload.password) {
-    showFormResult('<div class="notice err">Nom, adresse et mot de passe sont requis pour tester.</div>');
+    showFormResult('<div class="notice err">Name, address and password are required to test.</div>');
     return;
   }
   button.disabled = true;
-  showFormResult('<div class="notice">Connexion a ' + esc(payload.host) + ':' + esc(payload.port) + '...</div>');
+  showFormResult('<div class="notice">Connecting to ' + esc(payload.host) + ':' + esc(payload.port) + '...</div>');
   try {
     const result = await api('/pops/routers/test', { method: 'POST', body: JSON.stringify(payload) });
     if (result.reachable) {
       showFormResult('<div class="notice ok"><strong>Connexion etablie.</strong> ' +
-        esc(result.identity || 'routeur') + ' &middot; ' + esc(result.board_name || '?') +
+        esc(result.identity || 'router') + ' &middot; ' + esc(result.board_name || '?') +
         ' &middot; RouterOS ' + esc(result.version || '?') +
-        '<span class="hint">' + esc(result.ppp_active_sessions) + ' session(s) PPPoE active(s), dont ' +
-        esc(result.correlated_sessions) + ' avec compteurs correles' +
+        '<span class="hint">' + esc(result.ppp_active_sessions) + ' active PPPoE session(s), incl. ' +
+        esc(result.correlated_sessions) + ' with correlated counters' +
         (result.ppp_active_sessions > 0 && result.correlated_sessions === 0
-          ? ' — aucun debit ne pourra etre calcule, verifiez le motif d\'interface PPPoE.'
+          ? ' — no rate can be computed, check the PPPoE interface pattern.'
           : '.') + '</span></div>');
     } else {
-      showFormResult('<div class="notice err"><strong>Echec.</strong> <code>' + esc(result.error) + '</code>' +
+      showFormResult('<div class="notice err"><strong>Failed.</strong> <code>' + esc(result.error) + '</code>' +
         '<span class="hint">' + esc(result.hint || '') + '</span></div>');
     }
   } catch (err) {
@@ -3190,7 +3203,7 @@ async function probeRouter(id, button) {
   try {
     const result = await api('/pops/routers/' + id + '/probe', { method: 'POST' });
     if (!result.reachable) {
-      alert('Echec : ' + result.error + '\n\n' + (result.hint || ''));
+      alert('Failed: ' + result.error + '\n\n' + (result.hint || ''));
     }
   } catch (err) {
     alert(err.message);
@@ -3202,8 +3215,8 @@ async function probeRouter(id, button) {
 
 async function deleteRouter(id) {
   const router = state.routers.find((r) => String(r.id) === String(id));
-  if (!confirm('Retirer "' + (router ? router.name : id) + '" de l\'inventaire ?\n\n' +
-    'Les metriques deja collectees sont conservees.')) return;
+  if (!confirm('Remove "' + (router ? router.name : id) + '" from the inventory?\n\n' +
+    'The metrics already collected are kept.')) return;
   try {
     await api('/pops/routers/' + id, { method: 'DELETE' });
     await loadRouters();
@@ -3246,14 +3259,14 @@ const SVC = {
  *  cette page : il porte la couleur la plus visible. */
 const SVC_CATEGORIES = {
   'streaming': 'crit',
-  'reseaux sociaux': 'warn',
-  'jeux': 'warn',
-  'voix / visio': 'ok',
+  'social networks': 'warn',
+  'gaming': 'warn',
+  'voice / video': 'ok',
   'cdn': '',
-  'nuage': '',
-  'mises a jour': '',
+  'cloud': '',
+  'updates': '',
   'dns': '',
-  'messagerie': '',
+  'messaging': '',
 };
 
 const PROTOCOLES = { 1: 'icmp', 6: 'tcp', 17: 'udp', 47: 'gre', 50: 'esp', 58: 'icmpv6' };
@@ -3275,7 +3288,7 @@ function clientCell(ligne) {
       esc(ligne.login) + '</a>';
   }
   return '<code>' + esc(ligne.client || '?') + '</code>' +
-    ' <span class="hint">non declare</span>';
+    ' <span class="hint">undeclared</span>';
 }
 
 /** Le domaine sous lequel un nom inverse est enregistre.
@@ -3300,7 +3313,7 @@ function domaine(nom) {
 }
 
 function svcBadge(categorie) {
-  if (!categorie) return '<span class="badge">non identifie</span>';
+  if (!categorie) return '<span class="badge">unidentified</span>';
   return '<span class="badge ' + (SVC_CATEGORIES[categorie] || '') + '">' +
     esc(categorie) + '</span>';
 }
@@ -3313,7 +3326,7 @@ function svcBadge(categorie) {
  *  deux il regarde. */
 function svcName(ligne) {
   if (!ligne.service) {
-    return '<span class="hint">non identifie</span>';
+    return '<span class="hint">unidentified</span>';
   }
   const source = ligne.source ? ' <span class="hint">' + esc(ligne.source) + '</span>' : '';
   return '<b>' + esc(ligne.service) + '</b>' + source;
@@ -3355,8 +3368,8 @@ async function loadServices() {
   renderRules(regles);
 
   document.getElementById('svc-count').textContent = etat.listening
-    ? (dest.destinations || []).length + ' adresse(s) sur ' + SVC.minutes + ' min'
-    : 'collecteur a l\'arret';
+    ? (dest.destinations || []).length + ' address(es) over ' + SVC.minutes + ' min'
+    : 'collector stopped';
 }
 
 /** Ce qui empeche cette page de repondre, dit en toutes lettres.
@@ -3368,23 +3381,23 @@ function renderServiceNotice(etat, intel) {
   const hote = document.getElementById('svc-notice');
   const messages = [];
   if (!etat.enabled) {
-    messages.push('<div class="notice warn"><b>Collecteur NetFlow coupe.</b></div>');
+    messages.push('<div class="notice warn"><b>NetFlow collector off.</b></div>');
   } else if (!etat.listening) {
-    messages.push('<div class="notice err"><b>Le collecteur n\'ecoute pas.</b> ' +
-      esc(etat.last_error || 'port occupe ou droits insuffisants') + '</div>');
+    messages.push('<div class="notice err"><b>The collector is not listening.</b> ' +
+      esc(etat.last_error || 'port busy or insufficient privileges') + '</div>');
   } else if (!etat.packets_received) {
-    messages.push('<div class="notice warn"><b>Aucun datagramme recu sur ' +
-      esc(etat.bind) + '.</b> Onglet Trafic &gt; Export sur les routeurs.</div>');
+    messages.push('<div class="notice warn"><b>No datagram received on ' +
+      esc(etat.bind) + '.</b> Traffic tab &gt; Export on the routers.</div>');
   }
   if (etat.enabled && etat.track_destinations === false) {
-    messages.push('<div class="notice warn"><b>Suivi des destinations desactive.</b></div>');
+    messages.push('<div class="notice warn"><b>Destination tracking disabled.</b></div>');
   }
   if (intel && intel.enabled === false) {
-    messages.push('<div class="notice warn"><b>Identification desactivee.</b></div>');
+    messages.push('<div class="notice warn"><b>Identification disabled.</b></div>');
   }
   if (intel && intel.pending > 0) {
     messages.push('<div class="notice">' + esc(intel.pending) +
-      ' adresse(s) en attente de nom.</div>');
+      ' address(es) waiting for a name.</div>');
   }
   hote.innerHTML = messages.join('');
 }
@@ -3402,16 +3415,16 @@ function renderServiceStats(etat, intel, dest) {
 
   document.getElementById('svc-stats').innerHTML =
     statCard('down', 'Streaming', bytesText(streaming), '',
-      total ? Math.round((streaming / total) * 100) + ' % du trafic identifie' : 'rien a mesurer') +
-    statCard('', 'Trafic nomme', String(partNommee), '%',
-      'le reste n\'a ni bloc connu ni nom inverse') +
-    statCard('', 'Adresses connues', String((intel && intel.resolved) || 0), '',
-      ((intel && intel.named) || 0) + ' rattachee(s) a un service') +
-    statCard(etat.destinations_dropped ? 'warn' : '', 'Fenetre en cours',
+      total ? Math.round((streaming / total) * 100) + ' % of identified traffic' : 'nothing to measure') +
+    statCard('', 'Named traffic', String(partNommee), '%',
+      'the rest has neither a known prefix nor a reverse name') +
+    statCard('', 'Known addresses', String((intel && intel.resolved) || 0), '',
+      ((intel && intel.named) || 0) + ' matched to a service') +
+    statCard(etat.destinations_dropped ? 'warn' : '', 'Current window',
       String(etat.destinations_window || 0), '',
       etat.destinations_dropped
-        ? esc(etat.destinations_dropped) + ' ecartee(s) : plafond atteint'
-        : 'couples abonne/destination');
+        ? esc(etat.destinations_dropped) + ' dropped: cap reached'
+        : 'subscriber/destination pairs');
 }
 
 /** La fenetre EN COURS, lue dans la memoire du collecteur.
@@ -3423,12 +3436,12 @@ function renderLiveConnections(data) {
   const hote = document.getElementById('svc-live');
   const lignes = (data && data.connections) || [];
   if (!lignes.length) {
-    hote.innerHTML = '<div class="empty">Aucune connexion dans la fenetre en cours.</div>';
+    hote.innerHTML = '<div class="empty">No connection in the current window.</div>';
     return;
   }
   hote.innerHTML = '<table><thead><tr><th>Client</th><th>Destination</th>' +
-    '<th>Service</th><th>Famille</th><th class="num">Port</th><th>Proto</th>' +
-    '<th class="num">Descendant</th><th class="num">Montant</th><th></th>' +
+    '<th>Service</th><th>Category</th><th class="num">Port</th><th>Proto</th>' +
+    '<th class="num">Down</th><th class="num">Up</th><th></th>' +
     '</tr></thead><tbody>' +
     lignes.map((c) =>
       '<tr><td class="login">' + clientCell(c) + '</td>' +
@@ -3441,7 +3454,7 @@ function renderLiveConnections(data) {
       '<td>' + esc(protoName(c.protocol)) + '</td>' +
       '<td class="num">' + bytesText(c.down_bytes) + '</td>' +
       '<td class="num">' + bytesText(c.up_bytes) + '</td>' +
-      '<td>' + (c.pending ? '<span class="hint">a nommer</span>' : '') + '</td></tr>').join('') +
+      '<td>' + (c.pending ? '<span class="hint">to be named</span>' : '') + '</td></tr>').join('') +
     '</tbody></table>';
   brancherLiensServices(hote);
 }
@@ -3449,18 +3462,18 @@ function renderLiveConnections(data) {
 function renderServiceTable(services) {
   const hote = document.getElementById('svc-services');
   if (!services.length) {
-    hote.innerHTML = '<div class="empty">Aucun trafic mesure sur cette periode.</div>';
+    hote.innerHTML = '<div class="empty">No traffic measured over this period.</div>';
     return;
   }
   const total = services.reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
-  hote.innerHTML = '<table><thead><tr><th>Service</th><th>Famille</th>' +
-    '<th class="num">Adresses</th><th class="num">Clients</th>' +
-    '<th class="num">Descendant</th><th class="num">Montant</th><th>Part</th>' +
+  hote.innerHTML = '<table><thead><tr><th>Service</th><th>Category</th>' +
+    '<th class="num">Addresses</th><th class="num">Clients</th>' +
+    '<th class="num">Down</th><th class="num">Up</th><th>Share</th>' +
     '<th></th></tr></thead><tbody>' +
     services.map((r) => {
       const somme = Number(r.down_bytes || 0) + Number(r.up_bytes || 0);
       return '<tr>' +
-        '<td><b>' + esc(r.service || 'non identifie') + '</b></td>' +
+        '<td><b>' + esc(r.service || 'unidentified') + '</b></td>' +
         '<td>' + svcBadge(r.category) + '</td>' +
         '<td class="num">' + esc(r.addresses) + '</td>' +
         '<td class="num">' + esc(r.clients) + '</td>' +
@@ -3479,12 +3492,12 @@ function renderServiceTable(services) {
 function renderDestinations(lignes) {
   const hote = document.getElementById('svc-destinations');
   if (!lignes.length) {
-    hote.innerHTML = '<div class="empty">Aucune adresse atteinte.</div>';
+    hote.innerHTML = '<div class="empty">No destination reached.</div>';
     return;
   }
-  hote.innerHTML = '<table><thead><tr><th>Adresse</th><th>Nom inverse</th>' +
-    '<th>Service</th><th>Famille</th><th class="num">Clients</th>' +
-    '<th class="num">Descendant</th><th class="num">Montant</th><th>Vue</th>' +
+  hote.innerHTML = '<table><thead><tr><th>Address</th><th>Reverse name</th>' +
+    '<th>Service</th><th>Category</th><th class="num">Clients</th>' +
+    '<th class="num">Down</th><th class="num">Up</th><th>Seen</th>' +
     '</tr></thead><tbody>' +
     lignes.map((d) =>
       '<tr><td><a href="#" data-svc-ip="' + esc(d.address) + '"><code>' +
@@ -3519,7 +3532,7 @@ function brancherLiensServices(hote) {
 /** La fiche complete d'une adresse : ce qu'on sait, et QUI la joint. */
 async function openDestination(address) {
   const hote = document.getElementById('svc-detail');
-  hote.innerHTML = '<div class="ip-card">Lecture de <code>' + esc(address) + '</code>...</div>';
+  hote.innerHTML = '<div class="ip-card">Reading <code>' + esc(address) + '</code>...</div>';
   let fiche;
   try {
     fiche = await api('/netflow/destinations/' + encodeURIComponent(address) +
@@ -3564,42 +3577,42 @@ function ipCard(fiche, periodeSecondes, actions) {
     '<h3><code>' + esc(fiche.address) + '</code> ' + svcBadge(famille) + '</h3>' +
     '<div class="ip-facts">' +
       fait('Service', service ? '<b>' + esc(service) + '</b>' : null) +
-      fait('Reconnu par', source && source !== 'inconnu' ? esc(source) : null) +
-      fait('Domaine', domaine(intel.hostname)
+      fait('Recognised by', source && source !== 'inconnu' ? esc(source) : null) +
+      fait('Domain', domaine(intel.hostname)
         ? '<b>' + esc(domaine(intel.hostname)) + '</b>' : null) +
-      fait('Nom inverse', intel.hostname ? esc(intel.hostname) : null) +
+      fait('Reverse name', intel.hostname ? esc(intel.hostname) : null) +
       fait('Organisation', intel.org ? esc(intel.org) : null) +
       fait('AS', intel.asn ? 'AS' + esc(intel.asn) : null) +
-      fait('Pays', intel.country ? esc(intel.country) : null) +
-      fait('Ville', intel.city ? esc(intel.city) : null) +
+      fait('Country', intel.country ? esc(intel.country) : null) +
+      fait('City', intel.city ? esc(intel.city) : null) +
       fait('Region', intel.region ? esc(intel.region) : null) +
-      fait('Coordonnees', position ? '<code>' + esc(position) + '</code>' : null) +
-      fait('Bloc annonce', esc(intel.network || catalogue.matched_prefix || '')) +
-      fait('Analysee', intel.resolved_at ? esc(depuis(intel.resolved_at)) : null) +
+      fait('Coordinates', position ? '<code>' + esc(position) + '</code>' : null) +
+      fait('Announced prefix', esc(intel.network || catalogue.matched_prefix || '')) +
+      fait('Analysed', intel.resolved_at ? esc(depuis(intel.resolved_at)) : null) +
       fait('Clients', esc(totaux.clients || 0)) +
-      fait('Descendant', bytesText(totaux.down_bytes)) +
-      fait('Montant', bytesText(totaux.up_bytes)) +
-      fait('Bande passante moyenne', debitText(octets, periodeSecondes)) +
-      fait('Vue pour la premiere fois', totaux.first_seen ? esc(depuis(totaux.first_seen)) : null) +
-      fait('Vue la derniere fois', totaux.last_seen ? esc(depuis(totaux.last_seen)) : null) +
+      fait('Down', bytesText(totaux.down_bytes)) +
+      fait('Up', bytesText(totaux.up_bytes)) +
+      fait('Average bandwidth', debitText(octets, periodeSecondes)) +
+      fait('First seen', totaux.first_seen ? esc(depuis(totaux.first_seen)) : null) +
+      fait('Last seen', totaux.last_seen ? esc(depuis(totaux.last_seen)) : null) +
     '</div>' +
     (actions
       ? '<div class="actions" style="margin-top:.7rem">' +
-        '<button class="sm" id="svc-detail-resolve">Relancer l\'analyse</button>' +
-        '<button class="sm" id="svc-detail-restrict">Restreindre cette adresse</button>' +
+        '<button class="sm" id="svc-detail-resolve">Analyse again</button>' +
+        '<button class="sm" id="svc-detail-restrict">Restrict this address</button>' +
         '<span class="mode">' + esc(intel.attempts || 0) + ' tentative(s)</span>' +
         '</div>'
       : '') +
-    '<h3 style="margin-top:.9rem">Qui joint cette adresse</h3>' +
+    '<h3 style="margin-top:.9rem">Who reaches this address</h3>' +
     ((fiche.clients || []).length
       ? '<div class="table-wrap"><table><thead><tr><th>Client</th><th>PoP</th>' +
         '<th class="num">Port</th><th>Proto</th><th>Usage</th>' +
-        '<th class="num">Descendant</th><th class="num">Montant</th>' +
-        '<th class="num">Debit moyen</th><th>Vu</th>' +
+        '<th class="num">Down</th><th class="num">Up</th>' +
+        '<th class="num">Avg rate</th><th>Seen</th>' +
         '</tr></thead><tbody>' +
         fiche.clients.map((s) => '<tr>' +
           '<td class="login">' + clientCell(s) +
-            (s.kind === 'static' ? ' <span class="badge">IP fixe</span>' : '') + '</td>' +
+            (s.kind === 'static' ? ' <span class="badge">static IP</span>' : '') + '</td>' +
           '<td>' + esc(s.pop_name || '-') + '</td>' +
           '<td class="num">' + esc(s.port || '-') + '</td>' +
           '<td>' + esc(protoName(s.protocol)) + '</td>' +
@@ -3610,7 +3623,7 @@ function ipCard(fiche, periodeSecondes, actions) {
             Number(s.down_bytes || 0) + Number(s.up_bytes || 0), periodeSecondes) + '</td>' +
           '<td>' + esc(depuis(s.last_seen)) + '</td></tr>').join('') +
         '</tbody></table></div>'
-      : '<div class="empty">Personne n\'a joint cette adresse sur la periode.</div>') +
+      : '<div class="empty">Nobody reached this address over the period.</div>') +
     '</div>';
 }
 
@@ -3641,43 +3654,43 @@ function renderRules(data) {
   const regles = (data && data.rules) || [];
   const etat = (data && data.status) || {};
   document.getElementById('svc-rules-state').textContent = etat.enforcement_enabled
-    ? 'ecriture active'
-    : 'ecriture desactivee : rien ne sera pose';
+    ? 'writing enabled'
+    : 'writing disabled: nothing will be applied';
   if (!regles.length) {
-    hote.innerHTML = '<div class="empty">Aucune restriction.</div>';
+    hote.innerHTML = '<div class="empty">No restriction.</div>';
     return;
   }
-  hote.innerHTML = '<table><thead><tr><th>Regle</th><th>Effet</th><th>Vise</th>' +
-    '<th>Pour qui</th><th>Etat</th><th>Derniere pose</th><th></th>' +
+  hote.innerHTML = '<table><thead><tr><th>Rule</th><th>Effect</th><th>Targets</th>' +
+    '<th>For whom</th><th>State</th><th>Last applied</th><th></th>' +
     '</tr></thead><tbody>' +
     regles.map((r) => {
       const criteres = [].concat(r.services || [], r.categories || [],
-        (r.prefixes || []).length ? [(r.prefixes || []).length + ' bloc(s)'] : []);
+        (r.prefixes || []).length ? [(r.prefixes || []).length + ' prefix(es)'] : []);
       return '<tr>' +
         '<td><b>' + esc(r.name) + '</b>' +
           (r.note ? '<br><span class="hint">' + esc(r.note) + '</span>' : '') + '</td>' +
         '<td>' + (r.action === 'limit'
-          ? '<span class="badge warn">plafond ' +
+          ? '<span class="badge warn">cap ' +
             (r.limit_down_mbps ? esc(mbps(r.limit_down_mbps)) : '-') + ' / ' +
             (r.limit_up_mbps ? esc(mbps(r.limit_up_mbps)) : '-') + '</span>'
-          : '<span class="badge crit">bloque</span>') + '</td>' +
+          : '<span class="badge crit">blocked</span>') + '</td>' +
         '<td>' + (criteres.length ? esc(criteres.join(', ')) : '<span class="hint">-</span>') +
           (r.protocol ? ' <span class="hint">' + esc(r.protocol) +
             (r.ports ? ':' + esc(r.ports) : '') + '</span>' : '') + '</td>' +
         '<td>' + (r.scope === 'subscribers'
-          ? esc((r.logins || []).length) + ' abonne(s)' : 'tous') + '</td>' +
+          ? esc((r.logins || []).length) + ' subscriber(s)' : 'everyone') + '</td>' +
         '<td>' + (r.enabled
-          ? '<span class="badge ok">active</span>' : '<span class="badge">suspendue</span>') +
+          ? '<span class="badge ok">active</span>' : '<span class="badge">suspended</span>') +
           '</td>' +
         '<td>' + (r.last_applied_at
           ? esc(r.last_state || '') + ' <span class="hint">' +
             esc(depuis(r.last_applied_at)) + '</span>'
-          : '<span class="hint">jamais posee</span>') + '</td>' +
+          : '<span class="hint">never applied</span>') + '</td>' +
         '<td class="actions">' +
-          '<button class="sm" data-rule-preview="' + esc(r.id) + '">Ce qu\'elle vise</button>' +
+          '<button class="sm" data-rule-preview="' + esc(r.id) + '">What it targets</button>' +
           '<button class="sm" data-rule-toggle="' + esc(r.id) + '" data-rule-on="' +
-            (r.enabled ? '1' : '0') + '">' + (r.enabled ? 'Suspendre' : 'Activer') + '</button>' +
-          '<button class="sm danger" data-rule-del="' + esc(r.id) + '">Supprimer</button>' +
+            (r.enabled ? '1' : '0') + '">' + (r.enabled ? 'Suspend' : 'Enable') + '</button>' +
+          '<button class="sm danger" data-rule-del="' + esc(r.id) + '">Delete</button>' +
         '</td></tr>';
     }).join('') + '</tbody></table>';
 
@@ -3704,8 +3717,8 @@ function applyNotice(html) {
 async function deleteRule(id) {
   try {
     await api('/traffic-rules/' + id, { method: 'DELETE' });
-    applyNotice('<div class="notice ok">Regle supprimee. Posez pour nettoyer les ' +
-      'routeurs, ou attendez le passage automatique.</div>');
+    applyNotice('<div class="notice ok">Rule deleted. Apply to clean the ' +
+      'routers, or wait for the automatic pass.</div>');
     await loadServices();
   } catch (err) {
     applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
@@ -3734,18 +3747,18 @@ async function previewRule(id) {
     const vue = await api('/traffic-rules/' + id + '/preview?limit=40');
     applyNotice('<div class="ip-card"><h3>' + esc(vue.rule.name) + '</h3>' +
       '<div class="ip-facts">' +
-        '<div><span>Adresses visees</span><b>' + esc(vue.address_count) + '</b></div>' +
-        '<div><span>Clients vises</span>' + (vue.rule.scope === 'subscribers'
-          ? esc(vue.client_count) + ' bloc(s)' : 'tous') + '</div>' +
-        '<div><span>Routeurs</span>' +
-          esc((vue.routers || []).join(', ') || 'aucun') + '</div>' +
+        '<div><span>Target addresses</span><b>' + esc(vue.address_count) + '</b></div>' +
+        '<div><span>Target clients</span>' + (vue.rule.scope === 'subscribers'
+          ? esc(vue.client_count) + ' prefix(es)' : 'everyone') + '</div>' +
+        '<div><span>Routers</span>' +
+          esc((vue.routers || []).join(', ') || 'none') + '</div>' +
       '</div>' +
-      '<p class="empty" style="text-align:left;padding:.6rem 0 .3rem">Extrait :</p>' +
+      '<p class="empty" style="text-align:left;padding:.6rem 0 .3rem">Sample:</p>' +
       '<div class="login" style="font-size:.75rem;line-height:1.6">' +
         esc((vue.addresses || []).join('  ')) +
         (vue.address_count > (vue.addresses || []).length
-          ? ' <span class="hint">... et ' +
-            esc(vue.address_count - vue.addresses.length) + ' de plus</span>' : '') +
+          ? ' <span class="hint">... and ' +
+            esc(vue.address_count - vue.addresses.length) + ' more</span>' : '') +
       '</div></div>');
   } catch (err) {
     applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
@@ -3753,7 +3766,7 @@ async function previewRule(id) {
 }
 
 async function applyRules(dryRun) {
-  applyNotice('<div class="notice">Calcul du plan...</div>');
+  applyNotice('<div class="notice">Computing the plan...</div>');
   try {
     const rapport = await api('/traffic-rules/apply?dry_run=' + (dryRun ? 'true' : 'false'),
       { method: 'POST' });
@@ -3773,11 +3786,11 @@ function renderApplyReport(rapport) {
   const classe = rapport.state === 'erreur' ? 'err'
     : (rapport.state === 'posee' ? 'ok' : 'warn');
   const entete = '<div class="notice ' + classe + '"><b>' + esc(rapport.state) + '</b> — ' +
-    esc(rapport.rules) + ' regle(s) active(s), ' + esc(rapport.applied) +
-    ' commande(s) appliquee(s)' +
-    (rapport.dry_run ? ' <span class="hint">(simulation : rien n\'a ete ecrit)</span>' : '') +
+    esc(rapport.rules) + ' active rule(s), ' + esc(rapport.applied) +
+    ' command(s) applied' +
+    (rapport.dry_run ? ' <span class="hint">(dry run: nothing was written)</span>' : '') +
     (rapport.enforcement_enabled ? '' :
-      ' <span class="hint">l\'ecriture est desactivee (Reglages &gt; Shaping)</span>') +
+      ' <span class="hint">writing is disabled (Settings &gt; Shaping)</span>') +
     '</div>';
   const routeurs = (rapport.routers || []).map((r) =>
     '<div class="ip-card"><h3>' + esc(r.router) + ' <span class="hint">' +
@@ -3786,7 +3799,7 @@ function renderApplyReport(rapport) {
     ((r.actions || []).length
       ? '<div class="login" style="font-size:.75rem;line-height:1.7">' +
         r.actions.map((a) => esc(a)).join('<br>') + '</div>'
-      : '<span class="hint">aucune commande</span>') +
+      : '<span class="hint">no command</span>') +
     ((r.skipped || []).length
       ? '<p class="empty" style="text-align:left;padding:.5rem 0 0">' +
         r.skipped.map((s) => '<b>' + esc(s.rule) + '</b> : ' + esc(s.reason)).join('<br>') +
@@ -3801,7 +3814,7 @@ function renderApplyReport(rapport) {
 
 function fillCategoryFilter(catalogue) {
   const select = document.getElementById('svc-category');
-  select.innerHTML = '<option value="">Toutes les familles</option>' +
+  select.innerHTML = '<option value="">All categories</option>' +
     (catalogue.categories || []).map((c) =>
       '<option value="' + esc(c) + '">' + esc(c) + '</option>').join('');
 }
@@ -3820,14 +3833,14 @@ function fillRuleChoices(catalogue) {
 function renderCatalogue(catalogue) {
   const services = catalogue.services || [];
   document.getElementById('svc-catalogue').innerHTML = !services.length
-    ? '<div class="empty">Catalogue vide.</div>'
-    : '<table><thead><tr><th>Service</th><th>Famille</th><th class="num">Blocs publies</th>' +
-      '<th>Noms inverses</th><th>A savoir</th></tr></thead><tbody>' +
+    ? '<div class="empty">Empty catalogue.</div>'
+    : '<table><thead><tr><th>Service</th><th>Category</th><th class="num">Published prefixes</th>' +
+      '<th>Reverse names</th><th>Worth knowing</th></tr></thead><tbody>' +
       services.map((s) => '<tr>' +
         '<td><b>' + esc(s.label) + '</b><br><span class="hint">' + esc(s.key) + '</span></td>' +
         '<td>' + svcBadge(s.category) + '</td>' +
         '<td class="num">' + esc(s.prefixes) +
-          (s.prefixes ? '' : ' <span class="hint">nom inverse seul</span>') + '</td>' +
+          (s.prefixes ? '' : ' <span class="hint">reverse name only</span>') + '</td>' +
         '<td class="login" style="font-size:.72rem">' + esc((s.rdns || []).join(' ')) + '</td>' +
         '<td style="font-size:.74rem;color:var(--muted)">' + esc(s.note || '') + '</td>' +
         '</tr>').join('') + '</tbody></table>';
@@ -3884,8 +3897,8 @@ async function submitRule(event) {
   }
   try {
     const regle = await api('/traffic-rules', { method: 'POST', body: JSON.stringify(corps) });
-    ruleNotice('<div class="notice ok">Regle <b>' + esc(regle.name) + '</b> enregistree. ' +
-      'Rien n\'est ecrit tant qu\'elle n\'est pas posee.</div>');
+    ruleNotice('<div class="notice ok">Rule <b>' + esc(regle.name) + '</b> saved. ' +
+      'Nothing is written until it is applied.</div>');
     document.getElementById('svc-rule-form').reset();
     document.getElementById('svc-rule-limits').hidden = true;
     document.getElementById('svc-rule-logins-field').hidden = true;
@@ -3903,26 +3916,26 @@ async function loadAntennas() {
 
   const notice = document.getElementById('antennas-notice');
   notice.innerHTML = !data.secrets_available
-    ? '<div class="notice warn"><strong>Mot de passe non stockable.</strong> ' +
-      esc(data.secrets_reason || '') + '<span class="hint">Vous pouvez tout de meme ' +
-      'ajouter une antenne dont le <code>/status.cgi</code> est ouvert en lecture ' +
-      '(sans mot de passe).</span></div>'
+    ? '<div class="notice warn"><strong>Password cannot be stored.</strong> ' +
+      esc(data.secrets_reason || '') + '<span class="hint">You can still ' +
+      'add an antenna whose <code>/status.cgi</code> is open for reading ' +
+      '(no password).</span></div>'
     : '';
   document.getElementById('a-btn-save').disabled = false;
 
   const host = document.getElementById('antennas-table');
   if (!state.antennas.length) {
-    host.innerHTML = '<div class="empty">Aucune antenne. Utilisez le formulaire ci-dessous.</div>';
+    host.innerHTML = '<div class="empty">No antenna. Use the form below.</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Lien</th><th>Adresse</th><th>PoP</th>' +
-    '<th class="num">Capacite lue</th><th>Etat</th><th></th></tr></thead><tbody>' +
+    '<table><thead><tr><th>Link</th><th>Address</th><th>PoP</th>' +
+    '<th class="num">Capacity read</th><th>State</th><th></th></tr></thead><tbody>' +
     state.antennas.map((a) => {
-      let badge = '<span class="badge">jamais lue</span>';
-      if (a.last_error) badge = '<span class="badge crit" title="' + esc(a.last_error) + '">en echec</span>';
-      else if (a.last_ok_at) badge = '<span class="badge ok">joignable</span>';
-      if (a.enabled === false) badge = '<span class="badge">desactivee</span>';
+      let badge = '<span class="badge">never read</span>';
+      if (a.last_error) badge = '<span class="badge crit" title="' + esc(a.last_error) + '">failing</span>';
+      else if (a.last_ok_at) badge = '<span class="badge ok">reachable</span>';
+      if (a.enabled === false) badge = '<span class="badge">disabled</span>';
       return '<tr>' +
         '<td><strong>' + esc(a.name) + '</strong>' +
           (a.device_key ? '<br><span style="color:var(--faint);font-size:.72rem">' +
@@ -3933,10 +3946,10 @@ async function loadAntennas() {
           '<span style="color:var(--faint)">-</span>') + '</td>' +
         '<td>' + badge + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' +
-          '<button class="sm" data-a-probe="' + a.id + '">Tester</button>' +
+          '<button class="sm" data-a-probe="' + a.id + '">Test</button>' +
           '<button class="sm" data-a-toggle="' + a.id + '">' +
-            (a.enabled ? 'Desactiver' : 'Activer') + '</button>' +
-          '<button class="sm danger" data-a-del="' + a.id + '">Retirer</button>' +
+            (a.enabled ? 'Disable' : 'Enable') + '</button>' +
+          '<button class="sm danger" data-a-del="' + a.id + '">Remove</button>' +
         '</div></td></tr>';
     }).join('') + '</tbody></table>';
 
@@ -3970,7 +3983,7 @@ function showAntennaResult(html) {
 }
 
 function antennaCapacityLine(result) {
-  return '<div class="notice ok"><strong>Antenne joignable.</strong> Capacite lue : ' +
+  return '<div class="notice ok"><strong>Antenna reachable.</strong> Capacity read: ' +
     esc(mbps(result.capacity_mbps || 0)) +
     (result.capacity_down_mbps != null
       ? ' (down ' + esc(mbps(result.capacity_down_mbps)) + ' / up ' +
@@ -3985,16 +3998,16 @@ async function testAntenna() {
   const button = document.getElementById('a-btn-test');
   const payload = antennaPayload();
   if (!payload.name || !payload.host) {
-    showAntennaResult('<div class="notice err">Nom et adresse sont requis pour tester.</div>');
+    showAntennaResult('<div class="notice err">Name and address are required to test.</div>');
     return;
   }
   button.disabled = true;
-  showAntennaResult('<div class="notice">Lecture de ' + esc(payload.host) + '...</div>');
+  showAntennaResult('<div class="notice">Reading ' + esc(payload.host) + '...</div>');
   try {
     const result = await api('/pops/antennas/test', { method: 'POST', body: JSON.stringify(payload) });
     showAntennaResult(result.reachable
       ? antennaCapacityLine(result)
-      : '<div class="notice err"><strong>Echec.</strong> <code>' + esc(result.error) + '</code>' +
+      : '<div class="notice err"><strong>Failed.</strong> <code>' + esc(result.error) + '</code>' +
         '<span class="hint">' + esc(result.hint || '') + '</span></div>');
   } catch (err) {
     showAntennaResult('<div class="notice err">' + esc(err.message) + '</div>');
@@ -4010,8 +4023,8 @@ async function saveAntenna(event) {
   try {
     const created = await api('/pops/antennas', { method: 'POST', body: JSON.stringify(antennaPayload()) });
     showAntennaResult('<div class="notice ok"><strong>' + esc(created.name) +
-      ' enregistree.</strong><span class="hint">Sa capacite est lue et rattachee a ' +
-      'l\'arbre tout de suite, puis a chaque cycle, sans redemarrage.</span></div>');
+      ' saved.</strong><span class="hint">Its capacity is read and attached to ' +
+      'the tree right away, then on every cycle, without a restart.</span></div>');
     document.getElementById('antenna-form').reset();
     document.getElementById('a-username').value = 'ubnt';
     document.getElementById('a-timeout').value = '10';
@@ -4029,7 +4042,7 @@ async function probeAntenna(id, button) {
   button.disabled = true; button.textContent = '...';
   try {
     const result = await api('/pops/antennas/' + id + '/probe', { method: 'POST' });
-    if (!result.reachable) alert('Echec : ' + result.error + '\n\n' + (result.hint || ''));
+    if (!result.reachable) alert('Failed: ' + result.error + '\n\n' + (result.hint || ''));
   } catch (err) {
     alert(err.message);
   } finally {
@@ -4040,8 +4053,8 @@ async function probeAntenna(id, button) {
 
 async function deleteAntenna(id) {
   const antenna = state.antennas.find((a) => String(a.id) === String(id));
-  if (!confirm('Retirer "' + (antenna ? antenna.name : id) + '" ?\n\n' +
-    'Les metriques deja collectees sont conservees.')) return;
+  if (!confirm('Remove "' + (antenna ? antenna.name : id) + '"?\n\n' +
+    'The metrics already collected are kept.')) return;
   try {
     await api('/pops/antennas/' + id, { method: 'DELETE' });
     await loadAntennas();
@@ -4063,12 +4076,12 @@ async function toggleAntenna(id) {
 /* ------------------------------------------------------------- topologie */
 
 const KIND_LABEL = {
-  gateway: 'Gateway', core: 'Coeur', pop: 'PoP', radio: 'Radio',
-  sector: 'Secteur', cpe: 'CPE', client: 'Client', unknown: 'Inconnu', subscriber: 'Abonnes',
+  gateway: 'Gateway', core: 'Core', pop: 'PoP', radio: 'Radio',
+  sector: 'Sector', cpe: 'CPE', client: 'Client', unknown: 'Unknown', subscriber: 'Subscribers',
   // Nature a part entiere : ce noeud est DECLARE, pas decouvert.
-  static: 'Client a IP fixe',
+  static: 'Static-IP client',
   // Ni infrastructure, ni abonne : une adresse vue, rien de plus.
-  candidate: 'Detecte, non declare',
+  candidate: 'Detected, undeclared',
 };
 const KIND_COLOR = {
   gateway: 'var(--accent)', core: 'var(--accent)', pop: 'var(--down)',
@@ -4188,7 +4201,7 @@ function renderTopologySources(data, inventaire) {
   const injoignables = {};
   (data.nodes || []).forEach((n) => {
     const a = topoAttrs(n);
-    if (a.unreachable && n.router_name) injoignables[n.router_name] = a.error || 'lecture en echec';
+    if (a.unreachable && n.router_name) injoignables[n.router_name] = a.error || 'read failed';
   });
 
   if (!declares.length && !ecartes.length) { host.innerHTML = ''; return; }
@@ -4196,33 +4209,33 @@ function renderTopologySources(data, inventaire) {
   let html = '';
   if (!muets.length && !ecartes.length) {
     host.innerHTML = '<div class="notice ok" style="margin-bottom:.8rem">' +
-      '<strong>' + producteurs.size + ' routeur(s) interroge(s) : ' +
+      '<strong>' + producteurs.size + ' router(s) polled: ' +
       esc(declares.map((r) => r.name).sort().join(', ')) + '</strong>' +
-      '<span class="hint">Tous sont lus par API. Un cable entre deux d\'entre eux ' +
-      'ne compte qu\'UNE ligne, portee par l\'un des deux bouts : c\'est pourquoi la ' +
-      'colonne <b>Depuis</b> peut n\'en nommer qu\'un seul. Le badge ' +
-      '<span class="badge ok">interroge</span> de la colonne <b>Vers</b> signale ' +
-      'l\'autre bout. Les equipements SANS ce badge sont vus en face, pas lus : ' +
-      'ajoutez-les dans <b>Equipements</b> pour les interroger a leur tour.</span></div>';
+      '<span class="hint">All are read by API. A cable between two of them ' +
+      'counts as ONE row, carried by one of the two ends: that is why the ' +
+      '<b>From</b> column may name only one. The ' +
+      '<span class="badge ok">polled</span> badge in the <b>To</b> column marks ' +
+      'the other end. Devices WITHOUT that badge are seen from across, not read: ' +
+      'add them under <b>Devices</b> to poll them in turn.</span></div>';
     return;
   }
 
   html += '<div class="notice err" style="margin-bottom:.8rem"><strong>' +
-    producteurs.size + ' routeur(s) interroge(s) sur ' + (declares.length + ecartes.length) +
-    ' declare(s).</strong><span class="hint">Seul un routeur INTERROGE produit des lignes ' +
-    'ici. Un equipement qui n\'apparait que dans la colonne <b>Vers</b> est vu par un ' +
-    'voisin, pas lu : il n\'apporte ni ses propres liens, ni ses abonnes, ni ses files.' +
+    producteurs.size + ' router(s) polled out of ' + (declares.length + ecartes.length) +
+    ' declared.</strong><span class="hint">Only a POLLED router produces rows ' +
+    'here. A device that only appears in the <b>To</b> column is seen by a ' +
+    'neighbour, not read: it brings neither its own links, nor its subscribers, nor its queues.' +
     '</span><ul style="margin:.5rem 0 0;padding-left:1.1rem">';
   muets.forEach((r) => {
     const raison = injoignables[r.name];
     html += '<li><b>' + esc(r.name) + '</b> (' + esc(r.host) + ') — ' +
       (raison
-        ? 'injoignable : <code>' + esc(String(raison).slice(0, 200)) + '</code>'
-        : 'declare, mais aucun lien decouvert. Verifiez le compte API (policy ' +
-          '<code>read,api,test</code>) et le port.') + '</li>';
+        ? 'unreachable: <code>' + esc(String(raison).slice(0, 200)) + '</code>'
+        : 'declared, but no link discovered. Check the API account (policy ' +
+          '<code>read,api,test</code>) and the port.') + '</li>';
   });
   ecartes.forEach((e) => {
-    html += '<li><b>' + esc(e.name || '(fiche invalide)') + '</b> — ecarte : ' +
+    html += '<li><b>' + esc(e.name || '(invalid record)') + '</b> — dropped: ' +
       esc(String(e.reason || '').slice(0, 200)) + '</li>';
   });
   html += '</ul></div>';
@@ -4475,7 +4488,7 @@ function topoBuildModel(data) {
       const ouvert = topo.abosOuverts.has(cle);
       const synth = {
         key: cle,
-        name: ouvert ? 'Abonnes de ' + n.name : abonnes.length + ' abonne(s)',
+        name: ouvert ? 'Subscribers of ' + n.name : abonnes.length + ' subscriber(s)',
         kind: 'subscriber',
         synthetic: true, parentKey: n.key, children: [], edge: null,
         synthRates: (tx || rx) ? { down: tx, up: rx, cap: 0 } : null,
@@ -4507,7 +4520,7 @@ function topoBuildModel(data) {
       if (abonnes.length > montres.length) {
         const reste = {
           key: cle + '|…',
-          name: '+ ' + (abonnes.length - montres.length) + ' autres',
+          name: '+ ' + (abonnes.length - montres.length) + ' more',
           kind: 'subscriber', synthetic: true, parentKey: synth.key,
           children: [], edge: null, synthRates: null, addresses: [], fresh: true,
         };
@@ -4650,7 +4663,7 @@ function renderTopoCanvas() {
     // celle du dernier arbre dessine, et un message de trois mots flotterait
     // au milieu d'une zone vide de 700 px.
     host.style.height = '';
-    host.innerHTML = '<div class="empty">Aucun equipement decouvert.</div>';
+    host.innerHTML = '<div class="empty">No device discovered.</div>';
     return;
   }
   const model = topoBuildModel(data);
@@ -4726,7 +4739,7 @@ function renderTopoCanvas() {
     // supprime en cliquant dessus (les abonnes agreges n'ont pas de lien reel).
     if (!n.synthetic) {
       parts.push('<path class="topo-edge-hit" d="' + d + '" data-edge-child="' + esc(n.key) +
-        '" data-edge-link="' + esc(linkKey || '') + '"><title>Cliquer pour retirer ce lien' +
+        '" data-edge-link="' + esc(linkKey || '') + '"><title>Click to remove this link' +
         '</title></path>');
     }
     parts.push('<path class="' + cls + '" d="' + d + '"></path>');
@@ -4765,7 +4778,7 @@ function renderTopoCanvas() {
          n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : '']
         .filter(Boolean).join(' · ')
       : n.synthetic
-        ? (n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : 'abonnes')
+        ? (n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : 'subscribers')
         : (n.addresses && n.addresses.length ? n.addresses.join(', ')
           : (n.address || n.platform || ''));
     // Pastille de repli. Elle porte le COMPTE de ce qu'elle cache : une branche
@@ -4780,7 +4793,7 @@ function renderTopoCanvas() {
             '" width="30" height="18" rx="9"></rect>' +
           '<text x="' + (NODE_W - 21) + '" y="' + (NODE_H / 2 + 4) + '" text-anchor="middle">' +
             (replie ? '+' + sous : '\u2212') + '</text>' +
-          '<title>' + (replie ? 'Deplier ' + sous + ' case(s)' : 'Replier cette branche') +
+          '<title>' + (replie ? 'Unfold ' + sous + ' box(es)' : 'Fold this branch') +
           '</title>' +
         '</g>'
       : '';
@@ -4794,7 +4807,7 @@ function renderTopoCanvas() {
         '<text class="role" x="13" y="18" fill="' + color + '">' +
           esc(ICONE[n.kind] || '?') +
           // Le chevron dit que la case s'ouvre, et dans quel sens elle va.
-          (n.expandable ? (n.expanded ? '  ▾ ouvert' : '  ▸ voir') : '') + '</text>' +
+          (n.expandable ? (n.expanded ? '  \u25be open' : '  \u25b8 show') : '') + '</text>' +
         '<text class="title" x="13" y="31">' + esc(topoTrim(n.name, pliable ? 15 : 20)) +
           '</text>' +
         (meta ? '<text class="meta" x="13" y="42">' + esc(topoTrim(meta, 26)) + '</text>' : '') +
@@ -4897,7 +4910,7 @@ function bindTopoEdges(svg) {
       const child = el.dataset.edgeChild;
       const linkKey = el.dataset.edgeLink;
       const node = topo.model && topo.model.nodesByKey.get(child);
-      if (!confirm('Retirer ce lien de l\'arbre ?')) return;
+      if (!confirm('Remove this link from the tree?')) return;
       try {
         if (linkKey) {
           await api('/topology/links/' + encodeURIComponent(linkKey), { method: 'DELETE' });
@@ -4936,7 +4949,7 @@ async function topoLinkPick(key) {
   if (source === target) { renderTopoCanvas(); setTopoLinkNotice(); return; }
   // Anti-boucle : l'enfant ne peut pas etre un ancetre du parent.
   if (topo.model && topoDescendants(topo.model, target).has(source)) {
-    alert('Impossible : cela creerait une boucle (l\'enfant est deja au-dessus du parent).');
+    alert('Impossible: that would create a loop (the child is already above the parent).');
     renderTopoCanvas();
     setTopoLinkNotice();
     return;
@@ -4957,7 +4970,7 @@ function setTopoLinkNotice() {
   if (!notice) return;
   if (!topo.linkMode) { notice.innerHTML = ''; return; }
   notice.innerHTML = '<div class="notice">' +
-    (topo.linkSource ? 'Case <b>enfant</b> ?' : 'Case <b>parent</b>, puis case <b>enfant</b>.') +
+    (topo.linkSource ? '<b>Child</b> box?' : '<b>Parent</b> box, then <b>child</b> box.') +
     '</div>';
 }
 
@@ -5168,7 +5181,7 @@ function renderTopoPanel() {
   if (!host) return;
   const node = topo.selected && topo.model ? topo.model.nodesByKey.get(topo.selected) : null;
   if (!node) {
-    host.innerHTML = '<div class="muted">Aucune case selectionnee.</div>';
+    host.innerHTML = '<div class="muted">No box selected.</div>';
     return;
   }
   const parent = node.parentKey ? topo.model.nodesByKey.get(node.parentKey) : null;
@@ -5177,95 +5190,95 @@ function renderTopoPanel() {
   host.innerHTML =
     '<h4>' + esc(node.name) +
       (attrs.unreachable ? ' <span class="badge warn" title="' + esc(attrs.error || '') +
-        '">injoignable</span>' : '') + '</h4>' +
+        '">unreachable</span>' : '') + '</h4>' +
     // Doublon probable (memes mots-cles, ordre different) : signale, pas fusionne
     // d'office. Un clic replie l'autre case dans celle-ci si c'est le meme materiel.
     (dups.length
-      ? '<div class="notice" style="margin:.5rem 0"><b>Doublon probable</b> — mêmes ' +
-        'mots-clés que : ' +
+      ? '<div class="notice" style="margin:.5rem 0"><b>Probable duplicate</b> — same ' +
+        'keywords as: ' +
         dups.map((d) => '<button class="sm primary" data-merge-into="' + esc(d.key) + '">' +
-          'Fusionner ' + esc(topoTrim(d.name, 18)) + '</button>').join(' ') +
-        '<span class="hint">Même équipement ? Fusionnez. Sinon (deux bouts d\'un lien, ' +
-        'p.ex. CCR↔DS), laissez : ce sont deux vrais routeurs.</span></div>'
+          'Merge ' + esc(topoTrim(d.name, 18)) + '</button>').join(' ') +
+        '<span class="hint">Same device? Merge. Otherwise (two ends of one link, ' +
+        'e.g. CCR\u2194DS), leave it: these are two real routers.</span></div>'
       : '') +
     '<div class="kv"><span>Role</span><span>' + esc(KIND_LABEL[node.kind] || '?') + '</span></div>' +
     // Le loopback EST l'identite du routeur : il merite la ligne juste sous le
     // role, et l'origine de la deduction doit etre visible pour que l'operateur
     // sache s'il peut lui faire confiance ou s'il doit la declarer.
     (attrs.excluded
-      ? '<div class="notice err" style="margin:.5rem 0"><b>Ecarte de la collecte.</b> ' +
-        esc(attrs.error || '') + '<span class="hint">Cette case est posee d\'apres ' +
-        'l\'inventaire : rien n\'a ete lu sur cet equipement. Corrigez sa fiche dans ' +
-        'l\'onglet Equipements.</span></div>'
+      ? '<div class="notice err" style="margin:.5rem 0"><b>Dropped from collection.</b> ' +
+        esc(attrs.error || '') + '<span class="hint">This box is drawn from the ' +
+        'inventory: nothing was read from this device. Fix its record in the ' +
+        'Devices tab.</span></div>'
       : '') +
     (attrs.loopback
-      ? '<div class="kv"><span>Loopback</span><span title="Identite du routeur dans la ' +
-        'topologie, unique par construction. Origine : ' + esc(attrs.loopback_source || '?') +
+      ? '<div class="kv"><span>Loopback</span><span title="The router identity in the ' +
+        'topology, unique by construction. Origin: ' + esc(attrs.loopback_source || '?') +
         '"><code>' + esc(attrs.loopback) + '</code>' +
         (attrs.loopback_source && attrs.loopback_source !== 'declare'
-          ? ' <span class="badge warn">deduit</span>' : '') +
+          ? ' <span class="badge warn">inferred</span>' : '') +
         '</span></div>'
       : (attrs.managed
-        ? '<div class="kv"><span>Loopback</span><span class="na" title="Sans loopback, ' +
-          'l\'identite de ce routeur retombe sur sa MAC et ses adresses d\'interface, ' +
-          'moins sures. Declarez-le dans sa fiche.">introuvable</span></div>'
+        ? '<div class="kv"><span>Loopback</span><span class="na" title="Without a loopback, ' +
+          'this router identity falls back to its MAC and interface addresses, ' +
+          'which are less reliable. Declare it in its record.">not found</span></div>'
         : '')) +
     ((node.addresses && node.addresses.length)
-      ? '<div class="kv"><span>Adresse(s)</span><span>' + esc(node.addresses.join(', ')) + '</span></div>'
-      : (node.address ? '<div class="kv"><span>Adresse</span><span>' + esc(node.address) + '</span></div>' : '')) +
+      ? '<div class="kv"><span>Address(es)</span><span>' + esc(node.addresses.join(', ')) + '</span></div>'
+      : (node.address ? '<div class="kv"><span>Address</span><span>' + esc(node.address) + '</span></div>' : '')) +
     (attrs.serial
-      ? '<div class="kv"><span>N° serie</span><span>' + esc(attrs.serial) + '</span></div>' : '') +
+      ? '<div class="kv"><span>Serial no.</span><span>' + esc(attrs.serial) + '</span></div>' : '') +
     // QUOI a ete replie, pas seulement COMBIEN. Un compte seul ne permet pas de
     // juger : "4 vues reconciliees" est parfaitement normal pour un equipement
     // vu par quatre ports, et parfaitement faux pour quatre equipements
     // distincts qu'on vient de confondre. Les nommer laisse trancher.
     (node.merged_count > 1
-      ? '<div class="kv"><span>Fusion</span><span title="Observations repliees en cette ' +
-        'seule case.">' + esc(node.merged_count) + ' vues reconciliees</span></div>' +
-        '<div class="notice" style="margin:.5rem 0"><b>Cette case regroupe ' +
-        esc(node.merged_count) + ' observations :</b>' +
+      ? '<div class="kv"><span>Merge</span><span title="Observations folded into this ' +
+        'single box.">' + esc(node.merged_count) + ' reconciled views</span></div>' +
+        '<div class="notice" style="margin:.5rem 0"><b>This box groups ' +
+        esc(node.merged_count) + ' observations:</b>' +
         '<ul style="margin:.35rem 0 0;padding-left:1.1rem">' +
         (node.members || []).map((k) => '<li><code>' + esc(k) + '</code></li>').join('') +
-        '</ul><span class="hint">Meme equipement vu par plusieurs ports ou sous ' +
-        'plusieurs adresses : c\'est normal. Equipements <b>differents</b> : la ' +
-        'reconciliation s\'est trompee, et cette case absorbe des liens qui ne lui ' +
-        'appartiennent pas. Declarez alors un loopback distinct a chacun dans ' +
-        '<b>Equipements</b> — c\'est lui qui les distingue.</span></div>'
+        '</ul><span class="hint">Same device seen on several ports or under ' +
+        'several addresses: that is normal. <b>Different</b> devices: ' +
+        'reconciliation got it wrong, and this box absorbs links that are not ' +
+        'its own. Declare a distinct loopback for each one under ' +
+        '<b>Devices</b> — that is what tells them apart.</span></div>'
       : '') +
-    (node.platform ? '<div class="kv"><span>Plateforme</span><span>' + esc(topoTrim(node.platform, 18)) + '</span></div>' : '') +
-    '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'racine') +
+    (node.platform ? '<div class="kv"><span>Platform</span><span>' + esc(topoTrim(node.platform, 18)) + '</span></div>' : '') +
+    '<div class="kv"><span>Parent</span><span>' + esc(parent ? topoTrim(parent.name, 16) : 'root') +
       (node.parent_override ? ' *' : '') +
       // D'ou vient ce rattachement : pose a la main, PROUVE par la table de
       // routage, ou seulement deduit du graphe. L'operateur doit pouvoir faire
       // la difference avant de s'y fier.
       (node.parent_override
-        ? ' <span class="badge">a la main</span>'
+        ? ' <span class="badge">by hand</span>'
         : (node.config_parent && parent && node.config_parent === parent.key
-          ? ' <span class="badge ok" title="Sa route par defaut sort vers ce noeud' +
+          ? ' <span class="badge ok" title="Its default route exits towards this node' +
             (attrs.config_parent_via ? ', via ' + esc(attrs.config_parent_via) : '') +
             '">route</span>'
-          : (parent ? ' <span class="badge warn" title="Deduit du graphe, faute de ' +
-            'route par defaut exploitable">deduit</span>' : ''))) +
+          : (parent ? ' <span class="badge warn" title="Inferred from the graph, for lack of ' +
+            'a usable default route">inferred</span>' : ''))) +
       '</span></div>' +
-    '<div class="kv"><span>Vu</span><span>' + (node.fresh ? 'recemment' : 'ancien') + '</span></div>' +
+    '<div class="kv"><span>Seen</span><span>' + (node.fresh ? 'recently' : 'long ago') + '</span></div>' +
     // Rattachement INCERTAIN (vu via un segment partage, pas prouve
     // point-a-point) : on le signale et on offre de le confirmer/verrouiller.
     (node.edge && node.edge.uncertain && parent
-      ? '<div class="notice" style="margin:.5rem 0">Rattachement <b>probable</b> à <b>' +
-        esc(topoTrim(parent.name, 18)) + '</b>, vu via un segment partagé (switch / VLAN ' +
-        'de gestion) — pas une adjacence directe prouvée. ' +
-        '<button class="sm ghost" data-attach="' + esc(parent.key) + '">Confirmer</button>' +
-        '<span class="hint">Confirmer verrouille ce parent ; ou glissez la case sous le bon ' +
-        'parent. Trait pointillé = lien incertain.</span></div>'
+      ? '<div class="notice" style="margin:.5rem 0"><b>Probable</b> attachment to <b>' +
+        esc(topoTrim(parent.name, 18)) + '</b>, seen over a shared segment (switch / management ' +
+        'VLAN) — not a proven direct adjacency. ' +
+        '<button class="sm ghost" data-attach="' + esc(parent.key) + '">Confirm</button>' +
+        '<span class="hint">Confirming locks this parent; or drag the box under the right ' +
+        'one. A dashed line means an uncertain link.</span></div>'
       : '') +
     // Noeud vraiment orphelin (aucun lien) : propose ses candidats de segment.
     (!node.parentKey && node.unsureParents && node.unsureParents.length
-      ? '<div class="notice" style="margin:.5rem 0">Aucun lien direct sûr. Vu via un ' +
-        'segment partagé vers : ' +
+      ? '<div class="notice" style="margin:.5rem 0">No reliable direct link. Seen over a ' +
+        'shared segment towards: ' +
         node.unsureParents.map((c) =>
           '<button class="sm ghost" data-attach="' + esc(c.key) + '">' +
           esc(topoTrim(c.name, 18)) + '</button>').join(' ') +
-        '<span class="hint">Cliquez pour rattacher à la main.</span></div>'
+        '<span class="hint">Click to attach by hand.</span></div>'
       : '') +
     '<div class="stack field"><label>Role</label>' +
       '<select id="topo-kind">' + KIND_ORDER.map((k) =>
@@ -5273,22 +5286,22 @@ function renderTopoPanel() {
         esc(KIND_LABEL[k]) + '</option>').join('') + '</select></div>' +
     // Fusion manuelle : le dernier mot quand l'app n'a pas pu prouver que deux
     // cases sont le meme routeur (nom generique, pas de MAC commune).
-    '<div class="stack field"><label>Meme equipement que…</label>' +
-      '<select id="topo-merge-target"><option value="">— fusionner cette case dans —</option>' +
+    '<div class="stack field"><label>Same device as…</label>' +
+      '<select id="topo-merge-target"><option value="">— merge this box into —</option>' +
       topoOtherNodes(node.key).map((o) =>
         '<option value="' + esc(o.key) + '">' + esc(topoTrim(o.name, 24)) +
         ' · ' + esc(KIND_LABEL[o.kind] || '?') + '</option>').join('') +
       '</select></div>' +
     (node.manual_aliases && node.manual_aliases.length
-      ? '<div class="kv"><span>Fusions manuelles</span><span class="topo-unmerge">' +
+      ? '<div class="kv"><span>Manual merges</span><span class="topo-unmerge">' +
         node.manual_aliases.map((a) =>
           '<button class="sm ghost" data-unmerge="' + esc(a) + '" title="' + esc(a) +
-          '">Separer ' + esc(topoTrim(a, 16)) + '</button>').join(' ') + '</span></div>'
+          '">Split ' + esc(topoTrim(a, 16)) + '</button>').join(' ') + '</span></div>'
       : '') +
     '<div class="actions" style="margin-top:.7rem">' +
-      '<button class="sm" id="topo-merge">Fusionner</button>' +
+      '<button class="sm" id="topo-merge">Merge</button>' +
       (node.parent_override
-        ? '<button class="sm" id="topo-detach">Rattachement auto</button>' : '') +
+        ? '<button class="sm" id="topo-detach">Auto attachment</button>' : '') +
       '<button class="sm" id="topo-hide">Masquer</button>' +
     '</div>';
 
@@ -5301,7 +5314,7 @@ function renderTopoPanel() {
   });
   document.getElementById('topo-merge').addEventListener('click', async () => {
     const cible = document.getElementById('topo-merge-target').value;
-    if (!cible) { alert('Choisissez la case dans laquelle fusionner celle-ci.'); return; }
+    if (!cible) { alert('Choose the box to merge this one into.'); return; }
     try {
       await api('/topology/merge', { method: 'POST',
         body: JSON.stringify({ alias_key: node.key, canonical_key: cible }) });
@@ -5351,8 +5364,8 @@ function renderTopoPanel() {
 /** Remet toute la disposition en automatique : efface positions ET
  *  rattachements forces, sur chaque case. */
 async function resetTopoLayout() {
-  if (!topo.data || !confirm('Remettre la disposition automatique ?\n\n' +
-    'Les positions et rattachements poses a la main seront effaces.')) return;
+  if (!topo.data || !confirm('Restore the automatic layout?\n\n' +
+    'Hand-placed positions and attachments will be erased.')) return;
   // Meme geste, meme promesse : l'echelle repart elle aussi sur le cadrage
   // automatique, comme a la premiere ouverture.
   topo.ajuste = false;
@@ -5387,17 +5400,17 @@ async function resetTopoLayout() {
  *  une. En voici un, explicite et borne. */
 async function forgetStaleNodes() {
   const heures = prompt(
-    'Oublier les equipements que la decouverte ne revoit plus.\n\n' +
-    'Depuis combien d\'HEURES un equipement doit-il avoir disparu pour etre ' +
-    'retire de l\'arbre ?\n\n' +
-    'Les routeurs de votre inventaire ne sont jamais concernes, meme ' +
-    'injoignables : leur case est declaree, pas decouverte. Les liens poses a ' +
-    'la main non plus. Ce qui existe encore revient a la prochaine decouverte.',
+    'Forget the devices discovery no longer sees.\n\n' +
+    'For how many HOURS must a device have been gone before it is ' +
+    'removed from the tree?\n\n' +
+    'Routers from your inventory are never affected, even when ' +
+    'unreachable: their box is declared, not discovered. Nor are links placed ' +
+    'by hand. Whatever still exists comes back on the next discovery.',
     '24');
   if (heures === null) return;
   const minutes = Math.round(Number(heures) * 60);
   if (!Number.isFinite(minutes) || minutes < 5) {
-    alert('Duree invalide : au moins 5 minutes (0.1 heure).');
+    alert('Invalid duration: at least 5 minutes (0.1 hour).');
     return;
   }
   try {
@@ -5410,7 +5423,7 @@ async function forgetStaleNodes() {
     if (notice) {
       notice.insertAdjacentHTML('afterbegin',
         '<div class="notice ok"><b>' + esc(r.forgotten_nodes) +
-        ' case(s) et ' + esc(r.forgotten_links) + ' lien(s) oublies.</b>' +
+        ' box(es) and ' + esc(r.forgotten_links) + ' link(s) forgotten.</b>' +
         '<span class="hint">' + esc(r.detail) + '</span></div>');
     }
   } catch (err) { alert(err.message); }
@@ -5421,16 +5434,16 @@ async function forgetStaleNodes() {
  *  montre les compteurs tels que le routeur les tient. */
 function linkRates(l) {
   if (l.rx_bps === null && l.tx_bps === null) {
-    return '<span style="color:var(--faint)" title="Aucun compteur exploitable pour ce lien : ' +
-      'soit il vient d\'UISP et n\'a pas de port local, soit la premiere mesure ' +
-      'n\'a pas encore eu de seconde lecture.">pas de mesure</span>';
+    return '<span style="color:var(--faint)" title="No usable counter for this link: ' +
+      'either it comes from UISP with no local port, or the first sample ' +
+      'has not had a second reading yet.">no measurement</span>';
   }
   const perime = l.measure_fresh === false;
-  return '<span class="d" title="Le routeur emet vers ' + esc(l.target_name || '?') + '">&rarr; ' +
+  return '<span class="d" title="The router sends towards ' + esc(l.target_name || '?') + '">&rarr; ' +
       esc(bpsText(l.tx_bps || 0)) + '</span> ' +
-    '<span class="u" title="Le routeur recoit depuis ' + esc(l.target_name || '?') + '">&larr; ' +
+    '<span class="u" title="The router receives from ' + esc(l.target_name || '?') + '">&larr; ' +
       esc(bpsText(l.rx_bps || 0)) + '</span>' +
-    (perime ? ' <span class="badge warn" title="Derniere mesure : ' +
+    (perime ? ' <span class="badge warn" title="Last sample: ' +
       esc(clock(l.measured_at)) + '">perime</span>' : '');
 }
 
@@ -5462,21 +5475,21 @@ function renderTopologyLinks(allLinks, allNodes) {
   // paraissait etre le total.
   const masques = visibles.length - links.length;
   if (compte) {
-    compte.textContent = links.length + ' lien(s)' +
-      (masques > 0 ? ' · ' + masques + ' sans debit mesure, masque(s)' : '');
+    compte.textContent = links.length + ' link(s)' +
+      (masques > 0 ? ' · ' + masques + ' with no measured rate, hidden' : '');
   }
   if (!links.length) {
     host.innerHTML = '<div class="empty">' +
       (allLinks.length && topo.rateOnly
-        ? 'Aucun lien avec un debit mesure. Decochez "Liens a debit seulement" ' +
-          'pour voir les adjacences sans compteur.'
-        : 'Aucun lien.') + '</div>';
+        ? 'No link with a measured rate. Untick "Measured links only" ' +
+          'to see adjacencies without counters.'
+        : 'No link.') + '</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Depuis</th><th>Interface</th><th>Vers</th><th>Type</th>' +
-    '<th class="num">Debit mesure</th><th>Charge</th>' +
-    '<th class="num">Capacite</th><th class="num">Debit impose</th><th></th></tr></thead><tbody>' +
+    '<table><thead><tr><th>From</th><th>Interface</th><th>To</th><th>Type</th>' +
+    '<th class="num">Measured rate</th><th>Load</th>' +
+    '<th class="num">Capacity</th><th class="num">Forced rate</th><th></th></tr></thead><tbody>' +
     links.map((l) => {
       const impose = l.max_down_mbps || l.max_up_mbps;
       const partage = (l.interface_links || 0) > 1;
@@ -5487,14 +5500,14 @@ function renderTopologyLinks(allLinks, allNodes) {
           // Port d'en face : le cable est vu des deux cotes, on garde les deux
           // noms plutot que d'en perdre un en repliant les doublons.
           (attrs.peer_interface
-            ? ' <span style="color:var(--faint)" title="Port de ' +
-              esc(attrs.peer_router || 'l\'equipement d\'en face') +
-              ', a l\'autre bout du meme cable.">&#8596; ' +
+            ? ' <span style="color:var(--faint)" title="Port of ' +
+              esc(attrs.peer_router || 'the device across') +
+              ', at the other end of the same cable.">&#8596; ' +
               esc(attrs.peer_interface) + '</span>'
             : '') +
           (partage ? ' <span class="badge warn" title="' + esc(l.interface_links) +
-            ' voisins sur ce port : le debit est celui du port, pas de ce seul voisin.">' +
-            'partage</span>' : '') + '</td>' +
+            ' neighbours on this port: the rate is the port\'s, not this one neighbour\'s.">' +
+            'shared</span>' : '') + '</td>' +
         '<td>' + esc(l.target_name || l.target_key) +
           ' <span class="badge">' + esc(KIND_LABEL[l.target_kind] || '?') + '</span>' +
           // UN CABLE ENTRE DEUX ROUTEURS INTERROGES N'A QU'UNE LIGNE : celle du
@@ -5504,21 +5517,21 @@ function renderTopologyLinks(allLinks, allNodes) {
           // derriere le coeur, et l'operateur concluait qu'un seul routeur
           // etait detecte.
           (interroges.has(l.target_key)
-            ? ' <span class="badge ok" title="Ce routeur est interroge par API. ' +
-              'Le cable ci-contre est vu de ses deux bouts et ne compte qu\'une ligne.">' +
-              'interroge</span>'
+            ? ' <span class="badge ok" title="This router is polled by API. ' +
+              'The cable opposite is seen from both ends and counts as one row.">' +
+              'polled</span>'
             : '') +
           // Plusieurs lignes vers un meme nom : equipement joignable par
           // plusieurs chemins, ou fusion abusive de la reconciliation ? Ce
           // badge donne de quoi trancher, en nommant ce qui a ete replie.
           (fusions.has(l.target_key)
-            ? ' <span class="badge warn" title="Cette case regroupe ' +
-              esc(fusions.get(l.target_key).compte) + ' observations reconciliees en un ' +
-              'seul equipement :&#10;' +
+            ? ' <span class="badge warn" title="This box groups ' +
+              esc(fusions.get(l.target_key).compte) + ' observations reconciled into one ' +
+              'single device:&#10;' +
               esc(fusions.get(l.target_key).membres.join('\n')) +
-              '&#10;&#10;Si ce sont des equipements DIFFERENTS, la fusion est abusive : ' +
-              'ouvrez la case dans l\'onglet Arbre reseau pour la defaire.">' +
-              esc(fusions.get(l.target_key).compte) + ' vues</span>'
+              '&#10;&#10;If these are DIFFERENT devices, the merge is wrong: ' +
+              'open the box in the Network tree tab to undo it.">' +
+              esc(fusions.get(l.target_key).compte) + ' views</span>'
             : '') + '</td>' +
         '<td>' + esc(l.kind) + '</td>' +
         '<td class="num">' + linkRates(l) + '</td>' +
@@ -5529,8 +5542,8 @@ function renderTopologyLinks(allLinks, allNodes) {
             esc(mbps(l.max_down_mbps || 0) + ' / ' + mbps(l.max_up_mbps || 0)) + '</span>'
           : '<span style="color:var(--faint)">auto</span>') + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' +
-          '<button class="sm" data-link-detail="' + esc(l.key) + '">Debit</button>' +
-          '<button class="sm" data-edit-link="' + esc(l.key) + '">Bande passante</button>' +
+          '<button class="sm" data-link-detail="' + esc(l.key) + '">Rate</button>' +
+          '<button class="sm" data-edit-link="' + esc(l.key) + '">Bandwidth</button>' +
         '</div></td></tr>';
     }).join('') + '</tbody></table>';
 
@@ -5575,22 +5588,22 @@ async function openLink(key, minutes, silencieux) {
     root.querySelector('.drawer').innerHTML =
       '<div class="drawer-head"><h3>' + esc(l.source_name || l.source_key) +
         ' <span style="color:var(--faint)">&rarr;</span> ' + esc(voisin) + '</h3>' +
-      '<button class="sm" id="drawer-close">Fermer</button></div>' +
+      '<button class="sm" id="drawer-close">Close</button></div>' +
       '<div class="grid stats" style="margin-bottom:1rem">' +
-        statCard('', 'Vers ' + voisin, bpsText(l.tx_bps || 0), '',
+        statCard('', 'To ' + voisin, bpsText(l.tx_bps || 0), '',
           esc(l.interface || '') + (l.running === false ? ' &middot; port down' : '')) +
-        statCard('', 'Depuis ' + voisin, bpsText(l.rx_bps || 0), '',
-          l.measured_at ? 'mesure ' + esc(clock(l.measured_at)) : 'jamais mesure') +
-        statCard('', 'Capacite du port', plafond ? bpsText(plafond) : '-', '',
+        statCard('', 'From ' + voisin, bpsText(l.rx_bps || 0), '',
+          l.measured_at ? 'sampled ' + esc(clock(l.measured_at)) : 'never sampled') +
+        statCard('', 'Port capacity', plafond ? bpsText(plafond) : '-', '',
           plafond
-            ? 'charge ' + Math.round(pct(Math.max(l.rx_bps || 0, l.tx_bps || 0), plafond)) + ' %'
-            : 'capacite du port inconnue') +
-        statCard('', 'Pointe sur la fenetre', pointe ? bpsText(pointe) : '-', '',
+            ? 'load ' + Math.round(pct(Math.max(l.rx_bps || 0, l.tx_bps || 0), plafond)) + ' %'
+            : 'port capacity unknown') +
+        statCard('', 'Peak over the window', pointe ? bpsText(pointe) : '-', '',
           data.series.length + ' point(s)') +
       '</div>' +
-      '<div class="notice"><b>Origine du chiffre.</b> ' + esc(data.measurement.note) +
-        '<span class="hint">rx et tx sont ceux du routeur : &rarr; il emet vers ' +
-        esc(voisin) + ', &larr; il recoit depuis ' + esc(voisin) + '.</span></div>' +
+      '<div class="notice"><b>Where this figure comes from.</b> ' + esc(data.measurement.note) +
+        '<span class="hint">rx and tx are the router\'s: &rarr; it sends towards ' +
+        esc(voisin) + ', &larr; it receives from ' + esc(voisin) + '.</span></div>' +
       '<div class="actions" style="margin:.8rem 0">' +
         FENETRES.map(([m, libelle]) =>
           '<button class="sm' + (m === fenetre ? ' primary' : '') +
@@ -5617,11 +5630,11 @@ async function openLink(key, minutes, silencieux) {
     renderThroughput(
       document.getElementById('link-chart'),
       data.series.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_peak_bps, rx_bps: p.rx_peak_bps })),
-      { labels: { down: 'Vers ' + voisin, up: 'Depuis ' + voisin, extra: null } },
+      { labels: { down: 'To ' + voisin, up: 'From ' + voisin, extra: null } },
     );
   } catch (err) {
     root.querySelector('.drawer').innerHTML =
-      '<div class="drawer-head"><h3>Erreur</h3><button class="sm" id="drawer-close">Fermer</button></div>' +
+      '<div class="drawer-head"><h3>Error</h3><button class="sm" id="drawer-close">Close</button></div>' +
       '<div class="notice err">' + esc(err.message) + '</div>';
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
   }
@@ -5632,16 +5645,16 @@ async function openLink(key, minutes, silencieux) {
 async function measureLink(key) {
   const host = document.getElementById('link-live-result');
   const bouton = document.getElementById('link-live');
-  if (bouton) { bouton.disabled = true; bouton.textContent = 'Mesure...'; }
+  if (bouton) { bouton.disabled = true; bouton.textContent = 'Measuring...'; }
   try {
     const m = await api('/topology/links/' + encodeURIComponent(key) + '/live');
     const direct = m.source === 'monitor-traffic';
     const html = '<div class="notice' + (direct ? ' ok' : '') + '">' +
-      '<b>' + (direct ? 'Mesure instantanee' : 'Derniere mesure collectee') + '</b> ' +
+      '<b>' + (direct ? 'Instant sample' : 'Last collected sample') + '</b> ' +
       '<span style="color:var(--faint)">' + esc(clock(m.measured_at)) + '</span> &middot; ' +
       '&rarr; ' + esc(bpsText(m.tx_bps || 0)) + ' &middot; &larr; ' + esc(bpsText(m.rx_bps || 0)) +
-      (direct ? '<span class="hint">Lue a l\'instant sur ' + esc(m.router_name || '?') + ' ' +
-        'via /interface/monitor-traffic (lecture seule).</span>'
+      (direct ? '<span class="hint">Read just now from ' + esc(m.router_name || '?') + ' ' +
+        'via /interface/monitor-traffic (read-only).</span>'
         : '<span class="hint">' + esc(m.detail || '') + '</span>') +
       '</div>';
     state.linkLive = { key: key, html: html };
@@ -5670,7 +5683,7 @@ async function openBandwidthEditor(scope, cible) {
     const politiques = await api('/shaping/policies?scope=' + scope);
     actuelle = politiques.find((p) => p.target_key === cle) || {};
   } catch (err) {
-    console.warn('Politique non relue :', err);
+    console.warn('Policy not re-read:', err);
   }
 
   // Pre-remplir dans l'unite la plus lisible : 0.512 Mbps s'affiche 512 kbps.
@@ -5680,23 +5693,23 @@ async function openBandwidthEditor(scope, cible) {
   const root = document.getElementById('drawer-root');
   root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
     '<div class="drawer-head"><h3>' + esc(nom) + '</h3>' +
-    '<button class="sm" id="drawer-close">Fermer</button></div>' +
-    (capacite ? '<div class="notice">Capacite mesuree : <strong>' + esc(mbps(capacite)) +
-      '</strong><span class="hint">Le debit impose devrait rester sous cette valeur : ' +
-      'c\'est ce qui fait que la file se forme dans CAKE, ou on la controle, ' +
-      'plutot que dans le buffer de la radio.</span></div>' : '') +
+    '<button class="sm" id="drawer-close">Close</button></div>' +
+    (capacite ? '<div class="notice">Measured capacity: <strong>' + esc(mbps(capacite)) +
+      '</strong><span class="hint">The forced rate should stay under this value: ' +
+      'that is what makes the queue build inside CAKE, where it is controlled, ' +
+      'rather than in the radio buffer.</span></div>' : '') +
     // Sur quoi la file sera reellement accrochee : l'exploitant doit pouvoir
     // relier ce qu'il saisit ici a la ligne qu'il verra dans /queue/simple.
     (scope === 'subscriber'
       ? (cible.last_ip
-          ? '<div class="notice">La file visera <code>' + esc(cible.last_ip) +
-            '/32</code><span class="hint">C\'est l\'adresse de la session en cours, ' +
-            'relue sur le routeur au moment du plan. Elle est reecrite toute seule ' +
-            'si l\'abonne se reconnecte avec une autre IP.</span></div>'
-          : '<div class="notice warn">Aucune adresse connue pour cet abonne.' +
-            '<span class="hint">La limite est enregistree, mais aucune file ne sera ' +
-            'ecrite tant qu\'il n\'a pas de session ouverte : poser une file sur une ' +
-            'ancienne adresse briderait le client qui l\'a recuperee entre-temps.</span>' +
+          ? '<div class="notice">The queue will target <code>' + esc(cible.last_ip) +
+            '/32</code><span class="hint">That is the address of the current session, ' +
+            're-read from the router when the plan is built. It is rewritten on its own ' +
+            'if the subscriber reconnects with another IP.</span></div>'
+          : '<div class="notice warn">No address known for this subscriber.' +
+            '<span class="hint">The limit is saved, but no queue will be ' +
+            'written until a session is open: writing a queue on an ' +
+            'old address would throttle whoever picked it up in the meantime.</span>' +
             '</div>')
       : '') +
     '<form class="stack" id="bw-form">' +
@@ -5704,7 +5717,7 @@ async function openBandwidthEditor(scope, cible) {
         '<div class="field"><label for="bw-down">Download</label>' +
           '<div style="display:flex;gap:.4rem">' +
             '<input id="bw-down" type="number" min="0" step="any" value="' +
-            esc(dep.value) + '" placeholder="auto (plan ou capacite mesuree)">' +
+            esc(dep.value) + '" placeholder="auto (plan or measured capacity)">' +
             unitSelect('bw-down-unit', dep.unit) +
           '</div></div>' +
         '<div class="field"><label for="bw-up">Upload</label>' +
@@ -5716,17 +5729,17 @@ async function openBandwidthEditor(scope, cible) {
       '</div>' +
       '<div class="field"><label for="bw-note">Note</label>' +
         '<input id="bw-note" value="' + esc(actuelle.note || '') +
-        '" placeholder="pourquoi ce plafond (optionnel)"></div>' +
+        '" placeholder="why this cap (optional)"></div>' +
       '<div id="bw-result"></div>' +
       '<div class="actions">' +
-        '<button type="submit" class="primary">Enregistrer</button>' +
-        '<button type="button" id="bw-clear">Revenir a auto</button>' +
+        '<button type="submit" class="primary">Save</button>' +
+        '<button type="button" id="bw-clear">Back to auto</button>' +
       '</div>' +
     '</form>' +
     '<p class="empty" style="text-align:left;padding:.8rem 0 0">' +
-      'Enregistrer POSE le plafond sur le routeur immediatement. Le resultat ' +
-      'exact de l\'ecriture s\'affiche ici : si rien n\'a pu partir ' +
-      '(enforcement coupe, abonne hors ligne), c\'est dit.</p>' +
+      'Saving WRITES the cap on the router immediately. The exact result ' +
+      'of the write is shown here: if nothing could be sent ' +
+      '(enforcement off, subscriber offline), it says so.</p>' +
     '</div>';
 
   root.querySelector('.drawer-backdrop').addEventListener('click', closeDrawer);
@@ -5783,24 +5796,24 @@ function openBoostEditor(abonne) {
   const root = document.getElementById('drawer-root');
   root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
     '<div class="drawer-head"><h3>Boost &middot; ' + esc(abonne.login) + '</h3>' +
-    '<button class="sm" id="drawer-close">Fermer</button></div>' +
+    '<button class="sm" id="drawer-close">Close</button></div>' +
 
-    '<div class="notice">Plan actuel : <strong>' +
+    '<div class="notice">Current plan: <strong>' +
       esc(mbps(planDown)) + ' / ' + esc(mbps(planUp)) + '</strong>' +
-      '<span class="hint">Le boost prime sur le plan et sur toute surcharge ' +
-      'permanente, puis s\'efface a echeance sans intervention.</span></div>' +
+      '<span class="hint">A boost overrides the plan and any permanent ' +
+      'override, then clears itself when it expires.</span></div>' +
 
     '<form class="stack" id="boost-form">' +
-      '<div class="field"><label>Duree</label>' +
+      '<div class="field"><label>Duration</label>' +
         '<div class="boost-choices" id="boost-durations">' +
         DUREES.map((d, i) => '<button type="button" data-minutes="' + d.minutes + '"' +
           (i === 1 ? ' class="active"' : '') + '>' + esc(d.label) + '</button>').join('') +
         '</div>' +
         '<input id="boost-minutes" type="number" min="1" max="10080" value="60" ' +
-          'style="margin-top:.4rem" aria-label="duree en minutes">' +
-        '<span class="help">en minutes</span></div>' +
+          'style="margin-top:.4rem" aria-label="duration in minutes">' +
+        '<span class="help">in minutes</span></div>' +
 
-      '<div class="field"><label>Debit</label>' +
+      '<div class="field"><label>Rate</label>' +
         '<div class="boost-choices" id="boost-factors">' +
         FACTEURS.map((f) => '<button type="button" data-mult="' + f + '">x' + f +
           (planDown ? ' (' + esc(mbps(planDown * f)) + ')' : '') + '</button>').join('') +
@@ -5809,23 +5822,23 @@ function openBoostEditor(abonne) {
       '<div class="row-2">' +
         '<div class="field"><label for="boost-down">Download</label>' +
           '<div style="display:flex;gap:.4rem">' +
-            '<input id="boost-down" type="number" min="0" step="any" placeholder="inchange">' +
+            '<input id="boost-down" type="number" min="0" step="any" placeholder="unchanged">' +
             unitSelect('boost-down-unit', 'mbps') +
           '</div></div>' +
         '<div class="field"><label for="boost-up">Upload</label>' +
           '<div style="display:flex;gap:.4rem">' +
-            '<input id="boost-up" type="number" min="0" step="any" placeholder="inchange">' +
+            '<input id="boost-up" type="number" min="0" step="any" placeholder="unchanged">' +
             unitSelect('boost-up-unit', 'mbps') +
           '</div></div>' +
       '</div>' +
 
-      '<div class="field"><label for="boost-reason">Motif</label>' +
-        '<input id="boost-reason" placeholder="geste commercial, depannage... (optionnel)"></div>' +
+      '<div class="field"><label for="boost-reason">Reason</label>' +
+        '<input id="boost-reason" placeholder="goodwill gesture, troubleshooting... (optional)"></div>' +
 
       '<div id="boost-result"></div>' +
       '<div class="actions">' +
-        '<button type="submit" class="primary">Lancer le boost</button>' +
-        '<button type="button" id="boost-clear" class="danger">Retirer le boost en cours</button>' +
+        '<button type="submit" class="primary">Start the boost</button>' +
+        '<button type="button" id="boost-clear" class="danger">Remove the running boost</button>' +
       '</div>' +
     '</form>';
 
@@ -5861,7 +5874,7 @@ function openBoostEditor(abonne) {
     const up = readRate('boost-up', 'boost-up-unit');
     if (!down && !up) {
       document.getElementById('boost-result').innerHTML =
-        '<div class="notice err">Choisissez un facteur ou saisissez un debit.</div>';
+        '<div class="notice err">Choose a factor or enter a rate.</div>';
       return;
     }
     try {
@@ -5879,12 +5892,12 @@ function openBoostEditor(abonne) {
       const applique = r.applied || {};
       document.getElementById('boost-result').innerHTML =
         '<div class="notice ' + (applique.ok === false ? 'warn' : 'ok') + '">' +
-        '<strong>Boost actif jusqu\'a ' +
-        esc(new Date(r.boost.expires_at).toLocaleString('fr-FR')) + '.</strong>' +
+        '<strong>Boost active until ' +
+        esc(new Date(r.boost.expires_at).toLocaleString('en-GB')) + '.</strong>' +
         '<span class="hint">' +
         (applique.ok === false
           ? esc(applique.detail || '')
-          : (applique.applied || 0) + ' commande(s) poussee(s) sur le routeur.') +
+          : (applique.applied || 0) + ' command(s) pushed to the router.') +
         '</span></div>';
       await refresh();
     } catch (err) {
@@ -5911,7 +5924,7 @@ async function loadShaping() {
   const select = document.getElementById('shaping-router');
   if (!select.options.length) {
     const inventaire = await api('/pops/routers');
-    select.innerHTML = '<option value="">Tous les PoP</option>' + inventaire.routers
+    select.innerHTML = '<option value="">All PoPs</option>' + inventaire.routers
       .map((r) => '<option value="' + esc(r.name) + '">' + esc(r.name) + '</option>').join('');
   }
   await refreshEnforcement();
@@ -5927,11 +5940,11 @@ async function loadShaping() {
 
 /** Etats d'un point de shaping, et ce qu'ils veulent dire sur le reseau. */
 const POINT_ETATS = {
-  'file-posee': ['ok', 'bride'],
-  'file-a-poser': ['warn', 'a poser'],
-  'ecarte': ['warn', 'pas de file'],
-  'conflit': ['crit', 'conflit'],
-  'posee-a-la-main': ['', 'file manuelle'],
+  'file-posee': ['ok', 'throttled'],
+  'file-a-poser': ['warn', 'pending'],
+  'ecarte': ['warn', 'no queue'],
+  'conflit': ['crit', 'conflict'],
+  'posee-a-la-main': ['', 'manual queue'],
 };
 
 function pointBadge(etat) {
@@ -5955,13 +5968,13 @@ function pointDebit(point) {
 function renderPoint(point, profondeur) {
   const decalage = 'padding-left:' + (profondeur * 1.1 + 0.2) + 'rem';
   const nature = point.kind === 'lien'
-    ? '<span class="badge">lien</span>'
+    ? '<span class="badge">link</span>'
     : (point.detail && point.detail.nature === 'static'
-      ? '<span class="badge">client IP fixe</span>'
-      : '<span class="badge">abonne</span>');
+      ? '<span class="badge">static-IP client</span>'
+      : '<span class="badge">subscriber</span>');
   const cible = point.target
     ? '<code>' + esc(point.target) + '</code>'
-    : '<span class="hint">aucune cible</span>';
+    : '<span class="hint">no target</span>';
   // Le motif s'affiche pour ce qui ne bride PAS et ne bridera pas tout seul :
   // c'est l'information qu'on est venu chercher, et une infobulle la cacherait.
   // "A poser" n'en a pas besoin -- le bandeau du haut dit deja que la boucle
@@ -6021,7 +6034,7 @@ async function loadLimits() {
   if (!host) return;
   const routeur = document.getElementById('shaping-router').value;
   if (!host.innerHTML) {
-    host.innerHTML = '<div class="empty">Verification sur les routeurs...</div>';
+    host.innerHTML = '<div class="empty">Checking on the routers...</div>';
   }
   let data;
   try {
@@ -6037,25 +6050,25 @@ async function loadLimits() {
   // plafonds non tenus gonflait l'alarme d'un site neuf et noyait la seule
   // ligne qui comptait.
   const note = sansPlafond
-    ? '<span class="hint">' + sansPlafond + ' file(s) ne portent aucun plafond ' +
-      '(capacite du lien inconnue) : elles ne sont comptees ni d\'un cote ni de ' +
-      'l\'autre.</span>'
+    ? '<span class="hint">' + sansPlafond + ' queue(s) carry no cap ' +
+      '(link capacity unknown): they are counted on neither side of ' +
+      'the tally.</span>'
     : '';
   const entete = data.leaking
-    ? '<div class="notice err"><strong>' + data.leaking + ' plafond(s) sur ' + total +
-      ' ne sont PAS tenus par le reseau.</strong><span class="hint">Une file qui existe et ' +
-      'porte le bon debit peut ne rien brider : c\'est ce que ce tableau va chercher, ' +
-      'directement sur le routeur.</span>' + note + '</div>'
+    ? '<div class="notice err"><strong>' + data.leaking + ' cap(s) out of ' + total +
+      ' are NOT held by the network.</strong><span class="hint">A queue that exists and ' +
+      'carries the right rate may throttle nothing: that is what this table goes and checks, ' +
+      'straight on the router.</span>' + note + '</div>'
     : (total
-        ? '<div class="notice ok"><strong>Les ' + total + ' plafonds decides sont tenus par ' +
-          'le reseau.</strong><span class="hint">Verifie file par file sur le routeur : ' +
-          'debit conforme, file active, non masquee, et aucun fasttrack pour la contourner.' +
+        ? '<div class="notice ok"><strong>All ' + total + ' decided caps are held by ' +
+          'the network.</strong><span class="hint">Checked queue by queue on the router: ' +
+          'rate matching, queue enabled, not shadowed, and no fasttrack to bypass it.' +
           '</span>' + note + '</div>'
         : (sansPlafond
-            ? '<div class="notice"><strong>Aucun plafond a tenir sur ce perimetre.</strong>' +
+            ? '<div class="notice"><strong>No cap to hold on this scope.</strong>' +
               note + '</div>'
-            : '<div class="empty">Aucun plafond a verifier : aucune file n\'est encore ' +
-              'attendue sur ce perimetre.</div>'));
+            : '<div class="empty">No cap to check: no queue is expected ' +
+              'on this scope yet.</div>'));
 
   const routeurs = (data.routers || []).map((rt) => {
     if (rt.error) {
@@ -6065,20 +6078,20 @@ async function loadLimits() {
     const ft = rt.fasttrack || {};
     let bandeau = '';
     if (ft.active === true) {
-      bandeau = '<div class="notice err"><strong>Fasttrack actif : aucune file simple de ce ' +
-        'routeur ne bride quoi que ce soit.</strong><span class="hint">' + esc(ft.detail || '') +
+      bandeau = '<div class="notice err"><strong>Fasttrack on: no simple queue on this ' +
+        'router throttles anything.</strong><span class="hint">' + esc(ft.detail || '') +
         '</span>' + (ft.remedy ? '<span class="hint"><code>' + esc(ft.remedy) + '</code></span>'
           : '') + '</div>';
     } else if (ft.active === null) {
-      bandeau = '<div class="notice warn"><strong>Fasttrack non verifie.</strong>' +
+      bandeau = '<div class="notice warn"><strong>Fasttrack not verified.</strong>' +
         '<span class="hint">' + esc(ft.detail || '') + '</span></div>';
     }
     const fuites = (rt.queues || []).filter((q) => !q.enforced && q.verdict !== 'sans-plafond');
     const libres = (rt.queues || []).filter((q) => q.verdict === 'sans-plafond');
     const tableau = fuites.length
-      ? '<div class="table-wrap"><table><thead><tr><th>File</th><th>Abonne</th>' +
-        '<th>Cible</th><th class="num">Voulu</th><th class="num">Sur le routeur</th>' +
-        '<th>Pourquoi ca ne bride pas</th></tr></thead><tbody>' +
+      ? '<div class="table-wrap"><table><thead><tr><th>Queue</th><th>Subscriber</th>' +
+        '<th>Target</th><th class="num">Wanted</th><th class="num">On the router</th>' +
+        '<th>Why it does not throttle</th></tr></thead><tbody>' +
         fuites.map((q) => '<tr>' +
           '<td class="login">' + esc(q.name) + '</td>' +
           '<td>' + esc(q.login || '-') + '</td>' +
@@ -6087,21 +6100,21 @@ async function loadLimits() {
           '<td class="num">' + maxLimitText(q.seen) + '</td>' +
           '<td>' + esc(q.detail || q.verdict) + '</td>' +
           '</tr>').join('') + '</tbody></table></div>'
-      : '<p class="empty" style="text-align:left">Tous les plafonds de ce routeur sont tenus.</p>';
+      : '<p class="empty" style="text-align:left">Every cap on this router is held.</p>';
     // Informatif, pas une alerte : ces files existent et ne bornent rien, ce
     // qui est le comportement voulu tant que la capacite du lien est inconnue.
     const sans = libres.length
       ? '<p class="empty" style="text-align:left">' + libres.length +
-        ' file(s) sans plafond : ' +
+        ' queue(s) with no cap: ' +
         libres.map((q) => '<code>' + esc(q.name) + '</code>').join(', ') + '. ' +
-        'La capacite de ces liens n\'est pas connue, donc rien n\'y est borne. ' +
-        'Declarez-la pour qu\'elles portent une enveloppe.</p>'
+        'The capacity of these links is unknown, so nothing is bounded there. ' +
+        'Declare it so they carry an envelope.</p>'
       : '';
     return '<div class="card" style="margin-bottom:.8rem">' +
       '<h3 style="margin:0 0 .4rem">' + esc(rt.router) +
       '<span class="hint" style="display:inline;font-weight:400;margin-left:.5rem">' +
-      (rt.enforced || 0) + ' tenu(s), ' + (rt.leaking || 0) + ' non tenu(s)' +
-      (rt.uncapped ? ', ' + rt.uncapped + ' sans plafond' : '') + '</span></h3>' +
+      (rt.enforced || 0) + ' held, ' + (rt.leaking || 0) + ' not held' +
+      (rt.uncapped ? ', ' + rt.uncapped + ' with no cap' : '') + '</span></h3>' +
       bandeau + tableau + sans + '</div>';
   }).join('');
 
@@ -6111,7 +6124,7 @@ async function loadLimits() {
 async function loadPoints() {
   const host = document.getElementById('shaping-points');
   const routeur = document.getElementById('shaping-router').value;
-  if (!host.innerHTML) host.innerHTML = '<div class="empty">Lecture des routeurs...</div>';
+  if (!host.innerHTML) host.innerHTML = '<div class="empty">Reading the routers...</div>';
   let data;
   try {
     data = await api('/shaping/points' + (routeur ? '?router=' + encodeURIComponent(routeur) : ''));
@@ -6123,22 +6136,22 @@ async function loadPoints() {
   const cadence = Math.round(data.reconcile_interval_s || 0);
   let bandeau;
   if (!data.enforcement_enabled) {
-    bandeau = '<div class="notice"><strong>Application automatique en veille.</strong> ' +
-      'La carte ci-dessous est calculee et tenue a jour, mais rien n\'est ecrit tant que ' +
-      'l\'enforcement est coupe. Les points marques <b>a poser</b> partiront des que ' +
-      'vous basculerez l\'interrupteur.</div>';
+    bandeau = '<div class="notice"><strong>Automatic apply idle.</strong> ' +
+      'The map below is computed and kept up to date, but nothing is written while ' +
+      'enforcement is off. The points marked <b>pending</b> will go out as soon as ' +
+      'you flip the switch.</div>';
   } else {
-    bandeau = '<div class="notice ok"><strong>Application automatique active.</strong> ' +
-      'Les commandes partent seules, toutes les ' + esc(cadence) + ' s' +
+    bandeau = '<div class="notice ok"><strong>Automatic apply on.</strong> ' +
+      'Commands go out on their own, every ' + esc(cadence) + ' s' +
       (passe && passe.at
-        ? ' &middot; derniere passe ' + esc(depuis(passe.at)) + ' : ' +
-          esc(passe.applied || 0) + ' commande(s) sur ' + esc((passe.routers || []).length) +
-          ' routeur(s)'
-        : ' &middot; premiere passe a venir') +
+        ? ' &middot; last pass ' + esc(depuis(passe.at)) + ': ' +
+          esc(passe.applied || 0) + ' command(s) on ' + esc((passe.routers || []).length) +
+          ' router(s)'
+        : ' &middot; first pass still to come') +
       ((passe && (passe.errors || []).length)
         ? '<span class="hint">' + esc(passe.errors.join(' | ')) + '</span>' : '') +
       (state.enforcementReason
-        ? '<span class="hint">Ecriture autorisee, motif : ' +
+        ? '<span class="hint">Writing allowed, reason: ' +
           esc(state.enforcementReason) + '</span>' : '') +
       '</div>';
   }
@@ -6153,24 +6166,24 @@ async function loadPoints() {
     const entete = '<h2 style="margin-top:1rem">' + esc(r.router) +
       ' <span class="hint">' + esc(r.pop_name || '') + '</span></h2>' +
       '<div class="hint" style="margin-bottom:.4rem">' +
-      esc(c['file-posee'] || 0) + ' point(s) brides &middot; ' +
-      esc(c['file-a-poser'] || 0) + ' a poser &middot; ' +
-      esc(c['ecarte'] || 0) + ' sans file &middot; ' +
-      esc(c['posee-a-la-main'] || 0) + ' file(s) manuelle(s)' +
-      ((c['conflit'] || 0) ? ' &middot; ' + esc(c['conflit']) + ' conflit(s)' : '') +
+      esc(c['file-posee'] || 0) + ' point(s) throttled &middot; ' +
+      esc(c['file-a-poser'] || 0) + ' pending &middot; ' +
+      esc(c['ecarte'] || 0) + ' with no queue &middot; ' +
+      esc(c['posee-a-la-main'] || 0) + ' manual queue(s)' +
+      ((c['conflit'] || 0) ? ' &middot; ' + esc(c['conflit']) + ' conflict(s)' : '') +
       '</div>';
     if (!(r.points || []).length) {
-      return entete + '<div class="empty">Aucun point de shaping sur ce routeur.</div>';
+      return entete + '<div class="empty">No shaping point on this router.</div>';
     }
     return entete + '<div class="table-wrap"><table><thead><tr>' +
-      '<th>Point du reseau</th><th>Cible</th><th class="num">Plafond</th>' +
-      '<th>D\'ou vient le plafond</th><th>Etat</th>' +
+      '<th>Network point</th><th>Target</th><th class="num">Cap</th>' +
+      '<th>Where the cap comes from</th><th>State</th>' +
       '</tr></thead><tbody>' +
       r.points.map((p) => renderPoint(p, 0)).join('') +
       '</tbody></table></div>';
   }).join('');
 
-  host.innerHTML = bandeau + (corps || '<div class="empty">Aucun routeur collecte.</div>');
+  host.innerHTML = bandeau + (corps || '<div class="empty">No router collected.</div>');
 }
 
 async function refreshEnforcement() {
@@ -6181,18 +6194,18 @@ async function refreshEnforcement() {
   toggle.checked = etat.enabled;
   toggle.disabled = etat.locked;
   label.textContent = etat.locked
-    ? 'enforcement verrouille'
-    : etat.enabled ? 'ecriture AUTORISEE' : 'lecture seule';
+    ? 'enforcement locked'
+    : etat.enabled ? 'writing ALLOWED' : 'read-only';
   label.style.color = etat.enabled ? 'var(--warn)' : 'var(--muted)';
   document.getElementById('enforcement-switch').title = etat.locked
-    ? 'ENFORCEMENT_LOCKED=true : la bascule est interdite depuis l\'interface'
-    : 'Autoriser ou couper l\'ecriture sur les routeurs';
+    ? 'ENFORCEMENT_LOCKED=true: flipping it from the interface is forbidden'
+    : 'Allow or stop writing to the routers';
 
   // Le bandeau de la carte dit deja si l'ecriture est active et quand la boucle
   // est passee : ne reste ici que ce qu'il ne peut pas dire.
   const notice = document.getElementById('shaping-notice');
   notice.innerHTML = etat.locked
-    ? '<div class="notice"><b>Ecriture verrouillee</b> ' +
+    ? '<div class="notice"><b>Writing locked</b> ' +
       '(<code>ENFORCEMENT_LOCKED=true</code>).</div>'
     : '';
   state.enforcementReason = (etat.last_change && etat.last_change.reason) || null;
@@ -6201,14 +6214,14 @@ async function refreshEnforcement() {
 async function toggleEnforcement(active) {
   const toggle = document.getElementById('enforcement-toggle');
   if (active && !confirm(
-      "Autoriser l'ecriture sur les routeurs ?\n\n" +
-      'A partir de maintenant, appliquer un plan modifiera reellement leur ' +
-      'configuration. Seules les files marquees freeqos:managed sont touchees.')) {
+      'Allow writing to the routers?\n\n' +
+      'From now on, applying a plan will really change their ' +
+      'configuration. Only queues marked freeqos:managed are touched.')) {
     toggle.checked = false;
     return;
   }
   const motif = active
-    ? (prompt('Motif (trace dans le journal, optionnel) :') || null)
+    ? (prompt('Reason (recorded in the log, optional):') || null)
     : null;
   toggle.disabled = true;
   try {
@@ -6229,27 +6242,27 @@ async function loadAudit() {
   const rows = await api('/shaping/audit?limit=40');
   const host = document.getElementById('shaping-audit');
   if (!rows.length) {
-    host.innerHTML = '<div class="empty">Aucune commande envoyee.</div>';
+    host.innerHTML = '<div class="empty">No command sent.</div>';
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>Quand</th><th>Routeur</th><th>Commande</th>' +
-    '<th>Mode</th><th>Etat</th></tr></thead><tbody>' +
+    '<table><thead><tr><th>When</th><th>Router</th><th>Command</th>' +
+    '<th>Mode</th><th>State</th></tr></thead><tbody>' +
     rows.map((r) => '<tr>' +
       '<td class="num" style="color:var(--faint)">' + esc(clock(r.ts)) + '</td>' +
       '<td>' + esc(r.router_name) + '</td>' +
       '<td class="login" style="font-size:.74rem">' + esc(r.command) + '</td>' +
-      '<td>' + (r.dry_run ? '<span class="badge">simule</span>'
-        : '<span class="badge warn">applique</span>') + '</td>' +
+      '<td>' + (r.dry_run ? '<span class="badge">dry run</span>'
+        : '<span class="badge warn">applied</span>') + '</td>' +
       '<td>' + (r.ok ? '<span class="badge ok">ok</span>'
-        : '<span class="badge crit" title="' + esc(r.detail || '') + '">echec</span>') + '</td>' +
+        : '<span class="badge crit" title="' + esc(r.detail || '') + '">failed</span>') + '</td>' +
       '</tr>').join('') + '</tbody></table>';
 }
 
 async function inspectShaping() {
   const routeur = document.getElementById('shaping-router').value;
   const host = document.getElementById('shaping-state');
-  host.innerHTML = '<div class="notice">Lecture de ' + esc(routeur) + '...</div>';
+  host.innerHTML = '<div class="notice">Reading ' + esc(routeur) + '...</div>';
   try {
     const [etats, droits] = await Promise.all([
       api('/shaping/state?router=' + encodeURIComponent(routeur)),
@@ -6257,24 +6270,24 @@ async function inspectShaping() {
     ]);
     host.innerHTML = etats.map((e) => {
       if (!e.reachable) {
-        return '<div class="notice err"><strong>' + esc(e.router) + '</strong> injoignable : ' +
+        return '<div class="notice err"><strong>' + esc(e.router) + '</strong> unreachable: ' +
           esc(e.error || '') + '</div>';
       }
       let bandeauDroits = '';
       if (droits) {
         if (droits.can_write === true) {
-          bandeauDroits = '<div class="notice ok">Le compte <code>' +
-            esc(droits.username) + '</code> peut ecrire : ' + esc(droits.detail) + '</div>';
+          bandeauDroits = '<div class="notice ok">Account <code>' +
+            esc(droits.username) + '</code> can write: ' + esc(droits.detail) + '</div>';
         } else if (droits.can_write === false) {
-          bandeauDroits = '<div class="notice err"><strong>Le compte <code>' +
-            esc(droits.username) + '</code> ne peut pas ecrire.</strong> ' +
+          bandeauDroits = '<div class="notice err"><strong>Account <code>' +
+            esc(droits.username) + '</code> cannot write.</strong> ' +
             esc(droits.detail) +
-            '<span class="hint">Sur le routeur : <code>/user/group set ' +
-            '[find name=' + esc(droits.group || '&lt;groupe&gt;') +
+            '<span class="hint">On the router: <code>/user/group set ' +
+            '[find name=' + esc(droits.group || '&lt;group&gt;') +
             '] policy=read,write,api,test</code></span></div>';
         } else {
-          bandeauDroits = '<div class="notice warn">Droits du compte <code>' +
-            esc(droits.username) + '</code> non verifiables : ' + esc(droits.detail) +
+          bandeauDroits = '<div class="notice warn">Rights of account <code>' +
+            esc(droits.username) + '</code> not verifiable: ' + esc(droits.detail) +
             '</div>';
         }
       }
@@ -6282,19 +6295,19 @@ async function inspectShaping() {
         '<div class="node-head" style="margin-bottom:.8rem">' +
           '<div class="node-title">' + esc(e.router) + '</div>' +
           '<div class="node-metrics">' +
-            '<span>' + e.counts.simple_queues + ' file(s) simple(s)</span>' +
-            '<span style="color:var(--down)">' + e.counts.managed + ' geree(s) par freeQoS</span>' +
-            '<span style="color:var(--warn)">' + e.counts.foreign + ' tierce(s)</span>' +
+            '<span>' + e.counts.simple_queues + ' simple queue(s)</span>' +
+            '<span style="color:var(--down)">' + e.counts.managed + ' managed by freeQoS</span>' +
+            '<span style="color:var(--warn)">' + e.counts.foreign + ' third-party</span>' +
           '</div></div>' +
         (e.counts.foreign
-          ? '<div class="notice warn">' + e.counts.foreign + ' file(s) ne portent pas le ' +
-            'marqueur <code>freeqos:managed</code> : posees a la main ou par RADIUS. ' +
-            'Elles ne seront jamais modifiees ni supprimees.' +
+          ? '<div class="notice warn">' + e.counts.foreign + ' queue(s) do not carry the ' +
+            '<code>freeqos:managed</code> marker: written by hand or by RADIUS. ' +
+            'They will never be modified nor deleted.' +
             '<span class="hint">' +
             e.foreign_queues.slice(0, 8).map((q) => esc(q.name)).join(', ') +
             (e.foreign_queues.length > 8 ? '...' : '') + '</span></div>'
-          : '<div class="notice ok">Aucune file tierce : le controleur est seul a shaper ' +
-            'sur ce routeur.</div>') +
+          : '<div class="notice ok">No third-party queue: the controller is the only one shaping ' +
+            'on this router.</div>') +
         bandeauDroits +
         '</div>';
     }).join('');
@@ -6316,12 +6329,12 @@ async function computePlan() {
   const routeurs = choisi ? [choisi] : [...document.getElementById('shaping-router').options]
     .map((o) => o.value).filter(Boolean);
   if (!routeurs.length) {
-    host.innerHTML = '<div class="notice warn">Aucun routeur dans l\'inventaire : ' +
-      'declarez-en un dans l\'onglet Equipements.</div>';
+    host.innerHTML = '<div class="notice warn">No router in the inventory: ' +
+      'declare one in the Devices tab.</div>';
     return;
   }
 
-  host.innerHTML = '<div class="notice">Calcul du plan pour ' +
+  host.innerHTML = '<div class="notice">Computing the plan for ' +
     esc(routeurs.join(', ')) + '...</div>';
   const morceaux = [];
   for (const routeur of routeurs) {
@@ -6365,12 +6378,12 @@ function renderEcartes(ecartes) {
     parMotif.get(s.reason).push(s.login);
   });
   return '<div class="notice"><strong>' + ecartes.length +
-    ' abonne(s) hors du plan.</strong> Ce n\'est pas une erreur : ce sont ceux ' +
-    'pour lesquels il n\'y a rien a ecrire.' +
+    ' subscriber(s) outside the plan.</strong> This is not an error: these are the ones ' +
+    'with nothing to write.' +
     [...parMotif.entries()].map(([motif, logins]) =>
       '<span class="hint"><b>' + esc(motif) + '</b> &mdash; ' +
       esc(logins.slice(0, 12).join(', ')) +
-      (logins.length > 12 ? ' et ' + (logins.length - 12) + ' autre(s)' : '') +
+      (logins.length > 12 ? ' and ' + (logins.length - 12) + ' more' : '') +
       '</span>').join('') +
     '</div>';
 }
@@ -6383,12 +6396,12 @@ function renderPlan(plan, routeur, hote) {
   const c = plan.counts;
   const total = c.add + c.set + c.remove;
 
-  let html = '<h2>Plan pour ' + esc(routeur) + '</h2>';
+  let html = '<h2>Plan for ' + esc(routeur) + '</h2>';
 
   if (plan.conflicts.length) {
     html += '<div class="notice err"><strong>' + plan.conflicts.length +
-      ' conflit(s) de nom.</strong> Ces files existent deja sans notre marqueur : ' +
-      'elles appartiennent a quelqu\'un d\'autre et ne seront pas touchees.' +
+      ' name conflict(s).</strong> These queues already exist without our marker: ' +
+      'they belong to somebody else and will not be touched.' +
       '<span class="hint">' + plan.conflicts.map((x) => esc(x.name)).join(', ') +
       '</span></div>';
   }
@@ -6398,20 +6411,20 @@ function renderPlan(plan, routeur, hote) {
   html += renderEcartes(plan.skipped);
 
   if (!total) {
-    html += '<div class="notice ok">Rien a faire : la configuration du routeur ' +
-      'correspond deja a l\'etat voulu (' + plan.unchanged + ' element(s) conformes).</div>';
+    html += '<div class="notice ok">Nothing to do: the router configuration ' +
+      'already matches the wanted state (' + plan.unchanged + ' item(s) already correct).</div>';
     host.innerHTML = html;
     return;
   }
 
   html += '<div class="notice">' +
-    '<strong>' + total + ' commande(s)</strong> : ' +
-    c.add + ' creation(s), ' + c.set + ' modification(s), ' + c.remove + ' suppression(s). ' +
-    plan.unchanged + ' element(s) deja conformes.' +
-    '<span class="hint">Rien n\'est envoye tant que vous n\'avez pas applique.</span></div>';
+    '<strong>' + total + ' command(s)</strong>: ' +
+    c.add + ' add(s), ' + c.set + ' change(s), ' + c.remove + ' removal(s). ' +
+    plan.unchanged + ' item(s) already correct.' +
+    '<span class="hint">Nothing is sent until you apply.</span></div>';
 
-  html += '<div class="table-wrap"><table><thead><tr><th>Action</th><th>Raison</th>' +
-    '<th>Commande RouterOS</th></tr></thead><tbody>' +
+  html += '<div class="table-wrap"><table><thead><tr><th>Action</th><th>Reason</th>' +
+    '<th>RouterOS command</th></tr></thead><tbody>' +
     plan.actions.map((a) => {
       const couleur = a.verb === 'remove' ? 'crit' : a.verb === 'add' ? 'ok' : 'warn';
       return '<tr>' +
@@ -6423,8 +6436,8 @@ function renderPlan(plan, routeur, hote) {
     }).join('') + '</tbody></table></div>';
 
   html += '<div class="actions" style="margin-top:1rem">' +
-    '<button data-act="simulate">Simuler (dry-run)</button>' +
-    '<button data-act="apply" class="primary">Appliquer sur ' + esc(routeur) + '</button>' +
+    '<button data-act="simulate">Dry run</button>' +
+    '<button data-act="apply" class="primary">Apply on ' + esc(routeur) + '</button>' +
     '</div><div data-act="result"></div>';
 
   host.innerHTML = html;
@@ -6436,9 +6449,9 @@ function renderPlan(plan, routeur, hote) {
 
 async function applyPlan(routeur, dryRun, bloc) {
   if (!dryRun && !confirm(
-      'Appliquer reellement sur ' + routeur + ' ?\n\n' +
-      'Des commandes vont etre envoyees au routeur. Seules les files portant ' +
-      'le marqueur freeqos:managed sont concernees.')) {
+      'Really apply on ' + routeur + '?\n\n' +
+      'Commands will be sent to the router. Only queues carrying ' +
+      'the freeqos:managed marker are affected.')) {
     return;
   }
   // Le compte rendu va dans le bloc DE CE PLAN : avec plusieurs plans a
@@ -6455,8 +6468,8 @@ async function applyPlan(routeur, dryRun, bloc) {
     });
     const r = reponse.result;
     host.innerHTML = '<div class="notice ' + (r.ok ? 'ok' : 'err') + '">' +
-      '<strong>' + (r.dry_run ? 'Simulation' : 'Application') + ' : ' +
-      r.applied + ' reussie(s), ' + r.failed + ' echec(s).</strong>' +
+      '<strong>' + (r.dry_run ? 'Dry run' : 'Apply') + ': ' +
+      r.applied + ' succeeded, ' + r.failed + ' failed.</strong>' +
       (r.aborted_reason ? '<span class="hint">' + esc(r.aborted_reason) + '</span>' : '') +
       (r.failed ? '<span class="hint">' + r.results.filter((x) => !x.ok)
         .map((x) => esc(x.command) + ' -> ' + esc(x.detail)).join('<br>') + '</span>' : '') +
@@ -6478,18 +6491,18 @@ async function refreshHealth() {
     dot.className = 'dot' + (res.ok ? '' : ' stale');
     // Le mode d'ecriture est la premiere chose a savoir : l'afficher en dur
     // comme "lecture seule" alors que l'enforcement est actif serait mensonger.
-    const mode = body.enforcement_enabled ? 'ECRITURE ACTIVE' : 'lecture seule';
-    pill.textContent = 'hors-bande · ' + mode + ' · ' +
-      body.collectors_active + ' routeur(s)' +
-      (body.routers_skipped ? ' · ' + body.routers_skipped + ' ignore(s)' : '') +
+    const mode = body.enforcement_enabled ? 'WRITING ON' : 'read-only';
+    pill.textContent = 'out-of-band · ' + mode + ' · ' +
+      body.collectors_active + ' router(s)' +
+      (body.routers_skipped ? ' · ' + body.routers_skipped + ' skipped' : '') +
       (body.timescaledb ? ' · timescale' : '');
     pill.style.color = body.enforcement_enabled ? 'var(--warn)' : '';
     pill.style.borderColor = body.enforcement_enabled ? 'rgba(210,153,34,.45)' : '';
     pill.title = body.stale_jobs && body.stale_jobs.length
-      ? 'Jobs en retard : ' + body.stale_jobs.join(', ') : 'Cycles a l\'heure';
+      ? 'Jobs running late: ' + body.stale_jobs.join(', ') : 'Cycles on time';
   } catch (err) {
     dot.className = 'dot down';
-    pill.textContent = 'controleur injoignable';
+    pill.textContent = 'controller unreachable';
   }
 }
 
@@ -6499,9 +6512,9 @@ async function refreshHealth() {
 /* -------------------------------------------------------------- reglages */
 
 const GROUPE_TITRE = {
-  shaping: 'Shaping', cake: 'CAKE (AQM)', enforcement: 'Garde-fous d\'ecriture',
-  cadences: 'Cadences de collecte', detection: 'Detection des clients a IP fixe',
-  trafic: 'Trafic (NetFlow)',
+  shaping: 'Shaping', cake: 'CAKE (AQM)', enforcement: 'Write safeguards',
+  cadences: 'Collection cadences', detection: 'Static-IP client detection',
+  trafic: 'Traffic (NetFlow)',
 };
 
 /** Controle de saisie adapte au type du reglage. Un reglage "nullable" recoit
@@ -6511,15 +6524,15 @@ function settingControl(r) {
   const id = 'set-' + r.name;
   const vide = r.value === null || r.value === undefined;
   if (r.kind === 'bool') {
-    const opts = (r.nullable ? [['', '— (defaut RouterOS)']] : [])
-      .concat([['true', 'Oui'], ['false', 'Non']]);
+    const opts = (r.nullable ? [['', '— (RouterOS default)']] : [])
+      .concat([['true', 'Yes'], ['false', 'No']]);
     return '<select id="' + id + '">' + opts.map(([v, t]) =>
       '<option value="' + v + '"' +
       ((vide ? '' : String(r.value)) === v ? ' selected' : '') + '>' + t + '</option>').join('') +
       '</select>';
   }
   if (r.kind === 'choix') {
-    const opts = (r.nullable ? [['', '— (defaut RouterOS)']] : [])
+    const opts = (r.nullable ? [['', '— (RouterOS default)']] : [])
       .concat(r.choices.map((c) => [c, c]));
     return '<select id="' + id + '">' + opts.map(([v, t]) =>
       '<option value="' + esc(v) + '"' +
@@ -6536,18 +6549,18 @@ function settingControl(r) {
 function settingRow(r) {
   const pose = r.source === 'db';
   const badge = pose
-    ? '<span class="badge ok" title="Valeur posee ici, stockee en base">base</span>'
-    : '<span class="badge" title="Aucune valeur posee : le defaut s\'applique">defaut</span>';
+    ? '<span class="badge ok" title="Value set here, stored in the database">database</span>'
+    : '<span class="badge" title="No value set: the default applies">default</span>';
   const defaut = r.default === null || r.default === undefined ? '—' : String(r.default);
   return '<tr>' +
     '<td><code>' + esc(r.name) + '</code>' +
       '<span class="hint">' + esc(r.help) + '</span></td>' +
     '<td style="min-width:190px">' + settingControl(r) + '</td>' +
-    '<td>' + badge + '<span class="hint">defaut : ' + esc(defaut) + '</span></td>' +
+    '<td>' + badge + '<span class="hint">default: ' + esc(defaut) + '</span></td>' +
     '<td class="sticky-actions">' +
-      '<button class="sm" data-set-save="' + esc(r.name) + '">Appliquer</button> ' +
+      '<button class="sm" data-set-save="' + esc(r.name) + '">Apply</button> ' +
       (pose ? '<button class="sm" data-set-reset="' + esc(r.name) +
-        '">Defaut</button>' : '') +
+        '">Default</button>' : '') +
     '</td></tr>';
 }
 
@@ -6556,7 +6569,7 @@ async function loadSettings() {
   const host = document.getElementById('settings-groups');
   const compte = document.getElementById('settings-count');
   if (compte) {
-    compte.textContent = body.from_db.length + ' reglage(s) pose(s) en base sur ' +
+    compte.textContent = body.from_db.length + ' setting(s) stored in the database out of ' +
       body.settings.length;
   }
 
@@ -6566,7 +6579,7 @@ async function loadSettings() {
   host.innerHTML = groupes.map((g) =>
     '<h2>' + esc(GROUPE_TITRE[g] || g) + '</h2>' +
     '<div class="table-wrap"><table><thead><tr>' +
-      '<th>Reglage</th><th>Valeur</th><th>Source</th><th></th>' +
+      '<th>Setting</th><th>Value</th><th>Source</th><th></th>' +
     '</tr></thead><tbody>' +
     body.groups[g].map(settingRow).join('') +
     '</tbody></table></div>').join('');
@@ -6579,7 +6592,7 @@ async function loadSettings() {
   });
 
   document.getElementById('settings-bootstrap').innerHTML =
-    '<table><thead><tr><th>Variable</th><th>Pourquoi elle reste dans l\'environnement</th>' +
+    '<table><thead><tr><th>Variable</th><th>Why it stays in the environment</th>' +
     '</tr></thead><tbody>' + body.bootstrap_only.map((e) =>
       '<tr><td><code>' + esc(e.name) + '</code></td><td>' + esc(e.why) + '</td></tr>')
       .join('') + '</tbody></table>';
@@ -6615,7 +6628,7 @@ async function saveSetting(name) {
       method: 'PUT', body: JSON.stringify({ value: readSetting(name) }),
     });
     settingNotice('<div class="notice ok"><code>' + esc(name) + '</code> = ' +
-      esc(String(r.value)) + ' — applique immediatement, sans redemarrage.</div>');
+      esc(String(r.value)) + ' — applied immediately, no restart.</div>');
     await loadSettings();
   } catch (err) {
     settingNotice('<div class="notice err">' + esc(err.message) + '</div>');
@@ -6626,7 +6639,7 @@ async function resetSetting(name) {
   try {
     const r = await api('/settings/' + encodeURIComponent(name), { method: 'DELETE' });
     settingNotice('<div class="notice ok"><code>' + esc(name) +
-      '</code> revenu a son defaut (' + esc(String(r.value)) + ').</div>');
+      '</code> back to its default (' + esc(String(r.value)) + ').</div>');
     await loadSettings();
   } catch (err) {
     settingNotice('<div class="notice err">' + esc(err.message) + '</div>');
@@ -6667,10 +6680,10 @@ function appError(message) {
   if (!message) { banniere.hidden = true; banniere.innerHTML = ''; return; }
   banniere.hidden = false;
   banniere.innerHTML = '<div class="notice err">' +
-    '<strong>Cet onglet n\'a pas pu etre charge.</strong> ' + esc(message) +
-    '<span class="hint">Ce qui est affiche peut dater. Verifiez ' +
-    '<a href="/health" target="_blank">/health</a> et l\'onglet Reglages ; si le ' +
-    'probleme a suivi une mise a jour, rechargez la page (Ctrl+Maj+R).</span></div>';
+    '<strong>This tab could not be loaded.</strong> ' + esc(message) +
+    '<span class="hint">What is shown may be stale. Check ' +
+    '<a href="/health" target="_blank">/health</a> and the Settings tab; if the ' +
+    'problem followed an update, reload the page (Ctrl+Shift+R).</span></div>';
 }
 
 let refreshing = false;
@@ -6759,11 +6772,11 @@ document.getElementById('btn-plan').addEventListener('click', computePlan);
 document.getElementById('btn-discover').addEventListener('click', async (e) => {
   e.target.disabled = true;
   const notice = document.getElementById('topo-notice');
-  notice.innerHTML = '<div class="notice">Lecture de /ip/neighbor sur chaque PoP...</div>';
+  notice.innerHTML = '<div class="notice">Reading /ip/neighbor on every PoP...</div>';
   try {
     const r = await api('/topology/discover', { method: 'POST' });
-    notice.innerHTML = '<div class="notice ok">' + r.nodes + ' equipement(s), ' +
-      r.links + ' lien(s) decouvert(s).' +
+    notice.innerHTML = '<div class="notice ok">' + r.nodes + ' device(s), ' +
+      r.links + ' link(s) discovered.' +
       (r.warnings.length ? '<span class="hint">' + r.warnings.map(esc).join('<br>') + '</span>' : '') +
       '</div>';
     await loadNetwork();
@@ -6788,7 +6801,7 @@ document.getElementById('btn-topo-link').addEventListener('click', (e) => {
   topo.linkMode = !topo.linkMode;
   topo.linkSource = null;
   e.target.classList.toggle('primary', topo.linkMode);
-  e.target.textContent = topo.linkMode ? 'Terminer' : 'Creer un lien';
+  e.target.textContent = topo.linkMode ? 'Done' : 'Create a link';
   if (topo.data) renderTopoCanvas();
   setTopoLinkNotice();
 });
@@ -6834,10 +6847,16 @@ document.getElementById('sub-kind').addEventListener('change', (e) => {
 document.getElementById('sc-toggle').addEventListener('click', async () => {
   const panneau = document.getElementById('sc-panel');
   panneau.hidden = !panneau.hidden;
-  if (!panneau.hidden) {
-    scRemplirFormulaire(null);
-    await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
+  if (panneau.hidden) return;
+  scRemplirFormulaire(null);
+  // Le bouton annonce « Ajouter un client » : le curseur doit etre dans le
+  // premier champ, pas quelque part au-dessus d'un panneau a parcourir.
+  const reference = document.getElementById('sc-reference');
+  if (reference) {
+    reference.focus();
+    reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
+  await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
 document.getElementById('sc-candidates-block').addEventListener('toggle', (e) => {

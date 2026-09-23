@@ -184,7 +184,7 @@ async def test_un_abonne_sans_plan_est_sur_la_carte_avec_son_motif(
     points = _par_label(await service.shaping_points())
 
     assert points["dupont"]["state"] == ShapingService.ETAT_ECARTE
-    assert "aucun debit" in points["dupont"]["reason"]
+    assert "no rate to apply" in points["dupont"]["reason"]
 
 
 async def test_un_lien_desactive_a_la_main_est_sur_la_carte_avec_son_motif(
@@ -203,7 +203,7 @@ async def test_un_lien_desactive_a_la_main_est_sur_la_carte_avec_son_motif(
     points = _par_label(await service.shaping_points())
 
     assert points["BH-Nord"]["state"] == ShapingService.ETAT_ECARTE
-    assert "desactive" in points["BH-Nord"]["reason"]
+    assert "disabled" in points["BH-Nord"]["reason"]
 
 
 async def test_une_file_posee_a_la_main_figure_et_reste_intouchee(

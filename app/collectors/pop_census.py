@@ -934,19 +934,19 @@ def _qualifier(
     """
     if hote.address in siennes:
         hote.nature = NATURE_EQUIPEMENT
-        hote.reason = "adresse portee par le routeur lui-meme"
+        hote.reason = "address carried by the router itself"
     elif hote.login:
         hote.nature = NATURE_PPPOE
-        hote.reason = "session PPPoE ouverte : identite et plan deja connus"
+        hote.reason = "PPPoE session open: identity and plan already known"
     elif hote.address in materiel:
         hote.nature = NATURE_EQUIPEMENT
-        hote.reason = "declare dans l'inventaire, ou pair de routage"
+        hote.reason = "declared in the inventory, or a routing peer"
     elif sous_reseau is None and hote.perimeter:
         hote.nature = NATURE_CLIENT
         hote.reason = hote.perimeter
     elif sous_reseau is None:
         hote.nature = NATURE_HORS_PERIMETRE
-        hote.reason = "aucun sous-reseau de ce routeur ne couvre cette adresse"
+        hote.reason = "no subnet of this router covers this address"
     elif sous_reseau.role != ROLE_CLIENT:
         hote.nature = NATURE_HORS_PERIMETRE
         hote.reason = f"{sous_reseau.network} : {sous_reseau.reason}"

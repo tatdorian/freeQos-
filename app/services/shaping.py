@@ -228,7 +228,7 @@ class ShapingService:
                 FLAG_ENFORCEMENT,
                 self.settings.enforcement_enabled,
                 updated_by="bootstrap",
-                reason="valeur initiale issue de ENFORCEMENT_ENABLED",
+                reason="initial value from ENFORCEMENT_ENABLED",
             )
             return
         self._enforcement_enabled = stocke
@@ -314,9 +314,9 @@ class ShapingService:
         macs_ambigues = ambiguous_neighbor_macs(tous_voisins)
         if macs_ambigues:
             snapshot.warnings.append(
-                f"{len(macs_ambigues)} MAC annoncee(s) par plusieurs equipements distincts : "
-                f"elles ne servent plus a les identifier. Des equipements clones depuis la "
-                f"meme image donnent ce symptome."
+                f"{len(macs_ambigues)} MAC(s) announced by several distinct devices: "
+                f"they no longer identify them. Devices cloned from the same image "
+                f"give this symptom."
             )
             logger.warning("MAC de voisins ambigues : %s", sorted(macs_ambigues))
 
@@ -432,9 +432,9 @@ class ShapingService:
                 loopbacks_par_routeur[collector.config.name] = loopback
             else:
                 snapshot.warnings.append(
-                    f"{collector.config.name} : aucun loopback trouve. Son identite "
-                    f"retombe sur la MAC et l'adresse d'interface, moins sures. "
-                    f"Declarez-le dans la fiche du PoP."
+                    f"{collector.config.name}: no loopback found. Its identity falls "
+                    f"back to the MAC and interface address, which are less reliable. "
+                    f"Declare it in the PoP record."
                 )
             router_addresses.append((cle, collector.config.name, resultat.get("addresses") or []))
             # Toute IP portee par ce routeur pointe vers sa case (pour resoudre le
@@ -481,9 +481,9 @@ class ShapingService:
         for adresse, noms in sorted(proprietaires.items()):
             if len(noms) > 1:
                 snapshot.warnings.append(
-                    f"Loopback {adresse} declare par {len(noms)} routeurs "
-                    f"({', '.join(sorted(noms))}) : il doit etre unique. Aucun "
-                    f"n'est identifie par cette adresse tant que ce n'est pas corrige."
+                    f"Loopback {adresse} declared by {len(noms)} routers "
+                    f"({', '.join(sorted(noms))}): it must be unique. None of them is "
+                    f"identified by this address until that is fixed."
                 )
                 logger.error("Loopback %s partage par %s", adresse, sorted(noms))
                 continue
@@ -550,9 +550,9 @@ class ShapingService:
                 )
             )
             snapshot.warnings.append(
-                f"{nom} : ecarte de la collecte ({ecarte.get('reason')}). Sa case "
-                f"reste dans l'arbre, mais rien n'est lu sur lui -- ni topologie, "
-                f"ni abonnes, ni detection des clients a IP fixe."
+                f"{nom}: dropped from collection ({ecarte.get('reason')}). Its box "
+                f"stays in the tree, but nothing is read from it -- no topology, "
+                f"no subscribers, no static-IP client detection."
             )
 
             # ANALYSE DE CONFIGURATION : la hierarchie reelle.
@@ -2596,9 +2596,9 @@ def _index_sans_ambiguite(
             continue
         noms = sorted(cle.removeprefix("router:") for cle in proprietaires)
         snapshot.warnings.append(
-            f"{quoi} {indice} revendiquee par {len(noms)} routeurs ({', '.join(noms)}) : "
-            f"elle n'identifie plus aucun d'eux. Leurs voisins restent des cases a part. "
-            f"Des equipements clones depuis la meme image donnent ce symptome."
+            f"{quoi} {indice} claimed by {len(noms)} routers ({', '.join(noms)}): "
+            f"it no longer identifies any of them. Their neighbours stay as separate "
+            f"boxes. Devices cloned from the same image give this symptom."
         )
         logger.warning("%s %s partagee par %s", quoi, indice, noms)
     return index

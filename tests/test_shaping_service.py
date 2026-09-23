@@ -586,7 +586,7 @@ async def test_un_abonne_sans_session_n_est_pas_shape(
 
     files = [a for a in plan.actions if a.path == "/queue/simple"]
     assert files == []
-    assert [(s.login, "hors ligne" in s.reason) for s in plan.skipped] == [("parti", True)]
+    assert [(s.login, "subscriber offline" in s.reason) for s in plan.skipped] == [("parti", True)]
 
 
 async def test_une_session_inconnue_de_la_base_est_shapee_si_surchargee(

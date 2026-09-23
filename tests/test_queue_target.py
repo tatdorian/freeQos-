@@ -98,7 +98,7 @@ def test_un_abonne_hors_ligne_n_a_pas_de_file() -> None:
     _, files, ecartes = desired_state(links=[], subscribers=[abonne(address=None)])
 
     assert files == []
-    assert [(s.login, "hors ligne" in s.reason) for s in ecartes] == [("dupont", True)]
+    assert [(s.login, "subscriber offline" in s.reason) for s in ecartes] == [("dupont", True)]
 
 
 def test_le_nom_de_la_file_ne_depend_pas_de_l_adresse() -> None:
@@ -157,16 +157,16 @@ def test_chaque_abonne_ecarte_est_justifie() -> None:
             abonne("en-ligne"),
             abonne("hors-ligne", address=None),
             abonne("sans-plan", plan_down_mbps=None, plan_up_mbps=None),
-            abonne("desactive", enabled=False),
+            abonne("disabled", enabled=False),
         ],
     )
 
     assert [f.name for f in files] == ["freeqos-en-ligne"]
     motifs = {s.login: s.reason for s in ecartes}
-    assert set(motifs) == {"hors-ligne", "sans-plan", "desactive"}
-    assert "hors ligne" in motifs["hors-ligne"]
-    assert "aucun debit" in motifs["sans-plan"]
-    assert "desactive" in motifs["desactive"]
+    assert set(motifs) == {"hors-ligne", "sans-plan", "disabled"}
+    assert "subscriber offline" in motifs["hors-ligne"]
+    assert "no rate to apply" in motifs["sans-plan"]
+    assert "disabled" in motifs["disabled"]
 
 
 def test_les_ecarts_sont_serialises_pour_l_interface() -> None:
@@ -178,7 +178,7 @@ def test_les_ecarts_sont_serialises_pour_l_interface() -> None:
 
     corps = plan.to_dict()
     assert corps["skipped"][0]["login"] == "dupont"
-    assert "hors ligne" in corps["skipped"][0]["reason"]
+    assert "subscriber offline" in corps["skipped"][0]["reason"]
 
 
 # ------------------------------------------------------ mode historique
@@ -213,8 +213,8 @@ def test_deux_abonnes_sur_la_meme_adresse_ne_sont_pas_shapes() -> None:
     assert [f.name for f in files] == ["freeqos-tranquille"]
     motifs = {s.login: s.reason for s in ecartes}
     assert set(motifs) == {"ancien", "nouveau"}
-    assert "revendiquee aussi par nouveau" in motifs["ancien"]
-    assert "revendiquee aussi par ancien" in motifs["nouveau"]
+    assert "also claimed by nouveau" in motifs["ancien"]
+    assert "also claimed by ancien" in motifs["nouveau"]
 
 
 def test_un_abonne_sans_debit_ne_bloque_pas_l_adresse_d_un_autre() -> None:

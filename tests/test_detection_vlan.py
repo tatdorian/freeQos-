@@ -785,7 +785,7 @@ def test_api_diagnostic_sans_routeur_collecte(api) -> None:
     client, _, _ = api
     reponse = client.get("/api/v1/static-clients/candidates/diagnostic?router_name=fantome")
     assert reponse.status_code == 404
-    assert "ecarte de la collecte" in reponse.json()["detail"]
+    assert "dropped from collection" in reponse.json()["detail"]
 
 
 # =========================================================================

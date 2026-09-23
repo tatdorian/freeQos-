@@ -419,7 +419,7 @@ def plan_restrictions(
             plan.skipped.append(
                 PlanSkip(
                     login=cible.name,
-                    reason="plafond a poser mais aucun debit saisi : rien a ecrire",
+                    reason="cap to apply but no rate entered: nothing to write",
                 )
             )
             continue
@@ -446,7 +446,7 @@ def plan_restrictions(
                 path=PATH_ADDRESS_LIST,
                 fields={"list": liste, "address": adresse, "comment": commentaire},
                 name=f"{liste} {adresse}",
-                reason="adresse du service visee par la restriction",
+                reason="service address targeted by the restriction",
             )
         )
 
@@ -471,7 +471,7 @@ def plan_restrictions(
                         path=chemin,
                         fields=champs,
                         name=f"{cible.name} ({role})",
-                        reason=f"restriction '{cible.name}' : {role}",
+                        reason=f"restriction '{cible.name}': {role}",
                     )
                 )
                 continue
@@ -486,7 +486,7 @@ def plan_restrictions(
                     target_id=str(posee.get(".id") or ""),
                     fields={cle: apres for cle, (_, apres) in changements.items()},
                     name=f"{cible.name} ({role})",
-                    reason=f"restriction '{cible.name}' : alignement de {role}",
+                    reason=f"restriction '{cible.name}': aligning {role}",
                     changes=changements,
                 )
             )
@@ -506,7 +506,7 @@ def plan_restrictions(
                 path=PATH_ADDRESS_LIST,
                 target_id=str(row.get(".id") or ""),
                 name=f"{liste} {adresse}",
-                reason="cette adresse ne releve plus d'aucune restriction active",
+                reason="this address no longer belongs to any active restriction",
             )
         )
     for chemin, lignes in existantes.items():
@@ -519,7 +519,7 @@ def plan_restrictions(
                     path=chemin,
                     target_id=str(row.get(".id") or ""),
                     name=f"{slug} ({role})",
-                    reason="restriction retiree, desactivee ou devenue sans objet",
+                    reason="restriction removed, disabled or no longer relevant",
                 )
             )
     return plan

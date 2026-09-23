@@ -361,7 +361,7 @@ def test_un_secteur_inconnu_est_signale_sans_perdre_le_client() -> None:
 
     # Le noeud existe quand meme : l'operateur doit VOIR son client.
     assert static_client_node_key("mairie-vitre") in snapshot.nodes
-    assert any("secteur inconnu" in avertissement for avertissement in snapshot.warnings)
+    assert any("unknown sector" in avertissement for avertissement in snapshot.warnings)
 
 
 # =========================================================================

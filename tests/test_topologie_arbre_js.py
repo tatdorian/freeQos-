@@ -618,7 +618,7 @@ console.log(JSON.stringify({
 """,
     )
     assert res["cles"] == ["router:pop", "abos:router:pop"]
-    assert res["nom"] == "2 abonne(s)"
+    assert res["nom"] == "2 subscriber(s)"
     assert res["deplie"] is False
     assert res["enfants"] == 0
 
@@ -699,7 +699,7 @@ console.log(JSON.stringify({
 """,
     )
     assert res["enfants"] == 26, "25 abonnes + la case 'et les autres'"
-    assert res["dernier"] == "+ 15 autres"
+    assert res["dernier"] == "+ 15 more"
 
 
 def test_un_abonne_sans_pop_n_est_rattache_nulle_part(harnais: Path) -> None:

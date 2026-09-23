@@ -113,7 +113,7 @@ async def test_dry_run_n_envoie_rien() -> None:
     assert client.executed == []
     assert resultat.dry_run is True
     assert resultat.applied == 2
-    assert all(o.detail == "simule" for o in resultat.outcomes)
+    assert all(o.detail == "dry run" for o in resultat.outcomes)
 
 
 async def test_application_reelle_envoie_dans_l_ordre() -> None:

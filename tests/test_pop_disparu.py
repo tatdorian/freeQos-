@@ -165,7 +165,7 @@ async def test_un_pop_ecarte_garde_sa_case_dans_l_arbre() -> None:
     assert noeud.attributes["excluded"] is True
     assert noeud.attributes["managed"] is True
     assert "secret illisible" in noeud.attributes["error"]
-    assert any("ecarte de la collecte" in a for a in snapshot.warnings)
+    assert any("dropped from collection" in a for a in snapshot.warnings)
 
 
 async def test_un_coeur_ecarte_garde_son_role() -> None:

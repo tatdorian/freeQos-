@@ -40,7 +40,7 @@ def _require_topology(container: ContainerDep) -> TopologyRepository:
     if container.topology_repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Topologie indisponible (base non initialisee)",
+            detail="Topology unavailable (database not initialised)",
         )
     return container.topology_repo
 
@@ -68,7 +68,7 @@ def _miroir(lien: dict[str, Any]) -> bool:
 
 
 # --------------------------------------------------------------- topologie
-@router.get("/topology", summary="Graphe du reseau tel que le controleur le comprend")
+@router.get("/topology", summary="Network graph as the controller understands it")
 async def topology(container: ContainerDep) -> dict[str, Any]:
     repo = _require_topology(container)
     noeuds = await repo.nodes()
@@ -192,7 +192,7 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     }
 
 
-@router.get("/topology/routers/{router_name}/export", summary="Config complete d'un PoP")
+@router.get("/topology/routers/{router_name}/export", summary="Full config of a PoP")
 async def router_export(router_name: str, container: ContainerDep) -> dict[str, Any]:
     """Renvoie le ``/export`` brut d'un routeur et son analyse (adresses, tunnels,
     commentaires) : de quoi VOIR tout ce que le controleur percoit de sa config.
@@ -202,11 +202,11 @@ async def router_export(router_name: str, container: ContainerDep) -> dict[str, 
     except KeyError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Routeur '{router_name}' absent de l'inventaire actif",
+            detail=f"Router '{router_name}' is not in the active inventory",
         ) from exc
 
 
-@router.post("/topology/discover", summary="Relance la decouverte de topologie")
+@router.post("/topology/discover", summary="Run topology discovery again")
 async def discover(container: ContainerDep) -> dict[str, Any]:
     """Lecture seule sur tous les PoPs, puis persistance du graphe."""
     # Les deux sources de radios : le fournisseur statique (mock/UISP/env-airOS)
@@ -226,7 +226,7 @@ async def discover(container: ContainerDep) -> dict[str, Any]:
     }
 
 
-@router.post("/topology/forget-stale", summary="Oublier les equipements disparus de l'arbre")
+@router.post("/topology/forget-stale", summary="Forget the vanished devices of the tree")
 async def forget_stale(
     container: ContainerDep,
     older_than_minutes: Annotated[
@@ -234,10 +234,10 @@ async def forget_stale(
         Query(
             ge=5,
             le=60 * 24 * 365,
-            description="Age minimal, en minutes, depuis la derniere fois qu'on a vu l'equipement",
+            description="Minimum age, in minutes, since the device was last seen",
         ),
     ] = 60,
-    confirm: Annotated[bool, Query(description="Obligatoire : cette action efface")] = False,
+    confirm: Annotated[bool, Query(description="Required: this action erases")] = False,
 ) -> dict[str, Any]:
     """Retire du graphe ce qu'aucune decouverte ne revoit depuis un moment.
 
@@ -254,7 +254,7 @@ async def forget_stale(
     if not confirm:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cette action efface des cases de l'arbre : 'confirm' doit valoir true.",
+            detail="This action erases boxes from the tree: 'confirm' must be true.",
         )
     compte = await repo.forget_stale(older_than_minutes=older_than_minutes)
     return {
@@ -268,11 +268,11 @@ async def forget_stale(
     }
 
 
-@router.get("/topology/links/{key:path}/throughput", summary="Debit mesure d'un lien")
+@router.get("/topology/links/{key:path}/throughput", summary="Measured throughput of a link")
 async def link_throughput(
     key: str,
     container: ContainerDep,
-    minutes: Annotated[int, Query(ge=1, le=10080, description="Fenetre d'historique")] = 60,
+    minutes: Annotated[int, Query(ge=1, le=10080, description="History window")] = 60,
     bucket_seconds: Annotated[int, Query(ge=5, le=3600, alias="bucket")] = 30,
 ) -> dict[str, Any]:
     """Le debit d'un lien, maintenant et sur la fenetre demandee.
@@ -306,7 +306,7 @@ async def link_throughput(
     }
 
 
-@router.get("/topology/links/{key:path}/live", summary="Mesurer ce lien maintenant")
+@router.get("/topology/links/{key:path}/live", summary="Measure this link now")
 async def link_live(key: str, container: ContainerDep) -> dict[str, Any]:
     """Interroge le routeur pour le debit INSTANTANE du port.
 
@@ -394,7 +394,7 @@ class NodeVisibility(BaseModel):
 # Les routes a suffixe sont declarees AVANT la route "role" en {key:path} : cette
 # derniere est gloutonne (le convertisseur path avale les slashs), donc sans cet
 # ordre elle capterait "mac:AA/layout" avant la route dediee.
-@router.patch("/topology/nodes/{key:path}/layout", summary="Deplacer une case de l'arbre")
+@router.patch("/topology/nodes/{key:path}/layout", summary="Move a box of the tree")
 async def set_node_layout(
     key: str, payload: NodePosition, container: ContainerDep
 ) -> dict[str, Any]:
@@ -407,7 +407,7 @@ async def set_node_layout(
     return {"key": key, "pos_x": payload.x, "pos_y": payload.y}
 
 
-@router.patch("/topology/nodes/{key:path}/parent", summary="Re-parenter une case (glisser un lien)")
+@router.patch("/topology/nodes/{key:path}/parent", summary="Re-parent a box (drag a link)")
 async def set_node_parent(key: str, payload: NodeParent, container: ContainerDep) -> dict[str, Any]:
     """Force le parent d'un equipement dans l'arbre affiche.
 
@@ -425,7 +425,7 @@ async def set_node_parent(key: str, payload: NodeParent, container: ContainerDep
     return {"key": key, "parent_override": payload.parent_key or None}
 
 
-@router.patch("/topology/nodes/{key:path}/visibility", summary="Masquer ou reafficher une case")
+@router.patch("/topology/nodes/{key:path}/visibility", summary="Hide or show a box again")
 async def set_node_visibility(
     key: str, payload: NodeVisibility, container: ContainerDep
 ) -> dict[str, Any]:
@@ -441,7 +441,7 @@ class LinkInput(BaseModel):
     target_key: str
 
 
-@router.post("/topology/links", summary="Creer un lien a la main entre deux noeuds")
+@router.post("/topology/links", summary="Create a link by hand between two nodes")
 async def create_link(payload: LinkInput, container: ContainerDep) -> dict[str, Any]:
     """Ajoute une adjacence que la decouverte a manquee. Purement affichage :
     aucun equipement n'est reconfigure. Retirable ensuite via DELETE."""
@@ -453,7 +453,7 @@ async def create_link(payload: LinkInput, container: ContainerDep) -> dict[str, 
     return {"key": key, "source_key": payload.source_key, "target_key": payload.target_key}
 
 
-@router.delete("/topology/links/{key:path}", summary="Retirer un lien de l'arbre")
+@router.delete("/topology/links/{key:path}", summary="Remove a link from the tree")
 async def delete_link(key: str, container: ContainerDep) -> dict[str, Any]:
     """Ecarte un lien (adjacence erronee de la decouverte, ou lien manuel).
     Reversible : la decouverte ne le recree pas tant qu'il est masque."""
@@ -470,7 +470,7 @@ class MergeInput(BaseModel):
     canonical_key: str
 
 
-@router.post("/topology/merge", summary="Declarer que deux cases sont le meme equipement")
+@router.post("/topology/merge", summary="Declare that two boxes are the same device")
 async def merge_nodes(payload: MergeInput, container: ContainerDep) -> dict[str, Any]:
     """Fusion tranchee par l'operateur, quand l'automatique n'a pas pu prouver
     l'identite (nom generique, pas de MAC commune). C'est le levier de precision
@@ -484,25 +484,25 @@ async def merge_nodes(payload: MergeInput, container: ContainerDep) -> dict[str,
     return {"alias_key": payload.alias_key, "canonical_key": payload.canonical_key}
 
 
-@router.delete("/topology/merge/{alias_key:path}", summary="Annuler une fusion manuelle")
+@router.delete("/topology/merge/{alias_key:path}", summary="Undo a manual merge")
 async def unmerge_node(alias_key: str, container: ContainerDep) -> dict[str, Any]:
     """Defait une fusion posee a la main : la case redevient distincte."""
     repo = _require_topology(container)
     trouve = await repo.unmerge_node(alias_key)
     if not trouve:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail=f"Fusion inconnue : {alias_key}"
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown merge: {alias_key}"
         )
     return {"alias_key": alias_key, "unmerged": True}
 
 
-@router.patch("/topology/nodes/{key:path}", summary="Corriger le role d'un equipement")
+@router.patch("/topology/nodes/{key:path}", summary="Correct the role of a device")
 async def set_node_kind(
     key: str,
     container: ContainerDep,
     kind: Annotated[
         Literal["gateway", "core", "pop", "radio", "sector", "cpe", "client", "unknown"] | None,
-        Query(description="Role force ; omettre pour revenir a la detection"),
+        Query(description="Forced role; omit to go back to detection"),
     ] = None,
 ) -> dict[str, Any]:
     """La classification automatique est une heuristique : l'operateur tranche."""
@@ -512,7 +512,7 @@ async def set_node_kind(
 
 
 # ------------------------------------------------------- etat du shaping
-@router.get("/shaping/state", summary="Ce qui est deja configure sur les routeurs")
+@router.get("/shaping/state", summary="What is already configured on the routers")
 async def shaping_state(
     container: ContainerDep,
     router_name: Annotated[str | None, Query(alias="router")] = None,
@@ -526,7 +526,7 @@ async def shaping_state(
     return [etat.to_dict() for etat in etats]
 
 
-@router.get("/shaping/points", summary="Ou le shaping s'applique sur le reseau")
+@router.get("/shaping/points", summary="Where shaping applies on the network")
 async def shaping_points(
     container: ContainerDep,
     router_name: Annotated[str | None, Query(alias="router")] = None,
@@ -601,7 +601,7 @@ class PolicyInput(BaseModel):
         return self
 
 
-@router.get("/shaping/policies", summary="Surcharges de debit posees a la main")
+@router.get("/shaping/policies", summary="Rate overrides set by hand")
 async def list_policies(
     container: ContainerDep,
     scope: Annotated[Literal["link", "subscriber"] | None, Query()] = None,
@@ -609,7 +609,7 @@ async def list_policies(
     return await _require_topology(container).policies(scope)
 
 
-@router.put("/shaping/policies", summary="Fixer le debit d'un lien ou d'un abonne")
+@router.put("/shaping/policies", summary="Set the rate of a link or a subscriber")
 async def set_policy(
     payload: PolicyInput,
     container: ContainerDep,
@@ -649,7 +649,7 @@ async def set_policy(
     }
 
 
-@router.delete("/shaping/policies/{scope}/{target_key:path}", summary="Retirer une surcharge")
+@router.delete("/shaping/policies/{scope}/{target_key:path}", summary="Remove an override")
 async def delete_policy(
     scope: Literal["link", "subscriber"],
     target_key: str,
@@ -666,7 +666,7 @@ async def delete_policy(
     """
     supprime = await _require_topology(container).delete_policy(scope, target_key)
     if not supprime:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Surcharge inconnue")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown override")
     pose = None
     if apply_now:
         pose = await _poser_le_plafond(container, scope, target_key, removing=True)
@@ -696,7 +696,7 @@ async def _poser_le_plafond(
         }
 
 
-@router.get("/shaping/limits", summary="Les plafonds poses sont-ils reellement tenus ?")
+@router.get("/shaping/limits", summary="Are the applied caps actually held?")
 async def limit_audit(
     container: ContainerDep,
     router_name: Annotated[str | None, Query(alias="router")] = None,
@@ -718,7 +718,7 @@ async def limit_audit(
 
 
 # ------------------------------------------------- boucle fermee QoE (phase 4)
-@router.get("/shaping/qoe", summary="Ce que la boucle fermee QoE a decide, par secteur")
+@router.get("/shaping/qoe", summary="What the closed QoE loop decided, per sector")
 async def qoe_loop_state(container: ContainerDep) -> dict[str, Any]:
     """Etat de la boucle fermee : quel secteur est resserre, de combien, pourquoi.
 
@@ -742,7 +742,7 @@ async def qoe_loop_state(container: ContainerDep) -> dict[str, Any]:
     }
 
 
-@router.post("/shaping/qoe/run", summary="Declencher un cycle de la boucle fermee QoE")
+@router.post("/shaping/qoe/run", summary="Trigger one pass of the closed QoE loop")
 async def qoe_loop_run(container: ContainerDep) -> dict[str, Any]:
     """Un cycle hors cadence : lecture des scores, decision, plan, application.
 
@@ -758,7 +758,7 @@ class PlanRequest(BaseModel):
     router: str = Field(min_length=1)
 
 
-@router.post("/shaping/plan", summary="Calculer les commandes, sans rien envoyer")
+@router.post("/shaping/plan", summary="Compute the commands, without sending anything")
 async def build_shaping_plan(
     payload: PlanRequest, container: ContainerDep, metrics: RepositoryDep
 ) -> dict[str, Any]:
@@ -772,7 +772,7 @@ async def build_shaping_plan(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Lecture du routeur impossible : {type(exc).__name__}: {exc}",
+            detail=f"Cannot read the router: {type(exc).__name__}: {exc}",
         ) from exc
 
     orphelins = [a.login for a in abonnes if a.parent is None]
@@ -795,7 +795,7 @@ class ApplyRequest(BaseModel):
     confirm: bool = False
 
 
-@router.post("/shaping/apply", summary="Appliquer un plan (ecriture sur le routeur)")
+@router.post("/shaping/apply", summary="Apply a plan (writes to the router)")
 async def apply_shaping(
     payload: ApplyRequest, container: ContainerDep, metrics: RepositoryDep
 ) -> dict[str, Any]:
@@ -808,7 +808,7 @@ async def apply_shaping(
     if not payload.dry_run and not payload.confirm:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Application reelle : 'confirm' doit valoir true",
+            detail="Real apply: 'confirm' must be true",
         )
     try:
         liens, abonnes = await container.shaping.build_targets(payload.router)
@@ -820,8 +820,8 @@ async def apply_shaping(
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
-                f"{exc}. Declarez rw_username et rw_password_env pour ce routeur, "
-                "et creez le compte qos-rw avec policy=read,write,api,test."
+                f"{exc}. Declare rw_username and rw_password_env for this router, "
+                "and create the qos-rw account with policy=read,write,api,test."
             ),
         ) from exc
     except KeyError as exc:
@@ -829,7 +829,7 @@ async def apply_shaping(
     return {"plan": plan.to_dict(), "result": resultat.to_dict()}
 
 
-@router.get("/shaping/capability", summary="Droits reels du compte sur un routeur")
+@router.get("/shaping/capability", summary="Real rights of the account on a router")
 async def write_capability(
     container: ContainerDep, router_name: Annotated[str, Query(alias="router")]
 ) -> dict[str, Any]:
@@ -846,7 +846,7 @@ async def write_capability(
     return verdict.to_dict()
 
 
-@router.get("/shaping/audit", summary="Journal des commandes envoyees")
+@router.get("/shaping/audit", summary="Log of the commands sent")
 async def audit(
     container: ContainerDep, limit: Annotated[int, Query(ge=1, le=500)] = 100
 ) -> list[dict[str, Any]]:
@@ -861,7 +861,7 @@ class EnforcementInput(BaseModel):
     confirm: bool = False
 
 
-@router.get("/shaping/enforcement", summary="Etat du drapeau d'ecriture")
+@router.get("/shaping/enforcement", summary="State of the write flag")
 async def enforcement_state(container: ContainerDep) -> dict[str, Any]:
     detail = None
     if container.topology_repo is not None:
@@ -876,7 +876,7 @@ async def enforcement_state(container: ContainerDep) -> dict[str, Any]:
     }
 
 
-@router.put("/shaping/enforcement", summary="Activer ou couper l'ecriture sur les routeurs")
+@router.put("/shaping/enforcement", summary="Allow or stop writing to the routers")
 async def set_enforcement(payload: EnforcementInput, container: ContainerDep) -> dict[str, Any]:
     """Bascule sans redemarrage.
 
@@ -886,10 +886,7 @@ async def set_enforcement(payload: EnforcementInput, container: ContainerDep) ->
     if payload.enabled and not payload.confirm:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Activer l'enforcement autorise l'ecriture sur vos routeurs : "
-                "'confirm' doit valoir true."
-            ),
+            detail=("Enabling enforcement allows writing to your routers: 'confirm' must be true."),
         )
     try:
         return await container.shaping.set_enforcement(payload.enabled, reason=payload.reason)
@@ -939,12 +936,12 @@ async def _fiche_statique(container: Any, reference: str) -> dict[str, Any] | No
     return None
 
 
-@router.get("/shaping/boosts", summary="Boosts en cours")
+@router.get("/shaping/boosts", summary="Running boosts")
 async def list_boosts(container: ContainerDep) -> list[dict[str, Any]]:
     return await _require_topology(container).active_boosts()
 
 
-@router.post("/shaping/boosts", summary="Donner un coup de debit temporaire")
+@router.post("/shaping/boosts", summary="Give a temporary rate boost")
 async def create_boost(
     payload: BoostInput, container: ContainerDep, metrics: RepositoryDep
 ) -> dict[str, Any]:
@@ -971,7 +968,7 @@ async def create_boost(
     if abonne is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Aucun abonne actif ni client declare pour '{payload.login}'",
+            detail=f"No active subscriber nor declared client for '{payload.login}'",
         )
 
     down, up = payload.down_mbps, payload.up_mbps
@@ -982,8 +979,7 @@ async def create_boost(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "Precisez un debit (down_mbps / down_kbps / down_gbps, idem en "
-                "upload) ou un multiplier"
+                "Give a rate (down_mbps / down_kbps / down_gbps, same for upload) or a multiplier"
             ),
         )
 
@@ -1014,7 +1010,7 @@ async def create_boost(
     return resultat
 
 
-@router.delete("/shaping/boosts/{login}", summary="Retirer un boost avant son echeance")
+@router.delete("/shaping/boosts/{login}", summary="Remove a boost before it expires")
 async def clear_boost(
     login: str,
     container: ContainerDep,
@@ -1022,7 +1018,7 @@ async def clear_boost(
 ) -> dict[str, Any]:
     retire = await _require_topology(container).clear_boost("subscriber", login)
     if not retire:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Aucun boost en cours")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No boost running")
     applique = await _apply_for_subscriber(container, login, author="ui") if apply_now else None
     return {"cleared": True, "applied": applique}
 

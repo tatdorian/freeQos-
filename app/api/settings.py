@@ -24,18 +24,18 @@ from app.services.runtime_config import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["reglages"])
+router = APIRouter(tags=["settings"])
 
 # Ce qui ne peut PAS venir de la base, et pourquoi : il faut ces valeurs AVANT
 # de pouvoir ouvrir la base. Les y chercher serait circulaire.
 AMORCAGE = [
-    {"name": "DATABASE_URL", "why": "il faut cette valeur pour ouvrir la base elle-meme"},
+    {"name": "DATABASE_URL", "why": "this value is needed to open the database itself"},
     {
         "name": "APP_SECRET_KEY / APP_SECRET_KEY_FILE",
-        "why": "elle dechiffre les secrets stockes en base",
+        "why": "it decrypts the secrets stored in the database",
     },
-    {"name": "ROUTERS_FILE / ROUTERS", "why": "inventaire fichier, lu au demarrage"},
-    {"name": "APP_ENV / LOG_LEVEL / API_PREFIX", "why": "fixent le demarrage du processus"},
+    {"name": "ROUTERS_FILE / ROUTERS", "why": "file inventory, read at startup"},
+    {"name": "APP_ENV / LOG_LEVEL / API_PREFIX", "why": "they fix how the process starts"},
 ]
 
 
@@ -44,7 +44,7 @@ def _config(container: ContainerDep) -> RuntimeConfig:
     if config is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Reglages indisponibles (base non initialisee)",
+            detail="Settings unavailable (database not initialised)",
         )
     return config
 
@@ -54,7 +54,7 @@ def _repo(container: ContainerDep) -> SettingsRepository:
     if repo is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Reglages non persistables (base non initialisee)",
+            detail="Settings cannot be persisted (database not initialised)",
         )
     return repo
 
@@ -67,7 +67,7 @@ class ReglageInput(BaseModel):
     reason: str | None = Field(default=None, max_length=300)
 
 
-@router.get("/settings", summary="Reglages d'exploitation en vigueur")
+@router.get("/settings", summary="Operational settings in force")
 async def list_settings(container: ContainerDep) -> dict[str, Any]:
     """Chaque reglage avec sa valeur, son defaut, et d'ou vient la valeur
     ('db' = pose depuis l'interface, 'defaut' = valeur d'origine)."""
@@ -85,16 +85,16 @@ async def list_settings(container: ContainerDep) -> dict[str, Any]:
     }
 
 
-@router.get("/settings/history", summary="Qui a change quel reglage, et quand")
+@router.get("/settings/history", summary="Who changed which setting, and when")
 async def settings_history(container: ContainerDep) -> list[dict[str, Any]]:
     return await _repo(container).history()
 
 
-@router.put("/settings/{name}", summary="Fixer un reglage (stocke en base)")
+@router.put("/settings/{name}", summary="Set a setting (stored in the database)")
 async def set_setting(
     payload: ReglageInput,
     container: ContainerDep,
-    name: Annotated[str, Path(description="Nom du reglage, cf. GET /settings")],
+    name: Annotated[str, Path(description="Setting name, see GET /settings")],
 ) -> dict[str, Any]:
     """Valide, applique a chaud, puis persiste. L'ordre compte : on n'ecrit en
     base que ce qu'on a su appliquer."""
@@ -114,10 +114,10 @@ async def set_setting(
     return {"name": name, "value": valeur, "source": "db", "applied": True}
 
 
-@router.delete("/settings/{name}", summary="Revenir au defaut d'un reglage")
+@router.delete("/settings/{name}", summary="Reset a setting to its default")
 async def clear_setting(
     container: ContainerDep,
-    name: Annotated[str, Path(description="Nom du reglage, cf. GET /settings")],
+    name: Annotated[str, Path(description="Setting name, see GET /settings")],
 ) -> dict[str, Any]:
     """Efface la valeur en base : le reglage retombe sur le defaut d'origine,
     immediatement."""

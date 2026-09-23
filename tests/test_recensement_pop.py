@@ -685,7 +685,7 @@ def test_api_dit_ou_chercher_quand_aucun_routeur_ne_correspond(api) -> None:
     client, _ = api
     reponse = client.get("/api/v1/pops/census?pop_name=fantome")
     assert reponse.status_code == 404
-    assert "Equipements" in reponse.json()["detail"]
+    assert "Devices" in reponse.json()["detail"]
 
 
 def test_api_n_expose_aucune_route_d_ecriture_sur_le_recensement(api) -> None:

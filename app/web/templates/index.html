@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fr">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,17 +11,17 @@
   <header class="top">
     <div class="brand"><span class="dot" id="health-dot"></span> freeQoS</div>
     <nav class="tabs">
-      <a href="#/dashboard" data-view="dashboard">Tableau de bord</a>
-      <a href="#/exec"      data-view="exec">Executif</a>
-      <a href="#/traffic"   data-view="traffic">Trafic</a>
-      <a href="#/network"   data-view="network">Arbre reseau</a>
-      <a href="#/subscribers" data-view="subscribers">Abonnes</a>
-      <a href="#/pops"      data-view="pops">Equipements</a>
+      <a href="#/dashboard" data-view="dashboard">Dashboard</a>
+      <a href="#/exec"      data-view="exec">Executive</a>
+      <a href="#/traffic"   data-view="traffic">Traffic</a>
+      <a href="#/network"   data-view="network">Network tree</a>
+      <a href="#/subscribers" data-view="subscribers">Subscribers</a>
+      <a href="#/pops"      data-view="pops">Devices</a>
       <a href="#/services"  data-view="services">Services</a>
       <a href="#/api"       data-view="api">API</a>
-      <a href="#/settings"  data-view="settings">Reglages</a>
+      <a href="#/settings"  data-view="settings">Settings</a>
     </nav>
-    <span class="mode" id="mode-pill">hors-bande &middot; lecture seule</span>
+    <span class="mode" id="mode-pill">out-of-band &middot; read-only</span>
   </header>
 
   <!-- UN ECHEC DE CHARGEMENT DOIT SE VOIR. Sans ce bandeau, une API en erreur
@@ -35,18 +35,18 @@
     <section id="view-dashboard">
       <div class="grid stats" id="stat-row"></div>
 
-      <h2>Debit du reseau</h2>
+      <h2>Network throughput</h2>
       <div class="card">
         <div class="chart-head">
           <div class="legend">
-            <span class="d"><i></i>Download abonnes (tx routeur)</span>
-            <span class="u"><i></i>Upload abonnes (rx routeur)</span>
+            <span class="d"><i></i>Subscriber download (router tx)</span>
+            <span class="u"><i></i>Subscriber upload (router rx)</span>
           </div>
           <select id="range-select" style="width:auto">
             <option value="15">15 minutes</option>
-            <option value="60" selected>1 heure</option>
-            <option value="360">6 heures</option>
-            <option value="1440">24 heures</option>
+            <option value="60" selected>1 hour</option>
+            <option value="360">6 hours</option>
+            <option value="1440">24 hours</option>
           </select>
         </div>
         <div id="throughput-chart"></div>
@@ -54,11 +54,11 @@
 
       <div class="grid cols-2" style="margin-top:1.25rem">
         <div>
-          <h2>Top consommateurs</h2>
+          <h2>Top consumers</h2>
           <div class="table-wrap" id="top-talkers"></div>
         </div>
         <div>
-          <h2>Backhauls radio</h2>
+          <h2>Radio backhauls</h2>
           <div id="backhaul-cards"></div>
         </div>
       </div>
@@ -67,14 +67,14 @@
     <!-- ----------------------------------------------------- executif -->
     <section id="view-exec">
       <div class="toolbar">
-        <span class="mode">Files live &middot; noeuds et clients (topology-aware shaping)</span>
+        <span class="mode">Live queues &middot; nodes and clients (topology-aware shaping)</span>
         <select id="exec-range" style="width:auto">
           <option value="15">15 minutes</option>
-          <option value="60" selected>1 heure</option>
-          <option value="360">6 heures</option>
+          <option value="60" selected>1 hour</option>
+          <option value="360">6 hours</option>
         </select>
-        <label class="chk" title="Sonde de latence (/ping depuis le PoP)">
-          <input type="checkbox" id="rtt-toggle"> Sonde RTT
+        <label class="chk" title="Latency probe (/ping from the PoP)">
+          <input type="checkbox" id="rtt-toggle"> RTT probe
         </label>
         <span class="spacer"></span>
         <span class="mode" id="exec-count"></span>
@@ -89,13 +89,13 @@
         <div class="card lq-panel" id="lq-details"></div>
       </div>
 
-      <h2>Files par noeud</h2>
+      <h2>Queues by node</h2>
       <div class="table-wrap" id="exec-nodes"></div>
 
-      <h2>Heatmap global</h2>
+      <h2>Global heatmap</h2>
       <div class="card" id="exec-heatmap"></div>
 
-      <h2>Flux du reseau (Sankey)</h2>
+      <h2>Network flows (Sankey)</h2>
       <div class="card" id="exec-sankey"></div>
     </section>
 
@@ -116,16 +116,16 @@
       <div class="toolbar">
         <select id="flow-range" style="width:auto">
           <option value="15">15 minutes</option>
-          <option value="60" selected>1 heure</option>
-          <option value="360">6 heures</option>
-          <option value="1440">24 heures</option>
-          <option value="10080">7 jours</option>
+          <option value="60" selected>1 hour</option>
+          <option value="360">6 hours</option>
+          <option value="1440">24 hours</option>
+          <option value="10080">7 days</option>
         </select>
         <select id="flow-vantage" style="width:auto"
-                title="Point de comptage">
-          <option value="">Point de comptage par defaut</option>
-          <option value="edge">En amont du coeur (sortie internet)</option>
-          <option value="pop">Au PoP</option>
+                title="Vantage point">
+          <option value="">Default vantage point</option>
+          <option value="edge">Upstream of the core (internet egress)</option>
+          <option value="pop">At the PoP</option>
         </select>
         <span class="spacer"></span>
         <span class="mode" id="flow-count"></span>
@@ -134,71 +134,71 @@
       <div id="flow-notice"></div>
       <div class="grid stats" id="flow-stats"></div>
 
-      <h2>Qui consomme</h2>
+      <h2>Who consumes</h2>
       <div class="table-wrap" id="flow-top"></div>
 
-      <h2>De quoi est fait ce trafic</h2>
+      <h2>What this traffic is made of</h2>
       <div class="table-wrap" id="flow-apps"></div>
 
-      <h2>Qui parle a qui</h2>
+      <h2>Who talks to whom</h2>
       <div class="toolbar">
-        <input id="flow-pairs-search" placeholder="Client, login, adresse, nom"
+        <input id="flow-pairs-search" placeholder="Client, login, address, name"
                maxlength="128" style="max-width:260px">
         <select id="flow-pairs-pop" style="width:auto"></select>
         <select id="flow-pairs-category" style="width:auto"></select>
         <select id="flow-pairs-app" style="width:auto"></select>
-        <button class="sm" id="flow-pairs-reset">Tout voir</button>
+        <button class="sm" id="flow-pairs-reset">Show all</button>
         <span class="spacer"></span>
         <span class="mode" id="flow-pairs-count"></span>
       </div>
       <div class="table-wrap" id="flow-pairs"></div>
       <div id="flow-pair-detail"></div>
 
-      <h2>Adresses vues, non declarees</h2>
+      <h2>Addresses seen, undeclared</h2>
       <div class="table-wrap" id="flow-hosts"></div>
 
-      <h2>Export sur les routeurs</h2>
+      <h2>Export on the routers</h2>
       <div class="table-wrap" id="flow-export"></div>
       <div class="toolbar" style="margin-top:.6rem">
-        <button class="sm" id="flow-export-dry">Simuler</button>
-        <button class="sm primary" id="flow-export-apply">Configurer</button>
+        <button class="sm" id="flow-export-dry">Dry run</button>
+        <button class="sm primary" id="flow-export-apply">Configure</button>
         <span class="spacer"></span>
         <span class="mode" id="flow-export-state"></span>
       </div>
       <div id="flow-export-result"></div>
 
-      <h2>Exporteurs</h2>
+      <h2>Exporters</h2>
       <div class="table-wrap" id="flow-exporters"></div>
       <form class="stack" id="exporter-form" autocomplete="off">
         <div class="row-3">
           <div class="field">
-            <label for="exp-address">Adresse de l'exporteur</label>
+            <label for="exp-address">Exporter address</label>
             <input id="exp-address" required maxlength="64" placeholder="10.10.0.1">
           </div>
           <div class="field">
-            <label for="exp-name">Nom</label>
-            <input id="exp-name" maxlength="128" placeholder="Sortie internet">
+            <label for="exp-name">Name</label>
+            <input id="exp-name" maxlength="128" placeholder="Internet egress">
           </div>
           <div class="field">
             <label for="exp-pop">PoP</label>
-            <input id="exp-pop" maxlength="128" placeholder="PoP Nord">
+            <input id="exp-pop" maxlength="128" placeholder="North PoP">
           </div>
         </div>
 
         <div class="row-3">
           <div class="field">
-            <label for="exp-vantage">Point de mesure</label>
+            <label for="exp-vantage">Vantage point</label>
             <select id="exp-vantage">
-              <option value="edge">En amont du coeur (sortie internet)</option>
-              <option value="pop" selected>Au PoP</option>
+              <option value="edge">Upstream of the core (internet egress)</option>
+              <option value="pop" selected>At the PoP</option>
             </select>
           </div>
           <div class="field">
-            <label for="exp-sampling">Echantillonnage (1 = tout)</label>
+            <label for="exp-sampling">Sampling (1 = every flow)</label>
             <input id="exp-sampling" type="number" min="1" max="100000" value="1">
           </div>
           <div class="field actions" style="align-content:end">
-            <button type="submit" class="primary">Declarer</button>
+            <button type="submit" class="primary">Declare</button>
           </div>
         </div>
       </form>
@@ -208,24 +208,24 @@
     <!-- --------------------------------------------------- arbre reseau -->
     <section id="view-network">
       <div class="toolbar">
-        <button id="btn-discover">Relancer la decouverte</button>
-        <label class="chk" title="N'afficher que les liens dont le debit est mesure">
-          <input type="checkbox" id="topo-rate-only" checked> Liens a debit seulement
+        <button id="btn-discover">Run discovery again</button>
+        <label class="chk" title="Show only links whose throughput is measured">
+          <input type="checkbox" id="topo-rate-only" checked> Measured links only
         </label>
-        <button id="btn-topo-link" class="sm">Creer un lien</button>
-        <button id="btn-topo-reset" class="sm">Reinitialiser la disposition</button>
+        <button id="btn-topo-link" class="sm">Create a link</button>
+        <button id="btn-topo-reset" class="sm">Reset the layout</button>
         <!-- Le graphe n'efface jamais rien tout seul, pour qu'un equipement
              momentanement invisible ne disparaisse pas. Le revers : ce qui a
              VRAIMENT disparu y reste. Voici le geste qui le retire. -->
-        <button id="btn-topo-forget" class="sm">Oublier les equipements disparus</button>
+        <button id="btn-topo-forget" class="sm">Forget vanished devices</button>
         <span class="spacer"></span>
         <!-- Un arbre d'operateur deborde toujours de l'ecran : l'echelle est ce
              qui permet d'en voir la forme, puis d'y revenir de pres. -->
         <span class="zoom">
-          <button id="btn-topo-zoom-out" class="sm" title="Reduire">&minus;</button>
+          <button id="btn-topo-zoom-out" class="sm" title="Zoom out">&minus;</button>
           <span class="mode" id="topo-zoom-level">100 %</span>
-          <button id="btn-topo-zoom-in" class="sm" title="Agrandir">+</button>
-          <button id="btn-topo-fit" class="sm">Tout voir</button>
+          <button id="btn-topo-zoom-in" class="sm" title="Zoom in">+</button>
+          <button id="btn-topo-fit" class="sm">Fit</button>
         </span>
         <span class="mode" id="net-count"></span>
       </div>
@@ -242,7 +242,7 @@
            pas un : c'est le MEME graphe, lu en lignes plutot qu'en cases. Replie
            ici, il reste a un clic sans encombrer la navigation. -->
       <details id="net-links-block">
-        <summary>Liens : debit, capacite, source</summary>
+        <summary>Links: throughput, capacity, source</summary>
 
       <div class="toolbar">
         <span class="spacer"></span>
@@ -261,14 +261,14 @@
     <section id="view-subscribers">
       <div class="toolbar">
         <select id="sub-pop" style="width:auto"></select>
-        <select id="sub-kind" style="width:auto" title="Nature de l'abonne">
-          <option value="">Toutes natures</option>
-          <option value="pppoe">Abonnes PPPoE</option>
-          <option value="static">Clients a IP fixe</option>
+        <select id="sub-kind" style="width:auto" title="Subscriber kind">
+          <option value="">All kinds</option>
+          <option value="pppoe">PPPoE subscribers</option>
+          <option value="static">Static-IP clients</option>
         </select>
-        <input type="search" id="sub-search" placeholder="Filtrer par identifiant...">
+        <input type="search" id="sub-search" placeholder="Filter by identifier...">
         <span class="spacer"></span>
-        <button class="sm" id="sc-toggle">Inventaire des clients a IP fixe</button>
+        <button class="sm primary" id="sc-toggle">Add a client</button>
         <span class="mode" id="sub-count"></span>
       </div>
 
@@ -277,61 +277,44 @@
            OBSERVE. Les melanger ferait croire a une decouverte. -->
       <div id="sc-panel" hidden>
 
-        <!-- Candidats detectes. Volontairement AU-DESSUS du formulaire : c'est
-             le point de depart naturel du travail (regarder ce qui parle, puis
-             declarer), et "Declarer" remplit le formulaire juste en dessous. -->
-        <!-- CLIENTS PAR VLAN : LA SAISIE EST LA SOURCE, PAS UNE DECOUVERTE.
-             Ce tableau rend ce qui a ete DECLARE sur chaque VLAN. Il est en
-             haut parce que c'est la question du jour ("qu'est-ce que j'ai
-             vendu sur cette VLAN"), et non "qu'est-ce qui parle dessus". -->
-        <h3 style="margin:.2rem 0 .4rem">Clients par VLAN</h3>
-        <div class="table-wrap" id="sc-vlans"></div>
-
-        <details id="sc-candidates-block">
-          <summary>Adresses vues, non declarees</summary>
-          <div class="table-wrap" id="sc-candidates"></div>
-          <div class="actions" style="margin-top:.4rem">
-            <button class="sm" id="sc-recensement"
-                    title="Recensement du PoP">
-              Recenser le PoP (toutes sources)
-            </button>
-            <button class="sm" id="sc-diag"
-                    title="Diagnostic des candidats">
-              Un client manque ? Voir pourquoi
-            </button>
-          </div>
-          <div id="sc-recensement-out"></div>
-          <div id="sc-diag-out"></div>
-        </details>
-        <form class="stack" id="sc-form" autocomplete="off">
+        <!-- LE FORMULAIRE D'ABORD.
+             Le panneau s'ouvrait sur deux tableaux, et la saisie arrivait
+             troisieme : le bouton promettait d'ajouter un client, et il fallait
+             defiler pour trouver ou le faire. Ce qu'on vient faire est en haut ;
+             ce qui existe deja se lit juste en dessous. -->
+        <h3 id="sc-form-title" style="margin:.2rem 0 .6rem">Add a client</h3>
+        <form class="stack card" id="sc-form" autocomplete="off">
+          <!-- PoP et adresse des la premiere ligne : ce sont, avec la
+               reference, les trois seules valeurs sans lesquelles un client a
+               IP fixe n'existe pas. Le reste se remplit quand on l'a. -->
           <div class="row-3">
             <div class="field">
               <label for="sc-reference">Reference</label>
               <input id="sc-reference" required maxlength="64" placeholder="mairie-vitre">
             </div>
             <div class="field">
-              <label for="sc-label">Nom affiche</label>
-              <input id="sc-label" maxlength="128" placeholder="Mairie de Vitre">
+              <label for="sc-pop">Attached PoP</label>
+              <input id="sc-pop" required maxlength="128" list="sc-pop-list" placeholder="North PoP">
+              <datalist id="sc-pop-list"></datalist>
             </div>
             <div class="field">
-              <label for="sc-pop">PoP</label>
-              <input id="sc-pop" required maxlength="128" list="sc-pop-list" placeholder="PoP Nord">
-              <datalist id="sc-pop-list"></datalist>
+              <label for="sc-address">IP address or subnet</label>
+              <input id="sc-address" required maxlength="64" placeholder="10.0.0.5 or 10.0.0.0/29">
             </div>
           </div>
 
           <div class="row-3">
             <div class="field">
-              <label for="sc-address">Adresse ou sous-reseau</label>
-              <input id="sc-address" required maxlength="64" placeholder="10.0.0.5 ou 10.0.0.0/29">
+              <label for="sc-label">Display name</label>
+              <input id="sc-label" maxlength="128" placeholder="Vitre town hall">
             </div>
             <div class="field">
               <label for="sc-vlan">VLAN</label>
               <input id="sc-vlan" type="number" min="1" max="4094" placeholder="812">
             </div>
             <div class="field">
-              <label for="sc-sector">Secteur (cle de topologie)</label>
-              <input id="sc-sector" maxlength="128" list="sc-sector-list" placeholder="optionnel">
+              <label for="sc-sector">Sector (topology key)</label>
+              <input id="sc-sector" maxlength="128" list="sc-sector-list" placeholder="optional">
               <datalist id="sc-sector-list"></datalist>
             </div>
           </div>
@@ -339,36 +322,68 @@
           <div class="row-3">
             <div class="field">
               <label for="sc-down">Plan download (Mbps)</label>
-              <input id="sc-down" type="number" step="0.1" min="0.1" placeholder="optionnel">
+              <input id="sc-down" type="number" step="0.1" min="0.1" placeholder="optional">
             </div>
             <div class="field">
               <label for="sc-up">Plan upload (Mbps)</label>
-              <input id="sc-up" type="number" step="0.1" min="0.1" placeholder="optionnel">
+              <input id="sc-up" type="number" step="0.1" min="0.1" placeholder="optional">
             </div>
             <div class="field">
-              <label for="sc-cpe">MAC du CPE</label>
-              <input id="sc-cpe" maxlength="32" placeholder="optionnel">
+              <label for="sc-cpe">CPE MAC</label>
+              <input id="sc-cpe" maxlength="32" placeholder="optional">
             </div>
           </div>
 
           <div class="row-3">
             <div class="field">
               <label for="sc-note">Note</label>
-              <input id="sc-note" maxlength="512" placeholder="optionnel">
+              <input id="sc-note" maxlength="512" placeholder="optional">
             </div>
           </div>
 
           <div class="actions">
-            <label class="chk" title="Retire la file au plan suivant">
-              <input type="checkbox" id="sc-enabled" checked> Actif
+            <label class="chk" title="Removes the queue on the next plan">
+              <input type="checkbox" id="sc-enabled" checked> Enabled
             </label>
             <span class="spacer"></span>
             <span class="mode" id="sc-notice"></span>
-            <button type="button" class="sm" id="sc-cancel" hidden>Annuler</button>
-            <button type="submit" class="primary" id="sc-submit">Declarer</button>
+            <button type="button" class="sm" id="sc-cancel" hidden>Cancel</button>
+            <button type="submit" class="primary" id="sc-submit">Declare</button>
           </div>
         </form>
+
+        <!-- Ce qui est DECLARE, juste sous la saisie : on voit le client
+             apparaitre a l'endroit ou on vient de le poser. -->
+        <h3 style="margin:1.4rem 0 .4rem">Declared static-IP clients</h3>
         <div class="table-wrap" id="sc-table"></div>
+
+        <!-- CLIENTS PAR VLAN : LA SAISIE EST LA SOURCE, PAS UNE DECOUVERTE.
+             Ce tableau rend ce qui a ete DECLARE sur chaque VLAN -- la question
+             "qu'est-ce que j'ai vendu sur cette VLAN", et non "qu'est-ce qui
+             parle dessus". -->
+        <h3 style="margin:1.4rem 0 .4rem">Clients by VLAN</h3>
+        <div class="table-wrap" id="sc-vlans"></div>
+
+        <!-- Les adresses vues et non declarees : le chemin INVERSE, qui part de
+             ce qui parle pour arriver au formulaire ci-dessus ("Declarer" le
+             pre-remplit). Replie, parce qu'on ajoute plus souvent un client
+             qu'on ne depouille une liste de candidats. -->
+        <details id="sc-candidates-block">
+          <summary>Addresses seen, undeclared</summary>
+          <div class="table-wrap" id="sc-candidates"></div>
+          <div class="actions" style="margin-top:.4rem">
+            <button class="sm" id="sc-recensement"
+                    title="PoP census">
+              Census of the PoP (every source)
+            </button>
+            <button class="sm" id="sc-diag"
+                    title="Candidate diagnostics">
+              A client is missing? See why
+            </button>
+          </div>
+          <div id="sc-recensement-out"></div>
+          <div id="sc-diag-out"></div>
+        </details>
       </div>
 
       <!-- Ce qui EMPECHE un plafond de tenir. Vide quand tout bride
@@ -381,48 +396,48 @@
     <!-- --------------------------------------------------- equipements -->
     <section id="view-pops">
       <div class="toolbar">
-        <button id="btn-build-tree" class="primary">Analyser la configuration et construire l'arbre</button>
+        <button id="btn-build-tree" class="primary">Read the configuration and build the tree</button>
         <span class="spacer"></span>
         <span class="mode" id="build-count"></span>
       </div>
       <div id="build-notice"></div>
       <div id="pops-notice"></div>
 
-      <h2>Sante des routeurs</h2>
+      <h2>Router health</h2>
       <div class="table-wrap" id="routers-health"></div>
 
-      <h2>Connecter un routeur (PoP)</h2>
+      <h2>Connect a router (PoP)</h2>
       <div class="card">
         <form class="stack" id="router-form" autocomplete="off">
           <div class="row-3">
             <div class="field">
-              <label for="f-name">Nom du PoP</label>
+              <label for="f-name">PoP name</label>
               <input id="f-name" name="name" required placeholder="pop-nord">
             </div>
             <div class="field">
-              <label for="f-host">Adresse de management</label>
+              <label for="f-host">Management address</label>
               <input id="f-host" name="host" required placeholder="10.10.0.11">
             </div>
             <div class="field">
-              <label for="f-port">Port API</label>
+              <label for="f-port">API port</label>
               <input id="f-port" name="port" type="number" value="8728" min="1" max="65535">
             </div>
           </div>
 
           <div class="row-3">
             <div class="field">
-              <label for="f-username">Compte (lecture seule)</label>
+              <label for="f-username">Account (read-only)</label>
               <input id="f-username" name="username" value="qos-ro" required>
             </div>
             <div class="field">
-              <label for="f-password">Mot de passe</label>
+              <label for="f-password">Password</label>
               <input id="f-password" name="password" type="password" required>
             </div>
             <div class="field">
               <label for="f-role">Role</label>
               <select id="f-role" name="role">
-                <option value="pop">PoP (concentrateur PPPoE)</option>
-                <option value="core">Coeur de reseau</option>
+                <option value="pop">PoP (PPPoE concentrator)</option>
+                <option value="core">Network core</option>
                 <option value="gateway">Gateway (egress)</option>
               </select>
             </div>
@@ -431,93 +446,93 @@
           <div class="row-3">
             <div class="field">
               <label for="f-loopback">Loopback</label>
-              <input id="f-loopback" name="loopback" placeholder="10.255.0.1 (optionnel)">
+              <input id="f-loopback" name="loopback" placeholder="10.255.0.1 (optional)">
             </div>
           </div>
 
           <div class="row-3">
             <div class="field">
-              <label for="f-pop-name">Libelle du site</label>
-              <input id="f-pop-name" name="pop_name" placeholder="PoP Nord (optionnel)">
+              <label for="f-pop-name">Site label</label>
+              <input id="f-pop-name" name="pop_name" placeholder="North PoP (optional)">
             </div>
             <div class="field">
-              <label for="f-pattern">Motif d'interface PPPoE</label>
+              <label for="f-pattern">PPPoE interface pattern</label>
               <input id="f-pattern" name="pppoe_interface_pattern" value="&lt;pppoe-{login}&gt;">
             </div>
             <div class="field">
-              <label for="f-timeout">Delai de garde (s)</label>
+              <label for="f-timeout">Timeout (s)</label>
               <input id="f-timeout" name="timeout_s" type="number" step="0.5" min="0.5" max="60" value="5">
             </div>
           </div>
 
           <div class="field">
             <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer">
-              <input type="checkbox" id="f-ssl" name="use_ssl"> API TLS (api-ssl, port 8729)
+              <input type="checkbox" id="f-ssl" name="use_ssl"> TLS API (api-ssl, port 8729)
             </label>
           </div>
 
           <div id="form-result"></div>
 
           <div class="actions">
-            <button type="button" id="btn-test">Tester la connexion</button>
-            <button type="submit" class="primary" id="btn-save">Enregistrer</button>
+            <button type="button" id="btn-test">Test the connection</button>
+            <button type="submit" class="primary" id="btn-save">Save</button>
             <span class="spacer"></span>
-            <button type="reset">Reinitialiser</button>
+            <button type="reset">Reset</button>
           </div>
         </form>
       </div>
 
-      <h2>Antennes Ubiquiti (capacite radio)</h2>
+      <h2>Ubiquiti antennas (radio capacity)</h2>
       <div id="antennas-notice"></div>
       <div class="table-wrap" id="antennas-table"></div>
 
-      <h2>Ajouter une antenne</h2>
+      <h2>Add an antenna</h2>
       <div class="card">
         <form class="stack" id="antenna-form" autocomplete="off">
           <div class="row-3">
             <div class="field">
-              <label for="a-name">Nom du lien</label>
+              <label for="a-name">Link name</label>
               <input id="a-name" name="name" required placeholder="bh-nord">
             </div>
             <div class="field">
-              <label for="a-pop">PoP rattache</label>
-              <input id="a-pop" name="pop_name" required placeholder="PoP Nord">
+              <label for="a-pop">Attached PoP</label>
+              <input id="a-pop" name="pop_name" required placeholder="North PoP">
             </div>
             <div class="field">
-              <label for="a-host">Adresse de l'antenne</label>
+              <label for="a-host">Antenna address</label>
               <input id="a-host" name="host" required placeholder="10.10.0.30">
             </div>
           </div>
 
           <div class="row-3">
             <div class="field">
-              <label for="a-username">Compte airOS</label>
+              <label for="a-username">airOS account</label>
               <input id="a-username" name="username" value="ubnt">
             </div>
             <div class="field">
-              <label for="a-password">Mot de passe</label>
+              <label for="a-password">Password</label>
               <input id="a-password" name="password" type="password"
-                     placeholder="laisser vide si lecture ouverte">
+                     placeholder="leave empty if read access is open">
             </div>
             <div class="field">
-              <label for="a-nominal">Capacite nominale (Mbps)</label>
+              <label for="a-nominal">Nominal capacity (Mbps)</label>
               <input id="a-nominal" name="nominal_capacity_mbps" type="number"
-                     step="1" min="0" placeholder="optionnel">
+                     step="1" min="0" placeholder="optional">
             </div>
           </div>
 
           <div class="row-3">
             <div class="field">
-              <label for="a-key">Cle stable / MAC</label>
-              <input id="a-key" name="device_key" placeholder="DC:9F:DB:.. (optionnel)">
+              <label for="a-key">Stable key / MAC</label>
+              <input id="a-key" name="device_key" placeholder="DC:9F:DB:.. (optional)">
             </div>
             <div class="field">
-              <label for="a-timeout">Delai de garde (s)</label>
+              <label for="a-timeout">Timeout (s)</label>
               <input id="a-timeout" name="timeout_s" type="number" step="0.5" min="0.5" max="60" value="10">
             </div>
             <div class="field">
               <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer;margin-top:1.6rem">
-                <input type="checkbox" id="a-tls" name="verify_tls"> Verifier le certificat TLS
+                <input type="checkbox" id="a-tls" name="verify_tls"> Verify the TLS certificate
               </label>
             </div>
           </div>
@@ -525,18 +540,18 @@
           <div id="antenna-result"></div>
 
           <div class="actions">
-            <button type="button" id="a-btn-test">Tester l'antenne</button>
-            <button type="submit" class="primary" id="a-btn-save">Enregistrer</button>
+            <button type="button" id="a-btn-test">Test the antenna</button>
+            <button type="submit" class="primary" id="a-btn-save">Save</button>
             <span class="spacer"></span>
-            <button type="reset">Reinitialiser</button>
+            <button type="reset">Reset</button>
           </div>
         </form>
       </div>
 
-      <h2>Inventaire</h2>
-      <h2 style="text-transform:none;font-size:.75rem">Sites connus</h2>
+      <h2>Inventory</h2>
+      <h2 style="text-transform:none;font-size:.75rem">Known sites</h2>
       <div class="table-wrap" id="pops-table"></div>
-      <h2 style="text-transform:none;font-size:.75rem">Routeurs interroges</h2>
+      <h2 style="text-transform:none;font-size:.75rem">Polled routers</h2>
       <div class="table-wrap" id="routers-table"></div>
     </section>
 
@@ -552,15 +567,15 @@
       <div class="toolbar">
         <select id="svc-range" style="width:auto">
           <option value="15">15 minutes</option>
-          <option value="60" selected>1 heure</option>
-          <option value="360">6 heures</option>
-          <option value="1440">24 heures</option>
-          <option value="10080">7 jours</option>
+          <option value="60" selected>1 hour</option>
+          <option value="360">6 hours</option>
+          <option value="1440">24 hours</option>
+          <option value="10080">7 days</option>
         </select>
         <select id="svc-category" style="width:auto">
-          <option value="">Toutes les familles</option>
+          <option value="">All categories</option>
         </select>
-        <input id="svc-search" placeholder="Adresse, nom ou organisation"
+        <input id="svc-search" placeholder="Address, name or organisation"
                maxlength="128" style="max-width:320px">
         <span class="spacer"></span>
         <span class="mode" id="svc-count"></span>
@@ -569,62 +584,62 @@
       <div id="svc-notice"></div>
       <div class="grid stats" id="svc-stats"></div>
 
-      <h2>Connexions en cours</h2>
+      <h2>Live connections</h2>
       <div class="table-wrap" id="svc-live"></div>
 
-      <h2>De quels services vient le trafic</h2>
+      <h2>Which services the traffic comes from</h2>
       <div class="table-wrap" id="svc-services"></div>
 
-      <h2>Adresses atteintes</h2>
+      <h2>Destinations reached</h2>
       <div class="table-wrap" id="svc-destinations"></div>
       <div id="svc-detail"></div>
 
-      <h2>Restrictions de trafic</h2>
+      <h2>Traffic restrictions</h2>
       <div class="table-wrap" id="svc-rules"></div>
       <div class="toolbar" style="margin-top:.6rem">
-        <button class="sm" id="svc-apply-dry">Simuler la pose</button>
-        <button class="sm primary" id="svc-apply">Poser sur les routeurs</button>
+        <button class="sm" id="svc-apply-dry">Dry run</button>
+        <button class="sm primary" id="svc-apply">Apply on the routers</button>
         <span class="spacer"></span>
         <span class="mode" id="svc-rules-state"></span>
       </div>
       <div id="svc-apply-result"></div>
 
       <details id="svc-rule-block" style="margin-top:1rem">
-        <summary>Ecrire une restriction</summary>
+        <summary>Write a restriction</summary>
         <form class="stack" id="svc-rule-form" autocomplete="off">
           <div class="row-3">
             <div class="field">
-              <label for="svc-rule-name">Nom de la regle</label>
+              <label for="svc-rule-name">Rule name</label>
               <input id="svc-rule-name" required maxlength="128"
-                     placeholder="Pas de streaming en heure de pointe">
+                     placeholder="No streaming at peak hours">
             </div>
             <div class="field">
-              <label for="svc-rule-action">Effet</label>
+              <label for="svc-rule-action">Effect</label>
               <select id="svc-rule-action">
-                <option value="block">Bloquer ce trafic</option>
-                <option value="limit">Le plafonner</option>
+                <option value="block">Block this traffic</option>
+                <option value="limit">Cap it</option>
               </select>
             </div>
             <div class="field">
-              <label for="svc-rule-scope">Pour qui</label>
+              <label for="svc-rule-scope">For whom</label>
               <select id="svc-rule-scope">
-                <option value="all">Tous les clients</option>
-                <option value="subscribers">Des abonnes choisis</option>
+                <option value="all">Every client</option>
+                <option value="subscribers">Chosen subscribers</option>
               </select>
             </div>
           </div>
 
           <div class="row-3">
             <div class="field">
-              <label for="svc-rule-services">Services vises</label>
+              <label for="svc-rule-services">Target services</label>
               <select id="svc-rule-services" multiple size="6"></select>
             </div>
             <div class="field">
-              <label for="svc-rule-categories">Familles visees</label>
+              <label for="svc-rule-categories">Target categories</label>
               <select id="svc-rule-categories" multiple size="6"></select>
             </div>
             <div class="field">
-              <label for="svc-rule-prefixes">Blocs saisis a la main</label>
+              <label for="svc-rule-prefixes">Hand-entered prefixes</label>
               <textarea id="svc-rule-prefixes" rows="6"
                         placeholder="45.57.0.0/17&#10;198.38.96.0/19"></textarea>
             </div>
@@ -632,7 +647,7 @@
 
           <div class="row-3" id="svc-rule-limits" hidden>
             <div class="field">
-              <label for="svc-rule-down">Plafond descendant</label>
+              <label for="svc-rule-down">Download cap</label>
               <div class="inline">
                 <input id="svc-rule-down" type="number" min="0" step="any" placeholder="5">
                 <select id="svc-rule-down-unit" style="width:auto;flex:0 0 auto">
@@ -643,7 +658,7 @@
               </div>
             </div>
             <div class="field">
-              <label for="svc-rule-up">Plafond montant</label>
+              <label for="svc-rule-up">Upload cap</label>
               <div class="inline">
                 <input id="svc-rule-up" type="number" min="0" step="any">
                 <select id="svc-rule-up-unit" style="width:auto;flex:0 0 auto">
@@ -657,22 +672,22 @@
 
           <div class="row-3">
             <div class="field" id="svc-rule-logins-field" hidden>
-              <label for="svc-rule-logins">Abonnes vises</label>
+              <label for="svc-rule-logins">Target subscribers</label>
               <textarea id="svc-rule-logins" rows="3"
                         placeholder="dupont&#10;martin"></textarea>
             </div>
             <div class="field">
-              <label for="svc-rule-protocol">Protocole (facultatif)</label>
+              <label for="svc-rule-protocol">Protocol (optional)</label>
               <select id="svc-rule-protocol">
-                <option value="">Tous</option>
+                <option value="">Any</option>
                 <option value="tcp">TCP</option>
                 <option value="udp">UDP</option>
                 <option value="icmp">ICMP</option>
               </select>
             </div>
             <div class="field">
-              <label for="svc-rule-ports">Port du service (facultatif)</label>
-              <input id="svc-rule-ports" maxlength="64" placeholder="443 ou 6881-6999">
+              <label for="svc-rule-ports">Service port (optional)</label>
+              <input id="svc-rule-ports" maxlength="64" placeholder="443 or 6881-6999">
             </div>
           </div>
 
@@ -680,10 +695,10 @@
             <div class="field">
               <label for="svc-rule-note">Note</label>
               <input id="svc-rule-note" maxlength="1000"
-                     placeholder="Demande commerciale du 12/03">
+                     placeholder="Sales request of 12/03">
             </div>
             <div class="field actions" style="align-content:end">
-              <button type="submit" class="primary">Enregistrer la regle</button>
+              <button type="submit" class="primary">Save the rule</button>
             </div>
           </div>
         </form>
@@ -691,7 +706,7 @@
       </details>
 
       <details id="svc-catalogue-block" style="margin-top:1rem">
-        <summary>Catalogue des services</summary>
+        <summary>Service catalogue</summary>
         <div class="table-wrap" id="svc-catalogue"></div>
       </details>
     </section>
@@ -704,56 +719,56 @@
         <span class="mode" id="api-count"></span>
       </div>
 
-      <h2>Creer une cle</h2>
+      <h2>Create a key</h2>
       <form class="stack" id="key-form" autocomplete="off">
         <div class="row-3">
           <div class="field">
-            <label for="key-name">Nom</label>
-            <input id="key-name" required maxlength="128" placeholder="Facturation Splynx">
+            <label for="key-name">Name</label>
+            <input id="key-name" required maxlength="128" placeholder="Splynx billing">
           </div>
           <div class="field">
-            <label for="key-scope">Portee</label>
+            <label for="key-scope">Scope</label>
             <select id="key-scope">
-              <option value="read">Lecture</option>
-              <option value="write">Lecture et ecriture</option>
+              <option value="read">Read</option>
+              <option value="write">Read and write</option>
             </select>
           </div>
           <div class="field actions" style="align-content:end">
-            <button type="submit" class="primary">Creer</button>
+            <button type="submit" class="primary">Create</button>
           </div>
         </div>
       </form>
       <div id="key-result"></div>
       <div class="table-wrap" id="keys-table"></div>
 
-      <h2>Points d'entree</h2>
+      <h2>Endpoints</h2>
       <div class="table-wrap" id="api-endpoints"></div>
 
-      <h2>Exemple</h2>
+      <h2>Example</h2>
       <div class="table-wrap"><pre id="api-sample"></pre></div>
     </section>
 
     <!-- ------------------------------------------------------- reglages -->
     <section id="view-settings">
       <div class="chart-head">
-        <h2 style="margin:0">Reglages d'exploitation</h2>
+        <h2 style="margin:0">Operational settings</h2>
         <span class="spacer"></span>
         <span class="mode" id="settings-count"></span>
       </div>
       <div id="settings-notice"></div>
       <div id="settings-groups"></div>
-      <h2>Ce qui reste hors de portee de l'interface</h2>
+      <h2>What stays out of reach of the interface</h2>
       <div class="table-wrap" id="settings-bootstrap"></div>
 
       <!-- --------------------------------------------- shaping et ecriture -->
-      <h2>Shaping et ecriture sur les routeurs</h2>
+      <h2>Shaping and writing to the routers</h2>
       <details id="settings-shaping">
-        <summary>Interrupteur d'ecriture, carte des plafonds, journal des commandes</summary>
+        <summary>Write switch, map of caps, command log</summary>
 
       <div class="toolbar">
         <select id="shaping-router" style="width:auto"></select>
         <span class="spacer"></span>
-        <label class="switch" id="enforcement-switch" title="Autoriser l'ecriture sur les routeurs">
+        <label class="switch" id="enforcement-switch" title="Allow writing to the routers">
           <input type="checkbox" id="enforcement-toggle">
           <span class="rail"></span>
           <span class="label" id="enforcement-label">enforcement</span>
@@ -769,21 +784,21 @@
            questions differentes : une file peut exister, porter le bon debit,
            et ne rien plafonner (fasttrack, file masquee, file desactivee).
            C'est ce panneau qui repond a la seconde. -->
-      <h2>Les plafonds sont-ils reellement tenus ?</h2>
+      <h2>Are the caps actually held?</h2>
       <div id="shaping-limits"></div>
 
       <!-- Le detail technique reste accessible -- toute commande envoyee doit
            rester verifiable -- mais replie : ce n'est pas la question de tous
            les jours. -->
       <details id="shaping-technique">
-        <summary>Analyse brute, plan, journal</summary>
+        <summary>Raw analysis, plan, log</summary>
         <div class="actions" style="margin:.6rem 0">
-          <button class="sm" id="btn-inspect">Analyser l'existant</button>
-          <button class="sm" id="btn-plan">Calculer le plan (sans envoyer)</button>
+          <button class="sm" id="btn-inspect">Inspect what exists</button>
+          <button class="sm" id="btn-plan">Compute the plan (without sending)</button>
         </div>
         <div id="shaping-state"></div>
         <div id="shaping-plan"></div>
-        <h2>Journal des commandes envoyees</h2>
+        <h2>Log of commands sent</h2>
         <div class="table-wrap" id="shaping-audit"></div>
       </details>
       </details>

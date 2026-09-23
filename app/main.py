@@ -46,93 +46,93 @@ from app.web.ui import router as ui_router
 logger = logging.getLogger(__name__)
 
 DESCRIPTION = """\
-Controleur QoS/QoE souverain pour WISP.
+Sovereign QoS/QoE controller for WISPs.
 
-**Hors-bande** : cette application n'est jamais sur le chemin des paquets. Elle
-tourne sur une VM de management, lit la telemetrie des routeurs MikroTik et la
-capacite des liens radio, et alimente une base TimescaleDB.
+**Out-of-band**: this application is never on the packet path. It runs on a
+management VM, reads telemetry from MikroTik routers and the capacity of radio
+links, and feeds a TimescaleDB database.
 
-Elle porte la **boucle centrale lente** (collecte, politique, plans, baselines).
-La **boucle locale rapide** qui reagit aux fades radio vit sur le PoP et n'est
-pas implementee ici.
+It carries the **slow central loop** (collection, policy, plans, baselines). The
+**fast local loop** that reacts to radio fades lives on the PoP and is not
+implemented here.
 
-**Ecriture (enforcement) active et tracee** : le controleur peut poser et ajuster
-des files ``/queue/simple`` sur les routeurs. Toute ecriture est gouvernee par le
-drapeau ``ENFORCEMENT_ENABLED`` (lecture seule tant qu'il est faux), ne touche que
-les files marquees ``freeqos:managed``, et est journalisee dans
-``enforcement_audit`` avec son auteur.
+**Writing (enforcement) is active and traced**: the controller can write and
+adjust ``/queue/simple`` queues on the routers. Every write is governed by the
+``ENFORCEMENT_ENABLED`` flag (read-only while it is false), only touches queues
+marked ``freeqos:managed``, and is logged in ``enforcement_audit`` with its
+author.
 
-**Deux natures d'abonnes**, distinguees par le champ ``kind`` et traitees ensuite par
-le meme chemin de planification :
+**Two kinds of subscriber**, told apart by the ``kind`` field and then handled by
+the same planning path:
 
-- ``pppoe``  : decouvert dans ``/ppp/active``, adresse donnee par la session en cours ;
-- ``static`` : client a IP fixe, **declare a la main** dans ``/static-clients``. Aucune
-  source automatique n'existe pour lui (ni session, ni attribut RADIUS) : l'inventaire
-  saisi par l'operateur est la seule verite, et son debit se lit sur les compteurs de
-  la file qui le vise. Declarer un tel client POSE sa file dans la foulee, et la
-  reponse dit ce qui a ete ecrit -- ou ce qui l'en empeche (``enforcement``).
-  ``GET /static-clients/enforcement`` rend le meme etat pour tout l'inventaire.
+- ``pppoe``  : discovered in ``/ppp/active``, address given by the current session;
+- ``static`` : static-IP client, **declared by hand** in ``/static-clients``. No
+  automatic source exists for it (neither a session nor a RADIUS attribute): the
+  inventory entered by the operator is the only truth, and its rate is read from
+  the counters of the queue that targets it. Declaring such a client WRITES its
+  queue straight away, and the response says what was written -- or what
+  prevents it (``enforcement``). ``GET /static-clients/enforcement`` returns the
+  same state for the whole inventory.
 
-**Detection assistee, jamais automatique** : un recensement du PoP
-(``/pops/census``) croise sept sources de presence -- ``/ip/arp``, baux DHCP,
-sessions PPPoE, table de ponts, routes statiques, files deja posees, voisinage --
-sur les sous-reseaux que le routeur dessert reellement (``/ip/address``), et non
-sur le seul nom des interfaces. Il sert a deux choses seulement : confirmer la
-presence d'un client deja declare, et PROPOSER des candidats dans
-``/static-clients/candidates``. Un candidat n'est pas un client : une imprimante
-ou l'equipement d'un autre operateur laissent la meme trace. Aucun candidat
-n'est jamais faconne, aucun ne recoit de plan, et il n'existe deliberement
-aucune route pour le promouvoir -- declarer passe par
-``POST /static-clients`` avec un debit souscrit que seul un humain connait.
+**Assisted detection, never automatic**: a census of the PoP (``/pops/census``)
+cross-checks seven sources of presence -- ``/ip/arp``, DHCP leases, PPPoE
+sessions, bridge table, static routes, queues already written, neighbours -- over
+the subnets the router really serves (``/ip/address``), and not over interface
+names alone. It serves two purposes only: confirming the presence of an already
+declared client, and PROPOSING candidates in ``/static-clients/candidates``. A
+candidate is not a client: a printer or another operator device leaves the same
+trace. No candidate is ever shaped, none receives a plan, and there is
+deliberately no route to promote one -- declaring goes through
+``POST /static-clients`` with a subscribed rate only a human knows.
 
-**Boucle fermee QoE** : un job periodique lit le score de QoE composite
-(bufferbloat + latence a vide) et resserre l'enveloppe PARTAGEE d'un secteur qui
-decroche -- jamais le plan souscrit d'un abonne. Meme garde-fous que les autres
-boucles automatiques : soumise a ``ENFORCEMENT_ENABLED``, jamais de purge, et le
-plan passe par le meme planificateur, donc reste diffable et auditable.
+**Closed QoE loop**: a periodic job reads the composite QoE score (bufferbloat +
+idle latency) and tightens the SHARED envelope of a sector that is dropping off
+-- never the subscribed plan of a subscriber. Same safeguards as the other
+automatic loops: subject to ``ENFORCEMENT_ENABLED``, never a purge, and the plan
+goes through the same planner, so it stays diffable and auditable.
 
-**Ou ce controleur se place** : en amont du coeur, juste derriere la sortie
-internet, et au niveau du PoP -- aux deux extremites du reseau, jamais au milieu.
-Le coeur n'exporte rien et n'est pas interroge : la mesure ne lui ajoute aucune
-charge, ni a l'aller ni au retour. C'est l'interet du flux NetFlow exporte
-(quelques dizaines de kbit/s) sur un miroir de port, qui recopierait chaque octet
-sur le lien de collecte dans les deux sens.
+**Where this controller sits**: upstream of the core, just behind the internet
+egress, and at the PoP -- at both ends of the network, never in the middle. The
+core exports nothing and is not polled: measurement adds no load to it, in
+either direction. That is the point of exported NetFlow (a few tens of kbit/s)
+over a port mirror, which would copy every byte onto the collection link in both
+directions.
 
-**Trafic (NetFlow v5 / v9 / IPFIX)** : le controleur ECOUTE les flux exportes et
-en tire du volume date, par abonne et par usage. Le meme octet etant vu aux deux
-points de mesure, chacun est enregistre AVEC sa mesure et la consommation se lit
-depuis un seul (``NETFLOW_ACCOUNTING_VANTAGE``). Ce que les flux montrent et qui
-n'est rattache a aucune fiche va dans une liste d'aide a la saisie -- jamais dans
-l'inventaire.
+**Traffic (NetFlow v5 / v9 / IPFIX)**: the controller LISTENS to exported flows
+and derives timestamped volume from them, per subscriber and per usage. Since the
+same byte is seen at both measurement points, each one is recorded WITH its
+vantage and usage is read from a single one (``NETFLOW_ACCOUNTING_VANTAGE``).
+What the flows show that matches no record goes into an entry-aid list -- never
+into the inventory.
 
-**Qui se connecte a quoi (ipfinder)** : pour chaque flux rattache a un abonne,
-l'adresse DISTANTE est retenue, puis NOMMEE -- catalogue de blocs publies embarque
-(Netflix, YouTube, Twitch, les CDN...), nom inverse (PTR), et registre (RDAP,
-coupe par defaut). Aucune inspection de contenu : le trafic est chiffre, il le
-reste. Une adresse jamais vue entre en file d'attente au moment ou un client
-l'atteint et est nommee au passage suivant : la decouverte est DYNAMIQUE, rien
-n'est a declarer. ``GET /netflow/connections`` montre la fenetre EN COURS (la
-seule vue en direct), ``/netflow/destinations`` ce qui est atteint sur la
-periode, et ``/netflow/destinations/{ip}`` la fiche complete d'une adresse.
+**Who connects to what (ipfinder)**: for every flow matched to a subscriber, the
+REMOTE address is kept, then NAMED -- an embedded catalogue of published prefixes
+(Netflix, YouTube, Twitch, the CDNs...), reverse name (PTR), and registry (RDAP,
+off by default). No content inspection: the traffic is encrypted, and it stays
+that way. An address never seen before enters the queue the moment a client
+reaches it and is named on the next pass: discovery is DYNAMIC, nothing is to be
+declared. ``GET /netflow/connections`` shows the CURRENT window (the only live
+view), ``/netflow/destinations`` what is reached over the period, and
+``/netflow/destinations/{ip}`` the full record of one address.
 
-**Restrictions de trafic** (``/traffic-rules``) : bloquer ou plafonner un trafic
-designe par un SERVICE ou une FAMILLE ("netflix", "streaming"), pour tous les
-clients ou pour certains. Une regle n'est pas une liste d'adresses figee : son
-ensemble est recalcule a chaque reconciliation depuis le catalogue ET depuis ce
-que NetFlow a decouvert, donc un serveur nouveau rejoint la liste posee sur le
-routeur tout seul. L'ecriture pose une ``/ip/firewall/address-list`` et, selon
-l'action, des regles ``filter`` (rejet) ou ``mangle`` + ``queue tree`` (plafond).
-Elle passe par le MEME chemin que les files : ``ENFORCEMENT_ENABLED``, plan
-affichable, audit dans ``enforcement_audit``, et rien qui ne porte pas
-``freeqos:managed`` n'est touche.
+**Traffic restrictions** (``/traffic-rules``): block or cap traffic designated by
+a SERVICE or a CATEGORY ("netflix", "streaming"), for every client or for some.
+A rule is not a frozen list of addresses: its set is recomputed at every
+reconciliation from the catalogue AND from what NetFlow discovered, so a new
+server joins the list on the router by itself. Writing creates an
+``/ip/firewall/address-list`` and, depending on the action, ``filter`` rules
+(reject) or ``mangle`` + ``queue tree`` (cap). It goes through the SAME path as
+the queues: ``ENFORCEMENT_ENABLED``, a viewable plan, an audit trail in
+``enforcement_audit``, and nothing that does not carry ``freeqos:managed`` is
+touched.
 
-**API publique, contrat compatible Preseem** (``/model/v1`` et ``/usage/v1``,
-cle en authentification Basic) : cinq collections -- ``accounts``, ``packages``,
-``sites``, ``access_points``, ``services`` -- en ``GET``, ``PUT /{id}`` idempotent
-et ``DELETE``. Un systeme de facturation qui parlait a Preseem change l'URL de
-base et la cle, rien d'autre. Un service ecrit par l'API atterrit dans le MEME
-inventaire que la saisie manuelle, marque ``source='api'``, et l'API n'ecrase
-jamais une fiche saisie a la main (409).
+**Public API, Preseem-compatible contract** (``/model/v1`` and ``/usage/v1``, key
+in Basic authentication): five collections -- ``accounts``, ``packages``,
+``sites``, ``access_points``, ``services`` -- with ``GET``, idempotent
+``PUT /{id}`` and ``DELETE``. A billing system that talked to Preseem changes the
+base URL and the key, nothing else. A service written through the API lands in
+the SAME inventory as manual entry, marked ``source='api'``, and the API never
+overwrites a record entered by hand (409).
 """
 
 
