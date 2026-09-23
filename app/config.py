@@ -587,8 +587,10 @@ class Settings(BaseSettings):
     qoe_recovery_cycles: int = 3
 
     # --- Garde-fous ---
-    # Phase 2 uniquement : aucune ecriture n'est implementee aujourd'hui.
-    enforcement_enabled: bool = False
+    # Ecriture sur les routeurs ACTIVE par defaut : files, restrictions, export
+    # NetFlow se posent tout seuls. Seules les lignes marquees freeqos:managed
+    # sont touchees. ENFORCEMENT_ENABLED=false pour un controleur en lecture seule.
+    enforcement_enabled: bool = True
     max_plausible_bps: float = 100_000_000_000.0
     # En dessous de ce delta on ne calcule pas de debit (bruit de division).
     min_rate_interval_s: float = 1.0

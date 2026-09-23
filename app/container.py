@@ -185,8 +185,7 @@ async def build_container(settings: Settings) -> Container:
         # sur des equipements de production : on le dit fort au demarrage.
         logger.warning(
             "ENFORCEMENT ACTIF : ce controleur peut ecrire sur les routeurs. "
-            "Seules les files marquees '%s' sont modifiees, et chaque plan reste "
-            "soumis a une application explicite.",
+            "Seules les lignes marquees '%s' sont modifiees.",
             "freeqos:managed",
         )
     else:

@@ -406,6 +406,9 @@ def settings(router_config: RouterConfig) -> Settings:
         plan_provider="mock",
         scheduler_enabled=False,
         db_auto_migrate=False,
+        # Les tests partent d'un controleur en lecture seule et activent
+        # l'ecriture explicitement quand ils en ont besoin.
+        enforcement_enabled=False,
         subscriber_interval_s=10,
         min_rate_interval_s=1.0,
     )

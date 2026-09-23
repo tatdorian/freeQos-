@@ -12,13 +12,46 @@ from app.container import build_backhaul_provider, build_plan_provider
 from app.services.registry import collectors_from_settings
 
 
-def test_enforcement_desactive_par_defaut_meme_conteneur_construit() -> None:
-    """Le drapeau reste a false tant que l'operateur ne l'a pas leve lui-meme.
+class DrapeauxMemoire:
+    def __init__(self, valeur: bool | None, auteur: str | None) -> None:
+        self.valeur, self.auteur = valeur, auteur
 
-    Depuis la phase 2 il n'empeche plus le demarrage, mais il reste le dernier
-    rempart avant toute ecriture : cf. tests/test_shaping_service.py.
-    """
-    assert Settings(_env_file=None).enforcement_enabled is False
+    async def get_flag(self, name: str) -> bool | None:
+        return self.valeur
+
+    async def flag_author(self, name: str) -> str | None:
+        return self.auteur
+
+    async def set_flag(self, name: str, value: bool, **kwargs: object) -> None:
+        self.valeur, self.auteur = value, str(kwargs.get("updated_by"))
+
+
+async def _charger(settings: Settings, depot: DrapeauxMemoire) -> bool:
+    from types import SimpleNamespace
+
+    from app.services.shaping import ShapingService
+
+    service = ShapingService(
+        settings=settings,
+        registry=SimpleNamespace(collectors=[]),  # type: ignore[arg-type]
+        repository=depot,  # type: ignore[arg-type]
+    )
+    await service.load_flags()
+    return service.enforcement_enabled
+
+
+async def test_une_lecture_seule_posee_au_demarrage_passe_au_nouveau_defaut() -> None:
+    """Une installation amorcee quand le defaut etait la lecture seule garde
+    'false' en base, sans que personne l'ait choisi : le nouveau defaut s'applique."""
+    depot = DrapeauxMemoire(False, "bootstrap")
+    assert await _charger(Settings(_env_file=None), depot) is True
+    assert depot.valeur is True
+
+
+async def test_une_coupure_faite_par_un_humain_est_respectee() -> None:
+    depot = DrapeauxMemoire(False, "ui:admin")
+    assert await _charger(Settings(_env_file=None), depot) is False
+    assert depot.valeur is False
 
 
 def test_choix_du_fournisseur_de_plans(settings: Settings) -> None:

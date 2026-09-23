@@ -91,8 +91,10 @@ En phase 1 les trois sont **observés**, aucun n'est encore piloté.
 | **3** | Latence **sous charge** (bufferbloat) : corrélation RTT ↔ débit, note A+…F, **score QoE composite** | **fait** ; **exige la sonde RTT**, coupée par défaut |
 | **4** | Boucle fermée : ajustement du partage d'un secteur selon la QoE + capacité radio | **fait** ; désactivée tant que `ENFORCEMENT_ENABLED` est faux |
 
-L'enforcement existe désormais, mais reste **désactivé par défaut** : `ENFORCEMENT_ENABLED`
-doit être passé à `true` explicitement, et chaque plan demande une application distincte.
+L'enforcement est **activé par défaut** : files, restrictions et export NetFlow se posent
+tout seuls sur les routeurs, et seules les lignes marquées `freeqos:managed` sont touchées.
+Passer `ENFORCEMENT_ENABLED=false` (ou couper l'interrupteur des Réglages) remet le
+contrôleur en lecture seule.
 
 **Deux interrupteurs, pas un.** Les phases 3 et 4 ont besoin de la **sonde RTT**, qui est
 coupée par défaut parce qu'elle coûte du CPU aux routeurs. Sans elle, `rtt_ms` reste vide,

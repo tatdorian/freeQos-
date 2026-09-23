@@ -248,6 +248,26 @@ class ShapingService:
                 reason="initial value from ENFORCEMENT_ENABLED",
             )
             return
+        if stocke is False and self.settings.enforcement_enabled:
+            # Valeur posee AUTOMATIQUEMENT au premier demarrage, quand le defaut
+            # etait la lecture seule : personne ne l'a choisie. Le nouveau
+            # defaut (ecriture active) s'applique. Une coupure faite par un
+            # humain depuis l'interface, elle, est respectee.
+            auteur = None
+            lire_auteur = getattr(self.repository, "flag_author", None)
+            if lire_auteur is not None:
+                try:
+                    auteur = await lire_auteur(FLAG_ENFORCEMENT)
+                except Exception:  # noqa: BLE001
+                    auteur = None
+            if auteur == "bootstrap":
+                await self.repository.set_flag(
+                    FLAG_ENFORCEMENT,
+                    True,
+                    updated_by="bootstrap",
+                    reason="default is now writing enabled",
+                )
+                stocke = True
         self._enforcement_enabled = stocke
         if stocke != self.settings.enforcement_enabled:
             logger.warning(
