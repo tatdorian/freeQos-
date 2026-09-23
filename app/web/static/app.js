@@ -2140,19 +2140,36 @@ function scNotice(html) {
   document.getElementById('sc-notice').innerHTML = html;
 }
 
-/** Remplit les menus "Attached PoP" avec les PoP des routeurs collectes.
+/** Remplit les menus "Attached PoP" avec TOUS les PoP disponibles.
  *
- *  Un menu plutot qu'une saisie libre : une faute de frappe rattachait le
- *  client ou l'antenne a un PoP qui n'existe pas. */
+ *  Deux sources, reunies : les routeurs declares (un routeur sans PoP
+ *  explicite a son propre nom pour PoP -- c'est ce que fait le collecteur) et
+ *  les PoP deja connus en base (sites VLAN, PoP decouverts). Un menu plutot
+ *  qu'une saisie libre : une faute de frappe rattachait le client ou
+ *  l'antenne a un PoP qui n'existe pas. */
 let POPS_CONNUS = [];
 
 async function remplirMenusPop() {
-  try {
-    const inventaire = await api('/pops/routers');
-    POPS_CONNUS = [...new Set((inventaire.routers || [])
-      .filter((r) => r.active !== false && r.pop_name)
-      .map((r) => r.pop_name))].sort();
-  } catch (err) { /* on garde la derniere liste connue */ }
+  const [inventaire, pops] = await Promise.all([
+    api('/pops/routers').catch(() => null),
+    api('/pops').catch(() => null),
+  ]);
+  if (inventaire || pops) {
+    const noms = new Set();
+    ((inventaire && inventaire.routers) || []).forEach((r) => {
+      if (r.enabled === false) return;
+      const nom = r.pop_name || r.name;
+      if (nom) noms.add(nom);
+    });
+    (Array.isArray(pops) ? pops : []).forEach((p) => { if (p.name) noms.add(p.name); });
+    const liste = [...noms].sort((a, b) => a.localeCompare(b));
+    const inchangee = liste.join('\n') === POPS_CONNUS.join('\n');
+    POPS_CONNUS = liste;
+    // Reconstruire un menu deja ouvert le refermerait : on ne touche a rien
+    // quand la liste n'a pas bouge.
+    if (inchangee && remplirMenusPop.fait) return;
+  }
+  remplirMenusPop.fait = true;
   document.querySelectorAll('select[data-pop-select]').forEach((select) => {
     choisirPop(select, select.value);
   });
@@ -2164,7 +2181,9 @@ function choisirPop(select, valeur) {
   if (typeof select === 'string') select = document.getElementById(select);
   const noms = POPS_CONNUS.slice();
   if (valeur && !noms.includes(valeur)) noms.push(valeur);
-  select.innerHTML = '<option value="">Choose a PoP</option>' +
+  select.innerHTML = '<option value="">' +
+    (noms.length ? 'Choose a PoP (' + noms.length + ' available)' : 'No PoP available yet') +
+    '</option>' +
     noms.map((n) => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
   select.value = valeur || (noms.length === 1 ? noms[0] : '');
 }
@@ -6750,6 +6769,11 @@ document.getElementById('sc-candidates-block').addEventListener('toggle', (e) =>
 document.getElementById('sc-diag').addEventListener('click', scDiagnostic);
 document.getElementById('sc-recensement').addEventListener('click', scRecensement);
 document.getElementById('sc-cancel').addEventListener('click', () => scRemplirFormulaire(null));
+// La liste se relit quand on ouvre le menu : un routeur ou un PoP ajoute
+// depuis un autre onglet y apparait sans recharger la page.
+document.querySelectorAll('select[data-pop-select]').forEach((select) => {
+  select.addEventListener('focus', () => remplirMenusPop());
+});
 
 let searchTimer = null;
 document.getElementById('sub-search').addEventListener('input', (e) => {
