@@ -110,9 +110,10 @@ def test_dsn_asyncpg_normalise_le_schema_sqlalchemy() -> None:
     assert settings.asyncpg_dsn == "postgresql://u:p@db:5432/qos"
 
 
-def test_enforcement_desactive_par_defaut() -> None:
-    """Phase 1 : le controleur doit rester strictement observateur."""
-    assert Settings(_env_file=None).enforcement_enabled is False
+def test_enforcement_active_par_defaut() -> None:
+    """DEMANDE EXPLICITE : tout est automatique, donc l'ecriture est active
+    par defaut. ENFORCEMENT_ENABLED=false remet le controleur en lecture seule."""
+    assert Settings(_env_file=None).enforcement_enabled is True
 
 
 # ------------------------------------- boucle fermee QoE (phase 4)

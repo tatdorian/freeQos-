@@ -78,6 +78,25 @@ def local_address_for(host: str, port: int = 8728) -> str | None:
     return adresse
 
 
+def _loopback_of(collector: Any) -> str | None:
+    loopback = getattr(collector, "loopback", None)
+    return str(loopback) if loopback and _is_ip(str(loopback)) else None
+
+
+def source_for(collector: Any) -> str | None:
+    """L'adresse d'ou partent les flux : le LOOPBACK du routeur.
+
+    C'est aussi celle sous laquelle l'exporteur est reconnu. Le loopback ne
+    depend pas du chemin, la ou l'adresse d'interface (une VLAN) change avec
+    lui. A defaut de loopback connu, l'adresse de gestion, comme avant.
+    """
+    loopback = _loopback_of(collector)
+    if loopback:
+        return loopback
+    host = str(collector.config.host)
+    return host if _is_ip(host) else None
+
+
 def _is_ip(value: str) -> bool:
     try:
         ipaddress.ip_address(value)
@@ -210,6 +229,11 @@ class NetflowExportService:
     async def state_of(self, collector: MikrotikCollector) -> RouterExportState:
         etat = RouterExportState(router=collector.name, host=collector.config.host)
         etat.collector = self.collector_for(collector)
+        # Les flux partent du loopback : on s'assure de le connaitre AVANT de
+        # calculer la cible (lu sur le routeur s'il n'est ni declare ni decouvert).
+        chercher = getattr(collector, "ensure_loopback", None)
+        if chercher is not None:
+            await chercher()
         try:
             reglage, cibles = await self._read(collector)
         except Exception as exc:  # noqa: BLE001 - un routeur muet ne casse pas les autres
@@ -330,8 +354,9 @@ class NetflowExportService:
             # selon sa table de routage et l'exporteur peut apparaitre sous une
             # adresse qu'aucune declaration ne connait -- il tombe alors en
             # 'unknown', et ses octets ne sont rattaches a aucun point de mesure.
-            if _is_ip(collector.config.host):
-                champs["src-address"] = collector.config.host
+            source = source_for(collector)
+            if source:
+                champs["src-address"] = source
             plan.actions.append(
                 PlanAction(
                     verb="add",
@@ -339,6 +364,22 @@ class NetflowExportService:
                     fields=champs,
                     name=f"{collector.name} : cible {etat.collector}:{self.port}",
                     reason="this router does not send its flows to any known collector yet",
+                )
+            )
+        elif (source := _loopback_of(collector)) and str(
+            etat.ours.get("src-address") or ""
+        ) != source:
+            # Cible posee depuis une autre adresse (celle de gestion, ou celle
+            # que RouterOS choisissait seul) : on la fait partir du loopback.
+            plan.actions.append(
+                PlanAction(
+                    verb="set",
+                    path=PATH_TARGET,
+                    target_id=str(etat.ours.get(".id") or ""),
+                    fields={"src-address": source},
+                    name=f"{collector.name} : cible {etat.collector}:{self.port}",
+                    reason="flows must leave from the router's loopback",
+                    changes={"src-address": (str(etat.ours.get("src-address") or ""), source)},
                 )
             )
         elif str(etat.ours.get("version") or "") != str(self.version):
@@ -436,13 +477,14 @@ class NetflowExportService:
         consommation. Le point se deduit du ROLE du routeur -- une passerelle
         regarde depuis la sortie internet, tout le reste depuis le PoP.
         """
-        if self.exporters_repo is None or not _is_ip(collector.config.host):
+        source = source_for(collector)
+        if self.exporters_repo is None or not source:
             return
         vantage = "edge" if collector.config.role == RouterRole.GATEWAY else "pop"
         try:
             await self.exporters_repo.declare(
                 {
-                    "address": collector.config.host,
+                    "address": source,
                     "name": collector.name,
                     "vantage": vantage,
                     "pop_name": collector.config.effective_pop_name,

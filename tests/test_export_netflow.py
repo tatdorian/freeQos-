@@ -409,3 +409,45 @@ def test_le_collecteur_ecoute_bien_en_udp() -> None:
     perdu n'est jamais retransmis."""
     source = Path("app/services/netflow_service.py").read_text(encoding="utf-8")
     assert "create_datagram_endpoint" in source
+
+
+# ================================================== le loopback comme source
+
+
+async def test_les_flux_partent_du_loopback_trouve_par_l_api(client: FakeRouterOsClient) -> None:
+    """DEMANDE EXPLICITE : les flux partent du LOOPBACK, pas de l'adresse de
+    gestion ni d'une VLAN. Non declare, il est lu sur le routeur (router-id)."""
+    client.router_id_rows = ["10.255.0.7"]
+    export, collector = service(client)
+    plan = export.plan_for(collector, await export.state_of(collector))
+    cible = next(a for a in plan.actions if a.path == PATH_TARGET)
+    assert cible.fields["src-address"] == "10.255.0.7"
+
+
+async def test_une_cible_posee_depuis_une_autre_adresse_passe_au_loopback(
+    client: FakeRouterOsClient,
+) -> None:
+    client.router_id_rows = ["10.255.0.7"]
+    client.traffic_flow_row = configure()
+    client.traffic_flow_target_rows = [
+        {
+            ".id": "*1",
+            "dst-address": COLLECTEUR,
+            "port": "2055",
+            "version": "9",
+            "src-address": "100.100.101.118",
+        }
+    ]
+    export, collector = service(client)
+    plan = export.plan_for(collector, await export.state_of(collector))
+    assert [a.fields for a in plan.actions] == [{"src-address": "10.255.0.7"}]
+
+
+async def test_le_loopback_se_trouve_dans_la_configuration_en_dernier_recours(
+    client: FakeRouterOsClient,
+) -> None:
+    """Ni interface loopback ni /routing/id lisible : le texte de /export."""
+    client.raise_on_routing_ids = RuntimeError("chemin inconnu")
+    client.export_text = "/routing ospf instance\nset [ find default=yes ] router-id=10.255.0.9\n"
+    _, collector = service(client)
+    assert await collector.ensure_loopback() == "10.255.0.9"
