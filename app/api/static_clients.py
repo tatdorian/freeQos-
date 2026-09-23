@@ -19,6 +19,7 @@ aucun routeur.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -140,6 +141,49 @@ async def _poser_la_file(
             "applied": 0,
             "routers": [],
         }
+
+
+#: La redecouverte en cours, et s'il faudra en relancer une a sa fin. Une seule
+#: a la fois : dix clients saisis d'affilee ne doivent pas lancer dix lectures
+#: completes de tous les PoPs en parallele.
+_REDECOUVERTE: dict[str, Any] = {"tache": None, "encore": False}
+
+
+def _redessiner_l_arbre(container: ContainerDep) -> None:
+    """Relance la decouverte en tache de fond, pour que le client apparaisse
+    dans l'arbre tout de suite -- pas au prochain passage, un quart d'heure
+    plus tard. La reponse n'attend pas : la saisie reste instantanee."""
+    shaping = getattr(container, "shaping", None)
+    collection = getattr(container, "collection", None)
+    if shaping is None or collection is None:
+        return
+    tache = _REDECOUVERTE["tache"]
+    if tache is not None and not tache.done():
+        _REDECOUVERTE["encore"] = True
+        return
+
+    async def decouvrir() -> None:
+        from app.services.shaping import discover_with_devices
+
+        while True:
+            _REDECOUVERTE["encore"] = False
+            try:
+                await discover_with_devices(
+                    shaping,
+                    (
+                        getattr(container, "backhaul_provider", None),
+                        getattr(collection, "antennas_provider", None),
+                    ),
+                )
+            except Exception:  # noqa: BLE001 - le passage periodique rattrapera
+                logger.exception("Redecouverte apres saisie d'un client impossible")
+            if not _REDECOUVERTE["encore"]:
+                return
+
+    try:
+        _REDECOUVERTE["tache"] = asyncio.get_running_loop().create_task(decouvrir())
+    except RuntimeError:  # pas de boucle : rien a relancer
+        _REDECOUVERTE["tache"] = None
 
 
 @router.get("/static-clients", summary="Inventory of static-IP clients")
@@ -337,6 +381,7 @@ async def create_static_client(
     created["enforcement"] = await _poser_la_file(
         container, reference=created["reference"], pop_name=str(created["pop_name"])
     )
+    _redessiner_l_arbre(container)
     return created
 
 
@@ -364,6 +409,7 @@ async def update_static_client(
     modifie["enforcement"] = await _poser_la_file(
         container, reference=modifie["reference"], pop_name=str(modifie["pop_name"])
     )
+    _redessiner_l_arbre(container)
     return modifie
 
 
@@ -399,3 +445,4 @@ async def delete_static_client(
         pop_name=str(fiche["pop_name"]),
         removing=True,
     )
+    _redessiner_l_arbre(container)
