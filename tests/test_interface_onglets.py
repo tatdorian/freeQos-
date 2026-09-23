@@ -115,12 +115,11 @@ def test_les_cles_ne_sont_plus_dans_les_reglages() -> None:
     assert 'id="key-form"' not in reglages
 
 
-def test_l_export_netflow_se_pose_depuis_l_onglet_trafic() -> None:
-    """Le message "aucun datagramme recu" n'a de valeur que s'il est suivi du
-    geste qui le corrige."""
-    assert 'id="flow-export"' in HTML
-    assert 'id="flow-export-apply"' in HTML
-    assert "applyFlowExport" in JS
+def test_l_export_netflow_n_a_plus_de_bloc_manuel() -> None:
+    """DEMANDE EXPLICITE : l'export se pose tout seul (job periodique), le bloc
+    "Export on the routers" et ses boutons n'avaient plus rien a faire."""
+    assert 'id="flow-export"' not in HTML
+    assert "applyFlowExport" not in JS
 
 
 def test_l_interface_ne_fait_plus_la_lecon() -> None:
@@ -198,19 +197,20 @@ def test_le_diagnostic_netflow_mene_au_geste_suivant() -> None:
     designe le chemin reseau plutot que la configuration -- ce n'est pas le
     meme probleme, et surtout pas la meme personne qui le corrige.
     """
-    assert "data-goto-export" in JS
     assert "No router is declared" in JS
-    assert "flow-export-enable" in JS
+    assert "automatically on each router" in JS
     # Le cas "pose mais rien n'arrive" doit nommer le port UDP : c'est le
     # coupable le plus frequent, et il n'a rien a voir avec le routeur.
     assert "udp" in JS
 
 
-def test_le_bloc_d_export_dit_ce_qui_empeche_de_poser() -> None:
-    """Cliquer « Configurer » pour recevoir « ecriture desactivee » est une
-    boucle : le blocage est annonce avant, avec l'interrupteur."""
-    assert "enableEnforcementForExport" in JS
-    assert "Writing to the routers is disabled" in JS
+def test_le_pop_se_choisit_dans_un_menu() -> None:
+    """Une saisie libre rattachait a un PoP ne d'une faute de frappe : le PoP
+    d'un client ou d'une antenne se choisit parmi ceux des routeurs."""
+    for ident in ("sc-pop", "a-pop"):
+        debut = HTML.index(f'id="{ident}"')
+        assert HTML[HTML.rindex("<", 0, debut) : debut].startswith("<select")
+    assert "remplirMenusPop" in JS
 
 
 # -------------------------------------------------------------------------
