@@ -3653,9 +3653,6 @@ function renderRules(data) {
   const hote = document.getElementById('svc-rules');
   const regles = (data && data.rules) || [];
   const etat = (data && data.status) || {};
-  document.getElementById('svc-rules-state').textContent = etat.enforcement_enabled
-    ? 'writing enabled'
-    : 'writing disabled: nothing will be applied';
   if (!regles.length) {
     hote.innerHTML = '<div class="empty">No restriction.</div>';
     return;
@@ -3719,17 +3716,19 @@ function applyNotice(html) {
  *  Suspendre ou supprimer une regle la LEVE aussitot. Dire "c'est fait" sans
  *  regarder le rapport ferait croire qu'un trafic repasse alors qu'un routeur
  *  injoignable -- ou l'ecriture coupee -- le bloque encore. */
-function liftNotice(action, levee) {
-  if (!levee) return '<div class="notice ok">Rule ' + action + '.</div>';
-  if (levee.state === 'levee') {
-    return '<div class="notice ok">Rule ' + action + ' and lifted on the routers (' +
-      esc(levee.applied || 0) + ' line(s) removed).</div>';
+function liftNotice(action, rapport, fait) {
+  fait = fait || 'lifted on the routers';
+  if (!rapport || rapport.state === 'levee' || rapport.state === 'posee') {
+    return '<div class="notice ok">Rule ' + action + (rapport ? ' and ' + fait : '') +
+      '.</div>';
   }
-  const details = (levee.routers || [])
+  // Seulement ce qui bloque, routeur par routeur : pas la liste des commandes.
+  const details = (rapport.routers || [])
     .filter((r) => r.state !== 'posee')
     .map((r) => esc(r.router) + ': ' + esc(r.reason)).join('<br>');
-  return '<div class="notice warn">Rule ' + action + ', but <b>not lifted everywhere</b>: ' +
-    esc(levee.reason || '') + (details ? '<br>' + details : '') +
+  return '<div class="notice warn">Rule ' + action + ', but <b>not ' + esc(fait) +
+    ' everywhere</b>' + (rapport.reason ? ': ' + esc(rapport.reason) : '') +
+    (details ? '<br>' + details : '') +
     '<br><span class="hint">The automatic pass will retry.</span></div>';
 }
 
@@ -3748,7 +3747,9 @@ async function toggleRule(id, enabled) {
     const regle = await api('/traffic-rules/' + id, {
       method: 'PATCH', body: JSON.stringify({ enabled }),
     });
-    if (!enabled) applyNotice(liftNotice('suspended', regle && regle.lift));
+    applyNotice(enabled
+      ? liftNotice('enabled', regle && regle.apply, 'applied on the routers')
+      : liftNotice('suspended', regle && regle.lift));
     await loadServices();
   } catch (err) {
     applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
@@ -3782,53 +3783,6 @@ async function previewRule(id) {
   } catch (err) {
     applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
   }
-}
-
-async function applyRules(dryRun) {
-  applyNotice('<div class="notice">Computing the plan...</div>');
-  try {
-    const rapport = await api('/traffic-rules/apply?dry_run=' + (dryRun ? 'true' : 'false'),
-      { method: 'POST' });
-    applyNotice(renderApplyReport(rapport));
-    await loadServices();
-  } catch (err) {
-    applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
-  }
-}
-
-/** Le compte rendu d'une pose, routeur par routeur.
- *
- *  ON MONTRE LES COMMANDES, pas un resume rassurant. C'est la meme regle que
- *  pour les files : ce qui est affiche doit etre exactement ce qui serait
- *  envoye, sinon l'exploitant valide autre chose que ce qu'il croit. */
-function renderApplyReport(rapport) {
-  const classe = rapport.state === 'erreur' ? 'err'
-    : (rapport.state === 'posee' ? 'ok' : 'warn');
-  const entete = '<div class="notice ' + classe + '"><b>' + esc(rapport.state) + '</b> — ' +
-    esc(rapport.rules) + ' active rule(s), ' + esc(rapport.applied) +
-    ' command(s) applied' +
-    (rapport.dry_run ? ' <span class="hint">(dry run: nothing was written)</span>' : '') +
-    (rapport.enforcement_enabled ? '' :
-      ' <span class="hint">writing is disabled (Settings &gt; Shaping)</span>') +
-    '</div>';
-  const routeurs = (rapport.routers || []).map((r) =>
-    '<div class="ip-card"><h3>' + esc(r.router) + ' <span class="hint">' +
-      esc(r.state) + '</span></h3>' +
-    '<p class="empty" style="text-align:left;padding:0 0 .4rem">' + esc(r.reason) + '</p>' +
-    ((r.actions || []).length
-      ? '<div class="login" style="font-size:.75rem;line-height:1.7">' +
-        r.actions.map((a) => esc(a)).join('<br>') + '</div>'
-      : '<span class="hint">no command</span>') +
-    ((r.skipped || []).length
-      ? '<p class="empty" style="text-align:left;padding:.5rem 0 0">' +
-        r.skipped.map((s) => '<b>' + esc(s.rule) + '</b> : ' + esc(s.reason)).join('<br>') +
-        '</p>' : '') +
-    ((r.conflicts || []).length
-      ? '<div class="notice err" style="margin-top:.5rem">' +
-        r.conflicts.map((c) => '<b>' + esc(c.rule) + '</b> : ' + esc(c.detail)).join('<br>') +
-        '</div>' : '') +
-    '</div>').join('');
-  return entete + routeurs;
 }
 
 function fillCategoryFilter(catalogue) {
@@ -3916,8 +3870,8 @@ async function submitRule(event) {
   }
   try {
     const regle = await api('/traffic-rules', { method: 'POST', body: JSON.stringify(corps) });
-    ruleNotice('<div class="notice ok">Rule <b>' + esc(regle.name) + '</b> saved. ' +
-      'Nothing is written until it is applied.</div>');
+    ruleNotice(liftNotice('<b>' + esc(regle.name) + '</b> saved', regle.apply,
+      'applied on the routers'));
     document.getElementById('svc-rule-form').reset();
     document.getElementById('svc-rule-limits').hidden = true;
     document.getElementById('svc-rule-logins-field').hidden = true;
@@ -6503,25 +6457,14 @@ async function applyPlan(routeur, dryRun, bloc) {
 
 async function refreshHealth() {
   const dot = document.getElementById('health-dot');
-  const pill = document.getElementById('mode-pill');
   try {
     const res = await fetch('/health/ready');
     const body = await res.json();
     dot.className = 'dot' + (res.ok ? '' : ' stale');
-    // Le mode d'ecriture est la premiere chose a savoir : l'afficher en dur
-    // comme "lecture seule" alors que l'enforcement est actif serait mensonger.
-    const mode = body.enforcement_enabled ? 'WRITING ON' : 'read-only';
-    pill.textContent = 'out-of-band · ' + mode + ' · ' +
-      body.collectors_active + ' router(s)' +
-      (body.routers_skipped ? ' · ' + body.routers_skipped + ' skipped' : '') +
-      (body.timescaledb ? ' · timescale' : '');
-    pill.style.color = body.enforcement_enabled ? 'var(--warn)' : '';
-    pill.style.borderColor = body.enforcement_enabled ? 'rgba(210,153,34,.45)' : '';
-    pill.title = body.stale_jobs && body.stale_jobs.length
+    dot.title = body.stale_jobs && body.stale_jobs.length
       ? 'Jobs running late: ' + body.stale_jobs.join(', ') : 'Cycles on time';
   } catch (err) {
     dot.className = 'dot down';
-    pill.textContent = 'controller unreachable';
   }
 }
 
@@ -6833,8 +6776,6 @@ document.getElementById('svc-category').addEventListener('change', loadServices)
 // base qu'il y a de lettres dans "nflxvideo".
 document.getElementById('svc-search').addEventListener('change', loadServices);
 document.getElementById('svc-rule-form').addEventListener('submit', submitRule);
-document.getElementById('svc-apply-dry').addEventListener('click', () => applyRules(true));
-document.getElementById('svc-apply').addEventListener('click', () => applyRules(false));
 // Les champs qui n'ont de sens que pour un effet ou une portee donnes restent
 // caches tant qu'ils ne servent pas : un formulaire qui montre tout montre
 // surtout ce qu'il ne faut pas remplir.

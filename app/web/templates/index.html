@@ -21,7 +21,6 @@
       <a href="#/api"       data-view="api">API</a>
       <a href="#/settings"  data-view="settings">Settings</a>
     </nav>
-    <span class="mode" id="mode-pill">out-of-band &middot; read-only</span>
   </header>
 
   <!-- UN ECHEC DE CHARGEMENT DOIT SE VOIR. Sans ce bandeau, une API en erreur
@@ -596,12 +595,6 @@
 
       <h2>Traffic restrictions</h2>
       <div class="table-wrap" id="svc-rules"></div>
-      <div class="toolbar" style="margin-top:.6rem">
-        <button class="sm" id="svc-apply-dry">Dry run</button>
-        <button class="sm primary" id="svc-apply">Apply on the routers</button>
-        <span class="spacer"></span>
-        <span class="mode" id="svc-rules-state"></span>
-      </div>
       <div id="svc-apply-result"></div>
 
       <details id="svc-rule-block" style="margin-top:1rem">

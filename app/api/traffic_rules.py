@@ -2,11 +2,10 @@
 
 DEUX GESTES DISTINCTS, ET LA DISTINCTION EST TOUT L'INTERET :
 
-  - ``POST/PATCH/DELETE /traffic-rules`` enregistre une INTENTION. Rien n'est
-    POSE sur un routeur. Une regle peut etre saisie, relue, corrigee sans
-    qu'aucun paquet ne soit touche. Seule exception, et elle va dans le sens
-    sur : suspendre ou supprimer une regle la LEVE aussitot (retraits seuls,
-    voir ``RestrictionService.lift``).
+  - ``POST/PATCH/DELETE /traffic-rules`` enregistre la regle PUIS la pose (ou
+    la leve) aussitot sur les routeurs : creer, modifier ou reactiver applique,
+    suspendre ou supprimer retire (voir ``RestrictionService.lift``). Le
+    drapeau ``ENFORCEMENT_ENABLED`` reste le dernier mot.
   - ``POST /traffic-rules/apply`` ECRIT -- et seulement si l'enforcement est
     actif. Le meme appel en simulation (``dry_run``, le defaut) rend les
     commandes exactes qui seraient envoyees.
@@ -165,10 +164,14 @@ async def list_rules(container: ContainerDep) -> dict[str, Any]:
 async def create_rule(payload: RuleInput, container: ContainerDep) -> dict[str, Any]:
     donnees = payload.model_dump()
     _valide(donnees)
+    repo = _repo(container)
     try:
-        return await _repo(container).create(donnees)
+        regle = await repo.create(donnees)
     except RuleConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if regle.get("enabled"):
+        regle = await _apply(container, repo, regle)
+    return regle
 
 
 @router.patch("/traffic-rules/{rule_id}", summary="Edit a restriction")
@@ -202,6 +205,34 @@ async def update_rule(
             await repo.record_apply(rule_id, state=ETAT_LEVEE, detail="restriction lifted")
             regle = await repo.get(rule_id)
         regle["lift"] = levee
+    elif regle.get("enabled"):
+        # Creer, modifier, reactiver : la regle est posee tout de suite.
+        regle = await _apply(container, repo, regle)
+    return regle
+
+
+async def _apply(
+    container: ContainerDep, repo: TrafficRulesRepository, regle: dict[str, Any]
+) -> dict[str, Any]:
+    """Pose les restrictions sur les routeurs, sans jamais faire echouer la requete.
+
+    La regle est deja enregistree : un routeur injoignable n'annule pas la
+    saisie, la reconciliation periodique finira le travail.
+    """
+    service = container.restrictions
+    if service is None:
+        regle["apply"] = {"state": "indisponible", "reason": "service de restriction absent"}
+        return regle
+    try:
+        rapport = await service.apply_all(author="ui:restrictions", dry_run=False)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Pose de la restriction %s impossible", regle.get("id"))
+        regle["apply"] = {"state": "erreur", "reason": f"{type(exc).__name__}: {exc}"}
+        return regle
+    try:
+        regle = {**(await repo.get(int(regle["id"]))), "apply": rapport}
+    except RuleNotFoundError:
+        regle["apply"] = rapport
     return regle
 
 
