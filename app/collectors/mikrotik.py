@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from collections.abc import Callable, Collection
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -46,7 +47,7 @@ from app.collectors.pop_census import (
     missing_sources,
     sightings_from_census,
 )
-from app.collectors.topology import ethernet_capacity_mbps
+from app.collectors.topology import ethernet_capacity_mbps, parse_export, pick_loopback
 from app.collectors.vlan_clients import explain_arp
 from app.config import RouterConfig
 from app.models import InterfaceSample, PppoeSession, VlanSighting
@@ -96,7 +97,9 @@ class RouterOsReadClient(Protocol):
 
     def export_config(self) -> str: ...
 
-    def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]: ...
+    def ping(
+        self, address: str, count: int = 1, src_address: str | None = None
+    ) -> list[dict[str, Any]]: ...
 
     # --- Topologie et etat du shaping (lecture seule) ---
     def neighbors(self) -> list[dict[str, Any]]: ...
@@ -538,17 +541,23 @@ class LibrouterosReadClient:
         """Groupes et leurs politiques (read, write, api, test...)."""
         return self._query("/user/group")
 
-    def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]:
+    def ping(
+        self, address: str, count: int = 1, src_address: str | None = None
+    ) -> list[dict[str, Any]]:
         """Sonde active depuis le routeur vers l'abonne.
 
         C'est une COMMANDE, pas une ecriture de configuration : elle ne modifie
         rien sur l'equipement. Elle exige la politique 'test' sur le compte, que
-        le groupe qos-ro possede deja.
+        le groupe qos-ro possede deja. ``src_address`` fixe l'adresse d'ou part
+        la sonde (le loopback du routeur).
         """
+        options: dict[str, Any] = {"address": address, "count": count}
+        if src_address:
+            options["src-address"] = src_address
         with self._lock:
             try:
                 api = self._ensure()
-                return [dict(row) for row in api("/ping", address=address, count=count)]
+                return [dict(row) for row in api("/ping", **options)]
             except Exception:
                 self._drop()
                 raise
@@ -568,6 +577,31 @@ def _split_pair(value: Any) -> tuple[int | None, int | None] | None:
     return parse_counter(gauche), parse_counter(droite)
 
 
+#: Loopback DETECTE de chaque routeur (router-id, adresse /32), par nom. La
+#: decouverte le trouve ; la sonde ping et l'export NetFlow s'en servent comme
+#: adresse source. Range par nom et non sur l'objet : l'inventaire recree ses
+#: collecteurs a chaque rechargement, et le loopback ne doit pas s'y perdre.
+_LOOPBACKS_DETECTES: dict[str, str] = {}
+#: Derniere recherche infructueuse, par routeur (horloge monotone) : un routeur
+#: sans loopback ne doit pas etre relu a chaque sonde.
+_RECHERCHES_VAINES: dict[str, float] = {}
+RECHERCHE_LOOPBACK_DELAI_S = 600.0
+
+
+def remember_loopback(router_name: str, address: str | None) -> None:
+    if address:
+        _LOOPBACKS_DETECTES[router_name] = address
+        _RECHERCHES_VAINES.pop(router_name, None)
+    else:
+        _LOOPBACKS_DETECTES.pop(router_name, None)
+
+
+def forget_loopbacks() -> None:
+    """Oublie tout ce qui a ete detecte (tests, rechargement complet)."""
+    _LOOPBACKS_DETECTES.clear()
+    _RECHERCHES_VAINES.clear()
+
+
 class MikrotikCollector:
     """Lit les sessions PPPoE d'un routeur et les normalise en PppoeSession."""
 
@@ -582,6 +616,72 @@ class MikrotikCollector:
     @property
     def name(self) -> str:
         return self.config.name
+
+    @property
+    def loopback(self) -> str | None:
+        """L'adresse d'ou partent les connexions initiees PAR le routeur.
+
+        Le loopback declare fait foi ; a defaut, celui que la decouverte a
+        trouve. Sans lui, RouterOS choisit l'adresse de l'interface de sortie --
+        une adresse de VLAN, qui change selon le chemin et ne designe pas le
+        routeur.
+        """
+        return self.config.loopback or _LOOPBACKS_DETECTES.get(self.config.name)
+
+    async def ensure_loopback(self) -> str | None:
+        """Le loopback, en allant le CHERCHER sur le routeur s'il manque.
+
+        La decouverte le trouve, mais elle ne passe qu'un quart d'heure apres
+        le demarrage au pire : d'ici la, sonde et export partaient de l'adresse
+        de sortie. On lit donc directement, dans l'ordre de ``pick_loopback`` :
+        interfaces et adresses, router-id (``/routing/id``, OSPF, BGP) par les
+        chemins structures, puis le texte de ``/export`` en dernier recours.
+        """
+        connu = self.loopback
+        if connu:
+            return connu
+        nom = self.config.name
+        derniere = _RECHERCHES_VAINES.get(nom)
+        if derniere is not None and time.monotonic() - derniere < RECHERCHE_LOOPBACK_DELAI_S:
+            return None
+        timeout = max(self.config.timeout_s * 4, 10.0)
+        try:
+            trouve = await asyncio.wait_for(
+                asyncio.to_thread(self._chercher_loopback), timeout=timeout
+            )
+        except Exception as exc:  # noqa: BLE001 - sans loopback, on part de la sortie
+            logger.debug("%s : recherche du loopback impossible : %s", nom, exc)
+            trouve = None
+        if trouve:
+            remember_loopback(nom, trouve)
+            logger.info("%s : loopback %s retenu comme adresse source", nom, trouve)
+        else:
+            _RECHERCHES_VAINES[nom] = time.monotonic()
+        return trouve
+
+    def _chercher_loopback(self) -> str | None:
+        def lire(fonction: Any) -> Any:
+            try:
+                return fonction()
+            except Exception:  # noqa: BLE001 - un chemin absent n'arrete rien
+                return None
+
+        adresses = lire(self._client.addresses) or []
+        router_ids = lire(self._client.routing_ids) or []
+        loopback, _ = pick_loopback(declared=None, addresses=adresses, router_ids=router_ids)
+        if loopback:
+            return loopback
+        # Dernier recours : la configuration complete, en texte.
+        texte = lire(self._client.export_config) or ""
+        if not texte:
+            return None
+        analyse = parse_export(texte)
+        loopback, _ = pick_loopback(
+            declared=None,
+            addresses=analyse.get("addresses") or [],
+            router_ids=analyse.get("router_ids") or [],
+        )
+        return loopback
 
     async def collect(self) -> list[PppoeSession]:
         """Execute la lecture bloquante dans un thread, avec garde-fou de duree.
@@ -850,9 +950,28 @@ class MikrotikCollector:
         mieux qu'une valeur inventee.
         """
         timeout = max(self.config.timeout_s * 2, 4.0) + count
-        rows = await asyncio.wait_for(
-            asyncio.to_thread(self._client.ping, address, count), timeout=timeout
-        )
+        source = await self.ensure_loopback()
+        try:
+            rows = await asyncio.wait_for(
+                asyncio.to_thread(self._client.ping, address, count, source), timeout=timeout
+            )
+        except TimeoutError:
+            raise
+        except Exception as exc:
+            if not source:
+                raise
+            # RouterOS refuse une source qu'il ne porte pas (loopback declare
+            # faux, ou retire). La mesure passe alors par l'interface de sortie
+            # plutot que de disparaitre -- et on le dit.
+            logger.warning(
+                "%s : ping depuis le loopback %s refuse (%s), sonde sans source",
+                self.config.name,
+                source,
+                exc,
+            )
+            rows = await asyncio.wait_for(
+                asyncio.to_thread(self._client.ping, address, count, None), timeout=timeout
+            )
         times = [
             parse_routeros_duration_ms(row.get("time"))
             for row in rows

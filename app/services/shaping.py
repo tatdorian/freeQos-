@@ -27,7 +27,7 @@ from app.collectors.config_graph import (
     interface_stacks,
     routing_peers,
 )
-from app.collectors.mikrotik import MikrotikCollector
+from app.collectors.mikrotik import MikrotikCollector, remember_loopback
 from app.collectors.parsing import parse_flag
 from app.collectors.topology import (
     KIND_RADIO,
@@ -419,6 +419,8 @@ class ShapingService:
                 + (analyse_export.get("addresses") or []),
                 router_ids=router_ids,
             )
+            # La sonde ping et l'export NetFlow partent de ce loopback.
+            remember_loopback(collector.config.name, loopback)
             build_from_router(
                 snapshot,
                 router_name=collector.config.name,

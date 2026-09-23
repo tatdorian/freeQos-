@@ -619,3 +619,42 @@ async def test_un_chemin_de_routage_absent_ne_prive_pas_du_reste() -> None:
     snapshot = await service.discover()
 
     assert snapshot.nodes["router:pop"].attributes["loopback"] == "10.255.0.8"
+
+
+# =========================================================================
+# La sonde ping part du loopback
+# =========================================================================
+
+
+async def test_la_sonde_ping_part_du_loopback() -> None:
+    """DEMANDE EXPLICITE : la connexion vers le client s'initialise depuis le
+    loopback du routeur, pas depuis l'adresse de la VLAN de sortie."""
+    from app.collectors.mikrotik import MikrotikCollector
+
+    client = FakeRouterOsClient()
+    client.router_id_rows = ["10.255.0.7"]
+    client.ping_reply = "3ms"
+    config = RouterConfig(name="pop-nord", host="192.0.2.11", password="x")
+    collector = MikrotikCollector(config, client=client)
+
+    assert await collector.ping("154.66.223.217") == pytest.approx(3.0)
+    assert client.ping_sources == ["10.255.0.7"]
+
+
+async def test_un_loopback_refuse_ne_fait_pas_perdre_la_mesure() -> None:
+    from app.collectors.mikrotik import MikrotikCollector
+
+    class Refus(FakeRouterOsClient):
+        def ping(self, address, count=1, src_address=None):  # type: ignore[no-untyped-def]
+            if src_address:
+                self.ping_sources.append(src_address)
+                raise RuntimeError("no such address")
+            return super().ping(address, count, src_address)
+
+    client = Refus()
+    client.ping_reply = "5ms"
+    config = RouterConfig(name="pop-nord", host="192.0.2.11", password="x", loopback="10.9.9.9")
+    collector = MikrotikCollector(config, client=client)
+
+    assert await collector.ping("154.66.223.217") == pytest.approx(5.0)
+    assert client.ping_sources == ["10.9.9.9", None]

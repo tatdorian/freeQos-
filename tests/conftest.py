@@ -16,6 +16,17 @@ from app.collectors.mikrotik import MikrotikCollector
 from app.config import BackhaulConfig, RouterConfig, Settings
 
 
+@pytest.fixture(autouse=True)
+def _loopbacks_oublies():
+    """Le loopback detecte est retenu par nom de routeur, au niveau du module :
+    sans cet oubli, un test en heriterait d'un autre."""
+    from app.collectors.mikrotik import forget_loopbacks
+
+    forget_loopbacks()
+    yield
+    forget_loopbacks()
+
+
 class FakeRouterOsClient:
     """Faux routeur RouterOS : renvoie les tables /ppp/active et /interface.
 
@@ -37,6 +48,7 @@ class FakeRouterOsClient:
         self.closed = False
         self.raise_on_ppp: Exception | None = None
         self.pings: list[tuple[str, int]] = []
+        self.ping_sources: list[str | None] = []
         # Topologie et files, pour la phase 2.
         self.neighbor_rows: list[dict[str, Any]] = []
         self.ethernet_rows: list[dict[str, Any]] = []
@@ -251,8 +263,11 @@ class FakeRouterOsClient:
         self.user_rows = [{"name": username, "group": "full"}]
         self.group_rows = [{"name": "full", "policy": "read,write,api,test,policy"}]
 
-    def ping(self, address: str, count: int = 1) -> list[dict[str, Any]]:
+    def ping(
+        self, address: str, count: int = 1, src_address: str | None = None
+    ) -> list[dict[str, Any]]:
         self.pings.append((address, count))
+        self.ping_sources.append(src_address)
         if self.ping_error is not None:
             raise self.ping_error
         if self.ping_reply is None:
