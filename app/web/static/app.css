@@ -501,6 +501,30 @@ details[open] > summary {
   border-bottom: 1px solid var(--border);
 }
 
+/* Qui parle a qui : un bloc par client. La ligne de tete porte sa
+   consommation ; les adresses sont dessous, depliees a la demande. */
+details.flow-client { margin: .45rem 0; }
+details.flow-client > summary {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  flex-wrap: wrap;
+  font-size: .85rem;
+  color: var(--text);
+}
+details.flow-client > summary::before { content: '\25B8'; color: var(--muted); }
+details.flow-client[open] > summary::before { content: '\25BE'; }
+details.flow-client > summary::-webkit-details-marker { display: none; }
+details.flow-client > summary { list-style: none; }
+.flow-client-sum {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+  font-size: .8rem;
+}
+details.flow-client .table-wrap { margin: 0; }
+
 /* ------------------------------------------------------ l'arbre, en detail
    Ce qui rend un arbre d'operateur lisible n'est pas le dessin des cases mais
    ce qu'on peut en RETIRER : replier une branche, reduire l'echelle, retrouver

@@ -1117,7 +1117,7 @@ function renderExecSankey(host, subs) {
  *  mesure fait partie de la mesure, et la lecture n'en retient qu'un.
  */
 
-const FLOW = { minutes: 60, vantage: '', app: null, pop: '', category: '', search: '' };
+const FLOW = { minutes: 60, vantage: '', pop: '', category: '', search: '', open: new Set() };
 
 const VANTAGE_LABEL = {
   edge: 'upstream of the core',
@@ -1184,10 +1184,9 @@ async function loadTraffic() {
   FLOW.vantage = document.getElementById('flow-vantage').value || '';
 
   const suffixe = '?minutes=' + FLOW.minutes + (FLOW.vantage ? '&vantage=' + FLOW.vantage : '');
-  const [etat, top, apps, hotes, exporteurs] = await Promise.all([
+  const [etat, top, hotes, exporteurs] = await Promise.all([
     api('/netflow/status'),
     api('/netflow/top' + suffixe + '&limit=25').catch(() => null),
-    api('/netflow/applications?minutes=' + FLOW.minutes).catch(() => []),
     api('/netflow/hosts?limit=60').catch(() => ({ hosts: [], vlans: [] })),
     api('/netflow/exporters').catch(() => []),
   ]);
@@ -1196,7 +1195,6 @@ async function loadTraffic() {
   flowNotice(flowDiagnostic(etat, exportEtat));
   renderFlowStats(etat, top);
   renderFlowTop(top);
-  renderFlowApps(apps);
   renderFlowHosts(hotes);
   renderFlowExporters(exporteurs);
   renderFlowExport(exportEtat);
@@ -1268,35 +1266,6 @@ function renderFlowTop(top) {
   });
 }
 
-function renderFlowApps(apps) {
-  const host = document.getElementById('flow-apps');
-  if (!apps || !apps.length) {
-    host.innerHTML = '<div class="empty">Nothing to break down: no flow over this period.</div>';
-    return;
-  }
-  const total = apps.reduce((s, a) => s + Number(a.down_bytes || 0) + Number(a.up_bytes || 0), 0);
-  host.innerHTML = '<table><thead><tr><th>Usage</th><th class="num">Down</th>' +
-    '<th class="num">Up</th><th>Share</th></tr></thead><tbody>' +
-    apps.map((a) => {
-      const somme = Number(a.down_bytes || 0) + Number(a.up_bytes || 0);
-      return '<tr><td><a href="#" data-flow-app="' + esc(a.app) + '">' +
-          esc(a.app) + '</a></td>' +
-        '<td class="num">' + bytesText(a.down_bytes) + '</td>' +
-        '<td class="num">' + bytesText(a.up_bytes) + '</td>' +
-        '<td style="min-width:140px">' + meter(somme, total || 1, '') + '</td></tr>';
-    }).join('') + '</tbody></table>';
-
-  // « autre, 3 Kio » ne dit pas AVEC QUI. Le tableau par usage agrege justement
-  // ce detail : ouvrir la famille est le seul chemin vers la conversation.
-  host.querySelectorAll('[data-flow-app]').forEach((a) => {
-    a.addEventListener('click', (e) => {
-      e.preventDefault();
-      FLOW.app = FLOW.app === a.dataset.flowApp ? null : a.dataset.flowApp;
-      loadFlowPairs();
-    });
-  });
-}
-
 /** Un debit a partir d'un volume et d'une duree.
  *
  *  Des octets seuls ne disent pas si c'est un filet continu ou une rafale :
@@ -1334,8 +1303,7 @@ function remplirFacette(id, libelle, valeurs, choisi) {
 
 async function loadFlowPairs() {
   const hote = document.getElementById('flow-pairs');
-  const parametres = '?minutes=' + FLOW.minutes + '&limit=200' +
-    (FLOW.app ? '&app=' + encodeURIComponent(FLOW.app) : '') +
+  const parametres = '?minutes=' + FLOW.minutes + '&limit=500' +
     (FLOW.pop ? '&pop=' + encodeURIComponent(FLOW.pop) : '') +
     (FLOW.category ? '&category=' + encodeURIComponent(FLOW.category) : '') +
     (FLOW.search ? '&q=' + encodeURIComponent(FLOW.search) : '');
@@ -1350,62 +1318,113 @@ async function loadFlowPairs() {
   const facettes = data.facets || {};
   remplirFacette('flow-pairs-pop', 'All PoPs', facettes.pops, FLOW.pop);
   remplirFacette('flow-pairs-category', 'All categories', facettes.categories, FLOW.category);
-  remplirFacette('flow-pairs-app', 'All usages', facettes.apps, FLOW.app);
   const direct = new Set((data.live || []).map((c) => c[0] + '|' + c[1]));
   const octetsDirect = data.live_bytes || {};
   const fenetre = data.window_seconds || 0;
   const periode = FLOW.minutes * 60;
   const lignes = data.pairs || [];
 
-  const filtre = [FLOW.search, FLOW.pop, FLOW.category, FLOW.app].filter(Boolean).length;
-  document.getElementById('flow-pairs-count').textContent =
-    lignes.length + ' conversation(s) · ' + direct.size + ' live' +
-    (filtre ? ' · ' + filtre + ' filtre(s)' : '');
+  // UN BLOC PAR CLIENT. La ligne de tete donne sa consommation totale ; on
+  // deplie pour voir avec quelles adresses elle se fait, et a quel debit.
+  const clients = new Map();
+  lignes.forEach((r) => {
+    const cle = String(r.client);
+    if (!clients.has(cle)) {
+      clients.set(cle, { tete: r, lignes: [], down: 0, up: 0, direct: 0, vivants: 0 });
+    }
+    const c = clients.get(cle);
+    c.lignes.push(r);
+    c.down += Number(r.down_bytes || 0);
+    c.up += Number(r.up_bytes || 0);
+    const paire = r.client + '|' + r.address;
+    if (direct.has(paire)) {
+      c.vivants += 1;
+      c.direct += Number(octetsDirect[paire] || 0);
+    }
+  });
+  const groupes = Array.from(clients.values())
+    .sort((a, b) => (b.down + b.up) - (a.down + a.up));
 
-  if (!lignes.length) {
+  const filtre = [FLOW.search, FLOW.pop, FLOW.category].filter(Boolean).length;
+  document.getElementById('flow-pairs-count').textContent =
+    groupes.length + ' client(s) · ' + lignes.length + ' conversation(s) · ' +
+    direct.size + ' live' + (filtre ? ' · ' + filtre + ' filtre(s)' : '');
+
+  if (!groupes.length) {
     hote.innerHTML = '<div class="empty">' + (filtre
       ? 'No conversation matches these filters.'
       : 'No conversation over this period.') + '</div>';
     return;
   }
-  hote.innerHTML = '<table><thead><tr><th>Client</th><th>PoP</th><th>Destination</th>' +
-    '<th>Service</th><th>Category</th><th class="num">Port</th><th>Proto</th><th>Usage</th>' +
-    '<th class="num">Down</th><th class="num">Up</th>' +
-    '<th class="num">Avg rate</th><th class="num">Live</th>' +
-    '</tr></thead><tbody>' +
-    lignes.map((r) => {
-      const cle = r.client + '|' + r.address;
-      const vivant = direct.has(cle);
-      return '<tr>' +
-        '<td class="login">' + clientCell(r) + '</td>' +
-        '<td>' + (r.pop_name
-          ? '<a href="#" data-pair-pop="' + esc(r.pop_name) + '">' + esc(r.pop_name) + '</a>'
-          : '<span class="hint">-</span>') + '</td>' +
-        '<td><a href="#" data-pair-ip="' + esc(r.address) + '"><code>' +
-          esc(r.address) + '</code></a>' +
-          (domaine(r.hostname)
-            ? '<br><b style="font-size:.75rem">' + esc(domaine(r.hostname)) + '</b>' : '') +
-          (r.hostname ? '<br><span class="hint">' + esc(r.hostname) + '</span>' : '') + '</td>' +
-        '<td>' + (r.service
-          ? '<a href="#" data-pair-service="' + esc(r.service) + '">' + esc(r.service) + '</a>'
-          : '<span class="hint">unidentified</span>') + '</td>' +
-        '<td>' + (r.category
-          ? '<a href="#" data-pair-cat="' + esc(r.category) + '">' +
-            svcBadge(r.category) + '</a>'
-          : svcBadge(null)) + '</td>' +
-        '<td class="num">' + esc(r.port || '-') + '</td>' +
-        '<td>' + esc(protoName(r.protocol)) + '</td>' +
-        '<td>' + esc(r.app || '-') + '</td>' +
-        '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
-        '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
-        '<td class="num">' +
-          debitText(Number(r.down_bytes || 0) + Number(r.up_bytes || 0), periode) + '</td>' +
-        '<td class="num">' + (vivant
-          ? '<b>' + debitText(octetsDirect[cle] || 0, fenetre) + '</b>'
-          : '<span class="hint">-</span>') + '</td>' +
-        '</tr>';
-    }).join('') + '</tbody></table>';
 
+  const conversation = (r) => {
+    const paire = r.client + '|' + r.address;
+    return '<tr>' +
+      '<td><a href="#" data-pair-ip="' + esc(r.address) + '"><code>' +
+        esc(r.address) + '</code></a>' +
+        (domaine(r.hostname)
+          ? '<br><b style="font-size:.75rem">' + esc(domaine(r.hostname)) + '</b>' : '') +
+        (r.hostname ? '<br><span class="hint">' + esc(r.hostname) + '</span>' : '') + '</td>' +
+      '<td>' + (r.service
+        ? '<a href="#" data-pair-service="' + esc(r.service) + '">' + esc(r.service) + '</a>'
+        : '<span class="hint">unidentified</span>') + '</td>' +
+      '<td>' + (r.category
+        ? '<a href="#" data-pair-cat="' + esc(r.category) + '">' +
+          svcBadge(r.category) + '</a>'
+        : svcBadge(null)) + '</td>' +
+      '<td class="num">' + esc(r.port || '-') + '</td>' +
+      '<td>' + esc(protoName(r.protocol)) + '</td>' +
+      '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
+      '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
+      '<td class="num">' +
+        debitText(Number(r.down_bytes || 0) + Number(r.up_bytes || 0), periode) + '</td>' +
+      '<td class="num">' + (direct.has(paire)
+        ? '<b>' + debitText(octetsDirect[paire] || 0, fenetre) + '</b>'
+        : '<span class="hint">-</span>') + '</td>' +
+      '</tr>';
+  };
+
+  hote.innerHTML = groupes.map((c) => {
+    const r = c.tete;
+    const ouvert = FLOW.open.has(String(r.client));
+    return '<details class="flow-client" data-flow-client="' + esc(r.client) + '"' +
+        (ouvert ? ' open' : '') + '>' +
+      '<summary>' +
+        '<span class="login">' + clientCell(r) + '</span>' +
+        (r.pop_name ? ' <span class="hint">' + esc(r.pop_name) + '</span>' : '') +
+        '<span class="spacer"></span>' +
+        '<span class="flow-client-sum">' +
+          '<span>&darr; ' + bytesText(c.down) + '</span>' +
+          '<span>&uarr; ' + bytesText(c.up) + '</span>' +
+          '<span>' + debitText(c.down + c.up, periode) + ' avg</span>' +
+          '<span>' + (c.vivants
+            ? '<b>' + debitText(c.direct, fenetre) + '</b> live'
+            : '<span class="hint">idle</span>') + '</span>' +
+          '<span class="hint">' + c.lignes.length + ' address(es)</span>' +
+        '</span>' +
+      '</summary>' +
+      '<div class="table-wrap"><table><thead><tr><th>Destination</th><th>Service</th>' +
+        '<th>Category</th><th class="num">Port</th><th>Proto</th>' +
+        '<th class="num">Down</th><th class="num">Up</th>' +
+        '<th class="num">Avg rate</th><th class="num">Live</th>' +
+      '</tr></thead><tbody>' + c.lignes.map(conversation).join('') +
+      '</tbody></table></div></details>';
+  }).join('');
+
+  // Les blocs ouverts le restent quand la liste se recharge (filtre, periode).
+  hote.querySelectorAll('[data-flow-client]').forEach((d) => {
+    d.addEventListener('toggle', () => {
+      if (d.open) FLOW.open.add(d.dataset.flowClient);
+      else FLOW.open.delete(d.dataset.flowClient);
+    });
+  });
+  hote.querySelectorAll('[data-svc-sub]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openSubscriber(Number(a.dataset.svcSub));
+    });
+  });
   hote.querySelectorAll('[data-pair-ip]').forEach((a) => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1414,18 +1433,14 @@ async function loadFlowPairs() {
   });
   // Chaque valeur du tableau est un filtre : on clique ce qu'on voit plutot
   // que de le retrouver dans un selecteur.
-  const filtrer = (attribut, champ) => {
-    hote.querySelectorAll('[' + attribut + ']').forEach((a) => {
-      a.addEventListener('click', (e) => {
-        e.preventDefault();
-        const valeur = a.getAttribute(attribut);
-        FLOW[champ] = FLOW[champ] === valeur ? '' : valeur;
-        loadFlowPairs();
-      });
+  hote.querySelectorAll('[data-pair-cat]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      const valeur = a.getAttribute('data-pair-cat');
+      FLOW.category = FLOW.category === valeur ? '' : valeur;
+      loadFlowPairs();
     });
-  };
-  filtrer('data-pair-pop', 'pop');
-  filtrer('data-pair-cat', 'category');
+  });
   hote.querySelectorAll('[data-pair-service]').forEach((a) => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
@@ -6690,14 +6705,13 @@ document.getElementById('flow-pairs-search').addEventListener('change', (e) => {
   FLOW.search = e.target.value.trim();
   loadFlowPairs();
 });
-['pop', 'category', 'app'].forEach((champ) => {
+['pop', 'category'].forEach((champ) => {
   document.getElementById('flow-pairs-' + champ).addEventListener('change', (e) => {
-    FLOW[champ] = e.target.value || (champ === 'app' ? null : '');
+    FLOW[champ] = e.target.value || '';
     loadFlowPairs();
   });
 });
 document.getElementById('flow-pairs-reset').addEventListener('click', () => {
-  FLOW.app = null;
   FLOW.pop = '';
   FLOW.category = '';
   FLOW.search = '';
