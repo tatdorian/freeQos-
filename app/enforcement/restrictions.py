@@ -523,3 +523,45 @@ def plan_restrictions(
                 )
             )
     return plan
+
+
+def plan_lift(router_name: str, rule_id: int, state: RouterRestrictionState) -> Plan:
+    """Les retraits qui levent UNE regle, et rien d'autre.
+
+    C'est le geste "suspendre" ou "supprimer" : l'exploitant a demande que ce
+    trafic repasse. Attendre la reconciliation suivante laissait l'adresse
+    bloquee plusieurs minutes -- et indefiniment si une AUTRE regle du meme
+    routeur faisait echouer le plan complet avant qu'il n'atteigne ses retraits.
+    Ce plan ne contient que des suppressions de lignes portant la marque de
+    cette regle : il ne peut rien poser, ni toucher a une autre restriction.
+
+    L'ORDRE EST L'INVERSE DE LA POSE : les regles d'abord, qui cessent de
+    bloquer des qu'elles disparaissent, les listes d'adresses ensuite.
+    """
+    plan = Plan(router_name=router_name)
+    slug = rule_slug(rule_id)
+    for chemin, rows in (
+        (PATH_FILTER, state.filters),
+        (PATH_MANGLE, state.mangle),
+        (PATH_QUEUE_TREE, state.queue_trees),
+        (PATH_ADDRESS_LIST, state.address_list),
+    ):
+        for row in rows:
+            marque = parse_tag(row.get("comment"))
+            if marque is None or marque[0] != slug:
+                continue
+            nom = (
+                f"{row.get('list') or ''} {row.get('address') or ''}"
+                if chemin == PATH_ADDRESS_LIST
+                else f"{slug} ({marque[1]})"
+            )
+            plan.actions.append(
+                PlanAction(
+                    verb="remove",
+                    path=chemin,
+                    target_id=str(row.get(".id") or ""),
+                    name=nom.strip(),
+                    reason="restriction lifted",
+                )
+            )
+    return plan

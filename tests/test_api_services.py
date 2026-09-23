@@ -28,7 +28,7 @@ from app.api.deps import get_container
 from app.collectors.mikrotik import MikrotikCollector
 from app.collectors.netflow import Flow
 from app.config import RouterConfig, Settings
-from app.enforcement.restrictions import PATH_ADDRESS_LIST, dst_list_name
+from app.enforcement.restrictions import PATH_ADDRESS_LIST, PATH_FILTER, dst_list_name, tag
 from app.main import register_routes
 from app.services.flows import FlowAggregator, PrefixIndex
 from app.services.intel import IntelService
@@ -490,13 +490,133 @@ def test_le_plan_vise_la_liste_de_la_regle(client: TestClient) -> None:
     assert dst_list_name(cree["id"]) in commandes
 
 
-def test_supprimer_une_regle_ne_nettoie_pas_le_routeur_en_douce(client: TestClient) -> None:
-    """Supprimer une fiche ne doit pas declencher une ecriture sur des
-    equipements de production sans que personne ne l'ait demande. C'est la
-    reconciliation qui nettoie, et elle est observable."""
+def test_supprimer_une_regle_ecriture_coupee_dit_qu_elle_n_est_pas_levee(
+    client: TestClient,
+) -> None:
+    """L'interrupteur d'ecriture reste le dernier mot, meme pour lever. La
+    reponse le DIT : croire un trafic rouvert alors qu'il est toujours bloque
+    est exactement l'erreur a eviter."""
     cree = client.post("/api/v1/traffic-rules", json=regle()).json()
-    assert client.delete(f"/api/v1/traffic-rules/{cree['id']}").status_code == 204
+    reponse = client.delete(f"/api/v1/traffic-rules/{cree['id']}")
+    assert reponse.status_code == 200
+    assert reponse.json()["lift"]["state"] == "a poser"
     assert client.get("/api/v1/traffic-rules").json()["rules"] == []
+
+
+class FauxShaping:
+    """Ecriture active, executee sur le faux routeur : juste assez pour voir
+    ce qu'une levee retire vraiment."""
+
+    enforcement_enabled = True
+
+    def __init__(self, routeur: FakeRouterOsClient) -> None:
+        self.routeur = routeur
+        self.plans: list[Any] = []
+
+    async def apply(self, plan: Any, *, dry_run: bool = True, author: str | None = None) -> Any:
+        from app.enforcement.routeros import ActionOutcome, ApplyResult
+
+        self.plans.append(plan)
+        tables = {
+            PATH_ADDRESS_LIST: "firewall_address_list_rows",
+            PATH_FILTER: "firewall_filter_rows",
+        }
+        resultat = ApplyResult(router_name=plan.router_name, dry_run=dry_run)
+        for action in plan.actions:
+            assert action.verb == "remove"
+            attribut = tables[action.path]
+            lignes = getattr(self.routeur, attribut)
+            setattr(self.routeur, attribut, [r for r in lignes if r[".id"] != action.target_id])
+            resultat.outcomes.append(ActionOutcome(action=action, ok=True))
+        return resultat
+
+
+def poser(routeur: FakeRouterOsClient, rule_id: int, adresse: str) -> None:
+    """Le routeur tel qu'il est apres la pose d'un blocage sur une adresse."""
+    routeur.firewall_address_list_rows.append(
+        {
+            ".id": f"*A{rule_id}",
+            "list": dst_list_name(rule_id),
+            "address": adresse,
+            "comment": tag(rule_id, "dst"),
+        }
+    )
+    for role in ("drop-up", "drop-down"):
+        routeur.firewall_filter_rows.append(
+            {
+                ".id": f"*F{rule_id}{role}",
+                "chain": "forward",
+                "action": "drop",
+                "comment": tag(rule_id, role),
+            }
+        )
+
+
+def test_suspendre_une_regle_la_leve_aussitot_sur_le_routeur(
+    client: TestClient, restrictions: RestrictionService
+) -> None:
+    """LE BUG SIGNALE : une adresse restreinte le restait apres la levee de la
+    regle, faute d'ecriture avant la reconciliation suivante. Suspendre doit
+    retirer tout de suite ce que la regle avait pose -- et rien d'autre."""
+    routeur = restrictions.registry.collectors[0]._client  # noqa: SLF001
+    restrictions.shaping = FauxShaping(routeur)  # type: ignore[assignment]
+    levee = client.post(
+        "/api/v1/traffic-rules", json=regle(name="IP", services=[], prefixes=["203.0.113.9"])
+    ).json()
+    autre = client.post("/api/v1/traffic-rules", json=regle()).json()
+    poser(routeur, levee["id"], "203.0.113.9")
+    poser(routeur, autre["id"], "45.57.0.0/17")
+
+    reponse = client.patch(f"/api/v1/traffic-rules/{levee['id']}", json={"enabled": False})
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["lift"]["state"] == "levee"
+    assert corps["lift"]["applied"] == 3
+    assert corps["last_state"] == "levee"
+    # L'autre restriction est intacte.
+    assert [r["list"] for r in routeur.firewall_address_list_rows] == [dst_list_name(autre["id"])]
+    assert len(routeur.firewall_filter_rows) == 2
+    assert all(f"r{autre['id']}" in r["comment"] for r in routeur.firewall_filter_rows)
+
+
+def test_supprimer_une_regle_la_leve_aussitot_sur_le_routeur(
+    client: TestClient, restrictions: RestrictionService
+) -> None:
+    routeur = restrictions.registry.collectors[0]._client  # noqa: SLF001
+    restrictions.shaping = FauxShaping(routeur)  # type: ignore[assignment]
+    cree = client.post(
+        "/api/v1/traffic-rules", json=regle(name="IP", services=[], prefixes=["203.0.113.9"])
+    ).json()
+    poser(routeur, cree["id"], "203.0.113.9")
+
+    reponse = client.delete(f"/api/v1/traffic-rules/{cree['id']}")
+
+    assert reponse.status_code == 200
+    assert reponse.json()["lift"]["state"] == "levee"
+    assert routeur.firewall_address_list_rows == []
+    assert routeur.firewall_filter_rows == []
+
+
+def test_un_plan_refuse_par_le_coupe_circuit_n_est_pas_affiche_pose(
+    client: TestClient, restrictions: RestrictionService
+) -> None:
+    """Un plan refuse n'a RIEN ecrit. L'afficher "posee" faisait croire a une
+    restriction posee -- ou levee -- qui ne l'etait pas."""
+    from app.enforcement.routeros import ApplyResult
+
+    class Refus(FauxShaping):
+        async def apply(self, plan: Any, **kwargs: Any) -> Any:
+            return ApplyResult(
+                router_name=plan.router_name, dry_run=False, aborted_reason="trop d'actions"
+            )
+
+    routeur = restrictions.registry.collectors[0]._client  # noqa: SLF001
+    restrictions.shaping = Refus(routeur)  # type: ignore[assignment]
+    client.post("/api/v1/traffic-rules", json=regle())
+    rapport = client.post("/api/v1/traffic-rules/apply?dry_run=false").json()
+    assert rapport["state"] == "erreur"
+    assert "trop d'actions" in rapport["routers"][0]["reason"]
 
 
 # ================================================== la boucle qui nomme

@@ -3,8 +3,10 @@
 DEUX GESTES DISTINCTS, ET LA DISTINCTION EST TOUT L'INTERET :
 
   - ``POST/PATCH/DELETE /traffic-rules`` enregistre une INTENTION. Rien n'est
-    ecrit sur un routeur. Une regle peut etre saisie, relue, corrigee sans
-    qu'aucun paquet ne soit touche.
+    POSE sur un routeur. Une regle peut etre saisie, relue, corrigee sans
+    qu'aucun paquet ne soit touche. Seule exception, et elle va dans le sens
+    sur : suspendre ou supprimer une regle la LEVE aussitot (retraits seuls,
+    voir ``RestrictionService.lift``).
   - ``POST /traffic-rules/apply`` ECRIT -- et seulement si l'enforcement est
     actif. Le meme appel en simulation (``dry_run``, le defaut) rend les
     commandes exactes qui seraient envoyees.
@@ -28,7 +30,12 @@ from app.db.traffic_rules_repo import (
     RuleNotFoundError,
     TrafficRulesRepository,
 )
-from app.services.restrictions import InvalidRuleError, RestrictionService, validate
+from app.services.restrictions import (
+    ETAT_LEVEE,
+    InvalidRuleError,
+    RestrictionService,
+    validate,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -181,31 +188,55 @@ async def update_rule(
     # et une regle sans critere vise tout internet.
     _valide({**actuelle, **champs})
     try:
-        return await repo.update(rule_id, champs)
+        regle = await repo.update(rule_id, champs)
     except RuleNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except RuleConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if actuelle.get("enabled") and champs.get("enabled") is False:
+        # SUSPENDRE, C'EST LEVER. Attendre la reconciliation laissait le trafic
+        # bloque des minutes -- ou pour toujours si le plan complet echouait
+        # ailleurs avant ses retraits.
+        levee = await _lift(container, rule_id, author="ui:restrictions")
+        if levee.get("state") == ETAT_LEVEE:
+            await repo.record_apply(rule_id, state=ETAT_LEVEE, detail="restriction lifted")
+            regle = await repo.get(rule_id)
+        regle["lift"] = levee
+    return regle
 
 
-@router.delete(
-    "/traffic-rules/{rule_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Delete a restriction",
-)
-async def delete_rule(rule_id: Annotated[int, Path(ge=1)], container: ContainerDep) -> None:
-    """Retire la regle de la base.
+async def _lift(container: ContainerDep, rule_id: int, *, author: str) -> dict[str, Any]:
+    """Leve une regle sur les routeurs, sans jamais faire echouer la requete.
 
-    CE QUI EST POSE SUR LES ROUTEURS N'EST PAS RETIRE ICI. La reconciliation
-    s'en charge au passage suivant, ou tout de suite via ``/traffic-rules/apply``
-    -- et c'est deliberé : supprimer une fiche ne doit pas declencher une
-    ecriture sur des equipements de production sans que personne ne l'ait
-    demande.
+    La fiche est deja modifiee en base : si un routeur est injoignable, la
+    reconciliation finira le travail. Le rapport dit ce qui a ete retire, et
+    ou cela a echoue.
+    """
+    service = container.restrictions
+    if service is None:
+        return {"state": "indisponible", "reason": "service de restriction absent"}
+    try:
+        return await service.lift(rule_id, author=author)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Levee de la restriction %s impossible", rule_id)
+        return {"state": "erreur", "reason": f"{type(exc).__name__}: {exc}"}
+
+
+@router.delete("/traffic-rules/{rule_id}", summary="Delete a restriction and lift it")
+async def delete_rule(
+    rule_id: Annotated[int, Path(ge=1)], container: ContainerDep
+) -> dict[str, Any]:
+    """Retire la regle de la base, PUIS la leve sur les routeurs.
+
+    Supprimer une restriction, c'est demander que ce trafic repasse. Seules les
+    lignes portant la marque de CETTE regle sont retirees : rien n'est pose,
+    aucune autre restriction n'est touchee.
     """
     try:
         await _repo(container).delete(rule_id)
     except RuleNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return {"deleted": rule_id, "lift": await _lift(container, rule_id, author="ui:restrictions")}
 
 
 @router.get("/traffic-rules/{rule_id}/preview", summary="What this rule targets today")

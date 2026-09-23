@@ -3714,11 +3714,29 @@ function applyNotice(html) {
   document.getElementById('svc-apply-result').innerHTML = html;
 }
 
+/** Ce que la levee a vraiment retire des routeurs.
+ *
+ *  Suspendre ou supprimer une regle la LEVE aussitot. Dire "c'est fait" sans
+ *  regarder le rapport ferait croire qu'un trafic repasse alors qu'un routeur
+ *  injoignable -- ou l'ecriture coupee -- le bloque encore. */
+function liftNotice(action, levee) {
+  if (!levee) return '<div class="notice ok">Rule ' + action + '.</div>';
+  if (levee.state === 'levee') {
+    return '<div class="notice ok">Rule ' + action + ' and lifted on the routers (' +
+      esc(levee.applied || 0) + ' line(s) removed).</div>';
+  }
+  const details = (levee.routers || [])
+    .filter((r) => r.state !== 'posee')
+    .map((r) => esc(r.router) + ': ' + esc(r.reason)).join('<br>');
+  return '<div class="notice warn">Rule ' + action + ', but <b>not lifted everywhere</b>: ' +
+    esc(levee.reason || '') + (details ? '<br>' + details : '') +
+    '<br><span class="hint">The automatic pass will retry.</span></div>';
+}
+
 async function deleteRule(id) {
   try {
-    await api('/traffic-rules/' + id, { method: 'DELETE' });
-    applyNotice('<div class="notice ok">Rule deleted. Apply to clean the ' +
-      'routers, or wait for the automatic pass.</div>');
+    const reponse = await api('/traffic-rules/' + id, { method: 'DELETE' });
+    applyNotice(liftNotice('deleted', reponse && reponse.lift));
     await loadServices();
   } catch (err) {
     applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
@@ -3727,9 +3745,10 @@ async function deleteRule(id) {
 
 async function toggleRule(id, enabled) {
   try {
-    await api('/traffic-rules/' + id, {
+    const regle = await api('/traffic-rules/' + id, {
       method: 'PATCH', body: JSON.stringify({ enabled }),
     });
+    if (!enabled) applyNotice(liftNotice('suspended', regle && regle.lift));
     await loadServices();
   } catch (err) {
     applyNotice('<div class="notice err">' + esc(err.message) + '</div>');

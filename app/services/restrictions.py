@@ -46,6 +46,7 @@ from app.enforcement.restrictions import (
     RouterRestrictionState,
     RuleTarget,
     merge_addresses,
+    plan_lift,
     plan_restrictions,
 )
 from app.services import ipfinder
@@ -63,6 +64,10 @@ ETAT_A_POSER = "a poser"
 ETAT_ERREUR = "erreur"
 ETAT_SANS_ROUTEUR = "aucun routeur"
 ETAT_SANS_ADRESSE = "aucune adresse"
+#: Une regle suspendue dont les lignes ont bien quitte tous les routeurs. Sans
+#: cet etat, elle garderait l'affichage "posee" de sa derniere pose -- et on
+#: croirait encore bloque un trafic qui passe, ou l'inverse.
+ETAT_LEVEE = "levee"
 
 
 class InvalidRuleError(ValueError):
@@ -273,6 +278,17 @@ class RestrictionService:
         if self.rules_repo is not None and not dry_run:
             for regle in actives:
                 await self.rules_repo.record_apply(int(regle["id"]), state=etat, detail=detail)
+            if etat == ETAT_POSEE and router_name is None:
+                # Tous les routeurs sont conformes : une regle suspendue n'y a
+                # donc plus rien. Elle cesse de s'afficher comme posee.
+                for regle in regles:
+                    if not regle.get("enabled") and regle.get("last_state") not in (
+                        None,
+                        ETAT_LEVEE,
+                    ):
+                        await self.rules_repo.record_apply(
+                            int(regle["id"]), state=ETAT_LEVEE, detail=detail
+                        )
         self.last_run = {
             "at": datetime.now(tz=UTC),
             "state": etat,
@@ -282,7 +298,13 @@ class RestrictionService:
         return rapport
 
     async def _apply_one(
-        self, router_name: str, cibles: list[RuleTarget], author: str, dry_run: bool
+        self,
+        router_name: str,
+        cibles: list[RuleTarget],
+        author: str,
+        dry_run: bool,
+        *,
+        lift_rule_id: int | None = None,
     ) -> dict[str, Any]:
         ligne: dict[str, Any] = {
             "router": router_name,
@@ -292,7 +314,11 @@ class RestrictionService:
             "actions": [],
         }
         try:
-            plan = await self.plan_router(router_name, cibles)
+            if lift_rule_id is None:
+                plan = await self.plan_router(router_name, cibles)
+            else:
+                etat = await self._read_state(self._collector(router_name))
+                plan = plan_lift(router_name, lift_rule_id, etat)
         except Exception as exc:  # noqa: BLE001 - un routeur muet ne casse pas les autres
             logger.warning("Plan de restriction impossible sur %s : %s", router_name, exc)
             ligne["state"] = ETAT_ERREUR
@@ -323,12 +349,54 @@ class RestrictionService:
             return ligne
         ligne["applied"] = resultat.applied
         rates = [o for o in resultat.outcomes if not o.ok]
-        if rates:
+        if rates or resultat.aborted_reason:
+            # Un plan refuse par le coupe-circuit n'a RIEN ecrit : le montrer
+            # "posee" faisait croire a une restriction posee -- ou levee -- qui
+            # ne l'etait pas, et rien ne disait pourquoi.
             ligne["state"] = ETAT_ERREUR
-            ligne["reason"] = "; ".join(str(o.detail) for o in rates if o.detail)
+            ligne["reason"] = "; ".join(
+                [str(o.detail) for o in rates if o.detail]
+                + ([resultat.aborted_reason] if resultat.aborted_reason else [])
+            )
             return ligne
         ligne["reason"] = f"{resultat.applied} commande(s) appliquee(s)"
         return ligne
+
+    async def lift(self, rule_id: int, *, author: str) -> dict[str, Any]:
+        """Retire TOUT DE SUITE ce qu'une regle a pose, sur chaque routeur.
+
+        Appele quand l'exploitant suspend ou supprime une restriction. Avant,
+        rien n'etait retire avant la reconciliation suivante -- plusieurs
+        minutes pendant lesquelles l'adresse restait bloquee, et pour toujours
+        si le plan complet d'un routeur echouait sur une AUTRE regle avant
+        d'atteindre ses retraits (le plan s'arrete a la premiere erreur).
+
+        Seules des SUPPRESSIONS de lignes portant la marque de cette regle sont
+        envoyees : lever une restriction ne pose rien et ne touche a aucune
+        autre. Le drapeau d'ecriture reste le dernier mot, comme partout.
+        """
+        vises = [collector.name for collector in self.registry.collectors]
+        rapport: dict[str, Any] = {
+            "rule_id": rule_id,
+            "enforcement_enabled": self.shaping.enforcement_enabled,
+            "routers": [],
+            "applied": 0,
+        }
+        if not self.shaping.enforcement_enabled:
+            rapport["state"] = ETAT_A_POSER
+            rapport["reason"] = (
+                "l'enforcement est desactive : rien n'est retire des routeurs tant "
+                "qu'il ne sera pas actif (Reglages > Shaping et ecriture)"
+            )
+            return rapport
+        for nom in sorted(vises):
+            rapport["routers"].append(
+                await self._apply_one(nom, [], author, False, lift_rule_id=rule_id)
+            )
+        rapport["applied"] = sum(int(r["applied"]) for r in rapport["routers"])
+        etat = self._etat_global(rapport["routers"])
+        rapport["state"] = ETAT_LEVEE if etat == ETAT_POSEE else etat
+        return rapport
 
     @staticmethod
     def _etat_global(lignes: list[dict[str, Any]]) -> str:
