@@ -152,16 +152,6 @@
       <h2>Addresses seen, undeclared</h2>
       <div class="table-wrap" id="flow-hosts"></div>
 
-      <h2>Export on the routers</h2>
-      <div class="table-wrap" id="flow-export"></div>
-      <div class="toolbar" style="margin-top:.6rem">
-        <button class="sm" id="flow-export-dry">Dry run</button>
-        <button class="sm primary" id="flow-export-apply">Configure</button>
-        <span class="spacer"></span>
-        <span class="mode" id="flow-export-state"></span>
-      </div>
-      <div id="flow-export-result"></div>
-
       <h2>Exporters</h2>
       <div class="table-wrap" id="flow-exporters"></div>
       <form class="stack" id="exporter-form" autocomplete="off">
@@ -289,8 +279,9 @@
             </div>
             <div class="field">
               <label for="sc-pop">Attached PoP</label>
-              <input id="sc-pop" required maxlength="128" list="sc-pop-list" placeholder="North PoP">
-              <datalist id="sc-pop-list"></datalist>
+              <select id="sc-pop" required data-pop-select>
+                <option value="">Choose a PoP</option>
+              </select>
             </div>
             <div class="field">
               <label for="sc-address">IP address or subnet</label>
@@ -491,7 +482,9 @@
             </div>
             <div class="field">
               <label for="a-pop">Attached PoP</label>
-              <input id="a-pop" name="pop_name" required placeholder="North PoP">
+              <select id="a-pop" name="pop_name" required data-pop-select>
+                <option value="">Choose a PoP</option>
+              </select>
             </div>
             <div class="field">
               <label for="a-host">Antenna address</label>

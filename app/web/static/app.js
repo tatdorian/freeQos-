@@ -1156,8 +1156,8 @@ function flowDiagnostic(etat, exportEtat) {
     if (!poses) {
       return '<div class="notice warn"><b>No datagram received on ' +
         esc(etat.bind) + '.</b> ' + esc(routeurs.length) +
-        ' router(s) declared, none exports yet. ' +
-        '<button class="sm" data-goto-export>Configure the export</button></div>';
+        ' router(s) declared, none exports yet. The export is set up ' +
+        'automatically on each router at the next pass.</div>';
     }
     // POSE MAIS MUET : le routeur envoie, et rien n'arrive. Le coupable le plus
     // frequent n'est pas le routeur, c'est le chemin -- port UDP non publie par
@@ -1197,18 +1197,7 @@ async function loadTraffic() {
   renderFlowTop(top);
   renderFlowHosts(hotes);
   renderFlowExporters(exporteurs);
-  renderFlowExport(exportEtat);
   await loadFlowPairs();
-
-  // Le bandeau porte un bouton qui mene au bloc d'export : sans lui, "ci-dessous"
-  // laisse chercher dans une page qui defile.
-  const raccourci = document.querySelector('[data-goto-export]');
-  if (raccourci) {
-    raccourci.addEventListener('click', () => {
-      const bloc = document.getElementById('flow-export');
-      bloc.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-  }
 
   const compte = document.getElementById('flow-count');
   if (compte) {
@@ -1582,103 +1571,6 @@ async function declareExporter(event) {
     await api('/netflow/exporters', { method: 'POST', body: JSON.stringify(charge) });
     sortie.innerHTML = '<div class="notice ok">Exporter declared.</div>';
     document.getElementById('exporter-form').reset();
-    await loadTraffic();
-  } catch (err) {
-    sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
-  }
-}
-
-/** L'export NetFlow, tel qu'il est pose sur chaque routeur.
- *
- *  LE CONTROLEUR LE POSE LUI-MEME. Demander deux commandes a la main sur chaque
- *  PoP revenait a garantir qu'un PoP serait oublie -- et un PoP oublie ne se
- *  signale pas : ses abonnes apparaissent simplement comme s'ils ne
- *  consommaient rien. */
-function renderFlowExport(etat) {
-  const hote = document.getElementById('flow-export');
-  const pastille = document.getElementById('flow-export-state');
-  if (!etat) {
-    hote.innerHTML = '<div class="empty">Etat indisponible.</div>';
-    pastille.textContent = '';
-    return;
-  }
-  pastille.textContent = etat.enforcement_enabled
-    ? etat.configured + ' / ' + (etat.routers || []).length + ' router(s)'
-    : 'writing disabled';
-  const lignes = etat.routers || [];
-
-  // CE QUI BLOQUE LA POSE, AVANT LE TABLEAU. Cliquer "Configurer" pour recevoir
-  // "ecriture desactivee" est une boucle : autant le dire, avec l'interrupteur.
-  let bloquant = '';
-  if (!lignes.length) {
-    bloquant = '<div class="notice warn"><b>No router declared.</b> ' +
-      '<a href="#/pops">Devices tab</a></div>';
-  } else if (!etat.enforcement_enabled) {
-    bloquant = '<div class="notice warn"><b>Writing to the routers is disabled.</b> ' +
-      '<button class="sm" id="flow-export-enable">Allow writing</button></div>';
-  }
-
-  hote.innerHTML = bloquant + (!lignes.length
-    ? ''
-    : '<table><thead><tr><th>Router</th><th>Advertised collector</th>' +
-      '<th>Interfaces</th><th>State</th><th></th></tr></thead><tbody>' +
-      lignes.map((r) => '<tr>' +
-        '<td><b>' + esc(r.router) + '</b> <span class="hint">' + esc(r.host) + '</span></td>' +
-        '<td class="login">' + (r.collector
-          ? esc(r.collector) + ':' + esc(etat.port) : '<span class="hint">-</span>') + '</td>' +
-        '<td>' + esc(r.interfaces || '-') + '</td>' +
-        '<td><span class="badge ' +
-          (r.configured ? 'ok' : (r.state === 'erreur' ? 'crit' : 'warn')) +
-          '">' + esc(r.state) + '</span></td>' +
-        '<td style="color:var(--faint)">' + esc(r.reason || '') + '</td>' +
-        '</tr>').join('') + '</tbody></table>');
-
-  const autoriser = document.getElementById('flow-export-enable');
-  if (autoriser) autoriser.addEventListener('click', enableEnforcementForExport);
-}
-
-/** Autorise l'ecriture depuis l'onglet Trafic.
- *
- *  L'interrupteur vit dans les Reglages, et c'est sa place. Mais un exploitant
- *  arrive ici parce qu'il veut voir son trafic : l'envoyer chercher un
- *  interrupteur dans un autre onglet, sans dire lequel, est exactement le genre
- *  de detour qui fait abandonner. La confirmation reste la meme : ce geste
- *  autorise reellement des ecritures sur des equipements de production. */
-async function enableEnforcementForExport() {
-  if (!confirm('Allow writing to the routers?\n\n' +
-      'Only lines marked freeqos:managed are touched.')) return;
-  try {
-    await api('/shaping/enforcement', {
-      method: 'PUT',
-      body: JSON.stringify({
-        enabled: true, confirm: true, reason: 'NetFlow export configuration',
-      }),
-    });
-    await loadTraffic();
-  } catch (err) {
-    document.getElementById('flow-export-result').innerHTML =
-      '<div class="notice err">' + esc(err.message) + '</div>';
-  }
-}
-
-async function applyFlowExport(dryRun) {
-  const sortie = document.getElementById('flow-export-result');
-  sortie.innerHTML = '<div class="notice">Reading the routers...</div>';
-  try {
-    const rapport = await api('/netflow/export/apply?dry_run=' + (dryRun ? 'true' : 'false'),
-      { method: 'POST' });
-    const classe = rapport.state === 'erreur' ? 'err'
-      : (rapport.state === 'pose' ? 'ok' : 'warn');
-    sortie.innerHTML = '<div class="notice ' + classe + '"><b>' + esc(rapport.state) + '</b> - ' +
-      esc(rapport.applied) + ' commande(s) appliquee(s)' +
-      (rapport.dry_run ? ' <span class="hint">(simulation)</span>' : '') + '</div>' +
-      (rapport.routers || []).filter((r) => (r.actions || []).length || r.state === 'erreur')
-        .map((r) => '<div class="ip-card"><h3>' + esc(r.router) + ' <span class="hint">' +
-          esc(r.state) + '</span></h3>' +
-          ((r.actions || []).length
-            ? '<div class="login" style="font-size:.75rem;line-height:1.7">' +
-              r.actions.map((a) => esc(a)).join('<br>') + '</div>'
-            : '<span class="hint">' + esc(r.reason || '') + '</span>') + '</div>').join('');
     await loadTraffic();
   } catch (err) {
     sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
@@ -2248,12 +2140,41 @@ function scNotice(html) {
   document.getElementById('sc-notice').innerHTML = html;
 }
 
+/** Remplit les menus "Attached PoP" avec les PoP des routeurs collectes.
+ *
+ *  Un menu plutot qu'une saisie libre : une faute de frappe rattachait le
+ *  client ou l'antenne a un PoP qui n'existe pas. */
+let POPS_CONNUS = [];
+
+async function remplirMenusPop() {
+  try {
+    const inventaire = await api('/pops/routers');
+    POPS_CONNUS = [...new Set((inventaire.routers || [])
+      .filter((r) => r.active !== false && r.pop_name)
+      .map((r) => r.pop_name))].sort();
+  } catch (err) { /* on garde la derniere liste connue */ }
+  document.querySelectorAll('select[data-pop-select]').forEach((select) => {
+    choisirPop(select, select.value);
+  });
+}
+
+/** Selectionne un PoP, en l'ajoutant au menu s'il n'y figure pas : une fiche
+ *  existante rattachee a un PoP disparu doit rester lisible et modifiable. */
+function choisirPop(select, valeur) {
+  if (typeof select === 'string') select = document.getElementById(select);
+  const noms = POPS_CONNUS.slice();
+  if (valeur && !noms.includes(valeur)) noms.push(valeur);
+  select.innerHTML = '<option value="">Choose a PoP</option>' +
+    noms.map((n) => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+  select.value = valeur || (noms.length === 1 ? noms[0] : '');
+}
+
 function scRemplirFormulaire(fiche) {
   scEdition = fiche;
   const v = (id, valeur) => { document.getElementById(id).value = valeur === null || valeur === undefined ? '' : valeur; };
   v('sc-reference', fiche ? fiche.reference : '');
   v('sc-label', fiche ? fiche.label : '');
-  v('sc-pop', fiche ? fiche.pop_name : '');
+  choisirPop('sc-pop', fiche ? fiche.pop_name : '');
   v('sc-address', fiche ? fiche.address : '');
   v('sc-vlan', fiche ? fiche.vlan : '');
   v('sc-sector', fiche ? fiche.sector_key : '');
@@ -2286,7 +2207,7 @@ function scDepuisCandidat(candidat) {
   };
   v('sc-address', candidat.address);
   v('sc-vlan', candidat.vlan_id);
-  v('sc-pop', candidat.pop_name);
+  choisirPop('sc-pop', candidat.pop_name);
   scNotice('<span class="badge">Address, VLAN and PoP taken from detection &middot; ' +
     'reference and rate to enter</span>');
   const reference = document.getElementById('sc-reference');
@@ -2577,14 +2498,7 @@ async function loadStaticClients() {
   // La liste vient des ROUTEURS COLLECTES, pas de la table des PoP : celle-ci
   // contient aussi les PoP nes d'une faute de frappe, et les proposer
   // reproduirait l'erreur qu'on cherche a empecher.
-  try {
-    const inventaire = await api('/pops/routers');
-    const noms = [...new Set((inventaire.routers || [])
-      .filter((r) => r.active !== false && r.pop_name)
-      .map((r) => r.pop_name))].sort();
-    document.getElementById('sc-pop-list').innerHTML =
-      noms.map((nom) => '<option value="' + esc(nom) + '">').join('');
-  } catch (err) { /* la saisie libre reste possible */ }
+  await remplirMenusPop();
   try {
     const graphe = await api('/topology');
     document.getElementById('sc-sector-list').innerHTML = ((graphe && graphe.nodes) || [])
@@ -3901,6 +3815,7 @@ async function submitRule(event) {
 async function loadAntennas() {
   const data = await api('/pops/antennas');
   state.antennas = data.antennas;
+  remplirMenusPop();
 
   const notice = document.getElementById('antennas-notice');
   notice.innerHTML = !data.secrets_available
@@ -6718,10 +6633,6 @@ document.getElementById('flow-pairs-reset').addEventListener('click', () => {
   document.getElementById('flow-pairs-search').value = '';
   loadFlowPairs();
 });
-document.getElementById('flow-export-dry')
-  .addEventListener('click', () => applyFlowExport(true));
-document.getElementById('flow-export-apply')
-  .addEventListener('click', () => applyFlowExport(false));
 
 // Les deux blocs replies qui ont remplace les onglets Topologie et Shaping :
 // on ne charge leur contenu que lorsqu'ils s'ouvrent. C'est ce qui rend leur
