@@ -401,7 +401,9 @@ def test_enregistrer_une_regle_n_ecrit_rien_sur_les_routeurs(
     l'interrupteur d'ecriture."""
     reponse = client.post("/api/v1/traffic-rules", json=regle())
     assert reponse.status_code == 201
-    assert reponse.json()["last_applied_at"] is None
+    # Ecriture coupee : la pose automatique est tentee, rien n'est ecrit, et
+    # la regle le dit.
+    assert reponse.json()["last_state"] == "a poser"
 
     collector = restrictions.registry.collectors[0]
     assert collector._client.firewall_address_list_rows == []  # noqa: SLF001
@@ -927,3 +929,37 @@ def test_les_filtres_proposes_sont_ceux_qui_existent(
     assert facettes["pops"] == ["PoP Test"]
     assert "streaming" in facettes["categories"]
     assert "diagnostic" in facettes["apps"]
+
+
+def test_creer_une_regle_la_pose_aussitot_sur_les_routeurs(
+    client: TestClient, restrictions: RestrictionService
+) -> None:
+    """Plus de bouton "appliquer" : enregistrer une regle, ecriture active, la
+    pose tout de suite sur les routeurs."""
+    from app.enforcement.routeros import ActionOutcome, ApplyResult
+
+    class Enregistreur:
+        enforcement_enabled = True
+
+        def __init__(self) -> None:
+            self.plans: list[Any] = []
+
+        async def apply(self, plan: Any, **kwargs: Any) -> Any:
+            self.plans.append(plan)
+            resultat = ApplyResult(router_name=plan.router_name, dry_run=False)
+            resultat.outcomes = [ActionOutcome(action=a, ok=True) for a in plan.actions]
+            return resultat
+
+    ecriture = Enregistreur()
+    restrictions.shaping = ecriture  # type: ignore[assignment]
+    corps = client.post("/api/v1/traffic-rules", json=regle()).json()
+
+    assert corps["apply"]["state"] == "posee"
+    assert corps["last_state"] == "posee"
+    assert ecriture.plans
+    assert any(a.path == PATH_ADDRESS_LIST for a in ecriture.plans[0].actions)
+
+
+def test_creer_une_regle_ecriture_coupee_le_dit(client: TestClient) -> None:
+    corps = client.post("/api/v1/traffic-rules", json=regle()).json()
+    assert corps["apply"]["state"] == "a poser"
