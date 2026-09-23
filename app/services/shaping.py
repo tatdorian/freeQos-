@@ -134,6 +134,23 @@ class RouterShapingState:
         }
 
 
+def static_pop_keys(clients: Sequence[Any], collectors: Sequence[Any]) -> dict[str, str]:
+    """PoP saisi dans une fiche -> case du routeur qui le porte, dans l'arbre.
+
+    Le PoP de la fiche est rapproche de celui d'un routeur comme le fait la
+    collecte (casse, accents, mot "PoP") : une egalite stricte laissait detache
+    de l'arbre un client que la collecte, elle, mesurait bien sous son PoP.
+    """
+    pop_keys = {c.config.effective_pop_name: router_node_key(c.config.name) for c in collectors}
+    for client in clients:
+        declare = str(getattr(client, "pop_name", "") or "")
+        if declare and declare not in pop_keys:
+            match = resolve_pop(declare, collectors)
+            if match.collectors:
+                pop_keys[declare] = router_node_key(match.collectors[0].config.name)
+    return pop_keys
+
+
 async def discover_with_devices(
     shaping: ShapingService, providers: Sequence[Any]
 ) -> TopologySnapshot:
@@ -580,9 +597,7 @@ class ShapingService:
         # viennent d'etre poses, UISP compris.
         clients = await self._static_clients_all()
         if clients:
-            pop_keys = {
-                c.config.effective_pop_name: router_node_key(c.config.name) for c in collectors
-            }
+            pop_keys = static_pop_keys(clients, collectors)
             poses = attach_static_clients(snapshot, clients, pop_keys=pop_keys)
             logger.info("Topologie : %d client(s) a IP fixe declares", poses)
 

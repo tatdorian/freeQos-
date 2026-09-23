@@ -307,11 +307,12 @@ async def test_seule_la_file_de_ce_client_est_ecrite(
     assert noms == ["freeqos-mairie"]
 
 
-async def test_un_client_sans_debit_dit_pourquoi_il_n_a_pas_de_file(
+async def test_un_client_sans_debit_a_une_file_illimitee_pour_etre_mesure(
     settings_francophonie: Settings, routeur: FakeRouterOsClient, ecriture: FauxClientEcriture
 ) -> None:
-    """Le motif vient du planificateur lui-meme : il ne peut donc pas raconter
-    autre chose que ce qui serait reellement ecrit."""
+    """Le compteur de sa file est le SEUL compteur de trafic d'un client a IP
+    fixe. Sans debit saisi, il recoit donc une file 0/0 : elle ne bride rien,
+    mais sa bande passante s'affiche comme celle des autres."""
     service = _service(
         settings_francophonie,
         routeur,
@@ -324,9 +325,10 @@ async def test_un_client_sans_debit_dit_pourquoi_il_n_a_pas_de_file(
         reference="mairie", pop_name="francophonie", author="test"
     )
 
-    assert rapport["state"] == ShapingService.ETAT_ECARTE
-    assert "no rate to apply" in rapport["reason"]
-    assert ecriture.executed == []
+    assert rapport["state"] == ShapingService.ETAT_POSEE
+    files = [a for a in ecriture.executed if a.path == "/queue/simple"]
+    assert [a.name for a in files] == ["freeqos-mairie"]
+    assert files[0].fields["max-limit"] == "0/0"
 
 
 async def test_un_pop_qui_ne_correspond_a_rien_est_dit_tout_de_suite(
@@ -607,3 +609,35 @@ def test_api_l_etat_des_files_dit_le_motif_de_chaque_fiche(api) -> None:
     assert etats["mairie"]["state"] == ShapingService.ETAT_POSEE
     assert etats["ecole"]["state"] == ShapingService.ETAT_SANS_ROUTEUR
     assert "'Francophonie'" in etats["ecole"]["reason"]
+
+
+async def test_un_client_saisi_en_minuscules_pend_sous_son_pop_dans_l_arbre(
+    settings_francophonie: Settings, routeur: FakeRouterOsClient, ecriture: FauxClientEcriture
+) -> None:
+    """La collecte rapprochait 'francophonie' de 'Francophonie', l'arbre non :
+    le client etait mesure sous son PoP mais pendait detache dans l'arbre."""
+    from app.collectors.topology import (
+        TopologyNode,
+        TopologySnapshot,
+        attach_static_clients,
+        router_node_key,
+        static_client_node_key,
+    )
+    from app.services.shaping import static_pop_keys
+
+    service = _service(
+        settings_francophonie, routeur, ecriture, InventaireMemoire([_client_statique()])
+    )
+    await service.registry.reload()
+    collectors = service.registry.collectors
+    snapshot = TopologySnapshot()
+    snapshot.add_node(
+        TopologyNode(key=router_node_key("pop-francophonie"), name="Francophonie", kind="pop")
+    )
+
+    clients = [_client_statique()]
+    attach_static_clients(snapshot, clients, pop_keys=static_pop_keys(clients, collectors))
+
+    cle = static_client_node_key("mairie")
+    parents = [lien.source_key for lien in snapshot.links.values() if lien.target_key == cle]
+    assert parents == [router_node_key("pop-francophonie")]

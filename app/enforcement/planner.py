@@ -393,7 +393,11 @@ def desired_state(
         # sans debit a appliquer ne prend la place de personne.
         if not subscriber.enabled:
             continue
-        if subscriber.effective_down_at(now) is None and subscriber.effective_up_at(now) is None:
+        if (
+            subscriber.effective_down_at(now) is None
+            and subscriber.effective_up_at(now) is None
+            and subscriber.kind != KIND_STATIC
+        ):
             continue
         cible = subscriber.queue_target(target_mode)
         if cible is not None:
@@ -406,7 +410,12 @@ def desired_state(
             continue
         down = subscriber.effective_down_at(now)
         up = subscriber.effective_up_at(now)
-        if down is None and up is None:
+        # UN CLIENT A IP FIXE SANS DEBIT A QUAND MEME SA FILE, ILLIMITEE (0/0).
+        # Son seul compteur de trafic est celui de sa file : sans elle, un client
+        # declare sans plan n'avait aucune bande passante affichee. La file ne
+        # bride rien -- exactement comme celle d'un lien sans capacite connue.
+        # Un abonne PPPoE, lui, a deja le compteur de son interface de session.
+        if down is None and up is None and subscriber.kind != KIND_STATIC:
             ecartes.append(
                 PlanSkip(subscriber.login, "no rate to apply (neither plan nor override)")
             )
