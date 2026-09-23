@@ -38,6 +38,7 @@ from app.enforcement.restrictions import (
     normalize_prefixes,
     packet_mark,
     parse_tag,
+    plan_lift,
     plan_restrictions,
     tag,
 )
@@ -428,6 +429,29 @@ def test_une_regle_retiree_emporte_ce_qu_elle_avait_pose() -> None:
     assert all(a.verb == "remove" for a in plan.actions)
     assert len(actions(plan, PATH_FILTER)) == 2
     assert len(actions(plan, PATH_ADDRESS_LIST)) == 1
+
+
+def test_lever_une_regle_ne_retire_que_ses_propres_lignes() -> None:
+    """SUSPENDRE OU SUPPRIMER DOIT LEVER TOUT DE SUITE, et seulement cette
+    regle. Une autre restriction du meme routeur reste en place, et les
+    regles de blocage partent AVANT les listes : elles cessent de bloquer des
+    qu'elles disparaissent."""
+    levee = cible()
+    autre = cible(rule_id=8, name="Pas de Twitch", destinations=("185.42.204.0/22",))
+    etat = etat_pose(levee, ["45.57.0.0/17"])
+    etat_autre = etat_pose(autre, ["185.42.204.0/22"])
+    etat.address_list += [{**r, ".id": r[".id"] + "b"} for r in etat_autre.address_list]
+    etat.filters += [{**r, ".id": r[".id"] + "b"} for r in etat_autre.filters]
+
+    plan = plan_lift("pop-nord", levee.rule_id, etat)
+
+    assert all(a.verb == "remove" for a in plan.actions)
+    assert [a.path for a in plan.actions] == [PATH_FILTER, PATH_FILTER, PATH_ADDRESS_LIST]
+    assert all("b" not in a.target_id for a in plan.actions)
+
+
+def test_lever_une_regle_absente_du_routeur_ne_fait_rien() -> None:
+    assert plan_lift("pop-nord", 42, etat_pose(cible(), ["45.57.0.0/17"])).is_empty
 
 
 def test_une_ligne_desactivee_a_la_main_est_reactivee() -> None:
