@@ -144,6 +144,11 @@ class DestinationsRepository:
                        i.hostname,
                        i.service,
                        i.category,
+                       i.org,
+                       i.country,
+                       i.city,
+                       i.latitude,
+                       i.longitude,
                        d.down_bytes,
                        d.up_bytes,
                        d.flows,
@@ -169,6 +174,8 @@ class DestinationsRepository:
                        OR host(d.address) ILIKE '%' || $7 || '%'
                        OR coalesce(i.hostname, '') ILIKE '%' || $7 || '%'
                        OR coalesce(i.org, '') ILIKE '%' || $7 || '%'
+                       OR coalesce(i.city, '') ILIKE '%' || $7 || '%'
+                       OR coalesce(i.country, '') ILIKE '%' || $7 || '%'
                        OR coalesce(i.service, '') ILIKE '%' || $7 || '%')
                 ORDER BY (d.down_bytes + d.up_bytes) DESC
                 LIMIT $8
@@ -406,6 +413,69 @@ class DestinationsRepository:
                 max_attempts,
             )
         return [str(row["address"]) for row in rows]
+
+    async def pending_location(
+        self, *, limit: int = 20, max_attempts: int = 5, retry_after_s: float = 3600.0
+    ) -> list[str]:
+        """Adresses deja analysees mais toujours SANS POSITION, a relocaliser.
+
+        La localisation depend de services tiers qui limitent leur debit : une
+        adresse analysee au mauvais moment restait sans position pour toujours,
+        puisque la file principale ne redemande jamais une adresse resolue.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT host(address) AS address
+                FROM ip_intel
+                WHERE resolved_at IS NOT NULL
+                  AND latitude IS NULL
+                  AND geo_attempts < $2
+                  AND (geo_tried_at IS NULL
+                       OR geo_tried_at < now() - make_interval(secs => $3))
+                ORDER BY last_seen DESC
+                LIMIT $1
+                """,
+                limit,
+                max_attempts,
+                float(retry_after_s),
+            )
+        return [str(row["address"]) for row in rows]
+
+    async def save_location(self, rows: list[dict[str, Any]]) -> int:
+        """Complete la position d'adresses deja analysees, sans rien ecraser."""
+        if not rows:
+            return 0
+        async with self._pool.acquire() as conn:
+            await conn.executemany(
+                """
+                UPDATE ip_intel
+                   SET country   = COALESCE($2, country),
+                       city      = COALESCE($3, city),
+                       region    = COALESCE($4, region),
+                       latitude  = COALESCE($5, latitude),
+                       longitude = COALESCE($6, longitude),
+                       org       = COALESCE(org, $7),
+                       asn       = COALESCE(asn, $8),
+                       geo_attempts = geo_attempts + 1,
+                       geo_tried_at = now()
+                 WHERE address = $1::inet
+                """,
+                [
+                    (
+                        r["address"],
+                        r.get("country"),
+                        r.get("city"),
+                        r.get("region"),
+                        r.get("latitude"),
+                        r.get("longitude"),
+                        r.get("org"),
+                        r.get("asn"),
+                    )
+                    for r in rows
+                ],
+            )
+        return len(rows)
 
     async def count_pending(self, *, max_attempts: int = 3) -> int:
         async with self._pool.acquire() as conn:

@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -44,6 +45,9 @@ from app.db.flows_repo import FlowsRepository, NetflowExportersRepository
 from app.services.flows import FlowAggregator, PrefixIndex
 
 logger = logging.getLogger(__name__)
+
+#: Un point de mesure muet depuis plus longtemps n'est plus considere actif.
+VANTAGE_FRESH_S = 900.0
 
 JOB_NETFLOW = "netflow_flush"
 
@@ -119,6 +123,8 @@ class NetflowService:
     #: ``id -> (rx_bps, tx_bps, fin de fenetre)``. rx = ce que l'abonne emet,
     #: tx = ce qu'il recoit, meme convention que les compteurs de files.
     subscriber_rates: dict[int, tuple[float, float, datetime]] = field(default_factory=dict)
+    #: Dernier flux recu par point de mesure (horloge monotone).
+    vantages_seen: dict[str, float] = field(default_factory=dict)
     _transport: asyncio.DatagramTransport | None = None
 
     def __post_init__(self) -> None:
@@ -225,6 +231,8 @@ class NetflowService:
         suivi.version = f"v{paquet.version}"
         suivi.packets += 1
         suivi.flows += len(paquet.flows)
+        if paquet.flows:
+            self.vantages_seen[info.vantage] = time.monotonic()
 
         for flux in paquet.flows:
             self.aggregator.add(
@@ -427,6 +435,30 @@ class NetflowService:
             for d in self.aggregator.live_destinations(limit)
         ]
 
+    # ------------------------------------------------------- point de mesure
+    def active_vantages(self, *, max_age_s: float = VANTAGE_FRESH_S) -> list[str]:
+        """Les points de mesure qui recoivent reellement des flux."""
+        limite = time.monotonic() - max_age_s
+        return sorted(v for v, vu in self.vantages_seen.items() if vu >= limite)
+
+    @property
+    def effective_vantage(self) -> str:
+        """Le point ou l'on COMPTE, a defaut celui qui recoit vraiment.
+
+        Le meme octet passe au PoP puis a la sortie internet : on n'en retient
+        qu'un point pour ne pas le compter deux fois. Le point configure
+        l'emporte des qu'il recoit des flux ; sinon on lit l'autre. Sans ce
+        repli, un reseau dont aucun routeur n'est declare passerelle affichait
+        zero consommation alors que ses PoP exportaient tres bien.
+        """
+        actifs = self.active_vantages()
+        if not actifs or self.accounting_vantage in actifs:
+            return self.accounting_vantage
+        for point in ("edge", "pop", "unknown"):
+            if point in actifs:
+                return point
+        return self.accounting_vantage
+
     # ----------------------------------------------------------------- etat
     def status(self) -> dict[str, Any]:
         """Ce qu'il faut pour diagnostiquer sans ouvrir un terminal.
@@ -442,6 +474,8 @@ class NetflowService:
             "listening": self.listening,
             "bind": f"{self.bind}:{self.port}",
             "accounting_vantage": self.accounting_vantage,
+            "effective_vantage": self.effective_vantage,
+            "active_vantages": self.active_vantages(),
             "started_at": self.started_at,
             "last_flush_at": self.last_flush_at,
             "packets_received": self.packets_received,

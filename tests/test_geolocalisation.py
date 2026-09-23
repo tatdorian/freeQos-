@@ -16,7 +16,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.intel import IntelService
+import httpx
+import pytest
+
+from app.services import intel as module_intel
+from app.services.intel import IntelService, read_geoip_payload
 
 
 class FauxDepot:
@@ -135,3 +139,152 @@ async def test_l_etat_dit_si_la_localisation_reste_locale() -> None:
     etat = await intel.status()
     assert etat["geoip_enabled"] is True
     assert etat["geoip_local"] is False
+
+
+# =========================================================================
+# 4. PLUSIEURS SERVICES, ET UNE SECONDE CHANCE
+# =========================================================================
+
+
+@pytest.mark.parametrize(
+    "charge",
+    [
+        # ipapi.co
+        {
+            "country_code": "US",
+            "city": "Mountain View",
+            "region": "California",
+            "latitude": 37.4,
+            "longitude": -122.1,
+            "asn": "AS15169",
+            "org": "GOOGLE",
+        },
+        # ipwho.is
+        {
+            "success": True,
+            "country_code": "US",
+            "city": "Mountain View",
+            "region": "California",
+            "latitude": 37.4,
+            "longitude": -122.1,
+            "connection": {"asn": 15169, "org": "GOOGLE"},
+        },
+        # freeipapi.com
+        {
+            "countryCode": "US",
+            "cityName": "Mountain View",
+            "regionName": "California",
+            "latitude": 37.4,
+            "longitude": -122.1,
+            "asn": "15169",
+            "asnOrganization": "GOOGLE",
+        },
+        # ip-api.com
+        {
+            "status": "success",
+            "countryCode": "US",
+            "city": "Mountain View",
+            "regionName": "California",
+            "lat": 37.4,
+            "lon": -122.1,
+            "org": "GOOGLE",
+            "as": "AS15169 Google LLC",
+        },
+    ],
+)
+def test_chaque_forme_de_reponse_se_lit_pareil(charge: dict[str, Any]) -> None:
+    lu = read_geoip_payload(charge)
+    assert lu == {
+        "country": "US",
+        "city": "Mountain View",
+        "region": "California",
+        "latitude": 37.4,
+        "longitude": -122.1,
+        "org": "GOOGLE",
+        "asn": 15169,
+    }
+
+
+@pytest.mark.parametrize(
+    "charge",
+    [
+        {"error": True, "reason": "RateLimited"},
+        {"success": False, "message": "Reserved range"},
+        {"status": "fail", "message": "private range"},
+        {"latitude": 0, "longitude": 0},
+    ],
+)
+def test_une_reponse_qui_ne_sait_rien_n_est_pas_une_position(charge: dict[str, Any]) -> None:
+    assert read_geoip_payload(charge) is None
+
+
+def _brancher(monkeypatch: pytest.MonkeyPatch, reponses: dict[str, httpx.Response]) -> list[str]:
+    appels: list[str] = []
+
+    def repondre(requete: httpx.Request) -> httpx.Response:
+        appels.append(requete.url.host)
+        return reponses.get(requete.url.host, httpx.Response(500))
+
+    vrai = httpx.AsyncClient
+
+    def client(**kwargs: Any) -> httpx.AsyncClient:
+        return vrai(transport=httpx.MockTransport(repondre), **kwargs)
+
+    monkeypatch.setattr(module_intel.httpx, "AsyncClient", client)
+    return appels
+
+
+async def test_un_service_qui_limite_passe_la_main_et_se_met_en_pause(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ipapi.co plafonne vite : passe son quota, les adresses restaient sans
+    position. Le suivant prend le relais, et le premier n'est plus sollicite."""
+    appels = _brancher(
+        monkeypatch,
+        {
+            "ipapi.co": httpx.Response(429),
+            "ipwho.is": httpx.Response(
+                200,
+                json={"success": True, "country_code": "FR", "latitude": 48.8, "longitude": 2.3},
+            ),
+        },
+    )
+    intel, _ = service(geoip_enabled=True)
+
+    premier = await intel._geoip("45.57.12.34")  # noqa: SLF001
+    second = await intel._geoip("45.57.12.35")  # noqa: SLF001
+
+    assert premier["country"] == "FR" and second["latitude"] == 48.8
+    assert appels == ["ipapi.co", "ipwho.is", "ipwho.is"]
+
+
+class DepotALocaliser(FauxDepot):
+    def __init__(self) -> None:
+        super().__init__([])
+        self.positions: list[dict[str, Any]] = []
+
+    async def pending_location(self, **kwargs: Any) -> list[str]:
+        return ["45.57.12.34"]
+
+    async def save_location(self, rows: list[dict[str, Any]]) -> int:
+        self.positions.extend(rows)
+        return len(rows)
+
+
+async def test_une_adresse_restee_sans_position_est_relocalisee() -> None:
+    """La file principale ne redemande jamais une adresse resolue : sans cette
+    seconde chance, une localisation ratee l'etait pour toujours."""
+    depot = DepotALocaliser()
+    intel = IntelService(destinations=depot, rdns_enabled=False, geoip_enabled=True)  # type: ignore[arg-type]
+
+    async def geo(address: str) -> dict[str, Any]:
+        return {"country": "FR", "latitude": 48.8, "longitude": 2.3}
+
+    intel._geoip = geo  # type: ignore[assignment,method-assign]
+
+    await intel.resolve_pending()
+
+    assert depot.positions == [
+        {"address": "45.57.12.34", "country": "FR", "latitude": 48.8, "longitude": 2.3}
+    ]
+    assert intel.located == 1

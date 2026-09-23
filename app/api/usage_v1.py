@@ -67,7 +67,7 @@ def _window(start: datetime | None, end: datetime | None, days: int) -> tuple[da
 def _vantage(container: ContainerDep, demande: str | None) -> str:
     if demande:
         return demande
-    return container.netflow.accounting_vantage if container.netflow else "edge"
+    return container.netflow.effective_vantage if container.netflow else "edge"
 
 
 def _render(lignes: list[dict[str, Any]]) -> list[dict[str, Any]]:

@@ -393,6 +393,13 @@ class Settings(BaseSettings):
     # la coupe entierement.
     ipfinder_geoip_enabled: bool = True
     ipfinder_geoip_url: str = "https://ipapi.co/{ip}/json/"
+    # Services de secours, essayes dans l'ordre quand le precedent est limite
+    # ou muet. Vide = ipapi.co seul, comme avant.
+    ipfinder_geoip_fallbacks: list[str] = [
+        "https://ipwho.is/{ip}",
+        "https://freeipapi.com/api/json/{ip}",
+        "http://ip-api.com/json/{ip}",
+    ]
     ipfinder_geoip_db: str | None = None
     ipfinder_interval_s: float = 30.0
     ipfinder_batch_size: int = 40

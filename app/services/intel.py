@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -53,6 +54,79 @@ from app.services.ipfinder import ReverseDns, Verdict
 logger = logging.getLogger(__name__)
 
 JOB_INTEL = "ip_intel"
+
+#: Services de localisation gratuits essayes apres ``geoip_url``. Leurs
+#: reponses n'ont pas la meme forme : ``read_geoip_payload`` les lit toutes.
+DEFAULT_GEOIP_FALLBACKS: tuple[str, ...] = (
+    "https://ipwho.is/{ip}",
+    "https://freeipapi.com/api/json/{ip}",
+    "http://ip-api.com/json/{ip}",
+)
+#: Pause d'un service qui limite le debit, et d'un service injoignable.
+GEOIP_PAUSE_LIMITE_S = 900.0
+GEOIP_PAUSE_PANNE_S = 120.0
+
+
+def _nombre(valeur: Any) -> float | None:
+    try:
+        return float(valeur)
+    except (TypeError, ValueError):
+        return None
+
+
+def _asn(valeur: Any) -> int | None:
+    """'AS15169', 'AS15169 Google LLC', 15169 ou '15169' -> 15169."""
+    if valeur is None or isinstance(valeur, bool):
+        return None
+    if isinstance(valeur, int):
+        return valeur
+    texte = str(valeur).strip().split(" ", 1)[0].upper().removeprefix("AS")
+    return int(texte) if texte.isdigit() else None
+
+
+def _parle_de_limite(charge: Any) -> bool:
+    if not isinstance(charge, dict):
+        return False
+    texte = " ".join(
+        str(charge.get(cle) or "") for cle in ("reason", "message", "error", "status")
+    ).lower()
+    return any(mot in texte for mot in ("limit", "quota", "too many"))
+
+
+def read_geoip_payload(charge: Any) -> dict[str, Any] | None:
+    """Lit la reponse d'un service de localisation, quel qu'il soit.
+
+    Rend None quand le service dit lui-meme qu'il n'a pas de reponse (erreur,
+    quota, adresse reservee), et un dictionnaire sans valeurs vides sinon.
+    Formes reconnues : ipapi.co, ipwho.is, freeipapi.com, ip-api.com.
+    """
+    if not isinstance(charge, dict):
+        return None
+    if charge.get("error") is True or charge.get("success") is False:
+        return None
+    if str(charge.get("status") or "").lower() == "fail":
+        return None
+    connexion = charge.get("connection") if isinstance(charge.get("connection"), dict) else {}
+    lu: dict[str, Any] = {
+        "country": charge.get("country_code") or charge.get("countryCode"),
+        "city": charge.get("city") or charge.get("cityName"),
+        "region": charge.get("region") or charge.get("regionName"),
+        "latitude": _nombre(charge.get("latitude", charge.get("lat"))),
+        "longitude": _nombre(charge.get("longitude", charge.get("lon"))),
+        "org": (
+            charge.get("org")
+            or connexion.get("org")
+            or charge.get("asnOrganization")
+            or charge.get("isp")
+            or connexion.get("isp")
+        ),
+        "asn": _asn(charge.get("asn") or connexion.get("asn") or charge.get("as")),
+    }
+    # 0,0 est la position des services qui ne savent pas : ce n'en est pas une.
+    if lu["latitude"] == 0 and lu["longitude"] == 0:
+        lu["latitude"] = lu["longitude"] = None
+    propre = {cle: valeur for cle, valeur in lu.items() if valeur not in (None, "")}
+    return propre or None
 
 
 @dataclass(frozen=True)
@@ -86,6 +160,11 @@ class IntelService:
     #: Service interroge quand aucune base locale n'est posee. ``{ip}`` est
     #: remplace par l'adresse.
     geoip_url: str = "https://ipapi.co/{ip}/json/"
+    #: Services de secours, essayes DANS L'ORDRE quand le precedent est muet,
+    #: limite en debit ou ne sait rien. Un seul service gratuit ne suffit pas :
+    #: ipapi.co plafonne a environ mille requetes par jour, et passe ce cap
+    #: toutes les adresses suivantes restaient sans position.
+    geoip_fallbacks: tuple[str, ...] = DEFAULT_GEOIP_FALLBACKS
     #: Base MaxMind locale (.mmdb). PREFEREE des qu'elle existe : meme reponse,
     #: aucun appel sortant. Demande le paquet 'geoip2'.
     geoip_db: str | None = None
@@ -104,6 +183,12 @@ class IntelService:
     resolver: ReverseDns = field(default_factory=ReverseDns)
     _geoip_reader: Any = None
     _geoip_broken: bool = False
+    #: Service -> instant (monotone) jusqu'auquel on ne l'interroge plus.
+    _geoip_pause: dict[str, float] = field(default_factory=dict)
+    #: Relocalisation des adresses deja nommees mais restees sans position.
+    geo_retry_after_s: float = 3600.0
+    geo_max_attempts: int = 5
+    located: int = 0
     resolved: int = 0
     named: int = 0
     last_run_at: datetime | None = None
@@ -233,33 +318,55 @@ class IntelService:
         locale = await asyncio.to_thread(self._geoip_local, address)
         if locale is not None:
             return {cle: valeur for cle, valeur in locale.items() if valeur is not None}
+        for modele in self.geoip_services:
+            trouve = await self._geoip_http(modele, address)
+            if trouve:
+                return trouve
+        return {}
+
+    @property
+    def geoip_services(self) -> list[str]:
+        """Les services HTTP, dans l'ordre ou on les essaie, sans doublon."""
+        vus: list[str] = []
+        for modele in (self.geoip_url, *self.geoip_fallbacks):
+            if modele and modele not in vus:
+                vus.append(modele)
+        return vus
+
+    async def _geoip_http(self, modele: str, address: str) -> dict[str, Any]:
+        """Un service de localisation. Vide s'il est en pause, muet ou ignorant.
+
+        UN SERVICE QUI LIMITE EST MIS EN PAUSE, et les suivants prennent le
+        relais. Sans cette pause, chaque adresse du lot le re-solliciterait, se
+        ferait refuser, et prolongerait d'autant la limitation.
+        """
+        maintenant = time.monotonic()
+        if self._geoip_pause.get(modele, 0.0) > maintenant:
+            return {}
         try:
             async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-                reponse = await client.get(self.geoip_url.format(ip=address))
-                reponse.raise_for_status()
-                charge = reponse.json()
+                reponse = await client.get(modele.format(ip=address))
         except Exception as exc:  # noqa: BLE001 - la localisation est un bonus
-            logger.debug("Geolocalisation muette pour %s : %s", address, exc)
+            logger.debug("Localisation muette (%s) pour %s : %s", modele, address, exc)
+            self._geoip_pause[modele] = maintenant + GEOIP_PAUSE_PANNE_S
             return {}
-        if not isinstance(charge, dict):
+        if reponse.status_code in {403, 429}:
+            self._geoip_pause[modele] = maintenant + GEOIP_PAUSE_LIMITE_S
+            logger.info("Service de localisation %s limite : pause", modele)
             return {}
-        asn = str(charge.get("asn") or "")
-        return {
-            cle: valeur
-            for cle, valeur in {
-                # Les noms de champs varient d'un service a l'autre : on accepte
-                # les deux formes les plus repandues plutot que d'imposer un
-                # fournisseur precis.
-                "country": charge.get("country_code") or charge.get("countryCode"),
-                "city": charge.get("city"),
-                "region": charge.get("region") or charge.get("regionName"),
-                "latitude": charge.get("latitude") or charge.get("lat"),
-                "longitude": charge.get("longitude") or charge.get("lon"),
-                "org": charge.get("org") or charge.get("isp"),
-                "asn": int(asn[2:]) if asn.upper().startswith("AS") and asn[2:].isdigit() else None,
-            }.items()
-            if valeur not in (None, "")
-        }
+        try:
+            reponse.raise_for_status()
+            charge = reponse.json()
+        except Exception:  # noqa: BLE001
+            return {}
+        lu = read_geoip_payload(charge)
+        if lu is None:
+            # Erreur dans le corps : certains services repondent 200 avec
+            # "RateLimited" ou "quota". Meme traitement qu'un 429.
+            if _parle_de_limite(charge):
+                self._geoip_pause[modele] = maintenant + GEOIP_PAUSE_LIMITE_S
+            return {}
+        return lu
 
     async def _rdap(self, address: str) -> dict[str, Any]:
         """Organisation, AS, pays et bloc annonce, lus au registre.
@@ -316,10 +423,48 @@ class IntelService:
             self.last_error = f"file d'attente illisible : {exc}"
             logger.debug("Enrichissement : %s", self.last_error)
             return 0
-        if not adresses:
-            self.last_run_at = datetime.now(tz=UTC)
+        traitees = await self._resolve(adresses) if adresses else 0
+        await self.relocate()
+        self.last_run_at = datetime.now(tz=UTC)
+        return traitees
+
+    async def relocate(self, limit: int | None = None) -> int:
+        """Redemande la position des adresses restees sans localisation.
+
+        Elles etaient perdues pour la localisation des leur premier passage : la
+        file principale ne redemande jamais une adresse deja resolue. Elles sont
+        reprises ici, par petits lots, apres un delai, un nombre borne de fois.
+        """
+        chercher = getattr(self.destinations, "pending_location", None)
+        if not self.geoip_enabled or chercher is None:
             return 0
-        return await self._resolve(adresses)
+        try:
+            adresses = await chercher(
+                limit=limit or max(1, self.batch_size // 2),
+                max_attempts=self.geo_max_attempts,
+                retry_after_s=self.geo_retry_after_s,
+            )
+        except Exception as exc:  # noqa: BLE001 - colonne absente, base pas prete
+            logger.debug("Relocalisation : %s", exc)
+            return 0
+        if not adresses:
+            return 0
+        verrou = asyncio.Semaphore(max(1, self.concurrency))
+
+        async def une(address: str) -> dict[str, Any]:
+            async with verrou:
+                trouve = await self._sans_casser("localisation", self._geoip(address)) or {}
+            return {"address": address, **trouve}
+
+        lignes = await asyncio.gather(*(une(a) for a in adresses))
+        try:
+            await self.destinations.save_location(list(lignes))  # type: ignore[union-attr]
+        except Exception as exc:  # noqa: BLE001
+            self.last_error = f"positions non enregistrees : {exc}"
+            return 0
+        trouvees = sum(1 for ligne in lignes if ligne.get("latitude") is not None)
+        self.located += trouvees
+        return trouvees
 
     async def resolve_now(self, address: str) -> dict[str, Any]:
         """Force la (re)analyse d'une adresse, a la demande de l'exploitant.
@@ -377,6 +522,7 @@ class IntelService:
                 return 0
         self.resolved += len(verdicts)
         self.named += sum(1 for v in verdicts if v["service"])
+        self.located += sum(1 for v in verdicts if v.get("latitude") is not None)
         self.last_run_at = datetime.now(tz=UTC)
         self.last_error = None
         return len(verdicts)
@@ -400,6 +546,11 @@ class IntelService:
             "rdap_enabled": self.rdap_enabled,
             "geoip_enabled": self.geoip_enabled,
             "geoip_local": bool(self.geoip_db) and not self._geoip_broken,
+            "geoip_services": self.geoip_services,
+            "geoip_paused": [
+                modele for modele, fin in self._geoip_pause.items() if fin > time.monotonic()
+            ],
+            "located": self.located,
             "batch_size": self.batch_size,
             "resolved": self.resolved,
             "named": self.named,
