@@ -975,3 +975,10 @@ body.gated header.top, body.gated main { visibility: hidden; }
 .acc-me { margin-bottom: .4rem; }
 #settings-accounts td select { width: auto; }
 .acc-actions button + button { margin-left: .35rem; }
+
+/* =================================================== ports en direct */
+.chart-source { font-size: .75rem; color: var(--muted); margin-top: .5rem; }
+.cycles { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; font-size: .78rem; color: var(--muted); margin-bottom: .7rem; }
+.cycle .sq { margin-right: .35rem; }
+.ports-foot { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
+.stale-row td { opacity: .6; }

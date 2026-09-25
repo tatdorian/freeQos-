@@ -291,3 +291,27 @@ async def test_les_pings_partent_un_par_un_par_routeur_et_en_parallele_entre_rou
     assert len(resultats) == 10 and all(isinstance(r, PingStats) for r in resultats)
     assert pic == {"a": 1, "b": 1}  # jamais deux a la fois sur un routeur
     assert simultanes_total["max"] == 2  # mais les deux routeurs en parallele
+
+
+def test_la_mesure_a_sa_propre_connexion_au_routeur() -> None:
+    """REGRESSION : la lecture des sessions partageait la connexion de la
+    decouverte, des plafonds et du shaping. Quand l'un d'eux la tenait plus de
+    quinze secondes, les abonnes restaient figes sur leurs keepalives pendant
+    qu'un test de debit passait -- NetFlow le voyait, la page non."""
+    collector = MikrotikCollector(RouterConfig(name="r", host="192.0.2.1", password="x"))
+    connexions = {
+        id(collector._client),  # noqa: SLF001
+        id(collector._metrics_client),  # noqa: SLF001
+        id(collector._probe_client),  # noqa: SLF001
+    }
+    assert len(connexions) == 3
+
+
+async def test_un_client_injecte_sert_aux_trois_usages() -> None:
+    client = FakeRouterOsClient()
+    client.add_session("dupont", rx_byte=100, tx_byte=200)
+    collector = MikrotikCollector(
+        RouterConfig(name="pop-test", host="192.0.2.1", password="x"), client=client
+    )
+    sessions = await collector.collect()
+    assert [s.login for s in sessions] == ["dupont"]

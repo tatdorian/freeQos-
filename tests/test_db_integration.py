@@ -3406,3 +3406,22 @@ async def test_les_comptes_et_leurs_sessions(database: Database) -> None:
     await repo.close_sessions_of(lecteur["id"])
     await repo.delete(lecteur["id"])
     assert await repo.count() == 1
+
+
+async def test_les_ports_en_direct_montrent_tout_port_mesure(database: Database) -> None:
+    """Un port que la decouverte n'a relie a rien doit quand meme montrer son
+    debit : c'est la que se voit un test lance depuis un CPE ou entre routeurs."""
+    async with database.pool.acquire() as conn:
+        await conn.execute("TRUNCATE interface_metrics, topology_links, topology_nodes CASCADE")
+        await conn.executemany(
+            "INSERT INTO interface_metrics (ts, router_name, interface, rx_bps, tx_bps, running, "
+            "capacity_mbps) VALUES (now() - make_interval(secs => $1), $2, $3, $4, $5, true, $6)",
+            [
+                (30.0, "nas-ta", "ether1", 90e3, 95e3, 1000.0),
+                (15.0, "nas-ta", "ether1", 400e3, 390e3, 1000.0),  # la plus recente gagne
+                (5.0, "nas-ta", "ether2", 1e3, 1e3, 100.0),
+                (600.0, "nas-ta", "ether9", 5e6, 5e6, 100.0),  # trop vieille : absente
+            ],
+        )
+    ports = await MetricsRepository(database.pool).ports_live()
+    assert [(p["interface"], p["rx_bps"]) for p in ports] == [("ether1", 400e3), ("ether2", 1e3)]

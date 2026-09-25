@@ -725,6 +725,42 @@ class MetricsRepository:
             )
         return _rows(records)
 
+    async def ports_live(self, *, max_age_s: int = 120) -> list[dict[str, Any]]:
+        """Chaque port de chaque routeur, avec son DERNIER debit mesure.
+
+        Que le port porte un lien de l'arbre ou non : c'est la vue qui montre un
+        trafic ou qu'il passe -- un test entre routeurs, la gestion d'un CPE,
+        un port que la decouverte n'a pas relie. Limitee aux mesures recentes :
+        un port muet depuis deux minutes n'a pas de debit "actuel".
+        """
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                WITH derniers AS (
+                    SELECT DISTINCT ON (router_name, interface)
+                           router_name, interface, ts, rx_bps, tx_bps, running, capacity_mbps
+                      FROM interface_metrics
+                     WHERE ts > now() - make_interval(secs => $1)
+                     ORDER BY router_name, interface, ts DESC
+                ),
+                noms AS (
+                    SELECT DISTINCT ON (l.discovered_by, l.interface)
+                           l.discovered_by, l.interface, n.name AS link_name
+                      FROM topology_links l
+                      LEFT JOIN topology_nodes n ON n.key = l.target_key
+                     WHERE l.interface IS NOT NULL
+                     ORDER BY l.discovered_by, l.interface, l.last_seen DESC
+                )
+                SELECT d.*, n.link_name
+                  FROM derniers d
+                  LEFT JOIN noms n
+                         ON n.discovered_by = d.router_name AND n.interface = d.interface
+                 ORDER BY greatest(coalesce(d.rx_bps, 0), coalesce(d.tx_bps, 0)) DESC
+                """,
+                float(max_age_s),
+            )
+        return _rows(records)
+
     async def link_occupancy(self, *, hours: int = 24, limit: int = 30) -> list[dict[str, Any]]:
         """Par port : l'occupation atteinte, et L'HEURE a laquelle elle l'a ete.
 
