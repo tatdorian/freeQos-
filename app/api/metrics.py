@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
@@ -263,3 +264,46 @@ async def throughput(
 @router.get("/network/tree", summary="PoP tree -> backhauls, capacity and load")
 async def network_tree(repo: RepositoryDep) -> list[dict[str, Any]]:
     return await repo.network_tree()
+
+
+@router.get("/ports/live", summary="Every router port with its current throughput")
+async def ports_live(repo: RepositoryDep, collection: CollectionDep) -> dict[str, Any]:
+    """OU PASSE LE TRAFIC EN CE MOMENT, port par port, tous routeurs confondus.
+
+    La courbe du reseau additionne les SESSIONS D'ABONNES. Un trafic qui n'en
+    traverse aucune -- un test de debit lance depuis un CPE ou entre deux
+    routeurs, la gestion d'un equipement -- n'y figure pas, alors que les ports
+    le comptent. Cette vue les montre tous, que la decouverte les ait relies a
+    un lien de l'arbre ou non, avec l'etat des cycles de collecte : un chiffre
+    absent se lit alors "rien ne passe" OU "la mesure est en panne", jamais
+    l'un pour l'autre.
+    """
+    from app.collectors.mikrotik import upstream_of
+    from app.services.collection import JOB_LINKS, JOB_RTT, JOB_SUBSCRIBERS
+
+    ports = await repo.ports_live()
+    amonts = {c.name: upstream_of(c.name)[1] for c in collection.collectors}
+    for port in ports:
+        port["upstream"] = bool(amonts.get(port["router_name"])) and (
+            amonts.get(port["router_name"]) == port["interface"]
+        )
+    maintenant = datetime.now(tz=UTC)
+    cycles: dict[str, dict[str, Any] | None] = {}
+    for job in (JOB_SUBSCRIBERS, JOB_LINKS, JOB_RTT):
+        resultat = collection.last_results.get(job)
+        if resultat is None:
+            cycles[job] = None
+            continue
+        cycles[job] = {
+            "ok": resultat.ok,
+            "age_s": round((maintenant - resultat.started_at).total_seconds(), 1),
+            "duration_s": round(resultat.duration_s, 2),
+            "items": resultat.items,
+            "errors": list(resultat.errors)[:5],
+        }
+    return {
+        "ports": ports,
+        "upstream": amonts,
+        "cycles": cycles,
+        "routers": [c.name for c in collection.collectors],
+    }

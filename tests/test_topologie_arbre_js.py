@@ -596,6 +596,8 @@ const data = { nodes, links: [], counts: {} };
 const abonne = (login, pop, tx) => ({
   login, pop_name: pop, kind: 'pppoe', tx_bps: tx, rx_bps: 1000,
   last_ip: '10.20.0.' + login.length,
+  // Une mesure ACTUELLE : une mesure perimee ne porte plus de debit.
+  ts: new Date().toISOString(),
 });
 const cles = (m) => [...m.nodesByKey.keys()];
 """
@@ -1018,3 +1020,21 @@ console.log(JSON.stringify({ haut, normal, replie }));
     # Et il SE RETRACTE au repli, jusqu'au plancher.
     assert px(res["replie"]) == 360
     assert px(res["replie"]) < px(res["normal"])
+
+
+def test_une_mesure_perimee_ne_porte_pas_de_debit(harnais: Path) -> None:
+    """Un abonne dont la derniere mesure a une heure ne donne PAS son debit a
+    l'arbre : ce serait afficher comme present un chiffre d'un autre moment."""
+    res = executer(
+        harnais,
+        """
+const nodes = [{ key: 'router:nord', name: 'PoP Nord', kind: 'pop' }];
+A.topo.subs = [{ login: 'vieux', pop_name: 'PoP Nord', kind: 'pppoe', tx_bps: 9e6,
+                 rx_bps: 1e6, ts: new Date(Date.now() - 3600e3).toISOString() }];
+const m = A.topoBuildModel({ nodes, links: [], counts: {} });
+const agregat = [...m.nodesByKey.values()].find((n) => n.kind === 'subscriber');
+console.log(JSON.stringify({ rates: agregat.synthRates, compte: agregat.count }));
+""",
+    )
+    assert res["compte"] == 1
+    assert res["rates"] is None

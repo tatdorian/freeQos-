@@ -405,3 +405,12 @@ def test_changer_d_onglet_n_attend_pas_le_chargement_d_un_autre() -> None:
     bloc = bloc[: bloc.index("\n}\n")]
     assert "if (refreshing === vue) return;" in bloc
     assert "if (refreshing) return;" not in bloc
+
+
+def test_une_mesure_perimee_ne_passe_pas_pour_actuelle() -> None:
+    """REGRESSION : une collecte en panne laissait les abonnes figes sur leur
+    derniere valeur, affichee comme le debit present. Au-dela de 90 s, la
+    mesure est marquee perimee et ne s'additionne plus."""
+    assert "function mesureFraiche(r)" in JS
+    assert JS.count("mesureFraiche") >= 7
+    assert 'id="ports-live"' in HTML and "/ports/live" in JS

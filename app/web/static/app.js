@@ -658,6 +658,7 @@ function statCard(cls, label, value, unit, sub) {
 async function loadDashboard() {
   const courbe = loadThroughput();
   const top = loadTopTalkers();
+  const ports = loadPortsLive();
   const [overview, tree] = await Promise.all([api('/overview'), api('/network/tree')]);
 
   const down = bps(overview.tx_bps), up = bps(overview.rx_bps);
@@ -678,7 +679,70 @@ async function loadDashboard() {
   // En parallele : la courbe et le top partent AVANT les chiffres de tete,
   // et chaque bloc s'affiche des que SA donnee arrive.
   renderBackhaulCards(tree);
-  await Promise.all([courbe, top]);
+  await Promise.all([courbe, top, ports]);
+}
+
+/** PORTS EN DIRECT : tout ce que les routeurs comptent, sessions ou non.
+ *
+ *  La courbe au-dessus additionne les sessions d'abonnes. Un test de debit
+ *  lance depuis un CPE ou entre deux routeurs n'en traverse aucune : il
+ *  n'apparaissait nulle part, alors que les ports le mesuraient. Ici, chaque
+ *  port de chaque routeur, trie par debit, avec l'etat des cycles de mesure --
+ *  pour qu'un tableau vide ne se lise jamais "rien ne passe" quand il veut
+ *  dire "la mesure est en panne". */
+const PORTS = { all: false };
+const CYCLE_LABEL = { collect_subscribers: 'Subscribers', collect_links: 'Ports', probe_rtt: 'Latency' };
+
+async function loadPortsLive() {
+  const host = document.getElementById('ports-live');
+  if (!host) return;
+  let data;
+  try {
+    data = await api('/ports/live');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const cycles = Object.entries(data.cycles || {}).map(([job, c]) => {
+    if (!c) return '<span class="cycle"><i class="sq none"></i>' + esc(CYCLE_LABEL[job] || job) + ': not run yet</span>';
+    const retard = c.age_s > 60;
+    const sev = !c.ok ? 'crit' : retard ? 'warn' : 'ok';
+    return '<span class="cycle" title="' + esc((c.errors || []).join(' ; ')) + '"><i class="sq ' + sev + '"></i>' +
+      esc(CYCLE_LABEL[job] || job) + ': ' + (c.ok ? 'ok' : '<b>failed</b>') + ' &middot; ' +
+      Math.round(c.age_s) + ' s ago &middot; ' + c.duration_s + ' s' +
+      (!c.ok && c.errors && c.errors.length ? ' &middot; <span class="sev-crit">' + esc(c.errors[0]) + '</span>' : '') +
+      '</span>';
+  }).join('');
+  const ports = data.ports || [];
+  const actifs = ports.filter((p) => (p.rx_bps || 0) + (p.tx_bps || 0) > 2000);
+  const montres = PORTS.all ? ports : actifs.slice(0, 15);
+  const table = !ports.length
+    ? '<div class="empty">No port measured in the last two minutes: see the Ports cycle above.</div>'
+    : '<div class="table-wrap"><table><thead><tr><th>Router</th><th>Port</th><th>Towards</th>' +
+      '<th class="num">In (rx)</th><th class="num">Out (tx)</th><th class="num">Port speed</th>' +
+      '<th style="width:140px">Load</th><th>Measured</th></tr></thead><tbody>' +
+      montres.map((p) => {
+        const pic = Math.max(p.rx_bps || 0, p.tx_bps || 0);
+        return '<tr><td class="nowrap"><b>' + esc(p.router_name) + '</b></td>' +
+          '<td class="nowrap"><code>' + esc(p.interface) + '</code>' +
+            (p.upstream ? ' <span class="badge file" title="Carries the default route">uplink</span>' : '') +
+            (p.running === false ? ' <span class="badge warn">down</span>' : '') + '</td>' +
+          '<td>' + (p.link_name ? esc(p.link_name) : '<span class="na">-</span>') + '</td>' +
+          '<td class="num" style="color:var(--down)">' + esc(bpsText(p.rx_bps)) + '</td>' +
+          '<td class="num" style="color:var(--up)">' + esc(bpsText(p.tx_bps)) + '</td>' +
+          '<td class="num">' + (p.capacity_mbps ? esc(mbps(p.capacity_mbps)) : '<span class="na">-</span>') + '</td>' +
+          '<td>' + (p.capacity_mbps ? meter(pic, p.capacity_mbps * 1e6) : '<span class="na">-</span>') + '</td>' +
+          '<td class="nowrap">' + esc(depuis(p.ts)) + '</td></tr>';
+      }).join('') + '</tbody></table></div>';
+  host.innerHTML = '<div class="cycles">' + cycles + '</div>' + table +
+    '<div class="ports-foot"><span>' + actifs.length + ' port(s) with traffic, ' +
+      (ports.length - actifs.length) + ' idle</span>' +
+      '<button class="sm" id="ports-toggle">' + (PORTS.all ? 'Only ports with traffic' : 'Show every port') +
+      '</button><span class="pct-hint">In = received by the router on that port, Out = sent by it.</span></div>';
+  document.getElementById('ports-toggle').addEventListener('click', () => {
+    PORTS.all = !PORTS.all;
+    loadPortsLive();
+  });
 }
 
 async function loadThroughput() {
@@ -692,10 +756,15 @@ async function loadThroughput() {
 }
 
 async function loadTopTalkers() {
-  const rows = await api('/subscribers/latest?limit=12');
+  const brutes = await api('/subscribers/latest?limit=12');
+  // Un "gros consommateur" mesure il y a une heure n'en est pas un maintenant.
+  const rows = (brutes || []).filter(mesureFraiche);
   const host = document.getElementById('top-talkers');
   if (!rows.length) {
-    host.innerHTML = '<div class="empty">No active session.<br>Connect a PoP in the Devices tab.</div>';
+    host.innerHTML = (brutes || []).length
+      ? '<div class="notice warn"><b>No current measurement.</b> The last subscriber samples are ' +
+        esc(depuis(brutes[0].ts)) + ': the Subscribers cycle is failing (see Router ports below).</div>'
+      : '<div class="empty">No active session.<br>Connect a PoP in the Devices tab.</div>';
     return;
   }
   host.innerHTML =
@@ -1436,8 +1505,11 @@ function aggregateNodes(subs, childCounts) {
     }
     const n = parPop.get(nom);
     n.circuits += 1;
-    n.tx += Number(s.tx_bps) || 0;
-    n.rx += Number(s.rx_bps) || 0;
+    // Seul le debit ACTUEL s'additionne (cf. mesureFraiche).
+    if (mesureFraiche(s)) {
+      n.tx += Number(s.tx_bps) || 0;
+      n.rx += Number(s.rx_bps) || 0;
+    }
     n.effDown += (Number(s.effective_down_mbps) || 0) * 1e6;
     n.effUp += (Number(s.effective_up_mbps) || 0) * 1e6;
     n.confDown += (Number(s.plan_down_mbps) || 0) * 1e6;
@@ -2833,11 +2905,15 @@ async function loadSubscribers() {
       // abonne jamais vu pour un abonne silencieux -- deux situations qui
       // n'appellent pas du tout le meme geste.
       const mesure = !!r.ts;
+      const perime = mesure && !mesureFraiche(r);
       const trou = '<span style="color:var(--faint)">-</span>';
-      return '<tr class="clickable" data-sub="' + r.subscriber_id + '">' +
+      return '<tr class="clickable' + (perime ? ' stale-row' : '') + '" data-sub="' + r.subscriber_id + '">' +
         '<td class="login">' + esc(r.login) +
           (mesure ? '' : '<span class="hint" style="display:block" title="No sample: ' +
             'this subscriber was never measured, or its PoP is no longer collected">never measured</span>') +
+          (perime ? '<span class="badge warn" style="display:table;margin-top:.2rem" title="The last ' +
+            'measurement is ' + esc(depuis(r.ts)) + ': these figures are NOT current. Check the ' +
+            'Subscribers cycle on the dashboard.">stale · ' + esc(depuis(r.ts)) + '</span>' : '') +
           '</td>' +
         '<td>' + kindBadge(r.kind) + '</td>' +
         '<td>' + popCell(r, siteParNom) + '</td>' +
@@ -5410,6 +5486,16 @@ const TOPO_RANG = {
   cpe: 4, static: 4, candidate: 4, client: 4, unknown: 5,
 };
 
+/** Une mesure d'abonne est-elle ACTUELLE ? Un cycle toutes les 10 s : au-dela
+ *  de 90 s, le chiffre est celui d'un autre moment. L'afficher comme le debit
+ *  present cachait une collecte en panne -- des abonnes figes sur leurs
+ *  keepalives pendant qu'un test de debit passait. */
+function mesureFraiche(r) {
+  if (!r || !r.ts) return false;
+  return (Date.now() - new Date(r.ts).getTime()) < 90000;
+}
+
+
 /** Un lien est-il assez SUR pour dessiner une adjacence directe dans l'arbre ?
  *
  *  - manuel (pose par l'operateur) ou UISP/radio declare : oui.
@@ -5654,8 +5740,11 @@ function topoBuildModel(data) {
     [...nodes.values()].forEach((n) => {
       const abonnes = parPop.get(n.name);
       if (!abonnes || !abonnes.length) return;
-      const tx = abonnes.reduce((a, s) => a + (Number(s.tx_bps) || 0), 0);
-      const rx = abonnes.reduce((a, s) => a + (Number(s.rx_bps) || 0), 0);
+      // Seules les mesures ACTUELLES s'additionnent : une valeur vieille d'une
+      // heure n'est pas le debit de ce PoP maintenant.
+      const frais = abonnes.filter(mesureFraiche);
+      const tx = frais.reduce((a, s) => a + (Number(s.tx_bps) || 0), 0);
+      const rx = frais.reduce((a, s) => a + (Number(s.rx_bps) || 0), 0);
       const cle = 'abos:' + n.key;
       const ouvert = topo.abosOuverts.has(cle);
       const synth = {
@@ -5682,7 +5771,7 @@ function topoBuildModel(data) {
           kind: s.kind === 'static' ? 'static' : 'cpe',
           synthetic: true, parentKey: synth.key, children: [], edge: null,
           subscriber: s,
-          synthRates: (s.tx_bps || s.rx_bps)
+          synthRates: mesureFraiche(s) && (s.tx_bps || s.rx_bps)
             ? { down: Number(s.tx_bps) || 0, up: Number(s.rx_bps) || 0, cap: 0 } : null,
           addresses: s.last_ip ? [String(s.last_ip)] : [], fresh: true,
         };
@@ -5838,7 +5927,7 @@ function topoStaticRates(n) {
   if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = null; } }
   const ref = (a && a.reference) || n.name;
   const s = (topo.subs || []).find((x) => x.login === ref);
-  if (!s || (s.tx_bps == null && s.rx_bps == null)) return null;
+  if (!s || !mesureFraiche(s) || (s.tx_bps == null && s.rx_bps == null)) return null;
   return { down: Number(s.tx_bps) || 0, up: Number(s.rx_bps) || 0, cap: 0 };
 }
 

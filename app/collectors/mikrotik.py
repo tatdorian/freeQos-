@@ -678,6 +678,23 @@ class MikrotikCollector:
         self._probe_client: RouterOsReadClient | None = (
             None if client is not None else LibrouterosReadClient(config)
         )
+        # ET UNE AUTRE POUR LA MESURE PERIODIQUE (sessions, ports, files, VLAN).
+        #
+        # Meme mecanisme, autre coupable : la decouverte (export de toute la
+        # configuration), la verification des plafonds, le rapprochement du
+        # shaping, le recensement et l'export NetFlow passent par la connexion
+        # d'administration. Quand l'un d'eux la tenait plus de quinze secondes,
+        # la lecture des sessions PPPoE expirait a chaque cycle : les abonnes
+        # restaient figes sur leur derniere valeur (des keepalives, ~500 bps)
+        # pendant qu'un test de debit passait bel et bien -- NetFlow le voyait.
+        # La mesure ne partage plus sa connexion avec rien de long.
+        self._metrics_client: RouterOsReadClient | None = (
+            None if client is not None else LibrouterosReadClient(config)
+        )
+
+    @property
+    def _mesure(self) -> RouterOsReadClient:
+        return self._metrics_client if self._metrics_client is not None else self._client
 
     @property
     def _sonde(self) -> RouterOsReadClient:
@@ -763,14 +780,16 @@ class MikrotikCollector:
         return await asyncio.wait_for(asyncio.to_thread(self.collect_sync), timeout=timeout)
 
     def collect_sync(self) -> list[PppoeSession]:
-        active = self._client.ppp_active()
-        interfaces = self._client.interfaces()
+        active = self._mesure.ppp_active()
+        interfaces = self._mesure.interfaces()
         return self._correlate(active, interfaces)
 
     def close(self) -> None:
         self._client.close()
         if self._probe_client is not None:
             self._probe_client.close()
+        if self._metrics_client is not None:
+            self._metrics_client.close()
 
     # ------------------------------------------------------------------
     # Debit des liens
@@ -788,11 +807,11 @@ class MikrotikCollector:
         les abonnes : c'est le service de collecte qui le calcule, parce que
         c'est lui qui garde l'etat entre deux cycles.
         """
-        rows = self._client.interfaces()
+        rows = self._mesure.interfaces()
         try:
             capacites = {
                 str(row.get("name") or ""): ethernet_capacity_mbps(row)
-                for row in self._client.ethernet()
+                for row in self._mesure.ethernet()
             }
         except Exception:  # noqa: BLE001 - la capacite n'est qu'un plafond d'affichage
             # Un CHR sans port physique refuse cet appel. Les compteurs restent
@@ -984,18 +1003,18 @@ class MikrotikCollector:
                 parse_counter(row.get("rx-byte")),
                 parse_counter(row.get("tx-byte")),
             )
-            for row in self._client.interfaces()
+            for row in self._mesure.interfaces()
         }
         try:
             avec_pppoe = {
                 str(row.get("interface") or "")
-                for row in self._client.pppoe_servers()
+                for row in self._mesure.pppoe_servers()
                 if not parse_flag(row.get("disabled"))
             }
         except Exception:  # noqa: BLE001 - un routeur sans paquet PPP refuse l'appel
             avec_pppoe = set()
         resultat: dict[int, list[VlanCounter]] = {}
-        for row in self._client.vlans():
+        for row in self._mesure.vlans():
             if parse_flag(row.get("disabled")):
                 continue
             nom = str(row.get("name") or "")
@@ -1037,7 +1056,7 @@ class MikrotikCollector:
         client a la main, autant s'en servir plutot que de n'afficher rien.
         """
         compteurs: dict[str, tuple[int | None, int | None]] = {}
-        for row in self._client.simple_queues():
+        for row in self._mesure.simple_queues():
             octets = _split_pair(row.get("bytes"))
             if octets is None:
                 continue
