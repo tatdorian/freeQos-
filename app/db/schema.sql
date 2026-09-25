@@ -579,6 +579,34 @@ CREATE INDEX IF NOT EXISTS idx_shaping_boost_expiry
 -- n'est montre qu'une fois, a la creation. Le prefixe (visible, non secret)
 -- sert a retrouver la ligne sans parcourir la table et a nommer la cle dans
 -- l'interface ("fqos_a1b2c3d4...") sans jamais la reveler.
+-- Comptes de l'interface d'exploitation. Deux grades : 'read' voit tout et ne
+-- change rien, 'edit' fait tout (y compris gerer les comptes). Le mot de passe
+-- n'est jamais stocke : seulement son empreinte scrypt.
+CREATE TABLE IF NOT EXISTS app_users (
+    id             SERIAL PRIMARY KEY,
+    email          TEXT NOT NULL UNIQUE,
+    password_hash  TEXT NOT NULL,
+    role           TEXT NOT NULL CHECK (role IN ('read', 'edit')),
+    disabled       BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_login_at  TIMESTAMPTZ
+);
+
+-- Sessions ouvertes. On ne garde que l'EMPREINTE du jeton : une copie de la
+-- base ne permet d'ouvrir aucune session.
+CREATE TABLE IF NOT EXISTS app_sessions (
+    token_hash  TEXT PRIMARY KEY,
+    user_id     INTEGER NOT NULL REFERENCES app_users(id) ON DELETE CASCADE,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    user_agent  TEXT,
+    address     TEXT
+);
+CREATE INDEX IF NOT EXISTS app_sessions_user_idx ON app_sessions (user_id);
+
 CREATE TABLE IF NOT EXISTS api_keys (
     id           SERIAL PRIMARY KEY,
     name         TEXT NOT NULL,

@@ -3365,3 +3365,44 @@ async def test_un_client_passe_sous_son_vlan_perd_son_ancien_rattachement(
     assert vlan["interface"] == "vlan2060" and vlan["discovered_by"] == "pop-test"
     # Le lien observe que la seconde decouverte n'a pas revu est toujours la.
     assert any(lk["target_key"] == "mac:AA" for lk in liens)
+
+
+async def test_les_comptes_et_leurs_sessions(database: Database) -> None:
+    """Le premier compte ne se cree qu'une fois, une session se retrouve par
+    l'empreinte de son jeton, et un compte coupe perd ses sessions."""
+    from app.db.users_repo import DuplicateUserError, UsersRepository
+    from app.services.accounts import token_digest
+
+    async with database.pool.acquire() as conn:
+        await conn.execute("TRUNCATE app_users, app_sessions RESTART IDENTITY CASCADE")
+    repo = UsersRepository(database.pool)
+    ttl = timedelta(hours=1)
+
+    premier = await repo.create_first(email="a@x.fr", password_hash="h")
+    assert premier is not None and premier["role"] == "edit"
+    assert await repo.create_first(email="b@x.fr", password_hash="h") is None
+
+    lecteur = await repo.create(
+        email="b@x.fr", password_hash="h2", role="read", created_by="a@x.fr"
+    )
+    with pytest.raises(DuplicateUserError):
+        await repo.create(email="b@x.fr", password_hash="h3", role="read", created_by=None)
+    assert await repo.count_editors() == 1
+    assert "password_hash" not in (await repo.list_all())[0]
+    assert (await repo.credentials("b@x.fr"))["password_hash"] == "h2"
+
+    await repo.open_session(
+        token_hash=token_digest("jeton"),
+        user_id=lecteur["id"],
+        ttl=ttl,
+        user_agent="t",
+        address="1.2.3.4",
+    )
+    trouve = await repo.session_user(token_digest("jeton"), ttl=ttl)
+    assert trouve is not None and trouve["email"] == "b@x.fr"
+
+    await repo.update(lecteur["id"], disabled=True)
+    assert await repo.session_user(token_digest("jeton"), ttl=ttl) is None
+    await repo.close_sessions_of(lecteur["id"])
+    await repo.delete(lecteur["id"])
+    assert await repo.count() == 1

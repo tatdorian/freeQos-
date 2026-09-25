@@ -8,9 +8,14 @@ les tests d'integration optionnels.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import pytest
+
+# La suite historique teste les routes SANS session : l'authentification y est
+# coupee. Les tests de connexion (test_comptes.py) la rallument explicitement.
+os.environ.setdefault("AUTH_ENABLED", "false")
 
 from app.collectors.mikrotik import MikrotikCollector
 from app.config import BackhaulConfig, RouterConfig, Settings

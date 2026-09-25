@@ -40,9 +40,11 @@ from app.db.settings_repo import SettingsRepository
 from app.db.static_clients_repo import StaticClientsRepository, VlanSightingsRepository
 from app.db.topology_repo import TopologyRepository
 from app.db.traffic_rules_repo import TrafficRulesRepository
+from app.db.users_repo import UsersRepository, UsersStore
 from app.db.writer import MetricsWriter, PgMetricsWriter
 from app.models import Plan
 from app.scheduler import Scheduler
+from app.services.accounts import LoginThrottle
 from app.services.collection import (
     JOB_BACKHAULS,
     JOB_BOOSTS,
@@ -167,6 +169,8 @@ class Container:
     static_clients_repo: StaticClientsRepository | None = None
     sightings_repo: VlanSightingsRepository | None = None
     api_keys_repo: ApiKeysRepository | None = None
+    users_repo: UsersStore | None = None
+    login_throttle: LoginThrottle | None = None
     model_repo: ModelRepository | None = None
     flows_repo: FlowsRepository | None = None
     exporters_repo: NetflowExportersRepository | None = None
@@ -259,6 +263,7 @@ async def build_container(settings: Settings) -> Container:
     # trafic. Aucun secret d'equipement ici -- des identifiants externes, des
     # debits et des octets.
     api_keys_repo = ApiKeysRepository(database.pool)
+    users_repo = UsersRepository(database.pool)
     model_repo = ModelRepository(database.pool)
     flows_repo = FlowsRepository(database.pool)
     exporters_repo = NetflowExportersRepository(database.pool)
@@ -559,6 +564,8 @@ async def build_container(settings: Settings) -> Container:
         static_clients_repo=static_clients_repo,
         sightings_repo=sightings_repo,
         api_keys_repo=api_keys_repo,
+        users_repo=users_repo,
+        login_throttle=LoginThrottle(),
         model_repo=model_repo,
         flows_repo=flows_repo,
         exporters_repo=exporters_repo,
