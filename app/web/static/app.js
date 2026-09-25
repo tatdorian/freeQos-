@@ -113,13 +113,15 @@ function severity(p) {
 
 /** Latence : les seuils sont ceux qui comptent pour un usage temps reel
  *  (visio, jeu). Au-dela de 100 ms l'experience se degrade nettement. */
-function rtt(value) {
+function rtt(value, detail) {
   if (value === null || value === undefined) {
     return '<span style="color:var(--faint)">-</span>';
   }
   const ms = Number(value);
   const color = ms < 30 ? 'var(--ok)' : ms < 100 ? 'var(--warn)' : 'var(--crit)';
-  return '<span style="color:' + color + '">' + ms.toFixed(ms < 10 ? 1 : 0) + ' ms</span>';
+  const titre = detail ? ' title="' + esc(rttDetailText(detail)) + '"' : '';
+  return '<span style="color:' + color + '"' + titre + '>' + ms.toFixed(ms < 10 ? 1 : 0) + ' ms' +
+    (detail && detail.loss_pct ? ' <small>(' + detail.loss_pct + '% loss)</small>' : '') + '</span>';
 }
 
 /** Pastille de note de bufferbloat : couleur = severite, titre = le detail
@@ -249,8 +251,15 @@ function renderThroughput(container, points, options) {
 
   const down = points.map((p) => Number(p.tx_bps) || 0);
   const up = points.map((p) => Number(p.rx_bps) || 0);
+  // La POINTE de chaque pas, quand le serveur la fournit : sur un pas de
+  // plusieurs minutes, la moyenne noie un test de debit de vingt secondes.
+  const aPointes = points.some((p) => p.tx_peak_bps != null || p.rx_peak_bps != null);
+  const downPk = points.map((p, i) => Math.max(down[i], Number(p.tx_peak_bps) || 0));
+  const upPk = points.map((p, i) => Math.max(up[i], Number(p.rx_peak_bps) || 0));
   const sd = seriesSummary(down);
   const su = seriesSummary(up);
+  sd.peak = Math.max(sd.peak, ...downPk);
+  su.peak = Math.max(su.peak, ...upPk);
   const fig = (label, v) => '<div><span>' + label + '</span><b>' + esc(bpsText(v)) + '</b></div>';
   const resume = document.createElement('div');
   resume.className = 'chart-summary';
@@ -270,8 +279,8 @@ function renderThroughput(container, points, options) {
   // Sur un reseau d'acces le montant pese souvent cinq fois moins que le
   // descendant : une echelle commune laissait la moitie basse vide et la
   // courbe montante ecrasee sur l'axe. Chaque moitie porte ses graduations.
-  const pd = niceCeil(Math.max(1, ...down));
-  const pu = niceCeil(Math.max(1, ...up));
+  const pd = niceCeil(Math.max(1, ...downPk));
+  const pu = niceCeil(Math.max(1, ...upPk));
   const part = Math.max(0.55, Math.min(0.7, pd / (pd + pu)));
   const hTop = ih * part;
   const hBot = ih - hTop;
@@ -320,11 +329,16 @@ function renderThroughput(container, points, options) {
 
   svg.appendChild(svgEl('path', { d: area(down, yDown), fill: 'var(--down-dim)' }));
   svg.appendChild(svgEl('path', { d: area(up, yUp), fill: 'var(--up-dim)' }));
+  if (aPointes) {
+    // Trait fin pointille : la pointe atteinte dans chaque pas.
+    svg.appendChild(svgEl('path', { d: line(downPk, yDown), fill: 'none', stroke: 'var(--down)', 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: 0.8 }));
+    svg.appendChild(svgEl('path', { d: line(upPk, yUp), fill: 'none', stroke: 'var(--up)', 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: 0.8 }));
+  }
   svg.appendChild(svgEl('path', { d: line(down, yDown), fill: 'none', stroke: 'var(--down)', 'stroke-width': 1.8, 'stroke-linejoin': 'round' }));
   svg.appendChild(svgEl('path', { d: line(up, yUp), fill: 'none', stroke: 'var(--up)', 'stroke-width': 1.8, 'stroke-linejoin': 'round' }));
 
   // Pic de chaque sens, marque et chiffre sur la courbe.
-  [[down, yDown, 'var(--down)', -7], [up, yUp, 'var(--up)', 14]].forEach(([vals, yFn, col, dy]) => {
+  [[downPk, yDown, 'var(--down)', -7], [upPk, yUp, 'var(--up)', 14]].forEach(([vals, yFn, col, dy]) => {
     const iMax = vals.indexOf(Math.max(...vals));
     if (iMax < 0 || !vals[iMax]) return;
     svg.appendChild(svgEl('circle', { cx: x(iMax), cy: yFn(vals[iMax]), r: 3, fill: col }));
@@ -395,7 +409,11 @@ function showTooltip(event, point, down, up, legende) {
   tooltipEl.innerHTML =
     '<div class="t">' + esc(new Date(point.bucket).toLocaleString('fr-FR')) + '</div>' +
     '<div class="row"><span style="color:var(--down)">' + esc(lib.down) + '</span><span>' + esc(bpsText(down)) + '</span></div>' +
+    (point.tx_peak_bps != null && Number(point.tx_peak_bps) > down
+      ? '<div class="row"><span style="color:var(--down)">&nbsp;&nbsp;peak</span><span>' + esc(bpsText(point.tx_peak_bps)) + '</span></div>' : '') +
     '<div class="row"><span style="color:var(--up)">' + esc(lib.up) + '</span><span>' + esc(bpsText(up)) + '</span></div>' +
+    (point.rx_peak_bps != null && Number(point.rx_peak_bps) > up
+      ? '<div class="row"><span style="color:var(--up)">&nbsp;&nbsp;peak</span><span>' + esc(bpsText(point.rx_peak_bps)) + '</span></div>' : '') +
     (lib.extra === null ? ''
       : '<div class="row"><span style="color:var(--faint)">' + esc(lib.extra) + '</span><span>' +
         esc(point.subscribers || 0) + '</span></div>');
@@ -477,7 +495,7 @@ async function loadTopTalkers() {
         '<td class="num" style="color:var(--down)">' + esc(bpsText(r.tx_bps)) + '</td>' +
         '<td>' + meter(r.tx_bps, limiteDown) + '</td>' +
         '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
-        '<td class="num">' + rtt(r.rtt_ms) + '</td>' +
+        '<td class="num">' + rtt(r.rtt_ms, r.rtt_detail) + '</td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
   host.querySelectorAll('tr[data-sub]').forEach((tr) => {
@@ -650,14 +668,18 @@ async function loadExec() {
   // BLANC. On garde une trace de l'echec pour l'expliquer, plutot que rien.
   let firstError = null;
   const grab = (p) => p.catch((err) => { firstError = firstError || err; return undefined; });
-  const [heat, subsRaw, bloat, topoData, tree, rttState] = await Promise.all([
+  const [heat, subsRaw, bloat, topoData, tree, rttState, points, latence] = await Promise.all([
     grab(api('/heatmap?minutes=' + minutes + '&buckets=' + buckets)),
     grab(api('/subscribers/latest?limit=500&order_by=login')),
     api('/bufferbloat?minutes=' + minutes).catch(() => null),
     api('/topology').catch(() => null),
     api('/network/tree').catch(() => []),
     api('/rtt').catch(() => null),
+    api('/capacity/hotspots?hours=' + Math.max(1, Math.ceil(minutes / 60))).catch(() => null),
+    api('/latency').catch(() => null),
   ]);
+  exec.hotspots = (points && points.hotspots) || [];
+  exec.latency = latence;
   const subs = Array.isArray(subsRaw) ? subsRaw : [];
   renderRttControl(rttState);
   exec.bloatById = {};
@@ -685,6 +707,8 @@ async function loadExec() {
 
   exec.subs = subs;
   renderExecSummary(document.getElementById('exec-summary'));
+  renderHotspots(document.getElementById('exec-hotspots'), points);
+  renderLatencySegments(document.getElementById('exec-latency'), latence);
   renderExecLoad(document.getElementById('exec-load'));
   renderQueuePanels();
   renderNodeTable(document.getElementById('exec-nodes'));
@@ -783,6 +807,18 @@ function renderExecSummary(host) {
     (xs.length > 3 ? ' +' + (xs.length - 3) : '');
   if (satures.length) {
     faits.push(['crit', satures.length + ' node(s) above 90% of their limit: ' + liste(satures)]);
+  }
+  const chauds = (exec.hotspots || []).filter((h) => h.state === 'saturated');
+  const tendus = (exec.hotspots || []).filter((h) => h.state === 'busy');
+  const nomLien = (h) => '<b>' + esc(h.name) + '</b> <span class="pct-hint">(' +
+    esc(HOT_SIDE[h.side] || h.side) + ')</span>';
+  if (chauds.length) {
+    faits.push(['crit', chauds.length + ' link(s) at 90%+ of capacity: ' +
+      chauds.slice(0, 3).map(nomLien).join(', ')]);
+  }
+  if (tendus.length) {
+    faits.push(['warn', tendus.length + ' link(s) between 70 and 90%: ' +
+      tendus.slice(0, 3).map(nomLien).join(', ')]);
   }
   if (notes.poor) faits.push(['crit', notes.poor + ' client(s) with a poor experience']);
   if (occupes.length) {
@@ -899,6 +935,167 @@ function renderExecLoad(host) {
     '<span><i class="sq warn"></i>70-90%</span><span><i class="sq crit"></i>over 90%</span>' +
     '<span><i class="lb-cap-key"></i>backhaul capacity</span></div>';
   brancherLiensNoeuds(host);
+}
+
+const HOT_SIDE = {
+  internet: 'internet uplink',
+  upstream: 'PoP to core',
+  pop: 'PoP side',
+};
+
+/** POINTS DE SATURATION : chaque lien, ce qui y passe, ce qu'il peut porter.
+ *
+ *  Deux familles, parce qu'elles ne se traitent pas de la meme facon : le cote
+ *  INTERNET (la sortie de la passerelle, les liens des PoPs vers le coeur) fait
+ *  tomber tout le monde d'un coup ; le cote POP (vers les abonnes, un VLAN, un
+ *  relais) ne fait tomber que ce qui pend dessous. La barre montre l'instant,
+ *  le repere la pointe de la periode, et le chiffre la marge qui reste. */
+function renderHotspots(host, data) {
+  if (!host) return;
+  const lignes = (data && data.hotspots) || [];
+  if (!data) {
+    host.innerHTML = '<div class="empty">Link measurements unavailable.</div>';
+    return;
+  }
+  if (!lignes.length) {
+    host.innerHTML = '<div class="empty">No link measured yet.</div>';
+    return;
+  }
+  const connus = lignes.filter((h) => h.capacity_mbps);
+  const inconnus = lignes.filter((h) => !h.capacity_mbps);
+  const groupe = (titre, sous, xs) => {
+    if (!xs.length) return '';
+    return '<div class="hot-group"><div class="hot-title">' + titre +
+      '<span class="pct-hint">' + sous + '</span></div>' + xs.slice(0, 12).map((h) => {
+        const now = h.now_share === null ? null : Math.min(1.2, h.now_share);
+        const pic = h.peak_share === null ? null : Math.min(1.2, h.peak_share);
+        const sev = h.state === 'saturated' ? 'crit' : h.state === 'busy' ? 'warn' : 'ok';
+        const nowMbps = Math.max(h.now_down_mbps || 0, h.now_up_mbps || 0);
+        const pkMbps = Math.max(h.peak_down_mbps || 0, h.peak_up_mbps || 0);
+        const pkQuand = (h.peak_down_mbps || 0) >= (h.peak_up_mbps || 0) ? h.peak_down_at : h.peak_up_at;
+        const pkSens = (h.peak_down_mbps || 0) >= (h.peak_up_mbps || 0) ? 'down' : 'up';
+        return '<div class="hot-row">' +
+          '<div class="hot-name"><b>' + esc(h.name) + '</b><span class="hint">' + esc(h.router) +
+            ' &middot; ' + esc(h.interface) + '</span></div>' +
+          '<div class="hot-bar" title="Capacity ' + esc(mbps(h.capacity_mbps)) + ' (' +
+            esc(h.capacity_source || '') + ')">' +
+            '<div class="lb-track"><div class="lb-fill ' + sev + '" style="width:' +
+              Math.min(100, (now || 0) * 100).toFixed(1) + '%"></div>' +
+              (pic !== null ? '<div class="hot-peak" style="left:' + Math.min(100, pic * 100).toFixed(1) +
+                '%" title="Peak ' + esc(mbps(pkMbps)) + '"></div>' : '') +
+            '</div>' +
+          '</div>' +
+          '<div class="hot-val"><b>' + (h.now_share === null ? '-' : Math.round(h.now_share * 100) + '%') +
+            '</b> <span class="pct-hint">now</span>' +
+            '<span class="hint">' + esc(mbps(nowMbps)) + ' of ' + esc(mbps(h.capacity_mbps)) + '</span></div>' +
+          '<div class="hot-val"><b class="sev-' + sev + '">' +
+            (h.peak_share === null ? '-' : Math.round(h.peak_share * 100) + '%') +
+            '</b> <span class="pct-hint">peak ' + pkSens + '</span>' +
+            '<span class="hint">' + (pkQuand ? esc(clock(pkQuand)) : '') + '</span></div>' +
+          '<div class="hot-val"><b>' + esc(mbps(Math.max(0, h.headroom_mbps))) + '</b>' +
+            '<span class="hint">headroom</span></div>' +
+        '</div>';
+      }).join('') + '</div>';
+  };
+  const amont = connus.filter((h) => h.side !== 'pop');
+  const pop = connus.filter((h) => h.side === 'pop');
+  host.innerHTML =
+    groupe('Internet side', 'gateway uplink and PoP-to-core links: a saturation here hits everyone', amont) +
+    groupe('PoP side', 'towards subscribers, VLANs and relays', pop) +
+    (!amont.length && (data.upstream_known || []).length === 0
+      ? '<div class="notice">Upstream links are identified from each router\'s default route at ' +
+        'discovery: run <a href="#/network">discovery</a> once to split internet side from PoP side.</div>'
+      : '') +
+    (inconnus.length
+      ? '<details class="hot-unknown"><summary>' + inconnus.length + ' measured link(s) without a known ' +
+        'capacity</summary><div class="hint" style="margin:.4rem 0">Set their capacity with the ' +
+        '<b>Bandwidth</b> button on the link in the <a href="#/network">network tree</a> to track their ' +
+        'saturation.</div>' + inconnus.slice(0, 20).map((h) => '<div class="hot-mini"><b>' + esc(h.name) +
+        '</b> <span class="pct-hint">' + esc(h.router) + ' &middot; ' + esc(h.interface) + ' &middot; ' +
+        esc(HOT_SIDE[h.side] || h.side) + '</span><span>' +
+        esc(mbps(Math.max(h.now_down_mbps || 0, h.now_up_mbps || 0))) + ' now, peak ' +
+        esc(mbps(Math.max(h.peak_down_mbps || 0, h.peak_up_mbps || 0))) + '</span></div>').join('') +
+        '</details>'
+      : '') +
+    '<div class="exec-legend"><span><i class="sq ok"></i>under 70%</span><span><i class="sq warn"></i>70-90%</span>' +
+      '<span><i class="sq crit"></i>90%+</span><span><i class="hot-peak-key"></i>peak over the period</span>' +
+      '<span>Capacity = the lowest known of: rate set on the link, measured radio capacity, port speed</span></div>';
+}
+
+/** Une mesure de latence lisible : la mediane, et tout le reste en infobulle. */
+function latCell(st, seuils) {
+  if (!st || st.median_ms === null || st.median_ms === undefined) {
+    const perdu = st && st.sent && !st.received;
+    return '<td class="num">' + (perdu ? sqCell('no reply', 'crit') : '<span class="na">-</span>') + '</td>';
+  }
+  const s = seuils || [30, 100];
+  const m = Number(st.median_ms);
+  let sev = m < s[0] ? 'ok' : m < s[1] ? 'warn' : 'crit';
+  if (st.loss_pct >= 20) sev = 'crit';
+  else if (st.loss_pct > 0 && sev === 'ok') sev = 'warn';
+  const detail = 'median ' + m.toFixed(1) + ' ms' +
+    (st.min_ms != null ? ' · min ' + Number(st.min_ms).toFixed(1) : '') +
+    (st.max_ms != null ? ' · max ' + Number(st.max_ms).toFixed(1) : '') +
+    (st.jitter_ms != null ? ' · jitter ' + Number(st.jitter_ms).toFixed(1) : '') +
+    (st.p90_ms != null ? ' · p90 ' + Number(st.p90_ms).toFixed(1) : '') +
+    ' ms · loss ' + (st.loss_pct == null ? '-' : st.loss_pct + '%') +
+    (st.sent ? ' · ' + st.received + '/' + st.sent + ' replies' : '') +
+    (st.subscribers ? ' · ' + st.subscribers + ' subscriber(s)' : '') +
+    (st.age_s != null ? ' · ' + Math.round(st.age_s) + ' s ago' : '');
+  return '<td class="num" title="' + esc(detail) + '">' + sqCell(m.toFixed(m < 10 ? 1 : 0) + ' ms', sev) +
+    '<span class="lat-sub">' + (st.jitter_ms != null ? '±' + Number(st.jitter_ms).toFixed(1) + ' ' : '') +
+    (st.loss_pct ? '<span class="sev-crit">' + st.loss_pct + '% loss</span>' : '') + '</span></td>';
+}
+
+/** LATENCE PAR SEGMENT : ou se perd le temps, routeur par routeur.
+ *
+ *  Le meme routeur mesure trois choses par la meme methode : ses abonnes
+ *  (l'acces), sa passerelle (le lien vers le coeur), et internet. Comparer les
+ *  trois dit ou chercher : internet lent mais passerelle rapide, c'est au-dessus
+ *  du coeur ; passerelle deja lente, c'est entre le PoP et le coeur. */
+function renderLatencySegments(host, data) {
+  if (!host) return;
+  if (!data) { host.innerHTML = '<div class="empty">Latency unavailable.</div>'; return; }
+  const m = data.method || {};
+  const methode = '<div class="lat-method">Measured from each router: ' + esc(m.count) + ' pings ' +
+    esc(m.interval_ms) + ' ms apart every ' + esc(m.every_s) + ' s; <b>median</b> shown, ' +
+    '± = jitter. Hover a value for min / max / loss.</div>';
+  if (!data.enabled) {
+    host.innerHTML = '<div class="notice"><b>RTT probe off.</b> Tick <b>RTT probe</b> above to measure ' +
+      'latency by segment.</div>';
+    return;
+  }
+  const cibles = m.internet_targets || [];
+  const diag = (r) => {
+    const gw = r.gateway && r.gateway.median_ms;
+    const net = (r.internet || []).map((x) => x.median_ms).filter((v) => v != null);
+    const inet = net.length ? Math.min(...net) : null;
+    const acc = r.access && r.access.median_ms;
+    const pertes = [r.gateway, ...(r.internet || [])].filter(Boolean).some((x) => x.loss_pct > 0);
+    if (inet != null && gw != null && inet - gw > 60) {
+      return '<span class="sq warn"></span>delay above the core (transit / internet)';
+    }
+    if (gw != null && gw > 30) return '<span class="sq warn"></span>delay between this PoP and the core';
+    if (acc != null && r.access.p90_ms > 100) return '<span class="sq warn"></span>delay on the access side';
+    if (pertes) return '<span class="sq warn"></span>packet loss upstream';
+    if (gw == null && inet == null && acc == null) return '<span class="na">not measured yet</span>';
+    return '<span class="sq ok"></span>no abnormal segment';
+  };
+  host.innerHTML = methode + '<table><thead><tr><th>Router</th>' +
+    '<th class="num" title="PoP to its subscribers: median of their medians (p90 in the tooltip)">Access</th>' +
+    '<th class="num" title="PoP to its default gateway: the link towards the core">To core</th>' +
+    cibles.map((c) => '<th class="num">To ' + esc(c) + '</th>').join('') +
+    '<th>Where</th></tr></thead><tbody>' +
+    (data.routers || []).map((r) => {
+      const parCible = {};
+      (r.internet || []).forEach((x) => { parCible[x.target] = x; });
+      return '<tr><td><b>' + esc(r.pop_name || r.router) + '</b><span class="hint">' + esc(r.router) +
+          (r.upstream_gateway ? ' &rarr; ' + esc(r.upstream_gateway) +
+            (r.upstream_interface ? ' via ' + esc(r.upstream_interface) : '') : '') + '</span></td>' +
+        latCell(r.access, [30, 100]) + latCell(r.gateway, [10, 30]) +
+        cibles.map((c) => latCell(parCible[c], [40, 120])).join('') +
+        '<td class="nowrap">' + diag(r) + '</td></tr>';
+    }).join('') + '</tbody></table>';
 }
 
 /** Ce que veulent dire les pastilles du tableau, en une ligne. */
@@ -1034,14 +1231,24 @@ function aggregateNodes(subs, childCounts) {
   return nodes.sort((a, b) => (b.tx + b.rx) - (a.tx + a.rx));
 }
 
+/** Infobulle d'une latence d'abonne : la serie qui a donne le chiffre. */
+function rttDetailText(d) {
+  if (!d) return 'median of the last ping series from the PoP router';
+  return 'median ' + (d.median_ms ?? '-') + ' ms · min ' + (d.min_ms ?? '-') + ' · max ' +
+    (d.max_ms ?? '-') + ' · jitter ' + (d.jitter_ms ?? '-') + ' ms · loss ' +
+    (d.loss_pct ?? '-') + '% (' + (d.received ?? 0) + '/' + (d.sent ?? 0) + ') · ' +
+    (d.method || '') + ' · ' + Math.round(d.age_s || 0) + ' s ago';
+}
+
 function renderNodeTable(host) {
   const nodes = exec.nodes;
   if (!nodes.length) {
     host.innerHTML = '<div class="empty">No active circuit.</div>';
     return;
   }
-  const rttSq = (ms) => (ms === null || ms === undefined)
-    ? sqCell('-', 'none') : sqCell(Math.round(ms) + ' ms', rttSevJs(ms));
+  const rttSq = (ms, detail) => (ms === null || ms === undefined)
+    ? sqCell('-', 'none')
+    : sqCell(Math.round(ms) + ' ms', rttSevJs(ms), rttDetailText(detail));
   const naSq = '<span class="na">-</span>';
   // Le debit ET sa part de la limite, dans la meme cellule : c'est la part qui
   // dit s'il faut s'inquieter, le debit seul ne le dit pas.
@@ -1097,7 +1304,7 @@ function renderNodeTable(host) {
         '<td class="num">' + usage(Number(s.rx_bps) || 0, effU) + '</td>' +
         '<td class="num">' + esc(mbps(s.effective_down_mbps || 0) + ' / ' + mbps(s.effective_up_mbps || 0)) + '</td>' +
         '<td class="num na">' + esc(mbps(s.plan_down_mbps || 0) + ' / ' + mbps(s.plan_up_mbps || 0)) + '</td>' +
-        '<td class="num">' + rttSq(s.rtt_ms) + '</td>' +
+        '<td class="num">' + rttSq(s.rtt_ms, s.rtt_detail) + '</td>' +
         '<td class="num">' + qooCell(qoeOf(s.subscriber_id), s.rtt_ms) + '</td></tr>';
     }).join('');
     return nodeRow + subRows;
@@ -2412,7 +2619,7 @@ async function loadSubscribers() {
         '<td>' + (mesure ? meter(r.tx_bps, limiteDown) : '') + '</td>' +
         '<td class="num" style="color:var(--up)">' +
           (mesure ? esc(bpsText(r.rx_bps)) : trou) + '</td>' +
-        '<td class="num">' + (mesure ? rtt(r.rtt_ms) : trou) + '</td>' +
+        '<td class="num">' + (mesure ? rtt(r.rtt_ms, r.rtt_detail) : trou) + '</td>' +
         '<td>' + bloatBadge(bloatParId[r.subscriber_id]) + '</td>' +
         '<td>' + (parLogin[r.login]
           ? '<span class="boost-pill" title="' +

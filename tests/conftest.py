@@ -49,6 +49,7 @@ class FakeRouterOsClient:
         self.raise_on_ppp: Exception | None = None
         self.pings: list[tuple[str, int]] = []
         self.ping_sources: list[str | None] = []
+        self.ping_intervals: list[str | None] = []
         # Topologie et files, pour la phase 2.
         self.neighbor_rows: list[dict[str, Any]] = []
         self.ethernet_rows: list[dict[str, Any]] = []
@@ -264,9 +265,14 @@ class FakeRouterOsClient:
         self.group_rows = [{"name": "full", "policy": "read,write,api,test,policy"}]
 
     def ping(
-        self, address: str, count: int = 1, src_address: str | None = None
+        self,
+        address: str,
+        count: int = 1,
+        src_address: str | None = None,
+        interval: str | None = None,
     ) -> list[dict[str, Any]]:
         self.pings.append((address, count))
+        self.ping_intervals.append(interval)
         self.ping_sources.append(src_address)
         if self.ping_error is not None:
             raise self.ping_error

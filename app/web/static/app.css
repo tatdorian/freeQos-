@@ -896,3 +896,34 @@ tr.muted-row td { color: var(--muted); }
 .meter .fill.muted { background: var(--faint); }
 .ip-facts span.flag, .ip-facts span.geo { display: inline; font-size: 1em; color: inherit; margin-bottom: 0; }
 .heat-now { flex: 0 0 64px; text-align: right; }
+
+/* ================================================ saturation et latence */
+.hot-group + .hot-group { margin-top: 1.1rem; }
+.hot-title { font-weight: 600; font-size: .92rem; margin-bottom: .35rem; display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+.hot-row {
+  display: grid; grid-template-columns: minmax(150px, 1.2fr) 2.4fr repeat(3, minmax(88px, auto));
+  gap: .9rem; align-items: center; padding: .45rem 0;
+}
+.hot-row + .hot-row { border-top: 1px solid var(--border); }
+.hot-name { min-width: 0; font-size: .86rem; overflow: hidden; text-overflow: ellipsis; }
+.hot-name .hint { margin-top: .05rem; }
+.hot-bar .lb-track { overflow: visible; }
+.hot-peak { position: absolute; top: -4px; bottom: -4px; width: 3px; margin-left: -1px; background: var(--text); border-radius: 2px; opacity: .7; }
+.hot-peak-key { display: inline-block; width: 3px; height: 11px; background: var(--text); opacity: .7; margin-right: .4rem; vertical-align: middle; border-radius: 2px; }
+.hot-val { text-align: right; font-size: .86rem; font-variant-numeric: tabular-nums; }
+.hot-val .hint { margin-top: .05rem; }
+.hot-unknown { margin-top: .9rem; font-size: .84rem; }
+.hot-unknown summary { cursor: pointer; color: var(--muted); }
+.hot-mini { display: flex; flex-wrap: wrap; gap: .3rem .8rem; padding: .3rem 0; border-top: 1px solid var(--border); }
+.hot-mini span:last-child { margin-left: auto; font-variant-numeric: tabular-nums; }
+.sev-crit { color: var(--crit); }
+.sev-warn { color: var(--warn); }
+.sev-ok { color: var(--ok); }
+.lat-method { font-size: .76rem; color: var(--muted); padding: .75rem 1rem .25rem; }
+.lat-sub { display: block; font-size: .7rem; color: var(--faint); }
+#exec-latency td .hint { margin-top: .05rem; }
+@media (max-width: 760px) {
+  .hot-row { grid-template-columns: 1fr auto auto; }
+  .hot-bar { grid-column: 1 / -1; order: 5; }
+  .hot-row .hot-val:last-child { display: none; }
+}

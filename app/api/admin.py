@@ -53,6 +53,55 @@ async def set_rtt(
     return {"enabled": collection.rtt_enabled}
 
 
+@router.get("/latency", summary="Latency by segment: access, upstream, internet")
+async def latency(container: ContainerDep, collection: CollectionDep) -> dict[str, Any]:
+    """OU SE PERD LE TEMPS, routeur par routeur.
+
+    Trois segments mesures depuis le MEME routeur, par la meme methode (une
+    serie de pings dont on garde tout : mediane, extremes, gigue, perte) :
+
+    - ``access``   : PoP -> ses abonnes, resume sur tous ceux mesures ;
+    - ``gateway``  : PoP -> sa passerelle par defaut (le lien vers le coeur) ;
+    - ``internet`` : PoP -> des cibles publiques (``LATENCY_INTERNET_TARGETS``).
+    """
+    from app.collectors.mikrotik import upstream_of
+    from app.services.rtt import summarise
+
+    settings = container.settings
+    sonde = collection.rtt_prober
+    chemins = collection.path_prober.snapshot() if collection.path_prober is not None else {}
+    acces = sonde.readings_by_router() if sonde is not None else {}
+    routeurs = []
+    for collector in collection.collectors:
+        nom = collector.name
+        passerelle, interface = upstream_of(nom)
+        segments = chemins.get(nom, {})
+        routeurs.append(
+            {
+                "router": nom,
+                "pop_name": collector.config.effective_pop_name,
+                "role": str(collector.config.role),
+                "upstream_gateway": passerelle,
+                "upstream_interface": interface,
+                "access": summarise(acces.get(nom, [])),
+                "gateway": next(iter(segments.get("gateway") or []), None),
+                "internet": segments.get("internet") or [],
+            }
+        )
+    return {
+        "enabled": collection.rtt_enabled,
+        "method": {
+            "count": settings.rtt_count,
+            "interval_ms": settings.rtt_ping_interval_ms,
+            "every_s": settings.rtt_interval_s,
+            "reported": "median of the series (min, max, jitter and loss kept)",
+            "source": "the PoP router itself (/ping from its loopback)",
+            "internet_targets": list(settings.latency_internet_targets),
+        },
+        "routers": routeurs,
+    }
+
+
 @router.get("/status", summary="State of the controller and its cycles")
 async def status_view(
     container: ContainerDep,

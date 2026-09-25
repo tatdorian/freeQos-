@@ -94,6 +94,75 @@ class StaticClient:
 
 
 @dataclass(frozen=True, slots=True)
+class PingStats:
+    """Une serie de pings, TOUS gardes -- pas seulement le meilleur.
+
+    Le minimum seul (ce qui etait retenu avant) est la latence du meilleur
+    paquet : il cache precisement ce qu'on cherche, la gigue et les pertes
+    d'un lien qui commence a saturer. La MEDIANE est la valeur de reference :
+    insensible a un paquet isole, elle bouge des que la moitie des paquets
+    attendent dans une file.
+    """
+
+    sent: int
+    samples: tuple[float, ...] = ()
+
+    @property
+    def received(self) -> int:
+        return len(self.samples)
+
+    @property
+    def loss_pct(self) -> float | None:
+        if self.sent <= 0:
+            return None
+        return round(100.0 * max(0, self.sent - self.received) / self.sent, 1)
+
+    @property
+    def min_ms(self) -> float | None:
+        return min(self.samples) if self.samples else None
+
+    @property
+    def max_ms(self) -> float | None:
+        return max(self.samples) if self.samples else None
+
+    @property
+    def median_ms(self) -> float | None:
+        if not self.samples:
+            return None
+        ordre = sorted(self.samples)
+        milieu = len(ordre) // 2
+        if len(ordre) % 2:
+            return ordre[milieu]
+        return (ordre[milieu - 1] + ordre[milieu]) / 2
+
+    @property
+    def jitter_ms(self) -> float | None:
+        """Ecart moyen entre deux paquets SUCCESSIFS (au sens de la RFC 3550).
+
+        C'est ce que ressent un appel visio : pas la latence elle-meme, mais sa
+        variation d'un paquet au suivant.
+        """
+        if len(self.samples) < 2:
+            return None
+        ecarts = [abs(b - a) for a, b in zip(self.samples, self.samples[1:], strict=False)]
+        return sum(ecarts) / len(ecarts)
+
+    def to_dict(self) -> dict[str, float | int | None]:
+        def arrondi(v: float | None) -> float | None:
+            return round(v, 2) if v is not None else None
+
+        return {
+            "median_ms": arrondi(self.median_ms),
+            "min_ms": arrondi(self.min_ms),
+            "max_ms": arrondi(self.max_ms),
+            "jitter_ms": arrondi(self.jitter_ms),
+            "loss_pct": self.loss_pct,
+            "sent": self.sent,
+            "received": self.received,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class VlanCounter:
     """Compteurs cumules d'UNE interface VLAN d'un routeur."""
 

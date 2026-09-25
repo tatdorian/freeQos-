@@ -26,8 +26,14 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
 
-from app.api.deps import RepositoryDep
-from app.services.capacity import a_renforcer, link_row, pop_capacity_row, usage_row
+from app.api.deps import CollectionDep, ContainerDep, RepositoryDep
+from app.services.capacity import (
+    a_renforcer,
+    hotspot_rows,
+    link_row,
+    pop_capacity_row,
+    usage_row,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,4 +97,35 @@ async def capacity(
         # Ce qui n'a plus de marge EN MOYENNE : un lien a renforcer n'est pas un
         # lien qui a touche son plafond une fois, c'est un lien qui y vit.
         "reinforce": renfort,
+    }
+
+
+@router.get("/capacity/hotspots", summary="Saturation points: headroom left on every link")
+async def hotspots(
+    repo: RepositoryDep,
+    container: ContainerDep,
+    collection: CollectionDep,
+    hours: Annotated[int, Query(ge=1, le=720, description="Peak window")] = 1,
+    limit: Annotated[int, Query(ge=1, le=200)] = 60,
+) -> dict[str, Any]:
+    """OU LA MARGE MANQUE, avant que le reseau ne tombe.
+
+    Chaque port mesure, range du plus a risque au moins a risque, avec son cote :
+    ``internet`` (la sortie de la passerelle, le transit), ``upstream`` (le lien
+    d'un PoP vers le coeur) ou ``pop`` (vers les abonnes, un VLAN, un relais).
+    Le risque retient la pointe de la fenetre ET l'instant : une pointe passee
+    dit que ca peut recommencer, l'instant dit que c'est en cours.
+    """
+    from app.collectors.mikrotik import upstream_of
+
+    occupation = await repo.link_occupancy(hours=hours, limit=500)
+    liens = await container.topology_repo.links() if container.topology_repo is not None else []
+    amonts = {c.name: upstream_of(c.name) for c in collection.collectors}
+    roles = {c.name: str(c.config.role) for c in collection.collectors}
+    lignes = hotspot_rows(occupation, liens, upstream=amonts, roles=roles)[:limit]
+    return {
+        "hours": hours,
+        "thresholds": {"busy": 0.70, "saturated": 0.90},
+        "hotspots": lignes,
+        "upstream_known": sorted(n for n, (_g, i) in amonts.items() if i),
     }

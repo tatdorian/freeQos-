@@ -763,6 +763,43 @@ async def test_throughput_ne_double_compte_pas(database: Database, now: datetime
     assert all(point["subscribers"] == 1 for point in series)
 
 
+async def test_la_pointe_d_un_test_de_debit_survit_a_la_moyenne(
+    database: Database, now: datetime
+) -> None:
+    """Un test de debit de 20 s dans un pas de 5 min : la moyenne le noie,
+    la pointe doit le montrer tel quel -- deux abonnes additionnes au MEME
+    instant, jamais deux instants additionnes."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+    pop_id = await directory.ensure_pop("PoP Nord")
+    a = await directory.ensure_subscriber("a", pop_id=pop_id)
+    b = await directory.ensure_subscriber("b", pop_id=pop_id)
+    base = _ancre_dans_un_seul_pas(now, bucket_seconds=300, recul_s=60)
+
+    def echantillon(sid: int, login: str, ts: datetime, tx: float) -> tuple[int, SubscriberSample]:
+        return (
+            sid,
+            SubscriberSample(
+                ts=ts, login=login, router_name="r", pop_name="p", rx_bps=0.0, tx_bps=tx
+            ),
+        )
+
+    lignes = []
+    for i in range(6):
+        ts = base - timedelta(seconds=10 * i)
+        # Le test : 300 Mbps pour 'a' pendant UN seul cycle.
+        lignes.append(echantillon(a, "a", ts, 300e6 if i == 2 else 1e6))
+        lignes.append(echantillon(b, "b", ts, 50e6))
+    await writer.write_subscriber_metrics(lignes)
+
+    [point] = await repo.throughput_series(
+        start=base - timedelta(minutes=2), end=base + timedelta(seconds=1), bucket_seconds=300
+    )
+    assert point["tx_bps"] == pytest.approx((300e6 + 5 * 1e6) / 6 + 50e6)
+    assert point["tx_peak_bps"] == pytest.approx(350e6)
+
+
 # ---------------------------------------------------------------------------
 # Topologie et enforcement (phase 2)
 # ---------------------------------------------------------------------------

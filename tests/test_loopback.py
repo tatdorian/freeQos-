@@ -645,7 +645,7 @@ async def test_un_loopback_refuse_ne_fait_pas_perdre_la_mesure() -> None:
     from app.collectors.mikrotik import MikrotikCollector
 
     class Refus(FakeRouterOsClient):
-        def ping(self, address, count=1, src_address=None):  # type: ignore[no-untyped-def]
+        def ping(self, address, count=1, src_address=None, interval=None):  # type: ignore[no-untyped-def]
             if src_address:
                 self.ping_sources.append(src_address)
                 raise RuntimeError("no such address")

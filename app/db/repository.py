@@ -552,14 +552,37 @@ class MetricsRepository:
                      WHERE m.ts >= $1 AND m.ts < $2
                        AND ($4::int IS NULL OR s.pop_id = $4)
                      GROUP BY bucket, m.subscriber_id
+                ),
+                -- LA POINTE, PAS SEULEMENT LA MOYENNE. Un cycle de collecte
+                -- ecrit tous les abonnes sous le MEME horodatage : la somme
+                -- par horodatage est le debit du reseau a cet instant. Sur un
+                -- pas de quelques minutes, un test de debit de 20 s se noie
+                -- dans la moyenne ; son maximum, lui, reste visible.
+                par_cycle AS (
+                    SELECT date_bin($3::interval, m.ts, TIMESTAMPTZ 'epoch') AS bucket,
+                           sum(m.rx_bps) AS rx_bps,
+                           sum(m.tx_bps) AS tx_bps
+                      FROM subscriber_metrics m
+                      JOIN subscribers s ON s.id = m.subscriber_id
+                     WHERE m.ts >= $1 AND m.ts < $2
+                       AND ($4::int IS NULL OR s.pop_id = $4)
+                     GROUP BY m.ts
+                ),
+                pointes AS (
+                    SELECT bucket, max(rx_bps) AS rx_peak_bps, max(tx_bps) AS tx_peak_bps
+                      FROM par_cycle
+                     GROUP BY bucket
                 )
-                SELECT bucket,
-                       sum(rx_bps)  AS rx_bps,
-                       sum(tx_bps)  AS tx_bps,
-                       count(*)     AS subscribers
-                  FROM par_abonne
-                 GROUP BY bucket
-                 ORDER BY bucket
+                SELECT a.bucket,
+                       sum(a.rx_bps)  AS rx_bps,
+                       sum(a.tx_bps)  AS tx_bps,
+                       count(*)       AS subscribers,
+                       max(p.rx_peak_bps) AS rx_peak_bps,
+                       max(p.tx_peak_bps) AS tx_peak_bps
+                  FROM par_abonne a
+                  LEFT JOIN pointes p ON p.bucket = a.bucket
+                 GROUP BY a.bucket
+                 ORDER BY a.bucket
                 """,
                 start,
                 end,

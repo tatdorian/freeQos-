@@ -56,7 +56,7 @@
       <h2>Network throughput</h2>
       <div class="card">
         <div class="chart-head">
-          <span class="mode">Download above the axis, upload below</span>
+          <span class="mode">Download above, upload below &middot; solid = average, dotted = peak</span>
           <select id="range-select" style="width:auto">
             <option value="15">15 minutes</option>
             <option value="60" selected>1 hour</option>
@@ -99,6 +99,12 @@
       <!-- Le verdict d'abord, en une ligne, puis les quatre chiffres qui le
            justifient. Le detail vient ensuite, pour qui veut creuser. -->
       <div id="exec-summary"></div>
+
+      <h2>Saturation risks</h2>
+      <div class="card" id="exec-hotspots"></div>
+
+      <h2>Latency by segment</h2>
+      <div class="table-wrap" id="exec-latency"></div>
 
       <h2>Load by node</h2>
       <div class="card" id="exec-load"></div>

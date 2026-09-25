@@ -63,7 +63,7 @@ from app.services.netflow_export import JOB_NETFLOW_EXPORT, NetflowExportService
 from app.services.netflow_service import JOB_NETFLOW, NetflowService
 from app.services.registry import RouterRegistry
 from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
-from app.services.rtt import RttProber
+from app.services.rtt import PathProber, RttProber
 from app.services.runtime_config import RuntimeConfig
 from app.services.shaping import ShapingService, discover_with_devices
 
@@ -301,6 +301,13 @@ async def build_container(settings: Settings) -> Container:
         batch_size=settings.rtt_batch_size,
         max_age_s=settings.rtt_max_age_s,
         count=settings.rtt_count,
+        interval_ms=settings.rtt_ping_interval_ms,
+    )
+    path_prober = PathProber(
+        internet_targets=tuple(settings.latency_internet_targets),
+        count=settings.rtt_count,
+        interval_ms=settings.rtt_ping_interval_ms,
+        max_age_s=settings.rtt_max_age_s,
     )
 
     collection = CollectionService(
@@ -312,6 +319,7 @@ async def build_container(settings: Settings) -> Container:
         directory=directory,
         writer=writer,
         rtt_prober=rtt_prober,
+        path_prober=path_prober,
         static_clients=static_clients_repo,
         sightings=sightings_repo,
     )
