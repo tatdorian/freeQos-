@@ -18,6 +18,21 @@
   <link rel="stylesheet" href="/static/app.css?v={{ css_version }}">
 </head>
 <body>
+  <!-- ECRAN DE CONNEXION. Au premier lancement (aucun compte), il sert a creer
+       le premier compte, en edition. Tant qu'il est affiche, l'interface
+       derriere ne charge rien : toutes ses routes exigent une session. -->
+  <div id="auth-gate" class="auth-gate" hidden>
+    <form class="auth-card" id="auth-form" autocomplete="on">
+      <div class="auth-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16l5-6 4 4 7-8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <h1 id="auth-title">Log in</h1>
+      <p class="auth-sub" id="auth-sub">freeQoS controller</p>
+      <label>Email<input type="email" id="auth-email" autocomplete="username" required maxlength="254"></label>
+      <label>Password<input type="password" id="auth-password" autocomplete="current-password" required maxlength="256"></label>
+      <label id="auth-confirm-row" hidden>Confirm password<input type="password" id="auth-confirm" autocomplete="new-password" maxlength="256"></label>
+      <div id="auth-error"></div>
+      <button class="primary" type="submit" id="auth-submit">Log in</button>
+    </form>
+  </div>
   <header class="top">
     <div class="brand">
       <span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16l5-6 4 4 7-8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
@@ -35,6 +50,11 @@
       <a href="#/api" data-view="api"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5"/><path d="M16 7l5 5-5 5"/><path d="M13.5 5l-3 14"/></svg><span>API</span></a>
       <a href="#/settings" data-view="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a>
     </nav>
+    <div class="user-chip" id="user-chip" hidden>
+      <span class="user-email" id="user-email"></span>
+      <span class="badge" id="user-role"></span>
+      <button type="button" class="sm" id="logout-btn">Log out</button>
+    </div>
     <div class="sidebar-foot">
       <span class="version">Out-of-band QoS</span>
       <button type="button" class="theme-toggle" id="theme-toggle" title="Appearance">Auto</button>
@@ -44,6 +64,7 @@
 
   <main>
     <div class="page-head"><h1 id="page-title">Dashboard</h1></div>
+    <div class="readonly-banner" id="readonly-banner" hidden>Read-only access: you can view everything, changes are refused.</div>
     <!-- UN ECHEC DE CHARGEMENT DOIT SE VOIR. Sans ce bandeau, une API en erreur
          laissait l'onglet vide ou fige sur ses anciennes lignes : indiscernable
          d'un reseau sans abonnes, et la cause n'etait visible que dans la console
@@ -782,8 +803,11 @@
 
     <!-- ------------------------------------------------------- reglages -->
     <section id="view-settings">
+      <h2 style="margin-top:0">Accounts</h2>
+      <div class="card" id="settings-accounts"></div>
+
       <div class="chart-head">
-        <h2 style="margin:0">Operational settings</h2>
+        <h2>Operational settings</h2>
         <span class="spacer"></span>
         <span class="mode" id="settings-count"></span>
       </div>

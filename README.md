@@ -137,6 +137,32 @@ open http://localhost:8000/docs            # API
 Sans routeur sous la main, les providers `mock` suffisent à faire tourner toute la chaîne :
 `BACKHAUL_PROVIDER=mock` et `PLAN_PROVIDER=mock` (valeurs par défaut).
 
+### Comptes et connexion
+
+Au premier lancement, la page demande de **créer le premier compte** (email + mot de
+passe) : il a les droits d'**édition**. Ensuite, toute l'interface exige une connexion.
+
+| Grade | Ce qu'il peut faire |
+|---|---|
+| **Lecture seule** | Tout voir. Toute modification est **refusée par le serveur** (403), quelle que soit la page — pas seulement masquée |
+| **Édition** | Tout faire, y compris gérer les comptes dans *Settings › Accounts* : email, mot de passe et grade de chacun, désactivation, suppression |
+
+- Chacun peut changer son propre mot de passe (*Settings › Accounts › My password*).
+- Il reste toujours au moins un compte d'édition actif : le dernier ne peut être ni
+  supprimé, ni rétrogradé, ni désactivé.
+- Mots de passe hachés (scrypt), session par cookie `HttpOnly` + `SameSite=Strict`,
+  expirant après `SESSION_TTL_HOURS` sans activité ; 5 échecs de connexion bloquent
+  5 minutes. Changer le mot de passe ou le grade d'un compte ferme ses sessions.
+- L'API externe (`/model/v1`, `/usage/v1`) garde ses **clés d'API** ; `/health` reste
+  ouvert pour le healthcheck.
+
+> **Plus aucun compte d'édition utilisable ?** Vider la table des comptes rouvre l'écran
+> de création du premier compte (les mesures et l'inventaire ne sont pas touchés) :
+>
+> ```bash
+> docker compose exec timescaledb psql -U qos -d qos -c "TRUNCATE app_users CASCADE"
+> ```
+
 ### Mettre à jour, nettoyer, repartir de zéro
 
 Quatre gestes, du plus doux au plus radical. Prenez le premier qui suffit.

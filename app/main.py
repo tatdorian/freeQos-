@@ -13,12 +13,13 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
 from app.api import (
+    accounts,
     admin,
     antennas_admin,
     api_keys,
@@ -165,18 +166,29 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     """Monte les routeurs. Extrait de create_app pour que les tests puissent
     monter l'API sur un conteneur factice, sans cycle de vie ni base."""
     app.include_router(health.router)
-    app.include_router(metrics.router, prefix=settings.api_prefix)
-    app.include_router(admin.router, prefix=settings.api_prefix)
-    app.include_router(routers_admin.router, prefix=settings.api_prefix)
-    app.include_router(antennas_admin.router, prefix=settings.api_prefix)
-    app.include_router(capacity.router, prefix=settings.api_prefix)
-    app.include_router(shaping.router, prefix=settings.api_prefix)
-    app.include_router(static_clients.router, prefix=settings.api_prefix)
-    app.include_router(pop_census.router, prefix=settings.api_prefix)
-    app.include_router(settings_api.router, prefix=settings.api_prefix)
-    app.include_router(netflow.router, prefix=settings.api_prefix)
-    app.include_router(traffic_rules.router, prefix=settings.api_prefix)
-    app.include_router(api_keys.router, prefix=settings.api_prefix)
+    # Connexion et comptes : ces routes portent leurs propres gardes (ouvrir une
+    # session ne peut pas exiger d'en avoir une).
+    app.include_router(accounts.router, prefix=settings.api_prefix)
+    # TOUTE route d'exploitation exige une session, et un compte en lecture
+    # seule n'y obtient que les methodes de lecture. La garde est posee ICI,
+    # une fois, plutot que route par route : une route ajoutee demain est
+    # protegee sans qu'on ait a y penser.
+    proteges = [Depends(accounts.require_access)]
+    for module in (
+        metrics,
+        admin,
+        routers_admin,
+        antennas_admin,
+        capacity,
+        shaping,
+        static_clients,
+        pop_census,
+        settings_api,
+        netflow,
+        traffic_rules,
+        api_keys,
+    ):
+        app.include_router(module.router, prefix=settings.api_prefix, dependencies=proteges)
     # API PUBLIQUE. Volontairement HORS du prefixe d'exploitation : son chemin
     # est le contrat que les systemes de facturation connaissent deja
     # (/model/v1, /usage/v1), et le deplacer suffirait a casser la

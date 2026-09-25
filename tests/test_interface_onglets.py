@@ -378,3 +378,20 @@ def test_l_executif_montre_la_saturation_et_la_latence_par_segment() -> None:
     assert "renderHotspots" in JS and "renderLatencySegments" in JS
     # La pointe de chaque pas est tracee : un test de debit court reste visible.
     assert "tx_peak_bps" in JS
+
+
+def test_l_interface_passe_par_l_ecran_de_connexion() -> None:
+    """Rien ne charge avant la session : le demarrage passe par /auth/status,
+    et les rafraichissements periodiques attendent la connexion."""
+    for identifiant in (
+        "auth-gate",
+        "auth-form",
+        "logout-btn",
+        "settings-accounts",
+        "readonly-banner",
+    ):
+        assert f'id="{identifiant}"' in HTML, identifiant
+    assert "\nboot();\n" in JS
+    assert "\nroute();\n" not in JS  # plus de demarrage sans session
+    assert "if (!AUTH.ready) return;" in JS
+    assert "/auth/setup" in JS and "/auth/login" in JS and "'/users'" in JS

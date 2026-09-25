@@ -222,6 +222,11 @@ class Settings(BaseSettings):
     app_env: str = "lab"
     log_level: str = "INFO"
     api_prefix: str = "/api/v1"
+    # Connexion a l'interface (comptes 'read' / 'edit'). Ne se coupe que pour un
+    # lab isole : sans elle, quiconque atteint la page peut ecrire sur les routeurs.
+    auth_enabled: bool = True
+    # Duree d'une session SANS activite : chaque requete la prolonge.
+    session_ttl_hours: int = 168
 
     # --- Base de donnees ---
     database_url: str = "postgresql://qos:changeme@localhost:5432/qos"

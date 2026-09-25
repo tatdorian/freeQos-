@@ -14,15 +14,227 @@ const API = '/api/v1';
 async function api(path, options) {
   const res = await fetch(API + path, {
     headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     ...options,
   });
   if (res.status === 204) return null;
   const body = await res.json().catch(() => null);
+  // Session expiree ou fermee ailleurs : retour a l'ecran de connexion, plutot
+  // qu'une page qui se remplit d'erreurs.
+  if (res.status === 401 && path.indexOf('/auth/') !== 0 && AUTH.ready) {
+    AUTH.ready = false;
+    showAuthGate('login', 'Your session has ended: log in again.');
+  }
   if (!res.ok) {
     const detail = body && body.detail ? body.detail : res.status + ' ' + res.statusText;
     throw new Error(typeof detail === 'string' ? detail : validationText(detail));
   }
   return body;
+}
+
+/* ----------------------------------------------------------- connexion
+ *
+ *  L'interface ne charge RIEN tant qu'aucune session n'est ouverte : toutes
+ *  les routes d'exploitation exigent un compte. Au tout premier lancement
+ *  (aucun compte en base), l'ecran de connexion sert a creer le premier,
+ *  qui est en edition. Le grade est tenu par le serveur ; l'interface se
+ *  contente de le dire (bandeau "lecture seule"). */
+const AUTH = { user: null, ready: false, mode: 'login', started: false };
+
+function showAuthGate(mode, message) {
+  AUTH.mode = mode;
+  const setup = mode === 'setup';
+  document.getElementById('auth-gate').hidden = false;
+  document.body.classList.add('gated');
+  document.getElementById('auth-title').textContent = setup ? 'Create the first account' : 'Log in';
+  document.getElementById('auth-sub').textContent = setup
+    ? 'No account exists yet. This one will have edit rights and can create the others.'
+    : 'freeQoS controller';
+  document.getElementById('auth-confirm-row').hidden = !setup;
+  document.getElementById('auth-confirm').required = setup;
+  document.getElementById('auth-password').autocomplete = setup ? 'new-password' : 'current-password';
+  document.getElementById('auth-submit').textContent = setup ? 'Create and log in' : 'Log in';
+  document.getElementById('auth-error').innerHTML = message
+    ? '<div class="notice warn">' + esc(message) + '</div>' : '';
+  setTimeout(() => document.getElementById('auth-email').focus(), 0);
+}
+
+function startApp(user) {
+  AUTH.user = user;
+  AUTH.ready = true;
+  document.getElementById('auth-gate').hidden = true;
+  document.body.classList.remove('gated');
+  document.body.classList.toggle('role-read', user.role !== 'edit');
+  document.getElementById('readonly-banner').hidden = user.role === 'edit';
+  document.getElementById('user-chip').hidden = false;
+  document.getElementById('user-email').textContent = user.email;
+  document.getElementById('user-role').textContent = user.role === 'edit' ? 'edit' : 'read only';
+  document.getElementById('user-role').className = 'badge ' + (user.role === 'edit' ? 'file' : '');
+  document.getElementById('logout-btn').hidden = AUTH.authDisabled === true;
+  route();
+  refreshHealth();
+  AUTH.started = true;
+}
+
+async function boot() {
+  let etat;
+  try {
+    etat = await api('/auth/status');
+  } catch (err) {
+    showAuthGate('login', err.message);
+    return;
+  }
+  AUTH.authDisabled = etat.auth_enabled === false;
+  if (etat.user) { startApp(etat.user); return; }
+  showAuthGate(etat.setup_required ? 'setup' : 'login');
+}
+
+async function submitAuth(event) {
+  event.preventDefault();
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  const erreur = document.getElementById('auth-error');
+  if (AUTH.mode === 'setup' && password !== document.getElementById('auth-confirm').value) {
+    erreur.innerHTML = '<div class="notice err">The two passwords differ.</div>';
+    return;
+  }
+  const bouton = document.getElementById('auth-submit');
+  bouton.disabled = true;
+  try {
+    const r = await api(AUTH.mode === 'setup' ? '/auth/setup' : '/auth/login', {
+      method: 'POST', body: JSON.stringify({ email, password }),
+    });
+    document.getElementById('auth-password').value = '';
+    document.getElementById('auth-confirm').value = '';
+    if (AUTH.started) { location.reload(); return; }
+    startApp(r.user);
+  } catch (err) {
+    erreur.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    // Un compte a ete cree entre-temps (autre navigateur) : on passe en connexion.
+    if (AUTH.mode === 'setup' && /already exists/i.test(err.message)) showAuthGate('login', err.message);
+  } finally {
+    bouton.disabled = false;
+  }
+}
+
+async function logout() {
+  try { await api('/auth/logout', { method: 'POST' }); } catch (err) { /* on sort quand meme */ }
+  location.reload();
+}
+
+/* ------------------------------------------------------------- comptes */
+
+/** Les comptes, dans Reglages. Un compte d'edition les gere tous (email, mot
+ *  de passe, grade) ; tout compte peut changer son propre mot de passe. */
+async function renderAccounts() {
+  const host = document.getElementById('settings-accounts');
+  if (!host) return;
+  const moi = AUTH.user || {};
+  const monMdp =
+    '<form class="acc-form" id="acc-self-form"><b>My password</b>' +
+      '<input type="password" id="acc-self-current" placeholder="Current password" autocomplete="current-password" required>' +
+      '<input type="password" id="acc-self-new" placeholder="New password (8+ characters)" autocomplete="new-password" minlength="8" required>' +
+      '<button class="sm" type="submit">Change</button><span id="acc-self-result"></span></form>';
+  if (AUTH.authDisabled) {
+    host.innerHTML = '<div class="notice warn">Authentication is off (<code>AUTH_ENABLED=false</code>): ' +
+      'anyone who reaches this page has full rights.</div>';
+    return;
+  }
+  if (moi.role !== 'edit') {
+    host.innerHTML = '<div class="acc-me">Logged in as <b>' + esc(moi.email) + '</b> ' +
+      '<span class="badge">read only</span></div>' + monMdp;
+    brancherMonMdp();
+    return;
+  }
+  let comptes = [];
+  try {
+    comptes = await api('/users');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  host.innerHTML =
+    '<div class="table-wrap"><table><thead><tr><th>Email</th><th>Role</th><th>State</th>' +
+      '<th>Last login</th><th>Created by</th><th></th></tr></thead><tbody>' +
+      comptes.map((u) => '<tr data-user="' + u.id + '">' +
+        '<td><b>' + esc(u.email) + '</b>' + (u.id === moi.id ? ' <span class="pct-hint">(you)</span>' : '') + '</td>' +
+        '<td><select data-acc-role>' +
+          '<option value="read"' + (u.role === 'read' ? ' selected' : '') + '>Read only</option>' +
+          '<option value="edit"' + (u.role === 'edit' ? ' selected' : '') + '>Edit</option></select></td>' +
+        '<td>' + (u.disabled ? '<span class="badge warn">disabled</span>' : '<span class="badge ok">active</span>') + '</td>' +
+        '<td>' + esc(u.last_login_at ? depuis(u.last_login_at) : 'never') + '</td>' +
+        '<td>' + esc(u.created_by || '-') + '</td>' +
+        '<td class="nowrap acc-actions">' +
+          '<button class="sm" data-acc-pwd>Set password</button>' +
+          '<button class="sm" data-acc-toggle>' + (u.disabled ? 'Enable' : 'Disable') + '</button>' +
+          '<button class="sm danger" data-acc-del>Delete</button></td></tr>').join('') +
+    '</tbody></table></div>' +
+    '<form class="acc-form" id="acc-new-form"><b>New account</b>' +
+      '<input type="email" id="acc-new-email" placeholder="Email" required maxlength="254" autocomplete="off">' +
+      '<input type="password" id="acc-new-pwd" placeholder="Password (8+ characters)" minlength="8" required autocomplete="new-password">' +
+      '<select id="acc-new-role"><option value="read">Read only</option><option value="edit">Edit</option></select>' +
+      '<button class="sm primary" type="submit">Create</button></form>' +
+    '<div id="acc-result"></div>' +
+    '<div class="exec-legend"><span><b>Read only</b>: sees everything, every change is refused by the server.</span>' +
+      '<span><b>Edit</b>: can change everything, including accounts.</span></div>' +
+    monMdp;
+
+  const resultat = (html) => { document.getElementById('acc-result').innerHTML = html; };
+  const faire = async (fn, ok) => {
+    try { await fn(); resultat('<div class="notice ok">' + esc(ok) + '</div>'); await renderAccounts(); }
+    catch (err) { resultat('<div class="notice err">' + esc(err.message) + '</div>'); }
+  };
+  document.getElementById('acc-new-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const email = document.getElementById('acc-new-email').value.trim();
+    faire(() => api('/users', { method: 'POST', body: JSON.stringify({
+      email, password: document.getElementById('acc-new-pwd').value,
+      role: document.getElementById('acc-new-role').value,
+    }) }), 'Account ' + email + ' created.');
+  });
+  host.querySelectorAll('tr[data-user]').forEach((tr) => {
+    const id = tr.dataset.user;
+    const email = tr.querySelector('b').textContent;
+    tr.querySelector('[data-acc-role]').addEventListener('change', (e) => {
+      faire(() => api('/users/' + id, { method: 'PATCH', body: JSON.stringify({ role: e.target.value }) }),
+        'Role of ' + email + ' changed.');
+    });
+    tr.querySelector('[data-acc-pwd]').addEventListener('click', () => {
+      const mdp = prompt('New password for ' + email + ' (8+ characters):');
+      if (!mdp) return;
+      faire(() => api('/users/' + id, { method: 'PATCH', body: JSON.stringify({ password: mdp }) }),
+        'Password of ' + email + ' changed; their sessions are closed.');
+    });
+    tr.querySelector('[data-acc-toggle]').addEventListener('click', (e) => {
+      const couper = e.target.textContent === 'Disable';
+      faire(() => api('/users/' + id, { method: 'PATCH', body: JSON.stringify({ disabled: couper }) }),
+        email + (couper ? ' disabled.' : ' enabled.'));
+    });
+    tr.querySelector('[data-acc-del]').addEventListener('click', () => {
+      if (!confirm('Delete the account ' + email + '?')) return;
+      faire(() => api('/users/' + id, { method: 'DELETE' }), email + ' deleted.');
+    });
+  });
+  brancherMonMdp();
+}
+
+function brancherMonMdp() {
+  const form = document.getElementById('acc-self-form');
+  if (!form) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const sortie = document.getElementById('acc-self-result');
+    try {
+      await api('/auth/password', { method: 'POST', body: JSON.stringify({
+        current: document.getElementById('acc-self-current').value,
+        new: document.getElementById('acc-self-new').value,
+      }) });
+      form.reset();
+      sortie.innerHTML = '<span class="badge ok">changed</span>';
+    } catch (err) {
+      sortie.innerHTML = '<span class="badge crit">' + esc(err.message) + '</span>';
+    }
+  });
 }
 
 /** Rend lisible une erreur de validation d'API.
@@ -7497,6 +7709,7 @@ function settingRow(r) {
 }
 
 async function loadSettings() {
+  renderAccounts();
   const body = await api('/settings');
   const host = document.getElementById('settings-groups');
   const compte = document.getElementById('settings-count');
@@ -7639,7 +7852,7 @@ async function refresh() {
   }
 }
 
-function route() { show((location.hash || '#/dashboard').replace('#/', '')); }
+function route() { if (!AUTH.ready) return; show((location.hash || '#/dashboard').replace('#/', '')); }
 
 /* ------------------------------------------------------------ apparence */
 
@@ -7852,14 +8065,17 @@ document.getElementById('sub-search').addEventListener('input', (e) => {
   searchTimer = setTimeout(() => { state.subSearch = e.target.value.trim(); loadSubscribers(); }, 250);
 });
 
-route();
-refreshHealth();
+document.getElementById('auth-form').addEventListener('submit', submitAuth);
+document.getElementById('logout-btn').addEventListener('click', logout);
+boot();
 // Les PoPs ne changent pas tout seuls : inutile de recharger ce formulaire
 // pendant qu'un administrateur le remplit.
 // Les vues d'edition ne se rafraichissent pas toutes seules : ce serait effacer
 // un formulaire en cours de saisie, ou un plan qu'on est en train de lire.
 const VUES_FIGEES = new Set(['pops', 'settings']);
 setInterval(() => {
+  // Rien ne se rafraichit derriere l'ecran de connexion.
+  if (!AUTH.ready) return;
   if (VUES_FIGEES.has(state.view)) return;
   // L'arbre porte le debit des liens : le laisser vivre pour ne pas afficher un
   // debit perime. Mais on ne rafraichit PAS pendant qu'on deplace une case,
@@ -7878,4 +8094,4 @@ setInterval(() => {
   // quand il bouge.
   if (state.link) openLink(state.link.key, state.link.minutes, true);
 }, 10000);
-setInterval(refreshHealth, 15000);
+setInterval(() => { if (AUTH.ready) refreshHealth(); }, 15000);
