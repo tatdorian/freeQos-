@@ -348,7 +348,7 @@ async def test_le_plafond_pose_est_ensuite_declare_en_vigueur(
     await service.registry.reload()
     await service.enforce_subscriber(login="test-ba", author="test")
 
-    audit = await service.limit_audit()
+    audit = await service.limit_audit(live=True)
 
     (routeur,) = audit["routers"]
     ligne = next(q for q in routeur["queues"] if q["name"] == "freeqos-test-ba")
@@ -380,7 +380,7 @@ async def test_l_audit_denonce_le_plafond_reste_en_base(
     )
     await service.registry.reload()
 
-    audit = await service.limit_audit()
+    audit = await service.limit_audit(live=True)
 
     ligne = next(q for q in audit["routers"][0]["queues"] if q["name"] == "freeqos-test-ba")
     assert ligne["verdict"] == VERDICT_ECART
@@ -512,7 +512,7 @@ async def test_un_routeur_muet_coute_une_ligne_pas_la_page(
     service.AUDIT_TIMEOUT_S = 0.05  # type: ignore[misc]
     await service.registry.reload()
 
-    audit = await service.limit_audit()
+    audit = await service.limit_audit(live=True)
 
     (routeur,) = audit["routers"]
     assert "trop lent" in routeur["error"]
@@ -538,9 +538,9 @@ async def test_l_audit_ne_relit_pas_les_routeurs_a_chaque_appel(
 
     service._audit_un_routeur = compter  # type: ignore[assignment, method-assign]
 
-    await service.limit_audit()
-    await service.limit_audit()
-    await service.limit_audit()
+    await service.limit_audit(live=True)
+    await service.limit_audit(live=True)
+    await service.limit_audit(live=True)
 
     assert len(appels) == 1
 
@@ -560,12 +560,12 @@ async def test_une_ecriture_perime_l_audit_en_cache(
     )
     await service.registry.reload()
 
-    premier = await service.limit_audit()
+    premier = await service.limit_audit(live=True)
     ligne = next(q for q in premier["routers"][0]["queues"] if q["name"] == "freeqos-test-ba")
     assert ligne["verdict"] == VERDICT_ABSENTE
 
     await service.enforce_subscriber(login="test-ba", author="test")
-    second = await service.limit_audit()
+    second = await service.limit_audit(live=True)
 
     ligne = next(q for q in second["routers"][0]["queues"] if q["name"] == "freeqos-test-ba")
     assert ligne["verdict"] == VERDICT_EN_VIGUEUR
@@ -690,3 +690,80 @@ async def test_le_service_dit_si_la_reconciliation_a_touche_ce_routeur(
     # Trace sans liste de routeurs : on ne conclut rien plutot que d'affirmer.
     service.last_reconcile = {"at": "2026-09-18T12:00:00Z"}
     assert service._deja_reconcilie("pop-test") is None  # noqa: SLF001
+
+
+# =========================================================================
+# La verification tourne en tache de fond : la page n'attend jamais
+# =========================================================================
+
+
+async def test_la_page_ne_lit_jamais_les_routeurs(
+    settings: Settings, routeur_lecture: FakeRouterOsClient
+) -> None:
+    """DEMANDE EXPLICITE : les "caps not verified / routeur trop lent" etaient
+    affiches a chaque rafraichissement sans qu'on puisse rien y faire. La page
+    lit le dernier resultat de fond ; tant qu'il n'y en a pas, le routeur est
+    "en cours", pas en erreur."""
+    service = _service(settings, routeur_lecture, RouteurQuiSeSouvient(routeur_lecture), {})
+    await service.registry.reload()
+    appels: list[str] = []
+
+    async def compter(nom: str) -> dict:
+        appels.append(nom)
+        return {
+            "router": nom,
+            "queues": [],
+            "fasttrack": {"active": False},
+            "enforced": 0,
+            "leaking": 0,
+            "error": None,
+        }
+
+    service._audit_un_routeur = compter  # type: ignore[assignment, method-assign]
+    service._lance_audit = lambda *a, **k: None  # type: ignore[method-assign]
+
+    avant = await service.limit_audit()
+    (routeur,) = avant["routers"]
+    assert routeur["pending"] is True and not routeur["error"]
+    assert appels == []  # la page n'a rien lu
+
+    await service.refresh_limit_audit()
+    apres = await service.limit_audit()
+    assert apres["routers"][0]["fasttrack"]["active"] is False
+    assert "checked_at" in apres["routers"][0]
+    assert len(appels) == 1
+
+
+async def test_un_echec_passager_garde_le_dernier_resultat_et_ne_sonne_pas(
+    settings: Settings, routeur_lecture: FakeRouterOsClient
+) -> None:
+    service = _service(settings, routeur_lecture, RouteurQuiSeSouvient(routeur_lecture), {})
+    await service.registry.reload()
+    etat = {"echoue": False}
+
+    async def audit(nom: str) -> dict:
+        if etat["echoue"]:
+            raise TimeoutError
+        return {
+            "router": nom,
+            "queues": [],
+            "fasttrack": {"active": False},
+            "enforced": 3,
+            "leaking": 0,
+            "error": None,
+        }
+
+    service._audit_un_routeur = audit  # type: ignore[assignment, method-assign]
+    await service.refresh_limit_audit()
+    etat["echoue"] = True
+    await service.refresh_limit_audit()
+
+    (routeur,) = (await service.limit_audit())["routers"]
+    assert routeur["enforced"] == 3  # le dernier resultat lu est garde
+    assert "unverified_since" not in routeur  # une lecture manquee n'alerte pas
+
+    # Au-dela du delai, un seul signalement, date et motive.
+    service.AUDIT_ALERTE_APRES_S = -1  # type: ignore[misc]
+    (routeur,) = (await service.limit_audit())["routers"]
+    assert routeur["unverified_since"] is not None
+    assert "no answer" in routeur["unverified_reason"]

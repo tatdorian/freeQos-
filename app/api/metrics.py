@@ -109,6 +109,96 @@ async def subscribers_latest(
     return lignes
 
 
+@router.delete("/subscribers/{subscriber_id}", summary="Delete a subscriber and its history")
+async def delete_subscriber(
+    repo: RepositoryDep,
+    container: ContainerDep,
+    subscriber_id: Annotated[int, Path(ge=1)],
+    confirm: Annotated[bool, Query(description="Required: the deletion is permanent")] = False,
+) -> dict[str, Any]:
+    """Supprime l'abonne, son historique, et tout ce qui le ferait revenir.
+
+    - un client A IP FIXE est retire de l'inventaire et sa file du routeur :
+      sinon il serait recree au cycle suivant, puisque la fiche fait foi ;
+    - ses surcharges de debit et son boost sont retires (et le routeur remis
+      d'accord), pour ne pas laisser un plafond orphelin s'appliquer un jour a
+      un nouvel abonne du meme login ;
+    - le cache de la collecte l'oublie.
+
+    UN ABONNE PPPoE ENCORE CONNECTE REVIENDRA : il est decouvert dans
+    ``/ppp/active``, que ce controleur ne fait que lire. La reponse le dit
+    (``will_reappear``) ; pour qu'il disparaisse, fermer sa session ou retirer
+    son compte PPPoE sur le routeur / RADIUS.
+    """
+    import logging
+
+    if not confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Permanent deletion of the subscriber and its history: 'confirm' must be true.",
+        )
+    fiche = await repo.get_subscriber(subscriber_id)
+    if fiche is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown subscriber")
+    login = str(fiche["login"])
+    rapport: dict[str, Any] = {"login": login, "kind": fiche.get("kind")}
+
+    # 1. Client statique : la fiche d'inventaire et sa file.
+    statiques = container.static_clients_repo
+    if fiche.get("kind") == "static" and statiques is not None:
+        from app.api.static_clients import _poser_la_file
+
+        for ligne in await statiques.list_all():
+            if str(ligne.get("reference")) == login:
+                await statiques.delete(int(ligne["id"]))
+                rapport["static_client_removed"] = True
+                rapport["queue"] = await _poser_la_file(
+                    container,
+                    reference=login,
+                    pop_name=str(ligne.get("pop_name") or ""),
+                    removing=True,
+                )
+                break
+
+    # 2. Surcharge et boost : retires, et le routeur remis d'accord.
+    topo = container.topology_repo
+    if topo is not None:
+        surcharge = await topo.delete_policy("subscriber", login)
+        boost = await topo.clear_boost("subscriber", login)
+        rapport["override_removed"] = surcharge
+        rapport["boost_removed"] = boost
+        if surcharge and fiche.get("kind") != "static":
+            try:
+                rapport["cap"] = await container.shaping.enforce_policy(
+                    "subscriber", login, author="ui:delete", removing=True
+                )
+            except Exception as exc:  # noqa: BLE001 - la suppression reste valable
+                logging.getLogger(__name__).warning("Plafond de %s non retire : %s", login, exc)
+                rapport["cap"] = {"state": "erreur", "reason": str(exc)}
+
+    # 3. L'abonne et son historique.
+    try:
+        supprime = await repo.delete_subscriber(subscriber_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    rapport["samples_deleted"] = int(supprime.get("samples") or 0)
+
+    # 4. La collecte l'oublie.
+    collection = getattr(container, "collection", None)
+    if collection is not None:
+        collection.directory.forget_subscriber(login)
+        getattr(collection, "_known_logins", set()).discard(login)
+
+    dernier = supprime.get("last_sample")
+    actif = (
+        fiche.get("kind") != "static"
+        and dernier is not None
+        and (datetime.now(tz=UTC) - dernier).total_seconds() < 120
+    )
+    rapport["will_reappear"] = bool(actif)
+    return rapport
+
+
 @router.get("/subscribers/{subscriber_id}", summary="Record of one subscriber")
 async def get_subscriber(
     repo: RepositoryDep,
