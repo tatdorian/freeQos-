@@ -3268,3 +3268,63 @@ async def test_les_destinations_se_regroupent_par_lieu(database: Database) -> No
     top = await repo.top(minutes=60)
     assert {d["address"]: d["city"] for d in top}["45.57.0.1"] == "Paris"
     assert top[0]["latitude"] == 48.8566
+
+
+async def test_un_client_passe_sous_son_vlan_perd_son_ancien_rattachement(
+    database: Database,
+) -> None:
+    """Les rattachements DECLARES se recalculent en entier a chaque decouverte :
+    le client qui passe du routeur a la case de son VLAN ne garde pas l'ancien
+    lien (l'arbre le montrerait sous deux parents). Les liens OBSERVES, eux,
+    ne sont jamais purges par une decouverte."""
+    from app.collectors.topology import (
+        TopologyLink,
+        TopologyNode,
+        TopologySnapshot,
+        attach_static_clients,
+    )
+    from app.models import StaticClient
+
+    async with database.pool.acquire() as conn:
+        await conn.execute("TRUNCATE topology_links, topology_nodes CASCADE")
+    repo = TopologyRepository(database.pool)
+    client = StaticClient(
+        reference="nestle", pop_name="PoP Test", address="10.60.0.2/32", vlan=2060
+    )
+
+    def base() -> TopologySnapshot:
+        snap = TopologySnapshot()
+        snap.add_node(TopologyNode(key="router:pop-test", name="PoP Test", kind="pop"))
+        snap.add_node(TopologyNode(key="mac:AA", name="voisin", kind="radio"))
+        snap.add_link(
+            TopologyLink(
+                source_key="router:pop-test",
+                target_key="mac:AA",
+                kind="ethernet",
+                interface="ether5",
+                discovered_by="pop-test",
+            )
+        )
+        return snap
+
+    avant = base()
+    attach_static_clients(avant, [client], pop_keys={"PoP Test": "router:pop-test"})
+    await repo.save_snapshot(avant)
+
+    apres = base()
+    apres.links.pop(next(k for k in apres.links if k.endswith("mac:AA")))  # voisin non revu
+    attach_static_clients(
+        apres,
+        [client],
+        pop_keys={"PoP Test": "router:pop-test"},
+        vlan_sites={"nestle": ("pop-test", "vlan2060", 2060)},
+    )
+    await repo.save_snapshot(apres)
+
+    liens = await repo.links()
+    parents = [lk["source_key"] for lk in liens if lk["target_key"] == "static:nestle"]
+    assert parents == ["vlan:pop-test:2060"]
+    vlan = next(lk for lk in liens if lk["target_key"] == "vlan:pop-test:2060")
+    assert vlan["interface"] == "vlan2060" and vlan["discovered_by"] == "pop-test"
+    # Le lien observe que la seconde decouverte n'a pas revu est toujours la.
+    assert any(lk["target_key"] == "mac:AA" for lk in liens)

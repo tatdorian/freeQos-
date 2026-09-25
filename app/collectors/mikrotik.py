@@ -50,7 +50,7 @@ from app.collectors.pop_census import (
 from app.collectors.topology import ethernet_capacity_mbps, parse_export, pick_loopback
 from app.collectors.vlan_clients import explain_arp
 from app.config import RouterConfig
-from app.models import InterfaceSample, PppoeSession, VlanSighting
+from app.models import InterfaceSample, PppoeSession, VlanCounter, VlanSighting
 
 logger = logging.getLogger(__name__)
 
@@ -881,6 +881,63 @@ class MikrotikCollector:
             detail = ", ".join(f"{champ} ({motif})" for champ, motif in sorted(manquantes.items()))
             raise PartialCensusError(f"recensement incomplet : {detail}", vues)
         return vues
+
+    # ------------------------------------------------------------------
+    # Compteurs des interfaces VLAN
+    # ------------------------------------------------------------------
+    async def vlan_counters(self) -> dict[int, list[VlanCounter]]:
+        timeout = max(self.config.timeout_s * 3, 5.0)
+        return await asyncio.wait_for(asyncio.to_thread(self.vlan_counters_sync), timeout=timeout)
+
+    def vlan_counters_sync(self) -> dict[int, list[VlanCounter]]:
+        """Octets cumules de chaque interface VLAN : ``identifiant -> interfaces``.
+
+        POURQUOI CETTE LECTURE EXISTE
+        -----------------------------
+        Un client declare par son VLAN n'a ni session ni interface a son nom,
+        et tant que l'ecriture est coupee aucune file ne le vise : il restait a
+        zero. Or RouterOS compte deja tout ce qui traverse l'interface VLAN --
+        et quand ce client est SEUL sur son VLAN, ce compteur EST le sien.
+
+        C'est a l'appelant de decider s'il est seul : ce collecteur ne connait
+        pas l'inventaire. Il dit seulement, pour chaque VLAN, sur quelle(s)
+        interface(s) il est pose et si un serveur PPPoE l'ecoute -- auquel cas
+        le compteur melange les abonnes PPPoE et ne vaut pour personne.
+
+        Une liste plutot qu'une valeur : le meme identifiant peut etre pose sur
+        deux interfaces parentes differentes, et choisir l'une serait inventer.
+        """
+        compteurs = {
+            str(row.get("name") or ""): (
+                parse_counter(row.get("rx-byte")),
+                parse_counter(row.get("tx-byte")),
+            )
+            for row in self._client.interfaces()
+        }
+        try:
+            avec_pppoe = {
+                str(row.get("interface") or "")
+                for row in self._client.pppoe_servers()
+                if not parse_flag(row.get("disabled"))
+            }
+        except Exception:  # noqa: BLE001 - un routeur sans paquet PPP refuse l'appel
+            avec_pppoe = set()
+        resultat: dict[int, list[VlanCounter]] = {}
+        for row in self._client.vlans():
+            if parse_flag(row.get("disabled")):
+                continue
+            nom = str(row.get("name") or "")
+            brut = str(row.get("vlan-id") or row.get("vlan_id") or "").strip()
+            if not nom or not brut.isdigit():
+                continue
+            rx, tx = compteurs.get(nom, (None, None))
+            resultat.setdefault(int(brut), []).append(
+                # Du point de vue du routeur : rx = ce que le VLAN lui envoie
+                # (l'upload du client), tx = ce qu'il y emet (son download).
+                # Meme convention que les sessions PPPoE.
+                VlanCounter(interface=nom, rx_bytes=rx, tx_bytes=tx, pppoe=nom in avec_pppoe)
+            )
+        return resultat
 
     # ------------------------------------------------------------------
     # Compteurs des files simples

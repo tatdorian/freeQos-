@@ -102,6 +102,25 @@ class TopologyRepository:
                 """,
                 liens,
             )
+            # LES RATTACHEMENTS DECLARES SE RECALCULENT EN ENTIER A CHAQUE
+            # DECOUVERTE : un client passe de son routeur a la case de son VLAN
+            # ne doit pas garder l'ancien lien, sinon l'arbre le montre sous
+            # deux parents. Seuls ces liens-la sont purges -- ceux qu'une
+            # observation a poses restent, comme le veut le principe de ce
+            # depot -- et seulement si l'inventaire a bien ete lu (au moins un
+            # rattachement declare present) : une fiche illisible n'efface rien.
+            declares = [
+                lk.key
+                for lk in snapshot.links.values()
+                if lk.discovered_by == "inventory" or (lk.attributes or {}).get("vlan") is True
+            ]
+            if declares:
+                await conn.execute(
+                    "DELETE FROM topology_links "
+                    " WHERE (discovered_by = 'inventory' OR attributes->>'vlan' = 'true') "
+                    "   AND NOT (key = ANY($1::text[]))",
+                    declares,
+                )
         return {"nodes": len(noeuds), "links": len(liens)}
 
     async def forget_removed_routers(self, current: Sequence[str]) -> int:

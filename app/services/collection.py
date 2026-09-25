@@ -35,6 +35,7 @@ from app.models import (
     RunResult,
     StaticClient,
     SubscriberSample,
+    VlanCounter,
     VlanSighting,
 )
 from app.services.pop_match import resolve_pop
@@ -392,6 +393,24 @@ class CollectionService:
                 else:
                     compteurs[nom] = mesure
 
+        # Compteurs des interfaces VLAN, lus seulement sur les routeurs qui
+        # portent au moins un client declare par son VLAN. C'est la mesure de
+        # ce client quand aucune file ne le vise encore (ecriture coupee).
+        par_vlan = vlan_occupancy(clients, par_client)
+        routeurs_vlan = sorted({routeur for routeur, _vlan in par_vlan})
+        compteurs_vlan: dict[str, dict[int, list[VlanCounter]]] = {}
+        if routeurs_vlan:
+            mesures_vlan = await asyncio.gather(
+                *(routeurs[nom].vlan_counters() for nom in routeurs_vlan),
+                return_exceptions=True,
+            )
+            for nom, lu in zip(routeurs_vlan, mesures_vlan, strict=True):
+                if isinstance(lu, BaseException):
+                    logger.warning("Compteurs VLAN illisibles sur %s : %s", nom, lu)
+                    compteurs_vlan[nom] = {}
+                else:
+                    compteurs_vlan[nom] = lu
+
         # Les VLAN qui portent des clients sont des SITES a part entiere. Chez un
         # operateur radio, un VLAN porte un village ou un relais ; le routeur
         # n'en est que la tete. Tant que seul le site du routeur existait, tous
@@ -445,8 +464,21 @@ class CollectionService:
             # Cle de suivi prefixee : elle ne peut pas entrer en collision avec
             # celle d'une session PPPoE, qui est '<routeur>/<login>'.
             key = f"static/{client.reference}"
-            active_keys.add(key)
             octets = _counters_for(compteurs.get(collector.name, {}) if collector else {}, client)
+            if octets == (None, None) and collector is not None and client.vlan is not None:
+                # Pas de file : le compteur de l'interface VLAN, s'il n'appartient
+                # qu'a ce client. Cle de suivi DISTINCTE : le jour ou sa file est
+                # posee, passer d'un compteur a l'autre sous la meme cle ferait
+                # un delta absurde (des gigaoctets en dix secondes).
+                vlan = sole_vlan_counter(
+                    compteurs_vlan.get(collector.name, {}),
+                    client.vlan,
+                    clients_on_vlan=par_vlan.get((collector.name, client.vlan), 0),
+                )
+                if vlan is not None:
+                    octets = (vlan.rx_bytes, vlan.tx_bytes)
+                    key = f"static/{client.reference}@{vlan.interface}"
+            active_keys.add(key)
             rate = self.rates.update(
                 key,
                 ts=monotonic,
@@ -908,6 +940,49 @@ def _single_host(address: str) -> str | None:
     if reseau.prefixlen != reseau.max_prefixlen:
         return None
     return str(reseau.network_address)
+
+
+def vlan_occupancy(
+    clients: Sequence[StaticClient], par_client: dict[str, Any]
+) -> dict[tuple[str, int], int]:
+    """``(routeur, VLAN) -> nombre de clients declares dessus``.
+
+    C'est ce compte qui dit si le compteur d'une interface VLAN appartient a
+    UN client : a deux sur le meme VLAN, il est leur somme, et l'attribuer a
+    l'un des deux serait inventer une mesure.
+    """
+    compte: dict[tuple[str, int], int] = {}
+    for client in clients:
+        if client.vlan is None:
+            continue
+        match = par_client.get(client.reference)
+        collectors = getattr(match, "collectors", None) or []
+        if not collectors:
+            continue
+        cle = (collectors[0].name, client.vlan)
+        compte[cle] = compte.get(cle, 0) + 1
+    return compte
+
+
+def sole_vlan_counter(
+    counters: dict[int, list[VlanCounter]], vlan: int, *, clients_on_vlan: int
+) -> VlanCounter | None:
+    """Le compteur de l'interface VLAN, s'il ne mesure que CE client.
+
+    Trois conditions, chacune une facon differente de se tromper :
+    le client est seul declare sur ce VLAN ; le VLAN n'est pose que sur UNE
+    interface (sinon laquelle ?) ; aucun serveur PPPoE ne l'ecoute (sinon le
+    compteur porte aussi tous ses abonnes PPPoE).
+    """
+    if clients_on_vlan != 1:
+        return None
+    candidats = counters.get(vlan) or []
+    if len(candidats) != 1:
+        return None
+    seul = candidats[0]
+    if seul.pppoe or (seul.rx_bytes is None and seul.tx_bytes is None):
+        return None
+    return seul
 
 
 def _counters_for(

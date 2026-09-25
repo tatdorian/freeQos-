@@ -137,6 +137,9 @@ function bloatBadge(v) {
 }
 
 function uptime(seconds) {
+  // Un client a IP fixe n'a pas de session : "-", pas "0m" qui se lirait
+  // comme une session qui vient de s'ouvrir.
+  if (seconds === null || seconds === undefined || seconds === '') return '-';
   const s = Number(seconds);
   if (!s && s !== 0) return '-';
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
@@ -2080,7 +2083,7 @@ async function createApiKey(event) {
 const ICONE = {
   gateway: 'GW', core: 'CORE', pop: 'POP', radio: 'RF',
   sector: 'SECT', cpe: 'CPE', client: 'CLI', unknown: '?', subscriber: 'ABO',
-  static: 'FIXE', candidate: '?IP',
+  static: 'FIXE', candidate: '?IP', vlan: 'VLAN',
 };
 
 /** Combien d'equipements et de liens porte ce graphe.
@@ -4776,6 +4779,8 @@ async function toggleAntenna(id) {
 const KIND_LABEL = {
   gateway: 'Gateway', core: 'Core', pop: 'PoP', radio: 'Radio',
   sector: 'Sector', cpe: 'CPE', client: 'Client', unknown: 'Unknown', subscriber: 'Subscribers',
+  // Un VLAN qui porte des clients declares : un site derriere son routeur.
+  vlan: 'VLAN',
   // Nature a part entiere : ce noeud est DECLARE, pas decouvert.
   static: 'Static-IP client',
   // Ni infrastructure, ni abonne : une adresse vue, rien de plus.
@@ -4784,14 +4789,14 @@ const KIND_LABEL = {
 const KIND_COLOR = {
   gateway: 'var(--accent)', core: 'var(--accent)', pop: 'var(--down)',
   radio: 'var(--up)', sector: 'var(--up)', cpe: 'var(--muted)', client: '#a78bfa',
-  unknown: 'var(--faint)', subscriber: '#a78bfa', static: '#f0abfc',
+  unknown: 'var(--faint)', subscriber: '#a78bfa', static: '#f0abfc', vlan: 'var(--purple)',
   candidate: 'var(--warn)',
 };
 
 /* ------------------------------------------------- editeur d'arbre reseau */
 
 const KIND_ORDER = [
-  'gateway', 'core', 'pop', 'radio', 'sector', 'cpe', 'static', 'candidate', 'client', 'unknown',
+  'gateway', 'core', 'pop', 'radio', 'sector', 'vlan', 'cpe', 'static', 'candidate', 'client', 'unknown',
 ];
 const NODE_W = 176;
 const NODE_H = 48;
@@ -4946,7 +4951,7 @@ function renderTopologySources(data, inventaire) {
 // Un client a IP fixe pend au meme niveau qu'un CPE : c'est une feuille du
 // reseau, sous un secteur ou, a defaut de secteur declare, sous son PoP.
 const TOPO_RANG = {
-  gateway: 0, core: 1, pop: 2, radio: 3, sector: 3,
+  gateway: 0, core: 1, pop: 2, radio: 3, sector: 3, vlan: 3,
   cpe: 4, static: 4, candidate: 4, client: 4, unknown: 5,
 };
 
@@ -4966,6 +4971,10 @@ function topoLinkConfident(l) {
   let a = l.attributes;
   if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = null; } }
   if (a && a.config_link) return true;
+  // Lien routeur -> VLAN : l'interface VLAN est lue dans la configuration du
+  // routeur, c'est une preuve au meme titre qu'un /30 -- meme si d'autres
+  // voisins se montrent sur ce VLAN.
+  if (a && a.vlan) return true;
   if (!l.interface) return true;               // UISP / radio declare, sans port
   const peers = Number(l.interface_links) || 0;
   return peers <= 1;                            // point-a-point seulement
@@ -5171,8 +5180,18 @@ function topoBuildModel(data) {
   // Le repli reste le defaut, parce qu'un PoP d'operateur porte des centaines
   // d'abonnes et qu'aucun arbre ne se lit avec des centaines de cases.
   const parPop = new Map();
+  // Un client a IP fixe a DEJA sa propre case dans le graphe : le compter
+  // aussi dans l'agregat de son site le montrait deux fois.
+  const fiches = new Set();
+  nodes.forEach((n) => {
+    if (n.kind !== 'static') return;
+    let a = n.attributes;
+    if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = null; } }
+    fiches.add((a && a.reference) || n.name);
+  });
   (topo.subs || []).forEach((s) => {
     if (!s.pop_name) return;
+    if (fiches.has(s.login)) return;
     if (!parPop.has(s.pop_name)) parPop.set(s.pop_name, []);
     parPop.get(s.pop_name).push(s);
   });
@@ -5353,6 +5372,21 @@ function topoEdgeRates(edge) {
   return { down: down || 0, up: up || 0, cap };
 }
 
+/** Le debit d'un client a IP fixe, porte par son trait dans l'arbre.
+ *
+ *  Son rattachement est declare : aucun port ne le compte. Mais la collecte
+ *  le mesure (file, interface VLAN s'il y est seul, ou NetFlow) : c'est ce
+ *  debit-la que le trait affiche, plutot qu'un trait muet. */
+function topoStaticRates(n) {
+  if (!n || n.kind !== 'static') return null;
+  let a = n.attributes;
+  if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = null; } }
+  const ref = (a && a.reference) || n.name;
+  const s = (topo.subs || []).find((x) => x.login === ref);
+  if (!s || (s.tx_bps == null && s.rx_bps == null)) return null;
+  return { down: Number(s.tx_bps) || 0, up: Number(s.rx_bps) || 0, cap: 0 };
+}
+
 function renderTopoCanvas() {
   const host = document.getElementById('topo-canvas');
   const data = topo.data;
@@ -5405,7 +5439,11 @@ function renderTopoCanvas() {
     if (n.replie || !n.parentKey) return;
     const p = model.nodesByKey.get(n.parentKey);
     if (!p) return;
-    const rates = n.synthRates || topoEdgeRates(n.edge);
+    const rates = n.synthRates || topoEdgeRates(n.edge) || topoStaticRates(n);
+    // Un client a IP fixe est une DECLARATION : son trait se dessine toujours,
+    // comme celui d'un abonne -- sinon sa case flotte sous son VLAN sans rien
+    // qui dise de qui elle depend.
+    const declared = n.kind === 'static';
     // Un lien FORCE (parent pose a la main) ou MANUEL est toujours dessine :
     // sinon un lien qu'on vient de creer disparaitrait sous "debit seulement".
     const linkKey = (n.edge && n.edge.link && n.edge.link.key) || null;
@@ -5415,7 +5453,7 @@ function renderTopoCanvas() {
     // seulement" filtre les adjacences decouvertes sans compteur, pas
     // l'appartenance d'un abonne a son PoP. Le masquer laissait sa case flotter
     // a cote de l'arbre, sans rien pour dire de qui elle depend.
-    if (!rates && topo.rateOnly && !forced && !manual && !n.synthetic) return;
+    if (!rates && topo.rateOnly && !forced && !manual && !n.synthetic && !declared) return;
 
     const x1 = p.x + NODE_W;
     const y1 = p.y + NODE_H / 2;

@@ -134,6 +134,37 @@ class RouterShapingState:
         }
 
 
+def static_vlan_sites(
+    clients: Sequence[Any],
+    collectors: Sequence[Any],
+    stacks: dict[str, dict[str, InterfacePath]],
+) -> dict[str, tuple[str, str, int]]:
+    """``reference -> (routeur, interface VLAN, identifiant)`` pour l'arbre.
+
+    L'interface vient de la CONFIGURATION du routeur qui porte le PoP du
+    client (``/interface/vlan``), jamais d'un nom devine. Un identifiant pose
+    sur deux interfaces de ce routeur ne designe aucune des deux : le client
+    reste alors sous le routeur, comme avant.
+    """
+    resultat: dict[str, tuple[str, str, int]] = {}
+    for client in clients:
+        vlan = getattr(client, "vlan", None)
+        if vlan is None:
+            continue
+        match = resolve_pop(str(getattr(client, "pop_name", "") or ""), collectors)
+        if not match.collectors:
+            continue
+        routeur = match.collectors[0].config.name
+        noms = [
+            chemin.name
+            for chemin in (stacks.get(routeur) or {}).values()
+            if chemin.kind == "vlan" and chemin.vlan_id == vlan and not chemin.broken
+        ]
+        if len(noms) == 1:
+            resultat[str(client.reference)] = (routeur, noms[0], int(vlan))
+    return resultat
+
+
 def static_pop_keys(clients: Sequence[Any], collectors: Sequence[Any]) -> dict[str, str]:
     """PoP saisi dans une fiche -> case du routeur qui le porte, dans l'arbre.
 
@@ -620,7 +651,12 @@ class ShapingService:
         clients = await self._static_clients_all()
         if clients:
             pop_keys = static_pop_keys(clients, collectors)
-            poses = attach_static_clients(snapshot, clients, pop_keys=pop_keys)
+            poses = attach_static_clients(
+                snapshot,
+                clients,
+                pop_keys=pop_keys,
+                vlan_sites=static_vlan_sites(clients, collectors, piles_interfaces),
+            )
             logger.info("Topologie : %d client(s) a IP fixe declares", poses)
 
         # LA JOINTURE QUI DONNE SA CHAINE DE GOULOTS A UN ABONNE.
@@ -1141,10 +1177,19 @@ class ShapingService:
         # d'ici, plan(), le diff de reconciliation et apply() ne font plus
         # aucune difference entre les deux natures.
         ports_par_vlan = self._ports_par_vlan(router_name)
+        interfaces_par_vlan = self._interfaces_par_vlan(router_name)
         for client in await self._static_clients_for(collector):
             surcharge = surcharges_abonnes.get(client.reference, {})
             secteur = client.sector_key or rattachements.get(client.reference)
             parent = parent_par_noeud.get(secteur) if secteur else None
+            if parent is None and client.vlan is not None:
+                # L'enveloppe du VLAN lui-meme d'abord : un debit pose sur le
+                # lien routeur -> VLAN de l'arbre est la file parente de tous
+                # les clients de ce VLAN.
+                for nom in interfaces_par_vlan.get(client.vlan, []):
+                    parent = parent_par_interface.get(nom)
+                    if parent is not None:
+                        break
             if parent is None and client.vlan is not None:
                 # Aucun secteur declare : la CONFIGURATION sait quand meme par
                 # ou ce client sort. Son VLAN est pose sur une interface, qui
@@ -1175,6 +1220,17 @@ class ShapingService:
             if chemin.vlan_id is None or chemin.broken:
                 continue
             par_vlan.setdefault(chemin.vlan_id, []).extend(chemin.ports)
+        return par_vlan
+
+    def _interfaces_par_vlan(self, router_name: str) -> dict[int, list[str]]:
+        """``identifiant de VLAN -> interfaces VLAN`` sur ce routeur."""
+        if self.last_snapshot is None:
+            return {}
+        piles = self.last_snapshot.interface_paths.get(router_name) or {}
+        par_vlan: dict[int, list[str]] = {}
+        for chemin in piles.values():
+            if chemin.kind == "vlan" and chemin.vlan_id is not None and not chemin.broken:
+                par_vlan.setdefault(chemin.vlan_id, []).append(chemin.name)
         return par_vlan
 
     async def _static_clients_all(self) -> list[StaticClient]:

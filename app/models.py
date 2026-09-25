@@ -93,6 +93,18 @@ class StaticClient:
         return self.label or self.reference
 
 
+@dataclass(frozen=True, slots=True)
+class VlanCounter:
+    """Compteurs cumules d'UNE interface VLAN d'un routeur."""
+
+    interface: str
+    rx_bytes: int | None
+    tx_bytes: int | None
+    #: Un serveur PPPoE ecoute sur ce VLAN : ses compteurs melangent les
+    #: abonnes PPPoE avec le reste, ils ne valent pour aucun client seul.
+    pppoe: bool = False
+
+
 @dataclass(slots=True)
 class PppoeSession:
     """Une session PPPoE active, apres correlation /ppp/active + /interface."""

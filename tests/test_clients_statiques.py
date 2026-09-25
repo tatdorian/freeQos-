@@ -744,3 +744,161 @@ async def test_l_arbre_ne_sert_pas_les_cases_de_clients_statiques() -> None:
     assert [n["key"] for n in reponse["nodes"]] == ["router:pop"]
     assert reponse["links"] == [], "le lien vers le client part avec sa case"
     assert reponse["counts"]["nodes"] == 1
+
+
+# =========================================================================
+# 5. Client declare par son VLAN : mesure par l'interface, place sous son VLAN
+# =========================================================================
+
+
+def routeur_vlan(*, rx: int, tx: int, pppoe: bool = False) -> FakeRouterOsClient:
+    client = FakeRouterOsClient()
+    client.vlan_rows = [{"name": "vlan2060", "vlan-id": "2060", "interface": "ether2"}]
+    client.interfaces_rows.append(
+        {"name": "vlan2060", "type": "vlan", "rx-byte": str(rx), "tx-byte": str(tx)}
+    )
+    if pppoe:
+        client.pppoe_server_rows = [{"interface": "vlan2060", "service-name": "pppoe"}]
+    return client
+
+
+def fiche_vlan(**kwargs) -> StaticClient:
+    return fiche(reference="nestle", address="10.60.0.2/32", vlan=2060, **kwargs)
+
+
+async def test_sans_file_le_client_seul_sur_son_vlan_est_mesure_par_l_interface(
+    settings: Settings,
+) -> None:
+    """Le cas du terrain : un client ajoute a la main sur un VLAN, ecriture
+    coupee, donc aucune file. RouterOS compte deja tout ce qui passe sur
+    l'interface VLAN -- et quand le client y est seul, c'est SON trafic."""
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "2000", "tx-byte": "35000"})
+    await service.collect_subscribers()
+
+    dernier = writer.subscriber_rows[-1][1]
+    # rx de l'interface = ce que le client envoie (upload) ; tx = son download.
+    assert dernier.rx_bps == pytest.approx(800)
+    assert dernier.tx_bps == pytest.approx(20_000)
+
+
+async def test_deux_clients_sur_le_meme_vlan_ne_prennent_pas_son_compteur(
+    settings: Settings,
+) -> None:
+    """A deux, le compteur du VLAN est leur SOMME : l'attribuer a l'un des
+    deux serait inventer une mesure. Ils restent sans debit plutot que faux."""
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    autre = fiche(reference="voisin", address="10.60.0.3/32", vlan=2060)
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan(), autre]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "2000", "tx-byte": "35000"})
+    await service.collect_subscribers()
+
+    assert all(s.tx_bps is None for _, s in writer.subscriber_rows[-2:])
+
+
+async def test_un_vlan_qui_porte_du_pppoe_ne_mesure_pas_le_client(settings: Settings) -> None:
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000, pppoe=True)
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "2000", "tx-byte": "35000"})
+    await service.collect_subscribers()
+
+    assert writer.subscriber_rows[-1][1].tx_bps is None
+
+
+async def test_la_file_du_client_prime_sur_le_compteur_du_vlan(settings: Settings) -> None:
+    """Une file qui vise son adresse ne compte QUE lui : elle gagne."""
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.2/32", "bytes": "0/0"}]
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "999000", "tx-byte": "999000"})
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.2/32", "bytes": "100/1000"}]
+    await service.collect_subscribers()
+
+    assert writer.subscriber_rows[-1][1].tx_bps == pytest.approx(800)
+
+
+def test_le_client_vlan_pend_sous_son_vlan_relie_par_un_lien_mesure() -> None:
+    """Le lien routeur -> VLAN nomme l'interface : c'est ce qui lui fait
+    afficher le debit que RouterOS compte sur ce VLAN, au lieu d'un
+    rattachement declare que personne ne mesure."""
+    from app.collectors.topology import KIND_VLAN, vlan_node_key
+
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:pop-test", name="PoP Test", kind="pop"))
+
+    attach_static_clients(
+        snapshot,
+        [fiche_vlan()],
+        pop_keys={"PoP Test": "router:pop-test"},
+        vlan_sites={"nestle": ("pop-test", "vlan2060", 2060)},
+    )
+
+    cle_vlan = vlan_node_key("pop-test", 2060)
+    assert snapshot.nodes[cle_vlan].kind == KIND_VLAN
+    assert snapshot.nodes[cle_vlan].name == "VLAN 2060"
+    amont = next(lk for lk in snapshot.links.values() if lk.target_key == cle_vlan)
+    assert amont.source_key == "router:pop-test"
+    assert amont.interface == "vlan2060"
+    assert amont.discovered_by == "pop-test"
+    # Le client pend sous le VLAN, et SEULEMENT sous lui.
+    parents = [
+        lk.source_key
+        for lk in snapshot.links.values()
+        if lk.target_key == static_client_node_key("nestle")
+    ]
+    assert parents == [cle_vlan]
+    # Pas un secteur : le VLAN n'entre pas dans les rattachements radio.
+    assert "nestle" not in snapshot.subscriber_sectors
+
+
+def test_un_secteur_declare_reste_prioritaire_sur_le_vlan() -> None:
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:pop-test", name="PoP Test", kind="pop"))
+    snapshot.add_node(TopologyNode(key="uisp:ap-1", name="Secteur Nord", kind=KIND_SECTOR))
+
+    attach_static_clients(
+        snapshot,
+        [fiche_vlan(sector_key="uisp:ap-1")],
+        vlan_sites={"nestle": ("pop-test", "vlan2060", 2060)},
+    )
+
+    assert not any(n.kind == "vlan" for n in snapshot.nodes.values())
+
+
+def test_l_interface_du_vlan_vient_de_la_configuration_du_routeur(settings: Settings) -> None:
+    """Un identifiant pose sur deux interfaces ne designe aucune des deux."""
+    from app.collectors.config_graph import InterfacePath
+    from app.services.shaping import static_vlan_sites
+
+    collectors = [MikrotikCollector(cfg, client=FakeRouterOsClient()) for cfg in settings.routers]
+    piles = {
+        "pop-test": {
+            "vlan2060": InterfacePath(name="vlan2060", kind="vlan", vlan_id=2060),
+            "vlan70": InterfacePath(name="vlan70", kind="vlan", vlan_id=70),
+            "vlan70-bis": InterfacePath(name="vlan70-bis", kind="vlan", vlan_id=70),
+        }
+    }
+    sites = static_vlan_sites([fiche_vlan(), fiche(reference="ambigu", vlan=70)], collectors, piles)
+    assert sites == {"nestle": ("pop-test", "vlan2060", 2060)}
