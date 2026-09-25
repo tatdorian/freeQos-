@@ -58,6 +58,8 @@ class Directory(Protocol):
 
     async def list_subscriber_logins(self, *, kind: str | None = None) -> dict[str, int]: ...
 
+    def forget_subscriber(self, login: str) -> None: ...
+
 
 class PgDirectory:
     """Implementation PostgreSQL du referentiel."""
@@ -79,6 +81,17 @@ class PgDirectory:
         self._pop_state.clear()
         self._subscriber_cache.clear()
         self._backhaul_cache.clear()
+
+    def forget_subscriber(self, login: str) -> None:
+        """Oublie l'identifiant mis en cache d'un abonne SUPPRIME.
+
+        Sans cela, un abonne supprime dont la session est encore ouverte
+        reviendrait sous son ancien identifiant : l'ecriture de ses mesures
+        violerait la cle etrangere, et c'est le lot ENTIER du cycle -- tous les
+        abonnes -- qui serait perdu.
+        """
+        self._subscriber_cache.pop(login, None)
+        self._subscriber_state.pop(login, None)
 
     async def ensure_pop(
         self,
@@ -266,6 +279,13 @@ class PgDirectory:
 
 class InMemoryDirectory:
     """Double memoire pour les tests et le mode 'dry-run' sans base."""
+
+    def forget_subscriber(self, login: str) -> None:
+        sid = self.subscribers.pop(login, None)
+        if sid is not None:
+            for table in (self.plans, self.kinds, self.last_seen):
+                table.pop(sid, None)
+        self.subscriber_pop.pop(login, None)
 
     def __init__(self) -> None:
         self.pops: dict[str, int] = {}

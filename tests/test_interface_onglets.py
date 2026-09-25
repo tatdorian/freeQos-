@@ -414,3 +414,19 @@ def test_une_mesure_perimee_ne_passe_pas_pour_actuelle() -> None:
     assert "function mesureFraiche(r)" in JS
     assert JS.count("mesureFraiche") >= 7
     assert 'id="ports-live"' in HTML and "/ports/live" in JS
+
+
+def test_un_abonne_se_supprime_depuis_la_liste() -> None:
+    assert "data-del-sub=" in JS and "async function deleteSubscriber(" in JS
+    assert "'?confirm=true'" in JS
+    assert 'id="sub-notice"' in HTML
+
+
+def test_la_liste_ne_crie_plus_non_verifie_a_chaque_rafraichissement() -> None:
+    """DEMANDE EXPLICITE : les "caps / fasttrack not verified" repetes pour
+    chaque routeur, sur lesquels on ne pouvait rien, ont disparu. Seul un
+    routeur invérifiable depuis longtemps est cite, en une ligne."""
+    bloc = JS[JS.index("function renderLimitsAlert(") :]
+    bloc = bloc[: bloc.index("\n}\n")]
+    assert "not verified" not in bloc
+    assert "unverified_since" in bloc

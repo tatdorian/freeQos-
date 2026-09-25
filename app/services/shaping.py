@@ -253,6 +253,11 @@ class ShapingService:
         # Ils lisent les routeurs ; l'interface se rafraichit bien plus vite
         # qu'ils ne changent (cf. AUDIT_TTL_S).
         self._audit_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        # Verification des plafonds EN TACHE DE FOND : dernier resultat lu par
+        # routeur, et depuis quand un routeur ne repond plus a cette lecture.
+        self._audit_bon: dict[str, tuple[datetime, dict[str, Any]]] = {}
+        self._audit_echec: dict[str, tuple[datetime, str]] = {}
+        self._audit_tache: asyncio.Task[int] | None = None
 
     # ------------------------------------------------------------- drapeau
     @property
@@ -1616,7 +1621,117 @@ class ShapingService:
         return rapport
 
     # ------------------------------------------------ plafonds reellement tenus
-    async def limit_audit(self, router_name: str | None = None) -> dict[str, Any]:
+    #
+    # LA VERIFICATION NE SE FAIT PLUS A LA DEMANDE DE LA PAGE.
+    #
+    # Elle calcule le plan complet d'un routeur et relit ses files et son pare-
+    # feu : sur un PoP charge, bien plus que les douze secondes qu'une page
+    # peut attendre. Elle echouait donc a chaque affichage, et la liste des
+    # abonnes se couvrait d'avertissements "non verifie" sur lesquels
+    # l'exploitant ne pouvait rien. Elle tourne desormais en tache de fond,
+    # avec le temps qu'il lui faut ; la page lit le dernier resultat, sans
+    # attendre et sans toucher aux routeurs.
+    AUDIT_BACKGROUND_TIMEOUT_S = 120.0
+    #: Un routeur n'est signale "non verifie" qu'au-dela de ce delai d'echecs
+    #: consecutifs : une lecture manquee n'est pas une information.
+    AUDIT_ALERTE_APRES_S = 900.0
+
+    async def refresh_limit_audit(self, router_names: Sequence[str] | None = None) -> int:
+        """Relit les plafonds de chaque routeur, en parallele entre routeurs.
+
+        Garde le dernier resultat LU de chaque routeur : un echec n'efface pas
+        une verification reussie, il est seulement date. Rend le nombre de
+        routeurs lus.
+        """
+        noms = list(router_names or [c.name for c in self.registry.collectors])
+
+        async def un(nom: str) -> bool:
+            try:
+                resultat = await asyncio.wait_for(
+                    self._audit_un_routeur(nom), timeout=self.AUDIT_BACKGROUND_TIMEOUT_S
+                )
+            except Exception as exc:  # noqa: BLE001 - un PoP muet n'arrete pas les autres
+                motif = (
+                    f"no answer in {self.AUDIT_BACKGROUND_TIMEOUT_S:.0f} s"
+                    if isinstance(exc, TimeoutError)
+                    else f"{type(exc).__name__}: {exc}"
+                )
+                logger.info("Verification des plafonds impossible sur %s : %s", nom, motif)
+                depuis = self._audit_echec.get(nom, (datetime.now(tz=UTC), ""))[0]
+                self._audit_echec[nom] = (depuis, motif)
+                return False
+            self._audit_bon[nom] = (datetime.now(tz=UTC), resultat)
+            self._audit_echec.pop(nom, None)
+            return True
+
+        lus = await asyncio.gather(*(un(nom) for nom in noms))
+        # Un routeur retire de l'inventaire ne garde pas son dernier audit.
+        connus = {c.name for c in self.registry.collectors}
+        for nom in list(self._audit_bon):
+            if nom not in connus:
+                del self._audit_bon[nom]
+        return sum(1 for ok in lus if ok)
+
+    def _lance_audit(self, router_names: Sequence[str] | None = None) -> None:
+        """Une verification de fond a la fois ; la page n'attend jamais."""
+        if self._audit_tache is not None and not self._audit_tache.done():
+            return
+        try:
+            self._audit_tache = asyncio.get_running_loop().create_task(
+                self.refresh_limit_audit(router_names)
+            )
+        except RuntimeError:
+            self._audit_tache = None
+
+    def _rapport_de_fond(self, noms: Sequence[str]) -> dict[str, Any]:
+        maintenant = datetime.now(tz=UTC)
+        routeurs: list[dict[str, Any]] = []
+        for nom in noms:
+            bon = self._audit_bon.get(nom)
+            echec = self._audit_echec.get(nom)
+            if bon is not None:
+                ligne = dict(bon[1])
+                ligne["checked_at"] = bon[0]
+            else:
+                ligne = self._audit_muet(nom, "")
+                ligne["error"] = None
+                ligne["fasttrack"] = {"active": None, "rules": [], "detail": "", "remedy": None}
+                ligne["pending"] = True
+            # Signale seulement un routeur qui ne se laisse plus verifier
+            # DEPUIS LONGTEMPS -- sinon, on garde le dernier resultat lu.
+            if echec is not None and (maintenant - echec[0]).total_seconds() > (
+                self.AUDIT_ALERTE_APRES_S
+            ):
+                ligne["unverified_since"] = echec[0]
+                ligne["unverified_reason"] = echec[1]
+            routeurs.append(ligne)
+        return {
+            "enforcement_enabled": self._enforcement_enabled,
+            "last_reconcile": self.last_reconcile,
+            "computed_at": maintenant,
+            "background": True,
+            "routers": routeurs,
+            "enforced": sum(int(r.get("enforced") or 0) for r in routeurs),
+            "leaking": sum(int(r.get("leaking") or 0) for r in routeurs),
+        }
+
+    async def limit_audit(
+        self, router_name: str | None = None, *, live: bool = False
+    ) -> dict[str, Any]:
+        """Le dernier etat connu des plafonds, SANS lire les routeurs.
+
+        ``live=True`` refait la lecture tout de suite (bouton explicite de la
+        page Reglages) ; par defaut, on rend le resultat de la tache de fond et
+        on la relance si elle n'a encore rien produit.
+        """
+        noms = [router_name] if router_name else [c.name for c in self.registry.collectors]
+        if live:
+            return await self._limit_audit_live(noms)
+        if any(nom not in self._audit_bon for nom in noms):
+            self._lance_audit(noms)
+        return self._rapport_de_fond(noms)
+
+    async def _limit_audit_live(self, noms: list[str]) -> dict[str, Any]:
         """Les plafonds decides sont-ils REELLEMENT tenus par le reseau ?
 
         Ni le plan ("ce que je veux ecrire") ni le journal ("ce que j'ai ecrit")
@@ -1629,8 +1744,6 @@ class ShapingService:
         plafond et la boucle de reconciliation ; ce qui se lit ici, c'est
         l'ecart entre ce qui est decide et ce que le reseau applique vraiment.
         """
-        noms = [router_name] if router_name else [c.name for c in self.registry.collectors]
-
         frais = self._audit_en_cache(noms)
         if frais is not None:
             return frais
@@ -1687,6 +1800,9 @@ class ShapingService:
         de la correction, pas du cache.
         """
         self._audit_cache.clear()
+        # Ce qui vient d'etre ecrit a change l'etat : la verification de fond
+        # repart tout de suite, sans faire attendre qui que ce soit.
+        self._lance_audit()
 
     async def _audit_sous_minuterie(self, router_name: str) -> dict[str, Any]:
         """L'audit d'un routeur, borne dans le temps et sans exception qui sorte."""
