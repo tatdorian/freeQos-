@@ -4,32 +4,51 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>freeQoS</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230d1117'/%3E%3Cpath d='M3 11 L6 6 L9 9 L13 4' stroke='%2338bdf8' stroke-width='1.8' fill='none'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+  <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <!-- Le theme choisi s'applique AVANT le premier affichage : sinon la page
+       s'ouvre en clair puis bascule en sombre, ce qui clignote. -->
+  <script>
+    try {
+      var t = localStorage.getItem('freeqos-theme');
+      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
   <link rel="stylesheet" href="/static/app.css?v={{ css_version }}">
 </head>
 <body>
   <header class="top">
-    <div class="brand"><span class="dot" id="health-dot"></span> freeQoS</div>
+    <div class="brand">
+      <span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16l5-6 4 4 7-8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      freeQoS
+      <span class="dot" id="health-dot" title="Controller health"></span>
+    </div>
     <nav class="tabs">
-      <a href="#/dashboard" data-view="dashboard">Dashboard</a>
-      <a href="#/exec"      data-view="exec">Executive</a>
-      <a href="#/traffic"   data-view="traffic">Traffic</a>
-      <a href="#/network"   data-view="network">Network tree</a>
-      <a href="#/subscribers" data-view="subscribers">Subscribers</a>
-      <a href="#/pops"      data-view="pops">Devices</a>
-      <a href="#/services"  data-view="services">Services</a>
-      <a href="#/api"       data-view="api">API</a>
-      <a href="#/settings"  data-view="settings">Settings</a>
+      <a href="#/dashboard" data-view="dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Dashboard</span></a>
+      <a href="#/exec" data-view="exec"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-5 3 3 5-6"/></svg><span>Executive</span></a>
+      <a href="#/traffic" data-view="traffic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16"/><path d="M3 8l4-4 4 4"/><path d="M17 20V4"/><path d="M13 16l4 4 4-4"/></svg><span>Traffic</span></a>
+      <a href="#/network" data-view="network"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M12 7.2v4.3M12 11.5L6.3 17M12 11.5l5.7 5.5"/></svg><span>Network tree</span></a>
+      <a href="#/subscribers" data-view="subscribers"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14c2.4.2 4 1.8 4.6 4.5"/></svg><span>Subscribers</span></a>
+      <a href="#/pops" data-view="pops"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="6" rx="2"/><rect x="3" y="13" width="18" height="6" rx="2"/><path d="M7 8h.01M7 16h.01"/></svg><span>Devices</span></a>
+      <a href="#/services" data-view="services"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg><span>Services</span></a>
+      <a href="#/api" data-view="api"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5"/><path d="M16 7l5 5-5 5"/><path d="M13.5 5l-3 14"/></svg><span>API</span></a>
+      <a href="#/settings" data-view="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a>
     </nav>
+    <div class="sidebar-foot">
+      <span class="version">Out-of-band QoS</span>
+      <button type="button" class="theme-toggle" id="theme-toggle" title="Appearance">Auto</button>
+    </div>
   </header>
 
-  <!-- UN ECHEC DE CHARGEMENT DOIT SE VOIR. Sans ce bandeau, une API en erreur
-       laissait l'onglet vide ou fige sur ses anciennes lignes : indiscernable
-       d'un reseau sans abonnes, et la cause n'etait visible que dans la console
-       du navigateur. -->
-  <div id="app-error" hidden></div>
 
   <main>
+    <div class="page-head"><h1 id="page-title">Dashboard</h1></div>
+    <!-- UN ECHEC DE CHARGEMENT DOIT SE VOIR. Sans ce bandeau, une API en erreur
+         laissait l'onglet vide ou fige sur ses anciennes lignes : indiscernable
+         d'un reseau sans abonnes, et la cause n'etait visible que dans la console
+         du navigateur. -->
+    <div id="app-error" hidden></div>
     <!-- ------------------------------------------------ tableau de bord -->
     <section id="view-dashboard">
       <div class="grid stats" id="stat-row"></div>
@@ -51,7 +70,7 @@
         <div id="throughput-chart"></div>
       </div>
 
-      <div class="grid cols-2" style="margin-top:1.25rem">
+      <div class="grid dash-split" style="margin-top:1.25rem">
         <div>
           <h2>Top consumers</h2>
           <div class="table-wrap" id="top-talkers"></div>
@@ -113,24 +132,29 @@
     -->
     <section id="view-traffic">
       <div class="toolbar">
-        <select id="flow-range" style="width:auto">
+        <select id="flow-range">
           <option value="15">15 minutes</option>
           <option value="60" selected>1 hour</option>
           <option value="360">6 hours</option>
           <option value="1440">24 hours</option>
           <option value="10080">7 days</option>
         </select>
-        <select id="flow-vantage" style="width:auto"
-                title="Vantage point">
-          <option value="">Default vantage point</option>
-          <option value="edge">Upstream of the core (internet egress)</option>
-          <option value="pop">At the PoP</option>
+        <select id="flow-vantage" class="hidden" title="Vantage point">
+          <option value="">Auto</option>
+          <option value="edge">Internet edge</option>
+          <option value="pop">PoPs</option>
         </select>
+        <div class="segmented" id="flow-vantage-seg" role="group" aria-label="Vantage point">
+          <button type="button" data-vantage="" class="active">Auto</button>
+          <button type="button" data-vantage="edge">Internet edge</button>
+          <button type="button" data-vantage="pop">PoPs</button>
+        </div>
         <span class="spacer"></span>
         <span class="mode" id="flow-count"></span>
       </div>
 
       <div id="flow-notice"></div>
+      <div class="grid vantage-grid" id="flow-vantages"></div>
       <div class="grid stats" id="flow-stats"></div>
 
       <h2>Who consumes</h2>

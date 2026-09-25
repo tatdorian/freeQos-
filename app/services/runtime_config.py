@@ -435,9 +435,10 @@ REGLAGES: tuple[Reglage, ...] = (
         "ipfinder_geoip_enabled",
         "services",
         "bool",
-        "Locate the destinations reached (country, region, city). OFF BY DEFAULT: "
-        "without a local database, this sends the addresses your clients reach "
-        "to a third party.",
+        "Locate the destinations reached (country, region, city, coordinates). "
+        "Several free services are tried in turn; one that rate-limits is paused. "
+        "Without a local GeoLite2 database (IPFINDER_GEOIP_DB), the addresses your "
+        "clients reach are sent to those services.",
     ),
     Reglage(
         "ipfinder_batch_size",

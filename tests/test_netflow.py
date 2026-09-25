@@ -279,3 +279,24 @@ def test_une_longueur_de_jeu_incoherente_arrete_la_lecture() -> None:
     jeu_ment = struct.pack("!HH", 256, 9999)
     paquet = NetflowDecoder().decode(entete + jeu_ment + b"\x00" * 8, "192.0.2.9")
     assert paquet.flows == ()
+
+
+# ============================================ le point de mesure effectif
+
+
+def test_sans_passerelle_le_decompte_lit_les_pop() -> None:
+    """Aucun routeur declare passerelle : la sortie internet ne recoit rien.
+    Compter a cet endroit affichait zero consommation alors que les PoP
+    exportaient tres bien."""
+    import time
+
+    from app.services.netflow_service import NetflowService
+
+    service = NetflowService(accounting_vantage="edge")
+    assert service.effective_vantage == "edge"  # rien recu : on garde le reglage
+
+    service.vantages_seen["pop"] = time.monotonic()
+    assert service.effective_vantage == "pop"
+
+    service.vantages_seen["edge"] = time.monotonic()
+    assert service.effective_vantage == "edge"  # le reglage reprend la main

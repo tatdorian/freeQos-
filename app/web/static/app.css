@@ -1,439 +1,612 @@
 /* freeQoS - interface d'administration.
-   Theme sombre inspire de LibreQoS. Aucune dependance externe : le controleur
-   doit rester utilisable sur une VM de management sans acces internet. */
 
+   Langage visuel inspire des applications Apple : police systeme, grands
+   titres, cartes arrondies sans cadre, barre laterale translucide, controles
+   en pilule. Theme clair ET sombre, qui suit le systeme sauf choix contraire
+   (bouton en bas de la barre laterale).
+
+   Aucune dependance externe : pas de police ni d'icone a telecharger, le
+   controleur doit rester utilisable sur une VM de management sans internet. */
+
+/* ================================================================ jetons */
 :root {
-  --bg: #0d1117;
-  --surface: #161b22;
-  --surface-2: #1c2129;
-  --border: #262d38;
-  --border-strong: #38414f;
-  --text: #e6edf3;
-  --muted: #8b949e;
-  --faint: #6e7681;
+  color-scheme: light;
 
-  /* Bleu = download (le routeur emet vers l'abonne, tx).
-     Orange = upload (le routeur recoit de l'abonne, rx).
-     Paire sure pour les daltonismes courants. */
-  --down: #38bdf8;
-  --down-dim: rgba(56, 189, 248, .16);
-  --up: #fb923c;
-  --up-dim: rgba(251, 146, 60, .16);
+  --bg: #f5f5f7;
+  --surface: #ffffff;
+  --surface-2: #f2f2f7;
+  --surface-3: #e9e9ee;
+  --fill: rgba(118, 118, 128, .12);
+  --fill-strong: rgba(118, 118, 128, .2);
+  --border: rgba(60, 60, 67, .12);
+  --border-strong: rgba(60, 60, 67, .22);
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --faint: #8e8e93;
 
-  --ok: #3fb950;
-  --warn: #d29922;
-  --crit: #f85149;
-  --accent: #58a6ff;
+  /* Bleu = descendant (le routeur emet vers l'abonne, tx).
+     Orange = montant (le routeur recoit de l'abonne, rx). */
+  --down: #0a84ff;
+  --down-dim: rgba(10, 132, 255, .12);
+  --up: #ff9500;
+  --up-dim: rgba(255, 149, 0, .14);
 
-  --radius: 10px;
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --ok: #28a745;
+  --warn: #d98e04;
+  --crit: #e5342a;
+  --accent: #0071e3;
+  --accent-hover: #0077ed;
+  --accent-dim: rgba(0, 113, 227, .1);
+  --purple: #8e44d6;
+  --seg-active: #ffffff;
+
+  --sidebar-bg: rgba(246, 246, 248, .78);
+  --topbar-bg: rgba(255, 255, 255, .78);
+  --shadow: 0 1px 2px rgba(0, 0, 0, .04), 0 6px 20px rgba(0, 0, 0, .05);
+  --shadow-lift: 0 2px 6px rgba(0, 0, 0, .06), 0 18px 48px rgba(0, 0, 0, .12);
+
+  --radius: 14px;
+  --radius-sm: 10px;
+  --sidebar: 236px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    "Helvetica Neue", "Segoe UI", Roboto, Inter, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #000000;
+    --surface: #1c1c1e;
+    --surface-2: #2c2c2e;
+    --surface-3: #3a3a3c;
+    --fill: rgba(118, 118, 128, .24);
+    --fill-strong: rgba(118, 118, 128, .36);
+    --border: rgba(84, 84, 88, .55);
+    --border-strong: rgba(120, 120, 128, .6);
+    --text: #f5f5f7;
+    --muted: #a1a1a6;
+    --faint: #8d8d93;
+    --down: #409cff;
+    --down-dim: rgba(64, 156, 255, .18);
+    --up: #ff9f0a;
+    --up-dim: rgba(255, 159, 10, .2);
+    --ok: #30d158;
+    --warn: #ffd60a;
+    --crit: #ff453a;
+    --accent: #0a84ff;
+    --accent-hover: #409cff;
+    --accent-dim: rgba(10, 132, 255, .18);
+    --purple: #bf5af2;
+    --seg-active: #636366;
+    --sidebar-bg: rgba(28, 28, 30, .72);
+    --topbar-bg: rgba(22, 22, 24, .72);
+    --shadow: 0 0 0 1px rgba(255, 255, 255, .05);
+    --shadow-lift: 0 0 0 1px rgba(255, 255, 255, .08), 0 24px 60px rgba(0, 0, 0, .6);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000;
+  --surface: #1c1c1e;
+  --surface-2: #2c2c2e;
+  --surface-3: #3a3a3c;
+  --fill: rgba(118, 118, 128, .24);
+  --fill-strong: rgba(118, 118, 128, .36);
+  --border: rgba(84, 84, 88, .55);
+  --border-strong: rgba(120, 120, 128, .6);
+  --text: #f5f5f7;
+  --muted: #a1a1a6;
+  --faint: #8d8d93;
+  --down: #409cff;
+  --down-dim: rgba(64, 156, 255, .18);
+  --up: #ff9f0a;
+  --up-dim: rgba(255, 159, 10, .2);
+  --ok: #30d158;
+  --warn: #ffd60a;
+  --crit: #ff453a;
+  --accent: #0a84ff;
+  --accent-hover: #409cff;
+  --accent-dim: rgba(10, 132, 255, .18);
+  --purple: #bf5af2;
+  --seg-active: #636366;
+  --sidebar-bg: rgba(28, 28, 30, .72);
+  --topbar-bg: rgba(22, 22, 24, .72);
+  --shadow: 0 0 0 1px rgba(255, 255, 255, .05);
+  --shadow-lift: 0 0 0 1px rgba(255, 255, 255, .08), 0 24px 60px rgba(0, 0, 0, .6);
+}
+
+/* ================================================================== base */
 * { box-sizing: border-box; }
 
+html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 15px/1.47 var(--font);
+  letter-spacing: -.01em;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
+a:hover { text-decoration: underline; text-underline-offset: 2px; }
+code, .login { font-family: var(--mono); font-size: .92em; letter-spacing: 0; }
 
-/* ---------------------------------------------------------------- barre */
+/* ======================================================= barre laterale
+   Sur grand ecran, la navigation est une colonne translucide a gauche, comme
+   dans Reglages ou Musique ; elle redevient une barre horizontale en dessous
+   de 1000 px (voir la fin du fichier). */
 header.top {
-  position: sticky; top: 0; z-index: 30;
-  display: flex; align-items: center; gap: 1.5rem;
-  padding: 0 1.25rem; height: 56px;
-  background: rgba(13, 17, 23, .92);
-  backdrop-filter: blur(8px);
-  border-bottom: 1px solid var(--border);
+  position: fixed; top: 0; left: 0; bottom: 0; z-index: 30;
+  width: var(--sidebar);
+  display: flex; flex-direction: column; gap: 1.1rem;
+  padding: 1.25rem .85rem 1rem;
+  background: var(--sidebar-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-right: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: .55rem; font-weight: 650; letter-spacing: -.01em; }
+.brand {
+  display: flex; align-items: center; gap: .6rem;
+  padding: 0 .55rem;
+  font-size: 1.2rem; font-weight: 700; letter-spacing: -.025em;
+}
+.brand .logo {
+  width: 28px; height: 28px; border-radius: 8px; flex: 0 0 auto;
+  background: linear-gradient(145deg, #0a84ff, #5e5ce6);
+  display: grid; place-items: center;
+  box-shadow: 0 2px 6px rgba(10, 132, 255, .35);
+}
+.brand .logo svg { width: 18px; height: 18px; }
 .brand .dot {
-  width: 9px; height: 9px; border-radius: 50%;
-  background: var(--ok); box-shadow: 0 0 0 3px rgba(63,185,80,.18);
+  width: 8px; height: 8px; border-radius: 50%; margin-left: auto;
+  background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent);
 }
-.brand .dot.stale { background: var(--warn); box-shadow: 0 0 0 3px rgba(210,153,34,.18); }
-.brand .dot.down  { background: var(--crit); box-shadow: 0 0 0 3px rgba(248,81,73,.18); }
+.brand .dot.stale { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
+.brand .dot.down  { background: var(--crit); box-shadow: 0 0 0 3px color-mix(in srgb, var(--crit) 22%, transparent); }
 
-/* Neuf onglets ne tiennent pas sur un portable : ils defilent plutot que de
-   pousser le reste de la barre hors de l'ecran. */
-nav.tabs { display: flex; gap: .25rem; flex: 1; overflow-x: auto; scrollbar-width: none; }
-nav.tabs::-webkit-scrollbar { display: none; }
-/* Une zone qui defile sans le dire n'a pas l'air de defiler : on croit avoir vu
-   tous les onglets. Le dernier s'estompe au bord, ce qui annonce la suite. La
-   barre de defilement, elle, est masquee : elle trancherait sur le bandeau.
-   Quand les onglets tiennent, la place restante est vide et le fondu ne se voit
-   pas. */
-nav.tabs {
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent);
-  mask-image: linear-gradient(90deg, #000 calc(100% - 26px), transparent);
-}
+nav.tabs { display: flex; flex-direction: column; gap: 2px; flex: 1; overflow-y: auto; }
 nav.tabs a {
-  padding: .4rem .75rem; border-radius: 7px; color: var(--muted);
-  font-weight: 500; font-size: .875rem; text-decoration: none;
-  /* Sans cela, les onglets se serrent puis CASSENT sur deux lignes des que la
-     fenetre retrecit : « Tableau de / bord » sur deux etages, et les derniers
-     rognes en plein mot. Ils gardent leur largeur et defilent. */
-  white-space: nowrap; flex: 0 0 auto;
+  display: flex; align-items: center; gap: .7rem;
+  padding: .5rem .6rem; border-radius: 9px;
+  color: var(--text); font-size: .9rem; font-weight: 500;
+  text-decoration: none; white-space: nowrap;
+  transition: background .15s ease, color .15s ease;
 }
-nav.tabs a:hover { background: var(--surface); color: var(--text); text-decoration: none; }
-nav.tabs a.active {
-  background: var(--surface-2); color: var(--text);
-  box-shadow: inset 0 -2px 0 var(--accent);
+nav.tabs a svg {
+  width: 19px; height: 19px; flex: 0 0 auto;
+  stroke: var(--accent); fill: none; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
 }
+nav.tabs a:hover { background: var(--fill); text-decoration: none; }
+nav.tabs a.active { background: var(--accent); color: #fff; }
+nav.tabs a.active svg { stroke: #fff; }
+
+.sidebar-foot {
+  display: flex; align-items: center; justify-content: space-between; gap: .5rem;
+  padding: .6rem .55rem 0; border-top: 1px solid var(--border);
+  font-size: .75rem; color: var(--faint);
+}
+.theme-toggle {
+  display: inline-flex; align-items: center; gap: .35rem;
+  background: var(--fill); border: 0; color: var(--muted);
+  border-radius: 999px; padding: .28rem .7rem; font-size: .75rem;
+}
+.theme-toggle:hover:not(:disabled) { background: var(--fill-strong); color: var(--text); }
 
 .mode {
-  font-size: .72rem; color: var(--muted); font-family: var(--mono);
-  border: 1px solid var(--border); border-radius: 999px; padding: .2rem .6rem;
-  white-space: nowrap;
+  font-size: .74rem; color: var(--muted); font-family: var(--font);
+  background: var(--fill); border-radius: 999px; padding: .22rem .7rem;
+  white-space: nowrap; font-weight: 500;
+}
+.mode:empty { display: none; }
+
+/* ============================================================== contenu */
+main {
+  margin-left: var(--sidebar);
+  padding: 2rem 2.5rem 4rem;
+  max-width: calc(1680px + var(--sidebar));
+}
+#app-error[hidden] { display: none; }
+
+.page-head { margin-bottom: 1.6rem; }
+.page-head h1 {
+  margin: 0; font-size: 2.1rem; line-height: 1.12; font-weight: 700; letter-spacing: -.03em;
 }
 
-/* Une console d'exploitation se lit en largeur : tableaux a dix colonnes,
-   arbre reseau, heatmap. 1500px laissait deux bandes vides sur un 27 pouces. */
-main { padding: 1.25rem; max-width: 1760px; margin: 0 auto; }
 section { display: none; }
-section.active { display: block; }
+section.active { display: block; animation: apparition .25s ease; }
+@keyframes apparition { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 
 h2 {
-  font-size: .8rem; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .07em; color: var(--muted); margin: 1.75rem 0 .7rem;
+  font-size: 1.15rem; font-weight: 650; letter-spacing: -.02em;
+  color: var(--text); margin: 2.4rem 0 .85rem;
 }
 h2:first-child { margin-top: 0; }
+h3 { letter-spacing: -.015em; }
 
-/* ---------------------------------------------------------------- cartes */
+/* =============================================================== cartes */
 .card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 1rem 1.1rem;
+  background: var(--surface); border: 0;
+  border-radius: var(--radius); padding: 1.15rem 1.3rem;
+  box-shadow: var(--shadow);
 }
-.grid { display: grid; gap: .85rem; }
-.stats { grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); }
-.cols-2 { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+.grid { display: grid; gap: 1rem; }
+.stats { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.cols-2 { grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); }
+/* Le tableau des gros consommateurs a six colonnes, les backhauls trois
+   jauges : partager la largeur a parts egales cachait l'upload et la latence. */
+.dash-split { grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); }
+@media (max-width: 1280px) { .dash-split { grid-template-columns: 1fr; } }
 
 .stat .label {
-  font-size: .7rem; text-transform: uppercase; letter-spacing: .06em;
-  color: var(--muted); margin-bottom: .3rem;
+  font-size: .8rem; color: var(--muted); font-weight: 500; margin-bottom: .35rem;
 }
-.stat .value { font-size: 1.7rem; font-weight: 620; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.stat .value .unit { font-size: .8rem; font-weight: 500; color: var(--muted); margin-left: .2rem; }
-.stat .sub { font-size: .75rem; color: var(--faint); margin-top: .3rem; }
+.stat .value {
+  font-size: 2rem; font-weight: 650; line-height: 1.08; letter-spacing: -.03em;
+  font-variant-numeric: tabular-nums;
+}
+.stat .value .unit { font-size: .9rem; font-weight: 500; color: var(--muted); margin-left: .25rem; letter-spacing: 0; }
+.stat .sub { font-size: .78rem; color: var(--faint); margin-top: .4rem; }
 .stat.down .value { color: var(--down); }
 .stat.up .value { color: var(--up); }
+.stat.warn .value { color: var(--warn); }
 
-/* ---------------------------------------------------------------- graphe */
+/* ======================================================= points de mesure */
+.vantage-grid { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-bottom: 1rem; }
+.vantage {
+  display: grid; gap: .85rem;
+  background: var(--surface); border-radius: var(--radius); padding: 1.15rem 1.3rem;
+  box-shadow: var(--shadow); border: 2px solid transparent;
+}
+.vantage.counting { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.vantage-head { display: flex; align-items: center; gap: .7rem; }
+.vantage-icon {
+  width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center;
+  background: var(--accent-dim); color: var(--accent);
+}
+.vantage-icon svg { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.vantage-title { font-weight: 650; font-size: 1rem; }
+.vantage-title .hint { margin: .1rem 0 0; font-weight: 400; font-size: .78rem; letter-spacing: 0; }
+.vantage-head .badge { margin-left: auto; }
+.vantage-figures { display: flex; gap: 1.6rem; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.vantage-figures div { display: grid; gap: .1rem; }
+.vantage-figures span { font-size: .75rem; color: var(--muted); }
+.vantage-figures b { font-size: 1.35rem; font-weight: 650; letter-spacing: -.02em; }
+.vantage-figures .d b { color: var(--down); }
+.vantage-figures .u b { color: var(--up); }
+.vantage-note { font-size: .8rem; color: var(--muted); }
+
+/* ======================================================= controle segmente */
+.segmented {
+  display: inline-flex; padding: 2px; gap: 2px;
+  background: var(--fill); border-radius: 10px;
+}
+.segmented button {
+  background: transparent; border: 0; color: var(--text);
+  border-radius: 8px; padding: .32rem .9rem; font-size: .82rem; font-weight: 500;
+}
+.segmented button:hover:not(:disabled) { background: var(--fill); }
+.segmented button.active {
+  background: var(--seg-active); box-shadow: 0 1px 3px rgba(0, 0, 0, .12), 0 0 0 .5px rgba(0, 0, 0, .04);
+}
+
+/* =============================================================== graphe */
 .chart-head {
   display: flex; align-items: baseline; justify-content: space-between;
-  margin-bottom: .5rem; flex-wrap: wrap; gap: .5rem;
+  margin-bottom: .6rem; flex-wrap: wrap; gap: .5rem;
 }
-.legend { display: flex; gap: 1rem; font-size: .75rem; color: var(--muted); }
-.legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: .35rem; }
+.legend { display: flex; gap: 1rem; font-size: .78rem; color: var(--muted); }
+.legend i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: .35rem; }
 .legend .d i { background: var(--down); }
 .legend .u i { background: var(--up); }
 .chart { width: 100%; display: block; overflow: visible; }
 .chart .grid-line { stroke: var(--border); stroke-width: 1; }
-.chart .axis-label { fill: var(--faint); font-size: 10px; font-family: var(--mono); }
+.chart .axis-label { fill: var(--faint); font-size: 10px; font-family: var(--font); }
 .chart .zero { stroke: var(--border-strong); stroke-width: 1; }
 .chart .hover-line { stroke: var(--border-strong); stroke-width: 1; stroke-dasharray: 3 3; }
 
 .tooltip {
   position: fixed; z-index: 60; pointer-events: none;
-  background: #0b0e14; border: 1px solid var(--border-strong);
-  border-radius: 7px; padding: .5rem .65rem; font-size: .76rem;
-  box-shadow: 0 8px 24px rgba(0,0,0,.5); white-space: nowrap;
+  background: var(--surface); color: var(--text);
+  border-radius: 10px; padding: .55rem .75rem; font-size: .78rem;
+  box-shadow: var(--shadow-lift); white-space: nowrap;
 }
-.tooltip .t { color: var(--faint); font-family: var(--mono); margin-bottom: .3rem; }
-.tooltip .row { display: flex; gap: .8rem; justify-content: space-between; }
-.tooltip .row span:last-child { font-family: var(--mono); }
+.tooltip .t { color: var(--faint); margin-bottom: .3rem; }
+.tooltip .row { display: flex; gap: .9rem; justify-content: space-between; }
+.tooltip .row span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
 
-/* ---------------------------------------------------------------- tables */
-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+/* =============================================================== tables */
+table { width: 100%; border-collapse: collapse; font-size: .86rem; }
 /* Pas de position:sticky ici : dans un conteneur a overflow, l'en-tete se
    detachait et recouvrait la premiere ligne. */
 thead th {
-  text-align: left; font-size: .68rem; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .05em; color: var(--muted); padding: .5rem .7rem;
+  text-align: left; font-size: .75rem; font-weight: 600;
+  color: var(--muted); padding: .7rem .9rem .55rem;
   border-bottom: 1px solid var(--border); background: var(--surface);
+  white-space: nowrap;
 }
-tbody td { padding: .45rem .7rem; border-bottom: 1px solid var(--border); }
+tbody td { padding: .62rem .9rem; border-bottom: 1px solid var(--border); vertical-align: middle; }
 tbody tr:last-child td { border-bottom: 0; }
 tbody tr.clickable { cursor: pointer; }
-tbody tr.clickable:hover { background: var(--surface-2); }
-td.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
-td.login { font-family: var(--mono); }
-.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+tbody tr.clickable:hover td { background: var(--fill); }
+td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Un identifiant ou un nom de PoP coupe sur deux lignes ("NAS-" / "FRANCOPHONIE")
+   ne se lit plus : ces cellules restent sur une ligne, le tableau defile. */
+td.login, td.nowrap, .nowrap { white-space: nowrap; }
+th.num { text-align: right; }
+.table-wrap {
+  overflow-x: auto; background: var(--surface);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+}
+.table-wrap + form, .table-wrap + .card, .table-wrap + .toolbar,
+.table-wrap + .actions, .table-wrap + .table-wrap { margin-top: 1.1rem; }
 
-/* --------------------------------------------------------------- jauges */
-.meter { display: flex; align-items: center; gap: .5rem; min-width: 150px; }
+/* =============================================================== jauges */
+.meter { display: flex; align-items: center; gap: .55rem; min-width: 150px; }
 .meter .track {
-  flex: 1; height: 6px; border-radius: 3px; background: var(--surface-2);
+  flex: 1; height: 6px; border-radius: 999px; background: var(--fill);
   overflow: hidden; min-width: 60px;
 }
-.meter .fill { height: 100%; border-radius: 3px; transition: width .4s ease; }
+.meter .fill { height: 100%; border-radius: 999px; transition: width .5s cubic-bezier(.2, .8, .2, 1); }
 .meter .fill.down { background: var(--down); }
 .meter .fill.up { background: var(--up); }
 .meter .fill.ok { background: var(--ok); }
 .meter .fill.warn { background: var(--warn); }
 .meter .fill.crit { background: var(--crit); }
-.meter .pct { font-family: var(--mono); font-size: .72rem; color: var(--muted); width: 40px; text-align: right; }
+.meter .pct { font-size: .75rem; color: var(--muted); width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
 
-/* ------------------------------------------------------------ arbre reseau */
-.node { margin-bottom: .85rem; }
+/* ========================================================= arbre (liste) */
+.node { margin-bottom: 1rem; }
 .node-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
-.node-title { font-weight: 600; display: flex; align-items: center; gap: .5rem; }
-.node-title .host { font-family: var(--mono); font-size: .74rem; color: var(--faint); font-weight: 400; }
-.node-metrics { display: flex; gap: 1.4rem; font-size: .78rem; font-family: var(--mono); }
+.node-title { font-weight: 650; display: flex; align-items: center; gap: .5rem; }
+.node-title .host { font-family: var(--mono); font-size: .76rem; color: var(--faint); font-weight: 400; }
+.node-metrics { display: flex; gap: 1.4rem; font-size: .82rem; font-variant-numeric: tabular-nums; }
 .node-metrics .d { color: var(--down); }
 .node-metrics .u { color: var(--up); }
-.children { margin: .8rem 0 0 0; padding: .8rem 0 0 1.1rem; border-top: 1px solid var(--border); }
+.children { margin: .9rem 0 0; padding: .9rem 0 0 1.1rem; border-top: 1px solid var(--border); }
 .child {
   display: flex; align-items: center; justify-content: space-between; gap: 1rem;
-  padding: .45rem 0; flex-wrap: wrap;
+  padding: .5rem 0; flex-wrap: wrap;
 }
 .child + .child { border-top: 1px solid var(--border); }
-.child .name { font-size: .82rem; display: flex; align-items: center; gap: .5rem; }
+.child .name { font-size: .86rem; display: flex; align-items: center; gap: .5rem; }
 
-/* -------------------------------------------------------------- badges */
+/* =============================================================== badges */
 .badge {
-  display: inline-block; padding: .1rem .45rem; border-radius: 999px;
-  font-size: .68rem; font-weight: 600; border: 1px solid var(--border-strong);
-  color: var(--muted); white-space: nowrap;
+  display: inline-block; padding: .14rem .55rem; border-radius: 999px;
+  font-size: .72rem; font-weight: 600; letter-spacing: 0;
+  color: var(--muted); background: var(--fill); white-space: nowrap;
 }
-.badge.ok { color: var(--ok); border-color: rgba(63,185,80,.4); background: rgba(63,185,80,.1); }
-.badge.warn { color: var(--warn); border-color: rgba(210,153,34,.4); background: rgba(210,153,34,.1); }
-.badge.crit { color: var(--crit); border-color: rgba(248,81,73,.4); background: rgba(248,81,73,.1); }
-.badge.file { color: var(--accent); border-color: rgba(88,166,255,.35); background: rgba(88,166,255,.08); }
+.badge.ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+.badge.warn { color: var(--warn); background: color-mix(in srgb, var(--warn) 16%, transparent); }
+.badge.crit { color: var(--crit); background: color-mix(in srgb, var(--crit) 13%, transparent); }
+.badge.file { color: var(--accent); background: var(--accent-dim); }
 
-/* ------------------------------------------------------------ formulaires */
-form.stack { display: grid; gap: .8rem; }
-.field { display: grid; gap: .3rem; }
-.field label { font-size: .74rem; color: var(--muted); font-weight: 500; }
-.field .help { font-size: .7rem; color: var(--faint); }
-input, select {
-  background: var(--bg); border: 1px solid var(--border-strong); color: var(--text);
-  border-radius: 7px; padding: .45rem .6rem; font: inherit; font-size: .85rem; width: 100%;
+.flag { font-size: 1.05em; line-height: 1; margin-right: .25rem; }
+.geo { font-size: .76rem; color: var(--muted); }
+
+/* ========================================================== formulaires */
+form.stack { display: grid; gap: 1rem; }
+.field { display: grid; gap: .35rem; }
+.field label { font-size: .8rem; color: var(--muted); font-weight: 500; }
+.field .help { font-size: .75rem; color: var(--faint); }
+input, select, textarea {
+  background: var(--fill); border: 1px solid transparent; color: var(--text);
+  border-radius: var(--radius-sm); padding: .55rem .75rem;
+  font: inherit; font-size: .9rem; width: 100%;
+  transition: box-shadow .15s ease, background .15s ease;
 }
-input:focus, select:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.15); }
+input::placeholder, textarea::placeholder { color: var(--faint); }
+input:focus, select:focus, textarea:focus {
+  outline: none; background: var(--surface);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 22%, transparent);
+}
 input[type=checkbox] { width: auto; accent-color: var(--accent); }
-.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: .8rem; }
-.row-3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: .8rem; }
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.row-3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 1rem; }
 
 button {
-  background: var(--surface-2); border: 1px solid var(--border-strong); color: var(--text);
-  border-radius: 7px; padding: .45rem .9rem; font: inherit; font-size: .82rem;
-  font-weight: 500; cursor: pointer;
+  background: var(--fill); border: 0; color: var(--accent);
+  border-radius: 999px; padding: .5rem 1.05rem;
+  font: inherit; font-size: .86rem; font-weight: 550; cursor: pointer;
+  transition: background .15s ease, color .15s ease, transform .1s ease, box-shadow .15s ease;
 }
-button:hover:not(:disabled) { border-color: var(--faint); background: #232a34; }
-button:disabled { opacity: .5; cursor: not-allowed; }
-button.primary { background: #1f6feb; border-color: #1f6feb; color: #fff; }
-button.primary:hover:not(:disabled) { background: #2b7cf3; border-color: #2b7cf3; }
-button.danger { color: var(--crit); border-color: rgba(248,81,73,.35); }
-button.danger:hover:not(:disabled) { background: rgba(248,81,73,.12); }
-button.sm { padding: .25rem .55rem; font-size: .74rem; }
+button:hover:not(:disabled) { background: var(--fill-strong); }
+button:active:not(:disabled) { transform: scale(.97); }
+button:disabled { opacity: .45; cursor: not-allowed; }
+button.primary { background: var(--accent); color: #fff; }
+button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+button.danger { color: var(--crit); background: color-mix(in srgb, var(--crit) 11%, transparent); }
+button.danger:hover:not(:disabled) { background: color-mix(in srgb, var(--crit) 18%, transparent); }
+button.sm { padding: .3rem .75rem; font-size: .78rem; }
 .actions { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 /* Un champ et son unite cote a cote (debit + kbps/Mbps/Gbps). */
-.inline { display: flex; gap: .4rem; align-items: center; }
-/* Les zones de saisie multi-lignes (blocs d'adresses, listes de logins)
-   n'existaient pas avant les restrictions : sans cette regle elles heritaient
-   de la police du navigateur et juraient au milieu du formulaire. */
-textarea {
-  background: var(--bg); border: 1px solid var(--border-strong); color: var(--text);
-  border-radius: 7px; padding: .45rem .6rem; font: inherit; font-size: .85rem;
-  width: 100%; resize: vertical; font-family: var(--mono, ui-monospace, monospace);
-}
-textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88,166,255,.15); }
-select[multiple] { height: auto; padding: .3rem; }
-/* Fiche d'une adresse atteinte, ouverte sous le tableau. */
-.ip-card {
-  border: 1px solid var(--border-strong); border-radius: 10px; padding: .9rem 1rem;
-  background: var(--surface); margin-top: .8rem;
-}
-.ip-card h3 { margin: 0 0 .5rem; font-size: .95rem; }
-.ip-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: .6rem; }
-.ip-facts div { font-size: .78rem; }
-.ip-facts span { display: block; color: var(--faint); font-size: .7rem; }
+.inline { display: flex; gap: .45rem; align-items: center; }
+textarea { resize: vertical; font-family: var(--mono); font-size: .84rem; }
+select[multiple] { height: auto; padding: .35rem; }
 
-.notice {
-  border-radius: 8px; padding: .65rem .8rem; font-size: .8rem; margin-bottom: .9rem;
-  border: 1px solid var(--border-strong); background: var(--surface-2);
+/* Une liste deroulante doit se distinguer d'un champ de saisie. Le chevron est
+   ecrit en SVG dans la feuille de style : rien a aller chercher sur internet. */
+select {
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238e8e93' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right .75rem center;
+  background-size: 10px 6px;
+  padding-right: 2.1rem;
+  cursor: pointer;
 }
-.notice.ok { border-color: rgba(63,185,80,.35); background: rgba(63,185,80,.08); }
-.notice.err { border-color: rgba(248,81,73,.35); background: rgba(248,81,73,.08); }
-.notice.warn { border-color: rgba(210,153,34,.35); background: rgba(210,153,34,.08); }
-.notice code { font-family: var(--mono); font-size: .76rem; }
-/* Une precision qui SUIT une affirmation. Elle etait rendue en bloc uniquement
-   a l'interieur d'un bandeau ; partout ailleurs -- notamment dans les cellules
-   des tableaux de reglages -- elle restait en ligne et se collait au texte
-   precedent ("netflow_host_limitNombre maximum d'adresses..."). */
-.hint { color: var(--faint); font-size: .72rem; display: block; margin-top: .25rem; }
+select[multiple] { background-image: none; padding-right: .6rem; cursor: auto; }
+
+/* ====================================================== fiche d'une adresse */
+.ip-card {
+  border-radius: var(--radius); padding: 1.2rem 1.3rem;
+  background: var(--surface); margin-top: 1rem; box-shadow: var(--shadow);
+}
+.ip-card h3 { margin: 0 0 .8rem; font-size: 1.05rem; display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.ip-facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .9rem 1.2rem; }
+.ip-facts div { font-size: .86rem; }
+.ip-facts span { display: block; color: var(--muted); font-size: .74rem; margin-bottom: .1rem; }
+
+/* ============================================================= bandeaux */
+.notice {
+  border-radius: var(--radius-sm); padding: .75rem .95rem; font-size: .86rem; margin-bottom: 1rem;
+  background: var(--fill); color: var(--text); border: 0;
+}
+.notice.ok { background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.notice.err { background: color-mix(in srgb, var(--crit) 11%, transparent); }
+.notice.warn { background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.notice code { font-size: .82rem; }
+/* Une precision qui SUIT une affirmation. */
+.hint { color: var(--faint); font-size: .76rem; display: block; margin-top: .25rem; }
 .notice .hint { color: var(--muted); margin-top: .35rem; }
 
-.empty { color: var(--faint); font-size: .82rem; padding: 1.5rem; text-align: center; }
-.toolbar { display: flex; gap: .6rem; align-items: center; margin-bottom: .8rem; flex-wrap: wrap; }
+.empty { color: var(--faint); font-size: .88rem; padding: 2rem 1.5rem; text-align: center; }
+.toolbar { display: flex; gap: .65rem; align-items: center; margin-bottom: .9rem; flex-wrap: wrap; }
+.toolbar input, .toolbar select { width: auto; }
 .toolbar input[type=search] { max-width: 280px; }
 .spacer { flex: 1; }
 .hidden { display: none !important; }
 
-/* --------------------------------------------------------------- panneau */
+/* =============================================================== panneau */
 .drawer-backdrop {
-  position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 40;
+  position: fixed; inset: 0; background: rgba(0, 0, 0, .32); z-index: 40;
+  -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
 }
 .drawer {
-  position: fixed; top: 0; right: 0; bottom: 0; width: min(620px, 100%);
-  background: var(--bg); border-left: 1px solid var(--border); z-index: 50;
-  overflow-y: auto; padding: 1.25rem;
+  position: fixed; top: .75rem; right: .75rem; bottom: .75rem; width: min(640px, calc(100% - 1.5rem));
+  background: var(--bg); border-radius: 18px; z-index: 50;
+  overflow-y: auto; padding: 1.5rem; box-shadow: var(--shadow-lift);
+  animation: glisse .25s cubic-bezier(.2, .8, .2, 1);
 }
-.drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
-.drawer-head h3 { margin: 0; font-size: 1rem; font-family: var(--mono); }
+@keyframes glisse { from { transform: translateX(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.1rem; }
+.drawer-head h3 { margin: 0; font-size: 1.3rem; font-weight: 700; }
 
-/* La barre du haut se serre AVANT de devoir cacher quoi que ce soit : neuf
-   onglets plus la pastille de mode ne tiennent plus en dessous de ~1200px. */
-@media (max-width: 1200px) {
-  nav.tabs a { padding: .4rem .5rem; font-size: .82rem; }
-  header.top { gap: .9rem; }
-}
-@media (max-width: 760px) {
-  .row-2, .row-3 { grid-template-columns: 1fr; }
-  nav.tabs a { padding: .4rem .45rem; font-size: .8rem; }
-  .mode { display: none; }
-}
-
-
-/* --------------------------------------------------------- vue executive */
-/* Heatmap : une ligne par metrique, une cellule par pas de temps. */
-.heat-row { display: flex; align-items: center; gap: .8rem; padding: .28rem 0; }
+/* ======================================================== vue executive */
+.heat-row { display: flex; align-items: center; gap: .9rem; padding: .32rem 0; }
 .heat-row + .heat-row { border-top: 1px solid var(--border); }
-.heat-label { flex: 0 0 130px; font-size: .78rem; color: var(--muted); }
-.heat-label .u { color: var(--faint); font-size: .72rem; }
+.heat-label { flex: 0 0 140px; font-size: .82rem; color: var(--muted); }
+.heat-label .u { color: var(--faint); font-size: .74rem; }
 .heat-cells { display: flex; gap: 2px; flex: 1; min-width: 0; }
-.heat-cell { flex: 1; height: 20px; border-radius: 3px; background: var(--surface-2); min-width: 4px; }
+.heat-cell { flex: 1; height: 22px; border-radius: 4px; background: var(--fill); min-width: 4px; }
 .heat-cell.ok { background: var(--ok); }
 .heat-cell.warn { background: var(--warn); }
 .heat-cell.crit { background: var(--crit); }
-.heat-cell.none { background: #22272e; }
-.heat-now { flex: 0 0 auto; font-size: .72rem; color: var(--faint); font-family: var(--mono); }
-.heat-unavail { flex: 1; font-size: .74rem; color: var(--faint); font-style: italic; }
+.heat-cell.none { background: var(--fill); }
+.heat-now { flex: 0 0 auto; font-size: .74rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+.heat-unavail { flex: 1; font-size: .78rem; color: var(--faint); font-style: italic; }
 
-/* Trois panneaux facon LibreQoS : Live Queue State | Node Snapshot | Node Details. */
-.lq-panels { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: .85rem; margin-bottom: 1rem; }
+.lq-panels { display: grid; grid-template-columns: 1fr 1fr 1.15fr; gap: 1rem; margin-bottom: 1.2rem; }
 .lq-panel { min-height: 210px; }
-.lq-panel h3 { margin: 0 0 .7rem; font-size: .9rem; display: flex; align-items: center; gap: .4rem; }
-.lq-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
-.lq-table th { text-align: right; font-size: .66rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: .3rem .4rem; }
+.lq-panel h3 { margin: 0 0 .8rem; font-size: 1rem; display: flex; align-items: center; gap: .45rem; }
+.lq-table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+.lq-table th { text-align: right; font-size: .74rem; color: var(--muted); font-weight: 600; padding: .35rem .45rem; }
 .lq-table th:first-child { text-align: left; }
-.lq-table td { padding: .32rem .4rem; border-top: 1px solid var(--border); }
+.lq-table td { padding: .38rem .45rem; border-top: 1px solid var(--border); }
 .lq-table td:first-child { color: var(--muted); }
-.lq-table td.num { text-align: right; font-family: var(--mono); }
+.lq-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
-/* Petit carre colore devant une valeur (severite), signature de LibreQoS. */
-.sq { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: .4rem; vertical-align: baseline; background: var(--surface-2); }
+/* Petit repere colore devant une valeur (severite). */
+.sq { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: .45rem; vertical-align: middle; background: var(--fill-strong); }
 .sq.ok { background: var(--ok); } .sq.warn { background: var(--warn); } .sq.crit { background: var(--crit); }
-.sq.none { background: #30363d; }
+.sq.none { background: var(--fill-strong); }
 
-.lq-kv { display: grid; grid-template-columns: auto 1fr; gap: .35rem 1rem; font-size: .8rem; }
+.lq-kv { display: grid; grid-template-columns: auto 1fr; gap: .45rem 1rem; font-size: .86rem; }
 .lq-kv .k { color: var(--muted); }
-.lq-kv .v { font-family: var(--mono); text-align: right; }
-.lq-rate { display: flex; align-items: center; gap: .4rem; margin-top: .8rem; flex-wrap: wrap; }
-.lq-rate input { width: 84px; }
-.lq-note { font-size: .72rem; color: var(--faint); margin-top: .6rem; }
+.lq-kv .v { text-align: right; font-variant-numeric: tabular-nums; }
+.lq-rate { display: flex; align-items: center; gap: .45rem; margin-top: .9rem; flex-wrap: wrap; }
+.lq-rate input { width: 90px; }
+.lq-note { font-size: .76rem; color: var(--faint); margin-top: .7rem; }
 
-@media (max-width: 980px) { .lq-panels { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .lq-panels { grid-template-columns: 1fr; } }
 
 .na { color: var(--faint); }
 tr.node-row { cursor: pointer; }
-tr.node-row:hover { background: var(--surface-2); }
-tr.sub-row td { background: rgba(88,166,255,.04); font-size: .78rem; }
+tr.node-row:hover td { background: var(--fill); }
+tr.sub-row td { background: color-mix(in srgb, var(--accent) 4%, transparent); font-size: .82rem; }
 .expand { cursor: pointer; user-select: none; color: var(--muted); width: 1rem; display: inline-block; }
 
 /* Jauge (compteur de vitesse) du tiroir de noeud. */
 .gauge-wrap { display: flex; gap: 1rem; align-items: center; justify-content: center; }
-.gauge text { fill: var(--text); font-family: var(--mono); }
-.gauge .track { stroke: var(--surface-2); }
+.gauge text { fill: var(--text); font-family: var(--font); }
+.gauge .track { stroke: var(--fill); }
 .gauge .lbl { fill: var(--faint); font-size: 9px; }
 
 /* Sankey : bandes de flux dessinees main. */
 .sankey svg { width: 100%; display: block; }
-.sankey .node rect { rx: 2; }
-.sankey .flow { fill-opacity: .38; }
-.sankey .flow:hover { fill-opacity: .6; }
-.sankey .nlabel { fill: var(--text); font-size: 10px; }
+.sankey .node rect { rx: 3; }
+.sankey .flow { fill-opacity: .32; }
+.sankey .flow:hover { fill-opacity: .55; }
+.sankey .nlabel { fill: var(--text); font-size: 10.5px; }
 
-/* ------------------------------------------------------------------ boost */
+/* ================================================================ boost */
 .boost-pill {
   display: inline-flex; align-items: center; gap: .3rem;
-  padding: .1rem .45rem; border-radius: 999px; font-size: .68rem; font-weight: 600;
-  color: #a78bfa; border: 1px solid rgba(167,139,250,.4); background: rgba(167,139,250,.12);
+  padding: .14rem .55rem; border-radius: 999px; font-size: .72rem; font-weight: 600;
+  color: var(--purple); background: color-mix(in srgb, var(--purple) 14%, transparent);
   white-space: nowrap;
 }
-.boost-choices { display: flex; gap: .4rem; flex-wrap: wrap; }
-.boost-choices button.active {
-  border-color: var(--accent); color: var(--accent); background: rgba(88,166,255,.12);
-}
+.boost-choices { display: flex; gap: .45rem; flex-wrap: wrap; }
+.boost-choices button.active { background: var(--accent); color: #fff; }
 
-/* -------------------------------------------------- interrupteur enforcement */
-.switch { display: inline-flex; align-items: center; gap: .55rem; cursor: pointer; }
+/* ========================================== interrupteur (facon iOS) */
+.switch { display: inline-flex; align-items: center; gap: .65rem; cursor: pointer; }
 .switch input { display: none; }
 .switch .rail {
-  width: 38px; height: 21px; border-radius: 999px; background: var(--surface-2);
-  border: 1px solid var(--border-strong); position: relative; transition: all .18s;
+  width: 51px; height: 31px; border-radius: 999px; background: var(--fill-strong);
+  position: relative; transition: background .25s ease; flex: 0 0 auto;
 }
 .switch .rail::after {
   content: ""; position: absolute; top: 2px; left: 2px;
-  width: 15px; height: 15px; border-radius: 50%;
-  background: var(--faint); transition: all .18s;
+  width: 27px; height: 27px; border-radius: 50%;
+  background: #fff; box-shadow: 0 3px 8px rgba(0, 0, 0, .15), 0 1px 1px rgba(0, 0, 0, .16);
+  transition: left .25s cubic-bezier(.2, .8, .2, 1);
 }
-.switch input:checked + .rail { background: rgba(210,153,34,.28); border-color: var(--warn); }
-.switch input:checked + .rail::after { left: 19px; background: var(--warn); }
-.switch .label { font-size: .8rem; }
+.switch input:checked + .rail { background: #34c759; }
+.switch input:checked + .rail::after { left: 22px; }
+.switch .label { font-size: .88rem; }
 
-
-/* --------------------------------------------- editeur d'arbre (topologie) */
-/* Un vrai arbre manipulable : chaque equipement est une case qu'on deplace, et
-   qu'on depose sur une autre pour la rattacher. SVG fait main, sans dependance :
-   le controleur doit rester utilisable sur une VM coupee d'internet. */
+/* ============================================ editeur d'arbre (topologie) */
 .chk {
-  display: inline-flex; align-items: center; gap: .4rem; cursor: pointer;
-  font-size: .8rem; color: var(--muted);
+  display: inline-flex; align-items: center; gap: .45rem; cursor: pointer;
+  font-size: .84rem; color: var(--muted);
 }
 .chk input { width: auto; }
 
-.topo-editor { display: flex; gap: .85rem; align-items: stretch; }
-/* LE CADRE SUIT LE DESSIN, ET LE QUADRILLAGE AVEC LUI.
-   Une hauteur figee (560px) gachait un grand ecran et noyait un portable ; et
-   le quadrillage, peint ici, s'arretait a la partie visible pendant que
-   l'arbre, lui, continuait. Le quadrillage est desormais dessine DANS le SVG,
-   a la taille exacte du contenu, et la hauteur du cadre est posee par le rendu
-   (renderTopoCanvas) d'apres l'etendue des cases, bornee par la fenetre.
-   Ce minimum ne sert donc qu'avant tout dessin : etat vide, ou message. */
+.topo-editor { display: flex; gap: 1rem; align-items: stretch; }
+/* LE CADRE SUIT LE DESSIN, ET LE QUADRILLAGE AVEC LUI : le quadrillage est
+   dessine DANS le SVG, et la hauteur du cadre est posee par le rendu d'apres
+   l'etendue des cases. Ce minimum ne sert qu'avant tout dessin. */
 .topo-canvas {
   flex: 1; min-width: 0;
   min-height: 360px;
   overflow: auto;
   background: var(--surface);
-  border: 1px solid var(--border); border-radius: var(--radius);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   position: relative;
 }
 .topo-canvas svg { display: block; touch-action: none; }
 .topo-canvas .empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 
 .topo-panel {
-  flex: 0 0 250px; background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: .9rem; font-size: .82rem;
+  flex: 0 0 270px; background: var(--surface);
+  border-radius: var(--radius); padding: 1.05rem; font-size: .86rem;
+  box-shadow: var(--shadow);
   align-self: flex-start;
-  /* Il decrit la case selectionnee : le perdre en defilant reviendrait a
-     devoir remonter pour lire ce qu'on vient de cliquer. */
-  position: sticky; top: 70px;
-  max-height: calc(100vh - 90px); overflow: auto;
+  position: sticky; top: 1.5rem;
+  max-height: calc(100vh - 3rem); overflow: auto;
 }
 .topo-panel .muted { color: var(--faint); }
-.topo-panel h4 { margin: 0 0 .5rem; font-size: .9rem; font-family: var(--mono); word-break: break-all; }
-.topo-panel .kv { display: flex; justify-content: space-between; gap: .6rem; padding: .2rem 0; border-bottom: 1px solid var(--border); }
-.topo-panel .kv span:last-child { font-family: var(--mono); color: var(--muted); text-align: right; }
-.topo-panel .stack { margin-top: .7rem; }
+.topo-panel h4 { margin: 0 0 .6rem; font-size: 1rem; word-break: break-all; }
+.topo-panel .kv { display: flex; justify-content: space-between; gap: .6rem; padding: .3rem 0; border-bottom: 1px solid var(--border); }
+.topo-panel .kv span:last-child { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.topo-panel .stack { margin-top: .8rem; }
 
-/* Noeuds et liens SVG */
 .topo-edge { fill: none; stroke: var(--border-strong); stroke-width: 1.6; }
 .topo-edge.ok   { stroke: var(--ok); }
 .topo-edge.warn { stroke: var(--warn); }
@@ -441,194 +614,163 @@ tr.sub-row td { background: rgba(88,166,255,.04); font-size: .78rem; }
 .topo-edge.faint { stroke: var(--border); stroke-width: 1.2; stroke-dasharray: 4 4; }
 .topo-edge.forced { stroke: var(--accent); stroke-width: 1.8; stroke-dasharray: 6 3; }
 .topo-edge.uncertain { stroke-dasharray: 3 4; opacity: .65; }
-.export-pre { margin-top: .5rem; max-height: 460px; overflow: auto; padding: .7rem .8rem;
-  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
-  font-family: var(--mono); font-size: .74rem; line-height: 1.45; white-space: pre; color: var(--muted); }
-/* Zone de clic large et invisible pour attraper facilement une arete fine. */
+.export-pre {
+  margin-top: .6rem; max-height: 460px; overflow: auto; padding: .8rem .9rem;
+  background: var(--fill); border-radius: var(--radius-sm);
+  font-family: var(--mono); font-size: .76rem; line-height: 1.5; white-space: pre; color: var(--muted);
+}
 .topo-edge-hit { fill: none; stroke: transparent; stroke-width: 12; cursor: pointer; }
 .topo-node.linksrc .box { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 5 3; }
-.topo-edge-label { fill: var(--muted); font-size: 10px; font-family: var(--mono); }
+.topo-edge-label { fill: var(--muted); font-size: 10px; font-family: var(--font); }
 .topo-edge-label .d { fill: var(--down); }
 .topo-edge-label .u { fill: var(--up); }
 
 .topo-node { cursor: grab; }
 .topo-node.dragging { cursor: grabbing; }
-.topo-node .box {
-  fill: var(--surface-2); stroke: var(--border-strong); stroke-width: 1.5; rx: 8;
-}
-.topo-node.selected .box { stroke: var(--accent); stroke-width: 2; }
+.topo-node .box { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1.2; rx: 10; }
+.topo-node.selected .box { stroke: var(--accent); stroke-width: 2.2; }
 .topo-node.drop-target .box { stroke: var(--ok); stroke-width: 2.5; }
 .topo-node.stale .box { stroke-dasharray: 5 4; opacity: .8; }
 .topo-node .accent { rx: 3; }
-.topo-node .title { fill: var(--text); font-size: 12px; font-weight: 600; }
-.topo-node .role  { font-size: 9px; font-weight: 700; letter-spacing: .04em; }
-.topo-node .meta  { fill: var(--faint); font-size: 9.5px; font-family: var(--mono); }
+.topo-node .title { fill: var(--text); font-size: 12px; font-weight: 650; }
+.topo-node .role  { font-size: 9px; font-weight: 700; letter-spacing: .03em; }
+.topo-node .meta  { fill: var(--faint); font-size: 9.5px; }
 
-/* Les actions doivent rester atteignables sans defiler horizontalement :
-   sur un ecran etroit la table deborde, et Debit/Boost sont justement ce
-   pourquoi on ouvre cette vue. */
+/* Les actions restent atteignables sans defiler horizontalement. */
 .sticky-actions {
   position: sticky; right: 0;
   background: var(--surface);
-  box-shadow: -8px 0 8px -8px rgba(0, 0, 0, .55);
+  box-shadow: -10px 0 10px -10px rgba(0, 0, 0, .25);
 }
-tbody tr:hover .sticky-actions { background: var(--surface-2); }
 
-/* ------------------------------------------------------ blocs depliables
-   Trois panneaux de l'interface vivent replies : le tableau des liens et le
-   shaping, qui avaient chacun un onglet a eux, et l'aide a la saisie des
-   clients VLAN. Un bloc ferme ne doit pas se lire comme un titre perdu entre
-   deux sections -- d'ou la bordure, qui dit qu'il y a quelque chose dessous. */
+/* ================================================== blocs depliables */
 details {
-  margin: .9rem 0;
-  border: 1px solid var(--border);
+  margin: 1rem 0;
   border-radius: var(--radius);
   background: var(--surface);
-  padding: .55rem .8rem;
+  box-shadow: var(--shadow);
+  padding: .8rem 1.1rem;
 }
 details > summary {
   cursor: pointer;
-  font-size: .82rem;
-  font-weight: 500;
-  color: var(--muted);
-  list-style-position: outside;
-}
-details > summary:hover { color: var(--text); }
-details[open] > summary {
+  font-size: .92rem;
+  font-weight: 600;
   color: var(--text);
-  margin-bottom: .7rem;
-  padding-bottom: .55rem;
+  list-style: none;
+  display: flex; align-items: center; gap: .55rem;
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before {
+  content: ""; width: 7px; height: 7px; flex: 0 0 auto;
+  border-right: 2px solid var(--faint); border-bottom: 2px solid var(--faint);
+  transform: rotate(-45deg); transition: transform .2s ease; margin-right: .1rem;
+}
+details[open] > summary::before { transform: rotate(45deg); }
+details > summary:hover { color: var(--accent); }
+details[open] > summary {
+  margin-bottom: .9rem;
+  padding-bottom: .75rem;
   border-bottom: 1px solid var(--border);
 }
 
 /* Qui parle a qui : un bloc par client. La ligne de tete porte sa
    consommation ; les adresses sont dessous, depliees a la demande. */
-details.flow-client { margin: .45rem 0; }
+details.flow-client { margin: .55rem 0; padding: .75rem 1.1rem; }
 details.flow-client > summary {
-  display: flex;
-  align-items: center;
-  gap: .6rem;
-  flex-wrap: wrap;
-  font-size: .85rem;
-  color: var(--text);
+  flex-wrap: wrap; gap: .7rem;
+  font-size: .92rem; font-weight: 500;
 }
-details.flow-client > summary::before { content: '\25B8'; color: var(--muted); }
-details.flow-client[open] > summary::before { content: '\25BE'; }
-details.flow-client > summary::-webkit-details-marker { display: none; }
-details.flow-client > summary { list-style: none; }
 .flow-client-sum {
-  display: flex;
-  gap: 1rem;
-  flex-wrap: wrap;
-  font-variant-numeric: tabular-nums;
-  font-size: .8rem;
+  display: flex; gap: 1.2rem; flex-wrap: wrap;
+  font-variant-numeric: tabular-nums; font-size: .84rem;
 }
-details.flow-client .table-wrap { margin: 0; }
+details.flow-client .table-wrap { margin: 0; box-shadow: none; }
 
-/* ------------------------------------------------------ l'arbre, en detail
-   Ce qui rend un arbre d'operateur lisible n'est pas le dessin des cases mais
-   ce qu'on peut en RETIRER : replier une branche, reduire l'echelle, retrouver
-   quelle couleur porte quel role. */
-
-/* Pastille de repli, a droite de la case. Assez grande pour se cliquer au
-   doigt sans attraper la case, qui elle se glisse. */
+/* ============================================= l'arbre, en detail */
 .topo-toggle { cursor: pointer; }
-.topo-toggle rect {
-  fill: var(--surface); stroke: var(--border-strong); stroke-width: 1;
-}
-.topo-toggle text {
-  fill: var(--muted); font-size: 10px; font-family: var(--mono); font-weight: 600;
-}
+.topo-toggle rect { fill: var(--surface); stroke: var(--border-strong); stroke-width: 1; }
+.topo-toggle text { fill: var(--muted); font-size: 10px; font-weight: 700; }
 .topo-toggle:hover rect { stroke: var(--accent); }
 .topo-toggle:hover text { fill: var(--text); }
-/* Une branche fermee se signale : sinon rien ne distingue une case sans
-   enfants d'une case dont on a masque tout le sous-arbre. */
-.topo-toggle.replie rect { fill: rgba(88,166,255,.14); stroke: var(--accent); }
+.topo-toggle.replie rect { fill: var(--accent-dim); stroke: var(--accent); }
 .topo-toggle.replie text { fill: var(--accent); }
 
-/* Le quadrillage est desormais peint dans le SVG : il ne doit jamais capter un
-   clic destine a une case ou a une arete. */
+/* Le quadrillage est peint dans le SVG : il ne capte aucun clic. */
 .topo-fond { pointer-events: none; }
 
 .topo-node .box { transition: stroke .12s ease; }
 .topo-node:hover .box { stroke: var(--faint); }
 
-.topo-legend { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .6rem; }
+.topo-legend { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: .75rem; }
 .topo-legend .chip {
-  display: inline-flex; align-items: center; gap: .35rem;
-  font-size: .7rem; color: var(--muted);
-  border: 1px solid var(--border); border-radius: 999px; padding: .1rem .5rem;
+  display: inline-flex; align-items: center; gap: .4rem;
+  font-size: .74rem; color: var(--muted);
+  background: var(--fill); border-radius: 999px; padding: .18rem .6rem;
 }
-.topo-legend .chip i { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.topo-legend .chip i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 
-/* Les trois boutons d'echelle forment un seul objet : colles, on les lit comme
-   un reglage, espaces ils se melangent aux actions de la barre. */
 .toolbar .zoom { display: inline-flex; align-items: center; gap: .3rem; }
-.toolbar .zoom .mode { min-width: 52px; text-align: center; }
+.toolbar .zoom .mode { min-width: 56px; text-align: center; }
 
-/* ------------------------------------------------------------- finitions
-   Rien de decoratif ici : ce sont les reperes qui manquaient pour se servir de
-   l'interface au clavier, distinguer une ligne survolee, et voir d'un coup
-   d'oeil qu'une liste deroulante en est une. */
-
-/* Un parcours au clavier doit se voir. Les champs ont deja leur propre halo :
-   un second contour par-dessus les doublerait. */
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* ============================================================ finitions */
+:focus-visible { outline: 3px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 2px; }
 input:focus-visible, select:focus-visible, textarea:focus-visible { outline: none; }
 
-button { transition: background .14s ease, border-color .14s ease, color .14s ease; }
-button:active:not(:disabled) { transform: translateY(1px); }
+/* Suivre une ligne sur dix colonnes demande un repere visuel. */
+tbody tr:hover td { background: color-mix(in srgb, var(--fill) 55%, transparent); }
+tbody tr:hover .sticky-actions { background: var(--surface-2); }
 
-/* Une liste deroulante doit se distinguer d'un champ de saisie. Le chevron est
-   ecrit en SVG dans la feuille de style : aucun fichier a telecharger, donc
-   rien a aller chercher sur internet depuis une VM de management. */
-select {
-  appearance: none; -webkit-appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%238b949e' stroke-width='1.5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right .6rem center;
-  background-size: 10px 6px;
-  padding-right: 1.9rem;
-  cursor: pointer;
-}
-select[multiple] { background-image: none; padding-right: .6rem; cursor: auto; }
-
-.card { box-shadow: 0 1px 2px rgba(0, 0, 0, .25); }
-
-/* Suivre une ligne sur dix colonnes sans repere visuel est le defaut le plus
-   couteux d'un tableau large. Une teinte tres legere suffit. */
-tbody tr:hover td { background: rgba(255, 255, 255, .02); }
-
-/* Les barres de defilement claires du systeme trouaient le theme sombre. */
-* { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
-::-webkit-scrollbar { width: 10px; height: 10px; }
+* { scrollbar-width: thin; scrollbar-color: var(--fill-strong) transparent; }
+::-webkit-scrollbar { width: 11px; height: 11px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: var(--border-strong); border-radius: 6px; border: 2px solid var(--bg);
+  background: var(--fill-strong); border-radius: 999px; border: 3px solid transparent; background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--faint); }
+::-webkit-scrollbar-thumb:hover { background-color: var(--faint); }
 
-/* Un poste regle sur "moins d'animations" le demande pour une raison. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .01ms !important; transition-duration: .01ms !important;
   }
 }
 
-@media (max-width: 980px) {
-  /* Le panneau de detail passe SOUS la toile plutot que de la reduire a une
-     colonne ou plus aucune case n'est lisible. */
-  .topo-editor { flex-direction: column; }
-  .topo-panel { flex: 1 1 auto; width: 100%; position: static; max-height: none; }
-}
-
-/* ---------------------------------------------- saisie d'un client a IP fixe
-   Trois champs etires sur 1700 px se lisent plus mal que trois champs de
-   taille normale : le formulaire garde une largeur d'oeil. Et ses colonnes
-   sont egales -- le 2fr/1fr/1fr de .row-3 donnait a la reference deux fois la
-   place de l'adresse, qui en a bien plus besoin. */
+/* Saisie d'un client a IP fixe : une largeur d'oeil, des colonnes egales. */
 #sc-form { max-width: 1120px; }
 #sc-form .row-3 { grid-template-columns: 1fr 1fr 1fr; }
 
-/* Une pastille vide n'a rien a dire : elle ne doit pas dessiner un petit trait
-   gris a cote du bouton d'enregistrement. */
-.mode:empty { display: none; }
+/* ======================================================= petits ecrans
+   En dessous de 1000 px, la barre laterale redevient une barre du haut, et
+   ses onglets defilent horizontalement plutot que de casser en deux lignes. */
+@media (max-width: 1000px) {
+  header.top {
+    position: sticky; bottom: auto; width: auto;
+    flex-direction: row; align-items: center; gap: .8rem;
+    padding: .6rem 1rem;
+    background: var(--topbar-bg);
+    border-right: 0; border-bottom: 1px solid var(--border);
+  }
+  .brand { padding: 0; font-size: 1.05rem; }
+  .brand .logo { width: 24px; height: 24px; border-radius: 7px; }
+  .brand .dot { margin-left: .2rem; }
+  nav.tabs {
+    flex-direction: row; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
+    -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+    mask-image: linear-gradient(90deg, #000 calc(100% - 24px), transparent);
+  }
+  nav.tabs::-webkit-scrollbar { display: none; }
+  nav.tabs a { padding: .38rem .7rem; font-size: .84rem; flex: 0 0 auto; }
+  nav.tabs a svg { display: none; }
+  .sidebar-foot { border-top: 0; padding: 0; }
+  .sidebar-foot .version { display: none; }
+  main { margin-left: 0; padding: 1.3rem 1rem 3rem; }
+  .page-head h1 { font-size: 1.7rem; }
+  .topo-editor { flex-direction: column; }
+  .topo-panel { flex: 1 1 auto; width: 100%; position: static; max-height: none; }
+}
+@media (max-width: 760px) {
+  .row-2, .row-3, #sc-form .row-3 { grid-template-columns: 1fr; }
+  .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+  .card { padding: 1rem; }
+  .stat .value { font-size: 1.6rem; }
+  .sidebar-foot { display: none; }
+}

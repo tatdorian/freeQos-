@@ -437,6 +437,7 @@ async def build_container(settings: Settings) -> Container:
         rdap_url=settings.ipfinder_rdap_url,
         geoip_enabled=settings.ipfinder_geoip_enabled,
         geoip_url=settings.ipfinder_geoip_url,
+        geoip_fallbacks=tuple(settings.ipfinder_geoip_fallbacks),
         geoip_db=settings.ipfinder_geoip_db,
         batch_size=settings.ipfinder_batch_size,
         concurrency=settings.ipfinder_concurrency,

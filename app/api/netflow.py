@@ -202,13 +202,46 @@ async def top_talkers(
     vantage: Annotated[Vantage | None, Query()] = None,
 ) -> dict[str, Any]:
     service = _service(container)
-    point = vantage or service.accounting_vantage
+    point = vantage or service.effective_vantage
     repo = _flows(container)
     return {
         "vantage": point,
         "minutes": minutes,
         "totals": await repo.totals(minutes=minutes, vantage=point),
         "subscribers": await repo.top_subscribers(minutes=minutes, vantage=point, limit=limit),
+    }
+
+
+@router.get("/netflow/vantages", summary="Traffic seen at each vantage point")
+async def vantages(
+    container: ContainerDep,
+    minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
+) -> dict[str, Any]:
+    """Les DEUX points de mesure cote a cote : sortie internet et PoP.
+
+    Ils voient le meme trafic a deux endroits ; les montrer ensemble dit
+    tout de suite si l'un des deux manque (aucun routeur passerelle declare,
+    export absent d'un PoP), et lequel sert au decompte.
+    """
+    service = _service(container)
+    repo = _flows(container)
+    exporteurs = list(service.exporters.values())
+    actifs = service.active_vantages()
+    points = []
+    for point in ("edge", "pop"):
+        points.append(
+            {
+                "vantage": point,
+                "exporters": sum(1 for e in exporteurs if e.vantage == point and e.enabled),
+                "active": point in actifs,
+                "totals": await repo.totals(minutes=minutes, vantage=point),
+            }
+        )
+    return {
+        "minutes": minutes,
+        "accounting": service.effective_vantage,
+        "configured": service.accounting_vantage,
+        "points": points,
     }
 
 
@@ -234,7 +267,7 @@ async def subscriber_series(
     window: TimeRangeDep,
     vantage: Annotated[Vantage | None, Query()] = None,
 ) -> list[dict[str, Any]]:
-    point = vantage or _service(container).accounting_vantage
+    point = vantage or _service(container).effective_vantage
     return await _flows(container).subscriber_series(
         subscriber_id=subscriber_id,
         start=window.start,

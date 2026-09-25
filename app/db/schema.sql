@@ -912,6 +912,11 @@ ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS city      TEXT;
 ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS region    TEXT;
 ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS latitude  DOUBLE PRECISION;
 ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+-- Relocalisation : une adresse nommee mais restee SANS POSITION (service de
+-- localisation limite ou muet a ce moment-la) est redemandee plus tard, un
+-- nombre borne de fois.
+ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS geo_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE ip_intel ADD COLUMN IF NOT EXISTS geo_tried_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_ip_intel_service ON ip_intel (service);
 CREATE INDEX IF NOT EXISTS idx_ip_intel_category ON ip_intel (category);
