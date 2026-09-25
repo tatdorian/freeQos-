@@ -1596,8 +1596,8 @@ Twitch, un CDN, un fournisseur de nuage — et c'est de là que se posent les re
 |---|---|---|
 | **Catalogue embarqué** | Les blocs publiés par les opérateurs de service eux-mêmes (Netflix, Google, Twitch, Meta, les CDN…) | Rien. Instantané, et **fonctionne sur une VM coupée d'internet** |
 | **Nom inverse (PTR)** | Suit un service qui **change de préfixe**, distingue YouTube du reste de Google, reconnaît un cache hébergé chez vous | Une requête DNS par adresse **nouvelle**, mise en cache ensuite |
-| **RDAP** | Organisation, numéro d'AS, pays, bloc annoncé | Un appel HTTP sortant. **Coupé par défaut** |
-| **Géolocalisation** | Pays, région, ville, coordonnées | Une base MaxMind **locale** si `IPFINDER_GEOIP_DB` la désigne (aucun appel sortant), sinon un service HTTP. **Coupé par défaut** |
+| **RDAP** | Organisation, numéro d'AS, pays, bloc annoncé | Un appel HTTP sortant. Actif par défaut (`IPFINDER_RDAP_ENABLED`) |
+| **Géolocalisation** | Pays, région, ville, coordonnées | Une base MaxMind **locale** si `IPFINDER_GEOIP_DB` la désigne (aucun appel sortant), sinon un service HTTP. Actif par défaut (`IPFINDER_GEOIP_ENABLED`) |
 
 La fiche d'une adresse donne : **domaine** (`wanadoo.fr` plutôt que
 `lfbn-lyo-1-878-160.w86-194.abo.wanadoo.fr`, illisible), nom inverse complet, service
@@ -1655,7 +1655,9 @@ redemandée à chaque passage, pour toujours (`IPFINDER_MAX_ATTEMPTS` borne les 
 |---|---|---|
 | **Connexions en cours** | « Qu'est-ce que ce client fait *là, maintenant* » | L'agrégat **en mémoire** du collecteur : la seule vue réellement en direct. Elle se vide à chaque écriture de fenêtre puis se remplit — ce n'est pas une panne |
 | **De quels services vient le trafic** | « Qui fait du streaming sur ce secteur » | La base, sur la période choisie |
-| **Adresses atteintes** | La fiche complète d'une adresse : nom inverse, service **et à quel titre**, organisation, AS, pays, et **la liste nominative des abonnés qui la joignent** | La base + le catalogue, recalculé à la volée |
+| **Trouver une IP** | « Cette adresse (ou ce nom de domaine), c'est qui et c'est où ? » — **n'importe laquelle**, vue ou non sur le réseau : service, organisation, AS, ville, coordonnées, mini-carte, et qui la joint | Une analyse à la demande avec **les seules sources autorisées**. Rien n'est écrit en base |
+| **Où va le trafic** | Une carte du monde (un cercle par lieu, surface = volume ; molette pour zoomer, clic pour le détail) et le volume par pays, **dont la part non localisée** | La base. Le fond de carte (Natural Earth 1:110m, domaine public) est servi par le contrôleur : **aucune tuile téléchargée** |
+| **Adresses atteintes** | La fiche complète d'une adresse : nom inverse, service **et à quel titre**, organisation, AS, pays, ville, et **la liste nominative des abonnés qui la joignent** | La base + le catalogue, recalculé à la volée |
 
 La part `non identifié` est affichée **comme les autres**. Une page qui ne montrerait que
 ce qu'elle sait nommer laisserait croire que tout est reconnu, et la part réellement
@@ -1912,6 +1914,8 @@ le dit.
 | `GET` | `/api/v1/netflow/destinations` | Adresses atteintes sur la période, déjà nommées, + la répartition par service |
 | `GET` | `/api/v1/netflow/destinations/{ip}` | **Fiche d'une adresse** : nom inverse, service et à quel titre, organisation, AS, pays, et qui la joint |
 | `POST` | `/api/v1/netflow/destinations/{ip}/resolve` | Relancer l'analyse d'une adresse |
+| `GET` | `/api/v1/netflow/locations` | **Où va le trafic** : volume par lieu (points de la carte) et par pays, + ce qui n'est pas localisé |
+| `GET` | `/api/v1/netflow/lookup/{ip ou nom}` | **Trouver une IP** : analyse à la demande d'une adresse ou d'un nom de domaine, sans rien écrire |
 | `GET` | `/api/v1/netflow/catalogue` | Les services que le contrôleur sait reconnaître, et ce qu'il faut savoir avant de restreindre |
 | `GET` | `/api/v1/netflow/intel` · `POST /intel/run` | État de l'identification / nommer les adresses en attente tout de suite |
 | `GET` · `POST` | `/api/v1/traffic-rules` | **Restrictions de trafic** : lire / enregistrer une règle (**n'écrit rien sur les routeurs**) |

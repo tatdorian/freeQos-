@@ -3206,3 +3206,65 @@ async def test_un_client_declare_sur_une_seule_adresse_n_est_plus_propose(
 
     restants = [h["address"] for h in await depot.hosts(limit=10)]
     assert restants == ["172.16.9.9"], f"encore proposes a tort : {restants}"
+
+
+async def test_les_destinations_se_regroupent_par_lieu(database: Database) -> None:
+    """La carte : un point par lieu, les pays au complet, et ce qui n'est pas
+    localise rendu A PART plutot qu'ecarte -- sans quoi la carte laisserait
+    croire que tout le trafic y figure."""
+    from app.db.destinations_repo import DestinationsRepository
+
+    async with database.pool.acquire() as conn:
+        await conn.execute("TRUNCATE flow_destinations, ip_intel")
+        await conn.executemany(
+            "INSERT INTO ip_intel (address, service, category, org, country, city, "
+            "latitude, longitude) VALUES ($1::inet, $2, $3, $4, $5, $6, $7, $8)",
+            [
+                ("45.57.0.1", "netflix", "streaming", "Netflix", "FR", "Paris", 48.8566, 2.3522),
+                # Meme centre de donnees, a quelques metres : UN seul point.
+                ("45.57.0.2", "netflix", "streaming", "Netflix", "FR", "Paris", 48.8571, 2.3519),
+                ("8.8.8.8", None, None, "Google", "US", "Mountain View", 37.39, -122.08),
+                ("1.2.3.4", None, None, None, None, None, None, None),
+            ],
+        )
+        await conn.executemany(
+            "INSERT INTO flow_destinations (client, address, down_bytes, up_bytes, flows) "
+            "VALUES ($1::inet, $2::inet, $3, $4, 1)",
+            [
+                ("10.0.0.2", "45.57.0.1", 5_000, 100),
+                ("10.0.0.3", "45.57.0.1", 3_000, 100),
+                ("10.0.0.2", "45.57.0.2", 1_000, 0),
+                ("10.0.0.2", "8.8.8.8", 500, 50),
+                ("10.0.0.4", "1.2.3.4", 700, 0),
+            ],
+        )
+
+    repo = DestinationsRepository(database.pool)
+    lieux = await repo.by_location(minutes=60)
+
+    paris, mv = lieux["points"]
+    assert paris["city"] == "Paris"
+    assert paris["latitude"] == 48.86 and paris["longitude"] == 2.35
+    assert paris["addresses"] == 2
+    assert paris["clients"] == 2
+    assert paris["down_bytes"] == 9_000
+    assert paris["services"] == ["netflix"]
+    # Les adresses les plus lourdes d'abord, sans doublon.
+    assert paris["top_addresses"] == ["45.57.0.1", "45.57.0.2"]
+    assert mv["country"] == "US"
+
+    pays = {c["country"]: c for c in lieux["countries"]}
+    assert pays["FR"]["cities"] == 1
+    assert pays[None]["down_bytes"] == 700
+    assert lieux["unlocated"] == {"addresses": 1, "bytes": 700}
+
+    # Les filtres de la page s'appliquent aussi a la carte.
+    seuls = await repo.by_location(minutes=60, category="streaming")
+    assert [p["city"] for p in seuls["points"]] == ["Paris"]
+    cherche = await repo.by_location(minutes=60, search="mountain")
+    assert [p["city"] for p in cherche["points"]] == ["Mountain View"]
+
+    # La liste des destinations porte desormais la position.
+    top = await repo.top(minutes=60)
+    assert {d["address"]: d["city"] for d in top}["45.57.0.1"] == "Paris"
+    assert top[0]["latitude"] == 48.8566

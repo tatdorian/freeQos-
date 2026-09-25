@@ -7,8 +7,11 @@ demande une cle.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
+import re
+import socket
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
@@ -31,6 +34,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["traffic (netflow)"])
 
 Vantage = Literal["edge", "pop", "unknown"]
+
+#: Un nom de domaine plausible : des etiquettes separees par des points. Tout le
+#: reste est refuse AVANT d'atteindre le resolveur.
+_NOM_DE_DOMAINE = re.compile(r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
 
 
 class ExporterInput(BaseModel):
@@ -349,6 +356,140 @@ async def destinations(
     }
 
 
+@router.get("/netflow/locations", summary="Where the traffic goes: volume by place and country")
+async def locations(
+    container: ContainerDep,
+    minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
+    category: Annotated[str | None, Query(max_length=64)] = None,
+    q: Annotated[
+        str | None, Query(max_length=128, description="Address, name, city or country")
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 300,
+) -> dict[str, Any]:
+    """Les destinations placees sur la carte, et ce qui ne peut pas l'etre.
+
+    ``geoip_enabled`` est rendu avec : une carte vide parce que la
+    localisation est coupee et une carte vide parce que rien n'a ete atteint
+    ne demandent pas le meme geste.
+    """
+    lieux = await _destinations(container).by_location(
+        minutes=minutes, category=category, search=q, limit=limit
+    )
+    intel = container.intel
+    return {
+        "minutes": minutes,
+        "geoip_enabled": bool(intel is not None and intel.geoip_enabled),
+        **lieux,
+    }
+
+
+#: Au-dela, une recherche par nom attend un resolveur DNS qui ne repondra pas.
+LOOKUP_DNS_TIMEOUT_S = 3.0
+
+
+async def _adresses_du_nom(nom: str) -> list[str]:
+    """Les adresses d'un nom de domaine, IPv4 d'abord, sans doublon."""
+    boucle = asyncio.get_running_loop()
+    try:
+        reponses = await asyncio.wait_for(
+            boucle.getaddrinfo(nom, None, proto=socket.IPPROTO_TCP),
+            timeout=LOOKUP_DNS_TIMEOUT_S,
+        )
+    except (TimeoutError, OSError):
+        return []
+    adresses: list[str] = []
+    for famille in (socket.AF_INET, socket.AF_INET6):
+        for fam, *_reste, sockaddr in reponses:
+            adresse = str(sockaddr[0])
+            if fam == famille and adresse not in adresses:
+                adresses.append(adresse)
+    return adresses
+
+
+@router.get("/netflow/lookup/{query}", summary="Find an IP: who holds it and where it is")
+async def lookup(
+    container: ContainerDep,
+    query: Annotated[str, Path(min_length=1, max_length=253)],
+    minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 1440,
+) -> dict[str, Any]:
+    """N'IMPORTE QUELLE adresse, vue ou non sur le reseau -- ou un nom de domaine.
+
+    Les autres routes ne parlent que de ce que les clients ont deja atteint.
+    Celle-ci repond a "cette adresse, c'est qui et c'est ou ?" a la demande :
+    catalogue, nom inverse, registre et localisation, AVEC LES SEULES SOURCES
+    QUE L'EXPLOITANT A AUTORISEES. Rien n'est ecrit : consulter une adresse ne
+    doit pas la faire entrer dans l'historique du reseau.
+    """
+    saisie = query.strip()
+    resolu_depuis: str | None = None
+    candidates: list[str] = []
+    try:
+        adresse = str(ipaddress.ip_address(saisie))
+    except ValueError:
+        nom = saisie.rstrip(".").lower()
+        if not _NOM_DE_DOMAINE.fullmatch(nom):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"invalid address or domain name: {saisie}",
+            ) from None
+        candidates = await _adresses_du_nom(nom)
+        if not candidates:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"{nom} does not resolve to any address",
+            ) from None
+        adresse = candidates[0]
+        resolu_depuis = nom
+
+    routable = ipfinder.is_routable(adresse)
+    catalogue = ipfinder.match_prefix(adresse).to_dict()
+    connu: dict[str, Any] | None = None
+    vu: dict[str, Any] = {}
+    if container.destinations_repo is not None:
+        connu = await container.destinations_repo.get_intel(adresse)
+        fiche = await container.destinations_repo.detail(adresse, minutes=minutes)
+        vu = {"totals": fiche.get("totals") or {}, "clients": fiche.get("clients") or []}
+
+    intel = container.intel
+    analyse: dict[str, Any] | None = None
+    if routable and intel is not None and intel.enabled:
+        trouve = await intel.analyse(adresse)
+        analyse = {
+            "hostname": trouve.hostname,
+            **trouve.verdict.to_dict(),
+            **{
+                cle: trouve.registry.get(cle)
+                for cle in (
+                    "org",
+                    "asn",
+                    "country",
+                    "city",
+                    "region",
+                    "latitude",
+                    "longitude",
+                    "network",
+                )
+            },
+        }
+    return {
+        "query": saisie,
+        "address": adresse,
+        "resolved_from": resolu_depuis,
+        "other_addresses": candidates[1:8],
+        "routable": routable,
+        "catalogue": catalogue,
+        "stored": connu,
+        "live": analyse,
+        "seen": vu,
+        "sources": {
+            "enabled": bool(intel is not None and intel.enabled),
+            "rdns": bool(intel is not None and intel.rdns_enabled),
+            "rdap": bool(intel is not None and intel.rdap_enabled),
+            "geoip": bool(intel is not None and intel.geoip_enabled),
+        },
+    }
+
+
 @router.get(
     "/netflow/destinations/{address}",
     summary="Detailed record of a destination reached",
@@ -446,6 +587,8 @@ async def connections(
             ligne["category"] = connu.get("category")
             ligne["source"] = connu.get("source")
             ligne["org"] = connu.get("org")
+            ligne["country"] = connu.get("country")
+            ligne["city"] = connu.get("city")
             ligne["pending"] = connu.get("resolved_at") is None
     return {
         "window_open": service.listening,

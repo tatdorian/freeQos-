@@ -69,6 +69,10 @@ class DestinationsRepository:
                        i.org,
                        i.asn,
                        i.country,
+                       i.city,
+                       i.region,
+                       i.latitude,
+                       i.longitude,
                        i.resolved_at,
                        count(DISTINCT d.client)            AS clients,
                        count(DISTINCT d.subscriber_id)     AS subscribers,
@@ -92,7 +96,8 @@ class DestinationsRepository:
                        OR coalesce(i.hostname, '') ILIKE '%' || $5 || '%'
                        OR coalesce(i.org, '') ILIKE '%' || $5 || '%')
                 GROUP BY d.address, i.hostname, i.service, i.category, i.source,
-                         i.org, i.asn, i.country, i.resolved_at
+                         i.org, i.asn, i.country, i.city, i.region, i.latitude,
+                         i.longitude, i.resolved_at
                 ORDER BY (sum(d.down_bytes) + sum(d.up_bytes)) DESC
                 LIMIT $6
                 """,
@@ -268,6 +273,116 @@ class DestinationsRepository:
         if efface:
             logger.info("%d conversation(s) d'exploitation effacee(s) de l'historique", efface)
         return efface
+
+    async def by_location(
+        self,
+        *,
+        minutes: int = 60,
+        category: str | None = None,
+        search: str | None = None,
+        limit: int = 300,
+    ) -> dict[str, Any]:
+        """OU VA LE TRAFIC : volume par lieu, et par pays.
+
+        Les points sont regroupes au centieme de degre (environ un kilometre) :
+        cent adresses d'un meme centre de donnees font UN point sur la carte,
+        pas cent points superposes illisibles.
+
+        Ce qui n'est pas localise est RENDU en total a part plutot qu'ecarte :
+        une carte qui ne montrerait que ce qu'elle sait placer laisserait croire
+        que tout le trafic y figure.
+        """
+        filtres = """
+            d.last_seen >= now() - make_interval(mins => $1)
+            AND ($2::text IS NULL OR i.category = $2)
+            AND ($3::text IS NULL
+                 OR host(d.address) ILIKE '%' || $3 || '%'
+                 OR coalesce(i.hostname, '') ILIKE '%' || $3 || '%'
+                 OR coalesce(i.org, '') ILIKE '%' || $3 || '%'
+                 OR coalesce(i.city, '') ILIKE '%' || $3 || '%'
+                 OR coalesce(i.country, '') ILIKE '%' || $3 || '%'
+                 OR coalesce(i.service, '') ILIKE '%' || $3 || '%')
+        """
+        async with self._pool.acquire() as conn:
+            points = await conn.fetch(
+                f"""
+                SELECT i.country,
+                       i.city,
+                       i.region,
+                       round(i.latitude::numeric, 2)::float8  AS latitude,
+                       round(i.longitude::numeric, 2)::float8 AS longitude,
+                       count(DISTINCT d.address)              AS addresses,
+                       count(DISTINCT d.client)               AS clients,
+                       sum(d.down_bytes)::bigint              AS down_bytes,
+                       sum(d.up_bytes)::bigint                AS up_bytes,
+                       array_remove(array_agg(DISTINCT i.service), NULL) AS services,
+                       array_remove(array_agg(DISTINCT i.org), NULL)     AS orgs,
+                       (array_agg(host(d.address)
+                                  ORDER BY d.down_bytes + d.up_bytes DESC))[1:40]
+                                                              AS top_addresses
+                FROM flow_destinations d
+                JOIN ip_intel i ON i.address = d.address
+                WHERE {filtres}
+                  AND i.latitude IS NOT NULL AND i.longitude IS NOT NULL
+                GROUP BY 1, 2, 3, 4, 5
+                ORDER BY (sum(d.down_bytes) + sum(d.up_bytes)) DESC
+                LIMIT $4
+                """,  # noqa: S608 - filtres est une constante, pas une saisie
+                minutes,
+                category,
+                search,
+                limit,
+            )
+            pays = await conn.fetch(
+                f"""
+                SELECT i.country,
+                       count(DISTINCT d.address)              AS addresses,
+                       count(DISTINCT d.client)               AS clients,
+                       count(DISTINCT i.city)                 AS cities,
+                       sum(d.down_bytes)::bigint              AS down_bytes,
+                       sum(d.up_bytes)::bigint                AS up_bytes
+                FROM flow_destinations d
+                LEFT JOIN ip_intel i ON i.address = d.address
+                WHERE {filtres}
+                GROUP BY i.country
+                ORDER BY (sum(d.down_bytes) + sum(d.up_bytes)) DESC
+                """,  # noqa: S608
+                minutes,
+                category,
+                search,
+            )
+            hors_carte = await conn.fetchrow(
+                f"""
+                SELECT count(DISTINCT d.address)                    AS addresses,
+                       coalesce(sum(d.down_bytes + d.up_bytes), 0)::bigint AS bytes
+                FROM flow_destinations d
+                LEFT JOIN ip_intel i ON i.address = d.address
+                WHERE {filtres}
+                  AND (i.latitude IS NULL OR i.longitude IS NULL)
+                """,  # noqa: S608
+                minutes,
+                category,
+                search,
+            )
+        sortie_points = []
+        for row in points:
+            point = dict(row)
+            # Le tableau est trie par volume de CONVERSATION : une meme adresse
+            # y revient autant de fois qu'elle a de clients. On garde l'ordre,
+            # sans les doublons.
+            vues: list[str] = []
+            for adresse in point.pop("top_addresses") or []:
+                if adresse not in vues:
+                    vues.append(adresse)
+            point["top_addresses"] = vues[:5]
+            point["services"] = sorted(point["services"] or [])
+            point["orgs"] = sorted(point["orgs"] or [])[:5]
+            sortie_points.append(point)
+        return {
+            "points": sortie_points,
+            "countries": [dict(row) for row in pays],
+            "unlocated": dict(hors_carte) if hors_carte is not None else {},
+        }
 
     async def by_service(self, *, minutes: int = 60, limit: int = 30) -> list[dict[str, Any]]:
         """Volume par service reconnu. C'est la reponse a "qui fait du streaming".
