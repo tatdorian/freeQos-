@@ -24,7 +24,10 @@ services:
       retries: 20
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim}
     container_name: freeqos-app
     restart: unless-stopped
     depends_on:

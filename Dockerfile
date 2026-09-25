@@ -1,4 +1,8 @@
-FROM python:3.11-slim AS base
+# Image de base surchargeable (PYTHON_IMAGE dans .env) : si Docker Hub est
+# injoignable depuis le serveur (timeout sur registry-1.docker.io), pointer vers
+# un miroir, ex. mirror.gcr.io/library/python:3.11-slim.
+ARG PYTHON_IMAGE=python:3.11-slim
+FROM ${PYTHON_IMAGE} AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
