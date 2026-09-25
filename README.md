@@ -125,6 +125,15 @@ open http://localhost:8000/                # tableau de bord
 open http://localhost:8000/docs            # API
 ```
 
+> **`failed to solve: DeadlineExceeded … registry-1.docker.io … i/o timeout`** : le serveur
+> n'atteint pas Docker Hub (pare-feu, proxy, DNS, IPv6 cassé) — ce n'est pas le code. Le build
+> échoue alors, mais un simple `docker compose up -d` **relance l'ancienne image** sans le
+> dire : vous tournez sur la version précédente. Vérifiez l'accès
+> (`curl -sI https://registry-1.docker.io/v2/` doit répondre `401`), déclarez le proxy au
+> démon Docker s'il y en a un, ou passez par un miroir dans `.env` :
+> `PYTHON_IMAGE=mirror.gcr.io/library/python:3.11-slim`, puis relancez
+> `docker compose up -d --build`.
+
 Sans routeur sous la main, les providers `mock` suffisent à faire tourner toute la chaîne :
 `BACKHAUL_PROVIDER=mock` et `PLAN_PROVIDER=mock` (valeurs par défaut).
 
