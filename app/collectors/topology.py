@@ -66,6 +66,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.collectors.parsing import parse_bitrate, parse_flag
+from app.services.vlan_sites import site_name
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,11 @@ KIND_STATIC = "static"
 # (il n'a ni plan, ni contrat, ni file).
 KIND_CANDIDATE = "candidate"
 KIND_UNKNOWN = "unknown"
+# Un VLAN qui porte des clients declares : un SITE derriere son routeur (un
+# village, un relais), pas un equipement. Il existe dans l'arbre pour que le
+# lien routeur -> VLAN porte le debit MESURE de l'interface VLAN, et que ses
+# clients pendent sous lui plutot que directement sous le routeur.
+KIND_VLAN = "vlan"
 
 # Role DECLARE dans l'inventaire -> nature dans le graphe.
 #
@@ -1431,11 +1437,16 @@ def static_client_node_key(reference: str) -> str:
     return f"static:{reference}"
 
 
+def vlan_node_key(router_name: str, vlan_id: int) -> str:
+    return f"vlan:{router_name}:{vlan_id}"
+
+
 def attach_static_clients(
     snapshot: TopologySnapshot,
     clients: Sequence[Any],
     *,
     pop_keys: dict[str, str] | None = None,
+    vlan_sites: dict[str, tuple[str, str, int]] | None = None,
 ) -> int:
     """Pose les clients a IP fixe dans le graphe, sous leur secteur declare.
 
@@ -1448,6 +1459,14 @@ def attach_static_clients(
     Le rattachement vient de la fiche, pas d'une observation : ces clients n'ont
     pas de caller-id a joindre a une station UISP. A defaut de secteur declare,
     le client est pose sous son PoP -- moins precis, mais jamais faux.
+
+    UN CLIENT DECLARE PAR SON VLAN PEND SOUS CE VLAN. ``vlan_sites`` porte,
+    par reference de client, ``(routeur, interface VLAN, identifiant)`` tel
+    que la CONFIGURATION du routeur le resout. Le client est alors pose sous
+    une case VLAN, elle-meme reliee au routeur par un lien qui nomme
+    l'interface : ce lien affiche le debit que RouterOS compte sur ce VLAN,
+    au lieu d'un rattachement declare que personne ne mesure. Un secteur
+    declare dans la fiche reste prioritaire : c'est un choix de l'exploitant.
     """
     poses = 0
     for client in clients:
@@ -1475,6 +1494,12 @@ def attach_static_clients(
 
         secteur = str(getattr(client, "sector_key", "") or "")
         parent = secteur or (pop_keys or {}).get(str(getattr(client, "pop_name", "") or ""), "")
+        site = (vlan_sites or {}).get(reference)
+        if not secteur and site is not None:
+            routeur, interface, vlan_id = site
+            parent_routeur = router_node_key(routeur)
+            if parent_routeur in snapshot.nodes:
+                parent = _pose_vlan(snapshot, routeur, interface, vlan_id)
         if not parent or parent not in snapshot.nodes:
             # Secteur declare mais inconnu du graphe : le noeud existe quand
             # meme (l'operateur doit VOIR son client), simplement detache.
@@ -1496,6 +1521,42 @@ def attach_static_clients(
         if secteur:
             snapshot.subscriber_sectors[reference] = secteur
     return poses
+
+
+def _pose_vlan(snapshot: TopologySnapshot, router_name: str, interface: str, vlan_id: int) -> str:
+    """La case d'un VLAN client et son lien mesure vers le routeur.
+
+    Idempotent : deux clients du meme VLAN partagent la meme case et le meme
+    lien. Le lien porte ``interface`` et ``discovered_by`` = le routeur, c'est
+    ce qui lui fait afficher le debit de l'interface VLAN -- exactement comme
+    un lien decouvert affiche celui de son port.
+    """
+    cle = vlan_node_key(router_name, vlan_id)
+    if cle not in snapshot.nodes:
+        snapshot.add_node(
+            TopologyNode(
+                key=cle,
+                name=site_name(interface, vlan_id) or f"VLAN {vlan_id}",
+                kind=KIND_VLAN,
+                router_name=router_name,
+                attributes={
+                    "declared": True,
+                    "vlan_id": vlan_id,
+                    "vlan_interface": interface,
+                },
+            )
+        )
+    snapshot.add_link(
+        TopologyLink(
+            source_key=router_node_key(router_name),
+            target_key=cle,
+            kind=LINK_ETHERNET,
+            interface=interface,
+            discovered_by=router_name,
+            attributes={"vlan": True, "vlan_id": vlan_id},
+        )
+    )
+    return cle
 
 
 def candidate_node_key(router_name: str, address: str) -> str:

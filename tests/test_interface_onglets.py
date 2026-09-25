@@ -357,3 +357,13 @@ def test_les_services_localisent_les_adresses() -> None:
     assert "/netflow/locations" in JS
     assert "fetch('/static/world-110m.json')" in JS
     assert (RACINE / "static" / "world-110m.json").is_file()
+
+
+def test_l_arbre_connait_la_case_vlan() -> None:
+    """Un client declare par son VLAN pend sous une case VLAN : l'arbre doit la
+    nommer, la ranger, et ne pas recompter le client dans l'agregat de son site."""
+    for table in ("const KIND_LABEL", "const TOPO_RANG", "const ICONE"):
+        bloc = JS[JS.index(table) :]
+        assert "vlan:" in bloc[: bloc.index("};")], table
+    assert "topoStaticRates" in JS
+    assert "if (fiches.has(s.login)) return;" in JS
