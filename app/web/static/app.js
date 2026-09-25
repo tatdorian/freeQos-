@@ -190,10 +190,50 @@ function svgEl(name, attrs) {
   return node;
 }
 
+/** Plus petite valeur "ronde" (1, 2, 2,5, 5 x 10^n) superieure ou egale a v.
+ *
+ *  Une echelle graduee en 437 Mbps oblige a calculer ; graduee en 500 Mbps,
+ *  elle se lit d'un coup d'oeil. */
+function niceCeil(v) {
+  const n = Number(v) || 0;
+  if (n <= 0) return 1;
+  const puissance = Math.pow(10, Math.floor(Math.log10(n)));
+  for (const f of [1, 2, 2.5, 5, 10]) {
+    if (f * puissance >= n) return f * puissance;
+  }
+  return 10 * puissance;
+}
+
+/** Libelle d'heure adapte a la fenetre : l'heure seule suffit sur 24 h, les
+ *  secondes n'ont de sens que sur quelques minutes. */
+function tickClock(ts, spanMs) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (spanMs > 2 * 86400 * 1000) {
+    return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) + ' ' +
+      d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/** Maintenant / moyenne / pic d'une serie, pour le bandeau au-dessus du graphe. */
+function seriesSummary(values) {
+  const vals = values.filter((v) => isFinite(v));
+  if (!vals.length) return { now: 0, avg: 0, peak: 0 };
+  return {
+    now: vals[vals.length - 1],
+    avg: vals.reduce((a, b) => a + b, 0) / vals.length,
+    peak: Math.max(...vals),
+  };
+}
+
 /**
  * Graphe miroir : download au-dessus de l'axe, upload en dessous.
  * Cette forme rend immediatement lisible l'asymetrie d'un reseau d'acces,
  * bien plus qu'une superposition de deux courbes.
+ *
+ * Au-dessus, un bandeau MAINTENANT / MOYENNE / PIC par sens : c'est la question
+ * qu'on pose a un graphe de debit, et la lire sur la courbe demande de viser.
  */
 function renderThroughput(container, points, options) {
   const opt = options || {};
@@ -204,40 +244,66 @@ function renderThroughput(container, points, options) {
     return;
   }
 
-  const W = Math.max(320, container.clientWidth);
-  const H = 260;
-  const M = { top: 12, right: 12, bottom: 22, left: 62 };
-  const iw = W - M.left - M.right;
-  const ih = H - M.top - M.bottom;
-  const zeroY = M.top + ih / 2;
-
   const down = points.map((p) => Number(p.tx_bps) || 0);
   const up = points.map((p) => Number(p.rx_bps) || 0);
-  const peak = Math.max(1, ...down, ...up);
+  const sd = seriesSummary(down);
+  const su = seriesSummary(up);
+  const fig = (label, v) => '<div><span>' + label + '</span><b>' + esc(bpsText(v)) + '</b></div>';
+  const resume = document.createElement('div');
+  resume.className = 'chart-summary';
+  resume.innerHTML =
+    '<div class="cs d"><span class="cs-name"><i></i>' + esc(legende.down) + '</span>' +
+      fig('Now', sd.now) + fig('Average', sd.avg) + fig('Peak', sd.peak) + '</div>' +
+    '<div class="cs u"><span class="cs-name"><i></i>' + esc(legende.up) + '</span>' +
+      fig('Now', su.now) + fig('Average', su.avg) + fig('Peak', su.peak) + '</div>';
+  container.appendChild(resume);
+
+  const W = Math.max(320, container.clientWidth);
+  const H = 260;
+  const M = { top: 14, right: 14, bottom: 24, left: 70 };
+  const iw = W - M.left - M.right;
+  const ih = H - M.top - M.bottom;
+  // Une echelle arrondie PAR SENS, et une hauteur proportionnelle a chacune.
+  // Sur un reseau d'acces le montant pese souvent cinq fois moins que le
+  // descendant : une echelle commune laissait la moitie basse vide et la
+  // courbe montante ecrasee sur l'axe. Chaque moitie porte ses graduations.
+  const pd = niceCeil(Math.max(1, ...down));
+  const pu = niceCeil(Math.max(1, ...up));
+  const part = Math.max(0.55, Math.min(0.7, pd / (pd + pu)));
+  const hTop = ih * part;
+  const hBot = ih - hTop;
+  const zeroY = M.top + hTop;
 
   const x = (i) => M.left + (points.length === 1 ? iw / 2 : (i / (points.length - 1)) * iw);
-  const yDown = (v) => zeroY - (v / peak) * (ih / 2);
-  const yUp = (v) => zeroY + (v / peak) * (ih / 2);
+  const yDown = (v) => zeroY - (v / pd) * hTop;
+  const yUp = (v) => zeroY + (v / pu) * hBot;
 
   const svg = svgEl('svg', {
     class: 'chart', width: W, height: H, viewBox: '0 0 ' + W + ' ' + H,
   });
 
-  // Grille horizontale : 0, 50 % et 100 % du pic, de part et d'autre.
+  // Grille : 0, 50 % et 100 % de l'echelle arrondie, de part et d'autre.
   [0, 0.5, 1].forEach((f) => {
-    [yDown(peak * f), yUp(peak * f)].forEach((yy) => {
+    [yDown(pd * f), yUp(pu * f)].forEach((yy) => {
       svg.appendChild(svgEl('line', {
         class: f === 0 ? 'zero' : 'grid-line', x1: M.left, x2: W - M.right, y1: yy, y2: yy,
       }));
     });
     if (f > 0) {
-      const label = bpsText(peak * f);
-      [[yDown(peak * f), label], [yUp(peak * f), label]].forEach(([yy, text]) => {
+      [[yDown(pd * f), bpsText(pd * f)], [yUp(pu * f), bpsText(pu * f)]].forEach(([yy, text]) => {
         const t = svgEl('text', { class: 'axis-label', x: M.left - 8, y: yy + 3, 'text-anchor': 'end' });
         t.textContent = text;
         svg.appendChild(t);
       });
     }
+  });
+  // Le sens de chaque moitie, ecrit dans le graphe : plus besoin de chercher
+  // la legende pour savoir si le haut est le descendant.
+  [[M.top + 11, '↓ ' + legende.down, 'var(--down)'],
+    [M.top + ih - 4, '↑ ' + legende.up, 'var(--up)']].forEach(([yy, text, col]) => {
+    const t = svgEl('text', { class: 'axis-side', x: M.left + 6, y: yy, fill: col });
+    t.textContent = text;
+    svg.appendChild(t);
   });
 
   const area = (values, yFn) => {
@@ -251,19 +317,41 @@ function renderThroughput(container, points, options) {
 
   svg.appendChild(svgEl('path', { d: area(down, yDown), fill: 'var(--down-dim)' }));
   svg.appendChild(svgEl('path', { d: area(up, yUp), fill: 'var(--up-dim)' }));
-  svg.appendChild(svgEl('path', { d: line(down, yDown), fill: 'none', stroke: 'var(--down)', 'stroke-width': 1.7 }));
-  svg.appendChild(svgEl('path', { d: line(up, yUp), fill: 'none', stroke: 'var(--up)', 'stroke-width': 1.7 }));
+  svg.appendChild(svgEl('path', { d: line(down, yDown), fill: 'none', stroke: 'var(--down)', 'stroke-width': 1.8, 'stroke-linejoin': 'round' }));
+  svg.appendChild(svgEl('path', { d: line(up, yUp), fill: 'none', stroke: 'var(--up)', 'stroke-width': 1.8, 'stroke-linejoin': 'round' }));
 
-  // Axe des temps : trois reperes suffisent, davantage encombre.
-  [0, Math.floor(points.length / 2), points.length - 1].forEach((i) => {
-    if (i < 0 || !points[i]) return;
+  // Pic de chaque sens, marque et chiffre sur la courbe.
+  [[down, yDown, 'var(--down)', -7], [up, yUp, 'var(--up)', 14]].forEach(([vals, yFn, col, dy]) => {
+    const iMax = vals.indexOf(Math.max(...vals));
+    if (iMax < 0 || !vals[iMax]) return;
+    svg.appendChild(svgEl('circle', { cx: x(iMax), cy: yFn(vals[iMax]), r: 3, fill: col }));
     const t = svgEl('text', {
-      class: 'axis-label', x: x(i), y: H - 6,
-      'text-anchor': i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle',
+      class: 'peak-label', x: x(iMax), y: yFn(vals[iMax]) + dy, fill: col,
+      'text-anchor': x(iMax) > W - 80 ? 'end' : x(iMax) < M.left + 60 ? 'start' : 'middle',
     });
-    t.textContent = clock(points[i].bucket);
+    t.textContent = 'peak ' + bpsShort(vals[iMax]);
     svg.appendChild(t);
   });
+
+  // Axe des temps : un repere tous les ~110 px, avec une ligne verticale
+  // discrete pour situer une pointe sans compter les pixels.
+  const spanMs = new Date(points[points.length - 1].bucket) - new Date(points[0].bucket);
+  const nTicks = Math.max(2, Math.min(points.length, Math.floor(iw / 110) + 1));
+  const vus = new Set();
+  for (let k = 0; k < nTicks; k++) {
+    const i = Math.round((k / (nTicks - 1)) * (points.length - 1));
+    if (vus.has(i) || !points[i]) continue;
+    vus.add(i);
+    if (k > 0 && k < nTicks - 1) {
+      svg.appendChild(svgEl('line', { class: 'grid-line v', x1: x(i), x2: x(i), y1: M.top, y2: M.top + ih }));
+    }
+    const t = svgEl('text', {
+      class: 'axis-label', x: x(i), y: H - 6,
+      'text-anchor': k === 0 ? 'start' : k === nTicks - 1 ? 'end' : 'middle',
+    });
+    t.textContent = tickClock(points[i].bucket, spanMs);
+    svg.appendChild(t);
+  }
 
   const hoverLine = svgEl('line', { class: 'hover-line', y1: M.top, y2: M.top + ih, opacity: 0 });
   const hoverDot1 = svgEl('circle', { r: 3.5, fill: 'var(--down)', opacity: 0 });
@@ -476,7 +564,7 @@ function rttSevJs(ms) {
 
 /** Etat de la vue Files live : noeuds agreges, index abonnes, selection et
  *  branches depliees (conservees entre deux rafraichissements). */
-const exec = { nodes: [], subsById: {}, bloatById: {}, selected: null, expanded: new Set() };
+const exec = { nodes: [], subs: [], subsById: {}, bloatById: {}, selected: null, expanded: new Set() };
 
 /** Petit carre colore devant une valeur, signature visuelle de LibreQoS. */
 function sqCell(text, sev, title) {
@@ -592,16 +680,234 @@ async function loadExec() {
     exec.selected = exec.nodes.length ? { type: 'node', name: exec.nodes[0].name } : null;
   }
 
+  exec.subs = subs;
+  renderExecSummary(document.getElementById('exec-summary'));
+  renderExecLoad(document.getElementById('exec-load'));
   renderQueuePanels();
   renderNodeTable(document.getElementById('exec-nodes'));
+  renderExecLegend(document.getElementById('exec-legend'));
   renderHeatmap(document.getElementById('exec-heatmap'), heat);
-  renderExecSankey(document.getElementById('exec-sankey'), subs);
   document.getElementById('exec-count').textContent =
-    exec.nodes.length + ' node(s), ' + subs.length + ' circuit(s)';
+    exec.nodes.length + ' node(s), ' + subs.length + ' client(s)';
   renderExecNotice(rttState, firstError, {
     noNodes: exec.nodes.length === 0,
     topoOnly: fromTopo && exec.nodes.length > 0,
   });
+}
+
+/** Note d'experience d'un client : le score composite du serveur, ou le proxy
+ *  latence a defaut. null quand on ne sait rien -- jamais "bon" par defaut. */
+function clientScore(s) {
+  const note = qoeOf(s.subscriber_id);
+  if (note) return note.score;
+  return qoeScore(s.rtt_ms);
+}
+
+/** Taux d'utilisation d'un noeud : son debit descendant face a sa limite
+ *  effective (somme des plafonds poses). null sans limite connue. */
+function nodeUtil(n) {
+  if (n.synthetic || !n.effDown) return null;
+  return pct(n.tx, n.effDown);
+}
+
+/** Mediane d'une liste de nombres (les null sont ignores). */
+function median(values) {
+  const v = values.filter((x) => x !== null && x !== undefined && isFinite(x))
+    .map(Number).sort((a, b) => a - b);
+  if (!v.length) return null;
+  const m = Math.floor(v.length / 2);
+  return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+}
+
+/** Lien qui selectionne un noeud dans le tableau (et ouvre ses panneaux). */
+function nodeLink(name) {
+  return '<a href="#" data-exec-node="' + esc(name) + '">' + esc(name) + '</a>';
+}
+
+function brancherLiensNoeuds(host) {
+  host.querySelectorAll('[data-exec-node]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      exec.selected = { type: 'node', name: a.dataset.execNode };
+      renderQueuePanels();
+      renderNodeTable(document.getElementById('exec-nodes'));
+      const cible = document.getElementById('lq-heading');
+      if (cible) cible.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  });
+}
+
+/** LE VERDICT EN UNE LIGNE, PUIS LES QUATRE CHIFFRES QUI LE FONDENT.
+ *
+ *  L'ecran executif doit repondre a "est-ce que ca va ?" avant qu'on lise un
+ *  tableau. Le verdict ne dit que des faits mesures : un noeud a plus de 90 %
+ *  de sa limite, un client dont la note est mauvaise. Rien de mesure ne donne
+ *  un verdict neutre, jamais un "tout va bien" invente. */
+function renderExecSummary(host) {
+  if (!host) return;
+  const nodes = exec.nodes.filter((n) => !n.synthetic);
+  const subs = exec.subs || [];
+  const down = nodes.reduce((a, n) => a + n.tx, 0);
+  const up = nodes.reduce((a, n) => a + n.rx, 0);
+
+  // Capacite partagee (backhauls) des noeuds qui en declarent une.
+  let capa = 0;
+  nodes.forEach((n) => {
+    const env = (exec.envByPop || {})[n.name] || {};
+    capa += (env.capacity || env.nominal || 0) * 1e6;
+  });
+  const limite = nodes.reduce((a, n) => a + n.effDown, 0);
+
+  const notes = { good: 0, fair: 0, poor: 0, none: 0 };
+  subs.forEach((s) => {
+    const sc = clientScore(s);
+    if (sc === null) notes.none += 1;
+    else if (sc >= 80) notes.good += 1;
+    else if (sc >= 50) notes.fair += 1;
+    else notes.poor += 1;
+  });
+
+  const charges = nodes.map((n) => ({ n, u: nodeUtil(n) })).filter((x) => x.u !== null)
+    .sort((a, b) => b.u - a.u);
+  const satures = charges.filter((x) => x.u >= 90);
+  const occupes = charges.filter((x) => x.u >= 70 && x.u < 90);
+  const rttMed = median(subs.map((s) => s.rtt_ms));
+  const pireRtt = nodes.filter((n) => n.rttMax !== null).sort((a, b) => b.rttMax - a.rttMax)[0];
+
+  // ---- le verdict
+  const faits = [];
+  const liste = (xs) => xs.slice(0, 3).map((x) => nodeLink(x.n.name)).join(', ') +
+    (xs.length > 3 ? ' +' + (xs.length - 3) : '');
+  if (satures.length) {
+    faits.push(['crit', satures.length + ' node(s) above 90% of their limit: ' + liste(satures)]);
+  }
+  if (notes.poor) faits.push(['crit', notes.poor + ' client(s) with a poor experience']);
+  if (occupes.length) {
+    faits.push(['warn', occupes.length + ' node(s) between 70 and 90%: ' + liste(occupes)]);
+  }
+  if (pireRtt && pireRtt.rttMax >= 100) {
+    faits.push(['warn', 'High latency on ' + nodeLink(pireRtt.name) + ': ' +
+      Math.round(pireRtt.rttMax) + ' ms']);
+  }
+  let verdict;
+  if (!nodes.length) {
+    verdict = '<div class="verdict none"><span class="v-dot"></span><div>' +
+      '<b>No traffic measured yet.</b></div></div>';
+  } else if (!faits.length) {
+    verdict = '<div class="verdict ok"><span class="v-dot"></span><div>' +
+      '<b>All good.</b> No saturated node, no client with a poor experience.</div></div>';
+  } else {
+    const pire = faits.some((f) => f[0] === 'crit') ? 'crit' : 'warn';
+    verdict = '<div class="verdict ' + pire + '"><span class="v-dot"></span><div>' +
+      '<b>' + (pire === 'crit' ? 'Needs attention.' : 'Worth watching.') + '</b>' +
+      '<ul>' + faits.map((f) => '<li><span class="sq ' + f[0] + '"></span>' + f[1] + '</li>')
+        .join('') + '</ul></div></div>';
+  }
+
+  // ---- les quatre chiffres
+  const b = bps(down);
+  const refCapa = capa || limite;
+  const partCapa = refCapa ? pct(down, refCapa) : null;
+  const tuile1 = '<div class="card stat down"><div class="label">Traffic now</div>' +
+    '<div class="value">' + esc(b.v) + '<span class="unit">' + esc(b.u) + '</span></div>' +
+    '<div class="sub"><span style="color:var(--up)">&uarr; ' + esc(bpsText(up)) + '</span>' +
+    (partCapa === null ? '' : ' &middot; ' + partCapa.toFixed(0) + '% of ' +
+      (capa ? 'backhaul capacity' : 'the sum of limits')) + '</div>' +
+    (partCapa === null ? '' : meter(down, refCapa)) + '</div>';
+
+  // La part "bonne" se calcule sur les clients NOTES : un client sans mesure
+  // n'est ni bon ni mauvais, il est inconnu, et il est compte a part.
+  const connues = notes.good + notes.fair + notes.poor;
+  const barre = (k, n) => n ? '<span class="qbar-seg ' + k + '" style="flex:' + n + '" title="' +
+    n + ' ' + k + '"></span>' : '';
+  const tuile2 = '<div class="card stat"><div class="label">Client experience</div>' +
+    (connues
+      ? '<div class="value">' + Math.round((notes.good / connues) * 100) +
+        '<span class="unit">% good</span></div>'
+      : '<div class="value">-</div>') +
+    '<div class="qbar">' + barre('ok', notes.good) + barre('warn', notes.fair) +
+      barre('crit', notes.poor) + barre('none', notes.none) + '</div>' +
+    '<div class="sub qlegend"><span><i class="sq ok"></i>' + notes.good + ' good</span>' +
+      '<span><i class="sq warn"></i>' + notes.fair + ' fair</span>' +
+      '<span><i class="sq crit"></i>' + notes.poor + ' poor</span>' +
+      (notes.none ? '<span><i class="sq none"></i>' + notes.none + ' unknown</span>' : '') +
+    '</div></div>';
+
+  const top = charges[0];
+  const tuile3 = '<div class="card stat' + (top && top.u >= 90 ? ' crit' : top && top.u >= 70 ? ' warn' : '') +
+    '"><div class="label">Busiest node</div>' +
+    (top
+      ? '<div class="value">' + top.u.toFixed(0) + '<span class="unit">%</span></div>' +
+        '<div class="sub">' + nodeLink(top.n.name) + ' &middot; ' + esc(bpsText(top.n.tx)) +
+          ' of ' + esc(mbps(top.n.effDown / 1e6)) + '</div>' + meter(top.n.tx, top.n.effDown)
+      : '<div class="value">-</div><div class="sub">no limit known</div>') + '</div>';
+
+  const tuile4 = '<div class="card stat"><div class="label">Latency (median)</div>' +
+    (rttMed === null
+      ? '<div class="value">-</div><div class="sub">RTT probe off or no reply</div>'
+      : '<div class="value" style="color:' + (rttMed < 30 ? 'var(--ok)' : rttMed < 100 ? 'var(--warn)' : 'var(--crit)') +
+        '">' + Math.round(rttMed) + '<span class="unit">ms</span></div>' +
+        '<div class="sub">' + (pireRtt ? 'worst: ' + nodeLink(pireRtt.name) + ' ' +
+          Math.round(pireRtt.rttMax) + ' ms' : '') + '</div>') + '</div>';
+
+  host.innerHTML = verdict + '<div class="grid stats">' + tuile1 + tuile2 + tuile3 + tuile4 + '</div>';
+  brancherLiensNoeuds(host);
+}
+
+/** CHARGE PAR NOEUD : une barre par noeud, a l'echelle de sa propre limite.
+ *
+ *  Remplace le Sankey, qui n'avait qu'une source et ne disait donc qu'une
+ *  proportion, sans la limite. Ici chaque barre dit ce qui passe, ce qui est
+ *  permis, et la part que ca represente -- trois chiffres qu'on lisait avant
+ *  dans trois colonnes differentes. */
+function renderExecLoad(host) {
+  if (!host) return;
+  const nodes = exec.nodes.filter((n) => !n.synthetic);
+  if (!nodes.length) {
+    host.innerHTML = '<div class="empty">No node with measured traffic.</div>';
+    return;
+  }
+  const total = nodes.reduce((a, n) => a + n.tx, 0) || 1;
+  host.innerHTML = '<div class="loadbars">' + nodes.slice(0, 20).map((n) => {
+    const u = nodeUtil(n);
+    const sev = u === null ? 'none' : severity(u);
+    const larg = u === null ? pct(n.tx, total) || 0 : Math.min(100, u);
+    const env = (exec.envByPop || {})[n.name] || {};
+    const capa = (env.capacity || env.nominal || 0) * 1e6;
+    const repere = capa && n.effDown ? Math.min(100, (capa / n.effDown) * 100) : null;
+    return '<div class="lb-row" data-exec-row="' + esc(n.name) + '">' +
+      '<div class="lb-name">' + nodeLink(n.name) +
+        '<span class="hint">' + n.circuits + ' client(s)</span></div>' +
+      '<div class="lb-track" title="' + esc(bpsText(n.tx) + ' of ' + mbps(n.effDown / 1e6)) + '">' +
+        '<div class="lb-fill ' + sev + '" style="width:' + larg.toFixed(1) + '%"></div>' +
+        (repere !== null && repere < 100
+          ? '<div class="lb-cap" style="left:' + repere.toFixed(1) + '%" title="Backhaul capacity ' +
+            esc(mbps(capa / 1e6)) + '"></div>' : '') +
+      '</div>' +
+      '<div class="lb-val"><b>' + esc(bpsText(n.tx)) + '</b>' +
+        '<span class="hint">' + (u === null ? 'no limit' : u.toFixed(0) + '% of ' +
+          esc(mbps(n.effDown / 1e6))) + '</span></div>' +
+      '<div class="lb-up"><span style="color:var(--up)">&uarr; ' + esc(bpsText(n.rx)) + '</span></div>' +
+    '</div>';
+  }).join('') + '</div>' +
+  (nodes.length > 20 ? '<div class="hint" style="margin-top:.5rem">' + (nodes.length - 20) +
+    ' more node(s) in the table below.</div>' : '') +
+  '<div class="exec-legend"><span><i class="sq ok"></i>under 70% of limit</span>' +
+    '<span><i class="sq warn"></i>70-90%</span><span><i class="sq crit"></i>over 90%</span>' +
+    '<span><i class="lb-cap-key"></i>backhaul capacity</span></div>';
+  brancherLiensNoeuds(host);
+}
+
+/** Ce que veulent dire les pastilles du tableau, en une ligne. */
+function renderExecLegend(host) {
+  if (!host) return;
+  host.innerHTML =
+    '<span><b>Throughput</b> vs limit: <i class="sq ok"></i>&lt;70% <i class="sq warn"></i>70-90% ' +
+      '<i class="sq crit"></i>&gt;90%</span>' +
+    '<span><b>Latency</b>: <i class="sq ok"></i>&lt;30 ms <i class="sq warn"></i>30-100 ms ' +
+      '<i class="sq crit"></i>&gt;100 ms</span>' +
+    '<span><b>Experience</b> (0-100): <i class="sq ok"></i>&ge;80 <i class="sq warn"></i>50-79 ' +
+      '<i class="sq crit"></i>&lt;50</span>';
 }
 
 /** Bandeau d'etat de l'onglet : erreur de chargement, sonde coupee, ou reseau
@@ -629,22 +935,31 @@ function renderExecNotice(rttState, error, st) {
   notice.innerHTML = html;
 }
 
+/** Ce que chaque ligne de la heatmap mesure, dit simplement. La cle vient du
+ *  serveur ; un libelle inconnu est affiche tel quel. */
+const HEAT_LABEL = {
+  qoe: 'Experience score',
+  rtt: 'Latency (p90)',
+  utilisation: 'Load vs limit',
+};
+
 function renderHeatmap(host, heat) {
   if (!heat || !Array.isArray(heat.rows)) {
     host.innerHTML = '<div class="empty">Heatmap unavailable for now.</div>';
     return;
   }
-  host.innerHTML = heat.rows.map((row) => {
-    if (row.unavailable) {
-      return '<div class="heat-row"><span class="heat-label">' + esc(row.label) + '</span>' +
-        '<span class="heat-unavail" title="' + esc(row.reason || '') + '">n/d &mdash; ' +
-        esc(row.reason || 'indisponible hors-bande') + '</span></div>';
-    }
+  const lignes = heat.rows.filter((r) => !r.unavailable);
+  // Les lignes qu'un controleur hors-bande ne PEUT PAS mesurer ne meritent
+  // pas une ligne grise chacune : on les nomme une fois, en bas.
+  const absentes = heat.rows.filter((r) => r.unavailable);
+  const cellsOf = lignes.length ? lignes[0].cells : [];
+
+  const rows = lignes.map((row) => {
     const last = [...row.cells].reverse().find((c) => c.value !== null && c.value !== undefined);
     const cells = row.cells.map((c) => {
       let t = c.value !== null && c.value !== undefined
-        ? new Date(c.ts).toLocaleTimeString('en-GB', { hour12: false }) + ' : ' +
-          c.value + (row.unit ? ' ' + row.unit : '')
+        ? new Date(c.ts).toLocaleTimeString('fr-FR', { hour12: false, hour: '2-digit', minute: '2-digit' }) +
+          ' : ' + c.value + (row.unit ? ' ' + row.unit : '')
         : 'no measurement';
       // La ligne QoE dit si le pas repose sur une latence SOUS CHARGE reellement
       // mesuree ou sur le repli proxy : un chiffre qu'on croit mesure est pire
@@ -655,11 +970,29 @@ function renderHeatmap(host, heat) {
     }).join('');
     const now = last ? (last.value + (row.unit ? ' ' + row.unit : '')) : '-';
     return '<div class="heat-row">' +
-      '<span class="heat-label">' + esc(row.label) +
+      '<span class="heat-label">' + esc(HEAT_LABEL[row.key] || row.label) +
         (row.unit ? ' <span class="u">(' + esc(row.unit) + ')</span>' : '') + '</span>' +
       '<span class="heat-cells">' + cells + '</span>' +
-      '<span class="heat-now">' + esc(now) + '</span></div>';
+      '<span class="heat-now" title="Last value">' + esc(now) + '</span></div>';
   }).join('');
+
+  // Axe des temps sous les cases : debut, milieu, maintenant.
+  let axe = '';
+  if (cellsOf.length) {
+    const hh = (c) => c && c.ts
+      ? new Date(c.ts).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+    axe = '<div class="heat-row heat-axis"><span class="heat-label"></span>' +
+      '<span class="heat-ticks"><span>' + esc(hh(cellsOf[0])) + '</span>' +
+      '<span>' + esc(hh(cellsOf[Math.floor(cellsOf.length / 2)])) + '</span>' +
+      '<span>now</span></span><span class="heat-now"></span></div>';
+  }
+  host.innerHTML = (rows || '<div class="empty">No measurement over this period.</div>') + axe +
+    '<div class="exec-legend"><span><i class="sq ok"></i>good</span>' +
+      '<span><i class="sq warn"></i>degraded</span><span><i class="sq crit"></i>bad</span>' +
+      '<span><i class="sq none"></i>no measurement</span>' +
+      (absentes.length ? '<span class="hint">Not measurable out-of-band: ' +
+        esc(absentes.map((r) => r.label).join(', ')) + '</span>' : '') +
+    '</div>';
 }
 
 /** Agrege les abonnes par PoP en lignes de "files", facon LibreQoS. */
@@ -705,16 +1038,24 @@ function renderNodeTable(host) {
     return;
   }
   const rttSq = (ms) => (ms === null || ms === undefined)
-    ? sqCell('-', 'none') : sqCell(Math.round(ms) + 'ms', rttSevJs(ms));
-  const naSq = sqCell('n/d', 'none');
+    ? sqCell('-', 'none') : sqCell(Math.round(ms) + ' ms', rttSevJs(ms));
+  const naSq = '<span class="na">-</span>';
+  // Le debit ET sa part de la limite, dans la meme cellule : c'est la part qui
+  // dit s'il faut s'inquieter, le debit seul ne le dit pas.
+  const usage = (v, lim) => {
+    const p = pct(v, lim);
+    return sqCell(bpsText(v), severity(p)) +
+      (p === null ? '' : ' <span class="pct-hint">' + p.toFixed(0) + '%</span>');
+  };
+  // Les colonnes "hors-bande" (retransmissions, marks, drops) ont disparu :
+  // toujours vides pour ce controleur, elles ne faisaient que brouiller.
   const head =
-    '<table><thead><tr><th></th><th>Node</th><th class="num">Circuits</th>' +
-    '<th class="num">Nodes</th><th class="num">Effective</th><th class="num">Configured</th>' +
-    '<th class="num">&darr;</th><th class="num">&uarr;</th>' +
-    '<th class="num">RTT</th><th class="num">QoO</th>' +
-    '<th class="num" title="Retransmissions TCP — hors-bande">Retr</th>' +
-    '<th class="num" title="Marks qdisc — hors-bande">Marks</th>' +
-    '<th class="num" title="Drops qdisc — hors-bande">Drops</th></tr></thead><tbody>';
+    '<table class="exec-table"><thead><tr><th></th><th>Node</th><th class="num">Clients</th>' +
+    '<th class="num">Download now</th><th class="num">Upload now</th>' +
+    '<th class="num" title="Cap currently applied (plan, override or boost)">Limit &darr; / &uarr;</th>' +
+    '<th class="num" title="Sum of the sold plans">Plans &darr; / &uarr;</th>' +
+    '<th class="num">Latency</th><th class="num" title="0-100, from bufferbloat and latency">Experience</th>' +
+    '</tr></thead><tbody>';
 
   const body = nodes.map((n) => {
     const open = exec.expanded.has(n.name);
@@ -726,22 +1067,21 @@ function renderNodeTable(host) {
     const confCell = n.synthetic ? '<td class="num na">-</td>'
       : '<td class="num na">' + esc(mbps(n.confDown / 1e6) + ' / ' + mbps(n.confUp / 1e6)) + '</td>';
     const txCell = n.synthetic ? '<td class="num">' + naSq + '</td>'
-      : '<td class="num">' + sqCell(bpsText(n.tx), severity(pct(n.tx, n.effDown))) + '</td>';
+      : '<td class="num">' + usage(n.tx, n.effDown) + '</td>';
     const rxCell = n.synthetic ? '<td class="num">' + naSq + '</td>'
-      : '<td class="num">' + sqCell(bpsText(n.rx), severity(pct(n.rx, n.effUp))) + '</td>';
+      : '<td class="num">' + usage(n.rx, n.effUp) + '</td>';
     const nodeRow =
       '<tr class="node-row' + (sel ? ' selected' : '') + '" data-node="' + esc(n.name) + '">' +
       '<td>' + (n.synthetic ? ''
-        : '<span class="expand" data-expand="' + esc(n.name) + '">' + (open ? '−' : '+') + '</span>') + '</td>' +
+        : '<span class="expand" data-expand="' + esc(n.name) + '" title="Show its clients">' +
+          (open ? '−' : '+') + '</span>') + '</td>' +
       '<td><strong>' + esc(n.name) + '</strong>' +
         (n.synthetic && n.kind ? ' <span class="badge">' + esc(KIND_LABEL[n.kind] || n.kind) +
           '</span>' : '') + '</td>' +
       '<td class="num">' + n.circuits + '</td>' +
-      '<td class="num">' + (n.nodesCount == null ? '<span class="na">-</span>' : n.nodesCount) + '</td>' +
-      effCell + confCell + txCell + rxCell +
+      txCell + rxCell + effCell + confCell +
       '<td class="num">' + rttSq(n.rttMax) + '</td>' +
-      '<td class="num">' + qooCell(n.qoe, n.rttMax) + '</td>' +
-      '<td class="num">' + naSq + '</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>';
+      '<td class="num">' + qooCell(n.qoe, n.rttMax) + '</td></tr>';
 
     const subRows = !open ? '' : n.subs.map((s) => {
       const eff = (Number(s.effective_down_mbps) || 0) * 1e6;
@@ -749,14 +1089,13 @@ function renderNodeTable(host) {
       const csel = exec.selected && exec.selected.type === 'client' && exec.selected.id === s.subscriber_id;
       return '<tr class="sub-row' + (csel ? ' selected' : '') + '" data-client="' + s.subscriber_id + '">' +
         '<td></td><td class="login">' + esc(s.login) + '</td>' +
-        '<td class="num"></td><td class="num"></td>' +
+        '<td class="num"></td>' +
+        '<td class="num">' + usage(Number(s.tx_bps) || 0, eff) + '</td>' +
+        '<td class="num">' + usage(Number(s.rx_bps) || 0, effU) + '</td>' +
         '<td class="num">' + esc(mbps(s.effective_down_mbps || 0) + ' / ' + mbps(s.effective_up_mbps || 0)) + '</td>' +
         '<td class="num na">' + esc(mbps(s.plan_down_mbps || 0) + ' / ' + mbps(s.plan_up_mbps || 0)) + '</td>' +
-        '<td class="num">' + sqCell(bpsText(s.tx_bps), severity(pct(s.tx_bps, eff))) + '</td>' +
-        '<td class="num">' + sqCell(bpsText(s.rx_bps), severity(pct(s.rx_bps, effU))) + '</td>' +
         '<td class="num">' + rttSq(s.rtt_ms) + '</td>' +
-        '<td class="num">' + qooCell(qoeOf(s.subscriber_id), s.rtt_ms) + '</td>' +
-        '<td class="num">' + naSq + '</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>';
+        '<td class="num">' + qooCell(qoeOf(s.subscriber_id), s.rtt_ms) + '</td></tr>';
     }).join('');
     return nodeRow + subRows;
   }).join('');
@@ -830,7 +1169,7 @@ function gaugeSvg(downBps, upBps, maxBps, qoe) {
       esc(bpsShort(upBps)) + '</text>' +
     '</svg>' +
     '<svg width="46" height="128" viewBox="0 0 46 128"><text class="lbl" x="23" y="10" ' +
-      'text-anchor="middle">QoO</text>' +
+      'text-anchor="middle">Score</text>' +
     '<rect x="14" y="14" width="18" height="120" rx="3" fill="var(--surface-2)"></rect>' +
     '<rect x="14" y="' + (14 + 120 - qh) + '" width="18" height="' + qh + '" rx="3" fill="' +
       qCol + '"></rect>' +
@@ -848,9 +1187,11 @@ function renderQueuePanels() {
   if (!live || !snap || !det) return;
 
   const sel = exec.selected;
+  const titre = document.getElementById('lq-heading');
   if (!selectionExists(sel)) {
     const vide = '<div class="empty">Select a node or a client in the table.</div>';
     live.innerHTML = snap.innerHTML = det.innerHTML = vide;
+    if (titre) titre.textContent = 'Selection';
     return;
   }
 
@@ -858,6 +1199,11 @@ function renderQueuePanels() {
   const client = isClient ? exec.subsById[sel.id] : null;
   const node = isClient ? null : exec.nodes.find((n) => n.name === sel.name);
   const title = isClient ? client.login : node.name;
+  if (titre) {
+    titre.innerHTML = (isClient ? 'Client ' : 'Node ') + '<span class="sel-name">' + esc(title) +
+      '</span>' + (isClient && client.pop_name ? ' <span class="pct-hint">on ' + esc(client.pop_name) +
+      '</span>' : '');
+  }
   const down = isClient ? (Number(client.tx_bps) || 0) : node.tx;
   const up = isClient ? (Number(client.rx_bps) || 0) : node.rx;
   const effDown = isClient ? (Number(client.effective_down_mbps) || 0) * 1e6 : node.effDown;
@@ -882,23 +1228,22 @@ function renderQueuePanels() {
   // ---- Live Queue State
   const dwn = (t, s) => '<td class="num">' + sqCell(t, s) + '</td>';
   live.innerHTML =
-    '<h3>&#9881; Live Queue State</h3>' +
+    '<h3>Right now</h3>' +
     '<table class="lq-table"><thead><tr><th></th><th>Download</th><th>Upload</th></tr></thead><tbody>' +
-    '<tr><td>Effective Limit</td>' + (synth ? naCell + naCell
+    '<tr><td>Limit applied</td>' + (synth ? naCell + naCell
       : dwn(mbps(effDown / 1e6), 'ok') + dwn(mbps(effUp / 1e6), 'ok')) + '</tr>' +
-    '<tr><td>Configured Limit</td>' + (synth ? naCell + naCell
+    '<tr><td>Plan</td>' + (synth ? naCell + naCell
       : '<td class="num na">' + sqCell(mbps(confDown / 1e6), 'none') +
         '</td><td class="num na">' + sqCell(mbps(confUp / 1e6), 'none') + '</td>') + '</tr>' +
     '<tr><td>Throughput</td>' + (synth ? naCell + naCell
       : dwn(bpsText(down), severity(pct(down, effDown))) +
         dwn(bpsText(up), severity(pct(up, effUp)))) + '</tr>' +
     '<tr><td>RTT</td><td class="num">' + rttSq(rttMs) + '</td><td class="num">' + rttSq(rttMs) + '</td></tr>' +
-    '<tr><td>QoO</td><td class="num">' + qooSq + '</td><td class="num">' + qooSq + '</td></tr>' +
-    '<tr><td>TCP Retransmits</td><td class="num">' + naSq + '</td><td class="num">' + naSq + '</td></tr>' +
+    '<tr><td>Experience</td><td class="num">' + qooSq + '</td><td class="num">' + qooSq + '</td></tr>' +
     '</tbody></table>';
 
   // ---- Node Snapshot (jauge, ou n/d si aucune mesure)
-  snap.innerHTML = '<h3>&#128200; Node Snapshot</h3>' +
+  snap.innerHTML = '<h3>Load vs limit</h3>' +
     (synth
       ? '<div class="empty">No measurement for this node yet ' +
         '(shown from the topology).</div>'
@@ -907,7 +1252,7 @@ function renderQueuePanels() {
   // ---- Node Details
   const limitedBy = isClient
     ? ({ plan: 'Plan', override: 'Override', boost: 'Boost' }[client.limit_source] || client.limit_source || '-')
-    : 'Agregat';
+    : 'Sum of its clients';
   const override = isClient
     ? (client.limit_source === 'override' || client.limit_source === 'boost'
         ? mbps(client.effective_down_mbps || 0) + ' / ' + mbps(client.effective_up_mbps || 0)
@@ -916,16 +1261,15 @@ function renderQueuePanels() {
   const dPre = isClient ? bestUnitMbps(client.effective_down_mbps) : '';
   const uPre = isClient ? bestUnitMbps(client.effective_up_mbps) : '';
   det.innerHTML =
-    '<h3>&#9432; Node Details</h3>' +
+    '<h3>Limits and settings</h3>' +
     '<div class="lq-kv">' +
-      '<span class="k">Base Configured Rate</span><span class="v">' +
+      '<span class="k">Plan</span><span class="v">' +
         (synth ? 'n/d' : esc(mbps(confDown / 1e6) + ' / ' + mbps(confUp / 1e6))) + '</span>' +
-      '<span class="k">Effective Now</span><span class="v">' +
+      '<span class="k">Limit applied</span><span class="v">' +
         (synth ? 'n/d' : esc(mbps(effDown / 1e6) + ' / ' + mbps(effUp / 1e6))) + '</span>' +
-      '<span class="k">Rate Override</span><span class="v">' + esc(override) + '</span>' +
-      '<span class="k">Limited By</span><span class="v">' + esc(limitedBy) + '</span>' +
-      '<span class="k">Topology Override</span><span class="v">None</span>' +
-      '<span class="k">Active Attachment</span><span class="v">' +
+      '<span class="k">Forced rate</span><span class="v">' + esc(override) + '</span>' +
+      '<span class="k">Limit comes from</span><span class="v">' + esc(limitedBy) + '</span>' +
+      '<span class="k">Attached to</span><span class="v">' +
         esc(isClient ? (client.pop_name || '-') : title) + '</span>' +
     '</div>' +
     (isClient
@@ -934,7 +1278,7 @@ function renderQueuePanels() {
           '<button class="sm primary" id="lq-save">Save</button>' +
           '<button class="sm" id="lq-clear">Clear</button></div>' +
         '<div class="lq-note">Rate in Mbps. Save writes an override on this subscriber ' +
-          '(visible afterwards in the Shaping plan). Retr / marks / drops: out-of-band, unavailable.</div>' +
+          '(visible afterwards in the Shaping plan).</div>' +
         '<div class="actions" style="margin-top:.6rem">' +
           '<button class="sm" id="lq-open">Open in the tree</button></div>' +
         '<div id="lq-result"></div>'
@@ -947,7 +1291,7 @@ function renderQueuePanels() {
           : '<b>' + node.circuits + ' circuit(s).</b> A node is an ' +
             'aggregate: unfold it and select a client to force a rate. The parent ' +
             'rate (the shared envelope) is set on its link, <b>Bandwidth</b> ' +
-            'button in the tree. Retr / marks / drops: out-of-band, unavailable.') + '</div>' +
+            'button in the tree.') + '</div>' +
         '<div class="actions" style="margin-top:.6rem">' +
           '<button class="sm" id="lq-open">Set the envelope in the tree</button></div>');
 
@@ -1045,61 +1389,6 @@ async function clearClientRate(client) {
     await api('/shaping/policies/subscriber/' + encodeURIComponent(client.login), { method: 'DELETE' });
     await loadExec();
   } catch (err) { alert(err.message); }
-}
-
-/* ------------------------------------------------------- flux (sankey) */
-
-/** Sankey maison : une colonne "reseau" -> une colonne par PoP, largeur des
- *  bandes proportionnelle au debit descendant. Sans dependance, comme le reste. */
-function renderExecSankey(host, subs) {
-  const nodes = aggregateNodes(subs, {});
-  const total = nodes.reduce((a, n) => a + n.tx, 0);
-  if (!total) {
-    host.innerHTML = '<div class="empty">No downstream traffic to draw.</div>';
-    return;
-  }
-  const W = Math.max(360, host.clientWidth - 4);
-  const H = Math.max(160, Math.min(520, nodes.length * 46 + 20));
-  const M = 12;
-  const srcX = M;
-  const srcW = 16;
-  const dstX = W - 190;
-  const dstW = 16;
-  const scale = (H - 2 * M) / total;
-
-  let y = M;
-  const bands = [];
-  const parts = ['<div class="sankey"><svg width="' + W + '" height="' + H +
-    '" viewBox="0 0 ' + W + ' ' + H + '">'];
-  // Noeud source (tout le reseau).
-  parts.push('<rect class="node" x="' + srcX + '" y="' + M + '" width="' + srcW +
-    '" height="' + (H - 2 * M) + '" fill="var(--accent)"></rect>');
-  parts.push('<text class="nlabel" x="' + (srcX + srcW + 4) + '" y="' + (M + 12) +
-    '" transform="rotate(90 ' + (srcX + srcW + 4) + ' ' + (M + 12) + ')">Network</text>');
-
-  let sy = M;
-  nodes.forEach((n) => {
-    const h = Math.max(2, n.tx * scale);
-    const col = severity(pct(n.tx, n.effDown || total));
-    const colVar = col === 'crit' ? 'var(--crit)' : col === 'warn' ? 'var(--warn)' : 'var(--down)';
-    const y0 = sy;
-    const y1 = y;
-    const d = 'M ' + (srcX + srcW) + ' ' + y0 + ' C ' + ((srcX + srcW + dstX) / 2) + ' ' + y0 +
-      ', ' + ((srcX + srcW + dstX) / 2) + ' ' + y1 + ', ' + dstX + ' ' + y1 +
-      ' L ' + dstX + ' ' + (y1 + h) + ' C ' + ((srcX + srcW + dstX) / 2) + ' ' + (y1 + h) +
-      ', ' + ((srcX + srcW + dstX) / 2) + ' ' + (y0 + h) + ', ' + (srcX + srcW) + ' ' + (y0 + h) + ' Z';
-    parts.push('<path class="flow" d="' + d + '" fill="' + colVar + '"><title>' + esc(n.name) +
-      ' : ' + esc(bpsText(n.tx)) + '</title></path>');
-    parts.push('<rect class="node" x="' + dstX + '" y="' + y1 + '" width="' + dstW +
-      '" height="' + h + '" fill="' + colVar + '"></rect>');
-    parts.push('<text class="nlabel" x="' + (dstX + dstW + 6) + '" y="' + (y1 + Math.min(h, 12)) +
-      '">' + esc(topoTrim(n.name, 22)) + ' &middot; ' + esc(bpsText(n.tx)) + '</text>');
-    sy += h;
-    y += h;
-    bands.push(n);
-  });
-  parts.push('</svg></div>');
-  host.innerHTML = parts.join('');
 }
 
 /* ---------------------------------------------------------------- trafic
@@ -1534,6 +1823,7 @@ async function openPairAddress(address) {
     const fiche = await api('/netflow/destinations/' + encodeURIComponent(address) +
       '?minutes=' + Math.max(FLOW.minutes, 1440));
     hote.innerHTML = ipCard(fiche, Math.max(FLOW.minutes, 1440) * 60, false);
+    hydrateMiniMaps(hote);
     brancherLiensServices(hote);
     hote.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } catch (err) {
@@ -3287,6 +3577,9 @@ const SVC = {
   search: '',
   catalogue: null,
   detail: null,
+  locations: null,
+  // Contour du monde, lu une fois a la demande (/static/world-110m.json).
+  world: null,
 };
 
 /** Familles, avec la teinte qui leur va. Le streaming est la raison d'etre de
@@ -3385,17 +3678,21 @@ async function loadServices() {
     (SVC.category ? '&category=' + encodeURIComponent(SVC.category) : '') +
     (SVC.search ? '&q=' + encodeURIComponent(SVC.search) : '');
 
-  const [etat, intel, dest, live, regles] = await Promise.all([
+  const [etat, intel, dest, live, regles, lieux] = await Promise.all([
     api('/netflow/status'),
     api('/netflow/intel').catch(() => null),
     api('/netflow/destinations' + suffixe + '&limit=120')
       .catch(() => ({ destinations: [], services: [] })),
     api('/netflow/connections?limit=80').catch(() => ({ connections: [] })),
     api('/traffic-rules').catch(() => ({ rules: [] })),
+    api('/netflow/locations' + suffixe).catch(() => null),
   ]);
 
   renderServiceNotice(etat, intel);
   renderServiceStats(etat, intel, dest);
+  SVC.locations = lieux;
+  await renderTrafficMap(document.getElementById('svc-map'), lieux);
+  renderCountries(document.getElementById('svc-countries'), lieux);
   renderLiveConnections(live);
   renderServiceTable(dest.services || []);
   renderDestinations(dest.destinations || []);
@@ -3481,7 +3778,8 @@ function renderLiveConnections(data) {
       '<tr><td class="login">' + clientCell(c) + '</td>' +
       '<td><a href="#" data-svc-ip="' + esc(c.address) + '"><code>' + esc(c.address) +
         '</code></a>' + (c.hostname
-          ? '<br><span class="hint">' + esc(c.hostname) + '</span>' : '') + '</td>' +
+          ? '<br><span class="hint">' + esc(c.hostname) + '</span>' : '') +
+        (lieu(c) ? '<br>' + lieu(c) : '') + '</td>' +
       '<td>' + svcName(c) + '</td>' +
       '<td>' + svcBadge(c.category) + '</td>' +
       '<td class="num">' + esc(c.port || '-') + '</td>' +
@@ -3530,6 +3828,7 @@ function renderDestinations(lignes) {
     return;
   }
   hote.innerHTML = '<table><thead><tr><th>Address</th><th>Reverse name</th>' +
+    '<th>Location</th>' +
     '<th>Service</th><th>Category</th><th class="num">Clients</th>' +
     '<th class="num">Down</th><th class="num">Up</th><th>Seen</th>' +
     '</tr></thead><tbody>' +
@@ -3538,6 +3837,7 @@ function renderDestinations(lignes) {
         esc(d.address) + '</code></a></td>' +
       '<td class="login">' + (d.hostname
         ? esc(d.hostname) : '<span class="hint">-</span>') + '</td>' +
+      '<td class="nowrap">' + (lieu(d) || '<span class="na">-</span>') + '</td>' +
       '<td>' + svcName(d) + '</td>' +
       '<td>' + svcBadge(d.category) + '</td>' +
       '<td class="num">' + esc(d.clients) + '</td>' +
@@ -3608,7 +3908,9 @@ function ipCard(fiche, periodeSecondes, actions) {
     : null;
 
   return '<div class="ip-card">' +
-    '<h3><code>' + esc(fiche.address) + '</code> ' + svcBadge(famille) + '</h3>' +
+    '<h3><code>' + esc(fiche.address) + '</code> ' + svcBadge(famille) +
+      (lieu(intel) ? ' ' + lieu(intel) : '') + '</h3>' +
+    (position ? miniMapHtml(intel.latitude, intel.longitude, intel.city || intel.country) : '') +
     '<div class="ip-facts">' +
       fait('Service', service ? '<b>' + esc(service) + '</b>' : null) +
       fait('Recognised by', source && source !== 'inconnu' ? esc(source) : null) +
@@ -3669,6 +3971,7 @@ function renderDestinationCard(fiche) {
 
   const detail = document.getElementById('svc-detail');
   brancherLiensServices(detail);
+  hydrateMiniMaps(detail);
   document.getElementById('svc-detail-resolve').addEventListener('click', async () => {
     try {
       await api('/netflow/destinations/' + encodeURIComponent(fiche.address) + '/resolve',
@@ -3681,6 +3984,391 @@ function renderDestinationCard(fiche) {
   document.getElementById('svc-detail-restrict').addEventListener('click', () => {
     prefillRule(null, fiche.address);
   });
+}
+
+/* ------------------------------------------------ carte et recherche d'IP
+ *
+ *  OU SONT LES ADRESSES QUE LES CLIENTS JOIGNENT.
+ *
+ *  La carte est dessinee sans dependance ni tuile telechargee : un contour du
+ *  monde (Natural Earth 1:110m, domaine public) est servi par le controleur
+ *  lui-meme, et projete en equirectangulaire -- x = longitude, y = latitude.
+ *  C'est la seule projection ou un point se place sans bibliotheque, et elle
+ *  suffit a dire "Paris" ou "Virginie". Le lien OpenStreetMap de chaque lieu
+ *  donne la precision de la rue a qui en a besoin (et un acces internet).
+ */
+
+const MAP_W = 3600;
+const MAP_H = 1500;
+
+async function loadWorld() {
+  if (SVC.world) return SVC.world;
+  try {
+    const r = await fetch('/static/world-110m.json');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    SVC.world = await r.json();
+  } catch (err) {
+    SVC.world = { d: '', error: err.message };
+  }
+  return SVC.world;
+}
+
+function mapX(lon) { return (Number(lon) + 180) * 10; }
+function mapY(lat) { return (90 - Number(lat)) * 10; }
+
+/** Nom du pays dans la langue du navigateur, sans table embarquee. */
+function countryName(code) {
+  const c = String(code || '').toUpperCase();
+  if (!/^[A-Z]{2}$/.test(c)) return code || '';
+  try {
+    return new Intl.DisplayNames([navigator.language || 'en'], { type: 'region' }).of(c) || c;
+  } catch (err) {
+    return c;
+  }
+}
+
+/** Le fond de carte : les pays, et une graticule tous les 30 degres. */
+function mapBackground(world) {
+  let grille = '';
+  for (let lon = -150; lon <= 150; lon += 30) {
+    grille += '<line class="grat" x1="' + mapX(lon) + '" x2="' + mapX(lon) + '" y1="0" y2="' + MAP_H + '"/>';
+  }
+  for (let lat = -30; lat <= 60; lat += 30) {
+    grille += '<line class="grat' + (lat === 0 ? ' eq' : '') + '" x1="0" x2="' + MAP_W +
+      '" y1="' + mapY(lat) + '" y2="' + mapY(lat) + '"/>';
+  }
+  return '<rect class="sea" x="0" y="0" width="' + MAP_W + '" height="' + MAP_H + '"/>' +
+    grille + '<path class="land" d="' + (world.d || '') + '"/>';
+}
+
+/** Carte du trafic : un cercle par lieu, surface proportionnelle au volume.
+ *
+ *  Zoom a la molette (ou aux boutons), deplacement a la souris. Les cercles
+ *  gardent leur taille a l'ecran quand on zoome : sinon un zoom sur l'Europe
+ *  transformerait Francfort en tache qui couvre l'Allemagne. */
+async function renderTrafficMap(host, data) {
+  if (!host) return;
+  // Le rafraichissement periodique ne redessine pas sous la souris : ce
+  // serait lacher la carte en plein deplacement.
+  if (SVC.mapDragging) return;
+  const place = document.getElementById('svc-map-place');
+  if (!data) {
+    host.innerHTML = '<div class="empty">Locations unavailable.</div>';
+    if (place) place.innerHTML = '';
+    SVC.mapPlace = null;
+    return;
+  }
+  const points = data.points || [];
+  const world = await loadWorld();
+  const hors = data.unlocated || {};
+
+  let entete = '';
+  if (!data.geoip_enabled) {
+    entete = '<div class="notice warn"><b>Location is off.</b> Turn on ' +
+      '<i>Locate the destinations reached</i> in <a href="#/settings">Settings</a> to place ' +
+      'addresses on the map.</div>';
+  } else if (!points.length) {
+    entete = '<div class="notice">No located destination over this period yet.</div>';
+  }
+
+  const max = Math.max(1, ...points.map((p) => Number(p.down_bytes || 0) + Number(p.up_bytes || 0)));
+  const total = points.reduce((a, p) => a + Number(p.down_bytes || 0) + Number(p.up_bytes || 0), 0);
+  // Du plus gros au plus petit : les petits cercles restent cliquables au-dessus.
+  const tries = points.slice().sort((a, b) =>
+    (Number(b.down_bytes || 0) + Number(b.up_bytes || 0)) - (Number(a.down_bytes || 0) + Number(a.up_bytes || 0)));
+
+  host.innerHTML = entete +
+    '<div class="map-wrap">' +
+      '<svg class="worldmap" viewBox="0 0 ' + MAP_W + ' ' + MAP_H + '" preserveAspectRatio="xMidYMid meet">' +
+        mapBackground(world) +
+        '<g class="pts">' + tries.map((p, i) => {
+          const v = Number(p.down_bytes || 0) + Number(p.up_bytes || 0);
+          return '<circle class="pt" data-i="' + points.indexOf(p) + '" data-r="' +
+            (5 + Math.sqrt(v / max) * 22).toFixed(1) + '" cx="' + mapX(p.longitude).toFixed(1) +
+            '" cy="' + mapY(p.latitude).toFixed(1) + '"' + (i < 3 ? ' data-top="1"' : '') + '></circle>';
+        }).join('') + '</g>' +
+        '<g class="lbls">' + tries.slice(0, 15).map((p) =>
+          '<text class="pt-label" data-x="' + mapX(p.longitude).toFixed(1) + '" data-y="' +
+            mapY(p.latitude).toFixed(1) + '">' + esc(p.city || countryName(p.country)) + '</text>').join('') +
+        '</g>' +
+      '</svg>' +
+      '<div class="map-zoom"><button class="sm" data-z="in" title="Zoom in">+</button>' +
+        '<button class="sm" data-z="out" title="Zoom out">&minus;</button>' +
+        '<button class="sm" data-z="reset" title="Whole world">&#8634;</button></div>' +
+    '</div>' +
+    '<div class="map-foot"><span>' + esc(points.length) + ' place(s) &middot; ' +
+      bytesText(total) + ' located</span>' +
+      (Number(hors.bytes) ? '<span>' + bytesText(hors.bytes) + ' not located (' +
+        esc(hors.addresses || 0) + ' address(es))</span>' : '') +
+      '<span class="hint" style="display:inline;margin:0">Circle area = volume &middot; ' +
+      'scroll to zoom, drag to move, click a circle for details</span></div>';
+
+  const svg = host.querySelector('svg.worldmap');
+  // Le cadrage survit au rafraichissement : zoomer sur l'Europe puis la voir
+  // revenir au monde entier toutes les dix secondes rendrait la carte inutile.
+  let vb = SVC.mapView || { x: 0, y: 0, w: MAP_W, h: MAP_H };
+  const applique = () => {
+    SVC.mapView = vb;
+    svg.setAttribute('viewBox', vb.x + ' ' + vb.y + ' ' + vb.w + ' ' + vb.h);
+    // Taille constante a l'ecran : le rayon suit l'echelle du cadre.
+    const k = vb.w / MAP_W;
+    svg.querySelectorAll('circle.pt').forEach((c) => c.setAttribute('r', (Number(c.dataset.r) * 3 * k).toFixed(2)));
+    // Les noms ne se chevauchent pas : Paris, Londres, Amsterdam et Francfort
+    // tiennent dans un pouce au zoom monde. Le plus gros lieu garde son nom,
+    // les suivants ne l'affichent que s'il reste de la place.
+    const poses = [];
+    svg.querySelectorAll('text.pt-label').forEach((t) => {
+      const fs = 13 * 3 * k;
+      const bx = Number(t.dataset.x) + 14 * 3 * k;
+      const by = Number(t.dataset.y) + 5 * 3 * k;
+      const boite = { x0: bx, x1: bx + t.textContent.length * fs * 0.6, y0: by - fs, y1: by + fs * 0.25 };
+      const libre = !poses.some((o) => boite.x0 < o.x1 && boite.x1 > o.x0 && boite.y0 < o.y1 && boite.y1 > o.y0);
+      t.setAttribute('x', bx);
+      t.setAttribute('y', by);
+      t.setAttribute('font-size', fs.toFixed(2));
+      t.style.display = libre ? '' : 'none';
+      if (libre) poses.push(boite);
+    });
+    svg.style.setProperty('--sw', (1.2 * 3 * k).toFixed(2));
+  };
+  const borne = () => {
+    vb.w = Math.max(MAP_W / 40, Math.min(MAP_W, vb.w));
+    vb.h = vb.w * MAP_H / MAP_W;
+    vb.x = Math.max(0, Math.min(MAP_W - vb.w, vb.x));
+    vb.y = Math.max(0, Math.min(MAP_H - vb.h, vb.y));
+  };
+  const zoom = (f, cx, cy) => {
+    const px = cx === undefined ? vb.x + vb.w / 2 : cx;
+    const py = cy === undefined ? vb.y + vb.h / 2 : cy;
+    vb.x = px - (px - vb.x) * f;
+    vb.y = py - (py - vb.y) * f;
+    vb.w *= f;
+    borne();
+    applique();
+  };
+  const versCarte = (ev) => {
+    const r = svg.getBoundingClientRect();
+    // preserveAspectRatio meet : le dessin peut ne pas remplir la boite.
+    const echelle = Math.min(r.width / vb.w, r.height / vb.h);
+    const ox = (r.width - vb.w * echelle) / 2;
+    const oy = (r.height - vb.h * echelle) / 2;
+    return { x: vb.x + (ev.clientX - r.left - ox) / echelle, y: vb.y + (ev.clientY - r.top - oy) / echelle, echelle };
+  };
+  applique();
+
+  svg.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    const m = versCarte(ev);
+    zoom(ev.deltaY < 0 ? 0.8 : 1.25, m.x, m.y);
+  }, { passive: false });
+  let glisse = null;
+  svg.addEventListener('mousedown', (ev) => {
+    if (ev.target.closest('circle.pt')) return;
+    glisse = { x: ev.clientX, y: ev.clientY, vx: vb.x, vy: vb.y, e: versCarte(ev).echelle };
+    SVC.mapDragging = true;
+    svg.classList.add('dragging');
+  });
+  const lache = () => { glisse = null; SVC.mapDragging = false; svg.classList.remove('dragging'); };
+  svg.addEventListener('mouseup', lache);
+  svg.addEventListener('mouseleave', lache);
+  svg.addEventListener('mousemove', (ev) => {
+    if (!glisse) return;
+    vb.x = glisse.vx - (ev.clientX - glisse.x) / glisse.e;
+    vb.y = glisse.vy - (ev.clientY - glisse.y) / glisse.e;
+    borne();
+    applique();
+  });
+  host.querySelectorAll('[data-z]').forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.z === 'reset') { vb = { x: 0, y: 0, w: MAP_W, h: MAP_H }; applique(); return; }
+    zoom(b.dataset.z === 'in' ? 0.6 : 1 / 0.6);
+  }));
+
+  const cle = (p) => p.latitude + ',' + p.longitude;
+  svg.querySelectorAll('circle.pt').forEach((c) => {
+    const p = points[Number(c.dataset.i)];
+    if (SVC.mapPlace && SVC.mapPlace === cle(p)) c.classList.add('on');
+    c.addEventListener('mousemove', (ev) => showMapTip(ev, p));
+    c.addEventListener('mouseleave', hideTooltip);
+    c.addEventListener('click', () => {
+      svg.querySelectorAll('circle.pt.on').forEach((o) => o.classList.remove('on'));
+      c.classList.add('on');
+      SVC.mapPlace = cle(p);
+      renderMapPlace(place, p);
+    });
+  });
+}
+
+function showMapTip(event, p) {
+  if (!tooltipEl) {
+    tooltipEl = document.createElement('div');
+    tooltipEl.className = 'tooltip';
+    document.body.appendChild(tooltipEl);
+  }
+  tooltipEl.innerHTML =
+    '<div class="t">' + drapeau(p.country) + esc([p.city, p.region, countryName(p.country)]
+      .filter(Boolean).join(', ')) + '</div>' +
+    '<div class="row"><span style="color:var(--down)">Down</span><span>' + bytesText(p.down_bytes) + '</span></div>' +
+    '<div class="row"><span style="color:var(--up)">Up</span><span>' + bytesText(p.up_bytes) + '</span></div>' +
+    '<div class="row"><span>Addresses</span><span>' + esc(p.addresses) + '</span></div>' +
+    '<div class="row"><span>Clients</span><span>' + esc(p.clients) + '</span></div>' +
+    ((p.services || []).length ? '<div class="row"><span>Services</span><span>' +
+      esc(p.services.slice(0, 3).join(', ')) + '</span></div>' : '');
+  tooltipEl.style.display = 'block';
+  const pad = 14;
+  tooltipEl.style.left = Math.min(event.clientX + pad, window.innerWidth - tooltipEl.offsetWidth - 8) + 'px';
+  tooltipEl.style.top = Math.min(event.clientY + pad, window.innerHeight - tooltipEl.offsetHeight - 8) + 'px';
+}
+
+/** Le lieu clique : ou exactement, qui y heberge quoi, et quelles adresses. */
+function renderMapPlace(host, p) {
+  if (!host || !p) return;
+  host.innerHTML = '<div class="map-place">' +
+    '<div class="mp-head"><b>' + drapeau(p.country) + esc([p.city, p.region].filter(Boolean).join(', ') ||
+      countryName(p.country)) + '</b> <span class="pct-hint">' + esc(countryName(p.country)) + '</span>' +
+      '<span class="spacer"></span><code>' + esc(Number(p.latitude).toFixed(2) + ', ' +
+      Number(p.longitude).toFixed(2)) + '</code> ' + lienCarte(p.latitude, p.longitude) +
+      '<button class="sm" id="svc-map-place-close" title="Close">&times;</button></div>' +
+    '<div class="ip-facts">' +
+      '<div><span>Down</span>' + bytesText(p.down_bytes) + '</div>' +
+      '<div><span>Up</span>' + bytesText(p.up_bytes) + '</div>' +
+      '<div><span>Addresses</span>' + esc(p.addresses) + '</div>' +
+      '<div><span>Clients</span>' + esc(p.clients) + '</div>' +
+      '<div><span>Services</span>' + (esc((p.services || []).join(', ')) || '<span class="hint">-</span>') + '</div>' +
+      '<div><span>Organisations</span>' + (esc((p.orgs || []).join(', ')) || '<span class="hint">-</span>') + '</div>' +
+    '</div>' +
+    '<div class="mp-addr"><span class="pct-hint">Top addresses:</span> ' +
+      (p.top_addresses || []).map((a) => '<a href="#" data-svc-ip="' + esc(a) + '"><code>' +
+        esc(a) + '</code></a>').join(' ') + '</div>' +
+  '</div>';
+  brancherLiensServices(host);
+  document.getElementById('svc-map-place-close').addEventListener('click', () => {
+    host.innerHTML = '';
+    SVC.mapPlace = null;
+    document.querySelectorAll('#svc-map circle.pt.on').forEach((o) => o.classList.remove('on'));
+  });
+}
+
+/** Volume par pays, avec ce qui n'a pas pu etre localise en derniere ligne. */
+function renderCountries(host, data) {
+  if (!host) return;
+  const pays = (data && data.countries) || [];
+  const localises = pays.filter((c) => c.country);
+  if (!localises.length) { host.innerHTML = ''; return; }
+  const total = pays.reduce((a, c) => a + Number(c.down_bytes || 0) + Number(c.up_bytes || 0), 0) || 1;
+  const inconnu = pays.find((c) => !c.country);
+  host.innerHTML = '<table><thead><tr><th>Country</th><th class="num">Cities</th>' +
+    '<th class="num">Addresses</th><th class="num">Clients</th>' +
+    '<th class="num">Down</th><th class="num">Up</th><th>Share</th></tr></thead><tbody>' +
+    localises.slice(0, 30).map((c) => {
+      const v = Number(c.down_bytes || 0) + Number(c.up_bytes || 0);
+      return '<tr><td>' + drapeau(c.country) + '<b>' + esc(countryName(c.country)) + '</b> ' +
+        '<span class="pct-hint">' + esc(c.country) + '</span></td>' +
+        '<td class="num">' + esc(c.cities || 0) + '</td>' +
+        '<td class="num">' + esc(c.addresses) + '</td>' +
+        '<td class="num">' + esc(c.clients) + '</td>' +
+        '<td class="num">' + bytesText(c.down_bytes) + '</td>' +
+        '<td class="num">' + bytesText(c.up_bytes) + '</td>' +
+        '<td style="min-width:140px">' + meter(v, total, 'down') + '</td></tr>';
+    }).join('') +
+    (inconnu ? '<tr class="muted-row"><td><span class="na">Not located</span></td><td></td>' +
+      '<td class="num">' + esc(inconnu.addresses) + '</td><td class="num">' + esc(inconnu.clients) + '</td>' +
+      '<td class="num">' + bytesText(inconnu.down_bytes) + '</td>' +
+      '<td class="num">' + bytesText(inconnu.up_bytes) + '</td>' +
+      '<td style="min-width:140px">' + meter(Number(inconnu.down_bytes || 0) + Number(inconnu.up_bytes || 0), total, 'muted') +
+      '</td></tr>' : '') +
+    '</tbody></table>';
+}
+
+/** Emplacement d'une mini-carte, rempli par hydrateMiniMaps() une fois le
+ *  contour du monde charge. Separe en deux temps parce que ipCard() rend une
+ *  chaine synchrone et que le contour se lit en asynchrone. */
+function miniMapHtml(lat, lon, nom) {
+  return '<div class="minimap" data-lat="' + esc(lat) + '" data-lon="' + esc(lon) + '" data-name="' +
+    esc(nom || '') + '"></div>';
+}
+
+/** Une mini-carte centree sur un point, sur une fenetre de 60 x 25 degres :
+ *  assez pour reconnaitre le pays et ses voisins. */
+async function hydrateMiniMaps(root) {
+  const cibles = (root || document).querySelectorAll('.minimap[data-lat]');
+  if (!cibles.length) return;
+  const world = await loadWorld();
+  cibles.forEach((el) => {
+    const lat = Number(el.dataset.lat);
+    const lon = Number(el.dataset.lon);
+    if (!isFinite(lat) || !isFinite(lon)) return;
+    const w = 600;
+    const h = 250;
+    const x = Math.max(0, Math.min(MAP_W - w, mapX(lon) - w / 2));
+    const y = Math.max(0, Math.min(MAP_H - h, mapY(lat) - h / 2));
+    el.innerHTML = '<svg class="worldmap mini" viewBox="' + x + ' ' + y + ' ' + w + ' ' + h +
+      '" preserveAspectRatio="xMidYMid slice" style="--sw:.6">' + mapBackground(world) +
+      '<circle class="pin-halo" cx="' + mapX(lon) + '" cy="' + mapY(lat) + '" r="14"></circle>' +
+      '<circle class="pin" cx="' + mapX(lon) + '" cy="' + mapY(lat) + '" r="5"></circle>' +
+      (el.dataset.name ? '<text class="pt-label" x="' + (mapX(lon) + 9) + '" y="' + (mapY(lat) + 4) +
+        '" font-size="13">' + esc(el.dataset.name) + '</text>' : '') +
+      '</svg>';
+  });
+}
+
+/** TROUVER UNE IP : n'importe quelle adresse (ou nom), vue ou non sur le reseau.
+ *
+ *  La reponse fusionne ce que la base sait deja et ce qu'une analyse fraiche
+ *  vient d'apprendre, avec les SEULES sources que l'exploitant autorise. Ce
+ *  qu'une source coupee aurait pu dire est signale, pas invente. */
+async function lookupIp(query) {
+  const hote = document.getElementById('svc-lookup-result');
+  const q = String(query || '').trim();
+  if (!q) { hote.innerHTML = ''; return; }
+  hote.innerHTML = '<div class="notice">Looking up <code>' + esc(q) + '</code>...</div>';
+  let r;
+  try {
+    r = await api('/netflow/lookup/' + encodeURIComponent(q) + '?minutes=' + Math.max(SVC.minutes, 1440));
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const frais = r.live || {};
+  const connu = r.stored || {};
+  // Le frais l'emporte champ par champ, la base comble ce qu'il n'a pas dit.
+  const intel = {};
+  ['hostname', 'service', 'category', 'source', 'org', 'asn', 'country', 'city', 'region',
+    'latitude', 'longitude', 'network', 'resolved_at', 'attempts'].forEach((k) => {
+    const v = frais[k] !== undefined && frais[k] !== null ? frais[k] : connu[k];
+    if (v !== undefined && v !== null) intel[k] = v;
+  });
+  if (intel.category === 'unknown') delete intel.category;
+  const fiche = {
+    address: r.address,
+    intel: intel,
+    catalogue: r.catalogue || {},
+    totals: (r.seen && r.seen.totals) || {},
+    clients: (r.seen && r.seen.clients) || [],
+  };
+  const src = r.sources || {};
+  const manque = [];
+  if (!src.geoip) manque.push('location');
+  if (!src.rdap) manque.push('registry (organisation, AS)');
+  if (!src.rdns) manque.push('reverse name');
+  hote.innerHTML =
+    (r.resolved_from ? '<div class="notice"><code>' + esc(r.resolved_from) + '</code> resolves to <code>' +
+      esc(r.address) + '</code>' + ((r.other_addresses || []).length ? ' (also ' +
+      r.other_addresses.map((a) => '<a href="#" data-lookup="' + esc(a) + '"><code>' + esc(a) +
+      '</code></a>').join(', ') + ')' : '') + '</div>' : '') +
+    (!r.routable ? '<div class="notice warn"><b>Private or reserved address.</b> It is inside a ' +
+      'network, not on the internet: it has no public location or owner.</div>' : '') +
+    (r.routable && !src.enabled ? '<div class="notice warn"><b>Identification is off</b> ' +
+      '(<a href="#/settings">Settings</a>): only the built-in catalogue answered.</div>' : '') +
+    (r.routable && src.enabled && manque.length ? '<div class="notice">Sources turned off in ' +
+      '<a href="#/settings">Settings</a>: ' + esc(manque.join(', ')) + '.</div>' : '') +
+    ipCard(fiche, Math.max(SVC.minutes, 1440) * 60, false);
+  brancherLiensServices(hote);
+  hydrateMiniMaps(hote);
+  hote.querySelectorAll('[data-lookup]').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    document.getElementById('svc-lookup').value = a.dataset.lookup;
+    lookupIp(a.dataset.lookup);
+  }));
 }
 
 /* ------------------------------------------------------- restrictions */
@@ -6853,6 +7541,10 @@ document.getElementById('svc-category').addEventListener('change', loadServices)
 // sur chaque frappe : une requete par caractere ferait autant de lectures de
 // base qu'il y a de lettres dans "nflxvideo".
 document.getElementById('svc-search').addEventListener('change', loadServices);
+document.getElementById('svc-lookup-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  lookupIp(document.getElementById('svc-lookup').value);
+});
 document.getElementById('svc-rule-form').addEventListener('submit', submitRule);
 // Les champs qui n'ont de sens que pour un effet ou une portee donnes restent
 // caches tant qu'ils ne servent pas : un formulaire qui montre tout montre

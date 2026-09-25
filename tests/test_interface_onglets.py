@@ -331,3 +331,29 @@ def test_ouvrir_la_saisie_place_le_curseur_dedans() -> None:
     bloc = JS[JS.index("document.getElementById('sc-toggle')") :][:900]
     assert "reference.focus()" in bloc
     assert "scrollIntoView" in bloc
+
+
+def test_l_executif_commence_par_un_verdict() -> None:
+    """DEMANDE EXPLICITE : un ecran executif qu'on comprend d'un coup d'oeil.
+    Le verdict et ses chiffres viennent avant tout tableau, et les colonnes
+    toujours vides (retransmissions, marks, drops) ont quitte le tableau."""
+    section = HTML[HTML.index('<section id="view-exec">') :]
+    section = section[: section.index("</section>")]
+    assert section.index('id="exec-summary"') < section.index('id="exec-nodes"')
+    assert "renderExecSummary" in JS
+    assert "exec-sankey" not in HTML
+    tableau = JS[JS.index("function renderNodeTable(") :]
+    tableau = tableau[: tableau.index("\n}\n")]
+    assert "Marks" not in tableau and "Drops" not in tableau
+
+
+def test_les_services_localisent_les_adresses() -> None:
+    """La recherche d'une IP et la carte sont dans l'onglet Services, et le
+    fond de carte est servi par le controleur lui-meme (aucune tuile
+    telechargee : une VM de management peut ne pas avoir internet)."""
+    for identifiant in ("svc-lookup-form", "svc-lookup", "svc-map", "svc-countries"):
+        assert f'id="{identifiant}"' in HTML, identifiant
+    assert "/netflow/lookup/" in JS
+    assert "/netflow/locations" in JS
+    assert "fetch('/static/world-110m.json')" in JS
+    assert (RACINE / "static" / "world-110m.json").is_file()

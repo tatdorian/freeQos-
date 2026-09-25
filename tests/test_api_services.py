@@ -135,6 +135,29 @@ class FauxDestinations:
     async def addresses_for(self, **kwargs: Any) -> list[str]:
         return []
 
+    async def by_location(self, **kwargs: Any) -> dict[str, Any]:
+        self.lieux_demandes = kwargs
+        return {
+            "points": [
+                {
+                    "country": "FR",
+                    "city": "Paris",
+                    "region": "Ile-de-France",
+                    "latitude": 48.86,
+                    "longitude": 2.35,
+                    "addresses": 1,
+                    "clients": 2,
+                    "down_bytes": 900_000,
+                    "up_bytes": 12_000,
+                    "services": ["netflix"],
+                    "orgs": [],
+                    "top_addresses": ["45.57.12.34"],
+                }
+            ],
+            "countries": [{"country": "FR", "addresses": 1, "clients": 2, "cities": 1}],
+            "unlocated": {"addresses": 0, "bytes": 0},
+        }
+
 
 class FauxFlows:
     async def subscribers_by_id(self, ids: list[int]) -> dict[int, dict[str, Any]]:
@@ -963,3 +986,79 @@ def test_creer_une_regle_la_pose_aussitot_sur_les_routeurs(
 def test_creer_une_regle_ecriture_coupee_le_dit(client: TestClient) -> None:
     corps = client.post("/api/v1/traffic-rules", json=regle()).json()
     assert corps["apply"]["state"] == "a poser"
+
+
+# ============================================================ carte et recherche
+
+
+def test_la_carte_rend_les_lieux_et_dit_si_la_localisation_est_coupee(
+    client: TestClient, destinations: FauxDestinations
+) -> None:
+    """Une carte vide parce que la localisation est coupee et une carte vide
+    parce que rien n'a ete atteint n'appellent pas le meme geste : la reponse
+    doit permettre de les distinguer."""
+    corps = client.get("/api/v1/netflow/locations?minutes=120&category=streaming&q=par").json()
+    assert corps["geoip_enabled"] is False
+    assert corps["points"][0]["city"] == "Paris"
+    assert corps["countries"][0]["country"] == "FR"
+    # Les filtres de la page atteignent le depot tels quels.
+    assert destinations.lieux_demandes["minutes"] == 120
+    assert destinations.lieux_demandes["category"] == "streaming"
+    assert destinations.lieux_demandes["search"] == "par"
+
+
+def test_trouver_une_ip_la_nomme_sans_l_ecrire(
+    client: TestClient, destinations: FauxDestinations
+) -> None:
+    """N'importe quelle adresse se consulte, et la consulter n'ecrit RIEN : une
+    recherche ne doit pas faire entrer l'adresse dans l'historique du reseau."""
+    corps = client.get("/api/v1/netflow/lookup/45.57.12.34").json()
+    assert corps["address"] == "45.57.12.34"
+    assert corps["routable"] is True
+    assert corps["catalogue"]["service"] == "netflix"
+    assert corps["live"]["service"] == "netflix"
+    assert corps["seen"]["totals"]["clients"] == 2
+    # Les sources coupees sont dites, pour que l'interface explique un vide.
+    assert corps["sources"]["geoip"] is False
+    assert destinations.resolus == []
+    assert destinations.intel == {}
+
+
+def test_une_adresse_privee_n_est_pas_analysee(client: TestClient) -> None:
+    corps = client.get("/api/v1/netflow/lookup/10.1.2.3").json()
+    assert corps["routable"] is False
+    assert corps["live"] is None
+
+
+def test_une_saisie_qui_n_est_ni_adresse_ni_nom_est_refusee(client: TestClient) -> None:
+    reponse = client.get("/api/v1/netflow/lookup/pas une adresse")
+    assert reponse.status_code == 422
+
+
+def test_un_nom_de_domaine_se_cherche_par_ses_adresses(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api import netflow as routes
+
+    async def resolveur(nom: str) -> list[str]:
+        assert nom == "netflix.com"
+        return ["45.57.12.34", "45.57.12.35"]
+
+    monkeypatch.setattr(routes, "_adresses_du_nom", resolveur)
+    corps = client.get("/api/v1/netflow/lookup/Netflix.com.").json()
+    assert corps["resolved_from"] == "netflix.com"
+    assert corps["address"] == "45.57.12.34"
+    assert corps["other_addresses"] == ["45.57.12.35"]
+
+
+def test_un_nom_qui_ne_resout_pas_est_un_404(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api import netflow as routes
+
+    async def muet(nom: str) -> list[str]:
+        return []
+
+    monkeypatch.setattr(routes, "_adresses_du_nom", muet)
+    reponse = client.get("/api/v1/netflow/lookup/inexistant.example")
+    assert reponse.status_code == 404

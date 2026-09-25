@@ -56,10 +56,7 @@
       <h2>Network throughput</h2>
       <div class="card">
         <div class="chart-head">
-          <div class="legend">
-            <span class="d"><i></i>Subscriber download (router tx)</span>
-            <span class="u"><i></i>Subscriber upload (router rx)</span>
-          </div>
+          <span class="mode">Download above the axis, upload below</span>
           <select id="range-select" style="width:auto">
             <option value="15">15 minutes</option>
             <option value="60" selected>1 hour</option>
@@ -85,7 +82,7 @@
     <!-- ----------------------------------------------------- executif -->
     <section id="view-exec">
       <div class="toolbar">
-        <span class="mode">Live queues &middot; nodes and clients (topology-aware shaping)</span>
+        <span class="mode">Network at a glance</span>
         <select id="exec-range" style="width:auto">
           <option value="15">15 minutes</option>
           <option value="60" selected>1 hour</option>
@@ -99,22 +96,28 @@
       </div>
       <div id="exec-notice"></div>
 
+      <!-- Le verdict d'abord, en une ligne, puis les quatre chiffres qui le
+           justifient. Le detail vient ensuite, pour qui veut creuser. -->
+      <div id="exec-summary"></div>
+
+      <h2>Load by node</h2>
+      <div class="card" id="exec-load"></div>
+
+      <h2>Queues by node</h2>
+      <div class="table-wrap" id="exec-nodes"></div>
+      <div class="exec-legend" id="exec-legend"></div>
+
       <!-- Trois panneaux facon LibreQoS : etat live, jauge, details, du noeud
-           ou du client selectionne dans le tableau ci-dessous. -->
+           ou du client selectionne dans le tableau ci-dessus. -->
+      <h2 id="lq-heading">Selection</h2>
       <div class="lq-panels">
         <div class="card lq-panel" id="lq-live"></div>
         <div class="card lq-panel" id="lq-snapshot"></div>
         <div class="card lq-panel" id="lq-details"></div>
       </div>
 
-      <h2>Queues by node</h2>
-      <div class="table-wrap" id="exec-nodes"></div>
-
-      <h2>Global heatmap</h2>
+      <h2>Health over time</h2>
       <div class="card" id="exec-heatmap"></div>
-
-      <h2>Network flows (Sankey)</h2>
-      <div class="card" id="exec-sankey"></div>
     </section>
 
     <!-- --------------------------------------------------------- trafic -->
@@ -595,6 +598,23 @@
 
       <div id="svc-notice"></div>
       <div class="grid stats" id="svc-stats"></div>
+
+      <h2>Find an IP</h2>
+      <div class="card">
+        <form class="lookup-form" id="svc-lookup-form">
+          <input id="svc-lookup" placeholder="IP address or domain name (8.8.8.8, netflix.com)"
+                 maxlength="253" autocomplete="off" spellcheck="false">
+          <button class="primary" type="submit">Look up</button>
+        </form>
+        <div id="svc-lookup-result"></div>
+      </div>
+
+      <h2>Where the traffic goes</h2>
+      <div class="card map-card">
+        <div id="svc-map"></div>
+        <div id="svc-map-place"></div>
+      </div>
+      <div class="table-wrap" id="svc-countries" style="margin-top:1rem"></div>
 
       <h2>Live connections</h2>
       <div class="table-wrap" id="svc-live"></div>
