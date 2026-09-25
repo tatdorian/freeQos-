@@ -263,3 +263,139 @@ def a_renforcer(
     liens_charges.sort(key=lambda ligne: -float(ligne["avg_share"]))
     abonnes_charges.sort(key=lambda ligne: -float(ligne["avg_share"]))
     return {"links": liens_charges, "subscribers": abonnes_charges}
+
+
+# =========================================================================
+# Points de saturation : ou la marge manque, cote PoP comme cote internet
+# =========================================================================
+
+#: Memes seuils que les jauges de l'interface : a 70 % un lien se surveille,
+#: a 90 % il ne tient plus une pointe de plus.
+RISQUE_SURVEILLER = 0.70
+RISQUE_SATURE = 0.90
+
+COTE_INTERNET = "internet"  # le lien amont d'une passerelle : le transit
+COTE_AMONT = "upstream"  # le lien amont d'un PoP ou du coeur : vers le coeur
+COTE_POP = "pop"  # un lien aval : vers les abonnes, un VLAN, un relais
+
+
+def _positif(valeur: Any) -> float | None:
+    try:
+        v = float(valeur)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def hotspot_rows(
+    occupancy: list[dict[str, Any]],
+    links: list[dict[str, Any]],
+    *,
+    upstream: dict[str, tuple[str | None, str | None]],
+    roles: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Chaque port mesure, avec ce qui y passe, ce qu'il peut porter, et la marge.
+
+    LA CAPACITE RETENUE EST LA PLUS PETITE DE CELLES QU'ON CONNAIT : le debit
+    pose a la main sur le lien (bouton Bandwidth), la capacite mesuree du lien
+    (une radio), le debit negocie du port. C'est la plus petite qui sature en
+    premier ; retenir celle du port ferait croire a de la marge sur un
+    backhaul radio qui n'en a plus.
+
+    LE SENS SE DEDUIT DU COTE. Sur le lien amont d'un routeur, ce qu'il RECOIT
+    est le descendant des abonnes ; sur un lien aval, c'est ce qu'il EMET. Le
+    cote vient de la route par defaut lue a la decouverte, pas d'un nom.
+    """
+    par_port: dict[tuple[str, str], dict[str, Any]] = {}
+    for lien in links:
+        routeur = str(lien.get("discovered_by") or "")
+        interface = str(lien.get("interface") or "")
+        if routeur and interface:
+            # Le lien le plus renseigne gagne quand plusieurs voisins partagent le port.
+            actuel = par_port.get((routeur, interface))
+            if actuel is None or (lien.get("max_down_mbps") and not actuel.get("max_down_mbps")):
+                par_port[(routeur, interface)] = lien
+
+    lignes: list[dict[str, Any]] = []
+    for mesure in occupancy:
+        routeur = str(mesure.get("router_name") or "")
+        interface = str(mesure.get("interface") or "")
+        lien = par_port.get((routeur, interface), {})
+        _passerelle, sortie = upstream.get(routeur, (None, None))
+        amont = bool(sortie) and sortie == interface
+        role = roles.get(routeur, "pop")
+        cote = (COTE_INTERNET if role == "gateway" else COTE_AMONT) if amont else COTE_POP
+
+        candidats = [
+            ("set on the link", _positif(lien.get("max_down_mbps"))),
+            ("measured link capacity", _positif(lien.get("capacity_mbps"))),
+            ("port speed", _positif(mesure.get("capacity_mbps"))),
+        ]
+        connus = [(source, v) for source, v in candidats if v is not None]
+        capacite, source = (None, None)
+        if connus:
+            source, capacite = min(connus, key=lambda c: c[1])
+
+        # Descendant / montant vus des abonnes, selon le cote.
+        rx_now, tx_now = lien.get("rx_bps"), lien.get("tx_bps")
+        if not lien.get("measure_fresh", True):
+            rx_now = tx_now = None
+        down_now, up_now = (rx_now, tx_now) if amont else (tx_now, rx_now)
+        pic_rx, pic_tx = mesure.get("peak_rx_bps"), mesure.get("peak_tx_bps")
+        down_peak, up_peak = (pic_rx, pic_tx) if amont else (pic_tx, pic_rx)
+        quand_rx, quand_tx = mesure.get("peak_rx_at"), mesure.get("peak_tx_at")
+        down_at, up_at = (quand_rx, quand_tx) if amont else (quand_tx, quand_rx)
+
+        def mbps(v: Any) -> float | None:
+            return round(float(v) / 1e6, 2) if v is not None else None
+
+        pic = max(float(down_peak or 0), float(up_peak or 0))
+        maintenant = (
+            max(float(down_now or 0), float(up_now or 0))
+            if down_now is not None or up_now is not None
+            else None
+        )
+        part_pic = pic / (capacite * 1e6) if capacite else None
+        part_now = maintenant / (capacite * 1e6) if capacite and maintenant is not None else None
+        risque = max(part_pic or 0, part_now or 0) if capacite else None
+        if risque is None:
+            etat = "unknown"
+        elif risque >= RISQUE_SATURE:
+            etat = "saturated"
+        elif risque >= RISQUE_SURVEILLER:
+            etat = "busy"
+        else:
+            etat = "ok"
+        if not pic and not maintenant and capacite is None:
+            continue  # port muet et sans capacite : rien a dire
+        lignes.append(
+            {
+                "router": routeur,
+                "interface": interface,
+                "name": lien.get("target_name") or mesure.get("link_name") or interface,
+                "side": cote,
+                "capacity_mbps": round(capacite, 1) if capacite else None,
+                "capacity_source": source,
+                "now_down_mbps": mbps(down_now),
+                "now_up_mbps": mbps(up_now),
+                "peak_down_mbps": mbps(down_peak),
+                "peak_up_mbps": mbps(up_peak),
+                "peak_down_at": down_at,
+                "peak_up_at": up_at,
+                "avg_mbps": mbps(mesure.get("avg_bps")),
+                "now_share": round(part_now, 3) if part_now is not None else None,
+                "peak_share": round(part_pic, 3) if part_pic is not None else None,
+                "headroom_mbps": round(capacite - pic / 1e6, 1) if capacite else None,
+                "samples": int(mesure.get("samples") or 0),
+                "state": etat,
+            }
+        )
+    ordre = {"saturated": 0, "busy": 1, "ok": 2, "unknown": 3}
+    lignes.sort(
+        key=lambda r: (
+            ordre[r["state"]],
+            -(r["peak_share"] or 0),
+            -max(r["peak_down_mbps"] or 0, r["peak_up_mbps"] or 0),
+        )
+    )
+    return lignes

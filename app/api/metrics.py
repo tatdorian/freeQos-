@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
 
-from app.api.deps import CollectionDep, RepositoryDep, TimeRangeDep
+from app.api.deps import CollectionDep, ContainerDep, RepositoryDep, TimeRangeDep
 
 router = APIRouter(tags=["metrics"])
 
@@ -62,6 +62,7 @@ async def list_subscribers(
 @router.get("/subscribers/latest", summary="The subscribers of a PoP and their last sample")
 async def subscribers_latest(
     repo: RepositoryDep,
+    container: ContainerDep,
     pop_id: Annotated[int | None, Query()] = None,
     search: Annotated[str | None, Query(description="Filter on the subscriber identifier")] = None,
     kind: Annotated[
@@ -89,7 +90,7 @@ async def subscribers_latest(
     encore rien vu passer. Un abonne facture qui n'apparait nulle part est
     indiscernable d'un abonne qui n'existe pas.
     """
-    return await repo.subscriber_latest(
+    lignes = await repo.subscriber_latest(
         pop_id=pop_id,
         search=search,
         kind=kind,
@@ -97,6 +98,14 @@ async def subscribers_latest(
         order_by=order_by,
         include_unmeasured=include_unmeasured,
     )
+    # La SERIE derriere la latence affichee : mediane, extremes, gigue, perte,
+    # age de la mesure. Un chiffre seul ne dit pas s'il est stable.
+    collection = getattr(container, "collection", None)
+    sonde = getattr(collection, "rtt_prober", None) if collection is not None else None
+    if sonde is not None:
+        for ligne in lignes:
+            ligne["rtt_detail"] = sonde.detail(int(ligne["subscriber_id"]))
+    return lignes
 
 
 @router.get("/subscribers/{subscriber_id}", summary="Record of one subscriber")

@@ -27,7 +27,7 @@ from app.collectors.config_graph import (
     interface_stacks,
     routing_peers,
 )
-from app.collectors.mikrotik import MikrotikCollector, remember_loopback
+from app.collectors.mikrotik import MikrotikCollector, remember_loopback, remember_upstream
 from app.collectors.parsing import parse_flag
 from app.collectors.topology import (
     KIND_RADIO,
@@ -486,6 +486,18 @@ class ShapingService:
             cle = router_node_key(collector.config.name)
             amont, raison_amont = best_upstream(config["routes"])
             amonts[collector.config.name] = (amont.gateway if amont else None, raison_amont)
+            # La route par defaut dit aussi PAR OU part le trafic vers le coeur
+            # et internet : c'est le lien "amont" de ce routeur. Retenu pour la
+            # sonde de latence par segment et pour la carte des goulots, et
+            # porte par la case du routeur pour survivre a un redemarrage.
+            remember_upstream(
+                collector.config.name,
+                amont.gateway if amont else None,
+                amont.interface if amont else None,
+            )
+            if cle in snapshot.nodes and amont is not None:
+                snapshot.nodes[cle].attributes["upstream_gateway"] = amont.gateway
+                snapshot.nodes[cle].attributes["upstream_interface"] = amont.interface
             pairs = routing_peers(
                 ospf_neighbors=config["ospf_neighbors"],
                 bgp_sessions=config["bgp_sessions"],

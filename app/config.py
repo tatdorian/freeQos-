@@ -428,7 +428,15 @@ class Settings(BaseSettings):
     rtt_enabled: bool = False
     rtt_interval_s: float = 30.0
     rtt_batch_size: int = 20
-    rtt_count: int = 2
+    # Cinq paquets par mesure, espaces de 200 ms : assez pour une mediane, une
+    # gigue et une perte fiables, sans occuper le routeur plus d'une seconde
+    # par abonne. Deux paquets dont on gardait le meilleur ne mesuraient que le
+    # cas favorable.
+    rtt_count: int = 5
+    rtt_ping_interval_ms: int = 200
+    # Cibles publiques sondees DEPUIS CHAQUE ROUTEUR pour la latence du segment
+    # internet (en plus de sa passerelle amont). Anycast : proches partout.
+    latency_internet_targets: list[str] = ["1.1.1.1", "8.8.8.8"]
     # Au-dela, une mesure n'est plus rattachee aux echantillons.
     rtt_max_age_s: float = 300.0
 

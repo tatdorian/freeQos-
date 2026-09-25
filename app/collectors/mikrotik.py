@@ -50,7 +50,7 @@ from app.collectors.pop_census import (
 from app.collectors.topology import ethernet_capacity_mbps, parse_export, pick_loopback
 from app.collectors.vlan_clients import explain_arp
 from app.config import RouterConfig
-from app.models import InterfaceSample, PppoeSession, VlanCounter, VlanSighting
+from app.models import InterfaceSample, PingStats, PppoeSession, VlanCounter, VlanSighting
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +98,11 @@ class RouterOsReadClient(Protocol):
     def export_config(self) -> str: ...
 
     def ping(
-        self, address: str, count: int = 1, src_address: str | None = None
+        self,
+        address: str,
+        count: int = 1,
+        src_address: str | None = None,
+        interval: str | None = None,
     ) -> list[dict[str, Any]]: ...
 
     # --- Topologie et etat du shaping (lecture seule) ---
@@ -542,18 +546,25 @@ class LibrouterosReadClient:
         return self._query("/user/group")
 
     def ping(
-        self, address: str, count: int = 1, src_address: str | None = None
+        self,
+        address: str,
+        count: int = 1,
+        src_address: str | None = None,
+        interval: str | None = None,
     ) -> list[dict[str, Any]]:
         """Sonde active depuis le routeur vers l'abonne.
 
         C'est une COMMANDE, pas une ecriture de configuration : elle ne modifie
         rien sur l'equipement. Elle exige la politique 'test' sur le compte, que
         le groupe qos-ro possede deja. ``src_address`` fixe l'adresse d'ou part
-        la sonde (le loopback du routeur).
+        la sonde (le loopback du routeur) ; ``interval`` l'ecart entre deux
+        paquets (``200ms``), une seconde par defaut sur RouterOS.
         """
         options: dict[str, Any] = {"address": address, "count": count}
         if src_address:
             options["src-address"] = src_address
+        if interval:
+            options["interval"] = interval
         with self._lock:
             try:
                 api = self._ensure()
@@ -561,6 +572,30 @@ class LibrouterosReadClient:
             except Exception:
                 self._drop()
                 raise
+
+
+def ping_stats_from_rows(rows: list[dict[str, Any]], count: int) -> PingStats:
+    """Lit la reponse de ``/ping`` : une ligne par paquet, ``time`` s'il a repondu.
+
+    Les paquets perdus rendent une ligne SANS ``time`` (``status: timeout``) --
+    ou pas de ligne du tout si la commande s'arrete avant. Le nombre envoye est
+    donc le plus grand de ``count`` et des numeros de sequence vus : un paquet
+    sans reponse reste un paquet perdu, jamais un paquet oublie.
+    """
+    echantillons: list[float] = []
+    sequences: set[str] = set()
+    for row in rows:
+        seq = str(row.get("seq") or "")
+        if seq:
+            if seq in sequences:
+                continue  # ligne de resume repetee pour un meme paquet
+            sequences.add(seq)
+        if row.get("time") is None:
+            continue
+        valeur = parse_routeros_duration_ms(row.get("time"))
+        if valeur is not None:
+            echantillons.append(valeur)
+    return PingStats(sent=max(count, len(sequences)), samples=tuple(echantillons))
 
 
 def _split_pair(value: Any) -> tuple[int | None, int | None] | None:
@@ -594,6 +629,24 @@ def remember_loopback(router_name: str, address: str | None) -> None:
         _RECHERCHES_VAINES.pop(router_name, None)
     else:
         _LOOPBACKS_DETECTES.pop(router_name, None)
+
+
+#: Passerelle par defaut ACTIVE de chaque routeur et l'interface qui y mene,
+#: lues dans sa table de routage a la decouverte. La sonde de latence par
+#: segment et la carte des goulots en ont besoin sans relire la configuration.
+_AMONTS: dict[str, tuple[str | None, str | None]] = {}
+
+
+def remember_upstream(router_name: str, gateway: str | None, interface: str | None) -> None:
+    if gateway or interface:
+        _AMONTS[router_name] = (gateway, interface)
+    else:
+        _AMONTS.pop(router_name, None)
+
+
+def upstream_of(router_name: str) -> tuple[str | None, str | None]:
+    """``(passerelle, interface)`` de la route par defaut, ou ``(None, None)``."""
+    return _AMONTS.get(router_name, (None, None))
 
 
 def forget_loopbacks() -> None:
@@ -1001,16 +1054,29 @@ class MikrotikCollector:
         }
 
     async def ping(self, address: str, count: int = 1) -> float | None:
-        """RTT du routeur vers l'abonne, en millisecondes.
+        """RTT du routeur vers l'abonne, en millisecondes : la MEDIANE de la serie.
 
         Retourne None si l'abonne ne repond pas : une absence de mesure vaut
         mieux qu'une valeur inventee.
         """
-        timeout = max(self.config.timeout_s * 2, 4.0) + count
+        return (await self.ping_stats(address, count)).median_ms
+
+    async def ping_stats(
+        self, address: str, count: int = 5, *, interval_ms: int = 200
+    ) -> PingStats:
+        """Une serie de ``count`` pings, espaces de ``interval_ms``, TOUS gardes.
+
+        200 ms plutot que la seconde par defaut de RouterOS : cinq paquets en
+        une seconde, assez pour une mediane, une gigue et une perte, sans
+        occuper le routeur cinq secondes par abonne.
+        """
+        intervalle = f"{max(10, int(interval_ms))}ms"
+        timeout = max(self.config.timeout_s * 2, 4.0) + count * max(interval_ms, 10) / 1000 + 1
         source = await self.ensure_loopback()
         try:
             rows = await asyncio.wait_for(
-                asyncio.to_thread(self._client.ping, address, count, source), timeout=timeout
+                asyncio.to_thread(self._client.ping, address, count, source, intervalle),
+                timeout=timeout,
             )
         except TimeoutError:
             raise
@@ -1027,15 +1093,10 @@ class MikrotikCollector:
                 exc,
             )
             rows = await asyncio.wait_for(
-                asyncio.to_thread(self._client.ping, address, count, None), timeout=timeout
+                asyncio.to_thread(self._client.ping, address, count, None, intervalle),
+                timeout=timeout,
             )
-        times = [
-            parse_routeros_duration_ms(row.get("time"))
-            for row in rows
-            if row.get("time") is not None
-        ]
-        valides = [t for t in times if t is not None]
-        return min(valides) if valides else None
+        return ping_stats_from_rows(rows, count)
 
     async def health(self) -> dict[str, Any]:
         """Etat de sante du routeur : charge CPU, memoire, uptime, version.

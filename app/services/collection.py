@@ -40,7 +40,7 @@ from app.models import (
 )
 from app.services.pop_match import resolve_pop
 from app.services.rates import RateTracker
-from app.services.rtt import RttProber
+from app.services.rtt import PathProber, RttProber
 from app.services.vlan_sites import SITE_VLAN, VlanSite, sites_from
 
 logger = logging.getLogger(__name__)
@@ -135,6 +135,7 @@ class CollectionService:
         backhauls: Sequence[BackhaulConfig] | None = None,
         clock: Callable[[], float] = time.monotonic,
         rtt_prober: RttProber | None = None,
+        path_prober: PathProber | None = None,
         antennas_provider: AntennasProvider | None = None,
         static_clients: StaticClientsProvider | None = None,
         sightings: VlanSightingsProvider | None = None,
@@ -179,6 +180,8 @@ class CollectionService:
         # Sonde de latence optionnelle. Sans elle, rtt_ms reste NULL : la colonne
         # existe depuis la phase 1, elle attendait juste une source.
         self.rtt_prober = rtt_prober
+        # Latence par segment (PoP -> amont, PoP -> internet), meme drapeau.
+        self.path_prober = path_prober
         # Activation vivante de la sonde : amorcee par l'env, ensuite pilotee
         # depuis l'interface (le container la relit en base au demarrage).
         self.rtt_enabled = settings.rtt_enabled
@@ -853,6 +856,12 @@ class CollectionService:
             except Exception as exc:  # noqa: BLE001
                 errors.append(str(exc))
                 logger.exception("Sonde de latence impossible")
+            if self.path_prober is not None:
+                try:
+                    await self.path_prober.probe(self.collectors)
+                except Exception as exc:  # noqa: BLE001
+                    errors.append(f"latence par segment: {exc}")
+                    logger.exception("Sonde de latence par segment impossible")
 
         result = RunResult(
             job=JOB_RTT,

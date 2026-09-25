@@ -367,3 +367,14 @@ def test_l_arbre_connait_la_case_vlan() -> None:
         assert "vlan:" in bloc[: bloc.index("};")], table
     assert "topoStaticRates" in JS
     assert "if (fiches.has(s.login)) return;" in JS
+
+
+def test_l_executif_montre_la_saturation_et_la_latence_par_segment() -> None:
+    """DEMANDE EXPLICITE : reperer ou le debit manque avant que le reseau ne
+    tombe, cote PoP comme cote internet, et une latence precise."""
+    for identifiant in ("exec-hotspots", "exec-latency"):
+        assert f'id="{identifiant}"' in HTML, identifiant
+    assert "/capacity/hotspots" in JS and "/latency" in JS
+    assert "renderHotspots" in JS and "renderLatencySegments" in JS
+    # La pointe de chaque pas est tracee : un test de debit court reste visible.
+    assert "tx_peak_bps" in JS

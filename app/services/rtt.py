@@ -42,7 +42,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from app.collectors.mikrotik import MikrotikCollector
+from app.collectors.mikrotik import MikrotikCollector, upstream_of
+from app.models import PingStats
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,10 @@ logger = logging.getLogger(__name__)
 class RttReading:
     rtt_ms: float | None
     measured_at: float
+    #: La serie complete : mediane, extremes, gigue, perte. None quand le
+    #: routeur n'a pas pu lancer la sonde (erreur, delai depasse).
+    stats: PingStats | None = None
+    router_name: str | None = None
 
 
 class RttProber:
@@ -66,7 +71,8 @@ class RttProber:
         *,
         batch_size: int = 20,
         max_age_s: float = 300.0,
-        count: int = 1,
+        count: int = 5,
+        interval_ms: int = 200,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         # Lot PAR POP : c'est le routeur qui emet les pings, donc c'est par
@@ -74,6 +80,7 @@ class RttProber:
         self.batch_size = max(1, batch_size)
         self.max_age_s = max_age_s
         self.count = max(1, count)
+        self.interval_ms = max(10, interval_ms)
         self._clock = clock
         self._readings: dict[int, RttReading] = {}
         # Un curseur de tourniquet par PoP, jamais un seul pour tout le parc.
@@ -89,6 +96,35 @@ class RttProber:
         if self._clock() - reading.measured_at > self.max_age_s:
             return None
         return reading.rtt_ms
+
+    def detail(self, subscriber_id: int) -> dict[str, object] | None:
+        """La serie derriere le chiffre : mediane, extremes, gigue, perte, age."""
+        reading = self._readings.get(subscriber_id)
+        if reading is None:
+            return None
+        age = self._clock() - reading.measured_at
+        if age > self.max_age_s:
+            return None
+        base: dict[str, object] = {
+            "age_s": round(age, 1),
+            "router": reading.router_name,
+            "method": f"{self.count} x ping, {self.interval_ms} ms apart, from the PoP router",
+        }
+        if reading.stats is not None:
+            base.update(reading.stats.to_dict())
+        return base
+
+    def readings_by_router(self) -> dict[str, list[PingStats]]:
+        """Series fraiches, rangees par routeur emetteur (latence d'acces du PoP)."""
+        maintenant = self._clock()
+        par_routeur: dict[str, list[PingStats]] = {}
+        for reading in self._readings.values():
+            if reading.stats is None or reading.router_name is None:
+                continue
+            if maintenant - reading.measured_at > self.max_age_s:
+                continue
+            par_routeur.setdefault(reading.router_name, []).append(reading.stats)
+        return par_routeur
 
     def forget_all_but(self, subscriber_ids: set[int]) -> None:
         for subscriber_id in self._readings.keys() - subscriber_ids:
@@ -115,19 +151,28 @@ class RttProber:
             return 0
 
         results = await asyncio.gather(
-            *(collector.ping(ip, self.count) for _, ip, collector in batch),
+            *(
+                collector.ping_stats(ip, self.count, interval_ms=self.interval_ms)
+                for _, ip, collector in batch
+            ),
             return_exceptions=True,
         )
 
         now = self._clock()
         answered = 0
         for (subscriber_id, ip, collector), outcome in zip(batch, results, strict=True):
+            stats: PingStats | None
             if isinstance(outcome, BaseException):
                 logger.debug("Ping %s via %s impossible : %s", ip, collector.name, outcome)
-                rtt = None
+                stats = None
             else:
-                rtt = outcome
-            self._readings[subscriber_id] = RttReading(rtt_ms=rtt, measured_at=now)
+                stats = outcome
+            # La MEDIANE, plus le minimum : le meilleur paquet d'une serie cache
+            # exactement ce qu'on cherche, l'attente dans une file qui se remplit.
+            rtt = stats.median_ms if stats is not None else None
+            self._readings[subscriber_id] = RttReading(
+                rtt_ms=rtt, measured_at=now, stats=stats, router_name=collector.name
+            )
             self.probes_sent += 1
             if rtt is not None:
                 answered += 1
@@ -155,6 +200,8 @@ class RttProber:
             # combien de tourniquets tournent en parallele.
             "batch_size": self.batch_size,
             "pops": len(self._cursors),
+            "count": self.count,
+            "interval_ms": self.interval_ms,
         }
 
 
@@ -171,3 +218,129 @@ def _group_by_pop(
     for cible in targets:
         par_pop.setdefault(cible[2].name, []).append(cible)
     return par_pop
+
+
+# =========================================================================
+# Latence par SEGMENT : ou se trouve le retard
+# =========================================================================
+
+
+@dataclass(slots=True)
+class PathReading:
+    target: str
+    stats: PingStats | None
+    measured_at: float
+    error: str | None = None
+
+
+class PathProber:
+    """Sonde, depuis CHAQUE routeur, sa passerelle amont et des cibles internet.
+
+    POURQUOI. La latence d'un abonne ne dit pas OU se perd le temps. Mesuree du
+    PoP vers l'abonne, elle couvre l'acces (radio, VLAN) ; pour savoir si le
+    coeur ou le transit internet ralentissent, il faut aussi mesurer depuis ce
+    PoP vers le haut. Trois segments, trois mesures depuis le meme routeur :
+
+      - acces    : PoP -> abonnes (le tourniquet des abonnes, deja la) ;
+      - amont    : PoP -> sa passerelle par defaut (le lien vers le coeur) ;
+      - internet : PoP -> des cibles publiques stables (anycast).
+
+    Si l'amont est bon et internet mauvais, le probleme est au-dessus du coeur.
+    Si l'amont est deja mauvais, il est entre le PoP et le coeur. C'est ce
+    diagnostic que la seule latence abonne ne peut pas poser.
+
+    La passerelle vient de la TABLE DE ROUTAGE lue a la decouverte (route par
+    defaut active), jamais d'une saisie.
+    """
+
+    def __init__(
+        self,
+        *,
+        internet_targets: tuple[str, ...] = ("1.1.1.1", "8.8.8.8"),
+        count: int = 5,
+        interval_ms: int = 200,
+        max_age_s: float = 300.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self.internet_targets = tuple(t for t in internet_targets if t)
+        self.count = max(1, count)
+        self.interval_ms = max(10, interval_ms)
+        self.max_age_s = max_age_s
+        self._clock = clock
+        #: routeur -> segment ("gateway" | "internet") -> lectures
+        self._readings: dict[str, dict[str, list[PathReading]]] = {}
+
+    async def probe(self, collectors: list[MikrotikCollector]) -> int:
+        taches: list[tuple[str, str, str, MikrotikCollector]] = []
+        for collector in collectors:
+            passerelle, _interface = upstream_of(collector.name)
+            if passerelle:
+                taches.append((collector.name, "gateway", passerelle, collector))
+            for cible in self.internet_targets:
+                taches.append((collector.name, "internet", cible, collector))
+        if not taches:
+            return 0
+        resultats = await asyncio.gather(
+            *(
+                collector.ping_stats(cible, self.count, interval_ms=self.interval_ms)
+                for _, _, cible, collector in taches
+            ),
+            return_exceptions=True,
+        )
+        maintenant = self._clock()
+        nouvelles: dict[str, dict[str, list[PathReading]]] = {}
+        repondu = 0
+        for (routeur, segment, cible, _c), resultat in zip(taches, resultats, strict=True):
+            if isinstance(resultat, BaseException):
+                lecture = PathReading(cible, None, maintenant, error=str(resultat) or "error")
+            else:
+                lecture = PathReading(cible, resultat, maintenant)
+                if resultat.received:
+                    repondu += 1
+            nouvelles.setdefault(routeur, {}).setdefault(segment, []).append(lecture)
+        self._readings = nouvelles
+        return repondu
+
+    def snapshot(self) -> dict[str, dict[str, list[dict[str, object]]]]:
+        maintenant = self._clock()
+        sortie: dict[str, dict[str, list[dict[str, object]]]] = {}
+        for routeur, segments in self._readings.items():
+            for segment, lectures in segments.items():
+                for lecture in lectures:
+                    age = maintenant - lecture.measured_at
+                    if age > self.max_age_s:
+                        continue
+                    ligne: dict[str, object] = {
+                        "target": lecture.target,
+                        "age_s": round(age, 1),
+                        "error": lecture.error,
+                    }
+                    if lecture.stats is not None:
+                        ligne.update(lecture.stats.to_dict())
+                    sortie.setdefault(routeur, {}).setdefault(segment, []).append(ligne)
+        return sortie
+
+
+def summarise(series: list[PingStats]) -> dict[str, object] | None:
+    """Latence d'ACCES d'un PoP : ce que vivent ses abonnes, en un chiffre juste.
+
+    La mediane des medianes (l'abonne typique), le 90e centile (les plus mal
+    servis, qu'une moyenne noierait) et la perte moyenne.
+    """
+    medianes = sorted(s.median_ms for s in series if s.median_ms is not None)
+    if not medianes:
+        return None
+
+    def rang(q: float) -> float:
+        return medianes[min(len(medianes) - 1, int(round(q * (len(medianes) - 1))))]
+
+    pertes = [s.loss_pct for s in series if s.loss_pct is not None]
+    gigues = [s.jitter_ms for s in series if s.jitter_ms is not None]
+    return {
+        "median_ms": round(rang(0.5), 2),
+        "p90_ms": round(rang(0.9), 2),
+        "max_ms": round(medianes[-1], 2),
+        "jitter_ms": round(sum(gigues) / len(gigues), 2) if gigues else None,
+        "loss_pct": round(sum(pertes) / len(pertes), 1) if pertes else None,
+        "subscribers": len(medianes),
+    }

@@ -229,8 +229,16 @@ def default_gateways(routes: Sequence[dict[str, Any]]) -> list[Upstream]:
                     distance = int(brut_distance) if brut_distance else 1
                 except ValueError:
                     distance = 1
-                interface = (
-                    _texte(row.get(champ)).split("%")[1] if "%" in _texte(row.get(champ)) else None
+                # L'interface de sortie : RouterOS l'ecrit apres un '%', le
+                # plus souvent dans 'immediate-gw' ('10.0.0.1%ether1') alors
+                # que 'gateway' ne porte que l'adresse. On la prend ou elle est.
+                interface = next(
+                    (
+                        _texte(row.get(c)).split("%", 1)[1]
+                        for c in ("gateway", "immediate-gw", "immediate_gw")
+                        if "%" in _texte(row.get(c))
+                    ),
+                    None,
                 )
                 trouvees.append(Upstream(adresse, distance, interface))
                 break
