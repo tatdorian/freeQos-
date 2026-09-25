@@ -243,3 +243,51 @@ def client(settings) -> TestClient:  # type: ignore[no-untyped-def]
     register_routes(app, settings)
     app.dependency_overrides[get_container] = lambda: container
     return TestClient(app)
+
+
+# ================================================ la sonde ne bloque pas la collecte
+
+
+def test_les_sondes_ont_leur_propre_connexion_au_routeur() -> None:
+    """REGRESSION : sur la connexion commune, vingt series de pings occupaient
+    le routeur vingt secondes sur trente ; la lecture des sessions depassait
+    son delai et le cycle de debit n'ecrivait rien -- le trafic disparaissait
+    des qu'on activait la sonde."""
+    collector = MikrotikCollector(RouterConfig(name="r", host="192.0.2.1", password="x"))
+    assert collector._probe_client is not None  # noqa: SLF001
+    assert collector._probe_client is not collector._client  # noqa: SLF001
+
+
+async def test_les_pings_partent_un_par_un_par_routeur_et_en_parallele_entre_routeurs() -> None:
+    """Lancees toutes ensemble, les series bloquaient chacune un thread en
+    attendant la connexion, epuisaient le reservoir partage par toute
+    l'application, et les dernieres expiraient avant d'etre parties."""
+    import asyncio
+
+    from app.services.rtt import ping_per_router
+
+    en_cours: dict[str, int] = {}
+    pic: dict[str, int] = {}
+    simultanes_total = {"now": 0, "max": 0}
+
+    class Routeur:
+        def __init__(self, nom: str) -> None:
+            self.name = nom
+
+        async def ping_stats(self, cible: str, count: int, *, interval_ms: int) -> PingStats:
+            en_cours[self.name] = en_cours.get(self.name, 0) + 1
+            pic[self.name] = max(pic.get(self.name, 0), en_cours[self.name])
+            simultanes_total["now"] += 1
+            simultanes_total["max"] = max(simultanes_total["max"], simultanes_total["now"])
+            await asyncio.sleep(0.01)
+            en_cours[self.name] -= 1
+            simultanes_total["now"] -= 1
+            return PingStats(sent=count, samples=(1.0,))
+
+    a, b = Routeur("a"), Routeur("b")
+    cibles = [(f"10.0.0.{i}", a) for i in range(5)] + [(f"10.1.0.{i}", b) for i in range(5)]
+    resultats = await ping_per_router(cibles, 5, 200)  # type: ignore[arg-type]
+
+    assert len(resultats) == 10 and all(isinstance(r, PingStats) for r in resultats)
+    assert pic == {"a": 1, "b": 1}  # jamais deux a la fois sur un routeur
+    assert simultanes_total["max"] == 2  # mais les deux routeurs en parallele

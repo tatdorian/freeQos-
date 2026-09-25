@@ -395,3 +395,13 @@ def test_l_interface_passe_par_l_ecran_de_connexion() -> None:
     assert "\nroute();\n" not in JS  # plus de demarrage sans session
     assert "if (!AUTH.ready) return;" in JS
     assert "/auth/setup" in JS and "/auth/login" in JS and "'/users'" in JS
+
+
+def test_changer_d_onglet_n_attend_pas_le_chargement_d_un_autre() -> None:
+    """REGRESSION : le verrou de rafraichissement etait global ; cliquer sur un
+    onglet pendant qu'un autre chargeait ne chargeait rien pendant dix
+    secondes. Le verrou est desormais PAR onglet."""
+    bloc = JS[JS.index("async function refresh() {") :]
+    bloc = bloc[: bloc.index("\n}\n")]
+    assert "if (refreshing === vue) return;" in bloc
+    assert "if (refreshing) return;" not in bloc

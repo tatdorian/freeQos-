@@ -235,3 +235,33 @@ def test_l_empreinte_resiste_a_une_comparaison_naive() -> None:
     assert a != b  # sel different a chaque fois
     assert verify_password(MDP, a) and not verify_password(MDP + "x", a)
     assert not verify_password(MDP, "n'importe quoi")
+
+
+def test_la_session_n_est_pas_relue_en_base_a_chaque_requete(
+    app_client: TestClient, users: InMemoryUsersRepository
+) -> None:
+    """Une page envoie une dizaine de requetes : une ecriture de session par
+    requete, toutes sur la meme ligne, ralentissait chaque page."""
+    setup(app_client)
+    appels = {"n": 0}
+    original = users.session_user
+
+    async def compte(*args, **kwargs):  # type: ignore[no-untyped-def]
+        appels["n"] += 1
+        return await original(*args, **kwargs)
+
+    users.session_user = compte  # type: ignore[method-assign]
+    for _ in range(5):
+        assert app_client.get("/api/v1/rtt").status_code == 200
+    assert appels["n"] <= 1
+
+
+def test_un_grade_retire_s_applique_malgre_le_cache(app_client: TestClient) -> None:
+    setup(app_client)
+    app_client.post("/api/v1/users", json={"email": "b@x.fr", "password": MDP, "role": "edit"})
+    autre = TestClient(app_client.app, base_url="https://testserver")
+    assert login(autre, "b@x.fr") == 200
+    assert autre.put("/api/v1/rtt", json={"enabled": False}).status_code == 200
+    app_client.patch("/api/v1/users/2", json={"role": "read"})
+    # Sessions fermees et cache vide : la requete suivante est refusee.
+    assert autre.put("/api/v1/rtt", json={"enabled": False}).status_code in (401, 403)
