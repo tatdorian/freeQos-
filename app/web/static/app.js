@@ -656,6 +656,8 @@ function statCard(cls, label, value, unit, sub) {
 }
 
 async function loadDashboard() {
+  const courbe = loadThroughput();
+  const top = loadTopTalkers();
   const [overview, tree] = await Promise.all([api('/overview'), api('/network/tree')]);
 
   const down = bps(overview.tx_bps), up = bps(overview.rx_bps);
@@ -673,9 +675,10 @@ async function loadDashboard() {
     statCard('', 'Backhaul capacity', (overview.backhaul_capacity_mbps || 0).toFixed(0), 'Mbps',
       esc((overview.backhauls || 0) + ' link(s) measured'));
 
-  await loadThroughput();
-  await loadTopTalkers();
+  // En parallele : la courbe et le top partent AVANT les chiffres de tete,
+  // et chaque bloc s'affiche des que SA donnee arrive.
   renderBackhaulCards(tree);
+  await Promise.all([courbe, top]);
 }
 
 async function loadThroughput() {
@@ -880,18 +883,32 @@ async function loadExec() {
   // BLANC. On garde une trace de l'echec pour l'expliquer, plutot que rien.
   let firstError = null;
   const grab = (p) => p.catch((err) => { firstError = firstError || err; return undefined; });
-  const [heat, subsRaw, bloat, topoData, tree, rttState, points, latence] = await Promise.all([
-    grab(api('/heatmap?minutes=' + minutes + '&buckets=' + buckets)),
+  // LES BLOCS LENTS NE RETIENNENT PAS LES AUTRES. La heatmap, les points de
+  // saturation et la latence par segment lisent des series : ils partent en
+  // meme temps que le reste et s'affichent chacun a leur arrivee, au lieu de
+  // faire attendre tout l'ecran derriere la requete la plus lente.
+  const heures = Math.max(1, Math.ceil(minutes / 60));
+  const pHeat = grab(api('/heatmap?minutes=' + minutes + '&buckets=' + buckets));
+  const pPoints = api('/capacity/hotspots?hours=' + heures).catch(() => null);
+  const pLatence = api('/latency').catch(() => null);
+  pHeat.then((heat) => renderHeatmap(document.getElementById('exec-heatmap'), heat));
+  pLatence.then((latence) => {
+    exec.latency = latence;
+    renderLatencySegments(document.getElementById('exec-latency'), latence);
+  });
+  pPoints.then((points) => {
+    exec.hotspots = (points && points.hotspots) || [];
+    renderHotspots(document.getElementById('exec-hotspots'), points);
+    // Le verdict nomme les liens satures : il se redessine quand ils arrivent.
+    if (exec.subs) renderExecSummary(document.getElementById('exec-summary'));
+  });
+  const [subsRaw, bloat, topoData, tree, rttState] = await Promise.all([
     grab(api('/subscribers/latest?limit=500&order_by=login')),
     api('/bufferbloat?minutes=' + minutes).catch(() => null),
     api('/topology').catch(() => null),
     api('/network/tree').catch(() => []),
     api('/rtt').catch(() => null),
-    api('/capacity/hotspots?hours=' + Math.max(1, Math.ceil(minutes / 60))).catch(() => null),
-    api('/latency').catch(() => null),
   ]);
-  exec.hotspots = (points && points.hotspots) || [];
-  exec.latency = latence;
   const subs = Array.isArray(subsRaw) ? subsRaw : [];
   renderRttControl(rttState);
   exec.bloatById = {};
@@ -919,19 +936,19 @@ async function loadExec() {
 
   exec.subs = subs;
   renderExecSummary(document.getElementById('exec-summary'));
-  renderHotspots(document.getElementById('exec-hotspots'), points);
-  renderLatencySegments(document.getElementById('exec-latency'), latence);
   renderExecLoad(document.getElementById('exec-load'));
   renderQueuePanels();
   renderNodeTable(document.getElementById('exec-nodes'));
   renderExecLegend(document.getElementById('exec-legend'));
-  renderHeatmap(document.getElementById('exec-heatmap'), heat);
   document.getElementById('exec-count').textContent =
     exec.nodes.length + ' node(s), ' + subs.length + ' client(s)';
   renderExecNotice(rttState, firstError, {
     noNodes: exec.nodes.length === 0,
     topoOnly: fromTopo && exec.nodes.length > 0,
   });
+  // Le rafraichissement suivant attend quand meme les blocs lents : sinon ils
+  // s'empileraient toutes les dix secondes sur un serveur deja charge.
+  await Promise.all([pHeat, pPoints, pLatence]);
 }
 
 /** Note d'experience d'un client : le score composite du serveur, ou le proxy
@@ -2879,10 +2896,24 @@ async function loadSubscribers() {
  *  Detache a dessein : cette lecture touche chaque routeur (calcul du plan,
  *  files, pare-feu). Elle peut prendre plusieurs secondes sur un parc etendu,
  *  et un PoP injoignable ne doit pas faire disparaitre la liste des abonnes. */
+/** Derniere verification des plafonds, et son heure : elle touche CHAQUE
+ *  routeur (plan, files, pare-feu). La relancer a chaque rafraichissement de
+ *  dix secondes chargeait les routeurs en permanence, et la connexion qu'elle
+ *  occupe est celle de la collecte des debits. Une fois par minute suffit. */
+const PLAFONDS = { data: null, at: 0, pending: null };
+const PLAFONDS_TTL_MS = 60000;
+
 async function annoterLesPlafonds(rows) {
   let data;
   try {
-    data = await api('/shaping/limits');
+    if (!PLAFONDS.data || Date.now() - PLAFONDS.at > PLAFONDS_TTL_MS) {
+      PLAFONDS.pending = PLAFONDS.pending || api('/shaping/limits')
+        .then((d) => { PLAFONDS.data = d; PLAFONDS.at = Date.now(); return d; })
+        .finally(() => { PLAFONDS.pending = null; });
+      data = await PLAFONDS.pending;
+    } else {
+      data = PLAFONDS.data;
+    }
   } catch (err) {
     // Silencieux a l'ecran : l'absence de verification n'est pas une panne de
     // la page. Les pastilles restent simplement absentes, et Reglages > Shaping
@@ -4100,29 +4131,34 @@ async function loadServices() {
     (SVC.category ? '&category=' + encodeURIComponent(SVC.category) : '') +
     (SVC.search ? '&q=' + encodeURIComponent(SVC.search) : '');
 
-  const [etat, intel, dest, live, regles, lieux] = await Promise.all([
+  // Chaque bloc s'affiche a l'arrivee de SA donnee : la carte (trois
+  // agregations) ne retient plus les connexions en direct, qui sont en memoire.
+  const pLive = api('/netflow/connections?limit=80').catch(() => ({ connections: [] }))
+    .then((live) => renderLiveConnections(live));
+  const pRegles = api('/traffic-rules').catch(() => ({ rules: [] }))
+    .then((regles) => renderRules(regles));
+  const pLieux = api('/netflow/locations' + suffixe).catch(() => null)
+    .then(async (lieux) => {
+      SVC.locations = lieux;
+      await renderTrafficMap(document.getElementById('svc-map'), lieux);
+      renderCountries(document.getElementById('svc-countries'), lieux);
+    });
+  const [etat, intel, dest] = await Promise.all([
     api('/netflow/status'),
     api('/netflow/intel').catch(() => null),
     api('/netflow/destinations' + suffixe + '&limit=120')
       .catch(() => ({ destinations: [], services: [] })),
-    api('/netflow/connections?limit=80').catch(() => ({ connections: [] })),
-    api('/traffic-rules').catch(() => ({ rules: [] })),
-    api('/netflow/locations' + suffixe).catch(() => null),
   ]);
 
   renderServiceNotice(etat, intel);
   renderServiceStats(etat, intel, dest);
-  SVC.locations = lieux;
-  await renderTrafficMap(document.getElementById('svc-map'), lieux);
-  renderCountries(document.getElementById('svc-countries'), lieux);
-  renderLiveConnections(live);
   renderServiceTable(dest.services || []);
   renderDestinations(dest.destinations || []);
-  renderRules(regles);
 
   document.getElementById('svc-count').textContent = etat.listening
     ? (dest.destinations || []).length + ' address(es) over ' + SVC.minutes + ' min'
     : 'collector stopped';
+  await Promise.all([pLive, pRegles, pLieux]);
 }
 
 /** Ce qui empeche cette page de repondre, dit en toutes lettres.
@@ -7839,16 +7875,24 @@ function appError(message) {
 
 let refreshing = false;
 async function refresh() {
-  if (refreshing) return;
-  refreshing = true;
+  // UN CHARGEMENT EN COURS NE BLOQUE QUE LE MEME ONGLET.
+  //
+  // Le verrou etait global : cliquer sur un onglet pendant qu'un autre
+  // chargeait encore ne chargeait RIEN -- la page restait vide jusqu'au
+  // rafraichissement automatique suivant, dix secondes plus tard. C'est ce
+  // qui rendait toutes les pages "lentes". Seul un second chargement du MEME
+  // onglet est inutile ; un changement d'onglet part tout de suite.
+  const vue = state.view;
+  if (refreshing === vue) return;
+  refreshing = vue;
   try {
-    await LOADERS[state.view]();
-    appError(null);
+    await LOADERS[vue]();
+    if (state.view === vue) appError(null);
   } catch (err) {
     console.error('Rafraichissement impossible :', err);
-    appError(err && err.message ? err.message : String(err));
+    if (state.view === vue) appError(err && err.message ? err.message : String(err));
   } finally {
-    refreshing = false;
+    if (refreshing === vue) refreshing = false;
   }
 }
 

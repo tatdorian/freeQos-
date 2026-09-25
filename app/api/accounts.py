@@ -19,6 +19,7 @@ verifient en plus l'en-tete ``Origin`` quand le navigateur le fournit.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -101,6 +102,22 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "?"
 
 
+#: Sessions verifiees recemment : empreinte -> (compte, heure monotone).
+#:
+#: Une page envoie une dizaine de requetes en parallele. Verifier la session en
+#: base a CHACUNE, c'etait une ecriture (prolongation) par requete, toutes sur
+#: la MEME ligne -- donc servies l'une apres l'autre, et autant de connexions
+#: prises au reservoir que la collecte partage. Une verification toutes les
+#: trente secondes suffit ; toute modification de compte vide ce cache, pour
+#: qu'un grade retire ou une session fermee s'applique aussitot.
+_SESSIONS_VUES: dict[str, tuple[dict[str, Any], float]] = {}
+SESSION_CACHE_S = 30.0
+
+
+def forget_cached_sessions() -> None:
+    _SESSIONS_VUES.clear()
+
+
 async def current_user(request: Request, container: ContainerDep) -> dict[str, Any]:
     """Le compte de la session, ou 401. Ne juge pas encore du grade."""
     if not container.settings.auth_enabled:
@@ -108,7 +125,15 @@ async def current_user(request: Request, container: ContainerDep) -> dict[str, A
     jeton = request.cookies.get(COOKIE)
     if not jeton:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required")
-    fiche = await _store(container).session_user(token_digest(jeton), ttl=_ttl(container))
+    empreinte = token_digest(jeton)
+    vu = _SESSIONS_VUES.get(empreinte)
+    if vu is not None and time.monotonic() - vu[1] < SESSION_CACHE_S:
+        return vu[0]
+    fiche = await _store(container).session_user(empreinte, ttl=_ttl(container))
+    if fiche is not None:
+        if len(_SESSIONS_VUES) > 1000:
+            _SESSIONS_VUES.clear()
+        _SESSIONS_VUES[empreinte] = (fiche, time.monotonic())
     if fiche is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired, log in again"
@@ -266,6 +291,7 @@ async def auth_login(
 @router.post("/auth/logout", summary="Close the current session")
 async def auth_logout(request: Request, response: Response, container: ContainerDep) -> None:
     jeton = request.cookies.get(COOKIE)
+    forget_cached_sessions()
     if jeton and container.users_repo is not None:
         await container.users_repo.close_session(token_digest(jeton))
     response.delete_cookie(COOKIE, path="/")
@@ -293,6 +319,7 @@ async def change_my_password(
     except InvalidAccountError as exc:
         raise _refus(exc) from exc
     await store.update(int(user["id"]), password_hash=hash_password(nouveau))
+    forget_cached_sessions()
     jeton = request.cookies.get(COOKIE)
     await store.close_sessions_of(int(user["id"]), keep=token_digest(jeton) if jeton else None)
     return {"ok": True}
@@ -367,6 +394,7 @@ async def update_user(
             raise _refus(exc) from exc
     await _garde_un_editeur(store, cible, perd=perd)
     fiche = await store.update(user_id, **champs)
+    forget_cached_sessions()
     # Un grade retire, un compte coupe ou un mot de passe change ferment ses
     # sessions : l'effet est immediat, pas au prochain expirement.
     if "password_hash" in champs or payload.disabled or perd:
@@ -385,3 +413,4 @@ async def delete_user(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     await _garde_un_editeur(store, cible, perd=True)
     await store.delete(user_id)
+    forget_cached_sessions()

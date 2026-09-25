@@ -665,6 +665,23 @@ class MikrotikCollector:
     ) -> None:
         self.config = config
         self._client = client or LibrouterosReadClient(config)
+        # UNE CONNEXION A PART POUR LES SONDES (/ping).
+        #
+        # Une connexion RouterOS ne traite qu'une commande a la fois : ses
+        # appels passent sous un verrou. Or une serie de pings l'occupe une
+        # seconde par cible -- vingt abonnes et trois cibles amont par cycle,
+        # c'est vingt-trois secondes toutes les trente. Sur la connexion
+        # commune, la lecture des sessions attendait derriere, depassait son
+        # delai, et le cycle de debit n'ecrivait RIEN : activer la sonde de
+        # latence faisait disparaitre le trafic. Separees, les deux ne se
+        # croisent plus. (Un client injecte -- les tests -- sert aux deux.)
+        self._probe_client: RouterOsReadClient | None = (
+            None if client is not None else LibrouterosReadClient(config)
+        )
+
+    @property
+    def _sonde(self) -> RouterOsReadClient:
+        return self._probe_client if self._probe_client is not None else self._client
 
     @property
     def name(self) -> str:
@@ -752,6 +769,8 @@ class MikrotikCollector:
 
     def close(self) -> None:
         self._client.close()
+        if self._probe_client is not None:
+            self._probe_client.close()
 
     # ------------------------------------------------------------------
     # Debit des liens
@@ -1075,7 +1094,7 @@ class MikrotikCollector:
         source = await self.ensure_loopback()
         try:
             rows = await asyncio.wait_for(
-                asyncio.to_thread(self._client.ping, address, count, source, intervalle),
+                asyncio.to_thread(self._sonde.ping, address, count, source, intervalle),
                 timeout=timeout,
             )
         except TimeoutError:
@@ -1093,7 +1112,7 @@ class MikrotikCollector:
                 exc,
             )
             rows = await asyncio.wait_for(
-                asyncio.to_thread(self._client.ping, address, count, None, intervalle),
+                asyncio.to_thread(self._sonde.ping, address, count, None, intervalle),
                 timeout=timeout,
             )
         return ping_stats_from_rows(rows, count)

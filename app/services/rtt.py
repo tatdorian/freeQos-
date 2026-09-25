@@ -48,6 +48,35 @@ from app.models import PingStats
 logger = logging.getLogger(__name__)
 
 
+async def ping_per_router(
+    targets: list[tuple[str, MikrotikCollector]], count: int, interval_ms: int
+) -> list[PingStats | BaseException]:
+    """Les series de pings, UNE A LA FOIS par routeur, en parallele entre routeurs.
+
+    Une connexion RouterOS ne traite qu'une commande a la fois. Les lancer
+    toutes ensemble ne les rendait pas plus rapides : chacune bloquait un
+    thread en attendant son tour, epuisait le reservoir de threads partage par
+    toute l'application (collecte et pages comprises), et les dernieres
+    depassaient leur delai avant meme d'avoir commence -- comptees "sans
+    reponse" alors qu'elles n'etaient jamais parties.
+    """
+    resultats: list[PingStats | BaseException | None] = [None] * len(targets)
+    par_routeur: dict[int, list[int]] = {}
+    for i, (_cible, collector) in enumerate(targets):
+        par_routeur.setdefault(id(collector), []).append(i)
+
+    async def file(indices: list[int]) -> None:
+        for i in indices:
+            cible, collector = targets[i]
+            try:
+                resultats[i] = await collector.ping_stats(cible, count, interval_ms=interval_ms)
+            except Exception as exc:  # noqa: BLE001 - une cible muette n'arrete pas les autres
+                resultats[i] = exc
+
+    await asyncio.gather(*(file(indices) for indices in par_routeur.values()))
+    return [r if r is not None else RuntimeError("not probed") for r in resultats]
+
+
 @dataclass(slots=True)
 class RttReading:
     rtt_ms: float | None
@@ -150,12 +179,8 @@ class RttProber:
         if not batch:
             return 0
 
-        results = await asyncio.gather(
-            *(
-                collector.ping_stats(ip, self.count, interval_ms=self.interval_ms)
-                for _, ip, collector in batch
-            ),
-            return_exceptions=True,
+        results = await ping_per_router(
+            [(ip, collector) for _, ip, collector in batch], self.count, self.interval_ms
         )
 
         now = self._clock()
@@ -280,12 +305,8 @@ class PathProber:
                 taches.append((collector.name, "internet", cible, collector))
         if not taches:
             return 0
-        resultats = await asyncio.gather(
-            *(
-                collector.ping_stats(cible, self.count, interval_ms=self.interval_ms)
-                for _, _, cible, collector in taches
-            ),
-            return_exceptions=True,
+        resultats = await ping_per_router(
+            [(cible, collector) for _, _, cible, collector in taches], self.count, self.interval_ms
         )
         maintenant = self._clock()
         nouvelles: dict[str, dict[str, list[PathReading]]] = {}

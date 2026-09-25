@@ -10,10 +10,12 @@ connexions API et base sont fermees proprement.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -219,6 +221,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def chronometre(request: Request, call_next: Any) -> Any:
+        """Chaque reponse dit ce qu'elle a coute (``Server-Timing``, visible dans
+        l'onglet Reseau du navigateur), et une requete de plus d'une seconde est
+        journalisee avec sa route : une page lente se diagnostique sans outil."""
+        debut = time.perf_counter()
+        response = await call_next(request)
+        duree_ms = (time.perf_counter() - debut) * 1000
+        response.headers["Server-Timing"] = f"app;dur={duree_ms:.1f}"
+        if duree_ms > 1000 and request.url.path.startswith(settings.api_prefix):
+            logger.warning(
+                "Requete lente : %s %s en %.0f ms", request.method, request.url.path, duree_ms
+            )
+        return response
 
     register_routes(app, settings)
     return app
