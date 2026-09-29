@@ -20,6 +20,7 @@ async def list_pops(repo: RepositoryDep) -> list[dict[str, Any]]:
 @router.delete("/pops/{pop_id}", summary="Remove a PoP and its data")
 async def delete_pop(
     repo: RepositoryDep,
+    container: ContainerDep,
     pop_id: Annotated[int, Path(ge=1)],
     confirm: Annotated[bool, Query(description="Required: the deletion is permanent")] = False,
 ) -> dict[str, Any]:
@@ -40,6 +41,10 @@ async def delete_pop(
         supprime = await repo.delete_pop(pop_id)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    # Le PoP emporte ses abonnes et ses backhauls : les identifiants gardes en
+    # cache par la collecte designeraient des lignes disparues, et le lot
+    # suivant echouerait en entier sur la cle etrangere.
+    container.directory.clear_cache()
     return {"deleted": True, "cascaded": supprime}
 
 

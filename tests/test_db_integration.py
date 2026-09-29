@@ -1135,6 +1135,35 @@ async def test_suppression_d_un_pop_emporte_ses_donnees(database: Database, now:
         await repo.delete_pop(jetable)
 
 
+async def test_les_pops_vides_que_rien_ne_declare_sont_retires(database: Database) -> None:
+    """ "PoP Nord", "PoP Sud" saisis pour essayer, jamais relies : ils encombraient
+    l'arbre et les listes. Un site declare, ou qui porte quelque chose, reste."""
+    directory = PgDirectory(database.pool)
+    repo = MetricsRepository(database.pool)
+    ancien = await directory.ensure_pop("PoP Nord")
+    await directory.ensure_pop("PoP Sud")
+    await directory.ensure_pop("Site declare")
+    porteur = await directory.ensure_pop("Site avec abonne")
+    await directory.ensure_subscriber("client", pop_id=porteur)
+
+    # Tout juste crees : la periode de grace les protege.
+    assert await repo.purge_empty_pops(keep=set()) == []
+
+    async with database.pool.acquire() as conn:
+        await conn.execute("UPDATE pops SET updated_at = now() - interval '2 hours'")
+    retires = await repo.purge_empty_pops(keep={"site DECLARE"})
+
+    assert retires == ["PoP Nord", "PoP Sud"]
+    restants = {p["name"] for p in await repo.list_pops()}
+    assert restants == {"Site declare", "Site avec abonne"}
+
+    # Apres le menage, la collecte ne doit pas reutiliser un identifiant disparu.
+    directory.clear_cache()
+    nouveau = await directory.ensure_pop("PoP Nord")
+    assert nouveau != ancien
+    await directory.ensure_subscriber("revenu", pop_id=nouveau)  # pas de cle etrangere cassee
+
+
 async def test_la_limite_appliquee_remonte_avec_sa_source(
     database: Database, now: datetime
 ) -> None:

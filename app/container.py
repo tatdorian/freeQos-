@@ -63,6 +63,7 @@ from app.services.crypto import KeySource, SecretBox, load_or_create_key
 from app.services.intel import JOB_INTEL, IntelService
 from app.services.netflow_export import JOB_NETFLOW_EXPORT, NetflowExportService
 from app.services.netflow_service import JOB_NETFLOW, NetflowService
+from app.services.pop_cleanup import JOB_PURGE_POPS, purge_empty_pops
 from app.services.registry import RouterRegistry
 from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
 from app.services.rtt import PathProber, RttProber
@@ -550,7 +551,7 @@ async def build_container(settings: Settings) -> Container:
     # seulement l'affichage : le scheduler relit interval_s a chaque tour.
     runtime_config.on_interval_change = scheduler.set_interval
 
-    return Container(
+    conteneur = Container(
         settings=settings,
         database=database,
         writer=writer,
@@ -583,6 +584,14 @@ async def build_container(settings: Settings) -> Container:
         intel=intel,
         restrictions=restrictions,
     )
+
+    # PoPs vides que plus rien ne declare (routeur retire, essai jamais relie) :
+    # retires pour ne plus encombrer l'arbre et les listes.
+    async def purge_pops() -> None:
+        await purge_empty_pops(conteneur)
+
+    scheduler.add_job(JOB_PURGE_POPS, 600.0, purge_pops)
+    return conteneur
 
 
 async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Settings) -> None:
