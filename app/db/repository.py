@@ -8,7 +8,7 @@ continue, poste de dev).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -1030,6 +1030,15 @@ class MetricsRepository:
                 days,
             )
         return _rows(rows)
+
+    async def metrics_history_days(self) -> float:
+        """Jours de mesures par abonne deja en base (0 si aucune)."""
+        async with self._pool.acquire() as conn:
+            debut = await conn.fetchval("SELECT min(ts) FROM subscriber_metrics")
+        if debut is None:
+            return 0.0
+        ecart: timedelta = datetime.now(tz=UTC) - debut
+        return max(0.0, ecart.total_seconds() / 86400)
 
     async def silent_subscribers(self, *, days: int = 7, limit: int = 20) -> list[dict[str, Any]]:
         """Abonnes declares dont plus rien n'est passe depuis N jours.

@@ -518,6 +518,22 @@ async def test_la_base_fait_foi_apres_amorcage(
     assert service.enforcement_enabled is True
 
 
+async def test_l_ecriture_revient_toujours_au_demarrage(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """DEMANDE EXPLICITE : enforcement toujours actif par defaut. Une coupure
+    depuis l'interface, meme humaine, ne dure que jusqu'au redemarrage."""
+    settings.enforcement_enabled = True
+    depot = DepotBoosts()
+    depot.flags["enforcement_enabled"] = False
+    service = make_service(settings, routeur, repository=depot)
+
+    await service.load_flags()
+
+    assert service.enforcement_enabled is True
+    assert depot.flags["enforcement_enabled"] is True
+
+
 async def test_bascule_refusee_si_verrouille(
     settings: Settings, routeur: FakeRouterOsClient
 ) -> None:

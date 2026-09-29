@@ -151,6 +151,36 @@ async def test_referentiel_upsert(database: Database) -> None:
     assert row["pop_id"] == pop_id
 
 
+async def test_jours_d_historique_pour_les_insights(database: Database) -> None:
+    """Insights dit combien de jours de mesures existent : vide, c'est zero."""
+    repo = MetricsRepository(database.pool)
+    assert await repo.metrics_history_days() == 0.0
+
+    directory = PgDirectory(database.pool)
+    sid = await directory.ensure_subscriber("histo", plan=Plan(100, 20, "mock"))
+    ancien = datetime.now(tz=UTC) - timedelta(days=3)
+    await PgMetricsWriter(database.pool).write_subscriber_metrics(
+        [
+            (
+                sid,
+                SubscriberSample(
+                    ts=ancien,
+                    login="histo",
+                    router_name="r",
+                    pop_name="p",
+                    address="10.20.0.9",
+                    uptime_s=1,
+                    rx_bytes=0,
+                    tx_bytes=0,
+                    rx_bps=0.0,
+                    tx_bps=0.0,
+                ),
+            )
+        ]
+    )
+    assert 2.9 < await repo.metrics_history_days() < 3.1
+
+
 async def test_ecriture_et_relecture_des_metriques(database: Database, now: datetime) -> None:
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
