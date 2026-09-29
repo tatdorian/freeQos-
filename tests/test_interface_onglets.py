@@ -442,3 +442,8 @@ def test_l_onglet_insights_existe_et_est_cable() -> None:
     for identifiant in ("ins-risk", "ins-upgrade", "ins-capacity", "ins-all"):
         assert f'id="{identifiant}"' in HTML, identifiant
     assert 'id="global-search"' in HTML and "/search?q=" in JS
+
+
+def test_la_sante_radio_est_affichee_dans_les_equipements() -> None:
+    assert 'id="radio-health"' in HTML and "async function loadRadioHealth(" in JS
+    assert "'/radios'" in JS

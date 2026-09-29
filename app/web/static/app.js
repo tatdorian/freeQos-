@@ -3954,9 +3954,71 @@ function bytesText(octets) {
   return n + ' o';
 }
 
+/** SANTE RADIO : chaque AP (signal, bruit, SNR, CCQ, airtime, frequence) et
+ *  chacun de ses CPE, avec en clair ce qui ne va pas. Lu au dernier cycle. */
+async function loadRadioHealth() {
+  const hote = document.getElementById('radio-health');
+  if (!hote) return;
+  let data;
+  try { data = await api('/radios'); } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const antennes = data.antennas || [];
+  if (!antennes.length) {
+    hote.innerHTML = '<div class="empty">No antenna declared: add one below to read its radio and its CPEs.</div>';
+    return;
+  }
+  const v = (x, u, d) => x == null ? '<span class="na">-</span>' : esc(Number(x).toFixed(d || 0)) + (u ? ' ' + u : '');
+  hote.innerHTML = antennes.map((a) => {
+    const r = a.radio || {};
+    const stations = a.stations || [];
+    const entete = '<div class="radio-head"><b>' + esc(a.name) + '</b>' +
+      '<span class="pct-hint">' + esc([a.pop_name, r.model, r.firmware, r.mode].filter(Boolean).join(' · ')) + '</span>' +
+      '<span class="spacer"></span>' +
+      (a.error ? '<span class="badge crit" title="' + esc(a.error) + '">unreachable</span>'
+        : a.read_at ? '<span class="pct-hint">read ' + esc(depuis(a.read_at)) + '</span>' : '<span class="badge">not read yet</span>') +
+      '</div>';
+    const faits = a.radio ? '<div class="radio-facts">' +
+      '<div><span>Frequency</span>' + v(r.frequency_mhz, 'MHz') + (r.channel_width_mhz ? ' / ' + v(r.channel_width_mhz, 'MHz') : '') + '</div>' +
+      '<div><span>Signal</span>' + v(r.signal_dbm, 'dBm') + '</div>' +
+      '<div><span>Noise floor</span>' + v(r.noise_dbm, 'dBm') + '</div>' +
+      '<div><span>SNR</span>' + v(r.snr_db, 'dB') + '</div>' +
+      '<div><span>CCQ</span>' + v(r.ccq_pct, '%') + '</div>' +
+      '<div><span>Airtime</span>' + v(r.airtime_pct, '%') + '</div>' +
+      '<div><span>Capacity ↓/↑</span>' + v(r.capacity_down_mbps, '') + ' / ' + v(r.capacity_up_mbps, 'Mbps') + '</div>' +
+      '<div><span>Rate tx/rx</span>' + v(r.tx_rate_mbps, '') + ' / ' + v(r.rx_rate_mbps, 'Mbps') + '</div>' +
+      '<div><span>Distance</span>' + (r.distance_m != null ? v(r.distance_m / 1000, 'km', 1) : '<span class="na">-</span>') + '</div>' +
+      '<div><span>CPEs</span>' + (stations.length || v(r.stations)) + '</div>' +
+      '</div>' : '';
+    const problemes = (a.issues || []).length
+      ? '<div class="notice warn">' + a.issues.map(esc).join(' · ') + '</div>' : '';
+    const cpe = stations.length
+      ? '<details' + (a.stations_with_issues ? ' open' : '') + '><summary>' + stations.length + ' CPE(s)' +
+        (a.stations_with_issues ? ', <b class="sev-warn">' + a.stations_with_issues + ' with an issue</b>' : '') +
+        '</summary><div class="table-wrap"><table><thead><tr><th>CPE</th><th>IP</th><th class="num">Signal</th>' +
+        '<th class="num">Remote</th><th class="num">Noise</th><th class="num">SNR</th><th class="num">CCQ</th>' +
+        '<th class="num">Rate tx/rx</th><th class="num">Distance</th><th>Issue</th></tr></thead><tbody>' +
+        stations.map((c) => '<tr><td><b>' + esc(c.name || c.mac || '?') + '</b><span class="hint">' + esc(c.mac || '') + '</span></td>' +
+          '<td>' + (c.ip ? '<code>' + esc(c.ip) + '</code>' : '<span class="na">-</span>') + '</td>' +
+          '<td class="num">' + (c.signal_dbm == null ? '-' : sqCell(Math.round(c.signal_dbm) + ' dBm',
+            c.signal_dbm < -75 ? 'crit' : c.signal_dbm < -68 ? 'warn' : 'ok')) + '</td>' +
+          '<td class="num">' + v(c.remote_signal_dbm, 'dBm') + '</td>' +
+          '<td class="num">' + v(c.noise_dbm, 'dBm') + '</td>' +
+          '<td class="num">' + v(c.snr_db, 'dB') + '</td>' +
+          '<td class="num">' + v(c.ccq_pct, '%') + '</td>' +
+          '<td class="num">' + v(c.tx_rate_mbps) + ' / ' + v(c.rx_rate_mbps, 'Mbps') + '</td>' +
+          '<td class="num">' + (c.distance_m != null ? v(c.distance_m / 1000, 'km', 1) : '-') + '</td>' +
+          '<td>' + esc((c.issues || []).join(' · ')) + '</td></tr>').join('') +
+        '</tbody></table></div></details>' : '';
+    return '<div class="card radio-card">' + entete + faits + problemes + cpe + '</div>';
+  }).join('');
+}
+
 async function loadRouters() {
   await loadPops();
   await loadAntennas();
+  loadRadioHealth();
   // La sante interroge les routeurs un par un : lancee sans attendre, pour ne
   // pas retarder la page ou l'on vient d'ajouter un equipement.
   loadRoutersHealth();

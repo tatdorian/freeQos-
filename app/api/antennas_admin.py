@@ -225,3 +225,37 @@ async def probe_antenna(
     else:
         await repository.record_failure(antenna_id, result.get("error") or "echec")
     return result
+
+
+@router.get("/radios", summary="Radio health of every AP and its CPEs")
+async def radios(container: ContainerDep) -> dict[str, Any]:
+    """Signal, bruit, SNR, CCQ, airtime, modulation, distance : pour chaque
+    antenne declaree, et pour chaque CPE associe a une AP -- avec, en clair, ce
+    qui ne va pas. Lu au dernier cycle de collecte, sans interroger les radios.
+    """
+    from app.services.radio import radio_issues, station_issues
+
+    fournisseur = getattr(container.collection, "antennas_provider", None)
+    lecteur = getattr(fournisseur, "radio_snapshot", None)
+    instantane: list[dict[str, Any]] = lecteur() if callable(lecteur) else []
+    fiches: dict[str, dict[str, Any]] = {}
+    if container.antennas_repo is not None:
+        for fiche in await container.antennas_repo.list_public():
+            cle = str(fiche.get("device_key") or fiche.get("name"))
+            fiches[cle] = fiche
+    sortie = []
+    for antenne in instantane:
+        fiche = fiches.get(antenne["key"], {})
+        stations = [{**sta, "issues": station_issues(sta)} for sta in antenne.get("stations") or []]
+        stations.sort(key=lambda x: (x["signal_dbm"] is None, x["signal_dbm"] or 0))
+        sortie.append(
+            {
+                **antenne,
+                "name": fiche.get("name") or antenne["key"],
+                "pop_name": fiche.get("pop_name"),
+                "issues": radio_issues(antenne.get("radio")),
+                "stations": stations,
+                "stations_with_issues": sum(1 for x in stations if x["issues"]),
+            }
+        )
+    return {"antennas": sortie}
