@@ -33,7 +33,6 @@ from app.api import (
     pop_census,
     routers_admin,
     shaping,
-    sso,
     static_clients,
     traffic_rules,
     usage_v1,
@@ -172,7 +171,6 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     # Connexion et comptes : ces routes portent leurs propres gardes (ouvrir une
     # session ne peut pas exiger d'en avoir une).
     app.include_router(accounts.router, prefix=settings.api_prefix)
-    app.include_router(sso.router, prefix=settings.api_prefix)
     # TOUTE route d'exploitation exige une session, et un compte en lecture
     # seule n'y obtient que les methodes de lecture. La garde est posee ICI,
     # une fois, plutot que route par route : une route ajoutee demain est

@@ -85,18 +85,8 @@ async function boot() {
     return;
   }
   AUTH.authDisabled = etat.auth_enabled === false;
-  // Bouton SSO, seulement s'il est configure et hors premier lancement (le
-  // premier compte se cree avec un mot de passe : personne n'existe encore).
-  const sso = document.getElementById('auth-sso');
-  if (sso) {
-    sso.hidden = !(etat.sso && etat.sso.enabled) || etat.setup_required;
-    if (etat.sso && etat.sso.label) sso.textContent = etat.sso.label;
-  }
   if (etat.user) { startApp(etat.user); return; }
-  // Retour d'un SSO refuse : le motif s'affiche sur l'ecran de connexion.
-  const erreurSso = new URLSearchParams(location.search).get('sso_error');
-  showAuthGate(etat.setup_required ? 'setup' : 'login', erreurSso || undefined);
-  if (erreurSso) history.replaceState(null, '', location.pathname + location.hash);
+  showAuthGate(etat.setup_required ? 'setup' : 'login');
 }
 
 async function submitAuth(event) {

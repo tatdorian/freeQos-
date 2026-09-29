@@ -228,22 +228,6 @@ class Settings(BaseSettings):
     # Duree d'une session SANS activite : chaque requete la prolonge.
     session_ttl_hours: int = 168
 
-    # --- Connexion unique (SSO, OpenID Connect) ---
-    # Google Workspace, Microsoft Entra ID, Keycloak, Authentik... : l'equipe se
-    # connecte avec le compte qu'elle a deja. Vide = SSO desactive.
-    # Ex. Google : https://accounts.google.com
-    #     Entra ID : https://login.microsoftonline.com/<tenant>/v2.0
-    oidc_issuer: str | None = None
-    oidc_client_id: str | None = None
-    oidc_client_secret: SecretStr | None = None
-    # URL publique de retour, a declarer chez le fournisseur. Vide = deduite de
-    # la requete (https://<hote>/api/v1/auth/oidc/callback).
-    oidc_redirect_url: str | None = None
-    oidc_label: str = "Sign in with SSO"
-    # Un email inconnu de freeQoS qui se connecte en SSO : refuse ('none', le
-    # defaut -- l'editeur garde la main sur qui entre) ou cree avec ce grade.
-    oidc_auto_create_role: Literal["none", "read", "edit"] = "none"
-
     # --- Base de donnees ---
     database_url: str = "postgresql://qos:changeme@localhost:5432/qos"
     db_pool_min: int = 1

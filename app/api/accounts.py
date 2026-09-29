@@ -226,20 +226,15 @@ def _public(fiche: dict[str, Any]) -> dict[str, Any]:
 async def auth_status(request: Request, container: ContainerDep) -> dict[str, Any]:
     if not container.settings.auth_enabled:
         return {"auth_enabled": False, "setup_required": False, "user": _public(ANONYME)}
-    reglages = container.settings
-    sso = {
-        "enabled": bool(reglages.oidc_issuer and reglages.oidc_client_id),
-        "label": reglages.oidc_label,
-    }
     store = _store(container)
     if await store.count() == 0:
-        return {"auth_enabled": True, "setup_required": True, "user": None, "sso": sso}
+        return {"auth_enabled": True, "setup_required": True, "user": None}
     utilisateur = None
     jeton = request.cookies.get(COOKIE)
     if jeton:
         fiche = await store.session_user(token_digest(jeton), ttl=_ttl(container))
         utilisateur = _public(fiche) if fiche else None
-    return {"auth_enabled": True, "setup_required": False, "user": utilisateur, "sso": sso}
+    return {"auth_enabled": True, "setup_required": False, "user": utilisateur}
 
 
 @router.post("/auth/setup", summary="Create the FIRST account (edit rights)")
