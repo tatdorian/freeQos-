@@ -206,7 +206,7 @@ CREATE TABLE IF NOT EXISTS airos_antennas (
 -- -----------------------------------------------------------------------------
 
 -- Un equipement vu sur le reseau. La cle est prefixee par sa source
--- ("mac:AA:BB:..", "router:pop-nord") pour rester stable entre deux decouvertes.
+-- ("mac:AA:BB:..", "router:pop-altair") pour rester stable entre deux decouvertes.
 CREATE TABLE IF NOT EXISTS topology_nodes (
     key             TEXT PRIMARY KEY,
     name            TEXT NOT NULL,

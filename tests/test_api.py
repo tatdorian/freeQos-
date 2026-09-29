@@ -321,7 +321,7 @@ class FakeRepository:
             {
                 "router_name": "pop-test",
                 "interface": "ether2",
-                "link_name": "BH-Nord",
+                "link_name": "BH-Altair",
                 "capacity_mbps": 1000.0,
                 "peak_rx_bps": 120_000_000.0,
                 "peak_tx_bps": 960_000_000.0,

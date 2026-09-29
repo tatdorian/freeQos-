@@ -75,15 +75,15 @@ const l = (key, s, t, sur) => ({ key, source_key: s, target_key: t, interface: '
   capacity_mbps: 1000, port_capacity_mbps: 1000, attributes: {} });
 const nodes = [
   n('router:gw', 'GW', 'gateway'), n('router:core', 'CORE', 'core'),
-  n('router:nord', 'PoP Nord', 'pop'), n('router:sud', 'PoP Sud', 'pop'),
-  n('mac:AA', 'BH-Nord', 'radio'),
+  n('router:altair', 'PoP Altair', 'pop'), n('router:vega', 'PoP Vega', 'pop'),
+  n('mac:AA', 'BH-Altair', 'radio'),
 ];
 const links = [
-  l('k1', 'router:nord', 'router:sud', true),
-  l('k2', 'router:core', 'router:nord', true),
-  l('k3', 'router:core', 'router:sud', true),
+  l('k1', 'router:altair', 'router:vega', true),
+  l('k2', 'router:core', 'router:altair', true),
+  l('k3', 'router:core', 'router:vega', true),
   l('k4', 'router:gw', 'router:core', true),
-  l('k5', 'router:nord', 'mac:AA', true),
+  l('k5', 'router:altair', 'mac:AA', true),
 ];
 const data = { nodes, links, counts: {} };
 const parents = (m) => { const o = {};
@@ -103,17 +103,17 @@ A.topoAutoLayout(m);
 const p = parents(m);
 console.log(JSON.stringify({
   parents: p,
-  profondeurs: { sud: m.nodesByKey.get('router:sud').depth,
-                 nord: m.nodesByKey.get('router:nord').depth },
+  profondeurs: { vega: m.nodesByKey.get('router:vega').depth,
+                 altair: m.nodesByKey.get('router:altair').depth },
   racines: m.roots.map((r) => r.key),
 }));
 """,
     )
-    assert res["parents"]["router:nord"] == "router:core"
-    # Le coeur, pas PoP Nord : c'est tout l'objet du correctif.
-    assert res["parents"]["router:sud"] == "router:core"
+    assert res["parents"]["router:altair"] == "router:core"
+    # Le coeur, pas PoP Altair : c'est tout l'objet du correctif.
+    assert res["parents"]["router:vega"] == "router:core"
     # Donc les deux PoPs sont au MEME etage.
-    assert res["profondeurs"]["sud"] == res["profondeurs"]["nord"]
+    assert res["profondeurs"]["vega"] == res["profondeurs"]["altair"]
     # Et l'arbre a une seule racine : le sommet de la hierarchie.
     assert res["racines"] == ["router:gw"]
 
@@ -239,31 +239,31 @@ console.log(JSON.stringify({ collisions, cases: m.nodesByKey.size }));
 
 
 def test_replier_une_branche_retire_tout_ce_qui_pend_dessous(harnais: Path) -> None:
-    """Replier PoP Nord doit retirer le backhaul qui pend dessous, pas seulement
+    """Replier PoP Altair doit retirer le backhaul qui pend dessous, pas seulement
     le PoP lui-meme : une branche a moitie repliee laisserait un trait vers une
     case orpheline, et personne ne saurait de quoi elle depend."""
     res = executer(
         harnais,
         GRAPHE
         + """
-A.topo.replies.add('router:nord');
+A.topo.replies.add('router:altair');
 const m = A.topoBuildModel(data);
 A.topoAutoLayout(m);
 const replies = [];
 m.nodesByKey.forEach((x) => { if (x.replie) replies.push(x.key); });
 console.log(JSON.stringify({
   replies: replies.sort(),
-  nordVisible: m.nodesByKey.get('router:nord').replie === false,
-  nordPlace: Number.isFinite(m.nodesByKey.get('router:nord').x),
+  altairVisible: m.nodesByKey.get('router:altair').replie === false,
+  altairPlace: Number.isFinite(m.nodesByKey.get('router:altair').x),
 }));
 """,
     )
-    # Le backhaul pend sous PoP Nord : il disparait avec lui.
+    # Le backhaul pend sous PoP Altair : il disparait avec lui.
     assert res["replies"] == ["mac:AA"]
     # La case repliee, elle, reste dessinee : c'est elle qui porte la pastille
     # permettant de rouvrir la branche.
-    assert res["nordVisible"] is True
-    assert res["nordPlace"] is True
+    assert res["altairVisible"] is True
+    assert res["altairPlace"] is True
 
 
 def test_deplier_rend_la_branche_a_l_arbre(harnais: Path) -> None:
@@ -273,9 +273,9 @@ def test_deplier_rend_la_branche_a_l_arbre(harnais: Path) -> None:
         harnais,
         GRAPHE
         + """
-A.topo.replies.add('router:nord');
+A.topo.replies.add('router:altair');
 A.topoAutoLayout(A.topoBuildModel(data));
-A.topo.replies.delete('router:nord');
+A.topo.replies.delete('router:altair');
 const m = A.topoBuildModel(data);
 A.topoAutoLayout(m);
 const bh = m.nodesByKey.get('mac:AA');
@@ -288,7 +288,7 @@ console.log(JSON.stringify({ replie: bh.replie, place: Number.isFinite(bh.x) }))
 
 def test_deux_sous_arbres_voisins_ne_se_touchent_pas(harnais: Path) -> None:
     """Colles, les feuilles d'une branche touchent celles de la suivante et
-    l'oeil ne voit plus ou l'une finit. PoP Nord porte un backhaul, PoP Sud non :
+    l'oeil ne voit plus ou l'une finit. PoP Altair porte un backhaul, PoP Vega non :
     l'ecart entre les deux doit donc depasser une simple ligne."""
     res = executer(
         harnais,
@@ -301,7 +301,7 @@ m.nodesByKey.forEach((x) => { ys[x.key] = x.y; });
 console.log(JSON.stringify({ ys }));
 """,
     )
-    ecart = abs(res["ys"]["router:sud"] - res["ys"]["mac:AA"])
+    ecart = abs(res["ys"]["router:vega"] - res["ys"]["mac:AA"])
     # ROWH vaut 74 : un ecart strictement superieur prouve l'air ajoute entre
     # les deux sous-arbres.
     assert ecart > 74
@@ -318,7 +318,7 @@ const noeuds = nodes.map((x) => ({ ...x }));
 noeuds[2].pos_x = 999; noeuds[2].pos_y = 640;
 const m = A.topoBuildModel({ nodes: noeuds, links, counts: {} });
 A.topoAutoLayout(m);
-const nd = m.nodesByKey.get('router:nord');
+const nd = m.nodesByKey.get('router:altair');
 console.log(JSON.stringify({ x: nd.x, y: nd.y }));
 """,
     )
@@ -337,29 +337,29 @@ ANNEAU = """
 // son frere.
 const nodes = [
   { key: 'router:coeur', name: 'Coeur', kind: 'core' },
-  { key: 'router:nord',  name: 'Nord',  kind: 'pop' },
-  { key: 'router:sud',   name: 'Sud',   kind: 'pop' },
+  { key: 'router:altair',  name: 'Altair',  kind: 'pop' },
+  { key: 'router:vega',   name: 'Vega',   kind: 'pop' },
 ];
 const links = [
-  { key: 'l1', source_key: 'router:coeur', target_key: 'router:nord', interface: 'ether1' },
-  { key: 'l2', source_key: 'router:nord',  target_key: 'router:sud',  interface: 'ether2' },
+  { key: 'l1', source_key: 'router:coeur', target_key: 'router:altair', interface: 'ether1' },
+  { key: 'l2', source_key: 'router:altair',  target_key: 'router:vega',  interface: 'ether2' },
 ];
 """
 
 
 def test_le_parent_de_la_config_bat_le_plus_court_chemin(harnais: Path) -> None:
-    """Sud n'est relie qu'a Nord dans le graphe : le calcul le pend donc sous
-    Nord. Sa table de routage dit qu'il sort par le coeur -- et c'est elle qui
+    """Vega n'est relie qu'a Altair dans le graphe : le calcul le pend donc sous
+    Altair. Sa table de routage dit qu'il sort par le coeur -- et c'est elle qui
     doit gagner, parce qu'elle SAIT la ou le graphe suppose."""
     sans = executer(
         harnais,
         ANNEAU
         + """
 const m = A.topoBuildModel({ nodes, links, counts: {} });
-console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey }));
+console.log(JSON.stringify({ parent: m.nodesByKey.get('router:vega').parentKey }));
 """,
     )
-    assert sans["parent"] == "router:nord", "sans la config, l'arbre pend Sud sous Nord"
+    assert sans["parent"] == "router:altair", "sans la config, l'arbre pend Vega sous Altair"
 
     avec = executer(
         harnais,
@@ -368,7 +368,7 @@ console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey })
 const noeuds = nodes.map((x) => ({ ...x }));
 noeuds[2].config_parent = 'router:coeur';
 const m = A.topoBuildModel({ nodes: noeuds, links, counts: {} });
-console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey }));
+console.log(JSON.stringify({ parent: m.nodesByKey.get('router:vega').parentKey }));
 """,
     )
     assert avec["parent"] == "router:coeur"
@@ -382,12 +382,12 @@ def test_le_parent_pose_a_la_main_bat_celui_de_la_config(harnais: Path) -> None:
         + """
 const noeuds = nodes.map((x) => ({ ...x }));
 noeuds[2].config_parent = 'router:coeur';
-noeuds[2].parent_override = 'router:nord';
+noeuds[2].parent_override = 'router:altair';
 const m = A.topoBuildModel({ nodes: noeuds, links, counts: {} });
-console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey }));
+console.log(JSON.stringify({ parent: m.nodesByKey.get('router:vega').parentKey }));
 """,
     )
-    assert res["parent"] == "router:nord"
+    assert res["parent"] == "router:altair"
 
 
 def test_un_parent_de_config_disparu_ne_bloque_pas_l_arbre(harnais: Path) -> None:
@@ -400,10 +400,10 @@ def test_un_parent_de_config_disparu_ne_bloque_pas_l_arbre(harnais: Path) -> Non
 const noeuds = nodes.map((x) => ({ ...x }));
 noeuds[2].config_parent = 'router:fantome';
 const m = A.topoBuildModel({ nodes: noeuds, links, counts: {} });
-console.log(JSON.stringify({ parent: m.nodesByKey.get('router:sud').parentKey }));
+console.log(JSON.stringify({ parent: m.nodesByKey.get('router:vega').parentKey }));
 """,
     )
-    assert res["parent"] == "router:nord"
+    assert res["parent"] == "router:altair"
 
 
 def test_une_case_sans_aucun_lien_reste_affichee(harnais: Path) -> None:
@@ -420,7 +420,7 @@ def test_une_case_sans_aucun_lien_reste_affichee(harnais: Path) -> None:
         harnais,
         """
 const nodes = [
-  { key: 'router:pop', name: 'PoP Nord', kind: 'pop' },
+  { key: 'router:pop', name: 'PoP Altair', kind: 'pop' },
   { key: 'candidate:pop:10.20.0.77', name: '10.20.0.77', kind: 'candidate' },
 ];
 const m = A.topoBuildModel({ nodes, links: [], counts: {} });
@@ -496,7 +496,7 @@ def test_un_voisin_simplement_vu_n_est_pas_marque(harnais_interroges: Path) -> N
         """
 const nodes = [
   { key: 'mac:AA:00:00:00:00:FE', name: 'MAIN GATEWAY', kind: 'pop', attributes: {} },
-  { key: 'mac:DC:9F:DB:11:22:33', name: 'BH-Nord', kind: 'radio' },
+  { key: 'mac:DC:9F:DB:11:22:33', name: 'BH-Altair', kind: 'radio' },
 ];
 console.log(JSON.stringify({ cles: [...A.topoInterroges(nodes)] }));
 """,
@@ -591,7 +591,7 @@ console.log(JSON.stringify({ compte: f.get('k').compte, membres: f.get('k').memb
 # exactement la question qu'on se pose devant un PoP qui sature.
 # ---------------------------------------------------------------------------
 ARBRE_ABOS = """
-const nodes = [{ key: 'router:pop', name: 'PoP Nord', kind: 'pop', hidden: false }];
+const nodes = [{ key: 'router:pop', name: 'PoP Altair', kind: 'pop', hidden: false }];
 const data = { nodes, links: [], counts: {} };
 const abonne = (login, pop, tx) => ({
   login, pop_name: pop, kind: 'pppoe', tx_bps: tx, rx_bps: 1000,
@@ -610,7 +610,7 @@ def test_les_abonnes_sont_replies_par_defaut(harnais: Path) -> None:
         harnais,
         ARBRE_ABOS
         + """
-A.topo.subs = [abonne('alice', 'PoP Nord', 5e6), abonne('bob', 'PoP Nord', 2e6)];
+A.topo.subs = [abonne('alice', 'PoP Altair', 5e6), abonne('bob', 'PoP Altair', 2e6)];
 const m = A.topoBuildModel(data);
 const agregat = m.nodesByKey.get('abos:router:pop');
 console.log(JSON.stringify({
@@ -631,7 +631,7 @@ def test_l_agregat_deplie_montre_chaque_abonne(harnais: Path) -> None:
         harnais,
         ARBRE_ABOS
         + """
-A.topo.subs = [abonne('alice', 'PoP Nord', 5e6), abonne('bob', 'PoP Nord', 2e6)];
+A.topo.subs = [abonne('alice', 'PoP Altair', 5e6), abonne('bob', 'PoP Altair', 2e6)];
 A.topo.abosOuverts.add('abos:router:pop');
 const m = A.topoBuildModel(data);
 const agregat = m.nodesByKey.get('abos:router:pop');
@@ -653,7 +653,7 @@ def test_un_abonne_porte_son_adresse_et_son_debit(harnais: Path) -> None:
         harnais,
         ARBRE_ABOS
         + """
-A.topo.subs = [abonne('alice', 'PoP Nord', 5e6)];
+A.topo.subs = [abonne('alice', 'PoP Altair', 5e6)];
 A.topo.abosOuverts.add('abos:router:pop');
 const m = A.topoBuildModel(data);
 const feuille = m.nodesByKey.get('abos:router:pop|alice');
@@ -674,7 +674,7 @@ def test_un_client_a_ip_fixe_garde_sa_nature(harnais: Path) -> None:
         harnais,
         ARBRE_ABOS
         + """
-A.topo.subs = [{ login: 'mairie', pop_name: 'PoP Nord', kind: 'static' }];
+A.topo.subs = [{ login: 'mairie', pop_name: 'PoP Altair', kind: 'static' }];
 A.topo.abosOuverts.add('abos:router:pop');
 const m = A.topoBuildModel(data);
 console.log(JSON.stringify({ kind: m.nodesByKey.get('abos:router:pop|mairie').kind }));
@@ -690,7 +690,7 @@ def test_une_liste_trop_longue_est_bornee(harnais: Path) -> None:
         harnais,
         ARBRE_ABOS
         + """
-A.topo.subs = Array.from({ length: 40 }, (_, i) => abonne('cli' + i, 'PoP Nord', 1e6));
+A.topo.subs = Array.from({ length: 40 }, (_, i) => abonne('cli' + i, 'PoP Altair', 1e6));
 A.topo.abosOuverts.add('abos:router:pop');
 const m = A.topoBuildModel(data);
 const agregat = m.nodesByKey.get('abos:router:pop');
@@ -896,7 +896,7 @@ A.topo.replies.clear();
 A.topo.data = { nodes, links, counts: {} };
 A.renderTopoCanvas();
 const ouvert = A.boites['topo-canvas'].innerHTML;
-A.topo.replies.add('router:nord');
+A.topo.replies.add('router:altair');
 A.renderTopoCanvas();
 const ferme = A.boites['topo-canvas'].innerHTML;
 const cases = (s) => (s.match(/class="topo-node[^"]*" data-node=/g) || []).length;
@@ -906,7 +906,7 @@ console.log(JSON.stringify({
   traitsOuvert: traits(ouvert), traitsFerme: traits(ferme),
   backhaulOuvert: ouvert.indexOf('mac:AA') !== -1,
   backhaulFerme: ferme.indexOf('mac:AA') !== -1,
-  pastille: ferme.indexOf('data-fold="router:nord"') !== -1,
+  pastille: ferme.indexOf('data-fold="router:altair"') !== -1,
   compte: ferme.indexOf('>+1<') !== -1,
 }));
 """,
@@ -922,7 +922,7 @@ console.log(JSON.stringify({
 
 
 def test_la_legende_ne_liste_que_les_roles_dessines(harnais_dessin: Path) -> None:
-    """Replier PoP Nord retire le seul equipement radio : la legende ne doit
+    """Replier PoP Altair retire le seul equipement radio : la legende ne doit
     plus proposer « Radio », sinon on cherche une case qui n'est plus la."""
     res = dessiner(
         harnais_dessin,
@@ -932,7 +932,7 @@ A.topo.replies.clear();
 A.topo.data = { nodes, links, counts: {} };
 A.renderTopoCanvas();
 const avant = A.boites['topo-legend'].innerHTML;
-A.topo.replies.add('router:nord');
+A.topo.replies.add('router:altair');
 A.renderTopoCanvas();
 const apres = A.boites['topo-legend'].innerHTML;
 console.log(JSON.stringify({
@@ -1028,8 +1028,8 @@ def test_une_mesure_perimee_ne_porte_pas_de_debit(harnais: Path) -> None:
     res = executer(
         harnais,
         """
-const nodes = [{ key: 'router:nord', name: 'PoP Nord', kind: 'pop' }];
-A.topo.subs = [{ login: 'vieux', pop_name: 'PoP Nord', kind: 'pppoe', tx_bps: 9e6,
+const nodes = [{ key: 'router:altair', name: 'PoP Altair', kind: 'pop' }];
+A.topo.subs = [{ login: 'vieux', pop_name: 'PoP Altair', kind: 'pppoe', tx_bps: 9e6,
                  rx_bps: 1e6, ts: new Date(Date.now() - 3600e3).toISOString() }];
 const m = A.topoBuildModel({ nodes, links: [], counts: {} });
 const agregat = [...m.nodesByKey.values()].find((n) => n.kind === 'subscriber');

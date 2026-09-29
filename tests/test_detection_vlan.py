@@ -59,7 +59,7 @@ SERVEURS_PPPOE = [{"interface": "vlan999", "service-name": "isp"}]
 
 def _vues(arp: list[dict], **kwargs) -> list[VlanSighting]:
     return sightings_from_arp(
-        arp, VLANS, SERVEURS_PPPOE, router_name="pop-nord", pop_name="PoP Nord", **kwargs
+        arp, VLANS, SERVEURS_PPPOE, router_name="pop-altair", pop_name="PoP Altair", **kwargs
     )
 
 
@@ -72,8 +72,8 @@ def test_une_adresse_qui_parle_sur_une_vlan_routee_est_vue() -> None:
     assert vues[0].mac == "AA:BB:CC:00:00:01"
     assert vues[0].vlan_id == 120
     assert vues[0].vlan_interface == "vlan120"
-    assert vues[0].router_name == "pop-nord"
-    assert vues[0].pop_name == "PoP Nord"
+    assert vues[0].router_name == "pop-altair"
+    assert vues[0].pop_name == "PoP Altair"
 
 
 def test_la_vlan_du_serveur_pppoe_est_exclue() -> None:
@@ -417,12 +417,12 @@ async def test_une_ecriture_impossible_est_signalee(
 
 def _candidat(**kwargs) -> dict:
     base = {
-        "router_name": "pop-nord",
+        "router_name": "pop-altair",
         "address": "10.20.0.5",
         "mac": "AA:BB:CC:00:00:01",
         "vlan_interface": "vlan120",
         "vlan_id": 120,
-        "pop_name": "PoP Nord",
+        "pop_name": "PoP Altair",
         "first_seen": "2026-09-14T10:00:00+00:00",
         "last_seen": "2026-09-14T12:00:00+00:00",
     }
@@ -433,14 +433,14 @@ def test_un_candidat_a_sa_propre_nature() -> None:
     """Ni voisin reseau, ni CPE, ni abonne : on sait qu'une adresse parle, on
     ne sait pas QUI. Les trois confusions possibles sont testees ici."""
     snapshot = TopologySnapshot()
-    snapshot.add_node(TopologyNode(key="router:pop-nord", name="PoP Nord", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="router:pop-altair", name="PoP Altair", kind=KIND_POP))
 
     poses = attach_vlan_candidates(
-        snapshot, [_candidat()], pop_keys={"PoP Nord": "router:pop-nord"}
+        snapshot, [_candidat()], pop_keys={"PoP Altair": "router:pop-altair"}
     )
 
     assert poses == 1
-    noeud = snapshot.nodes[candidate_node_key("pop-nord", "10.20.0.5")]
+    noeud = snapshot.nodes[candidate_node_key("pop-altair", "10.20.0.5")]
     assert noeud.kind == KIND_CANDIDATE
     assert noeud.kind != KIND_CPE
     assert noeud.kind != KIND_STATIC
@@ -452,13 +452,13 @@ def test_un_candidat_a_sa_propre_nature() -> None:
 
 def test_un_candidat_pend_sous_son_pop() -> None:
     snapshot = TopologySnapshot()
-    snapshot.add_node(TopologyNode(key="router:pop-nord", name="PoP Nord", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="router:pop-altair", name="PoP Altair", kind=KIND_POP))
 
-    attach_vlan_candidates(snapshot, [_candidat()], pop_keys={"PoP Nord": "router:pop-nord"})
+    attach_vlan_candidates(snapshot, [_candidat()], pop_keys={"PoP Altair": "router:pop-altair"})
 
-    cle = candidate_node_key("pop-nord", "10.20.0.5")
+    cle = candidate_node_key("pop-altair", "10.20.0.5")
     lien = next(iter(snapshot.links.values()))
-    assert lien.source_key == "router:pop-nord"
+    assert lien.source_key == "router:pop-altair"
     assert lien.target_key == cle
     assert lien.attributes["declared"] is False
 
@@ -467,9 +467,9 @@ def test_un_candidat_ne_devient_pas_un_rattachement_d_abonne() -> None:
     """subscriber_sectors pilote le fair-share. Y inscrire un candidat
     reviendrait a compter dans le partage une machine dont on ne sait rien."""
     snapshot = TopologySnapshot()
-    snapshot.add_node(TopologyNode(key="router:pop-nord", name="PoP Nord", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="router:pop-altair", name="PoP Altair", kind=KIND_POP))
 
-    attach_vlan_candidates(snapshot, [_candidat()], pop_keys={"PoP Nord": "router:pop-nord"})
+    attach_vlan_candidates(snapshot, [_candidat()], pop_keys={"PoP Altair": "router:pop-altair"})
 
     assert snapshot.subscriber_sectors == {}
 
@@ -478,11 +478,11 @@ def test_le_plafond_protege_l_arbre() -> None:
     """Une VLAN de collecte bavarde produirait des centaines d'entrees ARP, et
     un arbre illisible ne sert plus a decider."""
     snapshot = TopologySnapshot()
-    snapshot.add_node(TopologyNode(key="router:pop-nord", name="PoP Nord", kind=KIND_POP))
+    snapshot.add_node(TopologyNode(key="router:pop-altair", name="PoP Altair", kind=KIND_POP))
     beaucoup = [_candidat(address=f"10.20.0.{i}") for i in range(1, 60)]
 
     poses = attach_vlan_candidates(
-        snapshot, beaucoup, pop_keys={"PoP Nord": "router:pop-nord"}, limit=10
+        snapshot, beaucoup, pop_keys={"PoP Altair": "router:pop-altair"}, limit=10
     )
 
     assert poses == 10
@@ -493,20 +493,20 @@ def test_deux_routeurs_peuvent_voir_la_meme_adresse() -> None:
     """Des plans d'adressage prives se recoupent d'un PoP a l'autre : la cle
     doit porter le routeur, sinon un PoP ecraserait le candidat de l'autre."""
     snapshot = TopologySnapshot()
-    for nom in ("pop-nord", "pop-sud"):
+    for nom in ("pop-altair", "pop-vega"):
         snapshot.add_node(TopologyNode(key=f"router:{nom}", name=nom, kind=KIND_POP))
 
     attach_vlan_candidates(
         snapshot,
         [
-            _candidat(router_name="pop-nord", pop_name="pop-nord"),
-            _candidat(router_name="pop-sud", pop_name="pop-sud"),
+            _candidat(router_name="pop-altair", pop_name="pop-altair"),
+            _candidat(router_name="pop-vega", pop_name="pop-vega"),
         ],
-        pop_keys={"pop-nord": "router:pop-nord", "pop-sud": "router:pop-sud"},
+        pop_keys={"pop-altair": "router:pop-altair", "pop-vega": "router:pop-vega"},
     )
 
-    assert candidate_node_key("pop-nord", "10.20.0.5") in snapshot.nodes
-    assert candidate_node_key("pop-sud", "10.20.0.5") in snapshot.nodes
+    assert candidate_node_key("pop-altair", "10.20.0.5") in snapshot.nodes
+    assert candidate_node_key("pop-vega", "10.20.0.5") in snapshot.nodes
 
 
 # =========================================================================
@@ -532,8 +532,8 @@ class DepotTopologie:
     async def nodes(self) -> list[dict]:
         return [
             {
-                "key": "router:pop-nord",
-                "name": "PoP Nord",
+                "key": "router:pop-altair",
+                "name": "PoP Altair",
                 "kind": KIND_POP,
                 "address": "10.10.0.11",
                 "attributes": {},
@@ -601,7 +601,7 @@ def test_api_joint_la_presence_aux_fiches(api) -> None:
     client, depot, inventaire = api
     cree = client.post(
         "/api/v1/static-clients",
-        json={"reference": "mairie", "pop_name": "PoP Nord", "address": "10.0.0.0/29"},
+        json={"reference": "mairie", "pop_name": "PoP Altair", "address": "10.0.0.0/29"},
     ).json()
     assert cree["reference"] == "mairie"
 
@@ -610,7 +610,7 @@ def test_api_joint_la_presence_aux_fiches(api) -> None:
             "last_seen": "2026-09-14T12:00:00+00:00",
             "mac": "AA:BB:CC:00:00:01",
             "vlan_interface": "vlan120",
-            "router_name": "pop-nord",
+            "router_name": "pop-altair",
         }
     }
     fiches = client.get("/api/v1/static-clients").json()
@@ -624,7 +624,7 @@ def test_une_fiche_sans_presence_reste_lisible(api) -> None:
     client, _, _ = api
     client.post(
         "/api/v1/static-clients",
-        json={"reference": "silencieux", "pop_name": "PoP Nord", "address": "10.0.0.5"},
+        json={"reference": "silencieux", "pop_name": "PoP Altair", "address": "10.0.0.5"},
     )
     fiches = client.get("/api/v1/static-clients").json()
     assert fiches[0]["last_seen_at"] is None

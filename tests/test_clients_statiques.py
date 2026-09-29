@@ -369,7 +369,7 @@ async def test_sans_inventaire_le_comportement_est_inchange(settings: Settings) 
 
 def test_le_client_est_pose_sous_son_secteur_declare() -> None:
     snapshot = TopologySnapshot()
-    snapshot.add_node(TopologyNode(key="uisp:ap-1", name="Secteur Nord", kind=KIND_SECTOR))
+    snapshot.add_node(TopologyNode(key="uisp:ap-1", name="Secteur Altair", kind=KIND_SECTOR))
 
     poses = attach_static_clients(snapshot, [fiche(sector_key="uisp:ap-1")])
 
@@ -712,7 +712,7 @@ async def test_l_arbre_ne_sert_pas_les_cases_de_clients_statiques() -> None:
     class DepotGraphe:
         async def nodes(self):
             return [
-                {"key": "router:pop", "name": "PoP Nord", "kind": "pop", "attributes": {}},
+                {"key": "router:pop", "name": "PoP Altair", "kind": "pop", "attributes": {}},
                 {"key": "static:mairie", "name": "mairie", "kind": KIND_STATIC, "attributes": {}},
             ]
 
@@ -876,7 +876,7 @@ def test_le_client_vlan_pend_sous_son_vlan_relie_par_un_lien_mesure() -> None:
 def test_un_secteur_declare_reste_prioritaire_sur_le_vlan() -> None:
     snapshot = TopologySnapshot()
     snapshot.add_node(TopologyNode(key="router:pop-test", name="PoP Test", kind="pop"))
-    snapshot.add_node(TopologyNode(key="uisp:ap-1", name="Secteur Nord", kind=KIND_SECTOR))
+    snapshot.add_node(TopologyNode(key="uisp:ap-1", name="Secteur Altair", kind=KIND_SECTOR))
 
     attach_static_clients(
         snapshot,

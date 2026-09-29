@@ -89,16 +89,16 @@ def test_uisp_sans_jeton_est_refuse(settings: Settings) -> None:
 
 def test_choix_du_fournisseur_airos(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
     """Provider airos : on interroge directement l'API locale des antennes."""
-    monkeypatch.setenv("BH_NORD_PASS", "s3cret")
+    monkeypatch.setenv("BH_ALTAIR_PASS", "s3cret")
     settings.backhaul_provider = "airos"
     settings.airos_username = "qos-ro"
     settings.backhauls = [
         BackhaulConfig(
-            name="bh-nord",
+            name="bh-altair",
             pop_name="Site 1",
-            uisp_device_id="bh-nord",
+            uisp_device_id="bh-altair",
             api_host="10.0.0.2",
-            api_password_env="BH_NORD_PASS",
+            api_password_env="BH_ALTAIR_PASS",
         )
     ]
     provider = build_backhaul_provider(settings)
@@ -213,7 +213,7 @@ async def test_un_pop_renomme_change_la_signature() -> None:
     await registre.reload()
     avant = registre.inventory_signature()
 
-    registre._settings.routers[0] = _routeur("pop-1", pop_name="Site Nord")
+    registre._settings.routers[0] = _routeur("pop-1", pop_name="Site Altair")
     await registre.reload()
 
     assert registre.inventory_signature() != avant

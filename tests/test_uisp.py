@@ -89,7 +89,7 @@ def test_normalisation_des_unites(value: object, expected: float | None) -> None
 # --------------------------------------------------------------- parsing v2.1
 def test_parse_device_uisp() -> None:
     device = {
-        "identification": {"id": "abc-123", "name": "BH Nord", "status": "active"},
+        "identification": {"id": "abc-123", "name": "BH Altair", "status": "active"},
         "overview": {
             "status": "active",
             "downlinkCapacity": 450_000_000,
@@ -217,7 +217,7 @@ def test_parse_airos_utilise_la_capacite_du_lien() -> None:
     pas le debit instantane."""
     sample = parse_airos_status(
         {
-            "host": {"hostname": "BH-Nord", "hwaddr": "DC:9F:DB:11:22:33"},
+            "host": {"hostname": "BH-Altair", "hwaddr": "DC:9F:DB:11:22:33"},
             "wireless": {
                 "mode": "sta",
                 "apmac": "AA:BB:CC:DD:EE:FF",
@@ -226,10 +226,10 @@ def test_parse_airos_utilise_la_capacite_du_lien() -> None:
                 "rxcapacity": 130000,  # kbps -> 130 Mbps
             },
         },
-        key="bh-nord",
+        key="bh-altair",
     )
 
-    assert sample.device_id == "bh-nord"
+    assert sample.device_id == "bh-altair"
     assert sample.capacity_down_mbps == 150.0
     assert sample.capacity_up_mbps == 130.0
     # La capacite utile d'un PtP est bornee par son sens le plus faible.

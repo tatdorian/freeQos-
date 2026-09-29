@@ -26,7 +26,7 @@ def abonne(login="dupont", down=100.0, up=20.0, **kwargs) -> SubscriberTarget:
     return SubscriberTarget(login=login, plan_down_mbps=down, plan_up_mbps=up, **kwargs)
 
 
-def lien(name="bh-nord", capacity=500.0, **kwargs) -> LinkTarget:
+def lien(name="bh-altair", capacity=500.0, **kwargs) -> LinkTarget:
     kwargs.setdefault("interface", "ether1")
     return LinkTarget(name=name, measured_capacity_mbps=capacity, **kwargs)
 
@@ -98,7 +98,7 @@ def test_le_resserrage_atteint_la_file_du_lien() -> None:
     _, files, _ = desired_state(
         links=[
             LinkTarget(
-                name="bh-nord", interface="ether2", measured_capacity_mbps=200, trim_factor=0.9
+                name="bh-altair", interface="ether2", measured_capacity_mbps=200, trim_factor=0.9
             )
         ],
         subscribers=[],
@@ -110,15 +110,15 @@ def test_le_resserrage_atteint_la_file_du_lien() -> None:
 # ---------------------------------------------------------------- etat desire
 def test_etat_desire_complet() -> None:
     types, files, _ = desired_state(
-        links=[lien()], subscribers=[abonne(parent="freeqos-parent-bh-nord")]
+        links=[lien()], subscribers=[abonne(parent="freeqos-parent-bh-altair")]
     )
 
     assert [t.name for t in types] == [QUEUE_TYPE_UP, QUEUE_TYPE_DOWN]
-    assert [f.name for f in files] == ["freeqos-parent-bh-nord", "freeqos-dupont"]
+    assert [f.name for f in files] == ["freeqos-parent-bh-altair", "freeqos-dupont"]
 
     parent, enfant = files
     assert parent.max_down_mbps == 450.0  # 500 x 0,9
-    assert enfant.parent == "freeqos-parent-bh-nord"
+    assert enfant.parent == "freeqos-parent-bh-altair"
     # max-limit = upload/download vu du routeur, comme RouterOS l'attend.
     assert enfant.max_limit == "20000000/100000000"
     assert enfant.queue == f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}"
@@ -132,7 +132,7 @@ def test_lien_decouvert_recoit_une_file_illimitee() -> None:
     contraire un lien sans aucune prise dans l'interface."""
     _, files, _ = desired_state(links=[lien(capacity=None)], subscribers=[abonne()])
 
-    assert [f.name for f in files] == ["freeqos-parent-bh-nord", "freeqos-dupont"]
+    assert [f.name for f in files] == ["freeqos-parent-bh-altair", "freeqos-dupont"]
     assert files[0].max_limit == "0/0"
 
 
@@ -157,7 +157,7 @@ def test_la_file_d_un_lien_vise_son_segment_l3() -> None:
     # L'adresse du routeur devient le RESEAU : c'est ce que RouterOS relira.
     assert parent.target == "172.16.38.0/23"
     # Et l'abonne est rattache par son adresse, sans avoir besoin d'UISP.
-    assert enfant.parent == "freeqos-parent-bh-nord"
+    assert enfant.parent == "freeqos-parent-bh-altair"
 
 
 def test_lien_sans_adresse_retombe_sur_l_interface() -> None:
@@ -223,13 +223,13 @@ def test_abonne_desactive_ignore() -> None:
 def test_plan_sur_routeur_vierge() -> None:
     types, files, _ = desired_state(links=[lien()], subscribers=[abonne()])
     plan = build_plan(
-        "pop-nord", desired_types=types, desired_queues=files, actual_types=[], actual_queues=[]
+        "pop-altair", desired_types=types, desired_queues=files, actual_types=[], actual_queues=[]
     )
 
     assert plan.counts() == {"add": 4, "set": 0, "remove": 0}  # 2 types + 2 files
     # Les parents passent avant leurs enfants : RouterOS refuse l'inverse.
     noms = [a.fields.get("name") for a in plan.actions if a.path == "/queue/simple"]
-    assert noms == ["freeqos-parent-bh-nord", "freeqos-dupont"]
+    assert noms == ["freeqos-parent-bh-altair", "freeqos-dupont"]
 
 
 def test_la_commande_est_lisible_avant_envoi() -> None:
@@ -545,7 +545,7 @@ def _capture_queue_simple_print(target: str) -> dict:
     """
     return {
         ".id": "*3",
-        "name": "freeqos-parent-bh-nord",
+        "name": "freeqos-parent-bh-altair",
         "target": target,
         "parent": "none",
         "packet-marks": "",
@@ -567,7 +567,7 @@ def test_cible_liste_reordonnee_ne_produit_aucune_action() -> None:
     toujours. On compare l'ENSEMBLE : ordre et forme ne comptent pas."""
     # L'etat desire vise deux interfaces (lien L2 sans segment L3).
     _, files, _ = desired_state(
-        links=[lien(name="bh-nord", capacity=None, subnet=None, interface="ether3,lan-bridge")],
+        links=[lien(name="bh-altair", capacity=None, subnet=None, interface="ether3,lan-bridge")],
         subscribers=[],
     )
     assert files[0].target == "ether3,lan-bridge"
@@ -576,7 +576,7 @@ def test_cible_liste_reordonnee_ne_produit_aucune_action() -> None:
     actual = _capture_queue_simple_print(target="lan-bridge, ether3")
 
     plan = build_plan(
-        "pop-nord",
+        "pop-altair",
         desired_types=[],
         desired_queues=files,
         actual_types=[],
@@ -588,7 +588,7 @@ def test_cible_liste_reordonnee_ne_produit_aucune_action() -> None:
     # Critere de sortie : deux cycles consecutifs sans changement reel n'ecrivent
     # rien. Le second cycle relit exactement la meme capture.
     plan2 = build_plan(
-        "pop-nord",
+        "pop-altair",
         desired_types=[],
         desired_queues=files,
         actual_types=[],
@@ -600,12 +600,16 @@ def test_cible_liste_reordonnee_ne_produit_aucune_action() -> None:
 def test_cible_liste_casse_et_espaces_ignores() -> None:
     """Casse et espaces autour des virgules ne sont pas des changements."""
     _, files, _ = desired_state(
-        links=[lien(name="bh-nord", capacity=None, subnet=None, interface="ether3,lan-bridge")],
+        links=[lien(name="bh-altair", capacity=None, subnet=None, interface="ether3,lan-bridge")],
         subscribers=[],
     )
     actual = _capture_queue_simple_print(target="LAN-BRIDGE ,   Ether3")
     plan = build_plan(
-        "pop-nord", desired_types=[], desired_queues=files, actual_types=[], actual_queues=[actual]
+        "pop-altair",
+        desired_types=[],
+        desired_queues=files,
+        actual_types=[],
+        actual_queues=[actual],
     )
     assert plan.is_empty
 
@@ -614,12 +618,16 @@ def test_cible_liste_reellement_differente_produit_un_set() -> None:
     """La normalisation ne doit PAS masquer un vrai changement de membres :
     retirer un membre reste un ecart, donc un set."""
     _, files, _ = desired_state(
-        links=[lien(name="bh-nord", capacity=None, subnet=None, interface="ether3,lan-bridge")],
+        links=[lien(name="bh-altair", capacity=None, subnet=None, interface="ether3,lan-bridge")],
         subscribers=[],
     )
     actual = _capture_queue_simple_print(target="ether3")  # un membre en moins
     plan = build_plan(
-        "pop-nord", desired_types=[], desired_queues=files, actual_types=[], actual_queues=[actual]
+        "pop-altair",
+        desired_types=[],
+        desired_queues=files,
+        actual_types=[],
+        actual_queues=[actual],
     )
     assert plan.counts() == {"add": 0, "set": 1, "remove": 0}
     assert "target" in plan.actions[0].changes
@@ -638,10 +646,10 @@ def test_normalise_des_listes_est_insensible_a_l_ordre() -> None:
 def test_serialisation_du_plan() -> None:
     types, files, _ = desired_state(links=[lien()], subscribers=[abonne()])
     plan = build_plan(
-        "pop-nord", desired_types=types, desired_queues=files, actual_types=[], actual_queues=[]
+        "pop-altair", desired_types=types, desired_queues=files, actual_types=[], actual_queues=[]
     )
     donnees = plan.to_dict()
 
-    assert donnees["router"] == "pop-nord"
+    assert donnees["router"] == "pop-altair"
     assert donnees["counts"]["add"] == 4
     assert all("command" in a and "summary" in a for a in donnees["actions"])

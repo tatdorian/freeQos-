@@ -1057,3 +1057,10 @@ pre { max-width: 100%; overflow-x: auto; }
 /* Clients detectes, non declares */
 .cand-banner .cand-list { display: flex; flex-wrap: wrap; gap: .4rem .9rem; margin-top: .45rem; }
 .cand-banner .cand { display: inline-flex; align-items: center; gap: .35rem; }
+
+/* Mise en service automatique d'un equipement */
+.prov-steps { list-style: none; padding: 0; margin: .5rem 0 0; font-size: .84rem; }
+.prov-steps li { display: flex; align-items: baseline; gap: .45rem; padding: .12rem 0; flex-wrap: wrap; }
+.prov-steps .hint { display: inline; }
+.prov-result { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; margin-top: .55rem; font-size: .84rem; }
+.sq.none { background: var(--fill-strong); }

@@ -1105,7 +1105,7 @@ class ShapingService:
         #
         # LE RAPPROCHEMENT SE FAIT SUR L'IDENTITE PHYSIQUE DE LA RADIO, PAS SUR
         # SON NOM. Le nom d'un lien est l'identite que l'equipement d'en face
-        # annonce en MNDP/LLDP ('NanoBeam-Nord') ; le nom d'un backhaul est le
+        # annonce en MNDP/LLDP ('NanoBeam-Altair') ; le nom d'un backhaul est le
         # libelle saisi par l'exploitant dans l'inventaire ('bh-1'). Rien ne les
         # oblige a coincider, et en pratique ils different presque toujours : la
         # capacite mesuree n'atteignait alors jamais la file, qui restait posee

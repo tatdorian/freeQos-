@@ -13,8 +13,64 @@ router = APIRouter(tags=["metrics"])
 
 
 @router.get("/pops", summary="List of PoPs")
-async def list_pops(repo: RepositoryDep) -> list[dict[str, Any]]:
-    return await repo.list_pops()
+async def list_pops(repo: RepositoryDep, container: ContainerDep) -> list[dict[str, Any]]:
+    """Chaque site dit s'il est encore porte par un equipement (``declared``).
+
+    Un site que plus rien ne declare -- routeur retire, essai jamais relie --
+    reste en base avec son historique ; l'interface le signale et permet de le
+    retirer d'un geste.
+    """
+    pops = await repo.list_pops()
+    declares = await _sites_declares(container)
+    for pop in pops:
+        pop["declared"] = _est_declare(pop, declares)
+    return pops
+
+
+async def _sites_declares(container: Any) -> set[str]:
+    from app.services.pop_cleanup import declared_pop_names
+
+    try:
+        noms = await declared_pop_names(container)
+    except Exception:  # noqa: BLE001 - sans inventaire lisible, on ne marque rien
+        return {"*"}
+    return {n.strip().lower() for n in noms if n}
+
+
+def _est_declare(pop: dict[str, Any], declares: set[str]) -> bool:
+    if "*" in declares:
+        return True
+    noms = {str(pop.get("name") or ""), str(pop.get("router_name") or "")}
+    return any(n.strip().lower() in declares for n in noms if n)
+
+
+@router.post("/pops/orphans/delete", summary="Delete every site no device declares")
+async def delete_orphan_pops(
+    repo: RepositoryDep,
+    container: ContainerDep,
+    confirm: Annotated[bool, Query(description="Required: the deletion is permanent")] = False,
+) -> dict[str, Any]:
+    """Retire d'un geste les sites qu'aucun routeur, antenne ou client ne declare,
+    avec leurs abonnes et leur historique."""
+    if not confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Permanent deletion of sites and their history: 'confirm' must be true.",
+        )
+    declares = await _sites_declares(container)
+    if "*" in declares:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="The device inventory cannot be read: nothing was deleted.",
+        )
+    retires: list[str] = []
+    for pop in await repo.list_pops():
+        if not _est_declare(pop, declares):
+            await repo.delete_pop(int(pop["id"]))
+            retires.append(str(pop["name"]))
+    if retires:
+        container.directory.clear_cache()
+    return {"deleted": retires}
 
 
 @router.delete("/pops/{pop_id}", summary="Remove a PoP and its data")

@@ -115,8 +115,8 @@ class InMemoryAntennasRepository:
 
 
 NOUVELLE = {
-    "name": "bh-nord",
-    "pop_name": "PoP Nord",
+    "name": "bh-altair",
+    "pop_name": "PoP Altair",
     "host": "10.10.0.30",
     "username": "ubnt",
     "password": "secret-antenne",
@@ -178,10 +178,10 @@ def client(settings: Settings, secrets: SecretBox, repo: InMemoryAntennasReposit
 def test_creation_puis_liste(client: TestClient) -> None:
     cree = client.post("/api/v1/pops/antennas", json=NOUVELLE)
     assert cree.status_code == 201
-    assert cree.json()["name"] == "bh-nord"
+    assert cree.json()["name"] == "bh-altair"
 
     liste = client.get("/api/v1/pops/antennas").json()
-    assert [a["name"] for a in liste["antennas"]] == ["bh-nord"]
+    assert [a["name"] for a in liste["antennas"]] == ["bh-altair"]
 
 
 def test_le_mot_de_passe_ne_ressort_jamais(client: TestClient) -> None:

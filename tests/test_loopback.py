@@ -337,7 +337,7 @@ async def test_l_arbre_a_une_vraie_hierarchie() -> None:
     configs = [
         _config(name="gw", host="1.1.1.1", role="gateway", pop_name="Paris"),
         _config(name="core", host="1.1.1.2", role="core", pop_name="Coeur"),
-        _config(name="pop", host="1.1.1.3", role="pop", pop_name="PoP Nord"),
+        _config(name="pop", host="1.1.1.3", role="pop", pop_name="PoP Altair"),
     ]
     service = _service(clients, configs)
     await service.registry.reload()
@@ -345,7 +345,7 @@ async def test_l_arbre_a_une_vraie_hierarchie() -> None:
     snapshot = await service.discover()
 
     natures = {n.name: n.kind for n in snapshot.nodes.values()}
-    assert natures == {"Paris": KIND_GATEWAY, "Coeur": KIND_CORE, "PoP Nord": KIND_POP}
+    assert natures == {"Paris": KIND_GATEWAY, "Coeur": KIND_CORE, "PoP Altair": KIND_POP}
     # Et chacun porte son loopback, avec l'origine de la deduction.
     for noeud in snapshot.nodes.values():
         assert noeud.attributes["loopback_source"] == "interface de loopback"
@@ -377,14 +377,14 @@ async def test_deux_sites_au_meme_30_ne_se_confondent_plus() -> None:
     coeur.neighbor_rows = [
         {
             "interface": "ether1",
-            "identity": "pop-nord",
+            "identity": "pop-altair",
             "mac-address": "AA:00:00:00:00:10",
             "platform": "MikroTik",
             "unicast-ipv4-addresses": "10.0.0.1,10.255.0.10",
         },
         {
             "interface": "ether2",
-            "identity": "pop-sud",
+            "identity": "pop-vega",
             "mac-address": "AA:00:00:00:00:11",
             "platform": "MikroTik",
             "unicast-ipv4-addresses": "10.0.0.1,10.255.0.11",
@@ -392,13 +392,13 @@ async def test_deux_sites_au_meme_30_ne_se_confondent_plus() -> None:
     ]
     clients = {
         "core": coeur,
-        "pop-nord": pop("pop-nord", "10.255.0.10"),
-        "pop-sud": pop("pop-sud", "10.255.0.11"),
+        "pop-altair": pop("pop-altair", "10.255.0.10"),
+        "pop-vega": pop("pop-vega", "10.255.0.11"),
     }
     configs = [
         _config(name="core", host="1.1.1.2", role="core", pop_name="Coeur"),
-        _config(name="pop-nord", host="1.1.1.10", role="pop", pop_name="PoP Nord"),
-        _config(name="pop-sud", host="1.1.1.11", role="pop", pop_name="PoP Sud"),
+        _config(name="pop-altair", host="1.1.1.10", role="pop", pop_name="PoP Altair"),
+        _config(name="pop-vega", host="1.1.1.11", role="pop", pop_name="PoP Vega"),
     ]
     service = _service(clients, configs)
     await service.registry.reload()
@@ -412,7 +412,7 @@ async def test_deux_sites_au_meme_30_ne_se_confondent_plus() -> None:
         for lien in snapshot.links.values()
         if snapshot.nodes[lien.source_key].name == "Coeur"
     }
-    assert depuis_coeur == {"ether1": "PoP Nord", "ether2": "PoP Sud"}
+    assert depuis_coeur == {"ether1": "PoP Altair", "ether2": "PoP Vega"}
 
 
 async def test_un_loopback_partage_est_refuse_et_signale() -> None:
@@ -591,7 +591,7 @@ def test_la_declaration_de_l_operateur_bat_toutes_les_deductions() -> None:
 async def test_la_decouverte_lit_le_router_id_sur_le_routeur() -> None:
     """De bout en bout : un routeur sans interface 'lo' et sans /export
     exploitable doit quand meme avoir son loopback."""
-    client = FakeRouterOsClient(identity="pop-nord")
+    client = FakeRouterOsClient(identity="pop-altair")
     client.address_rows = [{"address": "10.0.12.1/30", "interface": "ether1"}]
     client.router_id_rows = ["10.255.0.7"]
     client.export_text = ""
@@ -609,7 +609,7 @@ async def test_la_decouverte_lit_le_router_id_sur_le_routeur() -> None:
 
 async def test_un_chemin_de_routage_absent_ne_prive_pas_du_reste() -> None:
     """RouterOS 6 n'a pas /routing/id : la decouverte doit continuer."""
-    client = FakeRouterOsClient(identity="pop-sud")
+    client = FakeRouterOsClient(identity="pop-vega")
     client.address_rows = [{"address": "10.255.0.8/32", "interface": "loopback"}]
     client.raise_on_routing_ids = RuntimeError("no such command prefix")
 
@@ -634,7 +634,7 @@ async def test_la_sonde_ping_part_du_loopback() -> None:
     client = FakeRouterOsClient()
     client.router_id_rows = ["10.255.0.7"]
     client.ping_reply = "3ms"
-    config = RouterConfig(name="pop-nord", host="192.0.2.11", password="x")
+    config = RouterConfig(name="pop-altair", host="192.0.2.11", password="x")
     collector = MikrotikCollector(config, client=client)
 
     assert await collector.ping("154.66.223.217") == pytest.approx(3.0)
@@ -653,7 +653,7 @@ async def test_un_loopback_refuse_ne_fait_pas_perdre_la_mesure() -> None:
 
     client = Refus()
     client.ping_reply = "5ms"
-    config = RouterConfig(name="pop-nord", host="192.0.2.11", password="x", loopback="10.9.9.9")
+    config = RouterConfig(name="pop-altair", host="192.0.2.11", password="x", loopback="10.9.9.9")
     collector = MikrotikCollector(config, client=client)
 
     assert await collector.ping("154.66.223.217") == pytest.approx(5.0)

@@ -37,7 +37,7 @@ VOISINS = [
     },
     {
         "interface": "ether2",
-        "identity": "BH-Nord",
+        "identity": "BH-Altair",
         "mac-address": "DC:9F:DB:11:22:33",
         "address": "10.50.0.2",
         "platform": "Ubiquiti Networks Inc.",
@@ -63,8 +63,8 @@ def snapshot_du_pop() -> TopologySnapshot:
     snapshot = TopologySnapshot()
     build_from_router(
         snapshot,
-        router_name="pop-nord",
-        pop_name="PoP Nord",
+        router_name="pop-altair",
+        pop_name="PoP Altair",
         host="10.10.0.11",
         neighbors=VOISINS,
         interfaces=INTERFACES,
@@ -123,8 +123,8 @@ def test_cle_de_voisin_privilegie_la_mac() -> None:
 def test_le_pop_et_ses_voisins_sont_dans_le_graphe() -> None:
     snapshot = snapshot_du_pop()
 
-    assert snapshot.nodes["router:pop-nord"].name == "PoP Nord"
-    assert snapshot.nodes["router:pop-nord"].kind == KIND_POP
+    assert snapshot.nodes["router:pop-altair"].name == "PoP Altair"
+    assert snapshot.nodes["router:pop-altair"].kind == KIND_POP
     assert snapshot.nodes["mac:AA:BB:CC:00:00:01"].name == "gw-core"
     assert snapshot.nodes["mac:DC:9F:DB:11:22:33"].kind == KIND_RADIO
 
@@ -136,7 +136,7 @@ def test_les_liens_portent_leur_capacite_physique() -> None:
     assert par_interface["ether1"].capacity_mbps == 1000.0
     assert par_interface["ether2"].capacity_mbps == 100.0
     assert par_interface["ether2"].target_key == "mac:DC:9F:DB:11:22:33"
-    assert par_interface["ether2"].discovered_by == "pop-nord"
+    assert par_interface["ether2"].discovered_by == "pop-altair"
     assert par_interface["ether2"].attributes["local_networks"] == ["10.50.0.1/30"]
 
 
@@ -160,8 +160,8 @@ def test_deux_pops_partagent_le_meme_voisin() -> None:
     snapshot = snapshot_du_pop()
     build_from_router(
         snapshot,
-        router_name="pop-sud",
-        pop_name="PoP Sud",
+        router_name="pop-vega",
+        pop_name="PoP Vega",
         host="10.10.0.12",
         neighbors=[
             {
@@ -180,7 +180,7 @@ def test_deux_pops_partagent_le_meme_voisin() -> None:
     assert len(gateways) == 1
     # Mais deux liens distincts y menent, un par PoP.
     vers_gw = [lk for lk in snapshot.links.values() if lk.target_key == "mac:AA:BB:CC:00:00:01"]
-    assert {lk.discovered_by for lk in vers_gw} == {"pop-nord", "pop-sud"}
+    assert {lk.discovered_by for lk in vers_gw} == {"pop-altair", "pop-vega"}
 
 
 # ----------------------------- un routeur gere vu en voisin n'est pas double
@@ -335,14 +335,14 @@ EXPORT = """# oct/02/2025 12:00:00 by RouterOS 7.21
 # software id = ABCD-1234
 #
 /interface eoip
-add name=eoip-sud remote-address=100.100.101.113 local-address=100.100.100.254 tunnel-id=7
+add name=eoip-vega remote-address=100.100.101.113 local-address=100.100.100.254 tunnel-id=7
 /interface gre
-add name=gre-nord remote-address=203.0.113.9
+add name=gre-altair remote-address=203.0.113.9
 /ip address
 add address=10.50.0.1/30 interface=ether5 network=10.50.0.0
 add address=100.100.100.254/24 comment="LAN gestion" interface=bridge network=100.100.100.0
 /interface ethernet
-set [ find default-name=ether5 ] comment="Backhaul vers PoP Sud" name=ether5
+set [ find default-name=ether5 ] comment="Backhaul vers PoP Vega" name=ether5
 """
 
 
@@ -355,11 +355,11 @@ def test_parse_export_extrait_adresses_tunnels_et_commentaires() -> None:
     assert adresses["100.100.100.254/24"]["comment"] == "LAN gestion"
 
     tunnels = {t["name"]: t for t in analyse["tunnels"]}
-    assert tunnels["eoip-sud"]["remote_address"] == "100.100.101.113"
-    assert tunnels["eoip-sud"]["type"] == "eoip"
-    assert tunnels["gre-nord"]["remote_address"] == "203.0.113.9"
+    assert tunnels["eoip-vega"]["remote_address"] == "100.100.101.113"
+    assert tunnels["eoip-vega"]["type"] == "eoip"
+    assert tunnels["gre-altair"]["remote_address"] == "203.0.113.9"
 
-    assert analyse["comments"]["ether5"] == "Backhaul vers PoP Sud"
+    assert analyse["comments"]["ether5"] == "Backhaul vers PoP Vega"
 
 
 def test_parse_export_tolere_le_vide_et_le_bruit() -> None:
@@ -386,7 +386,7 @@ def test_liens_par_tunnel_relient_les_deux_bouts() -> None:
             (
                 "router:a",
                 "a",
-                [{"type": "eoip", "name": "eoip-sud", "remote_address": "100.100.101.113"}],
+                [{"type": "eoip", "name": "eoip-vega", "remote_address": "100.100.101.113"}],
             )
         ],
     )
@@ -416,7 +416,7 @@ def test_uisp_enrichit_un_voisin_existant_par_sa_mac() -> None:
                 "identification": {
                     "id": "uisp-bh-1",
                     "mac": "dc-9f-db-11-22-33",
-                    "name": "BH Nord PtP",
+                    "name": "BH Altair PtP",
                     "role": "station",
                 }
             }
@@ -426,7 +426,7 @@ def test_uisp_enrichit_un_voisin_existant_par_sa_mac() -> None:
     assert rattaches == 1
     noeud = snapshot.nodes["mac:DC:9F:DB:11:22:33"]
     assert noeud.uisp_device_id == "uisp-bh-1"
-    assert noeud.attributes["uisp_name"] == "BH Nord PtP"
+    assert noeud.attributes["uisp_name"] == "BH Altair PtP"
     # Pas de doublon cree.
     assert "uisp:uisp-bh-1" not in snapshot.nodes
 
@@ -441,7 +441,7 @@ def test_uisp_ajoute_les_equipements_inconnus_de_mikrotik() -> None:
                 "identification": {
                     "id": "ap-1",
                     "mac": "11:22:33:44:55:66",
-                    "name": "Secteur Nord 120",
+                    "name": "Secteur Altair 120",
                     "role": "ap",
                 }
             }
@@ -458,7 +458,7 @@ def test_lien_station_vers_ap_depuis_uisp() -> None:
             {"identification": {"id": "ap-1", "mac": "11:22:33:44:55:66", "role": "ap"}},
             {
                 "identification": {"id": "sta-1", "mac": "77:88:99:AA:BB:CC", "role": "station"},
-                "attributes": {"apDevice": {"id": "ap-1", "name": "Secteur Nord"}},
+                "attributes": {"apDevice": {"id": "ap-1", "name": "Secteur Altair"}},
             },
         ],
     )
@@ -617,17 +617,17 @@ def test_le_routeur_gere_porte_son_identite_et_ses_mac() -> None:
     snapshot = TopologySnapshot()
     build_from_router(
         snapshot,
-        router_name="pop-nord",
-        pop_name="PoP Nord",
+        router_name="pop-altair",
+        pop_name="PoP Altair",
         host="10.10.0.11",
         neighbors=[],
         interfaces=[{"name": "ether1", "mac-address": "48:8F:5A:00:00:11"}],
         ethernet=[{"name": "ether1", "orig-mac-address": "48:8F:5A:00:00:12"}],
         addresses=[],
-        identity="NAS-nord",
+        identity="NAS-altair",
     )
-    noeud = snapshot.nodes["router:pop-nord"]
-    assert noeud.attributes["identity"] == "NAS-nord"
+    noeud = snapshot.nodes["router:pop-altair"]
+    assert noeud.attributes["identity"] == "NAS-altair"
     assert noeud.attributes["macs"] == ["48:8F:5A:00:00:11", "48:8F:5A:00:00:12"]
     assert noeud.mac == "48:8F:5A:00:00:11"
 
@@ -668,7 +668,7 @@ def test_le_routeur_gere_porte_son_numero_de_serie() -> None:
 
 
 def test_reconciliation_fusionne_le_pop_gere_avec_sa_vue_voisin() -> None:
-    """LE bug de doublon : le PoP gere (nom d'affichage 'PoP Nord') et son
+    """LE bug de doublon : le PoP gere (nom d'affichage 'PoP Altair') et son
     apparition comme voisin du coeur (keye par la MAC de l'interface en face,
     nomme par son identite RouterOS) sont UN seul routeur.
 
@@ -677,21 +677,21 @@ def test_reconciliation_fusionne_le_pop_gere_avec_sa_vue_voisin() -> None:
     parce que le noeud gere expose TOUTES ses MAC."""
     noeuds = [
         _noeud(
-            "router:pop-nord",
-            "PoP Nord",
+            "router:pop-altair",
+            "PoP Altair",
             mac="48:8F:5A:00:00:11",
             attributes={
                 "managed": True,
-                "identity": "NAS-nord",
+                "identity": "NAS-altair",
                 "macs": ["48:8F:5A:00:00:11", "48:8F:5A:00:00:12"],
             },
         ),
-        _noeud("mac:48:8F:5A:00:00:12", "NAS-nord", mac="48:8F:5A:00:00:12"),
+        _noeud("mac:48:8F:5A:00:00:12", "NAS-altair", mac="48:8F:5A:00:00:12"),
     ]
     fusion, _ = reconcile_topology(noeuds, [])
     assert len(fusion) == 1
-    assert fusion[0]["key"] == "router:pop-nord"
-    assert fusion[0]["name"] == "PoP Nord"
+    assert fusion[0]["key"] == "router:pop-altair"
+    assert fusion[0]["name"] == "PoP Altair"
 
 
 def test_reconciliation_lit_les_attributs_en_json_brut() -> None:
@@ -700,10 +700,10 @@ def test_reconciliation_lit_les_attributs_en_json_brut() -> None:
     noeuds = [
         _noeud(
             "router:pop",
-            "PoP Nord",
+            "PoP Altair",
             attributes='{"managed": true, "macs": ["48:8F:5A:00:00:12"]}',
         ),
-        _noeud("mac:48:8F:5A:00:00:12", "NAS-nord", mac="48:8F:5A:00:00:12"),
+        _noeud("mac:48:8F:5A:00:00:12", "NAS-altair", mac="48:8F:5A:00:00:12"),
     ]
     fusion, _ = reconcile_topology(noeuds, [])
     assert len(fusion) == 1
@@ -725,11 +725,11 @@ def test_reconciliation_fusionne_sur_le_mac_meme_si_le_nom_manque() -> None:
     noeuds = [
         _noeud(
             "router:pop",
-            "PoP Nord",
+            "PoP Altair",
             address="10.0.0.1",
             attributes={"managed": True, "macs": ["DC:9F:DB:11:22:33"]},
         ),
-        _noeud("mac:DC:9F:DB:11:22:33", "PoP Nord", mac="DC:9F:DB:11:22:33"),
+        _noeud("mac:DC:9F:DB:11:22:33", "PoP Altair", mac="DC:9F:DB:11:22:33"),
         _noeud("address:fe80", "MikroTik", mac="DC:9F:DB:11:22:33", address="fe80::1"),
     ]
     fusion, _ = reconcile_topology(noeuds, [])
@@ -742,18 +742,18 @@ def test_reconciliation_supprime_un_lien_devenu_interne() -> None:
     noeuds = [
         _noeud(
             "router:pop",
-            "PoP Nord",
+            "PoP Altair",
             attributes={"managed": True, "macs": ["DC:9F:DB:11:22:33"]},
         ),
-        _noeud("mac:DC:9F:DB:11:22:33", "PoP Nord", mac="DC:9F:DB:11:22:33"),
+        _noeud("mac:DC:9F:DB:11:22:33", "PoP Altair", mac="DC:9F:DB:11:22:33"),
     ]
     liens = [
         {
             "key": "k",
             "source_key": "router:pop",
             "target_key": "mac:DC:9F:DB:11:22:33",
-            "source_name": "PoP Nord",
-            "target_name": "PoP Nord",
+            "source_name": "PoP Altair",
+            "target_name": "PoP Altair",
             "target_kind": KIND_POP,
             "interface": "e1",
         },
@@ -961,8 +961,8 @@ def test_le_nom_ne_fusionne_plus_rien() -> None:
     """Un nom n'est unique que par convention, et une convention ne se verifie
     pas. Deux equipements homonymes dans deux sites suffisent a tout confondre."""
     noeuds = [
-        _noeud("router:pop-a", "NAS-NORD", attributes={"managed": True}),
-        _noeud("autre:chose", "NAS-NORD"),
+        _noeud("router:pop-a", "NAS-ALTAIR", attributes={"managed": True}),
+        _noeud("autre:chose", "NAS-ALTAIR"),
     ]
 
     fusion, _ = reconcile_topology(noeuds, [])
@@ -974,7 +974,7 @@ def test_le_numero_de_serie_replie_toujours_une_vue_decouverte() -> None:
     """Ce qu'on garde : la preuve d'identite. Une case decouverte qui porte le
     meme numero de serie qu'un routeur gere EST ce routeur."""
     noeuds = [
-        _noeud("router:pop", "PoP Nord", attributes={"managed": True, "serial": "HFX0ABCDEF"}),
+        _noeud("router:pop", "PoP Altair", attributes={"managed": True, "serial": "HFX0ABCDEF"}),
         _noeud(
             "mac:AA:BB", "MikroTik", mac="AA:BB:CC:DD:EE:FF", attributes={"serial": "hfx0abcdef"}
         ),
@@ -1004,7 +1004,7 @@ def test_une_mac_annoncee_par_plusieurs_identites_est_reperee() -> None:
         [
             _voisin("NAS-BASSORA", "50:00:00:0A:00:00"),
             _voisin("NAS-TAILLADJE", "50:00:00:0A:00:00"),
-            _voisin("BH-Nord", "DC:9F:DB:11:22:33"),
+            _voisin("BH-Altair", "DC:9F:DB:11:22:33"),
         ]
     )
     assert ambigues == {"50:00:00:0A:00:00"}
@@ -1015,7 +1015,7 @@ def test_le_meme_equipement_vu_deux_fois_n_est_pas_ambigu() -> None:
     c'est bien un seul equipement, sa MAC reste une cle valable."""
     assert (
         ambiguous_neighbor_macs(
-            [_voisin("BH-Nord", "DC:9F:DB:11:22:33"), _voisin("BH-Nord", "DC:9F:DB:11:22:33")]
+            [_voisin("BH-Altair", "DC:9F:DB:11:22:33"), _voisin("BH-Altair", "DC:9F:DB:11:22:33")]
         )
         == set()
     )
@@ -1045,7 +1045,7 @@ def test_une_mac_ambigue_cede_la_cle_a_l_identite() -> None:
 def test_une_mac_unique_reste_la_cle() -> None:
     """Le cas normal ne change pas : la MAC survit a un changement de nom ou
     d'adresse, et c'est elle qui joint le graphe a UISP."""
-    assert neighbor_node_key(_voisin("BH-Nord", "DC:9F:DB:11:22:33"), set()) == (
+    assert neighbor_node_key(_voisin("BH-Altair", "DC:9F:DB:11:22:33"), set()) == (
         "mac:DC:9F:DB:11:22:33"
     )
 

@@ -85,7 +85,7 @@ def test_le_pop_est_reconnu_malgre_la_casse_les_accents_et_le_mot_pop(
 def test_l_egalite_exacte_garde_la_priorite() -> None:
     """Tant que le nom correspond au caractere pres, la tolerance ne sert a rien
     et ne peut donc rien casser."""
-    match = resolve_pop("Nord", [_collecteur("r1", "Nord"), _collecteur("r2", "nord")])
+    match = resolve_pop("Altair", [_collecteur("r1", "Altair"), _collecteur("r2", "altair")])
     assert match.resolution == RESOLUTION_EXACTE
     assert [c.name for c in match.collectors] == ["r1"]
 
@@ -93,7 +93,7 @@ def test_l_egalite_exacte_garde_la_priorite() -> None:
 def test_deux_pop_qui_se_ressemblent_ne_sont_jamais_fusionnes() -> None:
     """En choisir un poserait la file sur le MAUVAIS site : pire que de ne rien
     poser, et bien plus difficile a voir."""
-    match = resolve_pop("nord", [_collecteur("r1", "Nord"), _collecteur("r2", "PoP Nord")])
+    match = resolve_pop("altair", [_collecteur("r1", "Altair"), _collecteur("r2", "PoP Altair")])
     assert not match.found
     assert match.resolution == RESOLUTION_AMBIGUE
 
@@ -101,19 +101,19 @@ def test_deux_pop_qui_se_ressemblent_ne_sont_jamais_fusionnes() -> None:
 def test_un_pop_a_deux_routeurs_les_rend_tous_les_deux() -> None:
     """Redondance ou separation acces/coeur : oublier le routeur qui voit
     passer le trafic laisserait le client non bride."""
-    match = resolve_pop("Nord", [_collecteur("r1", "Nord"), _collecteur("r2", "Nord")])
+    match = resolve_pop("Altair", [_collecteur("r1", "Altair"), _collecteur("r2", "Altair")])
     assert [c.name for c in match.collectors] == ["r1", "r2"]
 
 
 def test_un_pop_inconnu_nomme_ceux_qui_existent() -> None:
     """ "PoP inconnu" laisse chercher une faute de frappe a l'aveugle."""
-    routeurs = [_collecteur("r1", "Francophonie"), _collecteur("r2", "Nord")]
+    routeurs = [_collecteur("r1", "Francophonie"), _collecteur("r2", "Altair")]
     match = resolve_pop("francofonie", routeurs)
 
     assert not match.found
     message = explain(match, "francofonie", routeurs)
-    assert "'Francophonie'" in message and "'Nord'" in message
-    assert pop_names(routeurs) == ["Francophonie", "Nord"]
+    assert "'Francophonie'" in message and "'Altair'" in message
+    assert pop_names(routeurs) == ["Altair", "Francophonie"]
 
 
 def test_la_normalisation_ne_vide_pas_un_nom_qui_commence_par_pop() -> None:
@@ -253,7 +253,7 @@ async def test_un_client_d_un_autre_pop_ne_suit_pas(
         settings_francophonie,
         routeur,
         ecriture,
-        InventaireMemoire([_client_statique(pop_name="Nord")]),
+        InventaireMemoire([_client_statique(pop_name="Altair")]),
     )
     await service.registry.reload()
 

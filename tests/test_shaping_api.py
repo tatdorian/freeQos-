@@ -511,20 +511,20 @@ def test_fusion_manuelle_replie_une_case_sur_une_autre(
     les deux cases n'en font plus qu'une dans l'arbre."""
     topo.node_rows = [
         {"key": "mac:AA:00:00:00:00:06", "name": "MikroTik", "kind": "pop"},
-        {"key": "router:pop-nord", "name": "PoP Nord", "kind": "pop"},
+        {"key": "router:pop-altair", "name": "PoP Altair", "kind": "pop"},
     ]
     reponse = client.post(
         "/api/v1/topology/merge",
-        json={"alias_key": "mac:AA:00:00:00:00:06", "canonical_key": "router:pop-nord"},
+        json={"alias_key": "mac:AA:00:00:00:00:06", "canonical_key": "router:pop-altair"},
     )
     assert reponse.status_code == 200
-    assert topo._aliases["mac:AA:00:00:00:00:06"] == "router:pop-nord"
+    assert topo._aliases["mac:AA:00:00:00:00:06"] == "router:pop-altair"
 
     # /topology ne montre plus qu'UNE case, marquee comme fusion manuelle.
     body = client.get("/api/v1/topology").json()
     cles = [n["key"] for n in body["nodes"]]
     assert "mac:AA:00:00:00:00:06" not in cles
-    canon = next(n for n in body["nodes"] if n["key"] == "router:pop-nord")
+    canon = next(n for n in body["nodes"] if n["key"] == "router:pop-altair")
     assert canon["manual_aliases"] == ["mac:AA:00:00:00:00:06"]
 
 
@@ -536,7 +536,7 @@ def test_fusion_manuelle_sur_soi_meme_refusee(client: TestClient) -> None:
 
 
 def test_annuler_une_fusion_manuelle(client: TestClient, topo: FauxDepotTopologie) -> None:
-    topo._aliases = {"mac:AA:00:00:00:00:06": "router:pop-nord"}
+    topo._aliases = {"mac:AA:00:00:00:00:06": "router:pop-altair"}
     from urllib.parse import quote
 
     reponse = client.delete("/api/v1/topology/merge/" + quote("mac:AA:00:00:00:00:06", safe=""))

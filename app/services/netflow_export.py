@@ -506,7 +506,7 @@ class NetflowExportService:
         if not self.enabled:
             return {"state": "desactive"}
         if not self.shaping.enforcement_enabled:
-            return {"state": ETAT_A_POSER, "reason": "ecriture desactivee"}
+            return {"state": ETAT_A_POSER, "reason": "writing is off"}
         return await self.apply_all(author="system:netflow-export", dry_run=False)
 
     async def status(self) -> dict[str, Any]:

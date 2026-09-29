@@ -2,7 +2,7 @@
 
 Un PoP entre en base des qu'un nom de site est vu (routeur, VLAN, fiche). Il y
 reste quand plus rien ne le porte : routeur retire de l'inventaire, essai
-("PoP Nord", "PoP Sud") jamais relie a un equipement. Il encombre alors
+("PoP Altair", "PoP Vega") jamais relie a un equipement. Il encombre alors
 l'arbre, les listes et les filtres sans rien mesurer.
 
 Ce job retire ceux qui n'ont ni abonne ni backhaul ET dont le nom n'est

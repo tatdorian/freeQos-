@@ -120,7 +120,7 @@ def _service(client: FakeRouterOsClient, **kwargs: Any) -> ShapingService:
 def _stations_uisp() -> list[dict[str, Any]]:
     """L'AP, puis les deux CPE declares sous lui -- ce que rend /devices."""
     return [
-        {"identification": {"id": "ap-1", "mac": AP_MAC, "name": "Secteur Nord", "role": "ap"}},
+        {"identification": {"id": "ap-1", "mac": AP_MAC, "name": "Secteur Altair", "role": "ap"}},
         {
             "identification": {"id": "sta-a", "mac": CPE_ALICE, "role": "station"},
             "attributes": {"apDevice": {"id": "ap-1"}},

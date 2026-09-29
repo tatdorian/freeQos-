@@ -100,7 +100,7 @@ def test_la_ligne_de_pop_rapproche_le_vendu_et_la_pointe_reelle() -> None:
     tiers du lien. Le taux seul serait un chiffre a sensation."""
     ligne = pop_capacity_row(
         {
-            "pop_name": "PoP Nord",
+            "pop_name": "PoP Altair",
             "subscribers": 40,
             "sold_down_mbps": 4000.0,
             "sold_up_mbps": 800.0,
@@ -151,7 +151,7 @@ def test_la_pointe_d_un_lien_retient_la_direction_la_plus_chargee() -> None:
         {
             "router_name": "pop-test",
             "interface": "ether2",
-            "link_name": "BH-Nord",
+            "link_name": "BH-Altair",
             "capacity_mbps": 1000.0,
             "peak_rx_bps": 120_000_000.0,
             "peak_tx_bps": 960_000_000.0,
@@ -234,7 +234,7 @@ def _lien(**surcharges):
     base = {
         "router_name": "pop-test",
         "interface": "ether2",
-        "link_name": "BH-Nord",
+        "link_name": "BH-Altair",
         "capacity_mbps": 1000.0,
         "peak_rx_bps": 120_000_000.0,
         "peak_tx_bps": 900_000_000.0,
@@ -264,7 +264,7 @@ def test_un_lien_qui_vit_a_85_pour_cent_est_a_renforcer() -> None:
     match, une moyenne a 85 % dit que la prochaine croissance se paiera en
     latence."""
     resultat = a_renforcer([_lien()], [])
-    assert [ligne["link_name"] for ligne in resultat["links"]] == ["BH-Nord"]
+    assert [ligne["link_name"] for ligne in resultat["links"]] == ["BH-Altair"]
     assert resultat["links"][0]["avg_share"] == 0.85
 
 
@@ -309,7 +309,7 @@ def test_api_rend_les_quatre_analyses(client: TestClient) -> None:
 
     assert corps["window"] == {"hours": 6, "usage_hours": 24, "silent_days": 3}
     assert [p["pop_name"] for p in corps["pops"]] == ["PoP Test", "PoP Sans Radio"]
-    assert corps["links"][0]["link_name"] == "BH-Nord"
+    assert corps["links"][0]["link_name"] == "BH-Altair"
     assert corps["usage"][0]["gigabytes"] == 42.0
     assert corps["silent"][0]["login"] == "ecole-dosso"
 
