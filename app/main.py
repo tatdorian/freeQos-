@@ -25,6 +25,7 @@ from app.api import (
     admin,
     antennas_admin,
     api_keys,
+    assistant,
     capacity,
     health,
     metrics,
@@ -171,6 +172,13 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     # Connexion et comptes : ces routes portent leurs propres gardes (ouvrir une
     # session ne peut pas exiger d'en avoir une).
     app.include_router(accounts.router, prefix=settings.api_prefix)
+    # Assistant : toute session y a droit, lecture seule comprise (poser une
+    # question ne modifie rien).
+    app.include_router(
+        assistant.router,
+        prefix=settings.api_prefix,
+        dependencies=[Depends(accounts.current_user)],
+    )
     # TOUTE route d'exploitation exige une session, et un compte en lecture
     # seule n'y obtient que les methodes de lecture. La garde est posee ICI,
     # une fois, plutot que route par route : une route ajoutee demain est

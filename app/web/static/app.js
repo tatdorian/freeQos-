@@ -2918,6 +2918,56 @@ async function liveCheck(id) {
     ((r.errors || []).length ? '<div class="notice warn">' + esc(r.errors.join(' ; ')) + '</div>' : '');
 }
 
+/** ASSISTANT DE SUPPORT : une question en clair, un diagnostic tire des
+ *  mesures (abonne, latence, bufferbloat, radio, saturation). Le serveur lit
+ *  tout ce qu'il sait et le transmet au modele ; sans cle API, la boite dit
+ *  comment l'activer au lieu de disparaitre. */
+async function assistantBox(hote, subscriberId) {
+  if (!hote) return;
+  let etat;
+  try { etat = await api('/assistant/status'); } catch (err) { etat = { enabled: false }; }
+  if (!etat.enabled) {
+    hote.innerHTML = '<div class="hint" style="display:block">The AI assistant is off. Set ' +
+      '<code>ANTHROPIC_API_KEY</code> in <code>.env</code> (key from console.anthropic.com), then ' +
+      '<code>docker compose up -d</code>. It then answers support questions from the measurements.</div>';
+    return;
+  }
+  const exemple = subscriberId
+    ? 'e.g. The customer says video stutters every evening. Why?'
+    : 'e.g. Which sites will saturate first, and what should we do?';
+  hote.innerHTML = '<textarea class="assistant-q" rows="3" maxlength="2000" placeholder="' + esc(exemple) +
+      '"></textarea><div class="actions"><button class="sm primary assistant-go">Ask</button>' +
+      '<span class="hint assistant-hint">Sends the question and the measurements shown in freeQoS ' +
+      '(no passwords) to ' + esc(etat.model) + '.</span></div><div class="assistant-out"></div>';
+  const zone = hote.querySelector('.assistant-q');
+  const bouton = hote.querySelector('.assistant-go');
+  const sortie = hote.querySelector('.assistant-out');
+  const poser = async () => {
+    const question = zone.value.trim();
+    if (question.length < 3) { zone.focus(); return; }
+    bouton.disabled = true;
+    sortie.innerHTML = '<div class="hint" style="display:block">Reading the network' +
+      (subscriberId ? ' and this subscriber on the router' : '') + ', then analysing...</div>';
+    try {
+      const r = await api('/assistant', {
+        method: 'POST',
+        body: JSON.stringify({ question, subscriber_id: subscriberId || null }),
+      });
+      const manques = Object.keys((r.context || {}).unavailable_data || {});
+      sortie.innerHTML = '<div class="assistant-answer">' + esc(r.answer) + '</div>' +
+        (manques.length ? '<div class="hint" style="display:block">Data not available for this ' +
+          'answer: ' + esc(manques.join(', ')) + '.</div>' : '');
+    } catch (err) {
+      sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+    bouton.disabled = false;
+  };
+  bouton.addEventListener('click', poser);
+  zone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) poser();
+  });
+}
+
 /** L'etat du cycle de mesure des abonnes, en tete de leur liste : un debit
  *  absent doit se lire "rien ne passe" OU "la mesure est en panne". */
 async function renderSubscriberCycles() {
@@ -3822,9 +3872,11 @@ async function openSubscriber(id) {
       '<h2>Live check</h2><div class="card"><div class="actions">' +
         '<button class="sm primary" id="sub-live-btn">Measure on the router now (2 s)</button></div>' +
         '<div id="sub-live"></div></div>' +
-      '<h2>Last hour</h2><div class="card"><div id="sub-chart"></div></div>';
+      '<h2>Last hour</h2><div class="card"><div id="sub-chart"></div></div>' +
+      '<h2>AI assistant</h2><div class="card" id="sub-assistant"></div>';
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
     document.getElementById('sub-live-btn').addEventListener('click', () => liveCheck(id));
+    assistantBox(document.getElementById('sub-assistant'), id);
     renderThroughput(document.getElementById('sub-chart'),
       data.points.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_bps_max, rx_bps: p.rx_bps_max, subscribers: p.samples })));
   } catch (err) {
@@ -8172,6 +8224,9 @@ async function resetSetting(name) {
  *  chaque site peut encore prendre. Tout vient de ce qui est deja mesure :
  *  debit, plan, latence sous charge. */
 async function loadInsights() {
+  const boite = document.getElementById('ins-assistant');
+  // Une fois : recharger l'onglet ne doit pas effacer une reponse en cours de lecture.
+  if (boite && !boite.dataset.ready) { boite.dataset.ready = '1'; assistantBox(boite, null); }
   const jours = Number(document.getElementById('ins-days').value) || 7;
   const [abos, sites] = await Promise.all([
     api('/insights/subscribers?days=' + jours),
