@@ -974,6 +974,91 @@ class MikrotikCollector:
         return vues
 
     # ------------------------------------------------------------------
+    # Controle en direct d'UN abonne
+    # ------------------------------------------------------------------
+    async def live_subscriber(
+        self, login: str, address: str | None = None, *, window_s: float = 2.0
+    ) -> dict[str, Any]:
+        """Ce que le routeur voit de cet abonne, MAINTENANT, sur ``window_s`` secondes.
+
+        Deux lectures des compteurs de son interface PPPoE, a ``window_s``
+        d'intervalle : le debit qui en sort est celui du routeur, sans passer
+        par la base ni par le cycle de collecte. C'est la reference qui dit si
+        un chiffre absent de l'interface est un trafic absent ou une mesure en
+        panne. La connexion n'est tenue que pendant chaque lecture, jamais
+        pendant l'attente.
+        """
+        timeout = max(self.config.timeout_s * 3, 5.0)
+        premier = await asyncio.wait_for(
+            asyncio.to_thread(self._live_lecture, login, address), timeout=timeout
+        )
+        debut = time.monotonic()
+        await asyncio.sleep(window_s)
+        second = await asyncio.wait_for(
+            asyncio.to_thread(self._live_lecture, login, address), timeout=timeout
+        )
+        duree = max(0.001, time.monotonic() - debut)
+
+        def debit(a: int | None, b: int | None) -> float | None:
+            if a is None or b is None or b < a:
+                return None
+            return (b - a) * 8 / duree
+
+        return {
+            "router": self.name,
+            "session": second["session"],
+            "interface": second["interface"],
+            "interface_found": second["interface_found"],
+            "interface_rx_bps": debit(premier["rx"], second["rx"]),
+            "interface_tx_bps": debit(premier["tx"], second["tx"]),
+            "queues": second["queues"],
+            "window_s": round(duree, 2),
+        }
+
+    def _live_lecture(self, login: str, address: str | None) -> dict[str, Any]:
+        active = [dict(r) for r in self._mesure.ppp_active() if str(r.get("name")) == login]
+        interfaces = self._mesure.interfaces()
+        session = active[0] if active else None
+        adresse = (session or {}).get("address") or address
+        by_name = {str(row.get("name", "")): row for row in interfaces}
+        iface_name = pppoe_interface_name(self.config.pppoe_interface_pattern, login)
+        iface = by_name.get(iface_name)
+        if iface is None and session is not None:
+            iface, iface_name = self._fuzzy_interface(by_name, login, iface_name)
+        files: list[dict[str, Any]] = []
+        hote = str(adresse).split("/")[0] if adresse else None
+        for row in self._mesure.simple_queues():
+            cibles = [c.strip().split("/")[0] for c in str(row.get("target") or "").split(",")]
+            if (hote and hote in cibles) or iface_name in str(row.get("target") or ""):
+                debit = _split_pair(row.get("rate"))
+                files.append(
+                    {
+                        "name": row.get("name"),
+                        "target": row.get("target"),
+                        "max_limit": row.get("max-limit"),
+                        "disabled": parse_flag(row.get("disabled")),
+                        # Vue de la CIBLE : <upload>/<download>.
+                        "rate_up_bps": debit[0] if debit else None,
+                        "rate_down_bps": debit[1] if debit else None,
+                    }
+                )
+        return {
+            "session": {
+                "address": session.get("address"),
+                "caller_id": session.get("caller-id"),
+                "uptime": session.get("uptime"),
+                "service": session.get("service"),
+            }
+            if session
+            else None,
+            "interface": iface_name if iface is not None else None,
+            "interface_found": iface is not None,
+            "rx": parse_counter(iface.get("rx-byte")) if iface else None,
+            "tx": parse_counter(iface.get("tx-byte")) if iface else None,
+            "queues": files,
+        }
+
+    # ------------------------------------------------------------------
     # Compteurs des interfaces VLAN
     # ------------------------------------------------------------------
     async def vlan_counters(self) -> dict[int, list[VlanCounter]]:

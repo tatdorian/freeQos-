@@ -2804,7 +2804,71 @@ function renderLimitsAlert(plafonds) {
   hote.innerHTML = morceaux.join('');
 }
 
+/** CONTROLE EN DIRECT : ce que le routeur compte pour cet abonne, face a ce
+ *  que freeQoS affiche. Chaque source sur une ligne, et un verdict qui dit OU
+ *  le debit se perd -- plutot que de deviner. */
+async function liveCheck(id) {
+  const hote = document.getElementById('sub-live');
+  const bouton = document.getElementById('sub-live-btn');
+  hote.innerHTML = '<div class="hint">Reading the router twice, 2 s apart...</div>';
+  bouton.disabled = true;
+  let r;
+  try {
+    r = await api('/subscribers/' + id + '/live');
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    bouton.disabled = false;
+    return;
+  }
+  bouton.disabled = false;
+  const l = r.live || {};
+  const ligne = (source, down, up, detail) => '<tr><td>' + source + '</td>' +
+    '<td class="num" style="color:var(--down)">' + (down == null ? '<span class="na">-</span>' : esc(bpsText(down))) + '</td>' +
+    '<td class="num" style="color:var(--up)">' + (up == null ? '<span class="na">-</span>' : esc(bpsText(up))) + '</td>' +
+    '<td class="hint" style="display:table-cell">' + detail + '</td></tr>';
+  const sess = l.session;
+  const lignes = [
+    // Interface PPPoE : tx = ce que le routeur envoie a l'abonne (download).
+    ligne('<b>Router, PPPoE interface</b>', l.interface_tx_bps, l.interface_rx_bps,
+      l.interface ? '<code>' + esc(l.interface) + '</code> on ' + esc(l.router) + ', measured over ' +
+        esc(l.window_s) + ' s' : (sess ? 'interface not found' : 'no open session')),
+  ];
+  (l.queues || []).forEach((q) => lignes.push(ligne('Router, queue', q.rate_down_bps, q.rate_up_bps,
+    '<code>' + esc(q.name) + '</code> max ' + esc(q.max_limit || '-') + (q.disabled ? ' (disabled)' : ''))));
+  lignes.push(ligne('NetFlow (last window)', r.netflow ? r.netflow.tx_bps : null,
+    r.netflow ? r.netflow.rx_bps : null, r.netflow ? '' : 'collector off'));
+  lignes.push(ligne('Stored by freeQoS', r.stored ? r.stored.tx_bps : null, r.stored ? r.stored.rx_bps : null,
+    r.stored ? 'sample ' + esc(depuis(r.stored.ts)) : 'no sample'));
+  const v = r.verdict || {};
+  hote.innerHTML = '<div class="notice ' + (v.level === 'ok' ? 'ok' : v.level === 'warn' ? 'warn' : 'err') + '">' +
+      esc(v.text || '') + '</div>' +
+    (sess ? '<div class="hint">Session: ' + esc(sess.address || '-') + ' · up ' + esc(sess.uptime || '-') +
+      (sess.caller_id ? ' · ' + esc(sess.caller_id) : '') + '</div>' : '') +
+    '<div class="table-wrap" style="margin-top:.5rem"><table><thead><tr><th>Source</th>' +
+      '<th class="num">Download</th><th class="num">Upload</th><th></th></tr></thead><tbody>' +
+      lignes.join('') + '</tbody></table></div>' +
+    ((r.errors || []).length ? '<div class="notice warn">' + esc(r.errors.join(' ; ')) + '</div>' : '');
+}
+
+/** L'etat du cycle de mesure des abonnes, en tete de leur liste : un debit
+ *  absent doit se lire "rien ne passe" OU "la mesure est en panne". */
+async function renderSubscriberCycles() {
+  const hote = document.getElementById('sub-cycles');
+  if (!hote) return;
+  let data;
+  try { data = await api('/collection/cycles'); } catch (err) { hote.innerHTML = ''; return; }
+  const c = (data.cycles || {}).collect_subscribers;
+  if (!c) { hote.innerHTML = '<div class="hint">Measurement cycle not run yet.</div>'; return; }
+  const sev = !c.ok ? 'crit' : c.age_s > 60 ? 'warn' : 'ok';
+  hote.innerHTML = '<div class="cycles"><span class="cycle"><i class="sq ' + sev + '"></i>Measurement: ' +
+    (c.ok ? 'ok' : '<b>failed</b>') + ' · ' + Math.round(c.age_s) + ' s ago · ' + c.duration_s + ' s · ' +
+    c.items + ' subscriber(s) written' +
+    (!c.ok && (c.errors || []).length ? ' · <span class="sev-crit">' + esc(c.errors.join(' ; ')) + '</span>' : '') +
+    '</span><span class="pct-hint">Click a subscriber, then "Measure on the router now" to compare with the router.</span></div>';
+}
+
 async function loadSubscribers() {
+  renderSubscriberCycles();
   let query = state.subSearch ? '&search=' + encodeURIComponent(state.subSearch) : '';
   if (state.subPop) query += '&pop_id=' + encodeURIComponent(state.subPop);
   if (state.subKind) query += '&kind=' + encodeURIComponent(state.subKind);
@@ -3687,8 +3751,12 @@ async function openSubscriber(id) {
             ', worst ' + rtt(Math.max(...data.points.map((p) => p.rtt_ms_max || 0))) +
             '</div>'
           : '') +
+      '<h2>Live check</h2><div class="card"><div class="actions">' +
+        '<button class="sm primary" id="sub-live-btn">Measure on the router now (2 s)</button></div>' +
+        '<div id="sub-live"></div></div>' +
       '<h2>Last hour</h2><div class="card"><div id="sub-chart"></div></div>';
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
+    document.getElementById('sub-live-btn').addEventListener('click', () => liveCheck(id));
     renderThroughput(document.getElementById('sub-chart'),
       data.points.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_bps_max, rx_bps: p.rx_bps_max, subscribers: p.samples })));
   } catch (err) {
