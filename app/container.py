@@ -56,10 +56,10 @@ from app.services.collection import (
     JOB_RTT,
     JOB_SUBSCRIBERS,
     JOB_TOPOLOGY,
-    JOB_VLAN_CLIENTS,
     CollectionService,
 )
 from app.services.crypto import KeySource, SecretBox, load_or_create_key
+from app.services.dns_names import JOB_DNS_NAMES, DnsNames
 from app.services.intel import JOB_INTEL, IntelService
 from app.services.netflow_export import JOB_NETFLOW_EXPORT, NetflowExportService
 from app.services.netflow_service import JOB_NETFLOW, NetflowService
@@ -181,6 +181,7 @@ class Container:
     netflow_export: NetflowExportService | None = None
     intel: IntelService | None = None
     restrictions: RestrictionService | None = None
+    dns_names: DnsNames | None = None
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
@@ -400,9 +401,9 @@ async def build_container(settings: Settings) -> Container:
         await shaping.adjust_for_qoe()
 
     scheduler.add_job(JOB_QOE_LOOP, settings.qoe_loop_interval_s, qoe_closed_loop)
-    scheduler.add_job(
-        JOB_VLAN_CLIENTS, settings.vlan_detect_interval_s, collection.detect_vlan_clients
-    )
+    # PAS DE DETECTION AUTOMATIQUE DES CLIENTS VLAN : demande explicite de
+    # l'exploitant. Les clients a IP fixe se declarent a la main (Subscribers >
+    # Add a client), rien n'est devine a partir de la table ARP.
 
     scheduler.add_job(JOB_TOPOLOGY, settings.topology_refresh_interval_s, discover_topology)
 
@@ -584,6 +585,16 @@ async def build_container(settings: Settings) -> Container:
         intel=intel,
         restrictions=restrictions,
     )
+
+    # Le nom que les clients ont DEMANDE (syit.fr), lu dans le cache DNS des
+    # routeurs : NetFlow ne voit que des adresses.
+    noms_dns = DnsNames()
+    conteneur.dns_names = noms_dns
+
+    async def lire_noms_dns() -> None:
+        await noms_dns.refresh(list(registry.collectors))
+
+    scheduler.add_job(JOB_DNS_NAMES, 120.0, lire_noms_dns)
 
     # PoPs vides que plus rien ne declare (routeur retire, essai jamais relie) :
     # retires pour ne plus encombrer l'arbre et les listes.

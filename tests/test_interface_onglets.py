@@ -84,13 +84,21 @@ def test_l_onglet_capacite_a_disparu() -> None:
     assert "loadCapacity" not in JS
 
 
-def test_l_onglet_services_existe_et_est_cable() -> None:
-    """QUI SE CONNECTE A QUOI. L'onglet qui remplace Capacite doit exister aux
-    trois endroits, sans quoi il s'ouvre sur une section qui ne se remplit
-    jamais -- ou pire, blanchit la page."""
-    assert "services" in ONGLETS
-    assert 'id="view-services"' in HTML
-    assert "services: loadServices" in JS
+def test_services_et_trafic_ne_font_qu_une_page_sans_doublon() -> None:
+    """DEMANDE EXPLICITE : pas deux pages qui disent la meme chose.
+
+    Services repetait la periode, l'avis NetFlow, des chiffres et les
+    connexions en direct deja montres par Trafic. Tout vit dans Trafic, une
+    seule fois ; l'ancien lien #/services y mene."""
+    assert "services" not in ONGLETS
+    assert 'id="view-services"' not in HTML
+    trafic = HTML[HTML.index('id="view-traffic"') :]
+    trafic = trafic[: trafic.index("</section>")]
+    for bloc in ("svc-map", "svc-services", "svc-destinations", "svc-lookup", "svc-rules"):
+        assert f'id="{bloc}"' in trafic
+    for doublon in ("svc-range", "svc-live", "svc-stats"):
+        assert f'id="{doublon}"' not in HTML
+    assert "loadServices()" in JS and "view === 'services'" in JS
 
 
 def test_l_onglet_api_existe_et_porte_la_creation_de_cles() -> None:
@@ -133,11 +141,11 @@ def test_l_interface_ne_fait_plus_la_lecon() -> None:
     assert 'class="help"' not in HTML
 
 
-def test_l_onglet_services_porte_ses_trois_promesses() -> None:
+def test_la_page_trafic_porte_ses_trois_promesses() -> None:
     """Voir les connexions en cours, voir ce qui est atteint, et pouvoir
-    restreindre. Les trois blocs doivent etre la : un formulaire de restriction
-    sans tableau de connexions obligerait a deviner ce qu'on bride."""
-    for identifiant in ("svc-live", "svc-destinations", "svc-services", "svc-rules"):
+    restreindre. Les connexions en cours sont "Qui parle a qui" (flow-pairs) :
+    un formulaire de restriction sans elles obligerait a deviner ce qu'on bride."""
+    for identifiant in ("flow-pairs", "svc-destinations", "svc-services", "svc-rules"):
         assert f'id="{identifiant}"' in HTML, identifiant
     assert 'id="svc-rule-form"' in HTML
     assert "loadServices" in JS
@@ -177,7 +185,7 @@ def test_aucun_ecouteur_ne_vise_un_element_disparu() -> None:
 def test_les_blocs_replies_ne_chargent_rien_tant_qu_ils_sont_fermes() -> None:
     """C'est ce qui rend leur deplacement gratuit : aucune lecture de plus tant
     que personne ne les regarde."""
-    for bloc in ("net-links-block", "settings-shaping", "sc-candidates-block"):
+    for bloc in ("net-links-block", "settings-shaping"):
         assert f"getElementById('{bloc}')" in JS
 
 
@@ -303,7 +311,6 @@ def test_la_saisie_est_en_haut_du_panneau() -> None:
     form = panneau.index('id="sc-form"')
     assert form < panneau.index('id="sc-table"')
     assert form < panneau.index('id="sc-vlans"')
-    assert form < panneau.index('id="sc-candidates-block"')
 
 
 def test_le_pop_et_l_adresse_sont_exiges_et_nommes() -> None:
@@ -447,3 +454,15 @@ def test_l_onglet_insights_existe_et_est_cable() -> None:
 def test_la_sante_radio_est_affichee_dans_les_equipements() -> None:
     assert 'id="radio-health"' in HTML and "async function loadRadioHealth(" in JS
     assert "'/radios'" in JS
+
+
+def test_aucune_detection_automatique_des_vlan_dans_l_interface() -> None:
+    """Demande explicite : pas de devinette a partir de la table ARP ni des flux.
+    Les clients a IP fixe se declarent a la main."""
+    for trace in (
+        "sc-candidates",
+        "sub-candidates-banner",
+        "flow-hosts",
+        "Addresses seen, undeclared",
+    ):
+        assert trace not in HTML and trace not in JS

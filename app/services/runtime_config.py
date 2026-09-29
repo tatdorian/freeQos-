@@ -307,37 +307,6 @@ REGLAGES: tuple[Reglage, ...] = (
         "qoe_closed_loop",
         "How often the closed QoE loop runs (tightening a sector that is dropping off).",
     ),
-    _cadence(
-        "vlan_detect_interval_s",
-        "detect_vlan_clients",
-        "How often the ARP table is read to spot clients on routed VLANs. This is an "
-        "aid to declaration: nothing found here is ever shaped.",
-    ),
-    # --- Detection ---
-    Reglage(
-        "vlan_detect_enabled",
-        "detection",
-        "bool",
-        "Read /ip/arp to suggest undeclared static-IP clients. Purely advisory: no "
-        "candidate is ever shaped.",
-    ),
-    Reglage(
-        "vlan_candidate_limit",
-        "detection",
-        "int",
-        "Maximum number of candidates reported to the interface and placed in the "
-        "graph. A chatty VLAN must not make the tree unreadable.",
-        minimum=1,
-        maximum=5_000,
-    ),
-    Reglage(
-        "vlan_sighting_retention_s",
-        "detection",
-        "float",
-        "How long before an address that stopped talking is forgotten.",
-        minimum=60.0,
-        maximum=2_592_000.0,
-    ),
     # --- Trafic (NetFlow) ---
     #
     # NETFLOW_ENABLED, NETFLOW_BIND et NETFLOW_PORT ne sont PAS ici : ouvrir une
@@ -357,30 +326,6 @@ REGLAGES: tuple[Reglage, ...] = (
         "egress) or 'pop'. The same byte is exported by both: adding them up "
         "would double every subscriber usage.",
         choices=("edge", "pop"),
-    ),
-    Reglage(
-        "netflow_track_hosts",
-        "trafic",
-        "bool",
-        "Keep the addresses seen that match no record. An aid to declaring VLAN "
-        "clients: none of them ever becomes a client on its own.",
-    ),
-    Reglage(
-        "netflow_host_limit",
-        "trafic",
-        "int",
-        "Maximum number of unmatched addresses kept per window. A chatty VLAN must "
-        "not drown the entry aid.",
-        minimum=1,
-        maximum=10_000,
-    ),
-    Reglage(
-        "netflow_host_retention_s",
-        "trafic",
-        "float",
-        "How long before an unmatched address that went quiet is forgotten.",
-        minimum=60.0,
-        maximum=2_592_000.0,
     ),
     # --- Services atteints (ipfinder) ---
     Reglage(

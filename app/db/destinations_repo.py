@@ -292,8 +292,11 @@ class DestinationsRepository:
         une carte qui ne montrerait que ce qu'elle sait placer laisserait croire
         que tout le trafic y figure.
         """
+        # Les adresses de nos routeurs ne sont nulle part sur la carte : ce trafic
+        # ne quitte pas le reseau.
         filtres = """
             d.last_seen >= now() - make_interval(mins => $1)
+            AND coalesce(i.category, '') <> 'internal'
             AND ($2::text IS NULL OR i.category = $2)
             AND ($3::text IS NULL
                  OR host(d.address) ILIKE '%' || $3 || '%'
@@ -657,6 +660,34 @@ class DestinationsRepository:
                 ],
             )
         return len(verdicts)
+
+    async def mark_internal(self, rows: list[tuple[str, str]]) -> int:
+        """Les adresses de NOS routeurs : ``(adresse, "routeur · interface")``.
+
+        ECRASE ce que les sources externes avaient rendu (organisation, pays,
+        position) : pour un loopback d'operateur, une base publique repond au
+        hasard -- Columbus (Ohio) pour un bloc qu'elle ne connait pas. Le nom
+        vient de l'inventaire, et c'est lui qui fait foi.
+        """
+        if not rows:
+            return 0
+        async with self._pool.acquire() as conn:
+            await conn.executemany(
+                """
+                INSERT INTO ip_intel (address, hostname, service, category, source, resolved_at)
+                VALUES ($1::inet, $2, 'your router', 'internal', 'inventory', now())
+                ON CONFLICT (address) DO UPDATE
+                   SET hostname = EXCLUDED.hostname, service = 'your router',
+                       category = 'internal', source = 'inventory',
+                       org = NULL, asn = NULL, country = NULL, city = NULL,
+                       region = NULL, latitude = NULL, longitude = NULL, network = NULL,
+                       resolved_at = now(), last_seen = now()
+                 WHERE ip_intel.source IS DISTINCT FROM 'inventory'
+                    OR ip_intel.hostname IS DISTINCT FROM EXCLUDED.hostname
+                """,
+                rows,
+            )
+        return len(rows)
 
     async def forget_resolution(self, address: str) -> None:
         """Remet une adresse dans la file d'attente, tentatives remises a zero.

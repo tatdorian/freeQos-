@@ -48,6 +48,7 @@ from typing import Any
 
 import httpx
 
+from app.collectors.mikrotik import own_address, own_addresses
 from app.db.destinations_repo import DestinationsRepository
 from app.services import ipfinder
 from app.services.ipfinder import ReverseDns, Verdict
@@ -187,6 +188,7 @@ class IntelService:
     #: systeme, qu'aucun delai Python ne borne : sur le pool commun d'asyncio,
     #: des resolutions figees finissaient par priver la lecture des routeurs
     #: de ses fils. Ici, au pire, ce sont ces quatre-la qui attendent.
+    _derniers_internes: list[tuple[str, str]] = field(default_factory=list)
     _rdns_pool: ThreadPoolExecutor = field(
         default_factory=lambda: ThreadPoolExecutor(max_workers=4, thread_name_prefix="rdns")
     )
@@ -433,6 +435,7 @@ class IntelService:
         """Nomme un lot d'adresses en attente. Rend le nombre traite."""
         if not self.enabled or self.destinations is None:
             return 0
+        await self._marquer_nos_routeurs()
         try:
             adresses = await self.destinations.pending(
                 limit=limit or self.batch_size, max_attempts=self.max_attempts
@@ -441,10 +444,30 @@ class IntelService:
             self.last_error = f"queue unreadable: {exc}"
             logger.debug("Enrichissement : %s", self.last_error)
             return 0
+        # Une adresse de nos routeurs ne part JAMAIS vers une source externe.
+        adresses = [a for a in adresses if own_address(a) is None]
         traitees = await self._resolve(adresses) if adresses else 0
         await self.relocate()
         self.last_run_at = datetime.now(tz=UTC)
         return traitees
+
+    async def _marquer_nos_routeurs(self) -> None:
+        """Etiquette les adresses de nos routeurs d'apres l'inventaire, et
+        corrige celles que des sources externes avaient deja nommees."""
+        marquer = getattr(self.destinations, "mark_internal", None)
+        if marquer is None:
+            return
+        lignes = sorted(
+            (adresse, f"{routeur} · {interface}")
+            for adresse, (routeur, interface) in own_addresses().items()
+        )
+        if not lignes or lignes == self._derniers_internes:
+            return
+        try:
+            await marquer(lignes)
+            self._derniers_internes = lignes
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Adresses des routeurs non etiquetees : %s", exc)
 
     async def relocate(self, limit: int | None = None) -> int:
         """Redemande la position des adresses restees sans localisation.
