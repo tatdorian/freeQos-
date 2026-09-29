@@ -3479,7 +3479,7 @@ async function scRecensement() {
       return '<tr>' +
         '<td class="login"><code>' + esc(cl.address) + '</code>' +
           ((cl.routed_prefixes || []).length
-            ? ' <span class="badge" title="bloc route derriere cette adresse">+ ' +
+            ? ' <span class="badge" title="block routed behind this address">+ ' +
               esc(cl.routed_prefixes.join(', ')) + '</span>' : '') +
         '</td>' +
         '<td style="color:var(--faint)">' + esc(cl.mac || '-') + '</td>' +
@@ -4339,7 +4339,7 @@ async function testConnection() {
   try {
     const result = await api('/pops/routers/test', { method: 'POST', body: JSON.stringify(payload) });
     if (result.reachable) {
-      showFormResult('<div class="notice ok"><strong>Connexion etablie.</strong> ' +
+      showFormResult('<div class="notice ok"><strong>Connected.</strong> ' +
         esc(result.identity || 'router') + ' &middot; ' + esc(result.board_name || '?') +
         ' &middot; RouterOS ' + esc(result.version || '?') +
         '<span class="hint">' + esc(result.ppp_active_sessions) + ' active PPPoE session(s), incl. ' +
@@ -4365,7 +4365,7 @@ async function saveRouter(event) {
   try {
     const created = await api('/pops/routers', { method: 'POST', body: JSON.stringify(formPayload()) });
     showFormResult('<div class="notice ok"><b>' + esc(created.name) +
-      ' enregistre.</b></div>');
+      ' saved.</b></div>');
     document.getElementById('router-form').reset();
     document.getElementById('f-username').value = 'qos-ro';
     document.getElementById('f-port').value = '8728';

@@ -107,7 +107,8 @@ def read_geoip_payload(charge: Any) -> dict[str, Any] | None:
         return None
     if str(charge.get("status") or "").lower() == "fail":
         return None
-    connexion = charge.get("connection") if isinstance(charge.get("connection"), dict) else {}
+    brut = charge.get("connection")
+    connexion: dict[str, Any] = brut if isinstance(brut, dict) else {}
     lu: dict[str, Any] = {
         "country": charge.get("country_code") or charge.get("countryCode"),
         "city": charge.get("city") or charge.get("cityName"),

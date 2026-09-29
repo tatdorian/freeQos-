@@ -841,7 +841,10 @@ class TopologyRepository:
     async def flag_author(self, name: str) -> str | None:
         """Qui a pose la valeur actuelle du drapeau ('bootstrap' = personne)."""
         async with self._pool.acquire() as conn:
-            return await conn.fetchval("SELECT updated_by FROM runtime_flags WHERE name = $1", name)
+            auteur = await conn.fetchval(
+                "SELECT updated_by FROM runtime_flags WHERE name = $1", name
+            )
+        return None if auteur is None else str(auteur)
 
     async def set_flag(
         self, name: str, value: bool, *, updated_by: str | None = None, reason: str | None = None

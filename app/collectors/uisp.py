@@ -340,6 +340,11 @@ class AirOsClient:
             verify=target.verify_tls,
             timeout=timeout_s,
             follow_redirects=False,
+            # L'antenne est sur le reseau de management, jamais derriere le proxy
+            # sortant du serveur : avec HTTP(S)_PROXY dans l'environnement, la
+            # requete partait au proxy, qui repondait 403 -- lu comme "identifiants
+            # refuses". Aucune radio n'etait joignable.
+            trust_env=False,
         )
 
     async def fetch_status(self) -> dict[str, Any]:

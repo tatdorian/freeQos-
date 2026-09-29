@@ -119,6 +119,11 @@ def _hint_for(exc: Exception, target: AirOsTarget) -> str:
             f"No answer from {target.host}. Check the route from this machine "
             "and that the antenna web interface is reachable over HTTPS."
         )
+    if "proxy" in text:
+        return (
+            f"A proxy answered instead of {target.host}: the request must go straight "
+            "to the antenna on the management network (check HTTP(S)_PROXY / NO_PROXY)."
+        )
     if "refused" in text:
         return f"Connection refused by {target.host}: HTTPS disabled, or port filtered."
     if "401" in text or "403" in text or "login" in text:
