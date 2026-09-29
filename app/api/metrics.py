@@ -536,3 +536,27 @@ async def ports_live(repo: RepositoryDep, collection: CollectionDep) -> dict[str
         "cycles": cycles,
         "routers": [c.name for c in collection.collectors],
     }
+
+
+@router.get("/search", summary="Instant lookup: subscriber, IP, MAC, device, site")
+async def search(
+    repo: RepositoryDep,
+    collection: CollectionDep,
+    q: Annotated[str, Query(min_length=2, max_length=128)],
+) -> dict[str, Any]:
+    """Un seul champ pour tout retrouver : le support tape ce qu'il a sous les yeux."""
+    resultats = await repo.search_everything(q)
+    motif = q.strip().lower()
+    resultats["routers"] = [
+        {
+            "name": c.name,
+            "host": c.config.host,
+            "pop_name": c.config.effective_pop_name,
+            "role": str(c.config.role),
+        }
+        for c in collection.collectors
+        if motif in c.name.lower()
+        or motif in str(c.config.host).lower()
+        or motif in c.config.effective_pop_name.lower()
+    ][:8]
+    return {"q": q, **resultats}

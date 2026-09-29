@@ -3460,3 +3460,24 @@ async def test_supprimer_un_abonne_emporte_son_historique(
     # Le cache d'identifiants l'oublie : l'abonne revenu recoit un NOUVEL id.
     directory.forget_subscriber("parti")
     assert await directory.ensure_subscriber("parti", pop_id=pop_id) != sid
+
+
+async def test_la_recherche_instantanee_trouve_login_ip_mac_et_site(database: Database) -> None:
+    directory = PgDirectory(database.pool)
+    repo = MetricsRepository(database.pool)
+    async with database.pool.acquire() as conn:
+        await conn.execute("TRUNCATE topology_nodes CASCADE")
+    pop_id = await directory.ensure_pop("NAS-Tailladje")
+    sid = await directory.ensure_subscriber("test-ta", pop_id=pop_id)
+    await directory.touch_subscribers({sid: ("100.100.105.242", datetime.now(tz=UTC))})
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO topology_nodes (key, name, kind, mac, address) "
+            "VALUES ('mac:AA', 'Radio Nord', 'radio', 'AA:BB:CC:00:11:22', '10.9.9.9')"
+        )
+    par_login = await repo.search_everything("test-t")
+    assert par_login["subscribers"][0]["login"] == "test-ta"
+    par_ip = await repo.search_everything("105.242")
+    assert par_ip["subscribers"][0]["address"] == "100.100.105.242"
+    assert (await repo.search_everything("cc:00"))["devices"][0]["name"] == "Radio Nord"
+    assert (await repo.search_everything("taill"))["sites"][0]["name"] == "NAS-Tailladje"

@@ -750,6 +750,69 @@ class MetricsRepository:
             )
         return _rows(records)
 
+    async def search_everything(self, q: str, *, limit: int = 8) -> dict[str, list[dict[str, Any]]]:
+        """RECHERCHE INSTANTANEE : un nom, une IP, une MAC, un equipement.
+
+        Le support tape ce qu'il a sous les yeux -- le login, l'adresse que
+        l'abonne lit sur son routeur, la MAC d'une radio, le nom d'un site --
+        pas le champ ou ca se trouve. Une requete par famille, bornees, pour
+        repondre en quelques millisecondes pendant la frappe.
+        """
+        motif = f"%{q.strip()}%"
+        async with self._pool.acquire() as conn:
+            abonnes = await conn.fetch(
+                """
+                SELECT s.id, s.login, s.kind, host(s.last_ip) AS address, p.name AS pop_name,
+                       s.plan_down_mbps, s.plan_up_mbps, s.last_seen
+                  FROM subscribers s LEFT JOIN pops p ON p.id = s.pop_id
+                 WHERE s.login ILIKE $1 OR host(s.last_ip) ILIKE $1
+                 ORDER BY (s.login ILIKE $2) DESC, s.last_seen DESC NULLS LAST
+                 LIMIT $3
+                """,
+                motif,
+                q.strip(),
+                limit,
+            )
+            equipements = await conn.fetch(
+                """
+                SELECT key, name, COALESCE(kind_override, kind) AS kind, address, mac,
+                       platform, router_name, last_seen
+                  FROM topology_nodes
+                 WHERE NOT COALESCE(hidden, FALSE)
+                   AND (name ILIKE $1 OR address ILIKE $1 OR mac ILIKE $1
+                        OR platform ILIKE $1)
+                 ORDER BY last_seen DESC NULLS LAST
+                 LIMIT $2
+                """,
+                motif,
+                limit,
+            )
+            sites = await conn.fetch(
+                """
+                SELECT p.id, p.name, p.kind,
+                       (SELECT count(*) FROM subscribers s WHERE s.pop_id = p.id) AS subscribers
+                  FROM pops p WHERE p.name ILIKE $1 ORDER BY p.name LIMIT $2
+                """,
+                motif,
+                limit,
+            )
+            adresses = await conn.fetch(
+                """
+                SELECT host(address) AS address, hostname, service, org, country, city
+                  FROM ip_intel
+                 WHERE host(address) ILIKE $1 OR hostname ILIKE $1 OR org ILIKE $1
+                 ORDER BY last_seen DESC LIMIT $2
+                """,
+                motif,
+                limit,
+            )
+        return {
+            "subscribers": _rows(abonnes),
+            "devices": _rows(equipements),
+            "sites": _rows(sites),
+            "addresses": _rows(adresses),
+        }
+
     async def ports_live(self, *, max_age_s: int = 120) -> list[dict[str, Any]]:
         """Chaque port de chaque routeur, avec son DERNIER debit mesure.
 

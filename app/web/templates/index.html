@@ -39,6 +39,12 @@
       freeQoS
       <span class="dot" id="health-dot" title="Controller health"></span>
     </div>
+    <!-- RECHERCHE INSTANTANEE : un nom, une IP, une MAC, un equipement, un site. -->
+    <div class="global-search">
+      <input type="search" id="global-search" placeholder="Search (name, IP, MAC...)  /"
+             autocomplete="off" spellcheck="false" maxlength="128">
+      <div class="gs-results" id="global-search-results" hidden></div>
+    </div>
     <nav class="tabs">
       <a href="#/dashboard" data-view="dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Dashboard</span></a>
       <a href="#/exec" data-view="exec"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-5 3 3 5-6"/></svg><span>Executive</span></a>

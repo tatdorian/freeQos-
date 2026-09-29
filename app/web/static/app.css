@@ -982,3 +982,33 @@ body.gated header.top, body.gated main { visibility: hidden; }
 .cycle .sq { margin-right: .35rem; }
 .ports-foot { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: center; font-size: .78rem; color: var(--muted); margin-top: .6rem; }
 .stale-row td { opacity: .6; }
+
+/* Une tuile ne deborde jamais : une adresse IP ou un nom de PoP long passent a
+   la ligne dans leur case au lieu de mordre sur la voisine. */
+.stat { min-width: 0; overflow: hidden; }
+.stat .value { overflow-wrap: anywhere; word-break: break-word; }
+.drawer .grid.stats { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.drawer .stat .value { font-size: 1.2rem; letter-spacing: -.01em; }
+.drawer .stat .sub { overflow-wrap: anywhere; }
+
+/* ================================================ recherche instantanee */
+.global-search { position: relative; padding: 0 .1rem; }
+.global-search input { width: 100%; font-size: .84rem; padding: .45rem .7rem; }
+.gs-results {
+  position: absolute; left: 0; top: calc(100% + 6px); z-index: 80;
+  width: min(440px, calc(100vw - 24px)); max-height: 70vh; overflow-y: auto;
+  background: var(--surface); border-radius: var(--radius-sm); box-shadow: var(--shadow-lift);
+  padding: .35rem;
+}
+.gs-results[hidden] { display: none; }
+.gs-group { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); padding: .5rem .5rem .2rem; }
+.gs-item {
+  display: flex; gap: .6rem; align-items: center; width: 100%; text-align: left;
+  background: transparent; border: 0; border-radius: 8px; padding: .4rem .5rem; color: var(--text);
+}
+.gs-item:hover, .gs-item:focus { background: var(--fill); }
+.gs-kind { flex: 0 0 38px; font-size: .62rem; font-weight: 700; color: var(--accent); text-align: center; background: var(--accent-dim); border-radius: 6px; padding: .15rem 0; }
+.gs-main { display: flex; flex-direction: column; min-width: 0; }
+.gs-main b { font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gs-main .hint { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gs-empty { padding: .7rem; color: var(--muted); font-size: .84rem; }

@@ -270,7 +270,7 @@ class Settings(BaseSettings):
     # declaration, rien de plus. Rien de ce qu'elle trouve n'est jamais shape.
     # Les flux NetFlow rendent le meme service sans rien demander aux routeurs
     # (cf. GET /netflow/hosts).
-    vlan_detect_enabled: bool = False
+    vlan_detect_enabled: bool = True
     vlan_detect_interval_s: float = 300.0
     # Au-dela, une adresse qui s'est tue n'est plus une piste : on l'oublie.
     vlan_sighting_retention_s: float = 86_400.0
@@ -430,7 +430,11 @@ class Settings(BaseSettings):
     # DESACTIVEE par defaut : c'est une sonde ACTIVE (/ping depuis le routeur),
     # elle consomme du CPU routeur, contrairement a la mesure passive de LibreQoS
     # qui est impossible hors-bande.
-    rtt_enabled: bool = False
+    # ACTIVEE par defaut : sans elle, pas de latence, donc ni bufferbloat, ni
+    # score QoE, ni boucle fermee. Depuis que les sondes ont leur propre
+    # connexion et partent une a une par routeur, elles ne gênent plus la
+    # mesure des debits.
+    rtt_enabled: bool = True
     rtt_interval_s: float = 30.0
     rtt_batch_size: int = 20
     # Cinq paquets par mesure, espaces de 200 ms : assez pour une mediane, une

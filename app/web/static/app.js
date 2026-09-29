@@ -237,6 +237,74 @@ function brancherMonMdp() {
   });
 }
 
+/* ------------------------------------------------- recherche instantanee
+ *
+ *  Un seul champ, toujours visible : le support tape ce qu'il a sous les yeux
+ *  (login, IP lue sur la box, MAC d'une radio, nom de site) et obtient la
+ *  fiche en deux frappes. "/" y place le curseur depuis n'importe quel onglet. */
+const GS = { timer: null, seq: 0 };
+
+function gsItem(icone, titre, detail, action) {
+  return '<button type="button" class="gs-item" data-gs="' + esc(action) + '">' +
+    '<span class="gs-kind">' + esc(icone) + '</span><span class="gs-main"><b>' + esc(titre) + '</b>' +
+    '<span class="hint">' + esc(detail || '') + '</span></span></button>';
+}
+
+async function globalSearch(q) {
+  const hote = document.getElementById('global-search-results');
+  if (q.trim().length < 2) { hote.hidden = true; hote.innerHTML = ''; return; }
+  const seq = ++GS.seq;
+  let r;
+  try { r = await api('/search?q=' + encodeURIComponent(q.trim())); } catch (err) { return; }
+  if (seq !== GS.seq) return;  // une frappe plus recente a deja repondu
+  const blocs = [];
+  const groupe = (titre, items) => { if (items.length) blocs.push('<div class="gs-group">' + titre + '</div>' + items.join('')); };
+  groupe('Subscribers', (r.subscribers || []).map((s) => gsItem(s.kind === 'static' ? 'IP' : 'SUB', s.login,
+    [s.address, s.pop_name, s.plan_down_mbps ? mbps(s.plan_down_mbps) : ''].filter(Boolean).join(' · '),
+    'sub:' + s.id)));
+  groupe('Routers', (r.routers || []).map((x) => gsItem('RTR', x.name, x.host + ' · ' + x.pop_name, 'router:' + x.name)));
+  groupe('Sites', (r.sites || []).map((x) => gsItem('POP', x.name, x.subscribers + ' subscriber(s)', 'site:' + x.id)));
+  groupe('Devices', (r.devices || []).map((d) => gsItem((ICONE[d.kind] || '?'), d.name,
+    [d.address, d.mac, d.platform].filter(Boolean).join(' · '), 'node:' + d.key)));
+  groupe('Internet addresses', (r.addresses || []).map((a) => gsItem('WAN', a.address,
+    [a.service || a.hostname, a.org, a.city].filter(Boolean).join(' · '), 'ip:' + a.address)));
+  // Une IP que personne n'a encore vue se cherche quand meme : "Find an IP".
+  if (/^[0-9a-f.:]+$/i.test(q.trim()) && !(r.addresses || []).length) {
+    groupe('Look up', [gsItem('WAN', q.trim(), 'who holds it and where it is', 'ip:' + q.trim())]);
+  }
+  hote.innerHTML = blocs.join('') || '<div class="gs-empty">Nothing matches "' + esc(q) + '".</div>';
+  hote.hidden = false;
+  hote.querySelectorAll('[data-gs]').forEach((b) => b.addEventListener('click', () => gsOpen(b.dataset.gs)));
+}
+
+function gsOpen(action) {
+  const [type, ...reste] = action.split(':');
+  const valeur = reste.join(':');
+  document.getElementById('global-search-results').hidden = true;
+  if (type === 'sub') { openSubscriber(Number(valeur)); return; }
+  if (type === 'router') { location.hash = '#/pops'; return; }
+  if (type === 'site') {
+    state.subPop = valeur;
+    const sel = document.getElementById('sub-pop');
+    if (sel) sel.value = valeur;
+    location.hash = '#/subscribers';
+    if (state.view === 'subscribers') loadSubscribers();
+    return;
+  }
+  if (type === 'node') {
+    location.hash = '#/network';
+    setTimeout(() => { if (typeof topo !== 'undefined') { topo.selected = valeur; renderTopoCanvas(); renderTopoPanel(); } }, 600);
+    return;
+  }
+  if (type === 'ip') {
+    location.hash = '#/services';
+    setTimeout(() => {
+      const champ = document.getElementById('svc-lookup');
+      if (champ) { champ.value = valeur; lookupIp(valeur); champ.scrollIntoView({ block: 'center' }); }
+    }, 400);
+  }
+}
+
 /** Rend lisible une erreur de validation d'API.
  *
  *  FastAPI rend un TABLEAU d'objets ; affiche tel quel, l'exploitant recevait
@@ -8318,6 +8386,27 @@ document.getElementById('sub-search').addEventListener('input', (e) => {
 });
 
 document.getElementById('auth-form').addEventListener('submit', submitAuth);
+document.getElementById('global-search').addEventListener('input', (e) => {
+  clearTimeout(GS.timer);
+  GS.timer = setTimeout(() => globalSearch(e.target.value), 180);
+});
+document.getElementById('global-search').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.target.value = ''; globalSearch(''); e.target.blur(); }
+  if (e.key === 'Enter') {
+    const premier = document.querySelector('#global-search-results [data-gs]');
+    if (premier) premier.click();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  const cible = e.target && e.target.tagName;
+  if (e.key === '/' && cible !== 'INPUT' && cible !== 'TEXTAREA' && cible !== 'SELECT') {
+    e.preventDefault();
+    document.getElementById('global-search').focus();
+  }
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.global-search')) document.getElementById('global-search-results').hidden = true;
+});
 document.getElementById('logout-btn').addEventListener('click', logout);
 boot();
 // Les PoPs ne changent pas tout seuls : inutile de recharger ce formulaire
