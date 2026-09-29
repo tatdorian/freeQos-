@@ -611,6 +611,27 @@ async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Set
         except Exception:  # noqa: BLE001
             pass
         return
+    # UNE VALEUR QUE PERSONNE N'A CHOISIE SE MET A JOUR. Le drapeau pose au
+    # premier demarrage par 'bootstrap' reprenait l'ancien defaut (sonde
+    # coupee) ; il suit desormais le nouveau. Un choix fait depuis l'interface
+    # ('ui') est, lui, toujours respecte.
+    if stored is False and settings.rtt_enabled:
+        try:
+            auteur = await topology_repo.flag_author(FLAG_RTT)
+        except Exception:  # noqa: BLE001
+            auteur = None
+        if auteur == "bootstrap":
+            try:
+                await topology_repo.set_flag(
+                    FLAG_RTT,
+                    True,
+                    updated_by="bootstrap",
+                    reason="sonde activee par defaut (bufferbloat, QoE)",
+                )
+                stored = True
+                logger.info("Sonde RTT activee : valeur initiale choisie par personne.")
+            except Exception:  # noqa: BLE001
+                pass
     collection.rtt_enabled = stored
     if stored:
         logger.info("Sonde RTT ACTIVE d'apres la base (/ping depuis le PoP).")

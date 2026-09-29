@@ -435,3 +435,15 @@ def test_la_liste_ne_crie_plus_non_verifie_a_chaque_rafraichissement() -> None:
 def test_la_fiche_abonne_propose_un_controle_en_direct() -> None:
     assert "async function liveCheck(" in JS and "/live'" in JS
     assert 'id="sub-cycles"' in HTML and "/collection/cycles" in JS
+
+
+def test_l_onglet_insights_existe_et_est_cable() -> None:
+    assert 'id="view-insights"' in HTML and "insights: loadInsights" in JS
+    for identifiant in ("ins-risk", "ins-upgrade", "ins-capacity", "ins-all"):
+        assert f'id="{identifiant}"' in HTML, identifiant
+    assert 'id="global-search"' in HTML and "/search?q=" in JS
+
+
+def test_la_sante_radio_est_affichee_dans_les_equipements() -> None:
+    assert 'id="radio-health"' in HTML and "async function loadRadioHealth(" in JS
+    assert "'/radios'" in JS

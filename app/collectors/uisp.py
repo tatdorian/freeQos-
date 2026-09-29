@@ -251,6 +251,73 @@ def parse_airos_status(
     )
 
 
+def parse_airos_radio(status: dict[str, Any]) -> dict[str, Any]:
+    """La sante radio d'une antenne : ce qu'on regarde quand un secteur degrade.
+
+    Le bruit (``noisef``) manquait : un signal de -65 dBm est excellent sous un
+    plancher de -95 et inutilisable sous -70. La marge signal/bruit est ce qui
+    decide de la modulation, donc du debit reel.
+    """
+    signal = _as_float(_pluck(status, "wireless.signal", "wireless.rssi"))
+    bruit = _as_float(_pluck(status, "wireless.noisef", "wireless.noise_floor", "wireless.noise"))
+    return {
+        "name": _as_str(_pluck(status, "host.hostname")),
+        "model": _as_str(_pluck(status, "host.devmodel", "host.model")),
+        "firmware": _as_str(_pluck(status, "host.fwversion", "host.fw_version")),
+        "mode": _as_str(_pluck(status, "wireless.mode")),
+        "ssid": _as_str(_pluck(status, "wireless.essid", "wireless.ssid")),
+        "frequency_mhz": _as_float(_pluck(status, "wireless.frequency", "wireless.freq")),
+        "channel_width_mhz": _as_float(_pluck(status, "wireless.chanbw", "wireless.chwidth")),
+        "signal_dbm": signal,
+        "noise_dbm": bruit,
+        "snr_db": round(signal - bruit, 1) if signal is not None and bruit is not None else None,
+        "ccq_pct": _as_float(_pluck(status, "wireless.ccq")),
+        "airtime_pct": _as_float(_pluck(status, "wireless.polling.use", "wireless.airmax.quality")),
+        "tx_rate_mbps": _as_float(_pluck(status, "wireless.txrate")),
+        "rx_rate_mbps": _as_float(_pluck(status, "wireless.rxrate")),
+        "capacity_down_mbps": normalize_capacity_to_mbps(_pluck(status, "wireless.txcapacity")),
+        "capacity_up_mbps": normalize_capacity_to_mbps(_pluck(status, "wireless.rxcapacity")),
+        "distance_m": _as_float(_pluck(status, "wireless.distance")),
+        "stations": _as_float(_pluck(status, "wireless.count", "wireless.sta_count")),
+        "uptime_s": _as_float(_pluck(status, "host.uptime")),
+    }
+
+
+def parse_airos_stations(rows: Any) -> list[dict[str, Any]]:
+    """Les CPE associes a une AP (``/sta.cgi``), un par ligne, de facon defensive."""
+    if not isinstance(rows, list):
+        return []
+    stations: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        signal = _as_float(_pluck(row, "signal", "rssi"))
+        bruit = _as_float(_pluck(row, "noisefloor", "noise"))
+        brut = row.get("remote")
+        distant: dict[str, Any] = brut if isinstance(brut, dict) else {}
+        stations.append(
+            {
+                "mac": _as_str(row.get("mac")),
+                "name": _as_str(_pluck(row, "name", "remote.hostname") or distant.get("hostname")),
+                "ip": _as_str(_pluck(row, "lastip", "remote.lastip")),
+                "model": _as_str(distant.get("platform") or distant.get("devmodel")),
+                "signal_dbm": signal,
+                "noise_dbm": bruit,
+                "snr_db": round(signal - bruit, 1)
+                if signal is not None and bruit is not None
+                else None,
+                "remote_signal_dbm": _as_float(distant.get("signal")),
+                "ccq_pct": _as_float(row.get("ccq")),
+                "tx_rate_mbps": _as_float(_pluck(row, "tx", "txrate", "tx_rate")),
+                "rx_rate_mbps": _as_float(_pluck(row, "rx", "rxrate", "rx_rate")),
+                "distance_m": _as_float(row.get("distance")),
+                "uptime_s": _as_float(row.get("uptime")),
+                "airmax_quality": _as_float(_pluck(row, "airmax.quality")),
+            }
+        )
+    return stations
+
+
 class AirOsClient:
     """Client de l'API locale d'UNE antenne airOS (lecture seule).
 
@@ -285,6 +352,18 @@ class AirOsClient:
         if not isinstance(payload, dict):
             raise ValueError("reponse /status.cgi inattendue (pas un objet JSON)")
         return payload
+
+    async def fetch_stations(self) -> list[dict[str, Any]]:
+        """Les CPE associes (``/sta.cgi``). Liste vide sur une station (CPE)."""
+        response = await self._client.get("/sta.cgi")
+        if response.status_code in (401, 403) or _looks_like_login(response):
+            await self._login()
+            response = await self._client.get("/sta.cgi")
+        if response.status_code == 404:
+            return []
+        response.raise_for_status()
+        payload = response.json()
+        return payload if isinstance(payload, list) else []
 
     async def _login(self) -> None:
         # Un premier GET pose le cookie de session que /login.cgi attend en
@@ -334,6 +413,10 @@ class AirOsProvider:
         self._factory = client_factory or (lambda target: AirOsClient(target, timeout_s=timeout_s))
         self._clients: dict[str, AirOsClient] = {}
         self._last_status: dict[str, dict[str, Any]] = {}
+        # CPE associes a chaque AP, lus avec son statut, et quand.
+        self._last_stations: dict[str, list[dict[str, Any]]] = {}
+        self._last_read: dict[str, datetime] = {}
+        self._last_error: dict[str, str] = {}
 
     def _client_for(self, target: AirOsTarget) -> AirOsClient:
         existing = self._clients.get(target.key)
@@ -362,13 +445,45 @@ class AirOsProvider:
         self._targets = nouveaux
 
     async def _read_one(self, target: AirOsTarget) -> tuple[str, BackhaulSample | None]:
+        client = self._client_for(target)
         try:
-            status = await self._client_for(target).fetch_status()
+            status = await client.fetch_status()
         except Exception as exc:  # noqa: BLE001 - une radio muette n'en coule pas d'autres
             logger.warning("airOS %s (%s) injoignable : %s", target.key, target.host, exc)
+            self._last_error[target.key] = f"{type(exc).__name__}: {exc}"
             return target.key, None
         self._last_status[target.key] = status
+        self._last_read[target.key] = datetime.now(tz=UTC)
+        self._last_error.pop(target.key, None)
+        # Les CPE, seulement sur une AP : une station n'a personne sous elle.
+        mode = str(_pluck(status, "wireless.mode") or "").lower()
+        if mode.startswith("ap") or "master" in mode:
+            try:
+                self._last_stations[target.key] = parse_airos_stations(
+                    await client.fetch_stations()
+                )
+            except Exception as exc:  # noqa: BLE001 - le statut de l'AP reste valable
+                logger.debug("airOS %s : liste des CPE illisible : %s", target.key, exc)
+        else:
+            self._last_stations.pop(target.key, None)
         return target.key, parse_airos_status(status, key=target.key)
+
+    def radio_snapshot(self) -> list[dict[str, Any]]:
+        """Chaque antenne lue : sa sante radio, et ses CPE s'il s'agit d'une AP."""
+        sortie: list[dict[str, Any]] = []
+        for key, target in self._targets.items():
+            status = self._last_status.get(key)
+            sortie.append(
+                {
+                    "key": key,
+                    "host": target.host,
+                    "read_at": self._last_read.get(key),
+                    "error": self._last_error.get(key),
+                    "radio": parse_airos_radio(status) if status else None,
+                    "stations": self._last_stations.get(key, []),
+                }
+            )
+        return sortie
 
     async def get_capacities(self, device_ids: Sequence[str]) -> dict[str, BackhaulSample]:
         wanted = [self._targets[d] for d in device_ids if d in self._targets]

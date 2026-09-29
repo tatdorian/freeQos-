@@ -3460,3 +3460,70 @@ async def test_supprimer_un_abonne_emporte_son_historique(
     # Le cache d'identifiants l'oublie : l'abonne revenu recoit un NOUVEL id.
     directory.forget_subscriber("parti")
     assert await directory.ensure_subscriber("parti", pop_id=pop_id) != sid
+
+
+async def test_la_recherche_instantanee_trouve_login_ip_mac_et_site(database: Database) -> None:
+    directory = PgDirectory(database.pool)
+    repo = MetricsRepository(database.pool)
+    async with database.pool.acquire() as conn:
+        await conn.execute("TRUNCATE topology_nodes CASCADE")
+    pop_id = await directory.ensure_pop("NAS-Tailladje")
+    sid = await directory.ensure_subscriber("test-ta", pop_id=pop_id)
+    await directory.touch_subscribers({sid: ("100.100.105.242", datetime.now(tz=UTC))})
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO topology_nodes (key, name, kind, mac, address) "
+            "VALUES ('mac:AA', 'Radio Nord', 'radio', 'AA:BB:CC:00:11:22', '10.9.9.9')"
+        )
+    par_login = await repo.search_everything("test-t")
+    assert par_login["subscribers"][0]["login"] == "test-ta"
+    par_ip = await repo.search_everything("105.242")
+    assert par_ip["subscribers"][0]["address"] == "100.100.105.242"
+    assert (await repo.search_everything("cc:00"))["devices"][0]["name"] == "Radio Nord"
+    assert (await repo.search_everything("taill"))["sites"][0]["name"] == "NAS-Tailladje"
+
+
+async def test_les_tendances_comparent_deux_periodes(database: Database) -> None:
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+    pop_id = await directory.ensure_pop("PoP T")
+    from app.models import Plan
+
+    sid = await directory.ensure_subscriber(
+        "trend", pop_id=pop_id, plan=Plan(down_mbps=10.0, up_mbps=2.0, source="t")
+    )
+    maintenant = datetime.now(tz=UTC)
+    lignes = []
+    for h in range(1, 5):  # periode precedente : 8 Mbps
+        lignes.append(
+            (
+                sid,
+                SubscriberSample(
+                    ts=maintenant - timedelta(days=8, hours=h),
+                    login="trend",
+                    router_name="r",
+                    pop_name="p",
+                    rx_bps=0.0,
+                    tx_bps=8e6,
+                ),
+            )
+        )
+    for h in range(1, 5):  # periode courante : 9.5 Mbps = au plafond (>= 90 % de 10)
+        lignes.append(
+            (
+                sid,
+                SubscriberSample(
+                    ts=maintenant - timedelta(hours=h),
+                    login="trend",
+                    router_name="r",
+                    pop_name="p",
+                    rx_bps=0.0,
+                    tx_bps=9.5e6,
+                ),
+            )
+        )
+    await writer.write_subscriber_metrics(lignes)
+    [t] = [r for r in await repo.subscriber_trends(days=7) if r["login"] == "trend"]
+    assert t["avg_down_bps"] == 9.5e6 and t["prev_avg_down_bps"] == 8e6
+    assert t["samples"] == 4 and t["capped_samples"] == 4

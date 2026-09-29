@@ -237,6 +237,74 @@ function brancherMonMdp() {
   });
 }
 
+/* ------------------------------------------------- recherche instantanee
+ *
+ *  Un seul champ, toujours visible : le support tape ce qu'il a sous les yeux
+ *  (login, IP lue sur la box, MAC d'une radio, nom de site) et obtient la
+ *  fiche en deux frappes. "/" y place le curseur depuis n'importe quel onglet. */
+const GS = { timer: null, seq: 0 };
+
+function gsItem(icone, titre, detail, action) {
+  return '<button type="button" class="gs-item" data-gs="' + esc(action) + '">' +
+    '<span class="gs-kind">' + esc(icone) + '</span><span class="gs-main"><b>' + esc(titre) + '</b>' +
+    '<span class="hint">' + esc(detail || '') + '</span></span></button>';
+}
+
+async function globalSearch(q) {
+  const hote = document.getElementById('global-search-results');
+  if (q.trim().length < 2) { hote.hidden = true; hote.innerHTML = ''; return; }
+  const seq = ++GS.seq;
+  let r;
+  try { r = await api('/search?q=' + encodeURIComponent(q.trim())); } catch (err) { return; }
+  if (seq !== GS.seq) return;  // une frappe plus recente a deja repondu
+  const blocs = [];
+  const groupe = (titre, items) => { if (items.length) blocs.push('<div class="gs-group">' + titre + '</div>' + items.join('')); };
+  groupe('Subscribers', (r.subscribers || []).map((s) => gsItem(s.kind === 'static' ? 'IP' : 'SUB', s.login,
+    [s.address, s.pop_name, s.plan_down_mbps ? mbps(s.plan_down_mbps) : ''].filter(Boolean).join(' · '),
+    'sub:' + s.id)));
+  groupe('Routers', (r.routers || []).map((x) => gsItem('RTR', x.name, x.host + ' · ' + x.pop_name, 'router:' + x.name)));
+  groupe('Sites', (r.sites || []).map((x) => gsItem('POP', x.name, x.subscribers + ' subscriber(s)', 'site:' + x.id)));
+  groupe('Devices', (r.devices || []).map((d) => gsItem((ICONE[d.kind] || '?'), d.name,
+    [d.address, d.mac, d.platform].filter(Boolean).join(' · '), 'node:' + d.key)));
+  groupe('Internet addresses', (r.addresses || []).map((a) => gsItem('WAN', a.address,
+    [a.service || a.hostname, a.org, a.city].filter(Boolean).join(' · '), 'ip:' + a.address)));
+  // Une IP que personne n'a encore vue se cherche quand meme : "Find an IP".
+  if (/^[0-9a-f.:]+$/i.test(q.trim()) && !(r.addresses || []).length) {
+    groupe('Look up', [gsItem('WAN', q.trim(), 'who holds it and where it is', 'ip:' + q.trim())]);
+  }
+  hote.innerHTML = blocs.join('') || '<div class="gs-empty">Nothing matches "' + esc(q) + '".</div>';
+  hote.hidden = false;
+  hote.querySelectorAll('[data-gs]').forEach((b) => b.addEventListener('click', () => gsOpen(b.dataset.gs)));
+}
+
+function gsOpen(action) {
+  const [type, ...reste] = action.split(':');
+  const valeur = reste.join(':');
+  document.getElementById('global-search-results').hidden = true;
+  if (type === 'sub') { openSubscriber(Number(valeur)); return; }
+  if (type === 'router') { location.hash = '#/pops'; return; }
+  if (type === 'site') {
+    state.subPop = valeur;
+    const sel = document.getElementById('sub-pop');
+    if (sel) sel.value = valeur;
+    location.hash = '#/subscribers';
+    if (state.view === 'subscribers') loadSubscribers();
+    return;
+  }
+  if (type === 'node') {
+    location.hash = '#/network';
+    setTimeout(() => { if (typeof topo !== 'undefined') { topo.selected = valeur; renderTopoCanvas(); renderTopoPanel(); } }, 600);
+    return;
+  }
+  if (type === 'ip') {
+    location.hash = '#/services';
+    setTimeout(() => {
+      const champ = document.getElementById('svc-lookup');
+      if (champ) { champ.value = valeur; lookupIp(valeur); champ.scrollIntoView({ block: 'center' }); }
+    }, 400);
+  }
+}
+
 /** Rend lisible une erreur de validation d'API.
  *
  *  FastAPI rend un TABLEAU d'objets ; affiche tel quel, l'exploitant recevait
@@ -2850,6 +2918,56 @@ async function liveCheck(id) {
     ((r.errors || []).length ? '<div class="notice warn">' + esc(r.errors.join(' ; ')) + '</div>' : '');
 }
 
+/** ASSISTANT DE SUPPORT : une question en clair, un diagnostic tire des
+ *  mesures (abonne, latence, bufferbloat, radio, saturation). Le serveur lit
+ *  tout ce qu'il sait et le transmet au modele ; sans cle API, la boite dit
+ *  comment l'activer au lieu de disparaitre. */
+async function assistantBox(hote, subscriberId) {
+  if (!hote) return;
+  let etat;
+  try { etat = await api('/assistant/status'); } catch (err) { etat = { enabled: false }; }
+  if (!etat.enabled) {
+    hote.innerHTML = '<div class="hint" style="display:block">The AI assistant is off. Set ' +
+      '<code>ANTHROPIC_API_KEY</code> in <code>.env</code> (key from console.anthropic.com), then ' +
+      '<code>docker compose up -d</code>. It then answers support questions from the measurements.</div>';
+    return;
+  }
+  const exemple = subscriberId
+    ? 'e.g. The customer says video stutters every evening. Why?'
+    : 'e.g. Which sites will saturate first, and what should we do?';
+  hote.innerHTML = '<textarea class="assistant-q" rows="3" maxlength="2000" placeholder="' + esc(exemple) +
+      '"></textarea><div class="actions"><button class="sm primary assistant-go">Ask</button>' +
+      '<span class="hint assistant-hint">Sends the question and the measurements shown in freeQoS ' +
+      '(no passwords) to ' + esc(etat.model) + '.</span></div><div class="assistant-out"></div>';
+  const zone = hote.querySelector('.assistant-q');
+  const bouton = hote.querySelector('.assistant-go');
+  const sortie = hote.querySelector('.assistant-out');
+  const poser = async () => {
+    const question = zone.value.trim();
+    if (question.length < 3) { zone.focus(); return; }
+    bouton.disabled = true;
+    sortie.innerHTML = '<div class="hint" style="display:block">Reading the network' +
+      (subscriberId ? ' and this subscriber on the router' : '') + ', then analysing...</div>';
+    try {
+      const r = await api('/assistant', {
+        method: 'POST',
+        body: JSON.stringify({ question, subscriber_id: subscriberId || null }),
+      });
+      const manques = Object.keys((r.context || {}).unavailable_data || {});
+      sortie.innerHTML = '<div class="assistant-answer">' + esc(r.answer) + '</div>' +
+        (manques.length ? '<div class="hint" style="display:block">Data not available for this ' +
+          'answer: ' + esc(manques.join(', ')) + '.</div>' : '');
+    } catch (err) {
+      sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+    bouton.disabled = false;
+  };
+  bouton.addEventListener('click', poser);
+  zone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) poser();
+  });
+}
+
 /** L'etat du cycle de mesure des abonnes, en tete de leur liste : un debit
  *  absent doit se lire "rien ne passe" OU "la mesure est en panne". */
 async function renderSubscriberCycles() {
@@ -3754,9 +3872,11 @@ async function openSubscriber(id) {
       '<h2>Live check</h2><div class="card"><div class="actions">' +
         '<button class="sm primary" id="sub-live-btn">Measure on the router now (2 s)</button></div>' +
         '<div id="sub-live"></div></div>' +
-      '<h2>Last hour</h2><div class="card"><div id="sub-chart"></div></div>';
+      '<h2>Last hour</h2><div class="card"><div id="sub-chart"></div></div>' +
+      '<h2>AI assistant</h2><div class="card" id="sub-assistant"></div>';
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
     document.getElementById('sub-live-btn').addEventListener('click', () => liveCheck(id));
+    assistantBox(document.getElementById('sub-assistant'), id);
     renderThroughput(document.getElementById('sub-chart'),
       data.points.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_bps_max, rx_bps: p.rx_bps_max, subscribers: p.samples })));
   } catch (err) {
@@ -3886,9 +4006,71 @@ function bytesText(octets) {
   return n + ' o';
 }
 
+/** SANTE RADIO : chaque AP (signal, bruit, SNR, CCQ, airtime, frequence) et
+ *  chacun de ses CPE, avec en clair ce qui ne va pas. Lu au dernier cycle. */
+async function loadRadioHealth() {
+  const hote = document.getElementById('radio-health');
+  if (!hote) return;
+  let data;
+  try { data = await api('/radios'); } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const antennes = data.antennas || [];
+  if (!antennes.length) {
+    hote.innerHTML = '<div class="empty">No antenna declared: add one below to read its radio and its CPEs.</div>';
+    return;
+  }
+  const v = (x, u, d) => x == null ? '<span class="na">-</span>' : esc(Number(x).toFixed(d || 0)) + (u ? ' ' + u : '');
+  hote.innerHTML = antennes.map((a) => {
+    const r = a.radio || {};
+    const stations = a.stations || [];
+    const entete = '<div class="radio-head"><b>' + esc(a.name) + '</b>' +
+      '<span class="pct-hint">' + esc([a.pop_name, r.model, r.firmware, r.mode].filter(Boolean).join(' · ')) + '</span>' +
+      '<span class="spacer"></span>' +
+      (a.error ? '<span class="badge crit" title="' + esc(a.error) + '">unreachable</span>'
+        : a.read_at ? '<span class="pct-hint">read ' + esc(depuis(a.read_at)) + '</span>' : '<span class="badge">not read yet</span>') +
+      '</div>';
+    const faits = a.radio ? '<div class="radio-facts">' +
+      '<div><span>Frequency</span>' + v(r.frequency_mhz, 'MHz') + (r.channel_width_mhz ? ' / ' + v(r.channel_width_mhz, 'MHz') : '') + '</div>' +
+      '<div><span>Signal</span>' + v(r.signal_dbm, 'dBm') + '</div>' +
+      '<div><span>Noise floor</span>' + v(r.noise_dbm, 'dBm') + '</div>' +
+      '<div><span>SNR</span>' + v(r.snr_db, 'dB') + '</div>' +
+      '<div><span>CCQ</span>' + v(r.ccq_pct, '%') + '</div>' +
+      '<div><span>Airtime</span>' + v(r.airtime_pct, '%') + '</div>' +
+      '<div><span>Capacity ↓/↑</span>' + v(r.capacity_down_mbps, '') + ' / ' + v(r.capacity_up_mbps, 'Mbps') + '</div>' +
+      '<div><span>Rate tx/rx</span>' + v(r.tx_rate_mbps, '') + ' / ' + v(r.rx_rate_mbps, 'Mbps') + '</div>' +
+      '<div><span>Distance</span>' + (r.distance_m != null ? v(r.distance_m / 1000, 'km', 1) : '<span class="na">-</span>') + '</div>' +
+      '<div><span>CPEs</span>' + (stations.length || v(r.stations)) + '</div>' +
+      '</div>' : '';
+    const problemes = (a.issues || []).length
+      ? '<div class="notice warn">' + a.issues.map(esc).join(' · ') + '</div>' : '';
+    const cpe = stations.length
+      ? '<details' + (a.stations_with_issues ? ' open' : '') + '><summary>' + stations.length + ' CPE(s)' +
+        (a.stations_with_issues ? ', <b class="sev-warn">' + a.stations_with_issues + ' with an issue</b>' : '') +
+        '</summary><div class="table-wrap"><table><thead><tr><th>CPE</th><th>IP</th><th class="num">Signal</th>' +
+        '<th class="num">Remote</th><th class="num">Noise</th><th class="num">SNR</th><th class="num">CCQ</th>' +
+        '<th class="num">Rate tx/rx</th><th class="num">Distance</th><th>Issue</th></tr></thead><tbody>' +
+        stations.map((c) => '<tr><td><b>' + esc(c.name || c.mac || '?') + '</b><span class="hint">' + esc(c.mac || '') + '</span></td>' +
+          '<td>' + (c.ip ? '<code>' + esc(c.ip) + '</code>' : '<span class="na">-</span>') + '</td>' +
+          '<td class="num">' + (c.signal_dbm == null ? '-' : sqCell(Math.round(c.signal_dbm) + ' dBm',
+            c.signal_dbm < -75 ? 'crit' : c.signal_dbm < -68 ? 'warn' : 'ok')) + '</td>' +
+          '<td class="num">' + v(c.remote_signal_dbm, 'dBm') + '</td>' +
+          '<td class="num">' + v(c.noise_dbm, 'dBm') + '</td>' +
+          '<td class="num">' + v(c.snr_db, 'dB') + '</td>' +
+          '<td class="num">' + v(c.ccq_pct, '%') + '</td>' +
+          '<td class="num">' + v(c.tx_rate_mbps) + ' / ' + v(c.rx_rate_mbps, 'Mbps') + '</td>' +
+          '<td class="num">' + (c.distance_m != null ? v(c.distance_m / 1000, 'km', 1) : '-') + '</td>' +
+          '<td>' + esc((c.issues || []).join(' · ')) + '</td></tr>').join('') +
+        '</tbody></table></div></details>' : '';
+    return '<div class="card radio-card">' + entete + faits + problemes + cpe + '</div>';
+  }).join('');
+}
+
 async function loadRouters() {
   await loadPops();
   await loadAntennas();
+  loadRadioHealth();
   // La sante interroge les routeurs un par un : lancee sans attendre, pour ne
   // pas retarder la page ou l'on vient d'ajouter un equipement.
   loadRoutersHealth();
@@ -8036,12 +8218,82 @@ async function resetSetting(name) {
 }
 
 
+/* ------------------------------------------------------------- insights
+ *
+ *  QUI RISQUE DE PARTIR, QUI EST PRET A MONTER EN GAMME, et combien d'abonnes
+ *  chaque site peut encore prendre. Tout vient de ce qui est deja mesure :
+ *  debit, plan, latence sous charge. */
+async function loadInsights() {
+  const boite = document.getElementById('ins-assistant');
+  // Une fois : recharger l'onglet ne doit pas effacer une reponse en cours de lecture.
+  if (boite && !boite.dataset.ready) { boite.dataset.ready = '1'; assistantBox(boite, null); }
+  const jours = Number(document.getElementById('ins-days').value) || 7;
+  const [abos, sites] = await Promise.all([
+    api('/insights/subscribers?days=' + jours),
+    api('/insights/capacity?hours=' + Math.min(720, jours * 24)).catch(() => ({ sites: [] })),
+  ]);
+  const lignes = abos.subscribers || [];
+  const sm = abos.summary || {};
+  document.getElementById('ins-count').textContent = lignes.length + ' subscriber(s)';
+  document.getElementById('ins-stats').innerHTML =
+    statCard(sm.at_risk ? 'crit' : '', 'At risk of leaving', String(sm.at_risk || 0), '',
+      'poor experience, usage collapsing, or silent') +
+    statCard(sm.upgrade ? 'down' : '', 'Ready for a bigger plan', String(sm.upgrade || 0), '',
+      'living at their plan ceiling, good experience') +
+    statCard('', 'Healthy', String(sm.healthy || 0), '', 'nothing to act on');
+
+  const lien = (r) => '<a href="#" data-ins-sub="' + r.subscriber_id + '">' + esc(r.login) + '</a>';
+  const usage = (r) => esc(bpsText(r.avg_down_bps)) +
+    (r.prev_avg_down_bps ? ' <span class="pct-hint">was ' + esc(bpsText(r.prev_avg_down_bps)) + '</span>' : '');
+  const qoe = (r) => r.qoe_score == null ? '<span class="na">-</span>'
+    : sqCell(Math.round(r.qoe_score) + (r.qoe_grade ? ' · ' + r.qoe_grade : ''), qoeSev(r.qoe_score));
+  const plan = (r) => r.plan_down_mbps ? esc(mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0))
+    : '<span class="na">no plan</span>';
+  const table = (xs, vide) => !xs.length ? '<div class="empty">' + vide + '</div>'
+    : '<table><thead><tr><th>Subscriber</th><th>Site</th><th class="num">Plan</th>' +
+      '<th class="num">Avg download</th><th class="num">At ceiling</th><th class="num">Experience</th>' +
+      '<th>Why</th></tr></thead><tbody>' + xs.map((r) => '<tr><td>' + lien(r) + '</td>' +
+        '<td>' + esc(r.pop_name || '-') + '</td><td class="num">' + plan(r) + '</td>' +
+        '<td class="num">' + usage(r) + '</td>' +
+        '<td class="num">' + (r.ceiling_share ? Math.round(r.ceiling_share * 100) + '%' : '-') + '</td>' +
+        '<td class="num">' + qoe(r) + '</td><td>' + esc((r.reasons || []).join(' · ')) + '</td></tr>').join('') +
+      '</tbody></table>';
+  document.getElementById('ins-risk').innerHTML =
+    table(lignes.filter((r) => r.status === 'at_risk'), 'Nobody shows a sign of leaving.');
+  document.getElementById('ins-upgrade').innerHTML =
+    table(lignes.filter((r) => r.status === 'upgrade'), 'Nobody lives at their plan ceiling.');
+  document.getElementById('ins-all').innerHTML = table(lignes, 'No subscriber.');
+
+  const lesSites = sites.sites || [];
+  document.getElementById('ins-capacity').innerHTML = !lesSites.length
+    ? '<div class="empty">No site.</div>'
+    : '<table><thead><tr><th>Site</th><th class="num">Subscribers</th><th class="num">Capacity</th>' +
+      '<th class="num">Busy-hour peak</th><th class="num">Poor experience</th>' +
+      '<th class="num">Room for</th><th>Basis</th></tr></thead><tbody>' +
+      lesSites.map((x) => '<tr><td><b>' + esc(x.pop_name) + '</b></td>' +
+        '<td class="num">' + esc(x.subscribers) + '</td>' +
+        '<td class="num">' + (x.capacity_mbps ? esc(mbps(x.capacity_mbps)) : '<span class="na">-</span>') + '</td>' +
+        '<td class="num">' + (x.peak_mbps != null ? esc(mbps(x.peak_mbps)) : '<span class="na">-</span>') + '</td>' +
+        '<td class="num">' + (x.poor_share != null ? sqCell(Math.round(x.poor_share * 100) + '%',
+          x.poor_share >= 0.2 ? 'crit' : x.poor_share > 0 ? 'warn' : 'ok') : '<span class="na">-</span>') + '</td>' +
+        '<td class="num">' + (x.room == null ? '<span class="na">?</span>'
+          : sqCell(x.room + ' more', x.room === 0 ? 'crit' : x.room < 5 ? 'warn' : 'ok')) + '</td>' +
+        '<td class="hint" style="display:table-cell">' + esc(x.reason || '') + '</td></tr>').join('') +
+      '</tbody></table>';
+
+  document.querySelectorAll('[data-ins-sub]').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    openSubscriber(Number(a.dataset.insSub));
+  }));
+}
+
 const LOADERS = {
   dashboard: loadDashboard,
   exec: loadExec,
   traffic: loadTraffic,
   network: loadNetwork,
   subscribers: loadSubscribers,
+  insights: loadInsights,
   pops: loadRouters,
   services: loadServices,
   api: loadApi,
@@ -8318,6 +8570,28 @@ document.getElementById('sub-search').addEventListener('input', (e) => {
 });
 
 document.getElementById('auth-form').addEventListener('submit', submitAuth);
+document.getElementById('ins-days').addEventListener('change', loadInsights);
+document.getElementById('global-search').addEventListener('input', (e) => {
+  clearTimeout(GS.timer);
+  GS.timer = setTimeout(() => globalSearch(e.target.value), 180);
+});
+document.getElementById('global-search').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { e.target.value = ''; globalSearch(''); e.target.blur(); }
+  if (e.key === 'Enter') {
+    const premier = document.querySelector('#global-search-results [data-gs]');
+    if (premier) premier.click();
+  }
+});
+document.addEventListener('keydown', (e) => {
+  const cible = e.target && e.target.tagName;
+  if (e.key === '/' && cible !== 'INPUT' && cible !== 'TEXTAREA' && cible !== 'SELECT') {
+    e.preventDefault();
+    document.getElementById('global-search').focus();
+  }
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.global-search')) document.getElementById('global-search-results').hidden = true;
+});
 document.getElementById('logout-btn').addEventListener('click', logout);
 boot();
 // Les PoPs ne changent pas tout seuls : inutile de recharger ce formulaire

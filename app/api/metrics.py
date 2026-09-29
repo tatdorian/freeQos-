@@ -536,3 +536,96 @@ async def ports_live(repo: RepositoryDep, collection: CollectionDep) -> dict[str
         "cycles": cycles,
         "routers": [c.name for c in collection.collectors],
     }
+
+
+@router.get("/search", summary="Instant lookup: subscriber, IP, MAC, device, site")
+async def search(
+    repo: RepositoryDep,
+    collection: CollectionDep,
+    q: Annotated[str, Query(min_length=2, max_length=128)],
+) -> dict[str, Any]:
+    """Un seul champ pour tout retrouver : le support tape ce qu'il a sous les yeux."""
+    resultats = await repo.search_everything(q)
+    motif = q.strip().lower()
+    resultats["routers"] = [
+        {
+            "name": c.name,
+            "host": c.config.host,
+            "pop_name": c.config.effective_pop_name,
+            "role": str(c.config.role),
+        }
+        for c in collection.collectors
+        if motif in c.name.lower()
+        or motif in str(c.config.host).lower()
+        or motif in c.config.effective_pop_name.lower()
+    ][:8]
+    return {"q": q, **resultats}
+
+
+@router.get("/insights/subscribers", summary="Churn risk and upgrade candidates")
+async def subscriber_insights(
+    repo: RepositoryDep,
+    days: Annotated[int, Query(ge=1, le=30)] = 7,
+) -> dict[str, Any]:
+    """Plan, usage et experience de chaque abonne, cote a cote, et deux listes :
+    ceux qui risquent de partir, ceux qui sont a l'etroit dans leur offre."""
+    from app.services.insights import classify, summarise
+
+    lignes = await repo.subscriber_trends(days=days)
+    qoe: dict[int, dict[str, Any]] = {}
+    try:
+        bloat = await repo.bufferbloat(minutes=min(days, 7) * 1440)
+        for b in bloat.get("subscribers") or []:
+            if b.get("qoe"):
+                qoe[int(b["subscriber_id"])] = b["qoe"] | {"grade": b.get("grade")}
+    except Exception:  # noqa: BLE001 - sans QoE, les autres signes restent
+        qoe = {}
+    resultat = [classify(r, qoe.get(int(r["subscriber_id"]))) for r in lignes]
+    ordre = {"at_risk": 0, "upgrade": 1, "healthy": 2}
+    resultat.sort(key=lambda x: (ordre[x["status"]], -(x["avg_down_bps"] or 0)))
+    return {"days": days, "summary": summarise(resultat), "subscribers": resultat}
+
+
+@router.get("/insights/capacity", summary="How many more subscribers each site can take")
+async def capacity_insights(
+    repo: RepositoryDep,
+    hours: Annotated[int, Query(ge=1, le=720)] = 24,
+) -> dict[str, Any]:
+    """Par site (PoP, VLAN) : capacite mesuree, pointe reelle, experience des
+    abonnes, et la place restante AVANT que la QoE ne souffre."""
+    from app.services.insights import ap_room
+
+    sites = await repo.capacity_by_pop(hours=hours)
+    mauvais: dict[str, list[bool]] = {}
+    try:
+        bloat = await repo.bufferbloat(minutes=min(hours, 168) * 60)
+        for b in bloat.get("subscribers") or []:
+            if b.get("qoe") and b.get("pop_name"):
+                mauvais.setdefault(str(b["pop_name"]), []).append(float(b["qoe"]["score"]) < 50)
+    except Exception:  # noqa: BLE001
+        mauvais = {}
+    lignes = []
+    for site in sites:
+        notes = mauvais.get(str(site.get("pop_name")), [])
+        part = (sum(notes) / len(notes)) if notes else None
+        lignes.append(
+            {
+                "pop_name": site.get("pop_name"),
+                "subscribers": int(site.get("subscribers") or 0),
+                "capacity_mbps": site.get("capacity_mbps"),
+                "peak_mbps": round(float(site["peak_bps"]) / 1e6, 1)
+                if site.get("peak_bps")
+                else None,
+                "sold_down_mbps": site.get("sold_down_mbps"),
+                "poor_share": round(part, 2) if part is not None else None,
+                "qoe_measured": len(notes),
+                **ap_room(
+                    capacity_mbps=site.get("capacity_mbps"),
+                    peak_bps=site.get("peak_bps"),
+                    subscribers=int(site.get("subscribers") or 0),
+                    poor_share=part,
+                ),
+            }
+        )
+    lignes.sort(key=lambda x: (x["room"] is None, x["room"] if x["room"] is not None else 0))
+    return {"hours": hours, "sites": lignes}
