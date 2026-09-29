@@ -156,6 +156,14 @@ passe) : il a les droits d'**édition**. Ensuite, toute l'interface exige une co
 - L'API externe (`/model/v1`, `/usage/v1`) garde ses **clés d'API** ; `/health` reste
   ouvert pour le healthcheck.
 
+**Connexion unique (SSO).** Renseigner `OIDC_ISSUER`, `OIDC_CLIENT_ID` et
+`OIDC_CLIENT_SECRET` (Google Workspace, Microsoft Entra ID, Keycloak, Authentik…) fait
+apparaître « Sign in with SSO » sur l'écran de connexion. URL de retour à déclarer chez le
+fournisseur : `https://<hôte>/api/v1/auth/oidc/callback`. Par défaut, seul un email qui a
+**déjà** un compte freeQoS entre (le SSO prouve l'identité, l'éditeur décide des droits) ;
+`OIDC_AUTO_CREATE_ROLE=read` ou `edit` ouvre la création automatique. Protections : `state`
+lié au navigateur, PKCE, email vérifié par le fournisseur exigé.
+
 > **Plus aucun compte d'édition utilisable ?** Vider la table des comptes rouvre l'écran
 > de création du premier compte (les mesures et l'inventaire ne sont pas touchés) :
 >
