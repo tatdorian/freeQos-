@@ -430,3 +430,8 @@ def test_la_liste_ne_crie_plus_non_verifie_a_chaque_rafraichissement() -> None:
     bloc = bloc[: bloc.index("\n}\n")]
     assert "not verified" not in bloc
     assert "unverified_since" in bloc
+
+
+def test_la_fiche_abonne_propose_un_controle_en_direct() -> None:
+    assert "async function liveCheck(" in JS and "/live'" in JS
+    assert 'id="sub-cycles"' in HTML and "/collection/cycles" in JS

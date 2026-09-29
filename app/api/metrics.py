@@ -199,6 +199,145 @@ async def delete_subscriber(
     return rapport
 
 
+@router.get("/collection/cycles", summary="State of the measurement cycles")
+async def collection_cycles(collection: CollectionDep) -> dict[str, Any]:
+    """Les derniers cycles de mesure : ok ou non, il y a combien, et l'erreur.
+
+    En tete de la liste des abonnes : un debit absent doit se lire "rien ne
+    passe" OU "la mesure est en panne", jamais l'un pour l'autre.
+    """
+    from app.services.collection import JOB_LINKS, JOB_SUBSCRIBERS
+
+    maintenant = datetime.now(tz=UTC)
+    sortie: dict[str, dict[str, Any] | None] = {}
+    for job in (JOB_SUBSCRIBERS, JOB_LINKS):
+        resultat = collection.last_results.get(job)
+        sortie[job] = (
+            None
+            if resultat is None
+            else {
+                "ok": resultat.ok,
+                "age_s": round((maintenant - resultat.started_at).total_seconds(), 1),
+                "duration_s": round(resultat.duration_s, 2),
+                "items": resultat.items,
+                "errors": list(resultat.errors)[:5],
+            }
+        )
+    return {"cycles": sortie}
+
+
+@router.get("/subscribers/{subscriber_id}/live", summary="Live check of one subscriber")
+async def subscriber_live(
+    repo: RepositoryDep,
+    container: ContainerDep,
+    collection: CollectionDep,
+    subscriber_id: Annotated[int, Path(ge=1)],
+) -> dict[str, Any]:
+    """CE QUE LE ROUTEUR VOIT DE CET ABONNE MAINTENANT, face a ce qui est affiche.
+
+    Lit en direct, sur deux secondes, l'interface PPPoE de l'abonne et sa file ;
+    y ajoute le debit NetFlow et le dernier echantillon enregistre ; et rend un
+    verdict qui dit OU le debit se perd, s'il se perd.
+    """
+    from app.services.pop_match import resolve_pop
+
+    fiche = await repo.get_subscriber(subscriber_id)
+    if fiche is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown subscriber")
+    login = str(fiche["login"])
+    match = resolve_pop(str(fiche.get("pop_name") or ""), collection.collectors)
+    candidats = list(match.collectors) or list(collection.collectors)
+
+    live: dict[str, Any] | None = None
+    erreurs: list[str] = []
+    for collector in candidats:
+        try:
+            lu = await collector.live_subscriber(login, fiche.get("last_ip"))
+        except Exception as exc:  # noqa: BLE001 - un routeur muet n'arrete pas les autres
+            erreurs.append(f"{collector.name}: {type(exc).__name__}: {exc}")
+            continue
+        if lu["session"] or lu["queues"] or live is None:
+            live = lu
+        if lu["session"]:
+            break
+
+    netflow = None
+    service = container.netflow
+    if service is not None and service.measuring:
+        rx, tx = service.rate_for(subscriber_id)
+        netflow = {"rx_bps": rx, "tx_bps": tx}
+
+    enregistre = None
+    for ligne in await repo.subscriber_latest(search=login, limit=20):
+        if str(ligne.get("login")) == login:
+            enregistre = {
+                "ts": ligne.get("ts"),
+                "tx_bps": ligne.get("tx_bps"),
+                "rx_bps": ligne.get("rx_bps"),
+                "age_s": round((datetime.now(tz=UTC) - ligne["ts"]).total_seconds(), 1)
+                if ligne.get("ts")
+                else None,
+            }
+            break
+
+    return {
+        "login": login,
+        "kind": fiche.get("kind"),
+        "live": live,
+        "netflow": netflow,
+        "stored": enregistre,
+        "errors": erreurs,
+        "verdict": live_verdict(fiche.get("kind"), live, netflow, enregistre, erreurs),
+    }
+
+
+def live_verdict(
+    kind: Any,
+    live: dict[str, Any] | None,
+    netflow: dict[str, Any] | None,
+    stored: dict[str, Any] | None,
+    errors: list[str],
+) -> dict[str, str]:
+    """Une phrase, et une seule, sur OU se perd le debit."""
+    seuil = 10_000.0  # 10 kbps : en dessous, des keepalives
+
+    def fort(*valeurs: Any) -> bool:
+        return any(v is not None and float(v) >= seuil for v in valeurs)
+
+    if live is None:
+        return {"level": "crit", "text": "The router could not be read: " + "; ".join(errors)}
+    if kind != "static" and live["session"] is None:
+        return {
+            "level": "warn",
+            "text": "No open PPPoE session for this login on " + str(live["router"]) + ".",
+        }
+    if kind != "static" and not live["interface_found"]:
+        return {
+            "level": "crit",
+            "text": "The session is open but its interface was not found on the router: "
+            "check PPPOE_INTERFACE_PATTERN.",
+        }
+    vu_routeur = fort(live.get("interface_tx_bps"), live.get("interface_rx_bps"))
+    vu_netflow = netflow is not None and fort(netflow.get("tx_bps"), netflow.get("rx_bps"))
+    perime = stored is None or stored.get("age_s") is None or stored["age_s"] > 90
+    if vu_routeur and perime:
+        return {
+            "level": "crit",
+            "text": "The router counts traffic but nothing recent is stored: the "
+            "Subscribers cycle is failing (see its error at the top of the list).",
+        }
+    if vu_routeur:
+        return {"level": "ok", "text": "The router counts this traffic and it is stored."}
+    if vu_netflow:
+        return {
+            "level": "warn",
+            "text": "NetFlow sees traffic for this subscriber but its PPPoE interface "
+            "counts none: the traffic does not go through its session (another path, "
+            "or fasttrack on a bridge).",
+        }
+    return {"level": "ok", "text": "No traffic right now: the session is idle."}
+
+
 @router.get("/subscribers/{subscriber_id}", summary="Record of one subscriber")
 async def get_subscriber(
     repo: RepositoryDep,
