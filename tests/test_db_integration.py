@@ -3623,3 +3623,36 @@ async def test_service_sans_adresse_accepte_puis_place(database: Database) -> No
     await depot.put_service("sans-rien", {"account": "2", "up_speed": 2000})
     await depot.delete_service("sans-rien")
     assert [s["id"] for s in await depot.list_services()] == ["svc-mac"]
+
+
+async def test_latence_par_abonne_mediane_et_p95(database: Database) -> None:
+    repo = MetricsRepository(database.pool)
+    directory = PgDirectory(database.pool)
+    sid = await directory.ensure_subscriber("lat", plan=Plan(100, 20, "mock"))
+    maintenant = datetime.now(tz=UTC)
+    await PgMetricsWriter(database.pool).write_subscriber_metrics(
+        [
+            (
+                sid,
+                SubscriberSample(
+                    ts=maintenant - timedelta(minutes=i),
+                    login="lat",
+                    router_name="r",
+                    pop_name="p",
+                    address="10.20.0.9",
+                    uptime_s=1,
+                    rx_bytes=0,
+                    tx_bytes=0,
+                    rx_bps=0.0,
+                    tx_bps=0.0,
+                    rtt_ms=float(10 + i),
+                ),
+            )
+            for i in range(11)
+        ]
+    )
+    lignes = await repo.latency_by_subscriber(minutes=60)
+    ligne = next(x for x in lignes if x["login"] == "lat")
+    assert ligne["samples"] == 11
+    assert ligne["median_ms"] == 15.0
+    assert ligne["best_ms"] == 10.0

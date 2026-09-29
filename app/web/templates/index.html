@@ -136,8 +136,24 @@
       <h2>Saturation risks</h2>
       <div class="card" id="exec-hotspots"></div>
 
-      <h2>Latency by segment</h2>
-      <div class="table-wrap" id="exec-latency"></div>
+      <h2>Latency by client</h2>
+      <div class="toolbar">
+        <input id="exec-lat-search" placeholder="Client or site" style="max-width:260px">
+        <select id="exec-lat-filter" style="width:auto">
+          <option value="">All clients</option>
+          <option value="poor">Poor experience</option>
+          <option value="fair">Fair</option>
+          <option value="good">Good</option>
+        </select>
+        <span class="spacer"></span>
+        <span class="mode" id="exec-lat-count"></span>
+      </div>
+      <div class="grid stats" id="exec-lat-stats"></div>
+      <div class="table-wrap" id="exec-latency-clients"></div>
+      <details class="card" id="exec-latency-block" style="margin-top:.8rem">
+        <summary><b>Where the delay comes from</b> (by segment: access, next hop, internet)</summary>
+        <div class="table-wrap" id="exec-latency"></div>
+      </details>
 
       <h2>Load by node</h2>
       <div class="card" id="exec-load"></div>

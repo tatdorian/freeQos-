@@ -1038,6 +1038,8 @@ async function loadExec() {
   const pHeat = grab(api('/heatmap?minutes=' + minutes + '&buckets=' + buckets));
   const pPoints = api('/capacity/hotspots?hours=' + heures).catch(() => null);
   const pLatence = api('/latency').catch(() => null);
+  api('/latency/clients?minutes=' + Math.max(5, minutes)).catch(() => null)
+    .then((lc) => { exec.latencyClients = lc; renderLatencyClients(); });
   pHeat.then((heat) => renderHeatmap(document.getElementById('exec-heatmap'), heat));
   pLatence.then((latence) => {
     exec.latency = latence;
@@ -1436,6 +1438,86 @@ function latCell(st, seuils) {
  *  (l'acces), sa passerelle (le lien vers le coeur), et internet. Comparer les
  *  trois dit ou chercher : internet lent mais passerelle rapide, c'est au-dessus
  *  du coeur ; passerelle deja lente, c'est entre le PoP et le coeur. */
+/** Latence par CLIENT : chaque abonne, son ressenti, le pire en tete.
+ *
+ *  La latence par segment dit ou se perd le temps ; celle-ci dit QUI le
+ *  subit. La mediane est l'habitude, le p95 les moments penibles, la latence
+ *  sous charge ce qui fait hacher un appel quand quelqu'un telecharge. */
+function renderLatencyClients() {
+  const host = document.getElementById('exec-latency-clients');
+  if (!host) return;
+  const data = exec.latencyClients;
+  const stats = document.getElementById('exec-lat-stats');
+  const compte = document.getElementById('exec-lat-count');
+  if (!data) { host.innerHTML = '<div class="empty">Latency unavailable.</div>'; return; }
+  if (!data.enabled) {
+    host.innerHTML = '<div class="notice"><b>RTT probe off.</b> Tick <b>RTT probe</b> above to ' +
+      'measure each client\'s latency.</div>';
+    if (stats) stats.innerHTML = '';
+    return;
+  }
+  const s = data.summary || {};
+  if (stats) {
+    stats.innerHTML =
+      statCard(s.poor ? 'crit' : '', 'Poor experience', String(s.poor || 0), '',
+        'high latency, loss or bufferbloat') +
+      statCard(s.fair ? 'warn' : '', 'Fair', String(s.fair || 0), '', 'noticeable but usable') +
+      statCard('ok', 'Good', String(s.good || 0), '', 'under 30 ms, stable') +
+      statCard('', 'Clients measured', String(s.measured || 0), '',
+        'over ' + esc(data.minutes) + ' min');
+  }
+  const q = (document.getElementById('exec-lat-search').value || '').trim().toLowerCase();
+  const filtre = document.getElementById('exec-lat-filter').value;
+  const lignes = (data.clients || []).filter((c) =>
+    (!filtre || c.experience === filtre) &&
+    (!q || String(c.login || '').toLowerCase().includes(q) ||
+      String(c.pop_name || '').toLowerCase().includes(q)));
+  if (compte) compte.textContent = lignes.length + ' client(s)';
+  if (!lignes.length) {
+    host.innerHTML = '<div class="empty">' + ((data.clients || []).length
+      ? 'No client matches this filter.'
+      : 'No client measured yet: the probe pings ' + esc(data.method.count) + ' times every ' +
+        esc(data.method.every_s) + ' s, a few clients per router at a time.') + '</div>';
+    return;
+  }
+  const ms = (v, seuils) => v == null ? '<span class="na">-</span>'
+    : sqCell(Math.round(v) + ' ms', v < seuils[0] ? 'ok' : v < seuils[1] ? 'warn' : 'crit');
+  const ressenti = { good: ['ok', 'Good'], fair: ['warn', 'Fair'], poor: ['crit', 'Poor'] };
+  host.innerHTML = '<table><thead><tr><th>Client</th><th>Site</th>' +
+    '<th>Experience</th>' +
+    '<th class="num" title="Usual latency: median over the period">Latency</th>' +
+    '<th class="num" title="The bad moments: 95th percentile">p95</th>' +
+    '<th class="num" title="Variation between pings of the last series">Jitter</th>' +
+    '<th class="num">Loss</th>' +
+    '<th class="num" title="Latency while the line is busy (bufferbloat)">Under load</th>' +
+    '<th class="num" title="Composite experience score 0-100">Score</th>' +
+    '<th>Why</th></tr></thead><tbody>' +
+    lignes.slice(0, 300).map((c) => {
+      const r = ressenti[c.experience];
+      return '<tr><td><a href="#" data-lat-sub="' + esc(c.subscriber_id) + '"><b>' +
+          esc(c.login) + '</b></a></td>' +
+        '<td>' + esc(c.pop_name || '-') + '</td>' +
+        '<td>' + (r ? sqCell(r[1], r[0]) : '<span class="na">-</span>') + '</td>' +
+        '<td class="num">' + ms(c.median_ms, [30, 100]) + '</td>' +
+        '<td class="num">' + ms(c.p95_ms, [60, 150]) + '</td>' +
+        '<td class="num">' + (c.jitter_ms == null ? '<span class="na">-</span>'
+          : esc(Math.round(c.jitter_ms)) + ' ms') + '</td>' +
+        '<td class="num">' + (c.loss_pct == null ? '<span class="na">-</span>'
+          : sqCell(Math.round(c.loss_pct) + '%', c.loss_pct === 0 ? 'ok' : c.loss_pct < 2 ? 'warn' : 'crit')) +
+        '</td>' +
+        '<td class="num">' + (c.loaded_ms == null ? '<span class="na" title="not enough load yet">-</span>'
+          : ms(c.loaded_ms, [60, 150]) + (c.bloat_ms ? '<span class="pct-hint">+' +
+            esc(Math.round(c.bloat_ms)) + '</span>' : '')) + '</td>' +
+        '<td class="num">' + (c.qoe_score == null ? '<span class="na">-</span>'
+          : sqCell(String(Math.round(c.qoe_score)), qoeSev(c.qoe_score))) + '</td>' +
+        '<td class="hint" style="display:table-cell">' + esc((c.reasons || []).join(' · ')) + '</td></tr>';
+    }).join('') + '</tbody></table>';
+  host.querySelectorAll('[data-lat-sub]').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    openSubscriber(Number(a.dataset.latSub));
+  }));
+}
+
 function renderLatencySegments(host, data) {
   if (!host) return;
   if (!data) { host.innerHTML = '<div class="empty">Latency unavailable.</div>'; return; }
@@ -8247,6 +8329,8 @@ document.getElementById('btn-test').addEventListener('click', testConnection);
 
 /* ------------------------------------------------------- trafic et API */
 document.getElementById('flow-range').addEventListener('change', loadTraffic);
+document.getElementById('exec-lat-search').addEventListener('input', renderLatencyClients);
+document.getElementById('exec-lat-filter').addEventListener('change', renderLatencyClients);
 document.getElementById('flow-vantage').addEventListener('change', loadTraffic);
 document.querySelectorAll('#flow-vantage-seg button').forEach((b) => {
   b.addEventListener('click', () => {

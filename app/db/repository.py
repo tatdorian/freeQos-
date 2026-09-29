@@ -1031,6 +1031,32 @@ class MetricsRepository:
             )
         return _rows(rows)
 
+    async def latency_by_subscriber(self, *, minutes: int = 60) -> list[dict[str, Any]]:
+        """Latence mesuree de CHAQUE abonne sur la periode : mediane, p95, meilleure.
+
+        La mediane dit l'experience habituelle, le p95 les moments penibles
+        (appel video qui hache), la meilleure valeur la latence a vide du lien.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT s.id AS subscriber_id, s.login, s.kind, p.name AS pop_name,
+                       count(*) AS samples,
+                       percentile_cont(0.5) WITHIN GROUP (ORDER BY m.rtt_ms) AS median_ms,
+                       percentile_cont(0.95) WITHIN GROUP (ORDER BY m.rtt_ms) AS p95_ms,
+                       min(m.rtt_ms) AS best_ms,
+                       max(m.ts) AS last_at
+                  FROM subscriber_metrics m
+                  JOIN subscribers s ON s.id = m.subscriber_id
+                  LEFT JOIN pops p ON p.id = s.pop_id
+                 WHERE m.ts > now() - make_interval(mins => $1)
+                   AND m.rtt_ms IS NOT NULL
+                 GROUP BY s.id, p.name
+                """,
+                minutes,
+            )
+        return _rows(rows)
+
     async def subscriber_at_address(self, address: str) -> dict[str, Any] | None:
         """L'abonne PPPoE/DHCP vu en dernier avec cette IP, et son site.
 
