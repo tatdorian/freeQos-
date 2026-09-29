@@ -1012,3 +1012,4 @@ body.gated header.top, body.gated main { visibility: hidden; }
 .gs-main b { font-size: .85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gs-main .hint { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gs-empty { padding: .7rem; color: var(--muted); font-size: .84rem; }
+.stat.crit .value { color: var(--crit); }

@@ -51,6 +51,7 @@
       <a href="#/traffic" data-view="traffic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16"/><path d="M3 8l4-4 4 4"/><path d="M17 20V4"/><path d="M13 16l4 4 4-4"/></svg><span>Traffic</span></a>
       <a href="#/network" data-view="network"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M12 7.2v4.3M12 11.5L6.3 17M12 11.5l5.7 5.5"/></svg><span>Network tree</span></a>
       <a href="#/subscribers" data-view="subscribers"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14c2.4.2 4 1.8 4.6 4.5"/></svg><span>Subscribers</span></a>
+      <a href="#/insights" data-view="insights"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M5.6 5.6l2.1 2.1M3 12h3M18.4 5.6l-2.1 2.1M21 12h-3"/><path d="M9 18h6M10 21h4"/><path d="M12 8a4 4 0 0 0-2.5 7.1c.4.3.5.6.5 1V17h4v-.9c0-.4.2-.7.5-1A4 4 0 0 0 12 8z"/></svg><span>Insights</span></a>
       <a href="#/pops" data-view="pops"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="6" rx="2"/><rect x="3" y="13" width="18" height="6" rx="2"/><path d="M7 8h.01M7 16h.01"/></svg><span>Devices</span></a>
       <a href="#/services" data-view="services"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/></svg><span>Services</span></a>
       <a href="#/api" data-view="api"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5"/><path d="M16 7l5 5-5 5"/><path d="M13.5 5l-3 14"/></svg><span>API</span></a>
@@ -309,6 +310,32 @@
     </section>
 
     <!-- -------------------------------------------------------- abonnes -->
+    <!-- -------------------------------------------------------- insights -->
+    <section id="view-insights">
+      <div class="toolbar">
+        <select id="ins-days" style="width:auto">
+          <option value="7" selected>Last 7 days vs the 7 before</option>
+          <option value="14">Last 14 days vs the 14 before</option>
+          <option value="30">Last 30 days vs the 30 before</option>
+        </select>
+        <span class="spacer"></span>
+        <span class="mode" id="ins-count"></span>
+      </div>
+      <div class="grid stats" id="ins-stats"></div>
+
+      <h2>At risk of leaving</h2>
+      <div class="table-wrap" id="ins-risk"></div>
+
+      <h2>Ready for a bigger plan</h2>
+      <div class="table-wrap" id="ins-upgrade"></div>
+
+      <h2>Sites and access points: room for more subscribers</h2>
+      <div class="table-wrap" id="ins-capacity"></div>
+
+      <h2>Every subscriber: plan, usage, experience</h2>
+      <div class="table-wrap" id="ins-all"></div>
+    </section>
+
     <section id="view-subscribers">
       <div class="toolbar">
         <select id="sub-pop" style="width:auto"></select>

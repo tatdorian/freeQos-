@@ -3481,3 +3481,49 @@ async def test_la_recherche_instantanee_trouve_login_ip_mac_et_site(database: Da
     assert par_ip["subscribers"][0]["address"] == "100.100.105.242"
     assert (await repo.search_everything("cc:00"))["devices"][0]["name"] == "Radio Nord"
     assert (await repo.search_everything("taill"))["sites"][0]["name"] == "NAS-Tailladje"
+
+
+async def test_les_tendances_comparent_deux_periodes(database: Database) -> None:
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+    pop_id = await directory.ensure_pop("PoP T")
+    from app.models import Plan
+
+    sid = await directory.ensure_subscriber(
+        "trend", pop_id=pop_id, plan=Plan(down_mbps=10.0, up_mbps=2.0, source="t")
+    )
+    maintenant = datetime.now(tz=UTC)
+    lignes = []
+    for h in range(1, 5):  # periode precedente : 8 Mbps
+        lignes.append(
+            (
+                sid,
+                SubscriberSample(
+                    ts=maintenant - timedelta(days=8, hours=h),
+                    login="trend",
+                    router_name="r",
+                    pop_name="p",
+                    rx_bps=0.0,
+                    tx_bps=8e6,
+                ),
+            )
+        )
+    for h in range(1, 5):  # periode courante : 9.5 Mbps = au plafond (>= 90 % de 10)
+        lignes.append(
+            (
+                sid,
+                SubscriberSample(
+                    ts=maintenant - timedelta(hours=h),
+                    login="trend",
+                    router_name="r",
+                    pop_name="p",
+                    rx_bps=0.0,
+                    tx_bps=9.5e6,
+                ),
+            )
+        )
+    await writer.write_subscriber_metrics(lignes)
+    [t] = [r for r in await repo.subscriber_trends(days=7) if r["login"] == "trend"]
+    assert t["avg_down_bps"] == 9.5e6 and t["prev_avg_down_bps"] == 8e6
+    assert t["samples"] == 4 and t["capped_samples"] == 4

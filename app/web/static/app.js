@@ -8104,12 +8104,79 @@ async function resetSetting(name) {
 }
 
 
+/* ------------------------------------------------------------- insights
+ *
+ *  QUI RISQUE DE PARTIR, QUI EST PRET A MONTER EN GAMME, et combien d'abonnes
+ *  chaque site peut encore prendre. Tout vient de ce qui est deja mesure :
+ *  debit, plan, latence sous charge. */
+async function loadInsights() {
+  const jours = Number(document.getElementById('ins-days').value) || 7;
+  const [abos, sites] = await Promise.all([
+    api('/insights/subscribers?days=' + jours),
+    api('/insights/capacity?hours=' + Math.min(720, jours * 24)).catch(() => ({ sites: [] })),
+  ]);
+  const lignes = abos.subscribers || [];
+  const sm = abos.summary || {};
+  document.getElementById('ins-count').textContent = lignes.length + ' subscriber(s)';
+  document.getElementById('ins-stats').innerHTML =
+    statCard(sm.at_risk ? 'crit' : '', 'At risk of leaving', String(sm.at_risk || 0), '',
+      'poor experience, usage collapsing, or silent') +
+    statCard(sm.upgrade ? 'down' : '', 'Ready for a bigger plan', String(sm.upgrade || 0), '',
+      'living at their plan ceiling, good experience') +
+    statCard('', 'Healthy', String(sm.healthy || 0), '', 'nothing to act on');
+
+  const lien = (r) => '<a href="#" data-ins-sub="' + r.subscriber_id + '">' + esc(r.login) + '</a>';
+  const usage = (r) => esc(bpsText(r.avg_down_bps)) +
+    (r.prev_avg_down_bps ? ' <span class="pct-hint">was ' + esc(bpsText(r.prev_avg_down_bps)) + '</span>' : '');
+  const qoe = (r) => r.qoe_score == null ? '<span class="na">-</span>'
+    : sqCell(Math.round(r.qoe_score) + (r.qoe_grade ? ' · ' + r.qoe_grade : ''), qoeSev(r.qoe_score));
+  const plan = (r) => r.plan_down_mbps ? esc(mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0))
+    : '<span class="na">no plan</span>';
+  const table = (xs, vide) => !xs.length ? '<div class="empty">' + vide + '</div>'
+    : '<table><thead><tr><th>Subscriber</th><th>Site</th><th class="num">Plan</th>' +
+      '<th class="num">Avg download</th><th class="num">At ceiling</th><th class="num">Experience</th>' +
+      '<th>Why</th></tr></thead><tbody>' + xs.map((r) => '<tr><td>' + lien(r) + '</td>' +
+        '<td>' + esc(r.pop_name || '-') + '</td><td class="num">' + plan(r) + '</td>' +
+        '<td class="num">' + usage(r) + '</td>' +
+        '<td class="num">' + (r.ceiling_share ? Math.round(r.ceiling_share * 100) + '%' : '-') + '</td>' +
+        '<td class="num">' + qoe(r) + '</td><td>' + esc((r.reasons || []).join(' · ')) + '</td></tr>').join('') +
+      '</tbody></table>';
+  document.getElementById('ins-risk').innerHTML =
+    table(lignes.filter((r) => r.status === 'at_risk'), 'Nobody shows a sign of leaving.');
+  document.getElementById('ins-upgrade').innerHTML =
+    table(lignes.filter((r) => r.status === 'upgrade'), 'Nobody lives at their plan ceiling.');
+  document.getElementById('ins-all').innerHTML = table(lignes, 'No subscriber.');
+
+  const lesSites = sites.sites || [];
+  document.getElementById('ins-capacity').innerHTML = !lesSites.length
+    ? '<div class="empty">No site.</div>'
+    : '<table><thead><tr><th>Site</th><th class="num">Subscribers</th><th class="num">Capacity</th>' +
+      '<th class="num">Busy-hour peak</th><th class="num">Poor experience</th>' +
+      '<th class="num">Room for</th><th>Basis</th></tr></thead><tbody>' +
+      lesSites.map((x) => '<tr><td><b>' + esc(x.pop_name) + '</b></td>' +
+        '<td class="num">' + esc(x.subscribers) + '</td>' +
+        '<td class="num">' + (x.capacity_mbps ? esc(mbps(x.capacity_mbps)) : '<span class="na">-</span>') + '</td>' +
+        '<td class="num">' + (x.peak_mbps != null ? esc(mbps(x.peak_mbps)) : '<span class="na">-</span>') + '</td>' +
+        '<td class="num">' + (x.poor_share != null ? sqCell(Math.round(x.poor_share * 100) + '%',
+          x.poor_share >= 0.2 ? 'crit' : x.poor_share > 0 ? 'warn' : 'ok') : '<span class="na">-</span>') + '</td>' +
+        '<td class="num">' + (x.room == null ? '<span class="na">?</span>'
+          : sqCell(x.room + ' more', x.room === 0 ? 'crit' : x.room < 5 ? 'warn' : 'ok')) + '</td>' +
+        '<td class="hint" style="display:table-cell">' + esc(x.reason || '') + '</td></tr>').join('') +
+      '</tbody></table>';
+
+  document.querySelectorAll('[data-ins-sub]').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    openSubscriber(Number(a.dataset.insSub));
+  }));
+}
+
 const LOADERS = {
   dashboard: loadDashboard,
   exec: loadExec,
   traffic: loadTraffic,
   network: loadNetwork,
   subscribers: loadSubscribers,
+  insights: loadInsights,
   pops: loadRouters,
   services: loadServices,
   api: loadApi,
@@ -8386,6 +8453,7 @@ document.getElementById('sub-search').addEventListener('input', (e) => {
 });
 
 document.getElementById('auth-form').addEventListener('submit', submitAuth);
+document.getElementById('ins-days').addEventListener('change', loadInsights);
 document.getElementById('global-search').addEventListener('input', (e) => {
   clearTimeout(GS.timer);
   GS.timer = setTimeout(() => globalSearch(e.target.value), 180);
