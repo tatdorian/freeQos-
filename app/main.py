@@ -16,7 +16,11 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
@@ -197,6 +201,19 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     # compatibilite qui fait tout l'interet de ces routes.
     app.include_router(model_v1.router)
     app.include_router(usage_v1.router)
+
+    # API PUBLIQUE : un JSON mal forme ou un champ invalide est un 400, comme
+    # chez Preseem ("Bad json"), et non le 422 de FastAPI. Les integrations
+    # testent ce code-la. L'API d'exploitation garde son 422.
+    @app.exception_handler(RequestValidationError)
+    async def validation_publique(request: Request, exc: RequestValidationError) -> Any:
+        if request.url.path.startswith(("/model/", "/usage/")):
+            return JSONResponse(
+                status_code=400,
+                content={"detail": jsonable_encoder(exc.errors())},
+            )
+        return await request_validation_exception_handler(request, exc)
+
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(ui_router)
 

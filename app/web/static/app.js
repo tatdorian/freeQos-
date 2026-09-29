@@ -2595,11 +2595,16 @@ async function loadApi() {
       '<td class="login">' + esc(chemin) + '</td>' +
       '<td>' + esc(objet) + '</td></tr>').join('') +
     '</tbody></table>';
+  // MEMES APPELS QUE PRESEEM : seule l'URL de base et la cle changent.
   document.getElementById('api-sample').textContent =
+    '# Preseem-compatible: replace api.preseem.com/model/v1/\n' +
+    '# with ' + location.origin + '/model/v1/ and use a freeQoS key.\n\n' +
     'curl -u <key>: -X PUT ' + location.origin + '/model/v1/services/abo-42 \\\n' +
     "  -H 'content-type: application/json' \\\n" +
-    '  -d \'{"name":"Dupont","address":"10.20.0.10/32","download_mbps":100,' +
-    '"upload_mbps":20,"account":"cli-7","package":"fibre-100"}\'';
+    '  -d \'{"id":"abo-42","account":"cli-7","package":"fibre-100",' +
+    '"parent_device_id":"sect-n1","down_speed":100000,"up_speed":20000,' +
+    '"attachments":[{"cpe_mac":"00:10:0b:6e:4c:ff","network_prefixes":["10.20.0.10"]}]}\'\n\n' +
+    'curl -u <key>: \'' + location.origin + '/model/v1/services?page=1&limit=500\'   # -> {"data": [...]}';
   await loadApiKeys();
   const lignes = document.querySelectorAll('#keys-table tbody tr').length;
   document.getElementById('api-count').textContent = lignes + ' key(s)';

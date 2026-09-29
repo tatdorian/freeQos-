@@ -158,7 +158,7 @@ class ModelRepository:
                 object_id,
             )
         if row is None:
-            raise ModelNotFoundError(f"{collection}/{object_id} inconnu")
+            raise ModelNotFoundError(f"{collection}/{object_id} not found")
         return self._render(collection, row)
 
     async def put_account(self, object_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -255,7 +255,7 @@ class ModelRepository:
                 object_id,
             )
         if resultat.endswith(" 0"):
-            raise ModelNotFoundError(f"{collection}/{object_id} inconnu")
+            raise ModelNotFoundError(f"{collection}/{object_id} not found")
 
     # -------------------------------------------------------------- services
     async def list_services(self) -> list[dict[str, Any]]:
@@ -267,7 +267,7 @@ class ModelRepository:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(_SELECT_SERVICES + " WHERE reference = $1", service_id)
         if row is None:
-            raise ModelNotFoundError(f"services/{service_id} inconnu")
+            raise ModelNotFoundError(f"services/{service_id} not found")
         return self._render_service(row)
 
     async def put_service(self, service_id: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -361,7 +361,7 @@ class ModelRepository:
                 "SELECT source FROM static_clients WHERE reference = $1", service_id
             )
             if existante is None:
-                raise ModelNotFoundError(f"services/{service_id} inconnu")
+                raise ModelNotFoundError(f"services/{service_id} not found")
             if existante["source"] != "api":
                 raise ModelConflictError(
                     f"'{service_id}' is a record entered by hand: the API does not delete it."
