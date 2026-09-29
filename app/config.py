@@ -228,13 +228,6 @@ class Settings(BaseSettings):
     # Duree d'une session SANS activite : chaque requete la prolonge.
     session_ttl_hours: int = 168
 
-    # --- Assistant de support IA (optionnel) ---
-    # Cle de l'API Anthropic (console.anthropic.com). Vide = assistant coupe :
-    # rien ne quitte le controleur. Renseignee : la question et les mesures
-    # affichees (jamais un mot de passe) partent vers api.anthropic.com.
-    anthropic_api_key: SecretStr | None = None
-    assistant_model: str = "claude-opus-5-5"
-
     # --- Base de donnees ---
     database_url: str = "postgresql://qos:changeme@localhost:5432/qos"
     db_pool_min: int = 1

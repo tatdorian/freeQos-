@@ -163,24 +163,6 @@ passe) : il a les droits d'**édition**. Ensuite, toute l'interface exige une co
 > docker compose exec timescaledb psql -U qos -d qos -c "TRUNCATE app_users CASCADE"
 > ```
 
-### Assistant de support IA
-
-Une question en clair (« la vidéo saccade tous les soirs, pourquoi ? »), un
-diagnostic tiré des mesures : cause probable, chiffres à l'appui, actions à
-mener. Dans la fiche d'un abonné (il lit aussi l'abonné en direct sur le
-routeur) et dans l'onglet **Insights** pour les questions sur tout le réseau.
-
-L'assistant reçoit la question et ce que freeQoS affiche déjà : fiche et
-dernier échantillon de l'abonné, latence, bufferbloat, QoE, tendance sur
-7 jours, santé radio des AP et CPE, place restante par site, état des cycles
-de mesure. Jamais un mot de passe ni une configuration de routeur.
-
-Il est **coupé par défaut** : rien ne part tant que `ANTHROPIC_API_KEY` n'est
-pas renseignée dans `.env` (clé créée sur console.anthropic.com), puis
-`docker compose up -d`. Modèle : `ASSISTANT_MODEL` (par défaut
-`claude-opus-5-5`). Tous les comptes peuvent l'utiliser, lecture seule
-comprise : poser une question ne modifie rien.
-
 ### Mettre à jour, nettoyer, repartir de zéro
 
 Quatre gestes, du plus doux au plus radical. Prenez le premier qui suffit.
