@@ -534,8 +534,8 @@ def test_supprimer_un_objet_absent_repond_404(ecriture) -> None:
 def test_supprimer_rend_200_et_retire_la_fiche(ecriture) -> None:
     """200 comme Preseem : les integrations testent code == 200."""
     client, secret, _, _ = ecriture
-    client.put("/model/v1/sites/tour-nord", headers=basic(secret), json={"name": "Tour Nord"})
-    assert client.delete("/model/v1/sites/tour-nord", headers=basic(secret)).status_code == 200
+    client.put("/model/v1/sites/tour-altair", headers=basic(secret), json={"name": "Tour Altair"})
+    assert client.delete("/model/v1/sites/tour-altair", headers=basic(secret)).status_code == 200
     assert client.get("/model/v1/sites", headers=basic(secret)).json()["data"] == []
 
 

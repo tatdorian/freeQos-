@@ -41,7 +41,7 @@ def action(nom: str, verb: str = "add") -> PlanAction:
 
 
 def plan_de(*noms: str) -> Plan:
-    return Plan(router_name="pop-nord", actions=[action(n) for n in noms])
+    return Plan(router_name="pop-altair", actions=[action(n) for n in noms])
 
 
 # ------------------------------------------------- separation des comptes
@@ -173,7 +173,7 @@ async def test_compte_rendu_serialisable() -> None:
     resultat = await apply_plan(plan_de("a"), client, dry_run=True)
     donnees = resultat.to_dict()
 
-    assert donnees["router"] == "pop-nord"
+    assert donnees["router"] == "pop-altair"
     assert donnees["dry_run"] is True
     assert donnees["results"][0]["command"].startswith("/queue/simple/add")
 

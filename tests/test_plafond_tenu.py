@@ -116,8 +116,8 @@ def test_un_parent_ne_masque_pas_son_enfant() -> None:
     """La hierarchie est VOULUE : la compter comme un masquage signalerait une
     panne a chaque abonne correctement rattache."""
     rows = [
-        file("freeqos-parent-nord", "10.0.0.0/24", "100000000/100000000"),
-        file("freeqos-alice", "10.0.0.5/32", "10000000/10000000", parent="freeqos-parent-nord"),
+        file("freeqos-parent-altair", "10.0.0.0/24", "100000000/100000000"),
+        file("freeqos-alice", "10.0.0.5/32", "10000000/10000000", parent="freeqos-parent-altair"),
     ]
     assert masked_queues(rows) == {}
 

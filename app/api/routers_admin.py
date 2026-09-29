@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, SecretStr
 from app.api.deps import ContainerDep
 from app.config import RouterConfig, RouterRole
 from app.db.routers_repo import DuplicateRouterError, RouterNotFoundError, RoutersRepository
+from app.services import provisioning
 from app.services.crypto import SecretUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -284,6 +285,10 @@ async def create_router(payload: RouterInput, container: ContainerDep) -> dict[s
 
     await _apply(container)
     logger.info("Routeur '%s' enregistre depuis l'interface", created["name"])
+    # MISE EN SERVICE IMMEDIATE : CAKE, premieres files, export NetFlow, arbre.
+    # En tache de fond : la reponse n'attend pas le routeur, l'interface suit
+    # l'avancement sur /pops/routers/{id}/provisioning.
+    created["provisioning"] = provisioning.start(container, str(created["name"]))
     return created
 
 
@@ -307,7 +312,30 @@ async def update_router(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     await _apply(container)
+    # Adresse, compte ou mot de passe corriges : on remet tout en place aussitot.
+    if updated.get("enabled", True):
+        updated["provisioning"] = provisioning.start(container, str(updated["name"]))
     return updated
+
+
+def _connu(container: ContainerDep, router_name: str) -> None:
+    if not any(c.name == router_name for c in container.registry.collectors):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Router '{router_name}' is not collected",
+        )
+
+
+@router.get("/pops/provisioning/{router_name}", summary="Progress of the automatic setup")
+async def provisioning_status(container: ContainerDep, router_name: str) -> dict[str, Any]:
+    """Par NOM : les routeurs du fichier routers.yml n'ont pas d'identifiant en base."""
+    return provisioning.status(router_name) or {"router": router_name, "state": "none"}
+
+
+@router.post("/pops/provisioning/{router_name}", summary="Run the automatic setup again")
+async def provision_again(container: ContainerDep, router_name: str) -> dict[str, Any]:
+    _connu(container, router_name)
+    return provisioning.start(container, router_name)
 
 
 @router.delete(

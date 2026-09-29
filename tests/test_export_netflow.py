@@ -49,11 +49,11 @@ def collecteur_routeur(
     client: FakeRouterOsClient, *, host: str = "192.0.2.11", role: RouterRole = RouterRole.POP
 ) -> MikrotikCollector:
     config = RouterConfig(
-        name="pop-nord",
+        name="pop-altair",
         host=host,
         username="qos-ro",
         password="secret-de-lab",
-        pop_name="PoP Nord",
+        pop_name="PoP Altair",
         role=role,
     )
     return MikrotikCollector(config, client=client)
@@ -145,7 +145,7 @@ async def test_un_routeur_joint_par_son_nom_n_impose_pas_d_adresse_source(
 ) -> None:
     """Un nom d'hote n'est pas forcement une adresse locale du routeur : poser
     ``src-address`` ferait echouer la commande."""
-    export, collector = service(client, host="pop-nord.lan")
+    export, collector = service(client, host="pop-altair.lan")
     plan = export.plan_for(collector, await export.state_of(collector))
     cible = next(a for a in plan.actions if a.path == PATH_TARGET)
     assert "src-address" not in cible.fields
@@ -320,7 +320,7 @@ async def test_configurer_l_export_declare_aussi_l_exporteur(
     fiche = exporteurs.declares[0]
     assert fiche["address"] == "192.0.2.11"
     assert fiche["vantage"] == "pop"
-    assert fiche["pop_name"] == "PoP Nord"
+    assert fiche["pop_name"] == "PoP Altair"
 
 
 async def test_une_passerelle_regarde_depuis_la_sortie_internet(

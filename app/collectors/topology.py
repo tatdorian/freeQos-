@@ -936,7 +936,7 @@ def build_from_router(
 def _parse_export_kv(reste: str) -> dict[str, str]:
     """Découpe une ligne ``add …`` / ``set …`` d'un export en paires clé=valeur.
 
-    Gère les valeurs entre guillemets (``comment="Lien vers PoP Nord"``) et les
+    Gère les valeurs entre guillemets (``comment="Lien vers PoP Altair"``) et les
     drapeaux nus (``disabled`` sans ``=``, ignorés)."""
     paires: dict[str, str] = {}
     for cle, val_q, val_nu in re.findall(r'([\w.-]+)=(?:"((?:[^"\\]|\\.)*)"|(\S+))', reste):

@@ -46,7 +46,7 @@ _NUMERIQUE = re.compile(r"^\d{1,4}$")
 def _titre(texte: str) -> str:
     """Met un nom d'interface en forme de nom de site.
 
-    'francophonie' -> 'Francophonie', 'zone-nord' -> 'Zone Nord'. On ne touche
+    'francophonie' -> 'Francophonie', 'zone-altair' -> 'Zone Altair'. On ne touche
     pas a ce qui est deja en majuscules (un sigle reste un sigle : 'ZTE', 'CCR').
     """
     mots = [m for m in re.split(r"[\s._-]+", texte) if m]

@@ -81,11 +81,11 @@ def _settings(routers: list[RouterConfig] | None = None) -> Settings:
 
 
 ECARTE = {
-    "name": "pop-nord",
+    "name": "pop-altair",
     "reason": "secret illisible : cle changee",
     "source": "db",
     "host": "10.10.0.10",
-    "pop_name": "PoP Nord",
+    "pop_name": "PoP Altair",
     "role": "pop",
 }
 
@@ -103,12 +103,12 @@ async def test_une_fiche_ecartee_remonte_dans_skipped() -> None:
     await registre.reload()
 
     assert registre.collectors == []
-    assert [e["name"] for e in registre.skipped] == ["pop-nord"]
+    assert [e["name"] for e in registre.skipped] == ["pop-altair"]
     # De quoi l'AFFICHER, et poser sa case dans l'arbre.
     ecarte = registre.skipped[0]
     assert ecarte["source"] == "db"
     assert ecarte["host"] == "10.10.0.10"
-    assert ecarte["pop_name"] == "PoP Nord"
+    assert ecarte["pop_name"] == "PoP Altair"
     assert ecarte["role"] == "pop"
 
 
@@ -158,8 +158,8 @@ async def test_un_pop_ecarte_garde_sa_case_dans_l_arbre() -> None:
 
     snapshot = await _decouvrir(registre)
 
-    noeud = snapshot.nodes["router:pop-nord"]
-    assert noeud.name == "PoP Nord"
+    noeud = snapshot.nodes["router:pop-altair"]
+    assert noeud.name == "PoP Altair"
     assert noeud.kind == KIND_POP
     assert noeud.address == "10.10.0.10"
     assert noeud.attributes["excluded"] is True
@@ -177,7 +177,7 @@ async def test_un_coeur_ecarte_garde_son_role() -> None:
 
     snapshot = await _decouvrir(registre)
 
-    assert snapshot.nodes["router:pop-nord"].kind == KIND_CORE
+    assert snapshot.nodes["router:pop-altair"].kind == KIND_CORE
 
 
 async def test_un_routeur_masque_ne_reapparait_pas() -> None:
@@ -186,14 +186,14 @@ async def test_un_routeur_masque_ne_reapparait_pas() -> None:
 
     class DepotMasquant(DepotEcartes):
         async def hidden_file_routers(self) -> set[str]:
-            return {"pop-nord"}
+            return {"pop-altair"}
 
     registre = RouterRegistry(_settings(), repository=DepotMasquant([], [ECARTE]))
 
     snapshot = await _decouvrir(registre)
 
     assert registre.skipped == []
-    assert "router:pop-nord" not in snapshot.nodes
+    assert "router:pop-altair" not in snapshot.nodes
 
 
 async def test_une_panne_globale_ne_pose_pas_de_case_fantome() -> None:
@@ -259,13 +259,13 @@ async def test_un_collecteur_present_produit_bien_une_observation() -> None:
     from app.services.collection import CollectionService
     from tests.test_detection_vlan import DepotObservations
 
-    client = FakeRouterOsClient(identity="pop-nord")
+    client = FakeRouterOsClient(identity="pop-altair")
     client.vlan_rows = [{"name": "vlan120", "vlan-id": "120"}]
     client.arp_rows = [
         {"address": "10.20.0.77", "mac-address": "AA:BB:CC:00:00:77", "interface": "vlan120"}
     ]
     config = RouterConfig(
-        name="pop-nord", host="10.10.0.10", username="u", password="p", pop_name="PoP Nord"
+        name="pop-altair", host="10.10.0.10", username="u", password="p", pop_name="PoP Altair"
     )
     registre = RouterRegistry(
         _settings(), repository=DepotEcartes([config], []), client_factory=lambda c: client
@@ -290,7 +290,7 @@ async def test_un_collecteur_present_produit_bien_une_observation() -> None:
     await service.detect_vlan_clients()
 
     assert [v.address for v in depot.enregistrees] == ["10.20.0.77"]
-    assert depot.enregistrees[0].pop_name == "PoP Nord"
+    assert depot.enregistrees[0].pop_name == "PoP Altair"
 
 
 # ---------------------------------------------------------------------------

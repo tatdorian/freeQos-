@@ -31,7 +31,7 @@ from app.services.vlan_sites import (
         # Le nom vient de l'interface : c'est celui que l'exploitant a ecrit.
         ("vlan-francophonie", "Francophonie"),
         ("vlan_mairie", "Mairie"),
-        ("vlan-zone-nord", "Zone Nord"),
+        ("vlan-zone-altair", "Zone Altair"),
         ("francophonie-vlan", "Francophonie"),
         # Un VLAN qui n'a qu'un numero garde son numero : inventer un nom serait
         # pire que de ne rien dire.

@@ -128,11 +128,11 @@ class InMemoryRoutersRepository:
 
 
 NOUVEAU_POP = {
-    "name": "pop-sud",
+    "name": "pop-vega",
     "host": "10.10.0.12",
     "password": "secret-du-routeur",
     "username": "qos-ro",
-    "pop_name": "PoP Sud",
+    "pop_name": "PoP Vega",
 }
 
 
@@ -148,7 +148,7 @@ def repo(secrets: SecretBox) -> InMemoryRoutersRepository:
 
 @pytest.fixture
 def fake_router() -> FakeRouterOsClient:
-    client = FakeRouterOsClient(identity="chr-pop-sud")
+    client = FakeRouterOsClient(identity="chr-pop-vega")
     client.add_session("dupont", rx_byte=1000, tx_byte=2000)
     return client
 
@@ -180,8 +180,8 @@ def test_inventaire_expose_les_deux_sources(
     par_nom = {r["name"]: r for r in body["routers"]}
     assert par_nom["pop-test"]["source"] == "file"
     assert par_nom["pop-test"]["editable"] is False
-    assert par_nom["pop-sud"]["source"] == "db"
-    assert par_nom["pop-sud"]["editable"] is True
+    assert par_nom["pop-vega"]["source"] == "db"
+    assert par_nom["pop-vega"]["editable"] is True
     assert body["secrets_available"] is True
 
 
@@ -209,14 +209,14 @@ def test_retirer_puis_restaurer_un_routeur_fichier(
 def test_creation_et_prise_en_compte_a_chaud(client: TestClient) -> None:
     """Le nouveau PoP doit etre interroge sans redemarrage."""
     avant = {c.name for c in client.container.collection.collectors}  # type: ignore[attr-defined]
-    assert "pop-sud" not in avant
+    assert "pop-vega" not in avant
 
     response = client.post("/api/v1/pops/routers", json=NOUVEAU_POP)
 
     assert response.status_code == 201
-    assert response.json()["name"] == "pop-sud"
+    assert response.json()["name"] == "pop-vega"
     apres = {c.name for c in client.container.collection.collectors}  # type: ignore[attr-defined]
-    assert "pop-sud" in apres
+    assert "pop-vega" in apres
 
 
 def test_le_mot_de_passe_ne_ressort_jamais(client: TestClient) -> None:
@@ -285,11 +285,11 @@ def test_modification_partielle_sans_resaisir_le_secret(
 
 def test_desactivation_retire_le_collecteur(client: TestClient) -> None:
     client.post("/api/v1/pops/routers", json=NOUVEAU_POP)
-    assert "pop-sud" in {c.name for c in client.container.collection.collectors}  # type: ignore[attr-defined]
+    assert "pop-vega" in {c.name for c in client.container.collection.collectors}  # type: ignore[attr-defined]
 
     client.patch("/api/v1/pops/routers/1", json={"enabled": False})
 
-    assert "pop-sud" not in {c.name for c in client.container.collection.collectors}  # type: ignore[attr-defined]
+    assert "pop-vega" not in {c.name for c in client.container.collection.collectors}  # type: ignore[attr-defined]
 
 
 def test_modification_d_un_routeur_inconnu(client: TestClient) -> None:
@@ -303,7 +303,7 @@ def test_suppression(client: TestClient, repo: InMemoryRoutersRepository) -> Non
     assert client.delete("/api/v1/pops/routers/1").status_code == 204
 
     assert repo.rows == {}
-    assert "pop-sud" not in {c.name for c in client.container.collection.collectors}  # type: ignore[attr-defined]
+    assert "pop-vega" not in {c.name for c in client.container.collection.collectors}  # type: ignore[attr-defined]
 
 
 def test_suppression_d_un_routeur_inconnu(client: TestClient) -> None:
@@ -316,7 +316,7 @@ def test_test_de_connexion_reussi(client: TestClient) -> None:
 
     body = response.json()
     assert body["reachable"] is True
-    assert body["identity"] == "chr-pop-sud"
+    assert body["identity"] == "chr-pop-vega"
     assert body["board_name"] == "CHR"
     assert body["version"].startswith("7.21.5")
     assert body["ppp_active_sessions"] == 1
@@ -357,7 +357,7 @@ def test_sonde_d_un_routeur_enregistre(client: TestClient, repo: InMemoryRouters
 
     assert body["reachable"] is True
     # Le diagnostic est memorise pour etre affiche dans l'inventaire.
-    assert repo.rows[1]["identity"] == "chr-pop-sud"
+    assert repo.rows[1]["identity"] == "chr-pop-vega"
     assert repo.rows[1]["last_error"] is None
 
 

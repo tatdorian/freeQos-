@@ -346,8 +346,8 @@ async def test_un_anneau_ne_pend_pas_un_pop_sous_son_frere() -> None:
             ],
             [_defaut("10.0.0.1")],
         ),
-        "pop-nord": _routeur(
-            "pop-nord",
+        "pop-altair": _routeur(
+            "pop-altair",
             "10.255.0.10",
             [
                 {"address": "10.0.1.2/30", "interface": "ether1"},
@@ -356,8 +356,8 @@ async def test_un_anneau_ne_pend_pas_un_pop_sous_son_frere() -> None:
             [_defaut("10.0.1.1")],
             ospf=[{"address": "10.0.9.2", "state": "Full"}],
         ),
-        "pop-sud": _routeur(
-            "pop-sud",
+        "pop-vega": _routeur(
+            "pop-vega",
             "10.255.0.11",
             [
                 {"address": "10.0.2.2/30", "interface": "ether1"},
@@ -370,8 +370,8 @@ async def test_un_anneau_ne_pend_pas_un_pop_sous_son_frere() -> None:
     configs = [
         _config(name="gw", host="1.1.1.1", role="gateway", pop_name="Gateway"),
         _config(name="core", host="1.1.1.2", role="core", pop_name="Coeur"),
-        _config(name="pop-nord", host="1.1.1.3", role="pop", pop_name="PoP Nord"),
-        _config(name="pop-sud", host="1.1.1.4", role="pop", pop_name="PoP Sud"),
+        _config(name="pop-altair", host="1.1.1.3", role="pop", pop_name="PoP Altair"),
+        _config(name="pop-vega", host="1.1.1.4", role="pop", pop_name="PoP Vega"),
     ]
     settings = Settings(
         _env_file=None,
@@ -391,8 +391,8 @@ async def test_un_anneau_ne_pend_pas_un_pop_sous_son_frere() -> None:
     parent = {n.name: n.config_parent for n in snapshot.nodes.values()}
     assert parent["Coeur"] == router_node_key("gw")
     # Les DEUX pendent du coeur, pas l'un de l'autre.
-    assert parent["PoP Nord"] == router_node_key("core")
-    assert parent["PoP Sud"] == router_node_key("core")
+    assert parent["PoP Altair"] == router_node_key("core")
+    assert parent["PoP Vega"] == router_node_key("core")
     # La passerelle n'a pas de parent : son amont est hors inventaire.
     assert parent["Gateway"] is None
 
@@ -401,7 +401,7 @@ async def test_un_anneau_ne_pend_pas_un_pop_sous_son_frere() -> None:
         lien
         for lien in snapshot.links.values()
         if {snapshot.nodes[lien.source_key].name, snapshot.nodes[lien.target_key].name}
-        == {"PoP Nord", "PoP Sud"}
+        == {"PoP Altair", "PoP Vega"}
     ]
     assert anneau and anneau[0].attributes.get("routing_adjacency") is True
 

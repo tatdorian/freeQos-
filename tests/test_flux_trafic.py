@@ -157,14 +157,14 @@ def test_une_adresse_non_declaree_va_dans_l_aide_a_la_saisie() -> None:
         flux("172.16.9.9", "8.8.8.8", octets=90, vlan=812),
         vantage="pop",
         exporter="10.10.0.1",
-        pop_name="PoP Nord",
+        pop_name="PoP Altair",
     )
     lot = agg.flush(MAINTENANT)
 
     assert lot.subscribers == []
     assert len(lot.hosts) == 1
     assert (lot.hosts[0].address, lot.hosts[0].vlan_id) == ("172.16.9.9", 812)
-    assert lot.hosts[0].pop_name == "PoP Nord"
+    assert lot.hosts[0].pop_name == "PoP Altair"
 
 
 def test_l_autre_bout_d_une_conversation_internet_n_est_pas_retenu() -> None:

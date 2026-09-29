@@ -53,7 +53,7 @@ def exporteur(
     return {
         "address": address,
         "vantage": vantage,
-        "pop_name": "PoP Nord",
+        "pop_name": "PoP Altair",
         "sampling_rate": sampling,
         "enabled": enabled,
     }

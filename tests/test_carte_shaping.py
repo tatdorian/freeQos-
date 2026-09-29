@@ -39,7 +39,7 @@ LIEN = {
     "key": "router:pop-test|ether2|mac:DC:9F:DB:11:22:33",
     "source_key": "router:pop-test",
     "target_key": "mac:DC:9F:DB:11:22:33",
-    "target_name": "BH-Nord",
+    "target_name": "BH-Altair",
     "target_kind": "radio",
     "kind": "ethernet",
     "interface": "ether2",
@@ -127,10 +127,10 @@ async def test_l_abonne_pend_sous_le_lien_qu_il_traverse(
     carte = await service.shaping_points()
 
     points = _par_label(carte)
-    assert points["BH-Nord"]["kind"] == "lien"
-    assert points["BH-Nord"]["profondeur"] == 0
+    assert points["BH-Altair"]["kind"] == "lien"
+    assert points["BH-Altair"]["profondeur"] == 0
     assert points["dupont"]["profondeur"] == 1
-    assert points["dupont"]["parent"] == points["BH-Nord"]["name"]
+    assert points["dupont"]["parent"] == points["BH-Altair"]["name"]
 
 
 async def test_la_carte_dit_le_plafond_et_d_ou_il_vient(
@@ -144,8 +144,8 @@ async def test_la_carte_dit_le_plafond_et_d_ou_il_vient(
 
     points = _par_label(await service.shaping_points())
 
-    assert points["BH-Nord"]["down_mbps"] == pytest.approx(900.0)  # 1000 x 0.90
-    assert "measured link capacity" in points["BH-Nord"]["source"]
+    assert points["BH-Altair"]["down_mbps"] == pytest.approx(900.0)  # 1000 x 0.90
+    assert "measured link capacity" in points["BH-Altair"]["source"]
     assert points["dupont"]["down_mbps"] == pytest.approx(100.0)
     assert points["dupont"]["source"] == "plan souscrit"
 
@@ -159,8 +159,8 @@ async def test_un_resserrage_qoe_est_dit_sur_le_point_concerne(
 
     points = _par_label(await service.shaping_points())
 
-    assert "80 %" in points["BH-Nord"]["source"]
-    assert points["BH-Nord"]["down_mbps"] == pytest.approx(720.0)
+    assert "80 %" in points["BH-Altair"]["source"]
+    assert points["BH-Altair"]["down_mbps"] == pytest.approx(720.0)
 
 
 # =========================================================================
@@ -202,8 +202,8 @@ async def test_un_lien_desactive_a_la_main_est_sur_la_carte_avec_son_motif(
 
     points = _par_label(await service.shaping_points())
 
-    assert points["BH-Nord"]["state"] == ShapingService.ETAT_ECARTE
-    assert "disabled" in points["BH-Nord"]["reason"]
+    assert points["BH-Altair"]["state"] == ShapingService.ETAT_ECARTE
+    assert "disabled" in points["BH-Altair"]["reason"]
 
 
 async def test_une_file_posee_a_la_main_figure_et_reste_intouchee(
@@ -236,7 +236,7 @@ async def test_tant_que_rien_n_est_ecrit_les_points_sont_a_poser(
 
     points = _par_label(await service.shaping_points())
 
-    assert points["BH-Nord"]["state"] == ShapingService.ETAT_A_POSER
+    assert points["BH-Altair"]["state"] == ShapingService.ETAT_A_POSER
     assert points["dupont"]["state"] == ShapingService.ETAT_A_POSER
 
 
@@ -252,7 +252,7 @@ async def test_apres_le_passage_de_la_boucle_les_points_sont_brides(
     points = _par_label(await service.shaping_points())
 
     assert resultat["applied"] >= 2
-    assert points["BH-Nord"]["state"] == ShapingService.ETAT_POSEE
+    assert points["BH-Altair"]["state"] == ShapingService.ETAT_POSEE
     assert points["dupont"]["state"] == ShapingService.ETAT_POSEE
 
 
@@ -369,7 +369,7 @@ def test_api_rend_la_carte_en_arbre(api) -> None:
     routeur = corps["routers"][0]
     assert routeur["router"] == "pop-test"
     racine = routeur["points"][0]
-    assert racine["label"] == "BH-Nord"
+    assert racine["label"] == "BH-Altair"
     assert [e["label"] for e in racine["children"]] == ["dupont"]
     assert routeur["counts"]["liens"] == 1
 

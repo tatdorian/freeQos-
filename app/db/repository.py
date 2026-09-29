@@ -72,7 +72,7 @@ class MetricsRepository:
         """Retire les PoPs VIDES que plus rien ne declare.
 
         Un PoP reste en base quand son routeur quitte l'inventaire, ou quand il
-        venait d'un essai (un "PoP Nord", un "PoP Sud" saisis pour voir) : il
+        venait d'un essai (un "PoP Altair", un "PoP Vega" saisis pour voir) : il
         s'affiche alors partout -- arbre, listes, filtres -- sans rien porter.
         Est retire un PoP qui n'a NI abonne NI backhaul, dont le nom n'est porte
         par aucun routeur, antenne ou client declare (``keep``), et qui n'a pas

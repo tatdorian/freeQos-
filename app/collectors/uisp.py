@@ -195,7 +195,7 @@ class AirOsTarget:
 
     ``key`` est l'identifiant stable du backhaul (celui qui sert de cle en base
     et a la jointure de topologie) ; ``host`` est l'adresse de management de la
-    radio. Les deux peuvent differer : on peut nommer un lien ``bh-nord`` et le
+    radio. Les deux peuvent differer : on peut nommer un lien ``bh-altair`` et le
     joindre en 10.0.0.2.
     """
 

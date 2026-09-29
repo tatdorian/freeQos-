@@ -136,8 +136,8 @@ async def test_le_schema_s_applique_et_est_rejouable(database: Database) -> None
 async def test_referentiel_upsert(database: Database) -> None:
     directory = PgDirectory(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
-    assert await directory.ensure_pop("PoP Nord") == pop_id  # idempotent
+    pop_id = await directory.ensure_pop("PoP Altair", "10.10.0.11")
+    assert await directory.ensure_pop("PoP Altair") == pop_id  # idempotent
 
     plan = Plan(down_mbps=100, up_mbps=20, source="mock:test")
     subscriber_id = await directory.ensure_subscriber("dupont", pop_id=pop_id, plan=plan)
@@ -156,7 +156,7 @@ async def test_ecriture_et_relecture_des_metriques(database: Database, now: date
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    pop_id = await directory.ensure_pop("PoP Altair", "10.10.0.11")
     subscriber_id = await directory.ensure_subscriber(
         "dupont", pop_id=pop_id, plan=Plan(100, 20, "mock")
     )
@@ -167,8 +167,8 @@ async def test_ecriture_et_relecture_des_metriques(database: Database, now: date
             SubscriberSample(
                 ts=now - timedelta(seconds=10 * i),
                 login="dupont",
-                router_name="pop-nord",
-                pop_name="PoP Nord",
+                router_name="pop-altair",
+                pop_name="PoP Altair",
                 address="10.20.0.10",
                 uptime_s=3600 + i,
                 rx_bytes=1000 * i,
@@ -206,7 +206,7 @@ async def test_vue_dernier_echantillon(database: Database, now: datetime) -> Non
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord")
+    pop_id = await directory.ensure_pop("PoP Altair")
     petit = await directory.ensure_subscriber("petit", pop_id=pop_id)
     gros = await directory.ensure_subscriber("gros", pop_id=pop_id)
 
@@ -236,9 +236,9 @@ async def test_metriques_backhaul(database: Database, now: datetime) -> None:
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord")
+    pop_id = await directory.ensure_pop("PoP Altair")
     backhaul_id = await directory.ensure_backhaul(
-        "bh-nord", pop_id=pop_id, uisp_device_id="dev-1", nominal_capacity_mbps=500
+        "bh-altair", pop_id=pop_id, uisp_device_id="dev-1", nominal_capacity_mbps=500
     )
 
     await writer.write_backhaul_metrics(
@@ -288,7 +288,7 @@ async def test_historique_des_cycles_et_compteurs(database: Database, now: datet
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord")
+    pop_id = await directory.ensure_pop("PoP Altair")
     await directory.ensure_subscriber("dupont", pop_id=pop_id)
     await writer.record_run(
         RunResult(
@@ -297,13 +297,13 @@ async def test_historique_des_cycles_et_compteurs(database: Database, now: datet
             duration_s=0.12,
             ok=False,
             items=3,
-            errors=["pop-sud injoignable"],
+            errors=["pop-vega injoignable"],
         )
     )
 
     runs = await repo.recent_runs(limit=5)
     assert runs[0]["ok"] is False
-    assert runs[0]["error"] == "pop-sud injoignable"
+    assert runs[0]["error"] == "pop-vega injoignable"
 
     counters = await repo.counters()
     assert counters["pops"] == 1
@@ -314,7 +314,7 @@ async def test_touch_et_mise_a_jour_des_plans(database: Database, now: datetime)
     directory = PgDirectory(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord")
+    pop_id = await directory.ensure_pop("PoP Altair")
     subscriber_id = await directory.ensure_subscriber("dupont", pop_id=pop_id)
 
     await directory.touch_subscribers({subscriber_id: ("10.20.0.42", now)})
@@ -333,7 +333,7 @@ async def test_suppression_en_cascade(database: Database, now: datetime) -> None
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord")
+    pop_id = await directory.ensure_pop("PoP Altair")
     subscriber_id = await directory.ensure_subscriber("temporaire", pop_id=pop_id)
     await writer.write_subscriber_metrics(
         [
@@ -362,15 +362,17 @@ async def test_bout_en_bout_routeur_vers_api(database: Database) -> None:
     from tests.conftest import FakeRouterOsClient
     from tests.test_collection_service import Clock
 
-    router = RouterConfig(name="pop-nord", host="192.0.2.11", password="lab", pop_name="PoP Nord")
+    router = RouterConfig(
+        name="pop-altair", host="192.0.2.11", password="lab", pop_name="PoP Altair"
+    )
     settings = Settings(
         _env_file=None,
         database_url=DSN,
         routers=[router],
         backhauls=[
             BackhaulConfig(
-                name="bh-nord",
-                pop_name="PoP Nord",
+                name="bh-altair",
+                pop_name="PoP Altair",
                 uisp_device_id="dev-1",
                 nominal_capacity_mbps=500,
             )
@@ -420,11 +422,11 @@ async def test_bout_en_bout_routeur_vers_api(database: Database) -> None:
     assert par_login["dupont"]["plan_down_mbps"] > 0
 
     pops = await repo.list_pops()
-    assert pops[0]["name"] == "PoP Nord"
+    assert pops[0]["name"] == "PoP Altair"
     assert pops[0]["subscriber_count"] == 2
 
     backhauls = await repo.backhaul_latest()
-    assert backhauls[0]["name"] == "bh-nord"
+    assert backhauls[0]["name"] == "bh-altair"
     assert backhauls[0]["capacity_mbps"] > 0
 
     counters = await repo.counters()
@@ -471,7 +473,7 @@ async def test_conteneur_reel_cable_la_collecte_des_antennes(database: Database)
         await container.antennas_repo.create(
             {
                 "name": "bh-toit",
-                "pop_name": "PoP Nord",
+                "pop_name": "PoP Altair",
                 "host": "203.0.113.9",  # TEST-NET-3 : jamais joignable
                 "device_key": "device-toit",
                 "nominal_capacity_mbps": 300,
@@ -587,10 +589,10 @@ async def test_cycle_de_vie_d_un_routeur_en_base(database: Database) -> None:
     repo = RoutersRepository(database.pool, secrets)
 
     created = await repo.create(
-        {"name": "pop-nord", "host": "10.10.0.11", "pop_name": "PoP Nord"},
+        {"name": "pop-altair", "host": "10.10.0.11", "pop_name": "PoP Altair"},
         "mot-de-passe-du-routeur",
     )
-    assert created["name"] == "pop-nord"
+    assert created["name"] == "pop-altair"
     assert "password_enc" not in created  # jamais renvoye
 
     # Le secret est chiffre au repos.
@@ -607,15 +609,15 @@ async def test_cycle_de_vie_d_un_routeur_en_base(database: Database) -> None:
     assert configs[0].resolve_password() == "mot-de-passe-du-routeur"
 
     with pytest.raises(DuplicateRouterError):
-        await repo.create({"name": "pop-nord", "host": "10.10.0.99"}, "x")
+        await repo.create({"name": "pop-altair", "host": "10.10.0.99"}, "x")
 
     # Modification partielle : le secret n'est pas touche.
     updated = await repo.update(created["id"], {"host": "10.10.0.12"})
     assert updated["host"] == "10.10.0.12"
     assert (await repo.load_configs())[0].resolve_password() == "mot-de-passe-du-routeur"
 
-    await repo.record_success(created["id"], {"identity": "chr-nord", "version": "7.21.5"})
-    assert (await repo.get_public(created["id"]))["identity"] == "chr-nord"
+    await repo.record_success(created["id"], {"identity": "chr-altair", "version": "7.21.5"})
+    assert (await repo.get_public(created["id"]))["identity"] == "chr-altair"
 
     await repo.record_failure(created["id"], "connexion refusee")
     assert (await repo.get_public(created["id"]))["last_error"] == "connexion refusee"
@@ -663,16 +665,16 @@ async def test_vues_du_tableau_de_bord(database: Database, now: datetime) -> Non
     # secondes d'un pas -- une fois sur quinze environ.
     now = _ancre_dans_un_seul_pas(now, bucket_seconds=300, recul_s=20)
 
-    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    pop_id = await directory.ensure_pop("PoP Altair", "10.10.0.11")
     backhaul_id = await directory.ensure_backhaul(
-        "bh-nord", pop_id=pop_id, uisp_device_id="dev-1", nominal_capacity_mbps=500
+        "bh-altair", pop_id=pop_id, uisp_device_id="dev-1", nominal_capacity_mbps=500
     )
     a = await directory.ensure_subscriber("alice", pop_id=pop_id, plan=Plan(100, 20, "mock"))
     b = await directory.ensure_subscriber("bob", pop_id=pop_id, plan=Plan(300, 50, "mock"))
 
     def sample(ts: datetime, rx: float, tx: float) -> SubscriberSample:
         return SubscriberSample(
-            ts=ts, login="x", router_name="r", pop_name="PoP Nord", rx_bps=rx, tx_bps=tx
+            ts=ts, login="x", router_name="r", pop_name="PoP Altair", rx_bps=rx, tx_bps=tx
         )
 
     await writer.write_subscriber_metrics(
@@ -707,7 +709,7 @@ async def test_vues_du_tableau_de_bord(database: Database, now: datetime) -> Non
     assert overview["backhaul_capacity_mbps"] == 400.0
 
     tree = await repo.network_tree()
-    assert tree[0]["name"] == "PoP Nord"
+    assert tree[0]["name"] == "PoP Altair"
     assert tree[0]["online"] == 2
     assert tree[0]["tx_bps"] == 80e6
     assert tree[0]["backhauls"][0]["capacity_mbps"] == 400.0
@@ -729,7 +731,7 @@ async def test_throughput_ne_double_compte_pas(database: Database, now: datetime
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord")
+    pop_id = await directory.ensure_pop("PoP Altair")
     seul = await directory.ensure_subscriber("solo", pop_id=pop_id)
 
     # Six echantillons a 100 Mbps dans le meme bucket d'une minute.
@@ -772,7 +774,7 @@ async def test_la_pointe_d_un_test_de_debit_survit_a_la_moyenne(
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
-    pop_id = await directory.ensure_pop("PoP Nord")
+    pop_id = await directory.ensure_pop("PoP Altair")
     a = await directory.ensure_subscriber("a", pop_id=pop_id)
     b = await directory.ensure_subscriber("b", pop_id=pop_id)
     base = _ancre_dans_un_seul_pas(now, bucket_seconds=300, recul_s=60)
@@ -813,8 +815,8 @@ async def test_persistance_de_la_topologie(database: Database) -> None:
     snapshot = TopologySnapshot()
     build_from_router(
         snapshot,
-        router_name="pop-nord",
-        pop_name="PoP Nord",
+        router_name="pop-altair",
+        pop_name="PoP Altair",
         host="10.10.0.11",
         neighbors=[
             {
@@ -839,9 +841,9 @@ async def test_persistance_de_la_topologie(database: Database) -> None:
     assert compte["nodes"] == 3 and compte["links"] == 2
 
     noeuds = {n["key"]: n for n in await repo.nodes()}
-    assert noeuds["router:pop-nord"]["kind"] == "pop"
+    assert noeuds["router:pop-altair"]["kind"] == "pop"
     assert noeuds["mac:DC:9F:DB:11:22:33"]["kind"] == "radio"
-    assert noeuds["router:pop-nord"]["fresh"] is True
+    assert noeuds["router:pop-altair"]["fresh"] is True
 
     liens = {lk["interface"]: lk for lk in await repo.links()}
     assert liens["ether1"]["capacity_mbps"] == 1000.0
@@ -859,8 +861,8 @@ async def test_la_decouverte_est_idempotente(database: Database) -> None:
         s = TopologySnapshot()
         build_from_router(
             s,
-            router_name="pop-nord",
-            pop_name="PoP Nord",
+            router_name="pop-altair",
+            pop_name="PoP Altair",
             host="10.10.0.11",
             neighbors=[
                 {
@@ -985,12 +987,12 @@ async def test_journal_des_commandes(database: Database) -> None:
     )
 
     await repo.record_audit(
-        "pop-nord", dry_run=False, outcomes=[(action, True, "*7")], author="alice"
+        "pop-altair", dry_run=False, outcomes=[(action, True, "*7")], author="alice"
     )
 
     lignes = await repo.audit(limit=10)
     assert len(lignes) == 1
-    assert lignes[0]["router_name"] == "pop-nord"
+    assert lignes[0]["router_name"] == "pop-altair"
     assert lignes[0]["dry_run"] is False
     assert lignes[0]["command"].startswith("/queue/simple/set")
     assert "max-limit=20000000/100000000" in lignes[0]["command"]
@@ -1136,12 +1138,12 @@ async def test_suppression_d_un_pop_emporte_ses_donnees(database: Database, now:
 
 
 async def test_les_pops_vides_que_rien_ne_declare_sont_retires(database: Database) -> None:
-    """ "PoP Nord", "PoP Sud" saisis pour essayer, jamais relies : ils encombraient
+    """ "PoP Altair", "PoP Vega" saisis pour essayer, jamais relies : ils encombraient
     l'arbre et les listes. Un site declare, ou qui porte quelque chose, reste."""
     directory = PgDirectory(database.pool)
     repo = MetricsRepository(database.pool)
-    ancien = await directory.ensure_pop("PoP Nord")
-    await directory.ensure_pop("PoP Sud")
+    ancien = await directory.ensure_pop("PoP Altair")
+    await directory.ensure_pop("PoP Vega")
     await directory.ensure_pop("Site declare")
     porteur = await directory.ensure_pop("Site avec abonne")
     await directory.ensure_subscriber("client", pop_id=porteur)
@@ -1153,13 +1155,13 @@ async def test_les_pops_vides_que_rien_ne_declare_sont_retires(database: Databas
         await conn.execute("UPDATE pops SET updated_at = now() - interval '2 hours'")
     retires = await repo.purge_empty_pops(keep={"site DECLARE"})
 
-    assert retires == ["PoP Nord", "PoP Sud"]
+    assert retires == ["PoP Altair", "PoP Vega"]
     restants = {p["name"] for p in await repo.list_pops()}
     assert restants == {"Site declare", "Site avec abonne"}
 
     # Apres le menage, la collecte ne doit pas reutiliser un identifiant disparu.
     directory.clear_cache()
-    nouveau = await directory.ensure_pop("PoP Nord")
+    nouveau = await directory.ensure_pop("PoP Altair")
     assert nouveau != ancien
     await directory.ensure_subscriber("revenu", pop_id=nouveau)  # pas de cle etrangere cassee
 
@@ -1286,12 +1288,12 @@ async def _poser_un_lien(
     database: Database, *, interface: str = "ether2", cible: str = "mac:AA:BB:CC:00:00:02"
 ) -> str:
     """Un routeur, un voisin, une adjacence : le minimum pour porter un debit."""
-    cle = f"router:pop-nord|{interface}|{cible}"
+    cle = f"router:pop-altair|{interface}|{cible}"
     async with database.pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO topology_nodes (key, name, kind) VALUES
-                ('router:pop-nord', 'PoP Nord', 'pop'), ($1, 'voisin', 'radio')
+                ('router:pop-altair', 'PoP Altair', 'pop'), ($1, 'voisin', 'radio')
             ON CONFLICT (key) DO NOTHING
             """,
             cible,
@@ -1300,7 +1302,7 @@ async def _poser_un_lien(
             """
             INSERT INTO topology_links
                    (key, source_key, target_key, kind, interface, capacity_mbps, discovered_by)
-            VALUES ($1, 'router:pop-nord', $2, 'ethernet', $3, 1000, 'pop-nord')
+            VALUES ($1, 'router:pop-altair', $2, 'ethernet', $3, 1000, 'pop-altair')
             ON CONFLICT (key) DO NOTHING
             """,
             cle,
@@ -1320,7 +1322,7 @@ async def test_le_debit_mesure_remonte_sur_le_lien(database: Database, now: date
         [
             InterfaceSample(
                 ts=now,
-                router_name="pop-nord",
+                router_name="pop-altair",
                 interface="ether2",
                 rx_bps=12_000_000,
                 tx_bps=340_000_000,
@@ -1353,7 +1355,7 @@ async def test_un_port_partage_signale_le_nombre_de_voisins(
     await PgMetricsWriter(database.pool).write_interface_metrics(
         [
             InterfaceSample(
-                ts=now, router_name="pop-nord", interface="ether2", rx_bps=1.0, tx_bps=2.0
+                ts=now, router_name="pop-altair", interface="ether2", rx_bps=1.0, tx_bps=2.0
             )
         ]
     )
@@ -1386,7 +1388,7 @@ async def test_la_serie_de_debit_est_agregee_par_bucket(database: Database, now:
         [
             InterfaceSample(
                 ts=now - timedelta(seconds=decalage),
-                router_name="pop-nord",
+                router_name="pop-altair",
                 interface="ether2",
                 rx_bps=1_000_000.0 * (i + 1),
                 tx_bps=10_000_000.0 * (i + 1),
@@ -1397,7 +1399,7 @@ async def test_la_serie_de_debit_est_agregee_par_bucket(database: Database, now:
     )
 
     serie = await TopologyRepository(database.pool).interface_series(
-        router_name="pop-nord", interface="ether2", minutes=60, bucket_seconds=60
+        router_name="pop-altair", interface="ether2", minutes=60, bucket_seconds=60
     )
 
     assert len(serie) >= 2
@@ -1417,11 +1419,11 @@ async def test_la_derniere_mesure_par_port_est_bien_la_plus_recente(
         [
             InterfaceSample(
                 ts=now - timedelta(minutes=5),
-                router_name="pop-nord",
+                router_name="pop-altair",
                 interface="ether1",
                 tx_bps=1.0,
             ),
-            InterfaceSample(ts=now, router_name="pop-nord", interface="ether1", tx_bps=999.0),
+            InterfaceSample(ts=now, router_name="pop-altair", interface="ether1", tx_bps=999.0),
         ]
     )
 
@@ -1532,7 +1534,7 @@ async def test_depot_inventaire_cycle_complet(database: Database) -> None:
         {
             "reference": "mairie-vitre",
             "label": "Mairie de Vitre",
-            "pop_name": "PoP Nord",
+            "pop_name": "PoP Altair",
             "address": "10.0.0.5",
             "vlan": 120,
             "plan_down_mbps": 200.0,
@@ -1559,7 +1561,7 @@ async def test_depot_inventaire_cycle_complet(database: Database) -> None:
 
     with pytest.raises(DuplicateStaticClientError):
         await repo.create(
-            {"reference": "mairie-vitre", "pop_name": "PoP Nord", "address": "10.0.0.9"}
+            {"reference": "mairie-vitre", "pop_name": "PoP Altair", "address": "10.0.0.9"}
         )
 
     await repo.delete(cree["id"])
@@ -1574,7 +1576,7 @@ async def test_la_vue_expose_la_nature(database: Database, now: datetime) -> Non
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord")
+    pop_id = await directory.ensure_pop("PoP Altair")
     ppp = await directory.ensure_subscriber("dupont", pop_id=pop_id)
     fixe = await directory.ensure_subscriber(
         "mairie-vitre",
@@ -1584,11 +1586,11 @@ async def test_la_vue_expose_la_nature(database: Database, now: datetime) -> Non
     )
     await writer.write_subscriber_metrics(
         [
-            (ppp, SubscriberSample(ts=now, login="dupont", router_name="r", pop_name="PoP Nord")),
+            (ppp, SubscriberSample(ts=now, login="dupont", router_name="r", pop_name="PoP Altair")),
             (
                 fixe,
                 SubscriberSample(
-                    ts=now, login="mairie-vitre", router_name="r", pop_name="PoP Nord"
+                    ts=now, login="mairie-vitre", router_name="r", pop_name="PoP Altair"
                 ),
             ),
         ]
@@ -1664,7 +1666,7 @@ async def test_conteneur_reel_cable_les_clients_statiques(database: Database) ->
         await container.static_clients_repo.create(
             {
                 "reference": "mairie-vitre",
-                "pop_name": "PoP Nord",
+                "pop_name": "PoP Altair",
                 "address": "10.0.0.0/29",
                 "plan_down_mbps": 200.0,
                 "plan_up_mbps": 50.0,
@@ -1702,7 +1704,7 @@ async def test_score_de_qoe_composite_par_abonne(database: Database, now: dateti
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    pop_id = await directory.ensure_pop("PoP Altair", "10.10.0.11")
     sain = await directory.ensure_subscriber("sain", pop_id=pop_id, plan=Plan(100, 20, "mock"))
     gonfle = await directory.ensure_subscriber("gonfle", pop_id=pop_id, plan=Plan(100, 20, "mock"))
 
@@ -1711,7 +1713,7 @@ async def test_score_de_qoe_composite_par_abonne(database: Database, now: dateti
             ts=ts,
             login="x",
             router_name="r",
-            pop_name="PoP Nord",
+            pop_name="PoP Altair",
             rx_bps=0.0,
             tx_bps=charge,
             rtt_ms=rtt,
@@ -1748,7 +1750,7 @@ async def test_la_heatmap_porte_les_echantillons_de_chaque_pas(
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    pop_id = await directory.ensure_pop("PoP Altair", "10.10.0.11")
     lignes = []
     for index in range(6):
         abonne = await directory.ensure_subscriber(
@@ -1762,7 +1764,7 @@ async def test_la_heatmap_porte_les_echantillons_de_chaque_pas(
                     ts=now,
                     login=f"abonne-{index}",
                     router_name="r",
-                    pop_name="PoP Nord",
+                    pop_name="PoP Altair",
                     rx_bps=0.0,
                     tx_bps=charge,
                     rtt_ms=10.0 if index < 4 else 280.0,
@@ -1901,8 +1903,8 @@ async def test_le_conteneur_reel_planifie_la_boucle_fermee_qoe(database: Databas
 
 def _vue(adresse: str, **kwargs) -> VlanSighting:
     base = {
-        "router_name": "pop-nord",
-        "pop_name": "PoP Nord",
+        "router_name": "pop-altair",
+        "pop_name": "PoP Altair",
         "address": adresse,
         "vlan_interface": "vlan120",
         "mac": "AA:BB:CC:00:00:01",
@@ -1925,7 +1927,7 @@ async def test_une_adresse_du_bloc_declare_confirme_la_presence(
     observations = VlanSightingsRepository(database.pool)
 
     await inventaire.create(
-        {"reference": "mairie", "pop_name": "PoP Nord", "address": "10.0.0.0/29"}
+        {"reference": "mairie", "pop_name": "PoP Altair", "address": "10.0.0.0/29"}
     )
     await observations.record([_vue("10.0.0.3")], seen_at=now)
 
@@ -1945,15 +1947,15 @@ async def test_une_adresse_hors_de_tout_bloc_devient_candidate(
     observations = VlanSightingsRepository(database.pool)
 
     await inventaire.create(
-        {"reference": "mairie", "pop_name": "PoP Nord", "address": "10.0.0.0/29"}
+        {"reference": "mairie", "pop_name": "PoP Altair", "address": "10.0.0.0/29"}
     )
     await observations.record([_vue("10.0.0.3"), _vue("10.20.0.77")], seen_at=now)
 
     candidats = await observations.candidates()
     assert [c["address"] for c in candidats] == ["10.20.0.77"]
     assert candidats[0]["vlan_id"] == 120
-    assert candidats[0]["router_name"] == "pop-nord"
-    assert candidats[0]["pop_name"] == "PoP Nord"
+    assert candidats[0]["router_name"] == "pop-altair"
+    assert candidats[0]["pop_name"] == "PoP Altair"
 
 
 async def test_declarer_un_client_retire_son_candidat(database: Database, now: datetime) -> None:
@@ -1971,7 +1973,7 @@ async def test_declarer_un_client_retire_son_candidat(database: Database, now: d
     await inventaire.create(
         {
             "reference": "clinique",
-            "pop_name": "PoP Nord",
+            "pop_name": "PoP Altair",
             "address": "10.20.0.77",
             "plan_down_mbps": 100.0,
         }
@@ -2004,12 +2006,12 @@ async def test_deux_routeurs_peuvent_voir_la_meme_adresse(
     observations = VlanSightingsRepository(database.pool)
 
     await observations.record(
-        [_vue("10.20.0.77"), _vue("10.20.0.77", router_name="pop-sud", pop_name="PoP Sud")],
+        [_vue("10.20.0.77"), _vue("10.20.0.77", router_name="pop-vega", pop_name="PoP Vega")],
         seen_at=now,
     )
 
     candidats = await observations.candidates()
-    assert sorted(c["router_name"] for c in candidats) == ["pop-nord", "pop-sud"]
+    assert sorted(c["router_name"] for c in candidats) == ["pop-altair", "pop-vega"]
 
 
 async def test_les_observations_perimees_sont_oubliees(database: Database, now: datetime) -> None:
@@ -2197,7 +2199,7 @@ async def test_un_secret_illisible_est_rapporte_avec_sa_fiche(database: Database
     from app.services.crypto import SecretBox, generate_key
 
     await RoutersRepository(database.pool, SecretBox(generate_key())).create(
-        {"name": "pop-nord", "host": "10.10.0.10", "role": "pop", "pop_name": "PoP Nord"}, "s"
+        {"name": "pop-altair", "host": "10.10.0.10", "role": "pop", "pop_name": "PoP Altair"}, "s"
     )
 
     # Nouvelle cle : le secret d'hier ne se dechiffre plus.
@@ -2206,8 +2208,8 @@ async def test_un_secret_illisible_est_rapporte_avec_sa_fiche(database: Database
 
     assert configs == []
     assert len(ecartes) == 1
-    assert ecartes[0]["name"] == "pop-nord"
-    assert ecartes[0]["pop_name"] == "PoP Nord"
+    assert ecartes[0]["name"] == "pop-altair"
+    assert ecartes[0]["pop_name"] == "PoP Altair"
     assert ecartes[0]["source"] == "db"
     assert "secret illisible" in ecartes[0]["reason"]
 
@@ -2223,7 +2225,7 @@ async def test_le_registre_reel_remonte_l_ecart_jusqu_a_l_interface(
     from app.services.registry import RouterRegistry
 
     await RoutersRepository(database.pool, SecretBox(generate_key())).create(
-        {"name": "pop-nord", "host": "10.10.0.10", "role": "pop", "pop_name": "PoP Nord"}, "s"
+        {"name": "pop-altair", "host": "10.10.0.10", "role": "pop", "pop_name": "PoP Altair"}, "s"
     )
     depot = RoutersRepository(database.pool, SecretBox(generate_key()))
     settings = Settings(
@@ -2239,7 +2241,7 @@ async def test_le_registre_reel_remonte_l_ecart_jusqu_a_l_interface(
     await registre.reload()
 
     assert registre.collectors == []
-    assert [e["name"] for e in registre.skipped] == ["pop-nord"]
+    assert [e["name"] for e in registre.skipped] == ["pop-altair"]
     assert registre.skipped[0]["source"] == "db"
 
 
@@ -2338,7 +2340,7 @@ def _graphe_deux_routeurs() -> TopologySnapshot:
                 attributes={"managed": True},
             )
         )
-    snapshot.add_node(TopologyNode(key="mac:DC:9F:DB:11:22:33", name="BH-Nord", kind="radio"))
+    snapshot.add_node(TopologyNode(key="mac:DC:9F:DB:11:22:33", name="BH-Altair", kind="radio"))
     snapshot.add_link(
         TopologyLink(
             source_key="router:pop-1",
@@ -2517,18 +2519,18 @@ async def test_les_analyses_de_capacite_repondent_sur_du_sql_reel(
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    pop_id = await directory.ensure_pop("PoP Altair", "10.10.0.11")
     bavard = await directory.ensure_subscriber("bavard", pop_id=pop_id, plan=Plan(100, 20, "mock"))
     muet = await directory.ensure_subscriber("muet", pop_id=pop_id, plan=Plan(50, 10, "mock"))
     backhaul_id = await directory.ensure_backhaul(
-        "bh-nord", pop_id=pop_id, nominal_capacity_mbps=500
+        "bh-altair", pop_id=pop_id, nominal_capacity_mbps=500
     )
 
     await writer.write_backhaul_metrics(
         [
             (
                 backhaul_id,
-                BackhaulSample(ts=now, device_id="bh-nord", capacity_mbps=400.0, online=True),
+                BackhaulSample(ts=now, device_id="bh-altair", capacity_mbps=400.0, online=True),
             )
         ]
     )
@@ -2540,8 +2542,8 @@ async def test_les_analyses_de_capacite_repondent_sur_du_sql_reel(
                 SubscriberSample(
                     ts=now - timedelta(seconds=10 * i),
                     login="bavard",
-                    router_name="pop-nord",
-                    pop_name="PoP Nord",
+                    router_name="pop-altair",
+                    pop_name="PoP Altair",
                     rx_bps=10_000_000.0,
                     # 95 Mbps sur un plan a 100 : au plafond.
                     tx_bps=95_000_000.0,
@@ -2555,8 +2557,8 @@ async def test_les_analyses_de_capacite_repondent_sur_du_sql_reel(
                 SubscriberSample(
                     ts=now - timedelta(days=30),
                     login="muet",
-                    router_name="pop-nord",
-                    pop_name="PoP Nord",
+                    router_name="pop-altair",
+                    pop_name="PoP Altair",
                     rx_bps=0.0,
                     tx_bps=0.0,
                 ),
@@ -2567,7 +2569,7 @@ async def test_les_analyses_de_capacite_repondent_sur_du_sql_reel(
         [
             InterfaceSample(
                 ts=now - timedelta(seconds=10 * i),
-                router_name="pop-nord",
+                router_name="pop-altair",
                 interface="ether2",
                 rx_bps=20_000_000.0,
                 tx_bps=900_000_000.0,
@@ -2579,10 +2581,10 @@ async def test_les_analyses_de_capacite_repondent_sur_du_sql_reel(
 
     # 1. Survente : 150 Mbps vendus sur 400 mesures, pointe a 95 Mbps.
     pops = await repo.capacity_by_pop(hours=24)
-    nord = next(p for p in pops if p["pop_name"] == "PoP Nord")
-    assert float(nord["sold_down_mbps"]) == 150.0
-    assert float(nord["capacity_mbps"]) == 400.0
-    assert float(nord["peak_bps"]) == 95_000_000.0
+    altair = next(p for p in pops if p["pop_name"] == "PoP Altair")
+    assert float(altair["sold_down_mbps"]) == 150.0
+    assert float(altair["capacity_mbps"]) == 400.0
+    assert float(altair["peak_bps"]) == 95_000_000.0
 
     # 2. Occupation : la pointe du port et l'heure a laquelle elle tombe.
     liens = await repo.link_occupancy(hours=24)
@@ -2621,7 +2623,7 @@ async def test_la_liste_des_abonnes_porte_tout_l_effectif_du_pop(
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
 
-    pop_id = await directory.ensure_pop("PoP Nord", "10.10.0.11")
+    pop_id = await directory.ensure_pop("PoP Altair", "10.10.0.11")
     vu = await directory.ensure_subscriber("vu", pop_id=pop_id, plan=Plan(100, 20, "mock"))
     await directory.ensure_subscriber("jamais-vu", pop_id=pop_id, plan=Plan(50, 10, "mock"))
     await writer.write_subscriber_metrics(
@@ -2631,8 +2633,8 @@ async def test_la_liste_des_abonnes_porte_tout_l_effectif_du_pop(
                 SubscriberSample(
                     ts=now,
                     login="vu",
-                    router_name="pop-nord",
-                    pop_name="PoP Nord",
+                    router_name="pop-altair",
+                    pop_name="PoP Altair",
                     rx_bps=1_000_000.0,
                     tx_bps=9_000_000.0,
                 ),
@@ -2653,7 +2655,7 @@ async def test_la_liste_des_abonnes_porte_tout_l_effectif_du_pop(
     assert absent["rx_bps"] is None and absent["tx_bps"] is None
     # Son plan, lui, est connu : c'est bien un abonne, pas une ligne vide.
     assert absent["plan_down_mbps"] == 50
-    assert absent["pop_name"] == "PoP Nord"
+    assert absent["pop_name"] == "PoP Altair"
 
     # Le classement par debit ne le remonte pas devant celui qui consomme.
     assert [r["login"] for r in effectif] == ["vu", "jamais-vu"]
@@ -2752,7 +2754,7 @@ async def test_les_vlan_observes_donnent_leur_nom_aux_sites(
             _vue("10.0.0.4", vlan_interface="vlan-francophonie", vlan_id=101),
             _vue("10.0.1.5", vlan_interface="vlan-mairie", vlan_id=102),
             # Meme VLAN, autre routeur : deux sites, pas un.
-            _vue("10.0.2.6", router_name="pop-sud", vlan_interface="vlan101", vlan_id=101),
+            _vue("10.0.2.6", router_name="pop-vega", vlan_interface="vlan101", vlan_id=101),
         ],
         seen_at=now,
     )
@@ -2761,9 +2763,9 @@ async def test_les_vlan_observes_donnent_leur_nom_aux_sites(
 
     par_cle = {(s["router_name"], s["vlan_id"]): s for s in sites}
     assert len(sites) == 3
-    assert par_cle[("pop-nord", 101)]["vlan_interface"] == "vlan-francophonie"
-    assert par_cle[("pop-nord", 101)]["addresses_seen"] == 2
-    assert par_cle[("pop-sud", 101)]["vlan_interface"] == "vlan101"
+    assert par_cle[("pop-altair", 101)]["vlan_interface"] == "vlan-francophonie"
+    assert par_cle[("pop-altair", 101)]["addresses_seen"] == 2
+    assert par_cle[("pop-vega", 101)]["vlan_interface"] == "vlan101"
 
 
 async def test_un_vlan_muet_depuis_longtemps_n_est_plus_un_site(
@@ -2811,8 +2813,8 @@ async def test_un_service_de_l_api_devient_un_client_declare(database: Database)
     from app.db.model_repo import ModelRepository
 
     depot = ModelRepository(database.pool)
-    await depot.put_site("tour-nord", {"name": "PoP Nord"})
-    await depot.put_access_point("sect-n1", {"name": "Secteur N1", "tower": "tour-nord"})
+    await depot.put_site("tour-altair", {"name": "PoP Altair"})
+    await depot.put_access_point("sect-n1", {"name": "Secteur N1", "tower": "tour-altair"})
     await depot.put_package(
         "pack-100", {"name": "100/20", "down_speed": 100_000, "up_speed": 20_000}
     )
@@ -2830,7 +2832,7 @@ async def test_un_service_de_l_api_devient_un_client_declare(database: Database)
         },
     )
     # Le PoP remonte par la chaine service -> point d'acces -> site.
-    assert fiche["pop_name"] == "PoP Nord"
+    assert fiche["pop_name"] == "PoP Altair"
     assert fiche["down_speed"] == 100_000
     assert fiche["attachments"][0]["network_prefixes"] == ["10.0.0.0/29", "10.0.1.5/32"]
 
@@ -2840,7 +2842,7 @@ async def test_un_service_de_l_api_devient_un_client_declare(database: Database)
             "FROM static_clients WHERE reference = 'svc-4321'"
         )
     assert ligne["source"] == "api"
-    assert ligne["pop_name"] == "PoP Nord"
+    assert ligne["pop_name"] == "PoP Altair"
     assert ligne["plan_down_mbps"] == 100.0  # 100 000 kbit/s convertis a la frontiere
     assert ligne["cpe_mac"] == "00:10:0B:6E:4C:FF"
 
@@ -2859,7 +2861,7 @@ async def test_l_api_n_ecrase_pas_une_fiche_saisie_a_la_main(database: Database)
     await saisie.create(
         {
             "reference": "mairie-vitre",
-            "pop_name": "PoP Nord",
+            "pop_name": "PoP Altair",
             "address": "10.0.0.5",
             "vlan": 812,
             "plan_down_mbps": 50,
@@ -2891,7 +2893,7 @@ async def test_les_clients_sont_ranges_par_vlan(database: Database) -> None:
         await depot.create(
             {
                 "reference": reference,
-                "pop_name": "PoP Nord",
+                "pop_name": "PoP Altair",
                 "address": f"10.0.{vlan % 250}.{len(reference)}",
                 "vlan": vlan,
                 "plan_down_mbps": 50,
@@ -2901,7 +2903,7 @@ async def test_les_clients_sont_ranges_par_vlan(database: Database) -> None:
     await depot.create(
         {
             "reference": "sans-vlan",
-            "pop_name": "PoP Nord",
+            "pop_name": "PoP Altair",
             "address": "10.5.0.1",
             "plan_down_mbps": 20,
             "plan_up_mbps": 5,
@@ -2919,7 +2921,7 @@ async def test_une_fenetre_de_trafic_s_ecrit_et_se_relit(database: Database, now
     from app.services.flows import AppCounters, FlushBatch, HostCounters, SubscriberCounters
 
     async with database.pool.acquire() as conn:
-        pop_id = await conn.fetchval("INSERT INTO pops (name) VALUES ('PoP Nord') RETURNING id")
+        pop_id = await conn.fetchval("INSERT INTO pops (name) VALUES ('PoP Altair') RETURNING id")
         abonne = await conn.fetchval(
             "INSERT INTO subscribers (login, kind, pop_id) VALUES ('dupont', 'pppoe', $1) "
             "RETURNING id",
@@ -2936,7 +2938,9 @@ async def test_une_fenetre_de_trafic_s_ecrit_et_se_relit(database: Database, now
         ],
         apps=[AppCounters(abonne, "web", down_bytes=900, up_bytes=100)],
         hosts=[
-            HostCounters("172.16.9.9", 812, exporter="10.10.0.1", pop_name="PoP Nord", up_bytes=90),
+            HostCounters(
+                "172.16.9.9", 812, exporter="10.10.0.1", pop_name="PoP Altair", up_bytes=90
+            ),
             # Sans etiquette VLAN : le cas le plus COURANT cote sortie internet.
             HostCounters("172.16.9.10", None, exporter="10.10.0.2", down_bytes=40),
         ],
@@ -3001,7 +3005,7 @@ async def test_un_hote_declare_disparait_de_l_aide_a_la_saisie(database: Databas
     await StaticClientsRepository(database.pool).create(
         {
             "reference": "nouveau",
-            "pop_name": "PoP Nord",
+            "pop_name": "PoP Altair",
             "address": "10.0.0.0/29",
             "vlan": 812,
             "plan_down_mbps": 50,
@@ -3027,7 +3031,7 @@ async def test_les_blocs_declares_alimentent_l_index_de_rattachement(
     await StaticClientsRepository(database.pool).create(
         {
             "reference": "mairie",
-            "pop_name": "PoP Nord",
+            "pop_name": "PoP Altair",
             "address": "10.0.0.0/29",
             "plan_down_mbps": 50,
             "plan_up_mbps": 10,
@@ -3121,7 +3125,7 @@ async def test_la_consommation_se_lit_par_periode(database: Database, now: datet
         )
         await conn.execute(
             "INSERT INTO static_clients (reference, pop_name, address, source, account_ref) "
-            "VALUES ('svc-1', 'PoP Nord', '10.0.0.5', 'api', 'cust-41')"
+            "VALUES ('svc-1', 'PoP Altair', '10.0.0.5', 'api', 'cust-41')"
         )
     depot = FlowsRepository(database.pool)
     for recul in (0, 3600):
@@ -3202,7 +3206,7 @@ async def test_la_mac_du_cpe_est_normalisee_a_la_modification(database: Database
     fiche = await depot.create(
         {
             "reference": "mairie",
-            "pop_name": "PoP Nord",
+            "pop_name": "PoP Altair",
             "address": "10.0.0.5",
             "cpe_mac": "aa-bb-cc-dd-ee-ff",
             "plan_down_mbps": 50,
@@ -3250,7 +3254,7 @@ async def test_un_client_declare_sur_une_seule_adresse_n_est_plus_propose(
     await saisie.create(
         {
             "reference": "unique",
-            "pop_name": "PoP Nord",
+            "pop_name": "PoP Altair",
             "address": "10.0.0.5",
             "plan_down_mbps": 50,
             "plan_up_mbps": 10,
@@ -3462,7 +3466,7 @@ async def test_supprimer_un_abonne_emporte_son_historique(
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
-    pop_id = await directory.ensure_pop("PoP Nord")
+    pop_id = await directory.ensure_pop("PoP Altair")
     sid = await directory.ensure_subscriber("parti", pop_id=pop_id)
     await writer.write_subscriber_metrics(
         [
@@ -3502,13 +3506,13 @@ async def test_la_recherche_instantanee_trouve_login_ip_mac_et_site(database: Da
     async with database.pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO topology_nodes (key, name, kind, mac, address) "
-            "VALUES ('mac:AA', 'Radio Nord', 'radio', 'AA:BB:CC:00:11:22', '10.9.9.9')"
+            "VALUES ('mac:AA', 'Radio Altair', 'radio', 'AA:BB:CC:00:11:22', '10.9.9.9')"
         )
     par_login = await repo.search_everything("test-t")
     assert par_login["subscribers"][0]["login"] == "test-ta"
     par_ip = await repo.search_everything("105.242")
     assert par_ip["subscribers"][0]["address"] == "100.100.105.242"
-    assert (await repo.search_everything("cc:00"))["devices"][0]["name"] == "Radio Nord"
+    assert (await repo.search_everything("cc:00"))["devices"][0]["name"] == "Radio Altair"
     assert (await repo.search_everything("taill"))["sites"][0]["name"] == "NAS-Tailladje"
 
 

@@ -31,7 +31,7 @@ def routeur() -> FakeRouterOsClient:
     client.neighbor_rows = [
         {
             "interface": "ether2",
-            "identity": "BH-Nord",
+            "identity": "BH-Altair",
             "mac-address": "DC:9F:DB:11:22:33",
             "platform": "Ubiquiti Networks Inc.",
         }
@@ -212,7 +212,7 @@ async def test_plan_complet_depuis_un_routeur_vierge(
 
     plan = await service.plan(
         "pop-test",
-        links=[LinkTarget(name="bh-nord", interface="ether2", measured_capacity_mbps=500)],
+        links=[LinkTarget(name="bh-altair", interface="ether2", measured_capacity_mbps=500)],
         subscribers=[
             SubscriberTarget(
                 login="dupont",
@@ -220,7 +220,7 @@ async def test_plan_complet_depuis_un_routeur_vierge(
                 address="10.20.0.10",
                 plan_down_mbps=100,
                 plan_up_mbps=20,
-                parent="freeqos-parent-bh-nord",
+                parent="freeqos-parent-bh-altair",
             )
         ],
     )
@@ -246,7 +246,7 @@ async def test_les_options_cake_de_la_config_atteignent_le_plan(
 
     plan = await service.plan(
         "pop-test",
-        links=[LinkTarget(name="bh-nord", interface="ether2", measured_capacity_mbps=500)],
+        links=[LinkTarget(name="bh-altair", interface="ether2", measured_capacity_mbps=500)],
         subscribers=[],
     )
 
@@ -794,7 +794,7 @@ async def test_une_application_automatique_ne_purge_jamais(
 # LA CAPACITE RADIO DOIT ATTEINDRE LA FILE PARENTE
 #
 # Le rapprochement backhaul <-> lien se faisait sur le NOM. Or le nom d'un lien
-# est l'identite que la radio annonce en MNDP ('BH-Nord'), et le nom d'un
+# est l'identite que la radio annonce en MNDP ('BH-Altair'), et le nom d'un
 # backhaul est le libelle saisi dans l'inventaire ('bh-1') : ils ne coincident
 # presque jamais. La file parente restait donc posee sur le debit negocie du
 # PORT -- le plafond du cable ethernet, pas celui de la parabole -- c'est-a-dire
@@ -810,7 +810,7 @@ class DepotLienRadio(DepotBoosts):
                 "source_key": "router:pop-test",
                 "target_key": "mac:DC:9F:DB:11:22:33",
                 # L'identite MNDP de la radio : PAS le nom du backhaul.
-                "target_name": "BH-Nord",
+                "target_name": "BH-Altair",
                 "target_mac": "DC:9F:DB:11:22:33",
                 "target_uisp_device_id": None,
                 "kind": "ethernet",
@@ -833,7 +833,7 @@ class MetriquesBackhaul(MetriquesMinimales):
 async def test_la_capacite_radio_rejoint_son_lien_par_la_mac(
     settings: Settings, routeur: FakeRouterOsClient
 ) -> None:
-    """Le backhaul s'appelle 'bh-1', la radio annonce 'BH-Nord' : seule la MAC
+    """Le backhaul s'appelle 'bh-1', la radio annonce 'BH-Altair' : seule la MAC
     les relie, et c'est la capacite MESUREE qui doit gagner."""
     service = make_service(
         settings,
@@ -902,7 +902,7 @@ async def test_l_egalite_des_noms_reste_un_recours(
         routeur,
         repository=SansIdentite(),
         metrics=MetriquesBackhaul(
-            [{"name": "BH-Nord", "pop_name": "PoP Test", "capacity_mbps": 310.0}]
+            [{"name": "BH-Altair", "pop_name": "PoP Test", "capacity_mbps": 310.0}]
         ),
     )
     await service.registry.reload()

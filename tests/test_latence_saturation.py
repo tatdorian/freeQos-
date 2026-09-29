@@ -167,7 +167,7 @@ def test_la_capacite_retenue_est_la_plus_petite_connue() -> None:
         "discovered_by": "pop-test",
         "interface": "ether2",
         "capacity_mbps": 200.0,
-        "target_name": "BH-Nord",
+        "target_name": "BH-Altair",
         "tx_bps": 150e6,
         "rx_bps": 20e6,
         "measure_fresh": True,
@@ -224,7 +224,7 @@ def test_les_plus_a_risque_viennent_en_premier() -> None:
 def test_l_api_des_points_de_saturation(client: TestClient) -> None:
     corps = client.get("/api/v1/capacity/hotspots?hours=1").json()
     [ligne] = corps["hotspots"]
-    assert ligne["name"] == "BH-Nord"
+    assert ligne["name"] == "BH-Altair"
     assert ligne["state"] == "saturated"  # 960 Mbps sur 1 Gbps
     assert corps["thresholds"] == {"busy": 0.70, "saturated": 0.90}
 

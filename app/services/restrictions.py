@@ -251,7 +251,7 @@ class RestrictionService:
             vises = [router_name]
 
         # Chaque routeur ne recoit que les regles qui le visent : une regle
-        # epinglee sur le PoP Nord ne doit pas apparaitre sur le PoP Sud.
+        # epinglee sur le PoP Altair ne doit pas apparaitre sur le PoP Vega.
         par_routeur: dict[str, list[RuleTarget]] = {nom: [] for nom in vises}
         for regle, cible in zip(actives, cibles, strict=True):
             for nom in self.routers_for(regle):

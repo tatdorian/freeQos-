@@ -137,9 +137,9 @@ async def test_un_routeur_fichier_masque_disparait_sans_avertissement(settings: 
     de la liste des ignores, sans editer le YAML."""
     settings.routers = [
         RouterConfig(name="garde", host="192.0.2.11", password="present"),
-        RouterConfig(name="pop-nord", host="192.0.2.12", password_env="MT_POP_NORD_PASSWORD"),
+        RouterConfig(name="pop-altair", host="192.0.2.12", password_env="MT_POP_ALTAIR_PASSWORD"),
     ]
-    repository = FakeRoutersRepository(hidden={"pop-nord"})
+    repository = FakeRoutersRepository(hidden={"pop-altair"})
     registry = make_registry(settings, repository)
 
     collectors = await registry.reload()

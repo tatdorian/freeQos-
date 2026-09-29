@@ -266,7 +266,7 @@ def test_un_blocage_pose_une_liste_et_deux_regles_une_par_sens() -> None:
     """UNE SEULE REGLE LAISSERAIT PASSER LE RETOUR. Pour du streaming, cela
     revient a ne rien bloquer : la liste est en destination quand le client
     emet, en source quand le service repond."""
-    plan = plan_restrictions("pop-nord", [cible()], RouterRestrictionState())
+    plan = plan_restrictions("pop-altair", [cible()], RouterRestrictionState())
 
     adresses = actions(plan, PATH_ADDRESS_LIST)
     assert len(adresses) == 1
@@ -288,7 +288,7 @@ def test_un_blocage_pose_une_liste_et_deux_regles_une_par_sens() -> None:
 
 def test_un_plafond_pose_un_marquage_et_une_file_par_sens() -> None:
     plan = plan_restrictions(
-        "pop-nord",
+        "pop-altair",
         [cible(action="limit", limit_down_mbps=5.0, limit_up_mbps=1.0)],
         RouterRestrictionState(),
     )
@@ -309,7 +309,7 @@ def test_un_plafond_pose_un_marquage_et_une_file_par_sens() -> None:
 def test_un_sens_sans_plafond_ne_pose_rien_de_ce_cote() -> None:
     """Marquer sans plafonner couterait du CPU routeur pour rien."""
     plan = plan_restrictions(
-        "pop-nord",
+        "pop-altair",
         [cible(action="limit", limit_down_mbps=5.0)],
         RouterRestrictionState(),
     )
@@ -319,7 +319,7 @@ def test_un_sens_sans_plafond_ne_pose_rien_de_ce_cote() -> None:
 
 def test_une_regle_bornee_a_des_clients_pose_leur_liste() -> None:
     plan = plan_restrictions(
-        "pop-nord",
+        "pop-altair",
         [cible(clients=("10.0.0.5/32",))],
         RouterRestrictionState(),
     )
@@ -330,7 +330,7 @@ def test_une_regle_bornee_a_des_clients_pose_leur_liste() -> None:
 
 
 def test_une_regle_pour_tous_ne_borne_pas_le_cote_client() -> None:
-    plan = plan_restrictions("pop-nord", [cible()], RouterRestrictionState())
+    plan = plan_restrictions("pop-altair", [cible()], RouterRestrictionState())
     montant = next(f.fields for f in actions(plan, PATH_FILTER) if f.fields.get("dst-address-list"))
     assert "src-address-list" not in montant
 
@@ -339,7 +339,7 @@ def test_l_ipv6_est_ecarte_et_le_plan_le_dit() -> None:
     """LES LISTES DE /ip/firewall SONT IPv4. Poser silencieusement la moitie
     d'une regle laisserait croire a une protection complete."""
     plan = plan_restrictions(
-        "pop-nord",
+        "pop-altair",
         [cible(destinations=("45.57.0.0/17", "2a00:86c0::/32"))],
         RouterRestrictionState(),
     )
@@ -350,7 +350,7 @@ def test_l_ipv6_est_ecarte_et_le_plan_le_dit() -> None:
 def test_une_regle_sans_aucune_adresse_est_ecartee_avec_son_motif() -> None:
     """Un service sans bloc publie et jamais rencontre ne vise rien encore. Le
     dire evite de chercher pourquoi la regle 'ne marche pas'."""
-    plan = plan_restrictions("pop-nord", [cible(destinations=())], RouterRestrictionState())
+    plan = plan_restrictions("pop-altair", [cible(destinations=())], RouterRestrictionState())
     assert plan.is_empty
     assert plan.skipped and "no IPv4 address" in plan.skipped[0].reason
 
@@ -358,7 +358,7 @@ def test_une_regle_sans_aucune_adresse_est_ecartee_avec_son_motif() -> None:
 def test_une_liste_demesuree_est_refusee_plutot_que_posee() -> None:
     trop = tuple(f"203.0.113.{i}" for i in range(20))
     plan = plan_restrictions(
-        "pop-nord", [cible(destinations=trop)], RouterRestrictionState(), address_limit=5
+        "pop-altair", [cible(destinations=trop)], RouterRestrictionState(), address_limit=5
     )
     assert plan.is_empty
     assert plan.conflicts and "safety limit" in plan.conflicts[0].detail
@@ -371,7 +371,7 @@ def test_une_liste_demesuree_est_refusee_plutot_que_posee() -> None:
 
 def etat_pose(cible_posee: RuleTarget, adresses: list[str]) -> RouterRestrictionState:
     """Le routeur tel qu'il serait apres une pose complete de cette regle."""
-    plan = plan_restrictions("pop-nord", [cible_posee], RouterRestrictionState())
+    plan = plan_restrictions("pop-altair", [cible_posee], RouterRestrictionState())
     liste = [
         {
             ".id": f"*{i}",
@@ -391,7 +391,7 @@ def test_rien_ne_bouge_quand_rien_n_a_change() -> None:
     ferait autant d'ecritures inutiles sur des equipements de production."""
     depart = cible()
     etat = etat_pose(depart, ["45.57.0.0/17"])
-    plan = plan_restrictions("pop-nord", [depart], etat)
+    plan = plan_restrictions("pop-altair", [depart], etat)
     assert plan.is_empty
     assert plan.unchanged == 2
 
@@ -402,7 +402,7 @@ def test_une_adresse_nouvellement_decouverte_rejoint_la_liste() -> None:
     sans que personne ne reecrive la regle."""
     etat = etat_pose(cible(), ["45.57.0.0/17"])
     enrichie = cible(destinations=("45.57.0.0/17", "203.0.113.9"))
-    plan = plan_restrictions("pop-nord", [enrichie], etat)
+    plan = plan_restrictions("pop-altair", [enrichie], etat)
     ajouts = [a for a in actions(plan, PATH_ADDRESS_LIST) if a.verb == "add"]
     assert len(ajouts) == 1
     assert ajouts[0].fields["address"] == "203.0.113.9"
@@ -414,7 +414,7 @@ def test_une_adresse_qui_ne_releve_plus_du_service_sort_de_la_liste() -> None:
     etat = etat_pose(
         cible(destinations=("45.57.0.0/17", "203.0.113.9")), ["45.57.0.0/17", "203.0.113.9"]
     )
-    plan = plan_restrictions("pop-nord", [cible()], etat)
+    plan = plan_restrictions("pop-altair", [cible()], etat)
     retraits = [a for a in actions(plan, PATH_ADDRESS_LIST) if a.verb == "remove"]
     assert len(retraits) == 1
     assert "203.0.113.9" in retraits[0].name
@@ -425,7 +425,7 @@ def test_une_regle_retiree_emporte_ce_qu_elle_avait_pose() -> None:
     absente de l'interface mais toujours posee sur le routeur est le pire des
     etats : plus rien ne l'explique."""
     etat = etat_pose(cible(), ["45.57.0.0/17"])
-    plan = plan_restrictions("pop-nord", [], etat)
+    plan = plan_restrictions("pop-altair", [], etat)
     assert all(a.verb == "remove" for a in plan.actions)
     assert len(actions(plan, PATH_FILTER)) == 2
     assert len(actions(plan, PATH_ADDRESS_LIST)) == 1
@@ -443,7 +443,7 @@ def test_lever_une_regle_ne_retire_que_ses_propres_lignes() -> None:
     etat.address_list += [{**r, ".id": r[".id"] + "b"} for r in etat_autre.address_list]
     etat.filters += [{**r, ".id": r[".id"] + "b"} for r in etat_autre.filters]
 
-    plan = plan_lift("pop-nord", levee.rule_id, etat)
+    plan = plan_lift("pop-altair", levee.rule_id, etat)
 
     assert all(a.verb == "remove" for a in plan.actions)
     assert [a.path for a in plan.actions] == [PATH_FILTER, PATH_FILTER, PATH_ADDRESS_LIST]
@@ -451,7 +451,7 @@ def test_lever_une_regle_ne_retire_que_ses_propres_lignes() -> None:
 
 
 def test_lever_une_regle_absente_du_routeur_ne_fait_rien() -> None:
-    assert plan_lift("pop-nord", 42, etat_pose(cible(), ["45.57.0.0/17"])).is_empty
+    assert plan_lift("pop-altair", 42, etat_pose(cible(), ["45.57.0.0/17"])).is_empty
 
 
 def test_une_ligne_desactivee_a_la_main_est_reactivee() -> None:
@@ -459,7 +459,7 @@ def test_une_ligne_desactivee_a_la_main_est_reactivee() -> None:
     montrerait comme posee. Meme logique que pour les files."""
     etat = etat_pose(cible(), ["45.57.0.0/17"])
     etat.filters[0]["disabled"] = "true"
-    plan = plan_restrictions("pop-nord", [cible()], etat)
+    plan = plan_restrictions("pop-altair", [cible()], etat)
     corrections = [a for a in plan.actions if a.verb == "set"]
     assert len(corrections) == 1
     assert corrections[0].fields["disabled"] == "no"
@@ -472,7 +472,7 @@ def test_ce_qui_ne_porte_pas_notre_marque_n_est_jamais_touche() -> None:
         address_list=[{".id": "*9", "list": "clients-vip", "address": "10.9.0.0/24"}],
         filters=[{".id": "*A", "chain": "forward", "action": "drop", "comment": "a moi"}],
     )
-    plan = plan_restrictions("pop-nord", [], etat)
+    plan = plan_restrictions("pop-altair", [], etat)
     assert plan.is_empty
 
 

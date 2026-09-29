@@ -3926,17 +3926,36 @@ async function loadPops() {
       'router reports sessions.</div>';
     return;
   }
+  const orphelins = pops.filter((p) => p.declared === false);
   host.innerHTML =
     '<table><thead><tr><th>Site</th><th>Router</th><th class="num">Subscribers</th>' +
     '<th class="num">Backhauls</th><th></th></tr></thead><tbody>' +
     pops.map((p) => '<tr>' +
-      '<td><strong>' + esc(p.name) + '</strong></td>' +
+      '<td><strong>' + esc(p.name) + '</strong>' + (p.declared === false
+        ? ' <span class="badge warn" title="No router, antenna or client declares this site any more">' +
+          'no device</span>' : '') + '</td>' +
       '<td class="login">' + esc(p.router_host || '-') + '</td>' +
       '<td class="num">' + p.subscriber_count + '</td>' +
       '<td class="num">' + p.backhaul_count + '</td>' +
       '<td><div class="actions" style="justify-content:flex-end">' +
         '<button class="sm danger" data-del-pop="' + p.id + '">Delete</button>' +
-      '</div></td></tr>').join('') + '</tbody></table>';
+      '</div></td></tr>').join('') + '</tbody></table>' +
+    (orphelins.length
+      ? '<div class="actions" style="padding:.6rem .9rem"><span class="hint">' + orphelins.length +
+        ' site(s) no device declares: ' + esc(orphelins.map((p) => p.name).join(', ')) + '</span>' +
+        '<button class="sm danger" id="del-orphans">Delete sites without a device</button></div>'
+      : '');
+
+  const tousOrphelins = document.getElementById('del-orphans');
+  if (tousOrphelins) tousOrphelins.addEventListener('click', async () => {
+    if (!confirm('Permanently delete ' + orphelins.length + ' site(s) that no device declares?\n\n' +
+        orphelins.map((p) => p.name + ' (' + p.subscriber_count + ' subscriber(s))').join('\n') +
+        '\n\nTheir subscribers and measurement history are erased too.')) return;
+    try {
+      await api('/pops/orphans/delete?confirm=true', { method: 'POST' });
+      await loadRouters();
+    } catch (err) { alert(err.message); }
+  });
 
   host.querySelectorAll('[data-del-pop]').forEach((b) => {
     const pop = pops.find((p) => String(p.id) === b.dataset.delPop);
@@ -4205,6 +4224,9 @@ async function loadRouters() {
           : '<td style="font-size:.76rem;color:var(--muted)" data-model-for="' + esc(r.name) + '">' +
             esc(modeleConnu(r.name)) + '</td>') +
         '<td><div class="actions" style="justify-content:flex-end">' +
+          '<button class="sm primary" data-provision="' + esc(r.name) +
+            '" title="Create the CAKE types and queues, set up the NetFlow export, rebuild the tree">' +
+            'Set up</button>' +
           '<button class="sm" data-config="' + esc(r.name) +
             '" title="See the full config (/export) the controller reads">Config</button>' +
           (r.editable
@@ -4220,6 +4242,15 @@ async function loadRouters() {
 
   host.querySelectorAll('[data-config]').forEach((b) =>
     b.addEventListener('click', () => showRouterExport(b.dataset.config)));
+  host.querySelectorAll('[data-provision]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const sortie = document.getElementById('router-export');
+      try {
+        await api('/pops/provisioning/' + encodeURIComponent(b.dataset.provision), { method: 'POST' });
+      } catch (err) { sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>'; return; }
+      sortie.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      followProvisioning(b.dataset.provision, sortie);
+    }));
   host.querySelectorAll('[data-probe]').forEach((b) =>
     b.addEventListener('click', () => probeRouter(b.dataset.probe, b)));
   host.querySelectorAll('[data-del]').forEach((b) =>
@@ -4370,14 +4401,14 @@ async function saveRouter(event) {
   try {
     const created = await api('/pops/routers', { method: 'POST', body: JSON.stringify(formPayload()) });
     showFormResult('<div class="notice ok"><b>' + esc(created.name) +
-      ' saved.</b></div>');
+      ' saved.</b> Setting it up now (CAKE, queues, NetFlow export, tree)...</div>' +
+      '<div id="provision-out"></div>');
     document.getElementById('router-form').reset();
     document.getElementById('f-username').value = 'qos-ro';
     document.getElementById('f-port').value = '8728';
     await loadRouters();
-    // Ajouter un routeur, c'est vouloir le voir dans l'arbre : on analyse sa
-    // conf dans la foulee plutot que d'attendre un clic ou le prochain cycle.
-    await buildTreeFromConfig(false);
+    // Le serveur met le routeur en service tout seul : on suit l'avancement.
+    followProvisioning(String(created.name), document.getElementById('provision-out'));
   } catch (err) {
     showFormResult('<div class="notice err">' + esc(err.message) + '</div>');
   } finally {
@@ -4399,6 +4430,58 @@ async function probeRouter(id, button) {
     button.disabled = false; button.textContent = original;
     await loadRouters();
   }
+}
+
+/** MISE EN SERVICE AUTOMATIQUE : le serveur deroule tout seul, a l'ajout
+ *  d'un equipement, ce que les cycles feraient en plusieurs minutes (types
+ *  CAKE, files des abonnes, export NetFlow, arbre). On en montre les etapes
+ *  au fur et a mesure, puis ce qui est REELLEMENT pose sur le routeur. */
+async function followProvisioning(nom, hote) {
+  if (!hote) return;
+  for (let essai = 0; essai < 150; essai++) {
+    let etat;
+    try { etat = await api('/pops/provisioning/' + encodeURIComponent(nom)); } catch (err) {
+      hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      return;
+    }
+    hote.innerHTML = renderProvisioning(etat);
+    if (etat.state !== 'running') {
+      if (etat.state === 'done') await loadRouters();
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
+function renderProvisioning(etat) {
+  if (!etat || etat.state === 'none') return '<div class="hint">No automatic setup has run yet.</div>';
+  const icone = (ok) => ok === true ? '<i class="sq ok"></i>' : ok === false ? '<i class="sq crit"></i>'
+    : '<i class="sq none"></i>';
+  const titre = {
+    running: 'Setting up ' + esc(etat.router) + '...',
+    done: esc(etat.router) + ' is set up.',
+    blocked: esc(etat.router) + ': setup blocked.',
+    failed: esc(etat.router) + ': setup finished with errors.',
+  }[etat.state] || esc(etat.state);
+  const r = etat.result || {};
+  const constat = etat.state === 'running' ? '' : r.error
+    ? '<div class="hint" style="display:block">Could not read the router back: ' + esc(r.error) + '</div>'
+    : '<div class="prov-result">' +
+      '<span><b>' + esc((r.cake_types || []).length) + '</b> CAKE type(s)' +
+        ((r.cake_types || []).length ? ' <code>' + esc(r.cake_types.join(', ')) + '</code>' : '') + '</span>' +
+      '<span><b>' + esc(r.managed_queues ?? 0) + '</b> queue(s) managed by freeQoS</span>' +
+      (r.netflow_export ? '<span>NetFlow export: <b>' + (r.netflow_export.enabled ? 'on' : 'off') + '</b>' +
+        (r.netflow_export.collector ? ' → ' + esc(r.netflow_export.collector) : '') + '</span>' : '') +
+      '</div>' +
+      (r.warnings || []).map((w) => '<div class="notice warn" style="margin-top:.5rem">' + esc(w) +
+        '</div>').join('');
+  const niveau = { done: 'ok', running: '', blocked: 'warn', failed: 'err' }[etat.state] || '';
+  return '<div class="notice ' + niveau + ' prov"><b>' + titre + '</b>' +
+    (etat.blocker ? '<div style="margin-top:.35rem">' + esc(etat.blocker) + '</div>' : '') +
+    '<ul class="prov-steps">' + (etat.steps || []).map((x) =>
+      '<li>' + icone(x.ok) + esc(x.step) + (x.detail ? ' <span class="hint">' + esc(x.detail) + '</span>' : '') +
+      '</li>').join('') + (etat.state === 'running' ? '<li class="hint">...</li>' : '') + '</ul>' +
+    constat + '</div>';
 }
 
 async function deleteRouter(id) {
@@ -5872,8 +5955,8 @@ function topoLinkConfident(l) {
  *  secours, cas tres courant -- il n'y a rien a comparer, et l'un devenait
  *  arbitrairement le parent de l'autre. Pire, le premier lien rencontre dans le
  *  tableau gagnait : un PoP deja rattache a un voisin ignorait ensuite son
- *  vrai lien vers le coeur. Resultat : une CHAINE (coeur > PoP Nord > PoP Sud)
- *  la ou il fallait un arbre (coeur > PoP Nord, PoP Sud).
+ *  vrai lien vers le coeur. Resultat : une CHAINE (coeur > PoP Altair > PoP Vega)
+ *  la ou il fallait un arbre (coeur > PoP Altair, PoP Vega).
  *
  *  On construit donc le voisinage NON ORIENTE, puis on derive l'arbre par un
  *  parcours en largeur qui part du haut de la hierarchie. Chaque case est

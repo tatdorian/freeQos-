@@ -14,7 +14,7 @@ from app.services.radio import radio_issues, station_issues
 
 STATUT_AP = {
     "host": {
-        "hostname": "AP-Nord",
+        "hostname": "AP-Altair",
         "devmodel": "LiteAP AC",
         "fwversion": "v8.7.11",
         "uptime": 86400,

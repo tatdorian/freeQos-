@@ -163,7 +163,7 @@ class DepotQoe:
                 "key": LIEN,
                 "source_key": "router:pop-test",
                 "target_key": SECTEUR,
-                "target_name": "BH-Nord",
+                "target_name": "BH-Altair",
                 "interface": "ether2",
                 "capacity_mbps": self.capacity_mbps,
                 "discovered_by": "pop-test",
@@ -269,7 +269,7 @@ def make_service(
 def file_du_secteur(commandes: list[str]) -> str | None:
     """La commande qui porte la file du LIEN de secteur (le partage), pas celle
     d'un abonne."""
-    return next((c for c in commandes if "freeqos-parent-BH-Nord" in c), None)
+    return next((c for c in commandes if "freeqos-parent-BH-Altair" in c), None)
 
 
 async def test_un_secteur_degrade_produit_un_plan_puis_le_calme_n_en_produit_aucun(

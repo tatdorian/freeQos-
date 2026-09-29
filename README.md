@@ -774,7 +774,7 @@ routeur — donc de ce que vous reconnaîtrez :
 | Interface | Site |
 | --- | --- |
 | `vlan-francophonie` | Francophonie |
-| `vlan-zone-nord` | Zone Nord |
+| `vlan-zone-altair` | Zone Altair |
 | `vlan101`, `ether1.101` | VLAN 101 |
 
 Une fiche de client ne porte qu'un numéro de VLAN ; c'est l'observation ARP qui connaît le
@@ -1381,7 +1381,7 @@ dans la file.** Le contrôleur rapproche un backhaul du lien qui le porte par l'
 physique** de la radio — son identifiant UISP ou sa MAC, les deux formes étant acceptées
 dans ce champ et comparées sans tenir compte de la casse ni des séparateurs. Le `name`, lui,
 est votre libellé (`bh-1`) alors que le lien porte l'identité que la radio annonce en
-MNDP/LLDP (`NanoBeam-Nord`) : les faire correspondre relèverait de la coïncidence. Sans
+MNDP/LLDP (`NanoBeam-Altair`) : les faire correspondre relèverait de la coïncidence. Sans
 identité renseignée, le rapprochement retombe sur l'égalité des deux noms, et à défaut la
 file parente garde le **débit négocié du port** — le plafond du câble ethernet, pas celui de
 la parabole. Un backhaul dont aucun lien ne correspond est signalé dans le journal.
