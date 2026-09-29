@@ -239,7 +239,11 @@ h3 { letter-spacing: -.015em; }
 /* Le tableau des gros consommateurs a six colonnes, les backhauls trois
    jauges : partager la largeur a parts egales cachait l'upload et la latence. */
 .dash-split { grid-template-columns: minmax(0, 1.7fr) minmax(300px, 1fr); }
-@media (max-width: 1280px) { .dash-split { grid-template-columns: 1fr; } }
+@media (max-width: 1280px) { .dash-split { grid-template-columns: minmax(0, 1fr); } }
+/* Un enfant de grille ne s'elargit jamais au-dela de sa colonne : sans cela un
+   tableau large poussait toute la page hors de l'ecran sur mobile, au lieu de
+   defiler dans son cadre. */
+.grid > * { min-width: 0; }
 
 .stat .label {
   font-size: .8rem; color: var(--muted); font-weight: 500; margin-bottom: .35rem;
@@ -1023,9 +1027,33 @@ body.gated header.top, body.gated main { visibility: hidden; }
 .radio-card details { margin-top: .5rem; font-size: .86rem; }
 .radio-card summary { cursor: pointer; color: var(--muted); margin-bottom: .4rem; }
 
-/* Assistant de support */
-.assistant-q{width:100%;box-sizing:border-box;resize:vertical;font:inherit;margin-bottom:.5rem}
-.assistant-hint{display:inline;margin-left:.5rem}
-.assistant-answer{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.5;margin-top:.75rem;
-  padding:.75rem;border-left:3px solid var(--accent, #3b82f6);background:var(--surface-2, rgba(127,127,127,.08));
-  border-radius:4px}
+/* ================================================ corrections d'affichage */
+/* Blocs de code : ils defilent dans leur cadre, jamais la page. */
+pre { max-width: 100%; overflow-x: auto; }
+
+@media (max-width: 1000px) {
+  /* Barre du haut sur deux lignes : marque, recherche et compte en haut, les
+     onglets dessous sur toute la largeur. La recherche n'est plus ecrasee a
+     trois lettres, le compte ne sort plus de l'ecran. */
+  header.top { flex-wrap: wrap; row-gap: .5rem; }
+  .global-search { flex: 1 1 160px; min-width: 0; order: 1; }
+  .brand { order: 0; }
+  .user-chip { order: 2; flex-wrap: nowrap; padding: 0; border-top: 0; min-width: 0; }
+  .user-chip .user-email { flex: 0 1 auto; max-width: 16ch; }
+  .sidebar-foot { order: 3; }
+  nav.tabs { order: 4; flex: 1 1 100%; }
+}
+@media (max-width: 760px) {
+  /* Les pastilles d'explication passent a la ligne plutot que de deborder. */
+  .mode { white-space: normal; border-radius: 10px; max-width: 100%; }
+  .user-chip .user-email { display: none; }
+}
+
+/* Boutons d'une ligne de tableau : cote a cote, jamais empiles (chaque ligne
+   d'abonne triplait de hauteur). */
+.sticky-actions .actions { flex-wrap: nowrap; }
+.sticky-actions { white-space: nowrap; }
+
+/* Clients detectes, non declares */
+.cand-banner .cand-list { display: flex; flex-wrap: wrap; gap: .4rem .9rem; margin-top: .45rem; }
+.cand-banner .cand { display: inline-flex; align-items: center; gap: .35rem; }

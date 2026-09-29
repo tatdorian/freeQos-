@@ -418,7 +418,7 @@ async def test_un_abonne_sans_routeur_est_nomme_comme_tel(
     rapport = await service.enforce_subscriber(login="inconnu-au-bataillon", author="test")
 
     assert rapport["state"] == "sans-routeur"
-    assert "aucun routeur" in rapport["reason"]
+    assert "no router" in rapport["reason"]
 
 
 async def test_retirer_le_plafond_repousse_le_plan_souscrit(
@@ -515,7 +515,7 @@ async def test_un_routeur_muet_coute_une_ligne_pas_la_page(
     audit = await service.limit_audit(live=True)
 
     (routeur,) = audit["routers"]
-    assert "trop lent" in routeur["error"]
+    assert "too slow" in routeur["error"]
     # Surtout pas "0 plafond qui fuit" : on n'a rien verifie du tout.
     assert routeur["fasttrack"]["active"] is None
     assert routeur["queues"] == []

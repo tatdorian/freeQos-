@@ -147,3 +147,13 @@ def test_un_reglage_absurde_est_refuse_au_chargement(champ: str, valeur: float, 
     rien, un plancher a zero autoriserait a couper un secteur."""
     with pytest.raises(ValidationError, match=motif):
         Settings(_env_file=None, **{champ: valeur})
+
+
+def test_un_routers_file_vide_ne_bloque_pas_le_demarrage() -> None:
+    """ROUTERS_FILE= laisse vide dans .env : Path('') etait le repertoire
+    courant, et le controleur ne demarrait plus (IsADirectoryError)."""
+    from app.config import Settings
+
+    reglages = Settings(_env_file=None, routers_file="")
+    assert reglages.routers_file is None
+    assert Settings(_env_file=None, routers_file=".").routers == []

@@ -293,6 +293,7 @@ def hotspot_rows(
     *,
     upstream: dict[str, tuple[str | None, str | None]],
     roles: dict[str, str],
+    live: dict[tuple[str, str], dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Chaque port mesure, avec ce qui y passe, ce qu'il peut porter, et la marge.
 
@@ -321,6 +322,7 @@ def hotspot_rows(
         routeur = str(mesure.get("router_name") or "")
         interface = str(mesure.get("interface") or "")
         lien = par_port.get((routeur, interface), {})
+        port = (live or {}).get((routeur, interface), {})
         _passerelle, sortie = upstream.get(routeur, (None, None))
         amont = bool(sortie) and sortie == interface
         role = roles.get(routeur, "pop")
@@ -340,6 +342,10 @@ def hotspot_rows(
         rx_now, tx_now = lien.get("rx_bps"), lien.get("tx_bps")
         if not lien.get("measure_fresh", True):
             rx_now = tx_now = None
+        # Sans lien de l'arbre (ou sans mesure fraiche du lien), le port lui-meme
+        # dit ce qui passe maintenant.
+        if rx_now is None and tx_now is None and port:
+            rx_now, tx_now = port.get("rx_bps"), port.get("tx_bps")
         down_now, up_now = (rx_now, tx_now) if amont else (tx_now, rx_now)
         pic_rx, pic_tx = mesure.get("peak_rx_bps"), mesure.get("peak_tx_bps")
         down_peak, up_peak = (pic_rx, pic_tx) if amont else (pic_tx, pic_rx)
@@ -372,7 +378,10 @@ def hotspot_rows(
             {
                 "router": routeur,
                 "interface": interface,
-                "name": lien.get("target_name") or mesure.get("link_name") or interface,
+                "name": lien.get("target_name")
+                or mesure.get("link_name")
+                or port.get("link_name")
+                or interface,
                 "side": cote,
                 "capacity_mbps": round(capacite, 1) if capacite else None,
                 "capacity_source": source,

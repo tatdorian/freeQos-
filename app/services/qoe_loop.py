@@ -159,7 +159,7 @@ def decide_sector(
         # n'est pas un secteur qui va bien.
         return verdict(
             ACTION_UNKNOWN,
-            "aucun abonne note sur la fenetre : rien a decider",
+            "no rated subscriber in the window: nothing to decide",
             avant,
             state.healthy_cycles,
         )
@@ -168,31 +168,31 @@ def decide_sector(
         if avant <= floor + EPSILON:
             return verdict(
                 ACTION_FLOOR,
-                f"{len(degrades)}/{len(notes)} abonne(s) sous {threshold:g} mais le "
-                f"secteur est deja au plancher ({floor:.0%}) : le goulot n'est pas "
-                "ici, il faut de la capacite",
+                f"{len(degrades)}/{len(notes)} subscriber(s) under {threshold:g} but the "
+                f"sector is already at its floor ({floor:.0%}): the bottleneck is not "
+                "here, capacity is needed",
                 floor,
                 0,
             )
         apres = round(max(floor, avant - step), 4)
         return verdict(
             ACTION_TIGHTEN,
-            f"{len(degrades)}/{len(notes)} abonne(s) sous {threshold:g} "
-            f"(pire {pire:g}) : partage du secteur resserre a {apres:.0%}",
+            f"{len(degrades)}/{len(notes)} subscriber(s) under {threshold:g} "
+            f"(worst {pire:g}): sector share tightened to {apres:.0%}",
             apres,
             0,
         )
 
     # Secteur sain.
     if avant >= 1.0 - EPSILON:
-        return verdict(ACTION_HOLD, "QoE dans les clous, aucun resserrage en cours", 1.0, 0)
+        return verdict(ACTION_HOLD, "QoE within bounds, no tightening in progress", 1.0, 0)
 
     cycles = state.healthy_cycles + 1
     if cycles < recovery_cycles:
         return verdict(
             ACTION_HOLD,
-            f"QoE retablie depuis {cycles}/{recovery_cycles} cycle(s) : "
-            f"le resserrage a {avant:.0%} est maintenu le temps du delai de garde",
+            f"QoE back to normal for {cycles}/{recovery_cycles} cycle(s): "
+            f"the tightening to {avant:.0%} is kept for the hold-off period",
             avant,
             cycles,
         )

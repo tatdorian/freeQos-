@@ -77,11 +77,11 @@ def _conflit(exc: asyncpg.UniqueViolationError, payload: dict[str, Any]) -> Dupl
     contrainte = str(getattr(exc, "constraint_name", "") or "")
     if "loopback" in contrainte:
         return DuplicateRouterError(
-            f"le loopback '{payload.get('loopback')}' est deja utilise par un autre "
-            f"routeur. Il identifie un routeur et un seul : verifiez lequel des deux "
-            f"est mal declare."
+            f"loopback '{payload.get('loopback')}' is already used by another "
+            f"router. It identifies one router only: check which of the two "
+            f"is declared wrongly."
         )
-    return DuplicateRouterError(f"un routeur nomme '{payload.get('name')}' existe deja")
+    return DuplicateRouterError(f"a router named '{payload.get('name')}' already exists")
 
 
 class RoutersRepository:

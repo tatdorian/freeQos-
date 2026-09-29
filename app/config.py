@@ -99,8 +99,8 @@ class RouterConfig(BaseModel):
             raise ValueError(f"loopback invalide : {texte}") from exc
         if interface.network.prefixlen != interface.ip.max_prefixlen:
             raise ValueError(
-                f"loopback {texte} : un loopback est une adresse d'hote "
-                f"(/{interface.ip.max_prefixlen}), pas un reseau"
+                f"loopback {texte}: a loopback is a host address "
+                f"(/{interface.ip.max_prefixlen}), not a network"
             )
         if interface.ip.is_unspecified or interface.ip.is_loopback:
             raise ValueError(f"loopback inutilisable : {texte}")
@@ -134,14 +134,14 @@ class RouterConfig(BaseModel):
             value = os.environ.get(self.password_env)
             if value is None or value == "":
                 raise MissingSecretError(
-                    f"routeur '{self.name}': variable d'environnement "
-                    f"'{self.password_env}' absente ou vide"
+                    f"router '{self.name}': environment variable "
+                    f"'{self.password_env}' missing or empty"
                 )
             return value
         if self.password is not None:
             return self.password.get_secret_value()
         raise MissingSecretError(
-            f"routeur '{self.name}': ni 'password_env' ni 'password' n'est defini"
+            f"router '{self.name}': neither 'password_env' nor 'password' is set"
         )
 
 
@@ -227,13 +227,6 @@ class Settings(BaseSettings):
     auth_enabled: bool = True
     # Duree d'une session SANS activite : chaque requete la prolonge.
     session_ttl_hours: int = 168
-
-    # --- Assistant de support IA (optionnel) ---
-    # Cle de l'API Anthropic (console.anthropic.com). Vide = assistant coupe :
-    # rien ne quitte le controleur. Renseignee : la question et les mesures
-    # affichees (jamais un mot de passe) partent vers api.anthropic.com.
-    anthropic_api_key: SecretStr | None = None
-    assistant_model: str = "claude-opus-5-5"
 
     # --- Base de donnees ---
     database_url: str = "postgresql://qos:changeme@localhost:5432/qos"
@@ -649,13 +642,22 @@ class Settings(BaseSettings):
             raise ValueError("QOE_TRIM_STEP doit etre dans ]0, 0.5] (un cran de resserrage)")
         if not 0.1 <= self.qoe_trim_floor <= 1.0:
             raise ValueError(
-                "QOE_TRIM_FLOOR doit etre dans [0.1, 1.0] : la boucle ne coupe jamais un secteur"
+                "QOE_TRIM_FLOOR must be within [0.1, 1.0]: the loop never cuts a sector off"
             )
         if self.qoe_recovery_cycles < 1:
-            raise ValueError("QOE_RECOVERY_CYCLES doit valoir au moins 1")
+            raise ValueError("QOE_RECOVERY_CYCLES must be at least 1")
         if self.qoe_min_degraded_subscribers < 1:
             raise ValueError("QOE_MIN_DEGRADED_SUBSCRIBERS doit valoir au moins 1")
         return self
+
+    @field_validator("routers_file", mode="before")
+    @classmethod
+    def _chemin_vide(cls, value: Any) -> Any:
+        # ROUTERS_FILE= laisse vide dans .env veut dire "pas de fichier" ; Path('')
+        # deviendrait le repertoire courant et ferait echouer le demarrage.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @field_validator("log_level", mode="before")
     @classmethod
@@ -672,7 +674,7 @@ class Settings(BaseSettings):
         if self.routers_file is None:
             return self
         path = Path(self.routers_file)
-        if not path.exists():
+        if not path.is_file():
             # Absent = pas bloquant : la stack doit demarrer meme sans inventaire,
             # l'API de lecture et /health restent utiles.
             return self

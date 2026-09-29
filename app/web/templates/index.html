@@ -233,7 +233,7 @@
           </div>
           <div class="field">
             <label for="exp-pop">PoP</label>
-            <input id="exp-pop" maxlength="128" placeholder="North PoP">
+            <input id="exp-pop" maxlength="128" placeholder="Site name">
           </div>
         </div>
 
@@ -322,9 +322,6 @@
         <span class="mode" id="ins-count"></span>
       </div>
       <div class="grid stats" id="ins-stats"></div>
-
-      <h2>Ask the AI assistant about the network</h2>
-      <div class="card" id="ins-assistant"></div>
 
       <h2>At risk of leaving</h2>
       <div class="table-wrap" id="ins-risk"></div>
@@ -474,6 +471,10 @@
            reellement : un bandeau permanent finirait par ne plus se lire. -->
       <div id="limits-alert"></div>
 
+      <!-- Clients vus sur une VLAN et jamais declares : en evidence ici, pas
+           seulement dans un volet replie du formulaire. -->
+      <div id="sub-candidates-banner"></div>
+
       <div class="table-wrap" id="subscribers-table"></div>
     </section>
 
@@ -496,7 +497,7 @@
           <div class="row-3">
             <div class="field">
               <label for="f-name">PoP name</label>
-              <input id="f-name" name="name" required placeholder="pop-nord">
+              <input id="f-name" name="name" required placeholder="nas-site1">
             </div>
             <div class="field">
               <label for="f-host">Management address</label>
@@ -537,7 +538,7 @@
           <div class="row-3">
             <div class="field">
               <label for="f-pop-name">Site label</label>
-              <input id="f-pop-name" name="pop_name" placeholder="North PoP (optional)">
+              <input id="f-pop-name" name="pop_name" placeholder="Site name (optional)">
             </div>
             <div class="field">
               <label for="f-pattern">PPPoE interface pattern</label>
@@ -579,7 +580,7 @@
           <div class="row-3">
             <div class="field">
               <label for="a-name">Link name</label>
-              <input id="a-name" name="name" required placeholder="bh-nord">
+              <input id="a-name" name="name" required placeholder="bh-site1">
             </div>
             <div class="field">
               <label for="a-pop">Attached PoP</label>
@@ -665,7 +666,7 @@
           <option value="">All categories</option>
         </select>
         <input id="svc-search" placeholder="Address, name or organisation"
-               maxlength="128" style="max-width:320px">
+               maxlength="128" style="flex:0 1 300px;width:300px;max-width:100%;min-width:0">
         <span class="spacer"></span>
         <span class="mode" id="svc-count"></span>
       </div>

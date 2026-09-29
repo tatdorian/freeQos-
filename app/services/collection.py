@@ -237,7 +237,7 @@ class CollectionService:
                     collector.config.effective_pop_name, collector.config.host
                 )
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{collector.name}: PoP non resolu: {exc}")
+                errors.append(f"{collector.name}: PoP not resolved: {exc}")
                 logger.exception("Resolution du PoP impossible pour %s", collector.name)
                 continue
 
@@ -254,7 +254,7 @@ class CollectionService:
                         kind=KIND_PPPOE,
                     )
                 except Exception as exc:  # noqa: BLE001
-                    errors.append(f"{session.login}: abonne non resolu: {exc}")
+                    errors.append(f"{session.login}: subscriber not resolved: {exc}")
                     continue
                 self._known_logins.add(session.login)
 
@@ -360,7 +360,7 @@ class CollectionService:
         try:
             clients = await self.static_clients.load_enabled()
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"inventaire statique illisible: {exc}")
+            errors.append(f"static-IP inventory unreadable: {exc}")
             logger.exception("Lecture de l'inventaire des clients statiques impossible")
             return
         if not clients:
@@ -446,7 +446,7 @@ class CollectionService:
                         router_name=collector.name if collector is not None else None,
                     )
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{client.reference}: PoP non resolu: {exc}")
+                errors.append(f"{client.reference}: PoP not resolved: {exc}")
                 continue
 
             plan = None
@@ -461,7 +461,7 @@ class CollectionService:
                     client.reference, pop_id=pop_id, plan=plan, kind=KIND_STATIC
                 )
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{client.reference}: client statique non resolu: {exc}")
+                errors.append(f"{client.reference}: static-IP client not resolved: {exc}")
                 continue
 
             # Cle de suivi prefixee : elle ne peut pas entrer en collision avec
@@ -779,7 +779,7 @@ class CollectionService:
             try:
                 db_antennas = await self.antennas_provider.backhaul_configs()
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"antennes (base): {exc}")
+                errors.append(f"antennas (database): {exc}")
                 logger.exception("Liste des antennes airOS non lue")
 
         if not file_backhauls and not db_antennas:
@@ -800,7 +800,7 @@ class CollectionService:
                 )
                 samples.update(lot)
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"fournisseur de capacite: {exc}")
+                errors.append(f"capacity provider: {exc}")
                 logger.exception("Lecture de la capacite backhaul impossible")
 
         rows: list[tuple[int, BackhaulSample]] = []
@@ -817,7 +817,7 @@ class CollectionService:
                     nominal_capacity_mbps=config.nominal_capacity_mbps,
                 )
             except Exception as exc:  # noqa: BLE001
-                errors.append(f"{config.name}: backhaul non resolu: {exc}")
+                errors.append(f"{config.name}: backhaul not resolved: {exc}")
                 continue
             rows.append((backhaul_id, sample))
 
@@ -860,7 +860,7 @@ class CollectionService:
                 try:
                     await self.path_prober.probe(self.collectors)
                 except Exception as exc:  # noqa: BLE001
-                    errors.append(f"latence par segment: {exc}")
+                    errors.append(f"latency by segment: {exc}")
                     logger.exception("Sonde de latence par segment impossible")
 
         result = RunResult(

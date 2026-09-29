@@ -82,7 +82,7 @@ class TrafficRulesRepository:
                 rule_id,
             )
         if row is None:
-            raise RuleNotFoundError(f"regle {rule_id} inconnue")
+            raise RuleNotFoundError(f"unknown rule {rule_id}")
         return _decode(dict(row))
 
     async def create(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -114,7 +114,7 @@ class TrafficRulesRepository:
                     valeurs.get("note"),
                 )
         except asyncpg.UniqueViolationError as exc:
-            raise RuleConflictError(f"une regle s'appelle deja '{payload.get('name')}'") from exc
+            raise RuleConflictError(f"a rule is already named '{payload.get('name')}'") from exc
         return _decode(dict(row))
 
     async def update(self, rule_id: int, payload: dict[str, Any]) -> dict[str, Any]:
@@ -138,16 +138,16 @@ class TrafficRulesRepository:
                     *champs.values(),
                 )
         except asyncpg.UniqueViolationError as exc:
-            raise RuleConflictError(f"une regle s'appelle deja '{payload.get('name')}'") from exc
+            raise RuleConflictError(f"a rule is already named '{payload.get('name')}'") from exc
         if row is None:
-            raise RuleNotFoundError(f"regle {rule_id} inconnue")
+            raise RuleNotFoundError(f"unknown rule {rule_id}")
         return _decode(dict(row))
 
     async def delete(self, rule_id: int) -> None:
         async with self._pool.acquire() as conn:
             resultat = await conn.execute("DELETE FROM traffic_rules WHERE id = $1", rule_id)
         if resultat.endswith(" 0"):
-            raise RuleNotFoundError(f"regle {rule_id} inconnue")
+            raise RuleNotFoundError(f"unknown rule {rule_id}")
 
     async def record_apply(self, rule_id: int, *, state: str, detail: str) -> None:
         """Garde la trace du dernier passage sur les routeurs.

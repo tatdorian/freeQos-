@@ -61,7 +61,7 @@ def grade_for_bloat(bloat_ms: float) -> str:
 def _quantile(valeurs_triees: list[float], q: float) -> float:
     """Quantile par interpolation lineaire. ``valeurs_triees`` doit etre trie."""
     if not valeurs_triees:
-        raise ValueError("quantile d'une liste vide")
+        raise ValueError("quantile of an empty list")
     if len(valeurs_triees) == 1:
         return valeurs_triees[0]
     q = min(1.0, max(0.0, q))

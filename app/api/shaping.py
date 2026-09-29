@@ -163,30 +163,30 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
             else None
         ),
         "sources": {
-            "neighbors": "/ip/neighbor (MNDP, LLDP, CDP) - adjacence physique",
-            "config_subnets": "/ip/address - liens routeur<->routeur par /30 partage",
-            "ethernet": "/interface/ethernet - debit negocie du port",
-            "addresses": "/ip/address - segment L3 du lien",
-            "uisp": "UISP /devices - liens radio et capacite du moment",
-            "pppoe": "/ppp/active caller-id - MAC du CPE, rattache l'abonne au secteur",
-            "counters": "/interface rx-byte,tx-byte - debit mesure du port qui porte le lien",
+            "neighbors": "/ip/neighbor (MNDP, LLDP, CDP) - physical adjacency",
+            "config_subnets": "/ip/address - router<->router links through a shared /30",
+            "ethernet": "/interface/ethernet - negotiated port speed",
+            "addresses": "/ip/address - L3 segment of the link",
+            "uisp": "UISP /devices - radio links and current capacity",
+            "pppoe": "/ppp/active caller-id - CPE MAC, ties the subscriber to its sector",
+            "counters": "/interface rx-byte,tx-byte - measured rate of the port carrying the link",
             "routes": (
-                "/ip/route - la route par defaut dit QUI EST AU-DESSUS. C'est la "
-                "hierarchie telle que le routeur l'applique, pas une deduction."
+                "/ip/route - the default route says WHO IS ABOVE. It is the "
+                "hierarchy as the router applies it, not a guess."
             ),
             "routing": (
-                "/routing/ospf/neighbor, /routing/bgp/session - adjacences "
-                "PROUVEES : deux routeurs qui echangent des routes, pas deux "
-                "equipements qui se voient sur un switch."
+                "/routing/ospf/neighbor, /routing/bgp/session - PROVEN "
+                "adjacencies: two routers exchanging routes, not two devices "
+                "that merely see each other on a switch."
             ),
             "stacking": (
                 "/interface/vlan, /interface/bridge/port, /interface/bonding - "
-                "par quel port physique sort un trafic donne, donc a quel lien "
-                "rattacher un client."
+                "which physical port a given traffic leaves through, hence which "
+                "link a client belongs to."
             ),
             "arp": (
-                "/ip/arp sur les VLAN sans PPPoE - presence d'une adresse non "
-                "declaree. Candidat a confirmer par un humain, jamais shape."
+                "/ip/arp on VLANs without PPPoE - presence of an undeclared "
+                "address. A candidate for a human to confirm, never shaped."
             ),
         },
     }
@@ -262,8 +262,8 @@ async def forget_stale(
         "forgotten_links": compte["links"],
         "older_than_minutes": older_than_minutes,
         "detail": (
-            "Les routeurs de l'inventaire et les liens poses a la main sont conserves. "
-            "Relancez la decouverte : ce qui existe encore reviendra."
+            "Inventory routers and links added by hand are kept. "
+            "Run the discovery again: whatever still exists will come back."
         ),
     }
 
@@ -284,7 +284,7 @@ async def link_throughput(
     repo = _require_topology(container)
     lien = await repo.link(key)
     if lien is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lien inconnu : {key}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown link: {key}")
 
     series: list[dict[str, Any]] = []
     if lien.get("discovered_by") and lien.get("interface"):
@@ -318,7 +318,7 @@ async def link_live(key: str, container: ContainerDep) -> dict[str, Any]:
     repo = _require_topology(container)
     lien = await repo.link(key)
     if lien is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lien inconnu : {key}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown link: {key}")
 
     routeur, interface = lien.get("discovered_by"), lien.get("interface")
     if not routeur or not interface:
@@ -326,8 +326,8 @@ async def link_live(key: str, container: ContainerDep) -> dict[str, Any]:
             "key": key,
             "source": "aucune",
             "detail": (
-                "Ce lien n'est porte par aucun port de routeur "
-                "(adjacence declaree par UISP) : il n'y a pas de compteur a lire."
+                "No router port carries this link "
+                "(adjacency declared by UISP): there is no counter to read."
             ),
             "rx_bps": None,
             "tx_bps": None,
@@ -336,7 +336,7 @@ async def link_live(key: str, container: ContainerDep) -> dict[str, Any]:
     try:
         mesure = await container.collection.measure_link(routeur, interface)
     except KeyError:
-        detail = f"Routeur '{routeur}' absent de l'inventaire actif"
+        detail = f"Router '{routeur}' is not in the active inventory"
     except Exception as exc:  # noqa: BLE001 - on degrade, on ne casse pas
         detail = f"{type(exc).__name__}: {exc}"
         logger.warning("Mesure instantanee impossible sur %s/%s : %s", routeur, interface, exc)
@@ -365,15 +365,15 @@ async def link_live(key: str, container: ContainerDep) -> dict[str, Any]:
 def _origine_mesure(lien: dict[str, Any]) -> dict[str, Any]:
     partage = int(lien.get("interface_links") or 0)
     if not lien.get("interface"):
-        origine, note = "aucune", "Lien sans port local : aucun compteur d'octets."
+        origine, note = "aucune", "Link without a local port: no byte counter."
     elif partage > 1:
         origine, note = (
             "port-partage",
-            f"{partage} voisins sont vus sur {lien['interface']} : "
-            "le debit affiche est celui du port, pas celui de ce seul voisin.",
+            f"{partage} neighbours are seen on {lien['interface']}: "
+            "the rate shown is the port's, not this neighbour's alone.",
         )
     else:
-        origine, note = "port", f"Compteurs de {lien['interface']} sur {lien.get('discovered_by')}."
+        origine, note = "port", f"Counters of {lien['interface']} on {lien.get('discovered_by')}."
     return {"source": origine, "interface_links": partage, "note": note}
 
 
@@ -460,7 +460,7 @@ async def delete_link(key: str, container: ContainerDep) -> dict[str, Any]:
     repo = _require_topology(container)
     trouve = await repo.hide_link(key)
     if not trouve:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Lien inconnu : {key}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown link: {key}")
     return {"key": key, "hidden": True}
 
 
@@ -560,8 +560,7 @@ def _en_mbps(
     fournis = [(v, u) for v, u in ((mbps, "mbps"), (kbps, "kbps"), (gbps, "gbps")) if v is not None]
     if len(fournis) > 1:
         raise ValueError(
-            f"{champ} : une seule unite a la fois "
-            f"({', '.join(u for _, u in fournis)} fournis ensemble)"
+            f"{champ}: one unit at a time ({', '.join(u for _, u in fournis)} given together)"
         )
     if not fournis:
         return None
@@ -645,7 +644,7 @@ async def set_policy(
     return {
         "policy": enregistre,
         "enforcement": pose,
-        "next_step": "GET /shaping/limits pour verifier que le plafond est bien tenu",
+        "next_step": "GET /shaping/limits to check that the cap is held",
     }
 
 
@@ -783,10 +782,10 @@ async def build_shaping_plan(
     donnees["unparented_subscribers"] = len(orphelins)
     if orphelins:
         donnees["notes"] = [
-            f"{len(orphelins)} abonne(s) sans backhaul identifie : leur file est "
-            "creee sans parent. Le dernier km est bien shape, mais la contention "
-            "sur le backhaul ne l'est pas. Le rattachement vient de la jointure "
-            "entre le caller-id PPPoE et les stations UISP."
+            f"{len(orphelins)} subscriber(s) without an identified backhaul: their "
+            "queue is created without a parent. The last mile is shaped, but "
+            "contention on the backhaul is not. The attachment comes from joining "
+            "the PPPoE caller-id with the UISP stations."
         ]
     return donnees
 

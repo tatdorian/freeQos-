@@ -425,7 +425,7 @@ function uptime(seconds) {
   const s = Number(seconds);
   if (!s && s !== 0) return '-';
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-  if (d) return d + 'j ' + h + 'h';
+  if (d) return d + 'd ' + h + 'h';
   if (h) return h + 'h ' + m + 'm';
   return m + 'm';
 }
@@ -591,8 +591,11 @@ function renderThroughput(container, points, options) {
   });
   // Le sens de chaque moitie, ecrit dans le graphe : plus besoin de chercher
   // la legende pour savoir si le haut est le descendant.
-  [[M.top + 11, '↓ ' + legende.down, 'var(--down)'],
-    [M.top + ih - 4, '↑ ' + legende.up, 'var(--up)']].forEach(([yy, text, col]) => {
+  // Contre la ligne du zero, de part et d'autre : les pics sont aux extremites
+  // (en haut pour le descendant, en bas pour le montant), les etiquettes n'y
+  // chevauchent plus le chiffre du pic ni l'axe des temps.
+  [[zeroY - 5, '↓ ' + legende.down, 'var(--down)'],
+    [zeroY + 13, '↑ ' + legende.up, 'var(--up)']].forEach(([yy, text, col]) => {
     const t = svgEl('text', { class: 'axis-side', x: M.left + 6, y: yy, fill: col });
     t.textContent = text;
     svg.appendChild(t);
@@ -618,13 +621,17 @@ function renderThroughput(container, points, options) {
   svg.appendChild(svgEl('path', { d: line(up, yUp), fill: 'none', stroke: 'var(--up)', 'stroke-width': 1.8, 'stroke-linejoin': 'round' }));
 
   // Pic de chaque sens, marque et chiffre sur la courbe.
-  [[downPk, yDown, 'var(--down)', -7], [upPk, yUp, 'var(--up)', 14]].forEach(([vals, yFn, col, dy]) => {
+  // Le chiffre se pose A COTE du point (a droite, ou a gauche pres du bord) :
+  // dessous, celui du montant tombait sur l'axe des temps.
+  [[downPk, yDown, 'var(--down)'], [upPk, yUp, 'var(--up)']].forEach(([vals, yFn, col]) => {
     const iMax = vals.indexOf(Math.max(...vals));
     if (iMax < 0 || !vals[iMax]) return;
     svg.appendChild(svgEl('circle', { cx: x(iMax), cy: yFn(vals[iMax]), r: 3, fill: col }));
+    const aDroite = x(iMax) < W - 90;
     const t = svgEl('text', {
-      class: 'peak-label', x: x(iMax), y: yFn(vals[iMax]) + dy, fill: col,
-      'text-anchor': x(iMax) > W - 80 ? 'end' : x(iMax) < M.left + 60 ? 'start' : 'middle',
+      class: 'peak-label', x: x(iMax) + (aDroite ? 7 : -7),
+      y: Math.min(M.top + ih - 2, Math.max(M.top + 9, yFn(vals[iMax]) + 3)), fill: col,
+      'text-anchor': aDroite ? 'start' : 'end',
     });
     t.textContent = 'peak ' + bpsShort(vals[iMax]);
     svg.appendChild(t);
@@ -741,8 +748,11 @@ async function loadDashboard() {
       esc((overview.subscribers || 0) + ' known') ) +
     statCard('', 'Sold throughput', (overview.sold_down_mbps || 0).toFixed(0), 'Mbps',
       ratio === null ? 'no known plan' : ratio.toFixed(0) + '% used') +
-    statCard('', 'Backhaul capacity', (overview.backhaul_capacity_mbps || 0).toFixed(0), 'Mbps',
-      esc((overview.backhauls || 0) + ' link(s) measured'));
+    // Aucun backhaul declare : "0 Mbps" se lisait comme un lien en panne.
+    (overview.backhauls
+      ? statCard('', 'Backhaul capacity', (overview.backhaul_capacity_mbps || 0).toFixed(0), 'Mbps',
+        esc(overview.backhauls + ' link(s) measured'))
+      : statCard('', 'Backhaul capacity', '-', '', 'no radio backhaul declared'));
 
   // En parallele : la courbe et le top partent AVANT les chiffres de tete,
   // et chaque bloc s'affiche des que SA donnee arrive.
@@ -1187,6 +1197,13 @@ function renderExecSummary(host) {
       tendus.slice(0, 3).map(nomLien).join(', ')]);
   }
   if (notes.poor) faits.push(['crit', notes.poor + ' client(s) with a poor experience']);
+  // "Tout va bien" ne peut pas s'afficher quand la majorite des clients notes
+  // n'a qu'une experience moyenne : la tuile d'a cote disait "0 % good".
+  const notesConnues = notes.good + notes.fair + notes.poor;
+  if (notes.fair && notes.fair * 2 >= notesConnues) {
+    faits.push(['warn', notes.fair + ' of ' + notesConnues + ' client(s) with only a fair ' +
+      'experience (latency or bufferbloat)']);
+  }
   if (occupes.length) {
     faits.push(['warn', occupes.length + ' node(s) between 70 and 90%: ' + liste(occupes)]);
   }
@@ -1441,7 +1458,13 @@ function renderLatencySegments(host, data) {
     if (inet != null && gw != null && inet - gw > 60) {
       return '<span class="sq warn"></span>delay above the core (transit / internet)';
     }
-    if (gw != null && gw > 30) return '<span class="sq warn"></span>delay between this PoP and the core';
+    if (gw != null && gw > 30) {
+      // Le saut mesure est la passerelle par defaut : pour un PoP c'est le
+      // coeur, pour le coeur la passerelle, pour la passerelle le transitaire.
+      const vers = r.role === 'gateway' ? 'the transit provider'
+        : r.role === 'core' ? 'the gateway' : 'the core';
+      return '<span class="sq warn"></span>delay towards ' + vers;
+    }
     if (acc != null && r.access.p90_ms > 100) return '<span class="sq warn"></span>delay on the access side';
     if (pertes) return '<span class="sq warn"></span>packet loss upstream';
     if (gw == null && inet == null && acc == null) return '<span class="na">not measured yet</span>';
@@ -1449,7 +1472,8 @@ function renderLatencySegments(host, data) {
   };
   host.innerHTML = methode + '<table><thead><tr><th>Router</th>' +
     '<th class="num" title="PoP to its subscribers: median of their medians (p90 in the tooltip)">Access</th>' +
-    '<th class="num" title="PoP to its default gateway: the link towards the core">To core</th>' +
+    '<th class="num" title="Router to its default gateway: the next hop up (core for a PoP, ' +
+      'gateway for the core, transit provider for the gateway)">Next hop up</th>' +
     cibles.map((c) => '<th class="num">To ' + esc(c) + '</th>').join('') +
     '<th>Where</th></tr></thead><tbody>' +
     (data.routers || []).map((r) => {
@@ -1484,7 +1508,7 @@ function renderExecNotice(rttState, error, st) {
   const state = st || {};
   let html = '';
   if (error) {
-    html += '<div class="notice err"><b>Chargement partiel.</b> ' +
+    html += '<div class="notice err"><b>Partly loaded.</b> ' +
       esc(error.message) + '</div>';
   }
   if (state.noNodes && !error) {
@@ -2061,7 +2085,19 @@ async function loadTraffic() {
   ]);
 
   const exportEtat = await api('/netflow/export').catch(() => null);
-  flowNotice(flowDiagnostic(etat, exportEtat));
+  // Un exporteur NON DECLARE qui envoie : ses flux sont comptes, mais sans
+  // point de mesure ; les deux cartes du dessus restaient "Silent" a 0 B alors
+  // que des gigaoctets s'affichaient juste dessous.
+  const muets = (Array.isArray(exporteurs) ? exporteurs : [])
+    .filter((x) => x.vantage === 'unknown' && x.packets_seen);
+  const avisExport = muets.length
+    ? '<div class="notice warn"><b>' + muets.length + ' undeclared exporter(s) sending flows: ' +
+      muets.slice(0, 3).map((x) => '<code>' + esc(x.address) + '</code>').join(', ') + '.</b> ' +
+      'Their traffic is counted below but belongs to no vantage point: say where each one ' +
+      'measures (internet edge or PoP) in ' +
+      '<button type="button" class="sm" data-scroll-to="flow-exporters">Exporters</button></div>'
+    : '';
+  flowNotice(flowDiagnostic(etat, exportEtat) + avisExport);
   renderVantages(points, top);
   renderFlowStats(etat, top);
   renderFlowTop(top);
@@ -2902,7 +2938,7 @@ async function liveCheck(id) {
         esc(l.window_s) + ' s' : (sess ? 'interface not found' : 'no open session')),
   ];
   (l.queues || []).forEach((q) => lignes.push(ligne('Router, queue', q.rate_down_bps, q.rate_up_bps,
-    '<code>' + esc(q.name) + '</code> max ' + esc(q.max_limit || '-') + (q.disabled ? ' (disabled)' : ''))));
+    '<code>' + esc(q.name) + '</code> max ' + maxLimitText(q.max_limit) + (q.disabled ? ' (disabled)' : ''))));
   lignes.push(ligne('NetFlow (last window)', r.netflow ? r.netflow.tx_bps : null,
     r.netflow ? r.netflow.rx_bps : null, r.netflow ? '' : 'collector off'));
   lignes.push(ligne('Stored by freeQoS', r.stored ? r.stored.tx_bps : null, r.stored ? r.stored.rx_bps : null,
@@ -2916,56 +2952,6 @@ async function liveCheck(id) {
       '<th class="num">Download</th><th class="num">Upload</th><th></th></tr></thead><tbody>' +
       lignes.join('') + '</tbody></table></div>' +
     ((r.errors || []).length ? '<div class="notice warn">' + esc(r.errors.join(' ; ')) + '</div>' : '');
-}
-
-/** ASSISTANT DE SUPPORT : une question en clair, un diagnostic tire des
- *  mesures (abonne, latence, bufferbloat, radio, saturation). Le serveur lit
- *  tout ce qu'il sait et le transmet au modele ; sans cle API, la boite dit
- *  comment l'activer au lieu de disparaitre. */
-async function assistantBox(hote, subscriberId) {
-  if (!hote) return;
-  let etat;
-  try { etat = await api('/assistant/status'); } catch (err) { etat = { enabled: false }; }
-  if (!etat.enabled) {
-    hote.innerHTML = '<div class="hint" style="display:block">The AI assistant is off. Set ' +
-      '<code>ANTHROPIC_API_KEY</code> in <code>.env</code> (key from console.anthropic.com), then ' +
-      '<code>docker compose up -d</code>. It then answers support questions from the measurements.</div>';
-    return;
-  }
-  const exemple = subscriberId
-    ? 'e.g. The customer says video stutters every evening. Why?'
-    : 'e.g. Which sites will saturate first, and what should we do?';
-  hote.innerHTML = '<textarea class="assistant-q" rows="3" maxlength="2000" placeholder="' + esc(exemple) +
-      '"></textarea><div class="actions"><button class="sm primary assistant-go">Ask</button>' +
-      '<span class="hint assistant-hint">Sends the question and the measurements shown in freeQoS ' +
-      '(no passwords) to ' + esc(etat.model) + '.</span></div><div class="assistant-out"></div>';
-  const zone = hote.querySelector('.assistant-q');
-  const bouton = hote.querySelector('.assistant-go');
-  const sortie = hote.querySelector('.assistant-out');
-  const poser = async () => {
-    const question = zone.value.trim();
-    if (question.length < 3) { zone.focus(); return; }
-    bouton.disabled = true;
-    sortie.innerHTML = '<div class="hint" style="display:block">Reading the network' +
-      (subscriberId ? ' and this subscriber on the router' : '') + ', then analysing...</div>';
-    try {
-      const r = await api('/assistant', {
-        method: 'POST',
-        body: JSON.stringify({ question, subscriber_id: subscriberId || null }),
-      });
-      const manques = Object.keys((r.context || {}).unavailable_data || {});
-      sortie.innerHTML = '<div class="assistant-answer">' + esc(r.answer) + '</div>' +
-        (manques.length ? '<div class="hint" style="display:block">Data not available for this ' +
-          'answer: ' + esc(manques.join(', ')) + '.</div>' : '');
-    } catch (err) {
-      sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
-    }
-    bouton.disabled = false;
-  };
-  bouton.addEventListener('click', poser);
-  zone.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) poser();
-  });
 }
 
 /** L'etat du cycle de mesure des abonnes, en tete de leur liste : un debit
@@ -2985,8 +2971,34 @@ async function renderSubscriberCycles() {
     '</span><span class="pct-hint">Click a subscriber, then "Measure on the router now" to compare with the router.</span></div>';
 }
 
+/** Clients a IP fixe DETECTES sur une VLAN et pas encore declares. Ils ne
+ *  sont ni mesures ni brides tant qu'on ne les declare pas : les laisser dans
+ *  un volet replie revenait a ne jamais les voir. */
+async function renderCandidatesBanner() {
+  const hote = document.getElementById('sub-candidates-banner');
+  if (!hote) return;
+  let data;
+  try { data = await api('/static-clients/candidates'); } catch (err) { hote.innerHTML = ''; return; }
+  const cands = (data && data.enabled && data.candidates) || [];
+  if (!cands.length) { hote.innerHTML = ''; return; }
+  hote.innerHTML = '<div class="notice warn cand-banner"><b>' + cands.length +
+    ' client(s) seen on a VLAN, not declared yet</b> &mdash; not measured nor shaped until declared.' +
+    '<div class="cand-list">' + cands.slice(0, 6).map((c, i) =>
+      '<span class="cand"><code>' + esc(c.address) + '</code> ' + esc(c.vlan_interface || '') +
+      (c.pop_name ? ' &middot; ' + esc(c.pop_name) : '') +
+      ' <button class="sm primary" data-cand="' + i + '">Declare</button></span>').join('') +
+    (cands.length > 6 ? '<span class="hint">+' + (cands.length - 6) + ' more in Add a client</span>' : '') +
+    '</div></div>';
+  hote.querySelectorAll('[data-cand]').forEach((b) => b.addEventListener('click', async () => {
+    document.getElementById('sc-panel').hidden = false;
+    scDepuisCandidat(cands[Number(b.dataset.cand)]);
+    await Promise.all([loadStaticClients(), loadVlanClients()]);
+  }));
+}
+
 async function loadSubscribers() {
   renderSubscriberCycles();
+  renderCandidatesBanner();
   let query = state.subSearch ? '&search=' + encodeURIComponent(state.subSearch) : '';
   if (state.subPop) query += '&pop_id=' + encodeURIComponent(state.subPop);
   if (state.subKind) query += '&kind=' + encodeURIComponent(state.subKind);
@@ -3037,6 +3049,9 @@ async function loadSubscribers() {
 
   const parLogin = {};
   (boosts || []).forEach((b) => { if (b.scope === 'subscriber') parLogin[b.target_key] = b; });
+  // Retenu pour le panneau Boost : "Remove the running boost" n'a de sens que
+  // s'il y en a un.
+  state.boostsParLogin = parLogin;
 
   const statiques = rows.filter((r) => r.kind === 'static').length;
   const sansMesure = rows.filter((r) => !r.ts).length;
@@ -3053,8 +3068,14 @@ async function loadSubscribers() {
   if (bloat && bloat.summary && bloat.summary.measured) {
     const dist = bloat.summary.distribution || {};
     const mauvais = (dist.D || 0) + (dist.F || 0);
+    // "all good" seulement si tout est note A ou mieux : avec des B et des C a
+    // l'ecran (+30 a +90 ms sous charge), le resume se contredisait.
+    const bons = (dist['A+'] || 0) + (dist.A || 0);
+    const moyens = bloat.summary.measured - bons - mauvais;
     compte += ' · bufferbloat: ' + bloat.summary.measured + ' measured' +
-      (mauvais ? ', ' + mauvais + ' degraded' : ', all good') +
+      (mauvais ? ', ' + mauvais + ' degraded' : '') +
+      (moyens > 0 ? ', ' + moyens + ' fair (B/C)' : '') +
+      (!mauvais && moyens <= 0 ? ', all good' : '') +
       (bloat.summary.worst_bloat_ms ? ' (worst +' + bloat.summary.worst_bloat_ms + ' ms)' : '');
   } else if (bloat && bloat.rtt_enabled === false) {
     // Sonde coupee : sans RTT la note ne PEUT pas exister. Le dire, plutot que
@@ -3255,7 +3276,7 @@ function kindBadge(kind) {
     return '<span class="badge" title="Static-IP client, declared by hand. ' +
       'No session: its address comes from its record.">static IP</span>';
   }
-  return '<span class="badge ok" title="Session PPPoE decouverte sur le routeur">PPPoE</span>';
+  return '<span class="badge ok" title="PPPoE session found on the router">PPPoE</span>';
 }
 
 /* =====================================================================
@@ -3458,7 +3479,7 @@ async function scRecensement() {
       return '<tr>' +
         '<td class="login"><code>' + esc(cl.address) + '</code>' +
           ((cl.routed_prefixes || []).length
-            ? ' <span class="badge" title="bloc route derriere cette adresse">+ ' +
+            ? ' <span class="badge" title="block routed behind this address">+ ' +
               esc(cl.routed_prefixes.join(', ')) + '</span>' : '') +
         '</td>' +
         '<td style="color:var(--faint)">' + esc(cl.mac || '-') + '</td>' +
@@ -3823,7 +3844,7 @@ async function scSupprimer(id, fiches) {
 async function openSubscriber(id) {
   const root = document.getElementById('drawer-root');
   root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
-    '<div class="empty">Chargement...</div></div>';
+    '<div class="empty">Loading...</div></div>';
   root.querySelector('.drawer-backdrop').addEventListener('click', closeDrawer);
 
   try {
@@ -3834,7 +3855,7 @@ async function openSubscriber(id) {
       '<button class="sm" id="drawer-close">Close</button></div>' +
       '<div class="grid stats" style="margin-bottom:1rem">' +
         statCard('', 'PoP', esc(s.pop_name || '-'), '', '') +
-        statCard('', 'Limite appliquee',
+        statCard('', 'Applied limit',
           s.effective_down_mbps
             ? esc(mbps(s.effective_down_mbps) + ' / ' + mbps(s.effective_up_mbps || 0))
             : '-',
@@ -3872,11 +3893,9 @@ async function openSubscriber(id) {
       '<h2>Live check</h2><div class="card"><div class="actions">' +
         '<button class="sm primary" id="sub-live-btn">Measure on the router now (2 s)</button></div>' +
         '<div id="sub-live"></div></div>' +
-      '<h2>Last hour</h2><div class="card"><div id="sub-chart"></div></div>' +
-      '<h2>AI assistant</h2><div class="card" id="sub-assistant"></div>';
+      '<h2>Last hour</h2><div class="card"><div id="sub-chart"></div></div>';
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
     document.getElementById('sub-live-btn').addEventListener('click', () => liveCheck(id));
-    assistantBox(document.getElementById('sub-assistant'), id);
     renderThroughput(document.getElementById('sub-chart'),
       data.points.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_bps_max, rx_bps: p.rx_bps_max, subscribers: p.samples })));
   } catch (err) {
@@ -3911,13 +3930,13 @@ async function loadPops() {
       '<td class="num">' + p.subscriber_count + '</td>' +
       '<td class="num">' + p.backhaul_count + '</td>' +
       '<td><div class="actions" style="justify-content:flex-end">' +
-        '<button class="sm danger" data-del-pop="' + p.id + '">Supprimer</button>' +
+        '<button class="sm danger" data-del-pop="' + p.id + '">Delete</button>' +
       '</div></td></tr>').join('') + '</tbody></table>';
 
   host.querySelectorAll('[data-del-pop]').forEach((b) => {
     const pop = pops.find((p) => String(p.id) === b.dataset.delPop);
     b.addEventListener('click', async () => {
-      if (!confirm('Supprimer definitivement "' + pop.name + '" ?\n\n' +
+      if (!confirm('Permanently delete "' + pop.name + '"?\n\n' +
           pop.subscriber_count + ' subscriber(s) and ' + pop.backhaul_count +
           ' backhaul(s) will be erased, along with ALL their measurement history.\n\n' +
           'Remove the router from the inventory too, otherwise the site is recreated ' +
@@ -3935,6 +3954,13 @@ async function loadPops() {
  *  Lue apres l'inventaire et sans le bloquer : c'est une commande par routeur,
  *  et un routeur lent ne doit pas retarder la page ou l'on vient justement
  *  d'ajouter un equipement. */
+/** Modele et version d'un routeur tels que la lecture de sante les a vus. */
+function modeleConnu(nom) {
+  const h = (state.routerHealth || {})[nom];
+  if (!h || !h.board_name) return '-';
+  return h.board_name + (h.version ? ' · ' + h.version : '');
+}
+
 async function loadRoutersHealth() {
   const host = document.getElementById('routers-health');
   let data;
@@ -3945,6 +3971,11 @@ async function loadRoutersHealth() {
     return;
   }
   const routeurs = data.routers || [];
+  state.routerHealth = {};
+  routeurs.forEach((r) => { if (r.reachable) state.routerHealth[r.router] = r; });
+  document.querySelectorAll('[data-model-for]').forEach((td) => {
+    td.textContent = modeleConnu(td.dataset.modelFor);
+  });
   if (!routeurs.length) {
     host.innerHTML = '<div class="empty">No router collected.</div>';
     return;
@@ -3986,24 +4017,26 @@ async function loadRoutersHealth() {
         '<td class="num">' +
           (ram === null || ram === undefined
             ? (r.free_memory
-              ? '<span class="hint">' + esc(bytesText(r.free_memory)) + ' libres</span>'
+              ? '<span class="hint">' + esc(bytesText(r.free_memory)) + ' free</span>'
               : '<span class="hint">-</span>')
             : badge(ram, 80, 90) +
               (r.free_memory ? '<span class="hint" style="display:block">' +
-                esc(bytesText(r.free_memory)) + ' libres</span>' : '')) + '</td>' +
+                esc(bytesText(r.free_memory)) + ' free</span>' : '')) + '</td>' +
         '<td class="num">' + esc(uptime(r.uptime_s)) + '</td>' +
         '<td style="color:var(--faint)">' + esc(r.version || '-') + '</td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
 }
 
-/** Octets en unite lisible. Les memoires de routeur se comptent en Mio. */
+/** Octets en unite lisible, dans la langue de l'interface (anglais) : "0 o"
+ *  et "3 Kio" y detonnaient. */
 function bytesText(octets) {
   const n = Number(octets) || 0;
-  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(1) + ' Gio';
-  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(0) + ' Mio';
-  if (n >= 1024) return (n / 1024).toFixed(0) + ' Kio';
-  return n + ' o';
+  if (n >= 1024 ** 4) return (n / 1024 ** 4).toFixed(2) + ' TiB';
+  if (n >= 1024 ** 3) return (n / 1024 ** 3).toFixed(1) + ' GiB';
+  if (n >= 1024 ** 2) return (n / 1024 ** 2).toFixed(0) + ' MiB';
+  if (n >= 1024) return (n / 1024).toFixed(0) + ' KiB';
+  return n + ' B';
 }
 
 /** SANTE RADIO : chaque AP (signal, bruit, SNR, CCQ, airtime, frequence) et
@@ -4159,8 +4192,13 @@ async function loadRouters() {
           ? '<span class="badge file">file inventory</span>'
           : '<span class="badge">interface</span>') + '</td>' +
         '<td>' + badge + '</td>' +
-        '<td style="font-size:.76rem;color:var(--muted)">' +
-          esc(r.board_name || '-') + (r.routeros_version ? ' &middot; ' + esc(r.routeros_version) : '') + '</td>' +
+        // Un routeur du fichier n'a pas de fiche en base : son modele vient de
+        // la lecture de sante, qui le connait deja ("-" alors qu'on sait).
+        (r.board_name
+          ? '<td style="font-size:.76rem;color:var(--muted)">' + esc(r.board_name) +
+            (r.routeros_version ? ' &middot; ' + esc(r.routeros_version) : '') + '</td>'
+          : '<td style="font-size:.76rem;color:var(--muted)" data-model-for="' + esc(r.name) + '">' +
+            esc(modeleConnu(r.name)) + '</td>') +
         '<td><div class="actions" style="justify-content:flex-end">' +
           '<button class="sm" data-config="' + esc(r.name) +
             '" title="See the full config (/export) the controller reads">Config</button>' +
@@ -4301,7 +4339,7 @@ async function testConnection() {
   try {
     const result = await api('/pops/routers/test', { method: 'POST', body: JSON.stringify(payload) });
     if (result.reachable) {
-      showFormResult('<div class="notice ok"><strong>Connexion etablie.</strong> ' +
+      showFormResult('<div class="notice ok"><strong>Connected.</strong> ' +
         esc(result.identity || 'router') + ' &middot; ' + esc(result.board_name || '?') +
         ' &middot; RouterOS ' + esc(result.version || '?') +
         '<span class="hint">' + esc(result.ppp_active_sessions) + ' active PPPoE session(s), incl. ' +
@@ -4327,7 +4365,7 @@ async function saveRouter(event) {
   try {
     const created = await api('/pops/routers', { method: 'POST', body: JSON.stringify(formPayload()) });
     showFormResult('<div class="notice ok"><b>' + esc(created.name) +
-      ' enregistre.</b></div>');
+      ' saved.</b></div>');
     document.getElementById('router-form').reset();
     document.getElementById('f-username').value = 'qos-ro';
     document.getElementById('f-port').value = '8728';
@@ -5230,7 +5268,7 @@ function renderRules(data) {
           ? '<span class="badge ok">active</span>' : '<span class="badge">suspended</span>') +
           '</td>' +
         '<td>' + (r.last_applied_at
-          ? esc(r.last_state || '') + ' <span class="hint">' +
+          ? esc(RULE_STATE[r.last_state] || r.last_state || '') + ' <span class="hint">' +
             esc(depuis(r.last_applied_at)) + '</span>'
           : '<span class="hint">never applied</span>') + '</td>' +
         '<td class="actions">' +
@@ -5266,6 +5304,12 @@ function applyNotice(html) {
  *  Suspendre ou supprimer une regle la LEVE aussitot. Dire "c'est fait" sans
  *  regarder le rapport ferait croire qu'un trafic repasse alors qu'un routeur
  *  injoignable -- ou l'ecriture coupee -- le bloque encore. */
+/** Etats d'une restriction : codes stockes en base (inchanges), libelles lus. */
+const RULE_STATE = {
+  'posee': 'applied', 'a poser': 'to apply', 'erreur': 'error', 'aucun routeur': 'no router',
+  'aucune adresse': 'no address yet', 'levee': 'lifted', 'indisponible': 'unavailable',
+};
+
 function liftNotice(action, rapport, fait) {
   fait = fait || 'lifted on the routers';
   if (!rapport || rapport.state === 'levee' || rapport.state === 'posee') {
@@ -7141,7 +7185,7 @@ async function openLink(key, minutes, silencieux) {
   const root = document.getElementById('drawer-root');
   if (!silencieux) {
     root.innerHTML = '<div class="drawer-backdrop"></div><div class="drawer">' +
-      '<div class="empty">Chargement...</div></div>';
+      '<div class="empty">Loading...</div></div>';
     root.querySelector('.drawer-backdrop').addEventListener('click', closeDrawer);
   } else if (!root.querySelector('.drawer')) {
     return;  // le tiroir a ete ferme entre-temps
@@ -7274,7 +7318,10 @@ async function openBandwidthEditor(scope, cible) {
     // relier ce qu'il saisit ici a la ligne qu'il verra dans /queue/simple.
     (scope === 'subscriber'
       ? (cible.last_ip
-          ? '<div class="notice">The queue will target <code>' + esc(cible.last_ip) +
+          ? '<div class="notice">' + (cible.plan_down_mbps
+              ? 'Current plan: <strong>' + esc(mbps(cible.plan_down_mbps)) + ' / ' +
+                esc(mbps(cible.plan_up_mbps || 0)) + '</strong>. '
+              : '') + 'The queue will target <code>' + esc(cible.last_ip) +
             '/32</code><span class="hint">That is the address of the current session, ' +
             're-read from the router when the plan is built. It is rewritten on its own ' +
             'if the subscriber reconnects with another IP.</span></div>'
@@ -7289,7 +7336,7 @@ async function openBandwidthEditor(scope, cible) {
         '<div class="field"><label for="bw-down">Download</label>' +
           '<div style="display:flex;gap:.4rem">' +
             '<input id="bw-down" type="number" min="0" step="any" value="' +
-            esc(dep.value) + '" placeholder="auto (plan or measured capacity)">' +
+            esc(dep.value) + '" placeholder="auto" title="auto = the plan (subscriber) or the measured capacity (link)">' +
             unitSelect('bw-down-unit', dep.unit) +
           '</div></div>' +
         '<div class="field"><label for="bw-up">Upload</label>' +
@@ -7410,7 +7457,9 @@ function openBoostEditor(abonne) {
       '<div id="boost-result"></div>' +
       '<div class="actions">' +
         '<button type="submit" class="primary">Start the boost</button>' +
-        '<button type="button" id="boost-clear" class="danger">Remove the running boost</button>' +
+        ((state.boostsParLogin || {})[abonne.login]
+          ? '<button type="button" id="boost-clear" class="danger">Remove the running boost</button>'
+          : '') +
       '</div>' +
     '</form>';
 
@@ -7478,7 +7527,8 @@ function openBoostEditor(abonne) {
     }
   });
 
-  document.getElementById('boost-clear').addEventListener('click', async () => {
+  const effacer = document.getElementById('boost-clear');
+  if (effacer) effacer.addEventListener('click', async () => {
     try {
       await api('/shaping/boosts/' + encodeURIComponent(abonne.login), { method: 'DELETE' });
       closeDrawer();
@@ -7596,7 +7646,7 @@ function maxLimitText(brut) {
   const up = lire(morceaux[0]);
   const down = lire(morceaux[1]);
   if (up === null || down === null) return esc(String(brut));
-  const mot = (n) => (n > 0 ? bpsText(n) : 'illimite');
+  const mot = (n) => (n > 0 ? bpsText(n) : 'unlimited');
   return '<span title="' + esc(String(brut)) + '">&uarr; ' + esc(mot(up)) +
     ' &nbsp;&darr; ' + esc(mot(down)) + '</span>';
 }
@@ -8224,9 +8274,6 @@ async function resetSetting(name) {
  *  chaque site peut encore prendre. Tout vient de ce qui est deja mesure :
  *  debit, plan, latence sous charge. */
 async function loadInsights() {
-  const boite = document.getElementById('ins-assistant');
-  // Une fois : recharger l'onglet ne doit pas effacer une reponse en cours de lecture.
-  if (boite && !boite.dataset.ready) { boite.dataset.ready = '1'; assistantBox(boite, null); }
   const jours = Number(document.getElementById('ins-days').value) || 7;
   const [abos, sites] = await Promise.all([
     api('/insights/subscribers?days=' + jours),
@@ -8621,3 +8668,11 @@ setInterval(() => {
   if (state.link) openLink(state.link.key, state.link.minutes, true);
 }, 10000);
 setInterval(() => { if (AUTH.ready) refreshHealth(); }, 15000);
+
+// Boutons "aller a" : un lien #ancre casserait le routage par #/onglet.
+document.addEventListener('click', (e) => {
+  const cible = e.target.closest && e.target.closest('[data-scroll-to]');
+  if (!cible) return;
+  const el = document.getElementById(cible.dataset.scrollTo);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});

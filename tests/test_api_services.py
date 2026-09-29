@@ -437,7 +437,7 @@ def test_une_regle_sans_critere_est_refusee_par_l_api(client: TestClient) -> Non
         "/api/v1/traffic-rules", json={"name": "vide", "services": [], "categories": []}
     )
     assert reponse.status_code == 422
-    assert "designer du trafic" in reponse.json()["detail"]
+    assert "must target some traffic" in reponse.json()["detail"]
 
 
 def test_un_service_inconnu_est_refuse_par_l_api(client: TestClient) -> None:
@@ -457,7 +457,7 @@ def test_vider_les_criteres_d_une_regle_existante_est_refuse(client: TestClient)
     cree = client.post("/api/v1/traffic-rules", json=regle()).json()
     reponse = client.patch(f"/api/v1/traffic-rules/{cree['id']}", json={"services": []})
     assert reponse.status_code == 422
-    assert "designer du trafic" in reponse.json()["detail"]
+    assert "must target some traffic" in reponse.json()["detail"]
 
 
 def test_suspendre_une_regle_ne_la_supprime_pas(client: TestClient) -> None:
@@ -505,7 +505,7 @@ def test_l_ecriture_reste_bloquee_tant_que_l_enforcement_est_coupe(client: TestC
     rapport = client.post("/api/v1/traffic-rules/apply?dry_run=false").json()
     assert rapport["enforcement_enabled"] is False
     assert rapport["state"] == "a poser"
-    assert "enforcement est desactive" in rapport["routers"][0]["reason"]
+    assert "enforcement is off" in rapport["routers"][0]["reason"]
 
 
 def test_le_plan_vise_la_liste_de_la_regle(client: TestClient) -> None:

@@ -248,8 +248,8 @@ async def clients_par_vlan(container: ContainerDep) -> dict[str, Any]:
         "vlans": declares,
         "unmatched": non_rattaches,
         "note": (
-            "Les clients VLAN sont declares a la main. 'unmatched' ne liste que "
-            "des adresses vues dans les flux : ce ne sont pas des clients."
+            "VLAN clients are declared by hand. 'unmatched' only lists "
+            "addresses seen in the flows: they are not clients."
         ),
     }
 
@@ -318,7 +318,7 @@ async def diagnose_candidates(
                 f"check the Devices tab."
             )
             if router_name
-            else "Aucun routeur n'est collecte.",
+            else "No router is being collected.",
         )
 
     rapports: list[dict[str, Any]] = []

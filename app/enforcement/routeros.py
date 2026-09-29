@@ -55,7 +55,7 @@ def write_config(config: RouterConfig, *, require_separate: bool = False) -> Rou
     if config.rw_username:
         if not config.rw_password_env:
             raise MissingWriteCredentialsError(
-                f"routeur '{config.name}' : rw_username est declare mais rw_password_env manque"
+                f"router '{config.name}': rw_username is set but rw_password_env is missing"
             )
         clone = config.model_copy(
             update={
@@ -236,8 +236,8 @@ async def apply_plan(
 
     if len(plan.actions) > max_actions:
         resultat.aborted_reason = (
-            f"{len(plan.actions)} actions depassent la limite de securite "
-            f"({max_actions}). Verifiez l'etat desire avant de forcer."
+            f"{len(plan.actions)} actions exceed the safety limit "
+            f"({max_actions}). Check the desired state before forcing."
         )
         logger.error("Plan refuse sur %s : %s", plan.router_name, resultat.aborted_reason)
         return resultat
@@ -261,8 +261,7 @@ async def apply_plan(
             logger.error("[%s] ECHEC %s -> %s", plan.router_name, action.command, message)
             if stop_on_error:
                 resultat.aborted_reason = (
-                    "interrompu apres un echec : les actions suivantes dependent "
-                    "peut-etre de celle-ci"
+                    "stopped after a failure: the next actions may depend on this one"
                 )
                 break
     return resultat

@@ -182,7 +182,7 @@ class NetflowService:
         except OSError as exc:
             # Port occupe, droits insuffisants sur un port < 1024 : ca doit se
             # dire fort et ne PAS empecher le reste du controleur de tourner.
-            self.last_error = f"ecoute impossible sur {self.bind}:{self.port} : {exc}"
+            self.last_error = f"cannot listen on {self.bind}:{self.port}: {exc}"
             logger.error("NetFlow : %s", self.last_error)
             return
         self._transport = transport
@@ -309,7 +309,7 @@ class NetflowService:
             try:
                 ecrites = await self.flows_repo.write_batch(lot)
             except Exception as exc:  # noqa: BLE001
-                self.last_error = f"ecriture impossible : {exc}"
+                self.last_error = f"write failed: {exc}"
                 logger.exception("Fenetre NetFlow non ecrite")
         if self.exporters_repo is not None and self.activity:
             instantane = {

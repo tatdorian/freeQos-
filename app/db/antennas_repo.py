@@ -56,7 +56,7 @@ class AntennasRepository:
                 antenna_id,
             )
         if row is None:
-            raise AntennaNotFoundError(f"antenne {antenna_id} inconnue")
+            raise AntennaNotFoundError(f"unknown antenna {antenna_id}")
         return dict(row)
 
     def _device_key(self, row: dict[str, Any]) -> str:
@@ -144,7 +144,7 @@ class AntennasRepository:
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise DuplicateAntennaError(
-                    f"une antenne nommee '{payload['name']}' existe deja"
+                    f"an antenna named '{payload['name']}' already exists"
                 ) from exc
         return dict(row)
 
@@ -187,16 +187,16 @@ class AntennasRepository:
                     *fields.values(),
                 )
             except asyncpg.UniqueViolationError as exc:
-                raise DuplicateAntennaError("ce nom d'antenne est deja pris") from exc
+                raise DuplicateAntennaError("this antenna name is already taken") from exc
         if row is None:
-            raise AntennaNotFoundError(f"antenne {antenna_id} inconnue")
+            raise AntennaNotFoundError(f"unknown antenna {antenna_id}")
         return dict(row)
 
     async def delete(self, antenna_id: int) -> None:
         async with self._pool.acquire() as conn:
             deleted = await conn.execute("DELETE FROM airos_antennas WHERE id = $1", antenna_id)
         if deleted.endswith(" 0"):
-            raise AntennaNotFoundError(f"antenne {antenna_id} inconnue")
+            raise AntennaNotFoundError(f"unknown antenna {antenna_id}")
 
     # --------------------------------------------------------- diagnostics
     async def record_success(self, antenna_id: int, capacity_mbps: float | None) -> None:

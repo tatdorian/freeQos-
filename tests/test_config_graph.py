@@ -539,3 +539,22 @@ async def test_sans_decouverte_le_rattachement_retombe_sur_le_secteur() -> None:
 
     assert len(abonnes) == 1
     assert abonnes[0].parent is None
+
+
+def test_l_interface_amont_se_deduit_des_adresses_quand_la_route_ne_la_dit_pas() -> None:
+    """Route par defaut sans '%ether1' : l'interface qui porte une adresse du
+    sous-reseau de la passerelle est la sortie. Sans elle, le port amont n'etait
+    ni marque 'uplink' ni relie a son voisin dans la vue des ports."""
+    from app.collectors.config_graph import interface_for_gateway
+
+    adresses = [
+        {"address": "10.255.0.10/32", "interface": "lo"},
+        {"address": "10.0.1.2/30", "interface": "ether1"},
+        {"address": "10.20.0.1/24", "interface": "vlan120"},
+    ]
+    assert interface_for_gateway("10.0.1.1", adresses) == "ether1"
+    assert interface_for_gateway("192.0.2.1", adresses) is None
+    assert interface_for_gateway(None, adresses) is None
+    # Deux interfaces sur le meme sous-reseau : on ne devine pas.
+    double = adresses + [{"address": "10.0.1.3/30", "interface": "ether9"}]
+    assert interface_for_gateway("10.0.1.1", double) is None

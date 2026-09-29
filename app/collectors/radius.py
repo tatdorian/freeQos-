@@ -69,7 +69,7 @@ class MockPlanProvider:
         overrides: dict[str, Plan] | None = None,
     ) -> None:
         if not catalog:
-            raise ValueError("Le catalogue de plans ne peut pas etre vide")
+            raise ValueError("The plan catalogue cannot be empty")
         self._catalog = tuple(catalog)
         self._overrides: dict[str, Plan] = dict(overrides or {})
 

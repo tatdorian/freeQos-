@@ -145,7 +145,7 @@ async def test_la_carte_dit_le_plafond_et_d_ou_il_vient(
     points = _par_label(await service.shaping_points())
 
     assert points["BH-Nord"]["down_mbps"] == pytest.approx(900.0)  # 1000 x 0.90
-    assert "capacite mesuree" in points["BH-Nord"]["source"]
+    assert "measured link capacity" in points["BH-Nord"]["source"]
     assert points["dupont"]["down_mbps"] == pytest.approx(100.0)
     assert points["dupont"]["source"] == "plan souscrit"
 
@@ -220,7 +220,7 @@ async def test_une_file_posee_a_la_main_figure_et_reste_intouchee(
     points = _par_label(await service.shaping_points())
 
     assert points["bride-camera"]["state"] == ShapingService.ETAT_MANUELLE
-    assert "jamais" in points["bride-camera"]["reason"]
+    assert "never" in points["bride-camera"]["reason"]
 
 
 # =========================================================================
@@ -280,7 +280,7 @@ async def test_enforcement_coupe_la_carte_le_dit_sur_chaque_point(
     carte = await service.shaping_points()
 
     assert carte["enforcement_enabled"] is False
-    assert "enforcement est desactive" in _par_label(carte)["dupont"]["reason"]
+    assert "enforcement is off" in _par_label(carte)["dupont"]["reason"]
 
 
 # =========================================================================

@@ -87,9 +87,9 @@ def validate(payload: dict[str, Any]) -> None:
     prefixes = list(payload.get("prefixes") or [])
     if not (services or categories or prefixes):
         raise InvalidRuleError(
-            "une restriction doit designer du trafic : choisissez un service, une "
-            "famille, ou saisissez au moins un bloc d'adresses. Sans critere, la "
-            "regle viserait tout internet."
+            "a restriction must target some traffic: choose a service, a "
+            "family, or enter at least one address block. Without a criterion, the "
+            "rule would target the whole internet."
         )
     inconnus = [s for s in services if s not in ipfinder.PAR_CLE]
     if inconnus:
@@ -101,12 +101,11 @@ def validate(payload: dict[str, Any]) -> None:
         payload.get("limit_down_mbps") or payload.get("limit_up_mbps")
     ):
         raise InvalidRuleError(
-            "un plafond sans debit ne plafonne rien : saisissez un debit "
-            "descendant, montant, ou les deux."
+            "a cap without a rate caps nothing: enter a download rate, an upload rate, or both."
         )
     if str(payload.get("scope") or "all") == "subscribers" and not payload.get("logins"):
         raise InvalidRuleError(
-            "portee 'abonnes choisis' sans aucun abonne : la regle ne viserait personne."
+            "scope 'chosen subscribers' without any subscriber: the rule would target nobody."
         )
 
 
@@ -225,7 +224,7 @@ class RestrictionService:
         for collector in self.registry.collectors:
             if collector.name == router_name:
                 return collector
-        raise KeyError(f"routeur '{router_name}' absent de l'inventaire actif")
+        raise KeyError(f"router '{router_name}' is not in the active inventory")
 
     # --------------------------------------------------------------- ecriture
     async def apply_all(
@@ -271,7 +270,7 @@ class RestrictionService:
         rapport["applied"] = sum(int(r["applied"]) for r in rapport["routers"])
 
         detail = (
-            "; ".join(f"{r['router']}: {r['state']}" for r in rapport["routers"]) or "aucun routeur"
+            "; ".join(f"{r['router']}: {r['state']}" for r in rapport["routers"]) or "no router"
         )
         etat = self._etat_global(rapport["routers"])
         rapport["state"] = etat
@@ -310,7 +309,7 @@ class RestrictionService:
             "router": router_name,
             "applied": 0,
             "state": ETAT_POSEE,
-            "reason": "restrictions deja conformes sur ce routeur",
+            "reason": "restrictions already in place on this router",
             "actions": [],
         }
         try:
@@ -334,10 +333,10 @@ class RestrictionService:
         if dry_run or not self.shaping.enforcement_enabled:
             ligne["state"] = ETAT_A_POSER
             ligne["reason"] = (
-                "l'enforcement est desactive : les commandes sont calculees, rien "
-                "n'est ecrit tant qu'il ne sera pas actif (Reglages > Shaping et ecriture)"
+                "enforcement is off: commands are computed, nothing is written "
+                "until it is on (Settings > Shaping and writing)"
                 if not self.shaping.enforcement_enabled
-                else "simulation : rien n'a ete ecrit"
+                else "simulation: nothing was written"
             )
             return ligne
         try:
@@ -359,7 +358,7 @@ class RestrictionService:
                 + ([resultat.aborted_reason] if resultat.aborted_reason else [])
             )
             return ligne
-        ligne["reason"] = f"{resultat.applied} commande(s) appliquee(s)"
+        ligne["reason"] = f"{resultat.applied} command(s) applied"
         return ligne
 
     async def lift(self, rule_id: int, *, author: str) -> dict[str, Any]:
@@ -385,8 +384,8 @@ class RestrictionService:
         if not self.shaping.enforcement_enabled:
             rapport["state"] = ETAT_A_POSER
             rapport["reason"] = (
-                "l'enforcement est desactive : rien n'est retire des routeurs tant "
-                "qu'il ne sera pas actif (Reglages > Shaping et ecriture)"
+                "enforcement is off: nothing is removed from the routers "
+                "until it is on (Settings > Shaping and writing)"
             )
             return rapport
         for nom in sorted(vises):
@@ -417,11 +416,11 @@ class RestrictionService:
         adresse de plus, le plan contient exactement une ligne : l'ajouter.
         """
         if self.rules_repo is None:
-            return {"state": "indisponible", "reason": "base non initialisee"}
+            return {"state": "indisponible", "reason": "database not initialised"}
         if not self.shaping.enforcement_enabled:
             # Inutile de lire quatre tables par routeur pour un plan qu'on ne
             # peut pas appliquer. L'interface, elle, calcule a la demande.
-            return {"state": ETAT_A_POSER, "reason": "enforcement desactive"}
+            return {"state": ETAT_A_POSER, "reason": "enforcement is off"}
         return await self.apply_all(author="system:restrictions", dry_run=False)
 
     def status(self) -> dict[str, Any]:

@@ -66,6 +66,9 @@ class InMemorySettingsRepository:
 class FakeRepository:
     """Repond ce que repondrait TimescaleDB, sans TimescaleDB."""
 
+    async def ports_live(self, *, max_age_s: int = 120) -> list[dict[str, Any]]:
+        return []
+
     async def list_pops(self) -> list[dict[str, Any]]:
         return [
             {
@@ -589,7 +592,7 @@ def test_serie_d_un_abonne(client: TestClient) -> None:
     assert body["bucket_seconds"] == 60
     assert body["points"][0]["tx_bps_avg"] == 40_000_000.0
     # La convention de sens est rappelee dans la reponse.
-    assert "upload abonne" in body["orientation"]
+    assert "subscriber upload" in body["orientation"]
 
 
 def test_serie_porte_la_note_de_bufferbloat(client: TestClient) -> None:
@@ -664,7 +667,7 @@ def test_throughput(client: TestClient) -> None:
     body = client.get("/api/v1/throughput?minutes=60&bucket_seconds=30").json()
     assert body["bucket_seconds"] == 30
     assert body["points"][0]["tx_bps"] == 40_000_000.0
-    assert "upload abonnes" in body["orientation"]
+    assert "subscribers upload" in body["orientation"]
 
 
 def test_network_tree(client: TestClient) -> None:

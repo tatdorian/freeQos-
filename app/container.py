@@ -63,6 +63,7 @@ from app.services.crypto import KeySource, SecretBox, load_or_create_key
 from app.services.intel import JOB_INTEL, IntelService
 from app.services.netflow_export import JOB_NETFLOW_EXPORT, NetflowExportService
 from app.services.netflow_service import JOB_NETFLOW, NetflowService
+from app.services.pop_cleanup import JOB_PURGE_POPS, purge_empty_pops
 from app.services.registry import RouterRegistry
 from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
 from app.services.rtt import PathProber, RttProber
@@ -140,8 +141,8 @@ def _build_airos_provider(settings: Settings) -> AirOsProvider:
         )
     if not targets:
         raise ValueError(
-            "BACKHAUL_PROVIDER=airos exige au moins un backhaul avec 'api_host' "
-            "(l'adresse de management de l'antenne Ubiquiti)"
+            "BACKHAUL_PROVIDER=airos needs at least one backhaul with 'api_host' "
+            "(the management address of the Ubiquiti antenna)"
         )
     logger.info("Capacite backhaul : airOS direct sur %d antenne(s)", len(targets))
     return AirOsProvider(targets, timeout_s=settings.airos_timeout_s)
@@ -550,7 +551,7 @@ async def build_container(settings: Settings) -> Container:
     # seulement l'affichage : le scheduler relit interval_s a chaque tour.
     runtime_config.on_interval_change = scheduler.set_interval
 
-    return Container(
+    conteneur = Container(
         settings=settings,
         database=database,
         writer=writer,
@@ -584,6 +585,14 @@ async def build_container(settings: Settings) -> Container:
         restrictions=restrictions,
     )
 
+    # PoPs vides que plus rien ne declare (routeur retire, essai jamais relie) :
+    # retires pour ne plus encombrer l'arbre et les listes.
+    async def purge_pops() -> None:
+        await purge_empty_pops(conteneur)
+
+    scheduler.add_job(JOB_PURGE_POPS, 600.0, purge_pops)
+    return conteneur
+
 
 async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Settings) -> None:
     """Amorce l'activation de la sonde RTT : base prioritaire, sinon RTT_ENABLED.
@@ -606,7 +615,7 @@ async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Set
                 FLAG_RTT,
                 settings.rtt_enabled,
                 updated_by="bootstrap",
-                reason="valeur initiale issue de RTT_ENABLED",
+                reason="initial value from RTT_ENABLED",
             )
         except Exception:  # noqa: BLE001
             pass
@@ -626,7 +635,7 @@ async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Set
                     FLAG_RTT,
                     True,
                     updated_by="bootstrap",
-                    reason="sonde activee par defaut (bufferbloat, QoE)",
+                    reason="probe on by default (bufferbloat, QoE)",
                 )
                 stored = True
                 logger.info("Sonde RTT activee : valeur initiale choisie par personne.")

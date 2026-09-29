@@ -137,13 +137,13 @@ def explain(match: PopMatch, declared: str | None, collectors: Sequence[Mikrotik
     une faute de frappe a l'aveugle.
     """
     connus = pop_names(collectors)
-    liste = ", ".join(f"'{nom}'" for nom in connus) or "aucun routeur n'est collecte"
+    liste = ", ".join(f"'{nom}'" for nom in connus) or "no router is being collected"
     if match.resolution == RESOLUTION_AMBIGUE:
         return (
-            f"Le PoP '{declared}' correspond a plusieurs PoP collectes a la casse et "
-            f"aux accents pres. Reprenez le nom exact : {liste}."
+            f"PoP '{declared}' matches several collected PoPs once case and "
+            f"accents are ignored. Use the exact name: {liste}."
         )
     return (
-        f"Aucun routeur collecte ne porte le PoP '{declared}'. Tant que ce sera le cas, "
-        f"ce client n'aura ni debit mesure ni file. PoP collectes : {liste}."
+        f"No collected router carries PoP '{declared}'. Until one does, "
+        f"this client gets neither a measured rate nor a queue. Collected PoPs: {liste}."
     )

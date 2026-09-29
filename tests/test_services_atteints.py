@@ -352,7 +352,7 @@ def test_une_regle_sans_aucune_adresse_est_ecartee_avec_son_motif() -> None:
     dire evite de chercher pourquoi la regle 'ne marche pas'."""
     plan = plan_restrictions("pop-nord", [cible(destinations=())], RouterRestrictionState())
     assert plan.is_empty
-    assert plan.skipped and "aucune adresse" in plan.skipped[0].reason
+    assert plan.skipped and "no IPv4 address" in plan.skipped[0].reason
 
 
 def test_une_liste_demesuree_est_refusee_plutot_que_posee() -> None:
@@ -361,7 +361,7 @@ def test_une_liste_demesuree_est_refusee_plutot_que_posee() -> None:
         "pop-nord", [cible(destinations=trop)], RouterRestrictionState(), address_limit=5
     )
     assert plan.is_empty
-    assert plan.conflicts and "limite de securite" in plan.conflicts[0].detail
+    assert plan.conflicts and "safety limit" in plan.conflicts[0].detail
 
 
 # =========================================================================
@@ -511,7 +511,7 @@ def test_une_regle_sans_critere_est_refusee() -> None:
     """ELLE VISERAIT TOUT INTERNET. Sur un routeur de sortie, l'appliquer
     couperait le reseau entier -- et la regle aurait l'air normale dans la
     liste."""
-    with pytest.raises(InvalidRuleError, match="designer du trafic"):
+    with pytest.raises(InvalidRuleError, match="must target some traffic"):
         validate({"name": "vide", "services": [], "categories": [], "prefixes": []})
 
 
@@ -521,12 +521,12 @@ def test_un_service_inconnu_du_catalogue_est_refuse() -> None:
 
 
 def test_un_plafond_sans_debit_est_refuse() -> None:
-    with pytest.raises(InvalidRuleError, match="plafond sans debit"):
+    with pytest.raises(InvalidRuleError, match="cap without a rate"):
         validate({"name": "x", "services": ["netflix"], "action": "limit"})
 
 
 def test_une_portee_par_abonne_sans_abonne_est_refusee() -> None:
-    with pytest.raises(InvalidRuleError, match="ne viserait personne"):
+    with pytest.raises(InvalidRuleError, match="would target nobody"):
         validate({"name": "x", "services": ["netflix"], "scope": "subscribers", "logins": []})
 
 

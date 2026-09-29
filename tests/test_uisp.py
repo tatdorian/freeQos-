@@ -389,3 +389,14 @@ async def test_db_airos_provider_relit_ses_antennes_a_chaque_cycle() -> None:
     antennes.clear()
     assert await provider.get_capacities(["bh"]) == {}
     await provider.aclose()
+
+
+def test_l_antenne_ne_passe_jamais_par_le_proxy_du_serveur(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """HTTPS_PROXY dans l'environnement : la requete vers une radio du reseau de
+    management partait au proxy, dont le 403 etait lu comme "identifiants
+    refuses". Aucune antenne n'etait joignable."""
+    from app.collectors.uisp import AirOsClient, AirOsTarget
+
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.invalid:3128")
+    client = AirOsClient(AirOsTarget(key="k", host="192.0.2.30", username="u", password="p"))
+    assert client._client.trust_env is False

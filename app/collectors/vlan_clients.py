@@ -116,14 +116,14 @@ def pppoe_interfaces(rows: Sequence[dict[str, Any]]) -> set[str]:
 # a l'exploitant ce qu'il peut VERIFIER sur son routeur, pas seulement que la
 # ligne a ete ecartee.
 GARDE = "retenu"
-GARDE_PERIMETRE = "retenu : adresse dans un sous-reseau client du PoP"
-REJET_DESACTIVEE = "entree ARP desactivee"
-REJET_INVALIDE = "entree ARP invalide"
-REJET_HORS_VLAN = "interface absente de /interface/vlan"
+GARDE_PERIMETRE = "kept: address in a client subnet of the PoP"
+REJET_DESACTIVEE = "ARP entry disabled"
+REJET_INVALIDE = "invalid ARP entry"
+REJET_HORS_VLAN = "interface not in /interface/vlan"
 REJET_VLAN_DESACTIVEE = "VLAN declaree mais desactivee dans la configuration"
 REJET_PPPOE = "cette interface heberge un serveur PPPoE"
-REJET_ADRESSE = "adresse inexploitable"
-REJET_SANS_MAC = "aucune MAC : l'adresse a ete cherchee, elle n'a pas repondu"
+REJET_ADRESSE = "unusable address"
+REJET_SANS_MAC = "no MAC: the address was looked up and did not answer"
 
 
 def _reseaux(prefixes: Sequence[str]) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:

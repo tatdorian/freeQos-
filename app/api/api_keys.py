@@ -72,8 +72,7 @@ async def create_key(payload: ApiKeyInput, container: ContainerDep) -> dict[str,
         **fiche,
         "secret": secret,
         "warning": (
-            "Ce secret ne sera plus jamais affiche. Copiez-le maintenant dans "
-            "le systeme qui doit appeler l'API."
+            "This secret will never be shown again. Copy it now into the system that calls the API."
         ),
     }
 

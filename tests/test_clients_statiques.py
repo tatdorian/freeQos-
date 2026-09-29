@@ -337,7 +337,7 @@ async def test_un_inventaire_illisible_ne_casse_pas_le_cycle_pppoe(
 
     assert [s.login for _, s in writer.subscriber_rows] == ["dupont"]
     assert not resultat.ok
-    assert any("inventaire statique" in e for e in resultat.errors)
+    assert any("static-IP inventory" in e for e in resultat.errors)
 
 
 async def test_sans_inventaire_le_comportement_est_inchange(settings: Settings) -> None:

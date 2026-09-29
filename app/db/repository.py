@@ -68,6 +68,33 @@ class MetricsRepository:
             )
         return _rows(records)
 
+    async def purge_empty_pops(self, *, keep: set[str], grace_minutes: int = 60) -> list[str]:
+        """Retire les PoPs VIDES que plus rien ne declare.
+
+        Un PoP reste en base quand son routeur quitte l'inventaire, ou quand il
+        venait d'un essai (un "PoP Nord", un "PoP Sud" saisis pour voir) : il
+        s'affiche alors partout -- arbre, listes, filtres -- sans rien porter.
+        Est retire un PoP qui n'a NI abonne NI backhaul, dont le nom n'est porte
+        par aucun routeur, antenne ou client declare (``keep``), et qui n'a pas
+        ete touche depuis ``grace_minutes`` : un site tout juste cree, dont les
+        abonnes arrivent au cycle suivant, n'est jamais emporte.
+        """
+        garde = sorted({n.strip().lower() for n in keep if n and n.strip()})
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                DELETE FROM pops p
+                 WHERE NOT EXISTS (SELECT 1 FROM subscribers s WHERE s.pop_id = p.id)
+                   AND NOT EXISTS (SELECT 1 FROM backhauls b WHERE b.pop_id = p.id)
+                   AND lower(p.name) <> ALL($1::text[])
+                   AND p.updated_at < now() - make_interval(mins => $2)
+                RETURNING p.name
+                """,
+                garde,
+                grace_minutes,
+            )
+        return sorted(str(r["name"]) for r in records)
+
     async def pop_sites(self) -> list[dict[str, Any]]:
         """Les sites et le ROUTEUR qui dessert chacun. Sans compteur, sans jointure.
 

@@ -122,8 +122,8 @@ async def test_une_base_illisible_produit_un_signal_exploitable() -> None:
     await registre.reload()
 
     assert len(registre.skipped) == 1
-    assert "inventaire en base illisible" in registre.skipped[0]["reason"]
-    assert "absents de la collecte" in registre.skipped[0]["reason"]
+    assert "database inventory unreadable" in registre.skipped[0]["reason"]
+    assert "missing from collection" in registre.skipped[0]["reason"]
 
 
 async def test_un_depot_sans_la_variante_detaillee_fonctionne_encore() -> None:

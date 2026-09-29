@@ -60,6 +60,8 @@ class Directory(Protocol):
 
     def forget_subscriber(self, login: str) -> None: ...
 
+    def clear_cache(self) -> None: ...
+
 
 class PgDirectory:
     """Implementation PostgreSQL du referentiel."""
@@ -80,6 +82,7 @@ class PgDirectory:
         self._pop_cache.clear()
         self._pop_state.clear()
         self._subscriber_cache.clear()
+        self._subscriber_state.clear()
         self._backhaul_cache.clear()
 
     def forget_subscriber(self, login: str) -> None:
@@ -286,6 +289,9 @@ class InMemoryDirectory:
             for table in (self.plans, self.kinds, self.last_seen):
                 table.pop(sid, None)
         self.subscriber_pop.pop(login, None)
+
+    def clear_cache(self) -> None:
+        """Rien a oublier : ce double EST la base, il n'a pas de cache."""
 
     def __init__(self) -> None:
         self.pops: dict[str, int] = {}

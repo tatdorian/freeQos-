@@ -163,24 +163,6 @@ passe) : il a les droits d'**édition**. Ensuite, toute l'interface exige une co
 > docker compose exec timescaledb psql -U qos -d qos -c "TRUNCATE app_users CASCADE"
 > ```
 
-### Assistant de support IA
-
-Une question en clair (« la vidéo saccade tous les soirs, pourquoi ? »), un
-diagnostic tiré des mesures : cause probable, chiffres à l'appui, actions à
-mener. Dans la fiche d'un abonné (il lit aussi l'abonné en direct sur le
-routeur) et dans l'onglet **Insights** pour les questions sur tout le réseau.
-
-L'assistant reçoit la question et ce que freeQoS affiche déjà : fiche et
-dernier échantillon de l'abonné, latence, bufferbloat, QoE, tendance sur
-7 jours, santé radio des AP et CPE, place restante par site, état des cycles
-de mesure. Jamais un mot de passe ni une configuration de routeur.
-
-Il est **coupé par défaut** : rien ne part tant que `ANTHROPIC_API_KEY` n'est
-pas renseignée dans `.env` (clé créée sur console.anthropic.com), puis
-`docker compose up -d`. Modèle : `ASSISTANT_MODEL` (par défaut
-`claude-opus-5-5`). Tous les comptes peuvent l'utiliser, lecture seule
-comprise : poser une question ne modifie rien.
-
 ### Mettre à jour, nettoyer, repartir de zéro
 
 Quatre gestes, du plus doux au plus radical. Prenez le premier qui suffit.
@@ -695,7 +677,7 @@ raison et ce qui change :
 
 ```
 /queue/type/add name=freeqos-cake-down kind=cake cake-overhead=22 cake-rtt=50ms
-/queue/simple/add name=freeqos-parent-BH-Nord target=ether2 max-limit=300000000/300000000 …
+/queue/simple/add name=freeqos-parent-BH-Site1 target=ether2 max-limit=300000000/300000000 …
 /queue/simple/add name=freeqos-dupont target=10.20.0.12/32 max-limit=20000000/100000000 …
 ```
 
@@ -1085,7 +1067,7 @@ IP, clients tenus par la seule table ARP.
 
 ```bash
 # Qui vit sur ce PoP, et lesquels ne sont pas dans l'inventaire
-curl 'localhost:8000/api/v1/pops/census?pop_name=PoP%20Nord' | jq '.pops[0].counts'
+curl 'localhost:8000/api/v1/pops/census?pop_name=Site%201' | jq '.pops[0].counts'
 { "clients": 47, "pppoe": 31, "declares": 38, "non_declares": 9 }
 ```
 
@@ -1133,8 +1115,8 @@ par l'opérateur est lue aussi, si elle vise la même adresse.
 # porte 'enforcement' -- ce qui a ete ecrit, ou ce qui l'en empeche
 curl -X POST localhost:8000/api/v1/static-clients -H 'content-type: application/json' -d '{
   "reference": "mairie-vitre", "label": "Mairie de Vitré",
-  "pop_name": "PoP Nord", "address": "10.0.0.0/29", "vlan": 120,
-  "sector_key": "uisp:ap-nord", "plan_down_mbps": 200, "plan_up_mbps": 50
+  "pop_name": "Site 1", "address": "10.0.0.0/29", "vlan": 120,
+  "sector_key": "uisp:ap-site1", "plan_down_mbps": 200, "plan_up_mbps": 50
 }'
 
 # Il devient un abonné comme un autre au cycle suivant
@@ -1833,12 +1815,12 @@ curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/packages/pack-100 \
      -H 'Content-Type: application/json' \
      -d '{"name": "100/20", "down_speed": 100000, "up_speed": 20000}'
 
-curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/sites/tour-nord \
-     -H 'Content-Type: application/json' -d '{"name": "PoP Nord"}'
+curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/sites/tour-1 \
+     -H 'Content-Type: application/json' -d '{"name": "Site 1"}'
 
 curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/access_points/sect-n1 \
      -H 'Content-Type: application/json' \
-     -d '{"name": "Secteur N1", "tower": "tour-nord", "ip_address": "10.10.5.2"}'
+     -d '{"name": "Secteur N1", "tower": "tour-1", "ip_address": "10.10.5.2"}'
 
 curl -u "$CLE:" -X PUT https://freeqos.exemple.net/model/v1/services/svc-4321 \
      -H 'Content-Type: application/json' \

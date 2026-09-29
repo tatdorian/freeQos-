@@ -238,7 +238,7 @@ async def test_rien_n_est_ecrit_tant_que_l_enforcement_est_coupe(
 
     assert rapport["state"] == "a poser"
     assert rapport["applied"] == 0
-    assert "ecriture desactivee" in rapport["routers"][0]["reason"]
+    assert "writing is off" in rapport["routers"][0]["reason"]
     # Le plan est quand meme calcule et montre : c'est ce que l'exploitant
     # validera le jour ou il ouvrira l'ecriture.
     assert rapport["routers"][0]["actions"]
