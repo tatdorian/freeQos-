@@ -32,7 +32,7 @@ def test_conversion_vers_mbps(mbps, kbps, gbps, attendu) -> None:
 
 def test_deux_unites_a_la_fois_refusees() -> None:
     """Ambigu : lequel gagne ? Mieux vaut refuser que deviner."""
-    with pytest.raises(ValueError, match="une seule unite"):
+    with pytest.raises(ValueError, match="one unit at a time"):
         _en_mbps(10, 10000, None, "download")
 
 

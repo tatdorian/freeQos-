@@ -135,7 +135,7 @@ async def test_plan_trop_gros_refuse() -> None:
 
     assert client.executed == []
     assert resultat.ok is False
-    assert "limite de securite" in (resultat.aborted_reason or "")
+    assert "safety limit" in (resultat.aborted_reason or "")
 
 
 # ------------------------------------------------------------------ echecs
@@ -148,7 +148,7 @@ async def test_arret_au_premier_echec() -> None:
     assert resultat.applied == 1
     assert resultat.failed == 1
     assert resultat.ok is False
-    assert "interrompu" in (resultat.aborted_reason or "")
+    assert "stopped after a failure" in (resultat.aborted_reason or "")
 
 
 async def test_poursuite_possible_apres_echec() -> None:

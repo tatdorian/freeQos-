@@ -208,9 +208,9 @@ class RouterRegistry:
                     {
                         "name": "",
                         "reason": (
-                            f"inventaire en base illisible ({type(exc).__name__}: {exc}). "
-                            f"Les routeurs declares en base sont absents de la collecte "
-                            f"et de l'arbre tant que ce n'est pas resolu."
+                            f"database inventory unreadable ({type(exc).__name__}: {exc}). "
+                            f"Routers declared in the database are missing from collection "
+                            f"and from the tree until this is resolved."
                         ),
                         "source": "db",
                     }

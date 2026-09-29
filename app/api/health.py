@@ -63,16 +63,16 @@ def _job_is_unhealthy(job: dict[str, Any]) -> tuple[bool, str | None]:
 
     # La boucle est-elle bloquee ? (cadence non tenue, tache morte)
     if since_run is not None and interval and since_run > interval * STALE_RUN_FACTOR:
-        return True, "boucle en retard : cadence non tenue"
+        return True, "loop running late: cadence not kept"
 
     # Le job a-t-il deja reussi au moins une fois ? S'il a tourne plusieurs fois
     # sans jamais aboutir, la donnee n'est jamais entree.
     if runs >= MIN_SAMPLES_FOR_RATE and since_success is None:
-        return True, "aucun cycle reussi depuis le demarrage"
+        return True, "no successful cycle since startup"
 
     # La donnee est-elle encore fraiche ? (dernier succes trop ancien)
     if since_success is not None and interval and since_success > interval * STALE_DATA_FACTOR:
-        return True, "aucun succes recent : la donnee n'est plus fraiche"
+        return True, "no recent success: the data is no longer fresh"
 
     # Echec durable sur la fenetre glissante.
     if (
@@ -81,10 +81,10 @@ def _job_is_unhealthy(job: dict[str, Any]) -> tuple[bool, str | None]:
         and rate >= FAILURE_RATE_THRESHOLD
         and job["last_ok"] is False
     ):
-        return True, f"taux d'echec {rate:.0%} sur les {window} derniers cycles"
+        return True, f"failure rate {rate:.0%} over the last {window} cycles"
 
     if job["consecutive_failures"] >= CONSECUTIVE_FAILURE_LIMIT:
-        return True, f"{job['consecutive_failures']} echecs consecutifs"
+        return True, f"{job['consecutive_failures']} consecutive failures"
 
     return False, None
 

@@ -24,10 +24,16 @@ from typing import Any
 from app.collectors.config_graph import (
     InterfacePath,
     best_upstream,
+    interface_for_gateway,
     interface_stacks,
     routing_peers,
 )
-from app.collectors.mikrotik import MikrotikCollector, remember_loopback, remember_upstream
+from app.collectors.mikrotik import (
+    MikrotikCollector,
+    remember_addresses,
+    remember_loopback,
+    remember_upstream,
+)
 from app.collectors.parsing import parse_flag
 from app.collectors.topology import (
     KIND_RADIO,
@@ -323,8 +329,8 @@ class ShapingService:
         """
         if self.settings.enforcement_locked:
             raise EnforcementLockedError(
-                "ENFORCEMENT_LOCKED=true : la bascule depuis l'interface est "
-                "interdite. Modifiez ENFORCEMENT_ENABLED puis redemarrez."
+                "ENFORCEMENT_LOCKED=true: switching from the interface is "
+                "forbidden. Change ENFORCEMENT_ENABLED then restart."
             )
         self._enforcement_enabled = enabled
         if self.repository is not None:
@@ -490,11 +496,16 @@ class ShapingService:
             )
             cle = router_node_key(collector.config.name)
             amont, raison_amont = best_upstream(config["routes"])
+            if amont is not None and not amont.interface:
+                amont.interface = interface_for_gateway(
+                    amont.gateway, resultat.get("addresses") or []
+                )
             amonts[collector.config.name] = (amont.gateway if amont else None, raison_amont)
             # La route par defaut dit aussi PAR OU part le trafic vers le coeur
             # et internet : c'est le lien "amont" de ce routeur. Retenu pour la
             # sonde de latence par segment et pour la carte des goulots, et
             # porte par la case du routeur pour survivre a un redemarrage.
+            remember_addresses(collector.config.name, resultat.get("addresses") or [])
             remember_upstream(
                 collector.config.name,
                 amont.gateway if amont else None,
@@ -1485,8 +1496,8 @@ class ShapingService:
                     "limit": str(file_tierce.get("max-limit") or ""),
                     "source": "posee par l'exploitant, hors controleur",
                     "state": self.ETAT_MANUELLE,
-                    "reason": "cette file ne porte pas freeqos:managed : le controleur ne la "
-                    "modifie jamais",
+                    "reason": "this queue does not carry freeqos:managed: the controller "
+                    "never modifies it",
                     "detail": {},
                     "children": [],
                 }
@@ -1518,16 +1529,16 @@ class ShapingService:
             etat, motif = self.ETAT_CONFLIT, conflits[queue_name]
         elif spec is None:
             etat = self.ETAT_ECARTE
-            motif = motifs.get(label, "aucune file : rien a appliquer ici")
+            motif = motifs.get(label, "no queue: nothing to apply here")
         elif queue_name in a_ecrire:
             etat = self.ETAT_A_POSER
             motif = (
-                "sera ecrite au prochain passage de la reconciliation"
+                "will be written at the next reconciliation pass"
                 if self._enforcement_enabled
-                else "l'enforcement est desactive : rien n'est ecrit tant qu'il ne l'est pas"
+                else "enforcement is off: nothing is written until it is on"
             )
         else:
-            etat, motif = self.ETAT_POSEE, "file en place, conforme a ce qui est prevu"
+            etat, motif = self.ETAT_POSEE, "queue in place, as planned"
         return {
             "kind": kind,
             "name": queue_name,
@@ -1814,7 +1825,7 @@ class ShapingService:
             logger.warning("Audit des plafonds trop long sur %s", router_name)
             return self._audit_muet(
                 router_name,
-                f"routeur trop lent : pas de reponse en {self.AUDIT_TIMEOUT_S:.0f} s",
+                f"router too slow: no answer within {self.AUDIT_TIMEOUT_S:.0f} s",
             )
         except Exception as exc:  # noqa: BLE001 - un PoP muet n'annule pas les autres
             logger.exception("Audit des plafonds impossible sur %s", router_name)
@@ -1942,8 +1953,8 @@ class ShapingService:
         if not routeurs:
             rapport["state"] = self.ETAT_SANS_ROUTEUR
             rapport["reason"] = (
-                "aucun routeur ne porte cet abonne : ni echantillon de mesure, ni "
-                "fiche d'inventaire ne le rattachent a un PoP connu"
+                "no router carries this subscriber: neither a measurement sample "
+                "nor an inventory record ties it to a known PoP"
             )
             rapport["router"] = None
             return rapport
@@ -1986,14 +1997,14 @@ class ShapingService:
         }
         if self.repository is None:
             rapport["state"] = self.ETAT_ERREUR
-            rapport["reason"] = "topologie indisponible : le lien ne peut pas etre retrouve"
+            rapport["reason"] = "topology unavailable: the link cannot be found"
             rapport["router"] = None
             return rapport
         liens = await self.repository.links()
         lien = next((ligne for ligne in liens if ligne.get("key") == link_key), None)
         if lien is None:
             rapport["state"] = self.ETAT_SANS_ROUTEUR
-            rapport["reason"] = f"aucun lien connu sous la cle '{link_key}'"
+            rapport["reason"] = f"no known link under the key '{link_key}'"
             rapport["router"] = None
             return rapport
         nom = str(lien.get("target_name") or lien.get("interface") or link_key)
@@ -2002,7 +2013,7 @@ class ShapingService:
         router_name = str(lien.get("discovered_by") or "")
         if not router_name:
             rapport["state"] = self.ETAT_SANS_ROUTEUR
-            rapport["reason"] = "ce lien n'est rattache a aucun routeur connu"
+            rapport["reason"] = "this link is attached to no known router"
             rapport["router"] = None
             return rapport
         rapport["routers"].append(
@@ -2040,8 +2051,8 @@ class ShapingService:
         """
         if self.repository is None or self.metrics is None:
             return (
-                "planification indisponible : ni topologie ni metriques (base non "
-                "initialisee). La file sera calculee des que la base repondra."
+                "planning unavailable: neither topology nor metrics (database not "
+                "initialised). The queue will be computed as soon as the database answers."
             )
         return None
 
@@ -2061,7 +2072,7 @@ class ShapingService:
             "applied": 0,
             "actions": [],
             "state": self.ETAT_POSEE,
-            "reason": "file deja conforme sur le routeur",
+            "reason": "queue already correct on the router",
         }
         empeche = self._plan_impossible()
         if empeche is not None:
@@ -2096,16 +2107,16 @@ class ShapingService:
         if restreint.is_empty:
             if removing:
                 ligne["state"] = self.ETAT_RETIREE
-                ligne["reason"] = "aucune file de ce client sur le routeur"
+                ligne["reason"] = "no queue for this client on the router"
             return ligne
 
         if dry_run or not self._enforcement_enabled:
             ligne["state"] = self.ETAT_A_POSER
             ligne["reason"] = (
-                "l'enforcement est desactive : la file est calculee, rien n'est ecrit "
-                "tant qu'il ne sera pas actif (Reglages > Shaping et ecriture)"
+                "enforcement is off: the queue is computed, nothing is written "
+                "until it is on (Settings > Shaping and writing)"
                 if not self._enforcement_enabled
-                else "simulation : rien n'a ete ecrit"
+                else "simulation: nothing was written"
             )
             return ligne
 
@@ -2135,7 +2146,7 @@ class ShapingService:
         )
         ligne["state"] = self.ETAT_RETIREE if retiree else self.ETAT_POSEE
         ligne["reason"] = (
-            "file retiree du routeur" if retiree else f"{resultat.applied} commande(s) appliquee(s)"
+            "queue removed from the router" if retiree else f"{resultat.applied} command(s) applied"
         )
         return ligne
 
@@ -2157,7 +2168,7 @@ class ShapingService:
         l'autre doit se voir, pas se noyer.
         """
         if not lignes:
-            return {"state": self.ETAT_SANS_ROUTEUR, "reason": "aucun routeur", "router": None}
+            return {"state": self.ETAT_SANS_ROUTEUR, "reason": "no router", "router": None}
         rang = {etat: i for i, etat in enumerate(self._ORDRE_ETATS)}
         return min(lignes, key=lambda r: rang.get(str(r["state"]), len(rang)))
 
@@ -2216,7 +2227,7 @@ class ShapingService:
                         {
                             "router": collector.name,
                             "state": self.ETAT_ERREUR,
-                            "reason": plan or "routeur non lu",
+                            "reason": plan or "router not read",
                             "applied": 0,
                             "actions": [],
                         }
@@ -2261,10 +2272,10 @@ class ShapingService:
                 "router": plan.router_name,
                 "state": self.ETAT_A_POSER,
                 "reason": (
-                    "file a poser : elle sera ecrite a la prochaine reconciliation"
+                    "queue to set: it will be written at the next reconciliation"
                     if self._enforcement_enabled
-                    else "l'enforcement est desactive : rien ne sera ecrit tant qu'il ne "
-                    "sera pas actif (Reglages > Shaping et ecriture)"
+                    else "enforcement is off: nothing will be written "
+                    "until it is on (Settings > Shaping and writing)"
                 ),
                 "applied": 0,
                 "actions": actions,
@@ -2272,7 +2283,7 @@ class ShapingService:
         return {
             "router": plan.router_name,
             "state": self.ETAT_POSEE,
-            "reason": "file posee et conforme sur le routeur",
+            "reason": "queue set and correct on the router",
             "applied": 0,
             "actions": [],
         }
@@ -2304,8 +2315,7 @@ class ShapingService:
 
         if not self._enforcement_enabled:
             resultat["errors"].append(
-                "enforcement desactive : les files gardent leur debit boosté "
-                "jusqu'a la prochaine application"
+                "enforcement is off: the queues keep their boosted rate until the next application"
             )
             return resultat
 
@@ -2468,15 +2478,15 @@ class ShapingService:
         resultat["unattached"] = sans_secteur
         if sans_secteur and not par_secteur:
             resultat["errors"].append(
-                f"{len(sans_secteur)} abonne(s) notes mais aucun rattache a un secteur : "
-                f"la boucle n'a aucun secteur a evaluer. Le rattachement vient de la "
-                f"jointure caller-id <-> station UISP a la decouverte, ou du champ "
-                f"'secteur' de la fiche pour un client a IP fixe."
+                f"{len(sans_secteur)} rated subscriber(s) but none attached to a sector: "
+                f"the loop has no sector to evaluate. The attachment comes from the "
+                f"caller-id <-> UISP station join at discovery, or from the "
+                f"'sector' field of the record for a static-IP client."
             )
         elif sans_secteur:
             resultat["errors"].append(
-                f"{len(sans_secteur)} abonne(s) notes sans secteur connu : ils ne comptent "
-                f"dans l'evaluation d'aucun secteur ({', '.join(sorted(sans_secteur)[:5])}"
+                f"{len(sans_secteur)} rated subscriber(s) with no known sector: they count "
+                f"in the evaluation of no sector ({', '.join(sorted(sans_secteur)[:5])}"
                 f"{', ...' if len(sans_secteur) > 5 else ''})."
             )
 
@@ -2486,7 +2496,7 @@ class ShapingService:
             lien = lien_par_secteur.get(secteur)
             if lien is None:
                 resultat["errors"].append(
-                    f"secteur {secteur} : aucun lien connu ne le dessert, rien a resserrer"
+                    f"sector {secteur}: no known link serves it, nothing to tighten"
                 )
                 continue
 
@@ -2525,8 +2535,8 @@ class ShapingService:
                     routeurs.setdefault(nom, []).append(verdict.sector_key)
                 else:
                     resultat["errors"].append(
-                        f"secteur {verdict.sector_key} : lien sans routeur d'origine, "
-                        "resserrage enregistre mais non applicable"
+                        f"sector {verdict.sector_key}: link without an origin router, "
+                        "tightening recorded but not applicable"
                     )
 
         # Seuls les routeurs dont un secteur a REELLEMENT bouge sont replanifies :
@@ -2541,8 +2551,8 @@ class ShapingService:
                     continue
                 if not self._enforcement_enabled:
                     resultat["errors"].append(
-                        f"{nom}: enforcement desactive, le resserrage est enregistre "
-                        "et le plan calcule mais rien n'est ecrit sur le routeur"
+                        f"{nom}: enforcement is off, the tightening is recorded "
+                        "and the plan computed but nothing is written on the router"
                     )
                     continue
                 applique = await self.apply(plan, dry_run=False, author="system:qoe-loop")
@@ -2704,8 +2714,8 @@ class ShapingService:
         """
         if not dry_run and not self._enforcement_enabled:
             raise EnforcementDisabledError(
-                "Le controleur est en lecture seule. Activez l'enforcement depuis "
-                "Reglages > Shaping et ecriture, ou passez ENFORCEMENT_ENABLED a true."
+                "The controller is read-only. Turn enforcement on in "
+                "Settings > Shaping and writing, or set ENFORCEMENT_ENABLED to true."
             )
 
         client: RouterOsWriteClient | None = None
@@ -2740,7 +2750,7 @@ class ShapingService:
         for collector in self.registry.collectors:
             if collector.name == router_name:
                 return collector
-        raise KeyError(f"routeur '{router_name}' absent de l'inventaire actif")
+        raise KeyError(f"router '{router_name}' is not in the active inventory")
 
     def _write_client(self, router_name: str) -> RouterOsWriteClient:
         existant = self._write_clients.get(router_name)
@@ -2780,8 +2790,8 @@ class ShapingService:
             return WriteCapability(
                 username=utilisateur,
                 detail=(
-                    f"droits non verifiables ({type(exc).__name__}) : la commande "
-                    "sera tentee et RouterOS tranchera"
+                    f"rights could not be checked ({type(exc).__name__}): the command "
+                    "will be tried and RouterOS will decide"
                 ),
             )
         return inspect_write_capability(utilisateur, comptes, groupes)
@@ -2910,12 +2920,12 @@ def _origine_du_debit(kind: str, detail: dict[str, Any]) -> str:
         origine = "surcharge saisie a la main"
     elif kind == ShapingService.POINT_LIEN:
         origine = (
-            "capacite mesuree du lien"
+            "measured link capacity"
             if detail.get("capacity_mbps")
-            else "aucune capacite connue : file illimitee, prete a recevoir un plafond"
+            else "no known capacity: unlimited queue, ready to receive a cap"
         )
     elif detail.get("boost"):
-        origine = "boost en cours"
+        origine = "boost running"
     elif detail.get("plan_down_mbps") or detail.get("plan_up_mbps"):
         origine = "plan souscrit"
     else:

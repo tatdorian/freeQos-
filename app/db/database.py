@@ -41,7 +41,7 @@ class Database:
     @property
     def pool(self) -> asyncpg.Pool:
         if self._pool is None:
-            raise RuntimeError("Le pool de connexions n'est pas initialise")
+            raise RuntimeError("The connection pool is not initialised")
         return self._pool
 
     @property
@@ -141,12 +141,12 @@ class Database:
                 f'Creez la base : CREATE DATABASE "{nom}"; ou laissez docker compose s\'en charger.'
             )
         if "password authentication" in texte or "role" in texte:
-            return "Verifiez l'utilisateur et le mot de passe de DATABASE_URL."
+            return "Check the user and password in DATABASE_URL."
         if "connect call failed" in texte or "refused" in texte:
             return (
-                "Verifiez que PostgreSQL ecoute a cette adresse. Hors docker, "
-                "DATABASE_URL doit pointer sur localhost et non sur l'hote "
-                "'timescaledb', qui n'existe que dans le reseau docker."
+                "Check that PostgreSQL listens at this address. Outside docker, "
+                "DATABASE_URL must point to localhost and not to the host "
+                "'timescaledb', which only exists inside the docker network."
             )
         return ""
 

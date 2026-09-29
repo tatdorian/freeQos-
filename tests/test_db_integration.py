@@ -2132,7 +2132,7 @@ async def test_la_base_refuse_deux_routeurs_au_meme_loopback(database: Database)
         await repo.create({"name": "b", "host": "1.1.1.2", "loopback": "10.255.0.1"}, "s")
 
     # Le message doit distinguer les deux unicites de la table.
-    with pytest.raises(DuplicateRouterError, match="nomme 'a'"):
+    with pytest.raises(DuplicateRouterError, match="named 'a'"):
         await repo.create({"name": "a", "host": "1.1.1.3"}, "s")
 
 

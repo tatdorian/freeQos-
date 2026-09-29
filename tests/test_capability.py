@@ -74,7 +74,7 @@ def test_compte_absent_ne_bloque_pas() -> None:
     affirmer, donc on n'interdit rien."""
     verdict = inspect_write_capability("via-radius", COMPTES, GROUPES)
     assert verdict.can_write is None
-    assert "verifies a l'execution" in verdict.detail
+    assert "checked when writing" in verdict.detail
 
 
 def test_groupe_introuvable_ne_bloque_pas() -> None:

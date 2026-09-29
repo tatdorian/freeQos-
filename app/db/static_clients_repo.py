@@ -145,7 +145,7 @@ class StaticClientsRepository:
                 client_id,
             )
         if row is None:
-            raise StaticClientNotFoundError(f"client statique {client_id} inconnu")
+            raise StaticClientNotFoundError(f"unknown static-IP client {client_id}")
         return _to_row(row)
 
     async def load_enabled(self) -> list[StaticClient]:
@@ -194,7 +194,7 @@ class StaticClientsRepository:
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise DuplicateStaticClientError(
-                    f"un client statique nomme '{payload['reference']}' existe deja"
+                    f"a static-IP client named '{payload['reference']}' already exists"
                 ) from exc
         return _to_row(row)
 
@@ -231,10 +231,10 @@ class StaticClientsRepository:
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise DuplicateStaticClientError(
-                    f"un client statique nomme '{payload.get('reference')}' existe deja"
+                    f"a static-IP client named '{payload.get('reference')}' already exists"
                 ) from exc
         if row is None:
-            raise StaticClientNotFoundError(f"client statique {client_id} inconnu")
+            raise StaticClientNotFoundError(f"unknown static-IP client {client_id}")
         return _to_row(row)
 
     async def by_vlan(self) -> list[dict[str, Any]]:
@@ -280,7 +280,7 @@ class StaticClientsRepository:
         async with self._pool.acquire() as conn:
             result = await conn.execute("DELETE FROM static_clients WHERE id = $1", client_id)
         if result.endswith(" 0"):
-            raise StaticClientNotFoundError(f"client statique {client_id} inconnu")
+            raise StaticClientNotFoundError(f"unknown static-IP client {client_id}")
 
 
 class VlanSightingsRepository:

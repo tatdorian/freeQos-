@@ -84,7 +84,7 @@ def ssl_wrapper_for(config: RouterConfig) -> Callable[[Any], ssl.SSLSocket]:
     if mode == TLS_FINGERPRINT:
         if not config.tls_fingerprint:
             raise TlsConfigurationError(
-                f"routeur '{config.name}' : tls_verify=fingerprint exige une empreinte "
+                f"router '{config.name}': tls_verify=fingerprint needs a fingerprint "
                 "(tls_fingerprint)"
             )
         expected = normalise_fingerprint(config.tls_fingerprint)
@@ -103,8 +103,8 @@ def ssl_wrapper_for(config: RouterConfig) -> Callable[[Any], ssl.SSLSocket]:
                 finally:
                     pass
                 raise ssl.SSLError(
-                    f"empreinte TLS du routeur '{config.name}' inattendue : "
-                    f"{actual} (attendu {expected})"
+                    f"unexpected TLS fingerprint for router '{config.name}': "
+                    f"{actual} (expected {expected})"
                 )
             return wrapped
 
@@ -117,7 +117,7 @@ def describe_tls(config: RouterConfig) -> dict[str, Any]:
     """Posture TLS lisible par l'interface : c'est ce qui rend une desactivation
     ASSUMEE et visible, au lieu d'etre cachee dans le code."""
     if not config.use_ssl:
-        return {"enabled": False, "mode": None, "secure": None, "label": "API binaire (sans TLS)"}
+        return {"enabled": False, "mode": None, "secure": None, "label": "Binary API (no TLS)"}
     mode = config.tls_verify
     return {
         "enabled": True,

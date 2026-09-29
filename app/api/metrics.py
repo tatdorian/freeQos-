@@ -380,7 +380,7 @@ async def subscriber_metrics(
         "end": window.end,
         "bucket_seconds": window.bucket_seconds,
         # Rappel de convention : rx = upload abonne, tx = download abonne.
-        "orientation": "rx=upload abonne, tx=download abonne (point de vue routeur)",
+        "orientation": "rx=subscriber upload, tx=subscriber download (router point of view)",
         "points": points,
         "bufferbloat": bloat["subscribers"][0] if bloat["subscribers"] else None,
     }
@@ -409,9 +409,9 @@ async def bufferbloat(
     resultat["rtt_enabled"] = collection.rtt_enabled
     if not collection.rtt_enabled:
         resultat["unavailable_reason"] = (
-            "La sonde de latence est coupee : sans RTT, le bufferbloat et le score "
-            "de QoE ne peuvent pas etre calcules. Activez-la dans l'onglet Executif "
-            "(case 'Sonde RTT'), ou via PUT /api/v1/rtt."
+            "The latency probe is off: without RTT, bufferbloat and the QoE score "
+            "cannot be computed. Turn it on in the Executive tab "
+            "('RTT probe' box), or via PUT /api/v1/rtt."
         )
     return resultat
 
@@ -490,7 +490,7 @@ async def throughput(
         "start": window.start,
         "end": window.end,
         "bucket_seconds": window.bucket_seconds,
-        "orientation": "rx=upload abonnes, tx=download abonnes (point de vue routeur)",
+        "orientation": "rx=subscribers upload, tx=subscribers download (router point of view)",
         "points": points,
     }
 
@@ -498,6 +498,40 @@ async def throughput(
 @router.get("/network/tree", summary="PoP tree -> backhauls, capacity and load")
 async def network_tree(repo: RepositoryDep) -> list[dict[str, Any]]:
     return await repo.network_tree()
+
+
+def name_ports(ports: list[dict[str, Any]], routers: list[str]) -> dict[str, str | None]:
+    """Marque le port amont de chaque routeur et nomme le voisin de chaque port.
+
+    La decouverte ne relie pas tous les ports a un lien de l'arbre. La route par
+    defaut et la table d'adresses suffisent pourtant a dire ou va un port :
+    vers la passerelle (le port amont), ou vers le routeur dont CE port porte
+    la passerelle (gw ether2 -> core). "-" laissait croire a un port isole.
+    Rend l'interface amont de chaque routeur.
+    """
+    from app.collectors.mikrotik import port_owning, router_owning, upstream_of
+
+    passerelles = {nom: upstream_of(nom) for nom in routers}
+    amonts = {nom: amont[1] for nom, amont in passerelles.items()}
+    en_aval: dict[tuple[str, str | None], str] = {}
+    for nom, (passerelle, _iface) in passerelles.items():
+        porteur = port_owning(passerelle)
+        if porteur is not None:
+            en_aval.setdefault(porteur, nom)
+    for port in ports:
+        routeur = port["router_name"]
+        port["upstream"] = bool(amonts.get(routeur)) and amonts.get(routeur) == port["interface"]
+        if port.get("link_name"):
+            continue
+        if port["upstream"]:
+            passerelle = passerelles.get(routeur, (None, None))[0]
+            # Passerelle hors de nos routeurs : c'est la sortie de l'operateur.
+            port["link_name"] = router_owning(passerelle) or (
+                f"Internet ({passerelle})" if passerelle else "Upstream"
+            )
+        else:
+            port["link_name"] = en_aval.get((routeur, port["interface"]))
+    return amonts
 
 
 @router.get("/ports/live", summary="Every router port with its current throughput")
@@ -512,15 +546,10 @@ async def ports_live(repo: RepositoryDep, collection: CollectionDep) -> dict[str
     absent se lit alors "rien ne passe" OU "la mesure est en panne", jamais
     l'un pour l'autre.
     """
-    from app.collectors.mikrotik import upstream_of
     from app.services.collection import JOB_LINKS, JOB_RTT, JOB_SUBSCRIBERS
 
     ports = await repo.ports_live()
-    amonts = {c.name: upstream_of(c.name)[1] for c in collection.collectors}
-    for port in ports:
-        port["upstream"] = bool(amonts.get(port["router_name"])) and (
-            amonts.get(port["router_name"]) == port["interface"]
-        )
+    amonts = name_ports(ports, [c.name for c in collection.collectors])
     maintenant = datetime.now(tz=UTC)
     cycles: dict[str, dict[str, Any] | None] = {}
     for job in (JOB_SUBSCRIBERS, JOB_LINKS, JOB_RTT):
@@ -594,6 +623,7 @@ async def subscriber_insights(
 @router.get("/insights/capacity", summary="How many more subscribers each site can take")
 async def capacity_insights(
     repo: RepositoryDep,
+    collection: CollectionDep,
     hours: Annotated[int, Query(ge=1, le=720)] = 24,
 ) -> dict[str, Any]:
     """Par site (PoP, VLAN) : capacite mesuree, pointe reelle, experience des
@@ -601,6 +631,21 @@ async def capacity_insights(
     from app.services.insights import ap_room
 
     sites = await repo.capacity_by_pop(hours=hours)
+    # Sans antenne ni debit pose sur le lien, le PORT AMONT du routeur du site
+    # borne quand meme ce qu'il peut porter : "?" partout alors que le port a
+    # 1 Gbps est mesure n'aidait personne.
+    from app.collectors.mikrotik import upstream_of
+
+    ports = {(str(p["router_name"]), str(p["interface"])): p for p in await repo.ports_live()}
+    port_amont: dict[str, tuple[float, str]] = {}
+    for c in collection.collectors:
+        sortie = upstream_of(c.name)[1]
+        port = ports.get((c.name, str(sortie))) if sortie else None
+        if port and port.get("capacity_mbps"):
+            port_amont.setdefault(
+                c.config.effective_pop_name,
+                (float(port["capacity_mbps"]), f"uplink port {c.name} {sortie}"),
+            )
     mauvais: dict[str, list[bool]] = {}
     try:
         bloat = await repo.bufferbloat(minutes=min(hours, 168) * 60)
@@ -611,6 +656,14 @@ async def capacity_insights(
         mauvais = {}
     lignes = []
     for site in sites:
+        base_capacite = None
+        if not site.get("capacity_mbps") and site.get("pop_name") in port_amont:
+            site = {**site, "capacity_mbps": port_amont[str(site["pop_name"])][0]}
+            base_capacite = port_amont[str(site["pop_name"])][1]
+        # Un site sans abonne et sans capacite connue (le coeur, la passerelle)
+        # n'est pas un site d'acces : il n'y a pas de place a y compter.
+        if not int(site.get("subscribers") or 0) and not site.get("capacity_mbps"):
+            continue
         notes = mauvais.get(str(site.get("pop_name")), [])
         part = (sum(notes) / len(notes)) if notes else None
         lignes.append(
@@ -632,5 +685,8 @@ async def capacity_insights(
                 ),
             }
         )
+        if base_capacite:
+            lignes[-1]["capacity_source"] = base_capacite
+            lignes[-1]["reason"] += f" (capacity: {base_capacite})"
     lignes.sort(key=lambda x: (x["room"] is None, x["room"] if x["room"] is not None else 0))
     return {"hours": hours, "sites": lignes}

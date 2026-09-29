@@ -1759,7 +1759,10 @@ def map_subscribers_to_sectors(
         if secteur:
             snapshot.subscriber_sectors[str(login)] = secteur
             rattaches += 1
-    if sessions and not rattaches:
+    # Sans aucune station radio connue (ni UISP, ni antenne), il n'y a rien a
+    # rattacher : l'avertissement ne dirait qu'une evidence que l'operateur ne
+    # peut pas corriger.
+    if sessions and uisp_stations and not rattaches:
         snapshot.warnings.append(
             "No subscriber attached to a radio sector: check that the CPEs are "
             "visible in UISP (the join is on the MAC of the PPPoE caller-id)."

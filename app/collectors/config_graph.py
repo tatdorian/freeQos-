@@ -198,6 +198,38 @@ class Upstream:
     interface: str | None = None
 
 
+def interface_for_gateway(gateway: str | None, addresses: Sequence[dict[str, Any]]) -> str | None:
+    """L'interface dont le sous-reseau contient la passerelle.
+
+    RouterOS n'ecrit pas toujours l'interface de sortie apres un '%' dans la
+    route par defaut (selon la version et la facon dont la route a ete saisie).
+    La table d'adresses le dit sans ambiguite : la passerelle est joignable par
+    l'interface qui porte une adresse de son sous-reseau. Deux candidates, ou
+    aucune : on ne devine pas.
+    """
+    if not gateway:
+        return None
+    try:
+        cible = ipaddress.ip_address(gateway)
+    except ValueError:
+        return None
+    candidates = set()
+    for row in addresses:
+        if parse_flag(row.get("disabled")):
+            continue
+        brut, interface = _texte(row.get("address")), _texte(row.get("interface"))
+        if not brut or not interface:
+            continue
+        try:
+            reseau = ipaddress.ip_interface(brut).network
+        except ValueError:
+            continue
+        # Un /32 (loopback) "contient" seulement lui-meme : pas un lien.
+        if reseau.num_addresses > 1 and cible in reseau:
+            candidates.add(interface)
+    return candidates.pop() if len(candidates) == 1 else None
+
+
 def default_gateways(routes: Sequence[dict[str, Any]]) -> list[Upstream]:
     """Passerelles des routes par defaut ACTIVES, de la meilleure a la pire.
 

@@ -141,8 +141,8 @@ def _build_airos_provider(settings: Settings) -> AirOsProvider:
         )
     if not targets:
         raise ValueError(
-            "BACKHAUL_PROVIDER=airos exige au moins un backhaul avec 'api_host' "
-            "(l'adresse de management de l'antenne Ubiquiti)"
+            "BACKHAUL_PROVIDER=airos needs at least one backhaul with 'api_host' "
+            "(the management address of the Ubiquiti antenna)"
         )
     logger.info("Capacite backhaul : airOS direct sur %d antenne(s)", len(targets))
     return AirOsProvider(targets, timeout_s=settings.airos_timeout_s)
@@ -615,7 +615,7 @@ async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Set
                 FLAG_RTT,
                 settings.rtt_enabled,
                 updated_by="bootstrap",
-                reason="valeur initiale issue de RTT_ENABLED",
+                reason="initial value from RTT_ENABLED",
             )
         except Exception:  # noqa: BLE001
             pass
@@ -635,7 +635,7 @@ async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Set
                     FLAG_RTT,
                     True,
                     updated_by="bootstrap",
-                    reason="sonde activee par defaut (bufferbloat, QoE)",
+                    reason="probe on by default (bufferbloat, QoE)",
                 )
                 stored = True
                 logger.info("Sonde RTT activee : valeur initiale choisie par personne.")

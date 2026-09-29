@@ -182,7 +182,7 @@ async def run_job(
             detail=f"Unknown job: {job_name} (available: {scheduler.job_names()})",
         ) from None
     if result is None:
-        return {"job": job_name, "ok": False, "detail": "Le job a leve une exception"}
+        return {"job": job_name, "ok": False, "detail": "The job raised an exception"}
     return {
         "job": result.job,
         "ok": result.ok,

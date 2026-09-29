@@ -122,7 +122,15 @@ async def hotspots(
     liens = await container.topology_repo.links() if container.topology_repo is not None else []
     amonts = {c.name: upstream_of(c.name) for c in collection.collectors}
     roles = {c.name: str(c.config.role) for c in collection.collectors}
-    lignes = hotspot_rows(occupation, liens, upstream=amonts, roles=roles)[:limit]
+    # Le debit ACTUEL de chaque port, et le nom de son voisin : un port que la
+    # decouverte n'a pas relie a un lien avait "-" pour maintenant et son nom
+    # d'interface pour titre, alors qu'il porte du trafic.
+    from app.api.metrics import name_ports
+
+    en_direct = await repo.ports_live()
+    name_ports(en_direct, [c.name for c in collection.collectors])
+    ports = {(str(p["router_name"]), str(p["interface"])): p for p in en_direct}
+    lignes = hotspot_rows(occupation, liens, upstream=amonts, roles=roles, live=ports)[:limit]
     return {
         "hours": hours,
         "thresholds": {"busy": 0.70, "saturated": 0.90},

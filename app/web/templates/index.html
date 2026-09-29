@@ -471,6 +471,10 @@
            reellement : un bandeau permanent finirait par ne plus se lire. -->
       <div id="limits-alert"></div>
 
+      <!-- Clients vus sur une VLAN et jamais declares : en evidence ici, pas
+           seulement dans un volet replie du formulaire. -->
+      <div id="sub-candidates-banner"></div>
+
       <div class="table-wrap" id="subscribers-table"></div>
     </section>
 
@@ -662,7 +666,7 @@
           <option value="">All categories</option>
         </select>
         <input id="svc-search" placeholder="Address, name or organisation"
-               maxlength="128" style="max-width:320px">
+               maxlength="128" style="flex:0 1 300px;width:300px;max-width:100%;min-width:0">
         <span class="spacer"></span>
         <span class="mode" id="svc-count"></span>
       </div>

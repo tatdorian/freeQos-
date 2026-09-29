@@ -384,9 +384,9 @@ def plan_restrictions(
                 PlanSkip(
                     login=cible.name,
                     reason=(
-                        f"{len(ecartees) + len(clients_ecartes)} prefixe(s) non poses "
-                        "(IPv6 ou saisie invalide) : les listes d'adresses de "
-                        "/ip/firewall sont IPv4. Le reste de la regle est pose."
+                        f"{len(ecartees) + len(clients_ecartes)} prefix(es) not set "
+                        "(IPv6 or invalid entry): /ip/firewall address lists "
+                        "are IPv4. The rest of the rule is set."
                     ),
                 )
             )
@@ -395,9 +395,9 @@ def plan_restrictions(
                 PlanSkip(
                     login=cible.name,
                     reason=(
-                        "aucune adresse IPv4 a viser : le service choisi n'a pas de "
-                        "bloc publie et rien n'a encore ete decouvert par NetFlow. "
-                        "La regle sera posee des qu'une adresse sera connue."
+                        "no IPv4 address to target: the chosen service has no "
+                        "published block and NetFlow has not discovered any yet. "
+                        "The rule will be set as soon as an address is known."
                     ),
                 )
             )
@@ -408,9 +408,9 @@ def plan_restrictions(
                     name=cible.name,
                     path=PATH_ADDRESS_LIST,
                     detail=(
-                        f"{len(destinations)} adresses depassent la limite de securite "
-                        f"({address_limit}). Restreignez le critere : une liste de cette "
-                        "taille pese sur le routeur a chaque paquet."
+                        f"{len(destinations)} addresses exceed the safety limit "
+                        f"({address_limit}). Narrow the criterion: a list this "
+                        "large weighs on the router for every packet."
                     ),
                 )
             )

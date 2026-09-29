@@ -147,7 +147,7 @@ async def test_droits_non_verifiables_ne_bloquent_pas(
     verdict = await service.write_capability("pop-test")
 
     assert verdict.can_write is None
-    assert "tranchera" in verdict.detail
+    assert "RouterOS will decide" in verdict.detail
 
 
 async def test_application_reelle_aboutit(settings: Settings, routeur: FakeRouterOsClient) -> None:
@@ -465,7 +465,7 @@ async def test_boost_echu_sans_enforcement(settings: Settings, routeur: FakeRout
 
     assert resultat["expired"] == 1
     assert resultat["routers"] == []
-    assert resultat["errors"] and "enforcement desactive" in resultat["errors"][0]
+    assert resultat["errors"] and "enforcement is off" in resultat["errors"][0]
 
 
 async def test_seuls_les_routeurs_concernes_sont_replanifies(

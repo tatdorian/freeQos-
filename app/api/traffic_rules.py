@@ -221,7 +221,7 @@ async def _apply(
     """
     service = container.restrictions
     if service is None:
-        regle["apply"] = {"state": "indisponible", "reason": "service de restriction absent"}
+        regle["apply"] = {"state": "indisponible", "reason": "restriction service not available"}
         return regle
     try:
         rapport = await service.apply_all(author="ui:restrictions", dry_run=False)
@@ -245,7 +245,7 @@ async def _lift(container: ContainerDep, rule_id: int, *, author: str) -> dict[s
     """
     service = container.restrictions
     if service is None:
-        return {"state": "indisponible", "reason": "service de restriction absent"}
+        return {"state": "indisponible", "reason": "restriction service not available"}
     try:
         return await service.lift(rule_id, author=author)
     except Exception as exc:  # noqa: BLE001

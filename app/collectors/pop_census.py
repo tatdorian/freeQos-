@@ -104,10 +104,10 @@ ROLE_PPPOE = "pppoe"
 ROLE_DESACTIVE = "desactive"
 
 MOTIF_CLIENT = "sous-reseau desservi, aucun signe d'infrastructure"
-MOTIF_POINT_A_POINT = "prefixe etroit (/30 ou plus) : lien entre deux equipements"
-MOTIF_TRANSIT = "porte une adjacence de routage ou la passerelle par defaut"
-MOTIF_PPPOE = "interface a serveur PPPoE : ses abonnes ont deja une identite"
-MOTIF_DESACTIVE = "adresse desactivee dans la configuration"
+MOTIF_POINT_A_POINT = "narrow prefix (/30 or longer): link between two devices"
+MOTIF_TRANSIT = "carries a routing adjacency or the default gateway"
+MOTIF_PPPOE = "PPPoE server interface: its subscribers already have an identity"
+MOTIF_DESACTIVE = "address disabled in the configuration"
 
 # -----------------------------------------------------------------------------
 # Les sept sources. Le nom est rendu a l'interface : savoir PAR QUOI un client
@@ -132,8 +132,8 @@ NATURE_HORS_PERIMETRE = "hors-perimetre"
 # ne se verifie pas : "vlan 120 d'apres la table de ponts" se recoupe sur le
 # routeur, "vlan 120" tout court ne se recoupe pas.
 VLAN_PAR_INTERFACE = "interface /interface/vlan"
-VLAN_PAR_PONT = "table de ponts (/interface/bridge/host)"
-VLAN_PAR_PVID = "pvid du port de pont"
+VLAN_PAR_PONT = "bridge table (/interface/bridge/host)"
+VLAN_PAR_PVID = "bridge port pvid"
 VLAN_INCONNU = "inconnu"
 
 
@@ -981,10 +981,10 @@ def _etat_des_sources(tables: RouterTables) -> dict[str, str]:
     for champ, libelle in _LIBELLES.items():
         motif = tables.unreadable.get(champ)
         if motif:
-            etat[libelle] = f"illisible : {motif}"
+            etat[libelle] = f"unreadable: {motif}"
         else:
             lignes = getattr(tables, champ, ())
-            etat[libelle] = f"lue ({len(lignes)} ligne(s))"
+            etat[libelle] = f"read ({len(lignes)} row(s))"
     return etat
 
 
@@ -998,15 +998,15 @@ def _remarques(census: PopCensus, tables: RouterTables) -> list[str]:
 
     for champ, motif in sorted(tables.unreadable.items()):
         notes.append(
-            f"{_LIBELLES.get(champ, champ)} illisible ({motif}) : "
-            f"les clients que cette source etait seule a voir manquent."
+            f"{_LIBELLES.get(champ, champ)} unreadable ({motif}): "
+            f"clients that only this source could see are missing."
         )
 
     if not tables.addresses and "addresses" not in tables.unreadable:
         notes.append(
-            "Aucune adresse lue dans /ip/address : le perimetre est vide, et la "
-            "detection retombe sur le seul nom des interfaces (/interface/vlan). "
-            "Un client sur un pont en filtrage VLAN reste invisible dans cet etat."
+            "No address read from /ip/address: the scope is empty, and detection "
+            "falls back on interface names only (/interface/vlan). "
+            "A client behind a VLAN-filtering bridge stays invisible in this state."
         )
 
     muets = [
@@ -1016,35 +1016,35 @@ def _remarques(census: PopCensus, tables: RouterTables) -> list[str]:
     ]
     if muets:
         notes.append(
-            "Sous-reseau(x) client sans aucune presence observee : "
+            "Client subnet(s) with no presence observed: "
             + ", ".join(muets)
-            + ". Soit personne n'y parle, soit la desserte passe par un equipement "
-            "qui masque ses clients (routeur intermediaire, NAT)."
+            + ". Either nobody talks there, or the service goes through a device "
+            "that hides its clients (intermediate router, NAT)."
         )
 
     dehors = [h for h in census.hosts if h.subnet is None]
     if dehors:
         interfaces = sorted({h.interface for h in dehors if h.interface})
         notes.append(
-            f"{len(dehors)} adresse(s) vue(s) hors de tout sous-reseau de ce routeur"
-            + (f" (interfaces : {', '.join(interfaces)})" if interfaces else "")
-            + ". C'est le cas quand le PoP commute sans router : l'adressage est "
-            "porte par un autre routeur, qui doit etre declare pour les recenser."
+            f"{len(dehors)} address(es) seen outside every subnet of this router"
+            + (f" (interfaces: {', '.join(interfaces)})" if interfaces else "")
+            + ". This happens when the PoP switches without routing: addressing is "
+            "held by another router, which must be declared to count them."
         )
 
     if census.l2_only:
         notes.append(
-            f"{len(census.l2_only)} MAC vue(s) sur un pont sans adresse IP connue. "
-            "Ces machines sont physiquement la mais aucune source L3 ne les nomme : "
-            "client muet, ou trafic qui traverse un routeur intermediaire."
+            f"{len(census.l2_only)} MAC(s) seen on a bridge with no known IP address. "
+            "These machines are physically there but no L3 source names them: "
+            "a silent client, or traffic crossing an intermediate router."
         )
 
     arp_seul = [h for h in census.hosts if h.nature == NATURE_CLIENT and h.sources == [SOURCE_ARP]]
     if arp_seul:
         notes.append(
-            f"{len(arp_seul)} client(s) possible(s) connu(s) par la SEULE table ARP. "
-            "Elle s'efface apres quelques minutes de silence : leur absence a un "
-            "prochain cycle ne prouvera rien."
+            f"{len(arp_seul)} possible client(s) known ONLY from the ARP table. "
+            "It clears after a few minutes of silence: their absence on a "
+            "later cycle will prove nothing."
         )
 
     return notes

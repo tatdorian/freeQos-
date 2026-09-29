@@ -72,7 +72,7 @@ def test_ligne_retransmissions_marquee_indisponible() -> None:
     )
     retr = next(r for r in heat["rows"] if r["key"] == "retransmits")
     assert retr["unavailable"] is True
-    assert "hors-bande" in retr["reason"].lower()
+    assert "out-of-band" in retr["reason"].lower()
 
 
 def test_utilisation_none_sans_reference() -> None:

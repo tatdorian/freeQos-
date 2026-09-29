@@ -354,7 +354,7 @@ def test_un_port_partage_est_signale_comme_tel(client: TestClient, topo) -> None
     body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/throughput").json()
 
     assert body["measurement"]["source"] == "port-partage"
-    assert "2 voisins" in body["measurement"]["note"]
+    assert "2 neighbours" in body["measurement"]["note"]
 
 
 def test_un_lien_sans_port_local_le_dit(client: TestClient, topo) -> None:
@@ -799,7 +799,7 @@ def test_activation_leve_le_verrou_global_mais_pas_les_autres(client: TestClient
         json={"router": "pop-test", "dry_run": False, "confirm": True},
     )
     assert avant.status_code == 409
-    assert "lecture seule" in avant.json()["detail"]
+    assert "read-only" in avant.json()["detail"]
 
     client.put(
         "/api/v1/shaping/enforcement",
@@ -934,7 +934,7 @@ def test_boost_enregistre_meme_si_ecriture_coupee(
     # Le rapport est celui de la pose immediate : il nomme l'obstacle plutot
     # que de rendre un compteur a zero sans explication.
     assert body["applied"]["state"] == "file-a-poser"
-    assert "desactive" in body["applied"]["reason"]
+    assert "enforcement is off" in body["applied"]["reason"]
     assert body["applied"]["applied"] == 0
 
 

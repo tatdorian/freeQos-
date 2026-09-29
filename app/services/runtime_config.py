@@ -70,7 +70,7 @@ class Reglage:
         """Ramene une valeur venue de JSON (ou d'un formulaire) au type attendu."""
         if value is None or (isinstance(value, str) and value.strip() == ""):
             if not self.nullable:
-                raise ValeurInvalideError(f"{self.name} : une valeur est obligatoire")
+                raise ValeurInvalideError(f"{self.name}: a value is required")
             return None
 
         if self.kind == "bool":

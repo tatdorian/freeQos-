@@ -462,7 +462,7 @@ def test_une_source_illisible_est_dite_et_non_avalee() -> None:
         pop_name="PoP Test",
     )
     assert any("dhcp" in note.lower() for note in recensement.remarks)
-    assert "illisible" in recensement.sources["/ip/dhcp-server/lease"]
+    assert "unreadable" in recensement.sources["/ip/dhcp-server/lease"]
 
 
 def test_un_sous_reseau_client_sans_aucune_presence_est_signale() -> None:
@@ -485,7 +485,7 @@ def test_une_adresse_hors_de_tout_sous_reseau_connu_est_signalee() -> None:
         ]
     )
     assert _hote(recensement, "172.16.5.9").nature == NATURE_HORS_PERIMETRE
-    assert any("hors de tout sous-reseau" in note for note in recensement.remarks)
+    assert any("outside every subnet" in note for note in recensement.remarks)
 
 
 def test_une_mac_vue_en_l2_sans_ip_est_un_trou_rendu_tel_quel() -> None:
@@ -494,7 +494,7 @@ def test_une_mac_vue_en_l2_sans_ip_est_un_trou_rendu_tel_quel() -> None:
         bridge_hosts=[{"mac-address": "AA:BB:CC:00:0F:0F", "on-interface": "ether4", "vid": "121"}],
     )
     assert [p.mac for p in recensement.l2_only] == ["AA:BB:CC:00:0F:0F"]
-    assert any("sans adresse IP" in note for note in recensement.remarks)
+    assert any("with no known IP address" in note for note in recensement.remarks)
 
 
 def test_la_mac_du_pont_lui_meme_n_est_pas_une_presence() -> None:
@@ -514,7 +514,7 @@ def test_un_client_connu_par_la_seule_arp_est_signale_comme_fragile() -> None:
             }
         ]
     )
-    assert any("SEULE table ARP" in note for note in recensement.remarks)
+    assert any("ONLY from the ARP table" in note for note in recensement.remarks)
 
 
 def test_sans_adressage_lisible_le_recensement_le_dit() -> None:
@@ -531,7 +531,7 @@ def test_sans_adressage_lisible_le_recensement_le_dit() -> None:
         pop_name="PoP Test",
     )
     assert _hote(recensement, "10.30.0.5").nature == NATURE_CLIENT
-    assert any("perimetre est vide" in note for note in recensement.remarks)
+    assert any("scope is empty" in note for note in recensement.remarks)
 
 
 # =========================================================================

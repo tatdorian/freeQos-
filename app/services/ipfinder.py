@@ -762,16 +762,18 @@ class ReverseDns:
         if address in self.cache:
             return self.cache[address]
         nom: str | None = None
+        # PAS de socket.setdefaulttimeout : gethostbyaddr passe par le resolveur
+        # du systeme, qui l'ignore, et ce reglage est GLOBAL au processus -- les
+        # connexions ouvertes au meme instant par d'autres fils (routeurs)
+        # heritaient d'un delai de deux secondes. La borne est posee par
+        # l'appelant (IntelService, pool de fils dedie + asyncio.wait_for).
         try:
-            socket.setdefaulttimeout(self.timeout_s)
             nom = socket.gethostbyaddr(address)[0]
         except OSError:
             nom = None
         except Exception:  # noqa: BLE001 - un resolveur exotique ne casse pas la boucle
             logger.debug("Nom inverse impossible pour %s", address, exc_info=True)
             nom = None
-        finally:
-            socket.setdefaulttimeout(None)
         if len(self.cache) >= self.cache_max:
             self.cache.clear()
         self.cache[address] = nom

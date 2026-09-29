@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -181,6 +182,13 @@ class IntelService:
     max_attempts: int = 3
 
     resolver: ReverseDns = field(default_factory=ReverseDns)
+    #: Fils RESERVES au nom inverse. gethostbyaddr passe par le resolveur du
+    #: systeme, qu'aucun delai Python ne borne : sur le pool commun d'asyncio,
+    #: des resolutions figees finissaient par priver la lecture des routeurs
+    #: de ses fils. Ici, au pire, ce sont ces quatre-la qui attendent.
+    _rdns_pool: ThreadPoolExecutor = field(
+        default_factory=lambda: ThreadPoolExecutor(max_workers=4, thread_name_prefix="rdns")
+    )
     _geoip_reader: Any = None
     _geoip_broken: bool = False
     #: Service -> instant (monotone) jusqu'auquel on ne l'interroge plus.
@@ -232,8 +240,10 @@ class IntelService:
             # doit couter le verdict que les autres ont deja rendu -- ni, pire,
             # faire perdre le LOT ENTIER d'adresses en cours d'enrichissement.
             # Ce sont des bonus, pas un socle.
+            boucle = asyncio.get_running_loop()
             nom = await self._sans_casser(
-                "nom inverse", asyncio.to_thread(self.resolver.lookup, address)
+                "nom inverse",
+                boucle.run_in_executor(self._rdns_pool, self.resolver.lookup, address),
             )
         asn: int | None = None
         registre: dict[str, Any] = {}
@@ -261,7 +271,14 @@ class IntelService:
         peut pas echouer -- etait jete avec le reste.
         """
         try:
-            return await attendu
+            # Une borne DURE par source : un resolveur ou un registre muet ne
+            # doit pas tenir le passage entier (constate : un lot fige plus de
+            # quatre minutes, et le controleur declare "degrade").
+            return await asyncio.wait_for(attendu, timeout=self.timeout_s * 2 + 1)
+        except TimeoutError:
+            logger.debug("Source '%s' : pas de reponse a temps", source)
+            self.last_error = f"{source} : no answer within {self.timeout_s * 2 + 1:.0f} s"
+            return None
         except Exception as exc:  # noqa: BLE001 - une source est un bonus
             logger.debug("Source '%s' muette : %s", source, exc)
             self.last_error = f"{source} : {exc}"
@@ -420,7 +437,7 @@ class IntelService:
                 limit=limit or self.batch_size, max_attempts=self.max_attempts
             )
         except Exception as exc:  # noqa: BLE001 - la base peut ne pas etre prete
-            self.last_error = f"file d'attente illisible : {exc}"
+            self.last_error = f"queue unreadable: {exc}"
             logger.debug("Enrichissement : %s", self.last_error)
             return 0
         traitees = await self._resolve(adresses) if adresses else 0
@@ -460,7 +477,7 @@ class IntelService:
         try:
             await self.destinations.save_location(list(lignes))  # type: ignore[union-attr]
         except Exception as exc:  # noqa: BLE001
-            self.last_error = f"positions non enregistrees : {exc}"
+            self.last_error = f"locations not saved: {exc}"
             return 0
         trouvees = sum(1 for ligne in lignes if ligne.get("latitude") is not None)
         self.located += trouvees
@@ -517,7 +534,7 @@ class IntelService:
             try:
                 await self.destinations.save_intel(list(verdicts))
             except Exception as exc:  # noqa: BLE001
-                self.last_error = f"verdicts non enregistres : {exc}"
+                self.last_error = f"verdicts not saved: {exc}"
                 logger.warning("Enrichissement : %s", self.last_error)
                 return 0
         self.resolved += len(verdicts)

@@ -130,7 +130,7 @@ def test_la_boucle_ne_descend_jamais_sous_le_plancher() -> None:
     assert verdict.action == ACTION_FLOOR
     assert verdict.trim_after == pytest.approx(0.50)
     assert verdict.changed is False
-    assert "capacite" in verdict.reason
+    assert "capacity is needed" in verdict.reason
 
 
 def test_sans_mesure_on_ne_decide_rien() -> None:
@@ -399,7 +399,7 @@ async def test_rien_n_est_ecrit_en_lecture_seule_mais_la_decision_est_lisible(
     assert resultat["sectors"][0]["action"] == ACTION_TIGHTEN
     assert resultat["plans"]  # le plan est calcule et lisible
     assert resultat["routers"] == [] and not ecriture.executed
-    assert any("enforcement desactive" in e for e in resultat["errors"])
+    assert any("enforcement is off" in e for e in resultat["errors"])
 
 
 async def test_la_boucle_ne_purge_jamais(
@@ -486,7 +486,7 @@ async def test_un_abonne_sans_secteur_connu_n_accuse_personne(
     # indiscernable d'un reseau sain : l'exploitant cherchait la panne ailleurs
     # alors que la boucle n'avait simplement aucun secteur a evaluer.
     assert sorted(resultat["unattached"]) == ["dupont", "durand"]
-    assert any("aucun rattache a un secteur" in e for e in resultat["errors"])
+    assert any("none attached to a sector" in e for e in resultat["errors"])
 
 
 async def test_un_secteur_sans_lien_connu_est_signale(
@@ -510,7 +510,7 @@ async def test_un_secteur_sans_lien_connu_est_signale(
     resultat = await service.adjust_for_qoe()
 
     assert resultat["sectors"] == []
-    assert any("aucun lien connu" in e for e in resultat["errors"])
+    assert any("no known link" in e for e in resultat["errors"])
 
 
 async def test_un_routeur_injoignable_n_arrete_pas_la_boucle(

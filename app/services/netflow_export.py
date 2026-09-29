@@ -446,7 +446,7 @@ class NetflowExportService:
         if dry_run or not self.shaping.enforcement_enabled:
             ligne["state"] = ETAT_A_POSER
             ligne["reason"] = (
-                "ecriture desactivee : les commandes sont calculees, rien n'est envoye"
+                "writing is off: commands are computed, nothing is sent"
                 if not self.shaping.enforcement_enabled
                 else "simulation"
             )
@@ -465,7 +465,7 @@ class NetflowExportService:
             ligne["reason"] = "; ".join(str(o.detail) for o in rates if o.detail)
             return ligne
         ligne["state"] = ETAT_POSE
-        ligne["reason"] = f"{resultat.applied} commande(s) appliquee(s)"
+        ligne["reason"] = f"{resultat.applied} command(s) applied"
         await self._declare(collector)
         return ligne
 
@@ -490,7 +490,7 @@ class NetflowExportService:
                     "pop_name": collector.config.effective_pop_name,
                     "sampling_rate": 1,
                     "enabled": True,
-                    "note": "declare automatiquement a la configuration de l'export",
+                    "note": "declared automatically when the export was configured",
                 }
             )
         except Exception as exc:  # noqa: BLE001 - la configuration reste valable

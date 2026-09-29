@@ -644,6 +644,32 @@ def remember_upstream(router_name: str, gateway: str | None, interface: str | No
         _AMONTS.pop(router_name, None)
 
 
+#: Adresse IP -> routeur qui la porte, relu a chaque decouverte : c'est ce qui
+#: permet de nommer le voisin qu'une passerelle designe ("core"), plutot que
+#: de n'afficher que son adresse.
+_PROPRIETAIRES: dict[str, tuple[str, str | None]] = {}
+
+
+def remember_addresses(router_name: str, addresses: list[dict[str, Any]]) -> None:
+    for adresse in [a for a, (r, _i) in _PROPRIETAIRES.items() if r == router_name]:
+        del _PROPRIETAIRES[adresse]
+    for row in addresses:
+        brut = str(row.get("address") or "").split("/")[0].strip()
+        if brut:
+            _PROPRIETAIRES[brut] = (router_name, str(row.get("interface") or "") or None)
+
+
+def router_owning(address: str | None) -> str | None:
+    """Le routeur qui porte cette adresse, s'il est connu."""
+    trouve = _PROPRIETAIRES.get(address) if address else None
+    return trouve[0] if trouve else None
+
+
+def port_owning(address: str | None) -> tuple[str, str | None] | None:
+    """``(routeur, interface)`` qui porte cette adresse, s'ils sont connus."""
+    return _PROPRIETAIRES.get(address) if address else None
+
+
 def upstream_of(router_name: str) -> tuple[str | None, str | None]:
     """``(passerelle, interface)`` de la route par defaut, ou ``(None, None)``."""
     return _AMONTS.get(router_name, (None, None))
@@ -1294,7 +1320,7 @@ class MikrotikCollector:
             capacite = {
                 "username": self.config.rw_username or self.config.username,
                 "can_write": None,
-                "detail": f"droits non verifiables ({type(exc).__name__})",
+                "detail": f"rights could not be checked ({type(exc).__name__})",
             }
 
         return {

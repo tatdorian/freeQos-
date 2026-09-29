@@ -408,7 +408,7 @@ async def test_sans_base_on_ne_pretend_pas_que_la_file_est_conforme(
     )
 
     assert rapport["state"] == ShapingService.ETAT_ERREUR
-    assert "base non initialisee" in rapport["reason"]
+    assert "database not initialised" in rapport["reason"]
 
 
 async def test_retirer_un_client_retire_sa_file_et_elle_seule(

@@ -299,9 +299,9 @@ class ModelRepository:
             )
             if existante is not None and existante["source"] != "api":
                 raise ModelConflictError(
-                    f"'{service_id}' designe une fiche saisie a la main : "
-                    "l'API ne l'ecrase pas. Renommez le service cote facturation, "
-                    "ou supprimez la fiche dans l'interface."
+                    f"'{service_id}' is a record entered by hand: "
+                    "the API does not overwrite it. Rename the service on the billing side, "
+                    "or delete the record in the interface."
                 )
 
             site_id, pop_name = await self._resolve_pop(conn, point_acces, payload)
@@ -364,7 +364,7 @@ class ModelRepository:
                 raise ModelNotFoundError(f"services/{service_id} inconnu")
             if existante["source"] != "api":
                 raise ModelConflictError(
-                    f"'{service_id}' designe une fiche saisie a la main : l'API ne la supprime pas."
+                    f"'{service_id}' is a record entered by hand: the API does not delete it."
                 )
             await conn.execute("DELETE FROM static_clients WHERE reference = $1", service_id)
 

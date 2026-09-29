@@ -495,15 +495,28 @@ def test_jointure_tolere_les_formats_de_mac_differents() -> None:
 
 
 def test_aucun_rattachement_produit_un_avertissement() -> None:
-    """Le silence serait pire : l'operateur doit savoir que la jointure echoue."""
+    """Le silence serait pire : des stations radio sont connues, aucune ne
+    correspond -- l'operateur doit savoir que la jointure echoue."""
     snapshot = TopologySnapshot()
     map_subscribers_to_sectors(
-        snapshot, [{"login": "dupont", "caller_id": "AA:BB:CC:DD:EE:FF"}], {}
+        snapshot,
+        [{"login": "dupont", "caller_id": "AA:BB:CC:DD:EE:FF"}],
+        {"11:22:33:44:55:66": "uisp:ap-1"},
     )
 
     assert snapshot.subscriber_sectors == {}
     assert len(snapshot.warnings) == 1
     assert "caller-id" in snapshot.warnings[0]
+
+
+def test_sans_aucune_station_radio_pas_d_avertissement() -> None:
+    """Ni UISP ni antenne : il n'y a rien a rattacher, et un avertissement que
+    l'operateur ne peut pas corriger ne ferait qu'encombrer l'arbre."""
+    snapshot = TopologySnapshot()
+    map_subscribers_to_sectors(
+        snapshot, [{"login": "dupont", "caller_id": "AA:BB:CC:DD:EE:FF"}], {}
+    )
+    assert snapshot.warnings == []
 
 
 def test_session_sans_caller_id_ignoree() -> None:

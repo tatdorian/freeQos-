@@ -90,8 +90,8 @@ def inspect_write_capability(
         # Compte absent de /user : authentification RADIUS, ou lecture partielle.
         # On ne peut rien affirmer, donc on n'interdit rien.
         verdict.detail = (
-            f"compte '{username}' absent de /user (authentification externe ?) : "
-            "les droits seront verifies a l'execution"
+            f"account '{username}' not in /user (external authentication?): "
+            "rights will be checked when writing"
         )
         return verdict
 
@@ -132,8 +132,8 @@ def permission_hint(error: Exception, username: str) -> str | None:
     texte = f"{type(error).__name__}: {error}".lower()
     if "not enough permissions" in texte or "permission denied" in texte:
         return (
-            f"Le compte '{username}' n'a pas les droits d'ecriture sur ce routeur. "
-            "Ajoutez les politiques 'write' et 'api' a son groupe : "
-            f"/user/group set [find name=<groupe>] policy=read,write,api,test"
+            f"Account '{username}' has no write rights on this router. "
+            "Add the 'write' and 'api' policies to its group: "
+            f"/user/group set [find name=<group>] policy=read,write,api,test"
         )
     return None

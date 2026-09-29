@@ -347,7 +347,7 @@ class TopologyRepository:
         adjacence declaree par l'operateur, pas un port mesure.
         """
         if source_key == target_key:
-            raise ValueError("un lien ne peut pas relier un noeud a lui-meme")
+            raise ValueError("a link cannot connect a node to itself")
         key = f"manual:{source_key}|{target_key}"
         async with self._pool.acquire() as conn:
             await conn.execute(

@@ -172,7 +172,7 @@ def build_heatmap(
                 "label": "Retransmissions TCP",
                 "unit": "%",
                 "unavailable": True,
-                "reason": "Hors-bande : mesurer les retransmissions exige de voir les paquets.",
+                "reason": "Out-of-band: measuring retransmissions requires seeing the packets.",
                 "cells": [],
             },
         ],
