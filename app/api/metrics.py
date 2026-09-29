@@ -673,7 +673,27 @@ async def subscriber_insights(
     resultat = [classify(r, qoe.get(int(r["subscriber_id"]))) for r in lignes]
     ordre = {"at_risk": 0, "upgrade": 1, "healthy": 2}
     resultat.sort(key=lambda x: (ordre[x["status"]], -(x["avg_down_bps"] or 0)))
-    return {"days": days, "summary": summarise(resultat), "subscribers": resultat}
+    # Ce qui manque pour que les listes veuillent dire quelque chose : sans deux
+    # periodes d'historique, sans plan ni mesure de latence, "rien a signaler"
+    # voudrait dire "rien a savoir". L'interface le dit en toutes lettres.
+    try:
+        historique = round(await repo.metrics_history_days(), 1)
+    except Exception:  # noqa: BLE001
+        historique = None
+    readiness = {
+        "history_days": historique,
+        "needed_days": days * 2,
+        "subscribers": len(resultat),
+        "with_plan": sum(1 for x in resultat if x["plan_down_mbps"]),
+        "with_traffic": sum(1 for x in resultat if x["avg_down_bps"]),
+        "with_qoe": sum(1 for x in resultat if x["qoe_score"] is not None),
+    }
+    return {
+        "days": days,
+        "summary": summarise(resultat),
+        "readiness": readiness,
+        "subscribers": resultat,
+    }
 
 
 @router.get("/insights/capacity", summary="How many more subscribers each site can take")

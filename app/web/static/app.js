@@ -7595,7 +7595,11 @@ async function refreshEnforcement() {
   notice.innerHTML = etat.locked
     ? '<div class="notice"><b>Writing locked</b> ' +
       '(<code>ENFORCEMENT_LOCKED=true</code>).</div>'
-    : '';
+    : (!etat.enabled && etat.env_default)
+      ? '<div class="notice warn"><b>Writing paused until the next restart.</b> ' +
+        'Enforcement is on by default and comes back on at startup ' +
+        '(<code>ENFORCEMENT_ENABLED=false</code> for a permanently read-only controller).</div>'
+      : '';
   state.enforcementReason = (etat.last_change && etat.last_change.reason) || null;
 }
 
@@ -8030,6 +8034,39 @@ async function resetSetting(name) {
  *  QUI RISQUE DE PARTIR, QUI EST PRET A MONTER EN GAMME, et combien d'abonnes
  *  chaque site peut encore prendre. Tout vient de ce qui est deja mesure :
  *  debit, plan, latence sous charge. */
+/** Pourquoi les listes sont vides, quand c'est faute de donnees.
+ *
+ *  "Nobody shows a sign of leaving" sur une installation d'hier ne veut pas
+ *  dire "tout va bien" mais "pas encore assez d'historique" : on le dit. */
+function renderInsightsNotice(r, jours) {
+  const hote = document.getElementById('ins-notice');
+  if (!hote) return;
+  if (!r) { hote.innerHTML = ''; return; }
+  const manques = [];
+  if (!r.subscribers) {
+    manques.push('no subscriber collected yet: add a router in Devices');
+  } else {
+    if (r.history_days != null && r.history_days < r.needed_days) {
+      manques.push(esc(r.history_days) + ' day(s) of measurements out of the ' +
+        esc(r.needed_days) + ' needed to compare ' + esc(jours) + ' days with the ' +
+        esc(jours) + ' before (usage drop and silent lines appear after that)');
+    }
+    if (r.with_plan < r.subscribers) {
+      manques.push((r.subscribers - r.with_plan) + ' of ' + r.subscribers +
+        ' subscriber(s) without a plan: "bigger plan" cannot be judged for them ' +
+        '(set the speed in the PPP profile or the API)');
+    }
+    if (!r.with_traffic) manques.push('no traffic measured over the period');
+    if (!r.with_qoe) {
+      manques.push('no latency-under-load measurement yet: the experience score stays empty');
+    }
+  }
+  hote.innerHTML = manques.length
+    ? '<div class="notice warn"><b>Not enough data yet for reliable lists.</b><ul>' +
+      manques.map((m) => '<li>' + m + '</li>').join('') + '</ul></div>'
+    : '';
+}
+
 async function loadInsights() {
   const jours = Number(document.getElementById('ins-days').value) || 7;
   const [abos, sites] = await Promise.all([
@@ -8039,6 +8076,7 @@ async function loadInsights() {
   const lignes = abos.subscribers || [];
   const sm = abos.summary || {};
   document.getElementById('ins-count').textContent = lignes.length + ' subscriber(s)';
+  renderInsightsNotice(abos.readiness, jours);
   document.getElementById('ins-stats').innerHTML =
     statCard(sm.at_risk ? 'crit' : '', 'At risk of leaving', String(sm.at_risk || 0), '',
       'poor experience, usage collapsing, or silent') +

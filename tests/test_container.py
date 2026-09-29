@@ -48,10 +48,17 @@ async def test_une_lecture_seule_posee_au_demarrage_passe_au_nouveau_defaut() ->
     assert depot.valeur is True
 
 
-async def test_une_coupure_faite_par_un_humain_est_respectee() -> None:
+async def test_une_coupure_depuis_l_interface_ne_survit_pas_au_redemarrage() -> None:
+    """DEMANDE EXPLICITE : enforcement toujours actif par defaut. L'interrupteur
+    reste un arret d'urgence, jusqu'au prochain demarrage."""
     depot = DrapeauxMemoire(False, "ui:admin")
-    assert await _charger(Settings(_env_file=None), depot) is False
-    assert depot.valeur is False
+    assert await _charger(Settings(_env_file=None), depot) is True
+    assert depot.valeur is True
+
+
+async def test_la_lecture_seule_durable_passe_par_l_environnement() -> None:
+    depot = DrapeauxMemoire(False, "ui:admin")
+    assert await _charger(Settings(_env_file=None, enforcement_enabled=False), depot) is False
 
 
 def test_choix_du_fournisseur_de_plans(settings: Settings) -> None:
