@@ -84,13 +84,21 @@ def test_l_onglet_capacite_a_disparu() -> None:
     assert "loadCapacity" not in JS
 
 
-def test_l_onglet_services_existe_et_est_cable() -> None:
-    """QUI SE CONNECTE A QUOI. L'onglet qui remplace Capacite doit exister aux
-    trois endroits, sans quoi il s'ouvre sur une section qui ne se remplit
-    jamais -- ou pire, blanchit la page."""
-    assert "services" in ONGLETS
-    assert 'id="view-services"' in HTML
-    assert "services: loadServices" in JS
+def test_services_et_trafic_ne_font_qu_une_page_sans_doublon() -> None:
+    """DEMANDE EXPLICITE : pas deux pages qui disent la meme chose.
+
+    Services repetait la periode, l'avis NetFlow, des chiffres et les
+    connexions en direct deja montres par Trafic. Tout vit dans Trafic, une
+    seule fois ; l'ancien lien #/services y mene."""
+    assert "services" not in ONGLETS
+    assert 'id="view-services"' not in HTML
+    trafic = HTML[HTML.index('id="view-traffic"') :]
+    trafic = trafic[: trafic.index("</section>")]
+    for bloc in ("svc-map", "svc-services", "svc-destinations", "svc-lookup", "svc-rules"):
+        assert f'id="{bloc}"' in trafic
+    for doublon in ("svc-range", "svc-live", "svc-stats"):
+        assert f'id="{doublon}"' not in HTML
+    assert "loadServices()" in JS and "view === 'services'" in JS
 
 
 def test_l_onglet_api_existe_et_porte_la_creation_de_cles() -> None:
@@ -133,11 +141,11 @@ def test_l_interface_ne_fait_plus_la_lecon() -> None:
     assert 'class="help"' not in HTML
 
 
-def test_l_onglet_services_porte_ses_trois_promesses() -> None:
+def test_la_page_trafic_porte_ses_trois_promesses() -> None:
     """Voir les connexions en cours, voir ce qui est atteint, et pouvoir
-    restreindre. Les trois blocs doivent etre la : un formulaire de restriction
-    sans tableau de connexions obligerait a deviner ce qu'on bride."""
-    for identifiant in ("svc-live", "svc-destinations", "svc-services", "svc-rules"):
+    restreindre. Les connexions en cours sont "Qui parle a qui" (flow-pairs) :
+    un formulaire de restriction sans elles obligerait a deviner ce qu'on bride."""
+    for identifiant in ("flow-pairs", "svc-destinations", "svc-services", "svc-rules"):
         assert f'id="{identifiant}"' in HTML, identifiant
     assert 'id="svc-rule-form"' in HTML
     assert "loadServices" in JS

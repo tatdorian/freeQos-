@@ -297,7 +297,7 @@ function gsOpen(action) {
     return;
   }
   if (type === 'ip') {
-    location.hash = '#/services';
+    location.hash = '#/traffic';
     setTimeout(() => {
       const champ = document.getElementById('svc-lookup');
       if (champ) { champ.value = valeur; lookupIp(valeur); champ.scrollIntoView({ block: 'center' }); }
@@ -2101,7 +2101,7 @@ async function loadTraffic() {
   renderFlowStats(etat, top);
   renderFlowTop(top);
   renderFlowExporters(exporteurs);
-  await loadFlowPairs();
+  await Promise.all([loadFlowPairs(), loadServices()]);
 
   const compte = document.getElementById('flow-count');
   if (compte) {
@@ -4336,7 +4336,8 @@ function svcName(ligne) {
 }
 
 async function loadServices() {
-  SVC.minutes = Number(document.getElementById('svc-range').value) || 60;
+  // Une seule periode pour toute la page Trafic : celle du haut.
+  SVC.minutes = Number(document.getElementById('flow-range').value) || 60;
   SVC.category = document.getElementById('svc-category').value || '';
   SVC.search = document.getElementById('svc-search').value.trim();
 
@@ -4354,10 +4355,8 @@ async function loadServices() {
     (SVC.category ? '&category=' + encodeURIComponent(SVC.category) : '') +
     (SVC.search ? '&q=' + encodeURIComponent(SVC.search) : '');
 
-  // Chaque bloc s'affiche a l'arrivee de SA donnee : la carte (trois
-  // agregations) ne retient plus les connexions en direct, qui sont en memoire.
-  const pLive = api('/netflow/connections?limit=80').catch(() => ({ connections: [] }))
-    .then((live) => renderLiveConnections(live));
+  // Chaque bloc s'affiche a l'arrivee de SA donnee. Les connexions en direct
+  // ne sont plus lues ici : "Qui parle a qui" les montre deja, client par client.
   const pRegles = api('/traffic-rules').catch(() => ({ rules: [] }))
     .then((regles) => renderRules(regles));
   const pLieux = api('/netflow/locations' + suffixe).catch(() => null)
@@ -4374,14 +4373,13 @@ async function loadServices() {
   ]);
 
   renderServiceNotice(etat, intel);
-  renderServiceStats(etat, intel, dest);
   renderServiceTable(dest.services || []);
   renderDestinations(dest.destinations || []);
 
   document.getElementById('svc-count').textContent = etat.listening
     ? (dest.destinations || []).length + ' address(es) over ' + SVC.minutes + ' min'
     : 'collector stopped';
-  await Promise.all([pLive, pRegles, pLieux]);
+  await Promise.all([pRegles, pLieux]);
 }
 
 /** Ce qui empeche cette page de repondre, dit en toutes lettres.
@@ -4390,17 +4388,11 @@ async function loadServices() {
  *  pas savoir" : collecteur coupe, suivi des destinations desactive,
  *  enrichissement a l'arret. Les trois appellent des gestes differents. */
 function renderServiceNotice(etat, intel) {
+  // Collecteur coupe, muet ou sans datagramme : deja dit par l'avis NetFlow
+  // juste au-dessus. Ici, uniquement ce qui concerne les destinations.
   const hote = document.getElementById('svc-notice');
+  if (!hote) return;
   const messages = [];
-  if (!etat.enabled) {
-    messages.push('<div class="notice warn"><b>NetFlow collector off.</b></div>');
-  } else if (!etat.listening) {
-    messages.push('<div class="notice err"><b>The collector is not listening.</b> ' +
-      esc(etat.last_error || 'port busy or insufficient privileges') + '</div>');
-  } else if (!etat.packets_received) {
-    messages.push('<div class="notice warn"><b>No datagram received on ' +
-      esc(etat.bind) + '.</b> Traffic tab &gt; Export on the routers.</div>');
-  }
   if (etat.enabled && etat.track_destinations === false) {
     messages.push('<div class="notice warn"><b>Destination tracking disabled.</b></div>');
   }
@@ -4412,64 +4404,6 @@ function renderServiceNotice(etat, intel) {
       ' address(es) waiting for a name.</div>');
   }
   hote.innerHTML = messages.join('');
-}
-
-function renderServiceStats(etat, intel, dest) {
-  const services = (dest.services || []);
-  const total = services.reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
-  const nomme = services
-    .filter((r) => r.service)
-    .reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
-  const streaming = services
-    .filter((r) => r.category === 'streaming')
-    .reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
-  const partNommee = total ? Math.round((nomme / total) * 100) : 0;
-
-  document.getElementById('svc-stats').innerHTML =
-    statCard('down', 'Streaming', bytesText(streaming), '',
-      total ? Math.round((streaming / total) * 100) + ' % of identified traffic' : 'nothing to measure') +
-    statCard('', 'Named traffic', String(partNommee), '%',
-      'the rest has neither a known prefix nor a reverse name') +
-    statCard('', 'Known addresses', String((intel && intel.resolved) || 0), '',
-      ((intel && intel.named) || 0) + ' matched to a service') +
-    statCard(etat.destinations_dropped ? 'warn' : '', 'Current window',
-      String(etat.destinations_window || 0), '',
-      etat.destinations_dropped
-        ? esc(etat.destinations_dropped) + ' dropped: cap reached'
-        : 'subscriber/destination pairs');
-}
-
-/** La fenetre EN COURS, lue dans la memoire du collecteur.
- *
- *  C'est la seule vue en direct du produit. Elle se vide a chaque ecriture de
- *  fenetre puis se remplit : le dire evite qu'un tableau momentanement vide ne
- *  soit lu comme une panne. */
-function renderLiveConnections(data) {
-  const hote = document.getElementById('svc-live');
-  const lignes = (data && data.connections) || [];
-  if (!lignes.length) {
-    hote.innerHTML = '<div class="empty">No connection in the current window.</div>';
-    return;
-  }
-  hote.innerHTML = '<table><thead><tr><th>Client</th><th>Destination</th>' +
-    '<th>Service</th><th>Category</th><th class="num">Port</th><th>Proto</th>' +
-    '<th class="num">Down</th><th class="num">Up</th><th></th>' +
-    '</tr></thead><tbody>' +
-    lignes.map((c) =>
-      '<tr><td class="login">' + clientCell(c) + '</td>' +
-      '<td><a href="#" data-svc-ip="' + esc(c.address) + '"><code>' + esc(c.address) +
-        '</code></a>' + (c.domain ? '<br><b style="font-size:.75rem">' + esc(c.domain) + '</b>' : '') +
-        (c.hostname ? '<br><span class="hint">' + esc(c.hostname) + '</span>' : '') +
-        (lieu(c) ? '<br>' + lieu(c) : '') + '</td>' +
-      '<td>' + svcName(c) + '</td>' +
-      '<td>' + svcBadge(c.category) + '</td>' +
-      '<td class="num">' + esc(c.port || '-') + '</td>' +
-      '<td>' + esc(protoName(c.protocol)) + '</td>' +
-      '<td class="num">' + bytesText(c.down_bytes) + '</td>' +
-      '<td class="num">' + bytesText(c.up_bytes) + '</td>' +
-      '<td>' + (c.pending ? '<span class="hint">to be named</span>' : '') + '</td></tr>').join('') +
-    '</tbody></table>';
-  brancherLiensServices(hote);
 }
 
 function renderServiceTable(services) {
@@ -8165,12 +8099,12 @@ const LOADERS = {
   subscribers: loadSubscribers,
   insights: loadInsights,
   pops: loadRouters,
-  services: loadServices,
   api: loadApi,
   settings: loadSettings,
 };
 
 async function show(view) {
+  if (view === 'services') view = 'traffic'; // ancien onglet, fusionne dans Trafic
   if (!LOADERS[view]) view = 'dashboard';
   state.view = view;
   document.querySelectorAll('section').forEach((s) => s.classList.remove('active'));
@@ -8367,7 +8301,6 @@ document.getElementById('btn-topo-link').addEventListener('click', (e) => {
 });
 document.getElementById('btn-build-tree').addEventListener('click', () => buildTreeFromConfig(false));
 /* ------------------------------------------------------------- services */
-document.getElementById('svc-range').addEventListener('change', loadServices);
 document.getElementById('svc-category').addEventListener('change', loadServices);
 // La recherche se declenche sur 'change' (validation ou perte de focus) et non
 // sur chaque frappe : une requete par caractere ferait autant de lectures de
