@@ -388,6 +388,13 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_RECONCILE, settings.shaping_reconcile_interval_s, reconcile_shaping)
 
+    # Verification des plafonds en tache de fond : la page lit son resultat
+    # sans jamais attendre les routeurs.
+    async def verify_caps() -> None:
+        await shaping.refresh_limit_audit()
+
+    scheduler.add_job("verify_caps", 180.0, verify_caps)
+
     async def qoe_closed_loop() -> None:
         await shaping.adjust_for_qoe()
 

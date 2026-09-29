@@ -2756,7 +2756,13 @@ function renderLimitsAlert(plafonds) {
   if (!hote) return;
   if (!plafonds) { hote.innerHTML = ''; return; }
 
+  // SEULS LES PROBLEMES SUR LESQUELS ON PEUT AGIR. La verification tourne en
+  // tache de fond : un routeur pas encore lu, ou qui a manque une lecture,
+  // n'est PAS un probleme -- huit avertissements "non verifie" repetes a
+  // chaque rafraichissement ne disaient rien d'utile. Un routeur n'est cite
+  // que s'il ne se laisse plus verifier depuis longtemps, en une seule ligne.
   const morceaux = [];
+  const muets = [];
   (plafonds.routers || []).forEach((rt) => {
     const ft = rt.fasttrack || {};
     if (ft.active === true) {
@@ -2765,17 +2771,16 @@ function renderLimitsAlert(plafonds) {
         '<span class="hint">' + esc(ft.detail || '') + '</span>' +
         (ft.remedy ? '<span class="hint">Run on the router: <code>' +
           esc(ft.remedy) + '</code></span>' : '') + '</div>');
-    } else if (ft.active === null) {
-      morceaux.push('<div class="notice warn"><strong>' + esc(rt.router) +
-        ': fasttrack not verified.</strong><span class="hint">' +
-        esc(ft.detail || '') + '</span></div>');
     }
-    if (rt.error) {
-      morceaux.push('<div class="notice warn"><strong>' + esc(rt.router) +
-        ': caps not verified.</strong><span class="hint">' +
-        esc(rt.error) + '</span></div>');
-    }
+    if (rt.unverified_since) muets.push(rt);
   });
+  if (muets.length) {
+    morceaux.push('<div class="notice"><span class="hint" style="margin:0">Caps not checked for ' +
+      esc(depuis(muets[0].unverified_since).replace(' ago', '')) + ' on ' +
+      muets.map((rt) => '<b>' + esc(rt.router) + '</b>').join(', ') +
+      ' (' + esc(muets[0].unverified_reason || 'router too slow') + '). Measurement and shaping ' +
+      'are not affected; the check retries every 3 minutes.</span></div>');
+  }
 
   // Le detail des files qui fuient, hors fasttrack (deja dit plus haut).
   const fuites = [];
@@ -2940,6 +2945,8 @@ async function loadSubscribers() {
         '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
           '<button class="sm" data-bw="' + esc(r.login) + '">Rate</button>' +
           '<button class="sm" data-boost="' + esc(r.login) + '">Boost</button>' +
+          '<button class="sm danger" data-del-sub="' + r.subscriber_id + '" title="Delete this ' +
+            'subscriber and its history">Delete</button>' +
         '</div></td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
@@ -2959,12 +2966,47 @@ async function loadSubscribers() {
     const ligne = rows.find((r) => r.login === b.dataset.boost);
     b.addEventListener('click', () => openBoostEditor(ligne));
   });
+  host.querySelectorAll('[data-del-sub]').forEach((b) => {
+    const ligne = rows.find((r) => String(r.subscriber_id) === b.dataset.delSub);
+    b.addEventListener('click', (e) => { e.stopPropagation(); deleteSubscriber(ligne); });
+  });
 
   // La verification des plafonds part MAINTENANT, sans etre attendue : la
   // liste est deja a l'ecran, elle se decorera quand les routeurs auront
   // repondu. Une page vide n'est pas une reponse plus honnete qu'une page
   // incomplete -- c'est l'absence de reponse.
   annoterLesPlafonds(rows);
+}
+
+/** Supprime un abonne, son historique, et ce qui le ferait revenir.
+ *
+ *  Le message de confirmation dit ce qui part ; la reponse dit ce qui a ete
+ *  fait -- et, pour un abonne PPPoE encore connecte, qu'il reviendra tant que
+ *  sa session existe sur le routeur (ce controleur ne fait que la lire). */
+async function deleteSubscriber(r) {
+  if (!r) return;
+  const statique = r.kind === 'static';
+  const ok = confirm('Delete ' + r.login + '?\n\n' +
+    'Its measurement history, override and boost are deleted' +
+    (statique ? ', and it is removed from the static-client inventory (its queue is removed from the router).'
+      : '.\nA PPPoE subscriber that is still connected reappears at the next cycle: close its session ' +
+        'or remove its PPPoE account to make it disappear for good.') +
+    '\n\nThis cannot be undone.');
+  if (!ok) return;
+  const notice = document.getElementById('sub-notice') || document.getElementById('app-error');
+  try {
+    const rep = await api('/subscribers/' + r.subscriber_id + '?confirm=true', { method: 'DELETE' });
+    const msg = r.login + ' deleted (' + (rep.samples_deleted || 0) + ' sample(s) removed).' +
+      (rep.will_reappear ? ' Its PPPoE session is still open: it will reappear until the session ' +
+        'is closed on the router.' : '');
+    if (notice) {
+      notice.hidden = false;
+      notice.innerHTML = '<div class="notice ' + (rep.will_reappear ? 'warn' : 'ok') + '">' + esc(msg) + '</div>';
+    }
+    await loadSubscribers();
+  } catch (err) {
+    alert(err.message);
+  }
 }
 
 /** Va lire sur les routeurs si les plafonds tiennent, puis decore la liste.
@@ -7351,6 +7393,10 @@ async function loadLimits() {
               'on this scope yet.</div>'));
 
   const routeurs = (data.routers || []).map((rt) => {
+    if (rt.pending) {
+      return '<div class="notice"><strong>' + esc(rt.router) + '</strong>' +
+        '<span class="hint">First check running in the background: refresh in a minute.</span></div>';
+    }
     if (rt.error) {
       return '<div class="notice warn"><strong>' + esc(rt.router) + '</strong>' +
         '<span class="hint">' + esc(rt.error) + '</span></div>';
@@ -7362,9 +7408,14 @@ async function loadLimits() {
         'router throttles anything.</strong><span class="hint">' + esc(ft.detail || '') +
         '</span>' + (ft.remedy ? '<span class="hint"><code>' + esc(ft.remedy) + '</code></span>'
           : '') + '</div>';
-    } else if (ft.active === null) {
-      bandeau = '<div class="notice warn"><strong>Fasttrack not verified.</strong>' +
-        '<span class="hint">' + esc(ft.detail || '') + '</span></div>';
+    } else if (ft.active === null && ft.detail) {
+      bandeau = '<div class="notice"><span class="hint" style="margin:0">Fasttrack state unknown: ' +
+        esc(ft.detail) + '</span></div>';
+    }
+    if (rt.checked_at) {
+      bandeau += '<div class="hint" style="margin:.2rem 0 .5rem">' + esc(rt.router) + ' checked ' +
+        esc(depuis(rt.checked_at)) + (rt.unverified_since ? ' · not checkable since ' +
+          esc(depuis(rt.unverified_since)) + ' (' + esc(rt.unverified_reason || '') + ')' : '') + '</div>';
     }
     const fuites = (rt.queues || []).filter((q) => !q.enforced && q.verdict !== 'sans-plafond');
     const libres = (rt.queues || []).filter((q) => q.verdict === 'sans-plafond');

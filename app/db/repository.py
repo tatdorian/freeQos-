@@ -168,6 +168,31 @@ class MetricsRepository:
             )
         return _with_effective_limits(dict(record)) if record else None
 
+    async def delete_subscriber(self, subscriber_id: int) -> dict[str, Any]:
+        """Supprime un abonne ET son historique (mesures, QoE, rattachements).
+
+        Les tables de mesures sont en ON DELETE CASCADE ; les conversations
+        NetFlow (flow_destinations) passent en SET NULL et restent lisibles
+        sous l'adresse du client. Rend ce qui a ete supprime.
+        """
+        async with self._pool.acquire() as conn, conn.transaction():
+            fiche = await conn.fetchrow(
+                """
+                SELECT s.id, s.login, s.kind, p.name AS pop_name,
+                       (SELECT count(*) FROM subscriber_metrics m
+                         WHERE m.subscriber_id = s.id) AS samples,
+                       (SELECT max(ts) FROM subscriber_metrics m
+                         WHERE m.subscriber_id = s.id) AS last_sample
+                  FROM subscribers s LEFT JOIN pops p ON p.id = s.pop_id
+                 WHERE s.id = $1
+                """,
+                subscriber_id,
+            )
+            if fiche is None:
+                raise LookupError(f"unknown subscriber {subscriber_id}")
+            await conn.execute("DELETE FROM subscribers WHERE id = $1", subscriber_id)
+        return dict(fiche)
+
     async def get_subscriber_by_login(self, login: str) -> dict[str, Any] | None:
         async with self._pool.acquire() as conn:
             record = await conn.fetchrow("SELECT id, kind FROM subscribers WHERE login = $1", login)

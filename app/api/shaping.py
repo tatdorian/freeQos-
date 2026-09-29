@@ -700,6 +700,9 @@ async def _poser_le_plafond(
 async def limit_audit(
     container: ContainerDep,
     router_name: Annotated[str | None, Query(alias="router")] = None,
+    live: Annotated[
+        bool, Query(description="Read the routers now instead of the background result")
+    ] = False,
 ) -> dict[str, Any]:
     """Verifie sur le routeur que chaque plafond decide s'applique VRAIMENT.
 
@@ -714,7 +717,7 @@ async def limit_audit(
 
     Lecture seule.
     """
-    return await container.shaping.limit_audit(router_name)
+    return await container.shaping.limit_audit(router_name, live=live)
 
 
 # ------------------------------------------------- boucle fermee QoE (phase 4)

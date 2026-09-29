@@ -3425,3 +3425,38 @@ async def test_les_ports_en_direct_montrent_tout_port_mesure(database: Database)
         )
     ports = await MetricsRepository(database.pool).ports_live()
     assert [(p["interface"], p["rx_bps"]) for p in ports] == [("ether1", 400e3), ("ether2", 1e3)]
+
+
+async def test_supprimer_un_abonne_emporte_son_historique(
+    database: Database, now: datetime
+) -> None:
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+    pop_id = await directory.ensure_pop("PoP Nord")
+    sid = await directory.ensure_subscriber("parti", pop_id=pop_id)
+    await writer.write_subscriber_metrics(
+        [
+            (
+                sid,
+                SubscriberSample(
+                    ts=now, login="parti", router_name="r", pop_name="p", rx_bps=1.0, tx_bps=2.0
+                ),
+            )
+        ]
+    )
+    supprime = await repo.delete_subscriber(sid)
+    assert supprime["login"] == "parti" and supprime["samples"] == 1
+    assert await repo.get_subscriber(sid) is None
+    async with database.pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM subscriber_metrics WHERE subscriber_id = $1", sid
+            )
+            == 0
+        )
+    with pytest.raises(LookupError):
+        await repo.delete_subscriber(sid)
+    # Le cache d'identifiants l'oublie : l'abonne revenu recoit un NOUVEL id.
+    directory.forget_subscriber("parti")
+    assert await directory.ensure_subscriber("parti", pop_id=pop_id) != sid
