@@ -185,6 +185,9 @@ class FakeRouterOsClient:
             raise self.raise_on_routing_ids
         return list(self.router_id_rows)
 
+    def dns_cache(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in getattr(self, "dns_cache_rows", [])]
+
     def arp(self) -> list[dict[str, Any]]:
         if self.raise_on_arp is not None:
             raise self.raise_on_arp

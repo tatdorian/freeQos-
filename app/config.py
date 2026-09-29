@@ -270,7 +270,7 @@ class Settings(BaseSettings):
     # declaration, rien de plus. Rien de ce qu'elle trouve n'est jamais shape.
     # Les flux NetFlow rendent le meme service sans rien demander aux routeurs
     # (cf. GET /netflow/hosts).
-    vlan_detect_enabled: bool = True
+    vlan_detect_enabled: bool = False
     vlan_detect_interval_s: float = 300.0
     # Au-dela, une adresse qui s'est tue n'est plus une piste : on l'oublie.
     vlan_sighting_retention_s: float = 86_400.0
@@ -317,7 +317,7 @@ class Settings(BaseSettings):
     )
     # Retenir les adresses non rattachees. C'est ce qui alimente l'aide a la
     # declaration des clients VLAN. A false, on ne garde que les abonnes connus.
-    netflow_track_hosts: bool = True
+    netflow_track_hosts: bool = False
     netflow_host_limit: int = 500
     netflow_host_retention_s: float = 86_400.0
     # Retenir l'adresse DISTANTE atteinte par chaque abonne. C'est ce qui

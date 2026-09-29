@@ -177,7 +177,7 @@ def test_aucun_ecouteur_ne_vise_un_element_disparu() -> None:
 def test_les_blocs_replies_ne_chargent_rien_tant_qu_ils_sont_fermes() -> None:
     """C'est ce qui rend leur deplacement gratuit : aucune lecture de plus tant
     que personne ne les regarde."""
-    for bloc in ("net-links-block", "settings-shaping", "sc-candidates-block"):
+    for bloc in ("net-links-block", "settings-shaping"):
         assert f"getElementById('{bloc}')" in JS
 
 
@@ -303,7 +303,6 @@ def test_la_saisie_est_en_haut_du_panneau() -> None:
     form = panneau.index('id="sc-form"')
     assert form < panneau.index('id="sc-table"')
     assert form < panneau.index('id="sc-vlans"')
-    assert form < panneau.index('id="sc-candidates-block"')
 
 
 def test_le_pop_et_l_adresse_sont_exiges_et_nommes() -> None:
@@ -447,3 +446,15 @@ def test_l_onglet_insights_existe_et_est_cable() -> None:
 def test_la_sante_radio_est_affichee_dans_les_equipements() -> None:
     assert 'id="radio-health"' in HTML and "async function loadRadioHealth(" in JS
     assert "'/radios'" in JS
+
+
+def test_aucune_detection_automatique_des_vlan_dans_l_interface() -> None:
+    """Demande explicite : pas de devinette a partir de la table ARP ni des flux.
+    Les clients a IP fixe se declarent a la main."""
+    for trace in (
+        "sc-candidates",
+        "sub-candidates-banner",
+        "flow-hosts",
+        "Addresses seen, undeclared",
+    ):
+        assert trace not in HTML and trace not in JS

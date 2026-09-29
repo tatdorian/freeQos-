@@ -2076,10 +2076,9 @@ async function loadTraffic() {
   FLOW.vantage = document.getElementById('flow-vantage').value || '';
 
   const suffixe = '?minutes=' + FLOW.minutes + (FLOW.vantage ? '&vantage=' + FLOW.vantage : '');
-  const [etat, top, hotes, exporteurs, points] = await Promise.all([
+  const [etat, top, exporteurs, points] = await Promise.all([
     api('/netflow/status'),
     api('/netflow/top' + suffixe + '&limit=25').catch(() => null),
-    api('/netflow/hosts?limit=60').catch(() => ({ hosts: [], vlans: [] })),
     api('/netflow/exporters').catch(() => []),
     api('/netflow/vantages?minutes=' + FLOW.minutes).catch(() => null),
   ]);
@@ -2101,7 +2100,6 @@ async function loadTraffic() {
   renderVantages(points, top);
   renderFlowStats(etat, top);
   renderFlowTop(top);
-  renderFlowHosts(hotes);
   renderFlowExporters(exporteurs);
   await loadFlowPairs();
 
@@ -2340,8 +2338,11 @@ async function loadFlowPairs() {
     return '<tr>' +
       '<td><a href="#" data-pair-ip="' + esc(r.address) + '"><code>' +
         esc(r.address) + '</code></a>' +
-        (domaine(r.hostname)
-          ? '<br><b style="font-size:.75rem">' + esc(domaine(r.hostname)) + '</b>' : '') +
+        // Le nom DEMANDE par le client (cache DNS du routeur) passe avant tout :
+        // c'est "syit.fr", pas "cluster100.hosting.ovh.net".
+        (r.domain || domaine(r.hostname)
+          ? '<br><b style="font-size:.75rem"' + (r.domain ? ' title="Name the client asked for (router DNS cache)"' : '') +
+            '>' + esc(r.domain || domaine(r.hostname)) + '</b>' : '') +
         (r.hostname ? '<br><span class="hint">' + esc(r.hostname) + '</span>' : '') +
         (lieu(r) ? '<br>' + lieu(r) : '') + '</td>' +
       '<td>' + (r.service
@@ -2446,53 +2447,6 @@ async function openPairAddress(address) {
   }
 }
 
-/** Les adresses vues qui ne correspondent a aucune fiche.
- *
- *  A LIRE COMME UNE PISTE. Une imprimante, une camera ou l'equipement d'un
- *  autre operateur laissent exactement la meme trace qu'un client, et rien dans
- *  un flux ne dit quel debit a ete vendu. Le bouton ne cree donc rien : il
- *  emmene vers le formulaire de declaration, ou un humain saisit le plan. */
-function renderFlowHosts(data) {
-  const host = document.getElementById('flow-hosts');
-  const lignes = (data && data.hosts) || [];
-  if (!lignes.length) {
-    host.innerHTML = '<div class="empty">No unmatched address. ' +
-      'Either everything is declared, or nothing talks on your client VLANs.</div>';
-    return;
-  }
-  host.innerHTML = '<table><thead><tr><th>Address</th><th>VLAN</th><th>PoP</th>' +
-    '<th>Exporter</th><th class="num">Down</th><th class="num">Up</th>' +
-    '<th>Seen</th><th></th></tr></thead><tbody>' +
-    lignes.map((h) =>
-      '<tr><td><code>' + esc(h.address) + '</code></td>' +
-      '<td>' + (h.vlan_id ? esc(h.vlan_id) : '<span class="faint">-</span>') + '</td>' +
-      '<td>' + esc(h.pop_name || '-') + '</td>' +
-      '<td>' + esc(h.exporter || '-') + '</td>' +
-      '<td class="num">' + bytesText(h.down_bytes) + '</td>' +
-      '<td class="num">' + bytesText(h.up_bytes) + '</td>' +
-      '<td>' + esc(depuis(h.last_seen)) + '</td>' +
-      '<td><button class="sm" data-declare-host="' + esc(h.address) + '"' +
-        ' data-declare-vlan="' + esc(h.vlan_id || '') + '"' +
-        ' data-declare-pop="' + esc(h.pop_name || '') + '">Declare</button></td>' +
-      '</tr>').join('') + '</tbody></table>';
-  host.querySelectorAll('[data-declare-host]').forEach((b) => {
-    b.addEventListener('click', () => {
-      location.hash = '#/subscribers';
-      // Le panneau de saisie est replie par defaut : l'ouvrir, sinon le
-      // formulaire pre-rempli serait invisible et le geste paraitrait sans effet.
-      const panneau = document.getElementById('sc-panel');
-      if (panneau) panneau.hidden = false;
-      scRemplirFormulaire({
-        reference: '',
-        address: b.dataset.declareHost,
-        vlan: b.dataset.declareVlan ? Number(b.dataset.declareVlan) : null,
-        pop_name: b.dataset.declarePop || '',
-      });
-      scNotice('<span class="warn">Address taken from observed traffic. ' +
-        'Enter the reference and the subscribed rate: nobody can guess those.</span>');
-    });
-  });
-}
 
 function renderFlowExporters(rows) {
   const host = document.getElementById('flow-exporters');
@@ -2976,34 +2930,9 @@ async function renderSubscriberCycles() {
     '</span><span class="pct-hint">Click a subscriber, then "Measure on the router now" to compare with the router.</span></div>';
 }
 
-/** Clients a IP fixe DETECTES sur une VLAN et pas encore declares. Ils ne
- *  sont ni mesures ni brides tant qu'on ne les declare pas : les laisser dans
- *  un volet replie revenait a ne jamais les voir. */
-async function renderCandidatesBanner() {
-  const hote = document.getElementById('sub-candidates-banner');
-  if (!hote) return;
-  let data;
-  try { data = await api('/static-clients/candidates'); } catch (err) { hote.innerHTML = ''; return; }
-  const cands = (data && data.enabled && data.candidates) || [];
-  if (!cands.length) { hote.innerHTML = ''; return; }
-  hote.innerHTML = '<div class="notice warn cand-banner"><b>' + cands.length +
-    ' client(s) seen on a VLAN, not declared yet</b> &mdash; not measured nor shaped until declared.' +
-    '<div class="cand-list">' + cands.slice(0, 6).map((c, i) =>
-      '<span class="cand"><code>' + esc(c.address) + '</code> ' + esc(c.vlan_interface || '') +
-      (c.pop_name ? ' &middot; ' + esc(c.pop_name) : '') +
-      ' <button class="sm primary" data-cand="' + i + '">Declare</button></span>').join('') +
-    (cands.length > 6 ? '<span class="hint">+' + (cands.length - 6) + ' more in Add a client</span>' : '') +
-    '</div></div>';
-  hote.querySelectorAll('[data-cand]').forEach((b) => b.addEventListener('click', async () => {
-    document.getElementById('sc-panel').hidden = false;
-    scDepuisCandidat(cands[Number(b.dataset.cand)]);
-    await Promise.all([loadStaticClients(), loadVlanClients()]);
-  }));
-}
 
 async function loadSubscribers() {
   renderSubscriberCycles();
-  renderCandidatesBanner();
   let query = state.subSearch ? '&search=' + encodeURIComponent(state.subSearch) : '';
   if (state.subPop) query += '&pop_id=' + encodeURIComponent(state.subPop);
   if (state.subKind) query += '&kind=' + encodeURIComponent(state.subKind);
@@ -3368,209 +3297,9 @@ function scRemplirFormulaire(fiche) {
   scNotice('');
 }
 
-/** Ouvre le formulaire pre-rempli a partir d'un candidat detecte.
- *
- *  On reprend ce que l'observation SAIT (adresse, VLAN, PoP) et rien d'autre.
- *  La reference et le plan restent vides a dessein : l'IP ne doit pas servir
- *  d'identite (elle changera), et le debit souscrit ne se devine pas -- c'est
- *  precisement ce qu'aucune detection ne pourra jamais fournir. */
-function scDepuisCandidat(candidat) {
-  scRemplirFormulaire(null);
-  const v = (id, valeur) => {
-    document.getElementById(id).value = valeur === null || valeur === undefined ? '' : valeur;
-  };
-  v('sc-address', candidat.address);
-  v('sc-vlan', candidat.vlan_id);
-  choisirPop('sc-pop', candidat.pop_name);
-  scNotice('<span class="badge">Address, VLAN and PoP taken from detection &middot; ' +
-    'reference and rate to enter</span>');
-  const reference = document.getElementById('sc-reference');
-  reference.focus();
-  reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
-}
 
-async function loadCandidates() {
-  const bloc = document.getElementById('sc-candidates-block');
-  if (bloc && bloc.tagName === 'DETAILS' && !bloc.open) return;
-  const host = document.getElementById('sc-candidates');
-  let data;
-  try {
-    data = await api('/static-clients/candidates');
-  } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
-    return;
-  }
-  if (!data.enabled) {
-    host.innerHTML = '<div class="empty">Detection disabled ' +
-      '(setting <code>vlan_detect_enabled</code>).</div>';
-    return;
-  }
-  const rows = data.candidates || [];
-  if (!rows.length) {
-    host.innerHTML = '<div class="empty">No undeclared address on the routed VLANs.</div>';
-    return;
-  }
-  host.innerHTML =
-    '<table><thead><tr><th>Address</th><th>MAC</th><th class="num">VLAN</th>' +
-    '<th>Interface</th><th>PoP</th><th>Router</th>' +
-    '<th>Seen</th><th>Since</th><th class="sticky-actions"></th>' +
-    '</tr></thead><tbody>' +
-    rows.map((c, i) =>
-      '<tr>' +
-      '<td class="login"><code>' + esc(c.address) + '</code></td>' +
-      '<td style="color:var(--faint)">' + esc(c.mac || '-') + '</td>' +
-      '<td class="num">' + esc(c.vlan_id === null || c.vlan_id === undefined ? '-' : c.vlan_id) + '</td>' +
-      '<td>' + esc(c.vlan_interface || '-') + '</td>' +
-      '<td>' + esc(c.pop_name || '-') + '</td>' +
-      '<td>' + esc(c.router_name || '-') + '</td>' +
-      '<td>' + esc(depuis(c.last_seen)) + '</td>' +
-      '<td style="color:var(--faint)">' + esc(depuis(c.first_seen)) + '</td>' +
-      '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
-        '<button class="sm primary" data-sc-declare="' + i + '">Declare</button>' +
-      '</div></td>' +
-      '</tr>').join('') + '</tbody></table>';
 
-  host.querySelectorAll('[data-sc-declare]').forEach((b) => {
-    b.addEventListener('click', () => scDepuisCandidat(rows[Number(b.dataset.scDeclare)]));
-  });
-}
 
-/** Recensement d'un PoP : TOUS les clients, quelle que soit leur trace.
- *
- *  Les candidats ci-dessus sortent de la detection periodique. Ce panneau lit
- *  les routeurs EN DIRECT et croise sept sources : ARP, baux DHCP, sessions
- *  PPPoE, table de ponts, routes statiques, files deja posees, voisinage. Il
- *  repond a la question que la liste des candidats ne repond pas : "combien de
- *  clients ce PoP porte-t-il, et lesquels ne sont pas dans mon inventaire ?".
- *
- *  Les remarques sont affichees AVANT la table, a dessein : une liste courte se
- *  lirait comme un PoP vide alors qu'elle signale souvent une source illisible
- *  ou un adressage porte par un autre routeur. */
-async function scRecensement() {
-  const hote = document.getElementById('sc-recensement-out');
-  hote.innerHTML = '<div class="empty">Reading the routers (about fifteen tables per PoP)...</div>';
-  let data;
-  try {
-    data = await api('/pops/census');
-  } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
-    return;
-  }
-
-  const pops = data.pops || [];
-  if (!pops.length) {
-    hote.innerHTML = '<div class="empty">No router collected.</div>';
-    return;
-  }
-  const declarations = [];
-  hote.innerHTML = pops.map((pop) => {
-    const c = pop.counts || {};
-    const erreurs = (pop.errors || []).map((e) =>
-      '<div class="notice err">' + esc(e) + '</div>').join('');
-    const remarques = (pop.remarks || []).map((r) =>
-      '<div class="notice"><span class="hint">' + esc(r) + '</span></div>').join('');
-    const lignes = (pop.clients || []).map((cl) => {
-      const declare = cl.declared
-        ? '<span class="badge">' + esc(cl.declared.reference) + '</span>'
-        : (cl.login
-          ? '<span class="badge">PPPoE ' + esc(cl.login) + '</span>'
-          : '<button class="sm primary" data-sc-census="' + (declarations.push({
-              address: cl.address, vlan_id: cl.vlan_id, pop_name: pop.pop_name,
-            }) - 1) + '">Declare</button>');
-      const vlan = cl.vlan_id === null || cl.vlan_id === undefined
-        ? '-'
-        : '<span title="' + esc(cl.vlan_source || '') + '">' + esc(cl.vlan_id) + '</span>';
-      const nom = cl.hostname || cl.identity || cl.comment || '';
-      return '<tr>' +
-        '<td class="login"><code>' + esc(cl.address) + '</code>' +
-          ((cl.routed_prefixes || []).length
-            ? ' <span class="badge" title="block routed behind this address">+ ' +
-              esc(cl.routed_prefixes.join(', ')) + '</span>' : '') +
-        '</td>' +
-        '<td style="color:var(--faint)">' + esc(cl.mac || '-') + '</td>' +
-        '<td class="num">' + vlan + '</td>' +
-        '<td>' + esc(cl.interface || '-') +
-          ((cl.ports || []).length ? ' <span class="hint">' + esc(cl.ports.join(', ')) + '</span>' : '') +
-        '</td>' +
-        '<td style="color:var(--faint)">' + esc((cl.sources || []).join(' + ')) + '</td>' +
-        '<td>' + esc(nom || '-') + '</td>' +
-        '<td>' + esc(cl.router || '-') + '</td>' +
-        '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
-          declare + '</div></td>' +
-        '</tr>';
-    }).join('');
-
-    return '<div class="notice" style="margin-top:.6rem">' +
-      '<strong>' + esc(pop.pop_name) + '</strong> &mdash; ' +
-      esc(c.clients || 0) + ' client(s) located, incl. ' +
-      esc(c.pppoe || 0) + ' over PPPoE. ' +
-      '<b>' + esc(c.non_declares || 0) + ' undeclared in the inventory.</b>' +
-      '</div>' + erreurs + remarques +
-      (lignes
-        ? '<div class="table-wrap"><table><thead><tr>' +
-          '<th>Address</th><th>MAC</th><th class="num">VLAN</th><th>Interface / port</th>' +
-          '<th>Seen by</th><th>Known name</th><th>Router</th><th class="sticky-actions"></th>' +
-          '</tr></thead><tbody>' + lignes + '</tbody></table></div>'
-        : '<div class="empty">No client located on this PoP.</div>');
-  }).join('');
-
-  hote.querySelectorAll('[data-sc-census]').forEach((b) => {
-    b.addEventListener('click', () => scDepuisCandidat(declarations[Number(b.dataset.scCensus)]));
-  });
-}
-
-/** Diagnostic : POURQUOI une entree ARP a ete ecartee, ligne par ligne.
- *
- *  Une adresse est retenue par deux chemins : son interface est une VLAN
- *  declaree sans serveur PPPoE, OU son adresse tombe dans un sous-reseau que le
- *  PoP dessert (/ip/address). Le second chemin est ce qui rend visible un
- *  client derriere un pont en filtrage VLAN, que le nom de l'interface seul
- *  ferait disparaitre. Les sous-reseaux retenus sont affiches : s'ils manquent,
- *  c'est la que se trouve la reponse. */
-async function scDiagnostic() {
-  const hote = document.getElementById('sc-diag-out');
-  hote.innerHTML = '<div class="empty">Reading /ip/arp on the routers...</div>';
-  let data;
-  try {
-    data = await api('/static-clients/candidates/diagnostic');
-  } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
-    return;
-  }
-  if (!data.routers || !data.routers.length) {
-    hote.innerHTML = '<div class="empty">No router collected.</div>';
-    return;
-  }
-  hote.innerHTML = data.routers.map((r) => {
-    if (r.error) {
-      return '<div class="notice err"><strong>' + esc(r.router) + '</strong> : ' +
-        esc(r.error) + '</div>';
-    }
-    const horsVlan = Object.entries(r.interfaces_hors_vlan || {});
-    const motifs = Object.entries(r.by_reason || {})
-      .filter(([m]) => m !== 'retenu')
-      .map(([m, n]) => '<span class="hint">' + esc(n) + ' &times; ' + esc(m) + '</span>')
-      .join('');
-    return '<div class="notice">' +
-      '<strong>' + esc(r.router) + '</strong> &mdash; ' + esc(r.kept) + ' kept out of ' +
-      esc(r.arp_rows) + ' ARP entry(ies).' +
-      '<span class="hint">Declared VLANs: ' +
-        esc((r.vlans_declares || []).join(', ') || 'none') +
-        ((r.interfaces_pppoe || []).length
-          ? ' &middot; excluded (PPPoE): ' + esc(r.interfaces_pppoe.join(', ')) : '') +
-      '</span>' + motifs +
-      (horsVlan.length
-        ? '<div class="notice err" style="margin-top:.5rem">' +
-          '<strong>Dropped: neither a declared VLAN nor a served subnet.</strong> ' +
-          horsVlan.map(([nom, n]) => '<code>' + esc(nom) + '</code> (' + esc(n) + ')').join(', ') +
-          '<span class="hint">Served subnets: ' +
-          esc((r.reseaux_clients || []).join(', ') || 'none read from /ip/address') +
-          '</span>' +
-          '</div>'
-        : '') +
-      '</div>';
-  }).join('');
-}
 
 /** Lit le formulaire. Les champs vides deviennent null plutot que "" : une
  *  chaine vide se lirait comme une valeur posee, un null comme une absence. */
@@ -3819,7 +3548,7 @@ async function scEnregistrer(event) {
     scRemplirFormulaire(null);
     // Declarer un client le retire de la liste des candidats : les deux
     // tableaux doivent etre relus ensemble, sinon il apparait aux deux endroits.
-    await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
+    await Promise.all([loadStaticClients(), loadVlanClients()]);
     // La fiche modifiee change le plan : le tableau des abonnes doit suivre.
     await loadSubscribers();
   } catch (err) {
@@ -3839,7 +3568,7 @@ async function scSupprimer(id, fiches) {
     await api('/static-clients/' + encodeURIComponent(id), { method: 'DELETE' });
     if (scEdition && String(scEdition.id) === String(id)) scRemplirFormulaire(null);
     // Retirer une fiche peut faire REAPPARAITRE son adresse en candidat.
-    await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
+    await Promise.all([loadStaticClients(), loadVlanClients()]);
     await loadSubscribers();
   } catch (err) {
     scNotice('<span class="badge crit">' + esc(err.message) + '</span>');
@@ -4729,8 +4458,8 @@ function renderLiveConnections(data) {
     lignes.map((c) =>
       '<tr><td class="login">' + clientCell(c) + '</td>' +
       '<td><a href="#" data-svc-ip="' + esc(c.address) + '"><code>' + esc(c.address) +
-        '</code></a>' + (c.hostname
-          ? '<br><span class="hint">' + esc(c.hostname) + '</span>' : '') +
+        '</code></a>' + (c.domain ? '<br><b style="font-size:.75rem">' + esc(c.domain) + '</b>' : '') +
+        (c.hostname ? '<br><span class="hint">' + esc(c.hostname) + '</span>' : '') +
         (lieu(c) ? '<br>' + lieu(c) : '') + '</td>' +
       '<td>' + svcName(c) + '</td>' +
       '<td>' + svcBadge(c.category) + '</td>' +
@@ -4787,8 +4516,8 @@ function renderDestinations(lignes) {
     lignes.map((d) =>
       '<tr><td><a href="#" data-svc-ip="' + esc(d.address) + '"><code>' +
         esc(d.address) + '</code></a></td>' +
-      '<td class="login">' + (d.hostname
-        ? esc(d.hostname) : '<span class="hint">-</span>') + '</td>' +
+      '<td class="login">' + (d.domain ? '<b>' + esc(d.domain) + '</b><br>' : '') + (d.hostname
+        ? '<span class="hint">' + esc(d.hostname) + '</span>' : (d.domain ? '' : '<span class="hint">-</span>')) + '</td>' +
       '<td class="nowrap">' + (lieu(d) || '<span class="na">-</span>') + '</td>' +
       '<td>' + svcName(d) + '</td>' +
       '<td>' + svcBadge(d.category) + '</td>' +
@@ -5278,6 +5007,12 @@ async function lookupIp(query) {
     r = await api('/netflow/lookup/' + encodeURIComponent(q) + '?minutes=' + Math.max(SVC.minutes, 1440));
   } catch (err) {
     hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  if (r.internal) {
+    hote.innerHTML = '<div class="notice ok"><b><code>' + esc(r.address) + '</code> belongs to your router ' +
+      esc(r.router) + '</b> (' + esc(String(r.hostname || '').split(' · ').pop()) + '). ' +
+      'Traffic to it stays on your network: no location, no internet service.</div>';
     return;
   }
   const frais = r.live || {};
@@ -8683,14 +8418,9 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
     reference.focus();
     reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
-  await Promise.all([loadStaticClients(), loadVlanClients(), loadCandidates()]);
+  await Promise.all([loadStaticClients(), loadVlanClients()]);
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
-document.getElementById('sc-candidates-block').addEventListener('toggle', (e) => {
-  if (e.target.open) loadCandidates();
-});
-document.getElementById('sc-diag').addEventListener('click', scDiagnostic);
-document.getElementById('sc-recensement').addEventListener('click', scRecensement);
 document.getElementById('sc-cancel').addEventListener('click', () => scRemplirFormulaire(null));
 // La liste se relit quand on ouvre le menu : un routeur ou un PoP ajoute
 // depuis un autre onglet y apparait sans recharger la page.

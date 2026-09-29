@@ -216,9 +216,6 @@
       <div id="flow-pairs"></div>
       <div id="flow-pair-detail"></div>
 
-      <h2>Addresses seen, undeclared</h2>
-      <div class="table-wrap" id="flow-hosts"></div>
-
       <h2>Exporters</h2>
       <div class="table-wrap" id="flow-exporters"></div>
       <form class="stack" id="exporter-form" autocomplete="off">
@@ -445,35 +442,11 @@
         <h3 style="margin:1.4rem 0 .4rem">Clients by VLAN</h3>
         <div class="table-wrap" id="sc-vlans"></div>
 
-        <!-- Les adresses vues et non declarees : le chemin INVERSE, qui part de
-             ce qui parle pour arriver au formulaire ci-dessus ("Declarer" le
-             pre-remplit). Replie, parce qu'on ajoute plus souvent un client
-             qu'on ne depouille une liste de candidats. -->
-        <details id="sc-candidates-block">
-          <summary>Addresses seen, undeclared</summary>
-          <div class="table-wrap" id="sc-candidates"></div>
-          <div class="actions" style="margin-top:.4rem">
-            <button class="sm" id="sc-recensement"
-                    title="PoP census">
-              Census of the PoP (every source)
-            </button>
-            <button class="sm" id="sc-diag"
-                    title="Candidate diagnostics">
-              A client is missing? See why
-            </button>
-          </div>
-          <div id="sc-recensement-out"></div>
-          <div id="sc-diag-out"></div>
-        </details>
       </div>
 
       <!-- Ce qui EMPECHE un plafond de tenir. Vide quand tout bride
            reellement : un bandeau permanent finirait par ne plus se lire. -->
       <div id="limits-alert"></div>
-
-      <!-- Clients vus sur une VLAN et jamais declares : en evidence ici, pas
-           seulement dans un volet replie du formulaire. -->
-      <div id="sub-candidates-banner"></div>
 
       <div class="table-wrap" id="subscribers-table"></div>
     </section>

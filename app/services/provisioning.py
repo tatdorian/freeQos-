@@ -30,8 +30,8 @@ from app.services.collection import (
     JOB_RTT,
     JOB_SUBSCRIBERS,
     JOB_TOPOLOGY,
-    JOB_VLAN_CLIENTS,
 )
+from app.services.dns_names import JOB_DNS_NAMES
 from app.services.netflow_export import JOB_NETFLOW_EXPORT
 from app.services.restrictions import JOB_RESTRICTIONS
 
@@ -48,7 +48,7 @@ ETAPES: tuple[tuple[str, str], ...] = (
     (JOB_RECONCILE, "Create the CAKE queue types and the subscriber queues"),
     (JOB_NETFLOW_EXPORT, "Configure the NetFlow export"),
     (JOB_RESTRICTIONS, "Apply the traffic restrictions"),
-    (JOB_VLAN_CLIENTS, "Detect static-IP clients on the VLANs"),
+    (JOB_DNS_NAMES, "Read the DNS cache (names the clients asked for)"),
     (JOB_RTT, "Measure latency"),
 )
 ETAPE_TIMEOUT_S = 90.0

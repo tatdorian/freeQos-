@@ -121,6 +121,8 @@ class RouterOsReadClient(Protocol):
 
     def pppoe_servers(self) -> list[dict[str, Any]]: ...
 
+    def dns_cache(self) -> list[dict[str, Any]]: ...
+
     # --- Recensement : les sources que l'ARP seule ne remplace pas ---
     def dhcp_leases(self) -> list[dict[str, Any]]: ...
 
@@ -365,6 +367,19 @@ class LibrouterosReadClient:
 
     def addresses(self) -> list[dict[str, Any]]:
         return self._query("/ip/address")
+
+    def dns_cache(self) -> list[dict[str, Any]]:
+        """Cache DNS du routeur : le NOM que les clients ont demande.
+
+        NetFlow ne voit que des adresses ; le nom tape (syit.fr) n'existe que
+        dans la requete DNS. Quand les clients resolvent par le routeur, c'est
+        lui qui le garde. ``cache/all`` (RouterOS 7) porte aussi les CNAME, qui
+        relient le nom demande a l'adresse du CDN ; RouterOS 6 n'a que ``cache``.
+        """
+        try:
+            return self._query("/ip/dns/cache/all")
+        except Exception:  # noqa: BLE001 - RouterOS 6 : pas de 'all'
+            return self._query("/ip/dns/cache")
 
     def arp(self) -> list[dict[str, Any]]:
         """Table ARP. Le seul signal de presence d'un client sans session.
@@ -663,6 +678,34 @@ def router_owning(address: str | None) -> str | None:
     """Le routeur qui porte cette adresse, s'il est connu."""
     trouve = _PROPRIETAIRES.get(address) if address else None
     return trouve[0] if trouve else None
+
+
+def own_addresses() -> dict[str, tuple[str, str]]:
+    """Toutes les adresses connues de nos routeurs -> ``(routeur, interface)``."""
+    sortie: dict[str, tuple[str, str]] = {}
+    for adresse in list(_PROPRIETAIRES):
+        trouve = own_address(adresse)
+        if trouve is not None:
+            sortie[adresse] = trouve
+    for routeur, loopback in _LOOPBACKS_DETECTES.items():
+        sortie[loopback] = (routeur, "loopback")
+    return sortie
+
+
+def own_address(address: str | None) -> tuple[str, str] | None:
+    """``(routeur, "interface" ou "loopback")`` si l'adresse est celle d'un de NOS
+    routeurs -- lue dans leur table d'adresses ou detectee comme loopback."""
+    if not address:
+        return None
+    for routeur, loopback in _LOOPBACKS_DETECTES.items():
+        if loopback == address:
+            return routeur, "loopback"
+    porteur = _PROPRIETAIRES.get(address)
+    if porteur is None:
+        return None
+    routeur, interface = porteur
+    nom = (interface or "").lower()
+    return routeur, "loopback" if nom in ("lo", "loopback") else (interface or "address")
 
 
 def port_owning(address: str | None) -> tuple[str, str | None] | None:

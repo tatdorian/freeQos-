@@ -2062,7 +2062,9 @@ async def test_conteneur_reel_cable_la_detection(database: Database) -> None:
     container = await build_container(settings)
     try:
         assert container.sightings_repo is not None
-        assert JOB_VLAN_CLIENTS in container.scheduler.job_names()
+        # Plus de detection automatique : l'exploitant declare ses clients VLAN
+        # a la main, aucun cycle ne lit la table ARP pour les deviner.
+        assert JOB_VLAN_CLIENTS not in container.scheduler.job_names()
 
         # Aucun routeur dans l'inventaire : le cycle passe sans rien trouver.
         resultat = await container.collection.detect_vlan_clients()

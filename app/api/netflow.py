@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Path, Query, status
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import ContainerDep, TimeRangeDep
+from app.collectors.mikrotik import own_address
 from app.db.destinations_repo import DestinationsRepository
 from app.db.flows_repo import (
     ExporterNotFoundError,
@@ -28,6 +29,7 @@ from app.services import ipfinder
 from app.services.intel import IntelService
 from app.services.netflow_export import NetflowExportService
 from app.services.netflow_service import NetflowService
+from app.services.own_network import SERVICE_INTERNE, mark_all, mark_internal
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +329,12 @@ async def flush_now(container: ContainerDep) -> dict[str, Any]:
 # le trafic est chiffre, il le reste.
 
 
+def _noms(container: Any, lignes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ajoute le nom DEMANDE (cache DNS des routeurs) quand il est connu."""
+    noms = getattr(container, "dns_names", None)
+    return noms.annotate(lignes) if noms is not None else lignes
+
+
 @router.get("/netflow/destinations", summary="Destinations reached by the clients")
 async def destinations(
     container: ContainerDep,
@@ -343,14 +351,16 @@ async def destinations(
     repo = _destinations(container)
     return {
         "minutes": minutes,
-        "destinations": await repo.top(
-            minutes=minutes,
-            subscriber_id=subscriber_id,
-            client=_valide_adresse(client) if client else None,
-            service=service,
-            category=category,
-            search=q,
-            limit=limit,
+        "destinations": mark_all(
+            await repo.top(
+                minutes=minutes,
+                subscriber_id=subscriber_id,
+                client=_valide_adresse(client) if client else None,
+                service=service,
+                category=category,
+                search=q,
+                limit=limit,
+            )
         ),
         "services": await repo.by_service(minutes=minutes),
     }
@@ -441,6 +451,23 @@ async def lookup(
         adresse = candidates[0]
         resolu_depuis = nom
 
+    interne = own_address(adresse)
+    if interne is not None:
+        # Une adresse de NOS routeurs : l'inventaire repond, aucune source externe.
+        routeur, interface = interne
+        return {
+            "query": saisie,
+            "address": adresse,
+            "resolved_from": resolu_depuis,
+            "internal": True,
+            "router": routeur,
+            "hostname": f"{routeur} · {interface}",
+            "service": SERVICE_INTERNE,
+            "category": "internal",
+            "verdict": {"service": SERVICE_INTERNE, "category": "internal", "source": "inventory"},
+            "note": f"This address belongs to your router {routeur} ({interface}): "
+            "the traffic stays on your network.",
+        }
     routable = ipfinder.is_routable(adresse)
     catalogue = ipfinder.match_prefix(adresse).to_dict()
     connu: dict[str, Any] | None = None
@@ -590,6 +617,9 @@ async def connections(
             ligne["country"] = connu.get("country")
             ligne["city"] = connu.get("city")
             ligne["pending"] = connu.get("resolved_at") is None
+        if mark_internal(ligne):
+            ligne["pending"] = False
+    _noms(container, lignes)
     return {
         "window_open": service.listening,
         "tracked": service.track_destinations,
@@ -648,7 +678,7 @@ async def pairs(
     return {
         "minutes": minutes,
         "app": app,
-        "pairs": lignes,
+        "pairs": _noms(container, mark_all(lignes)),
         "live": [(str(d["client"]), str(d["address"])) for d in directes],
         # Les valeurs REELLEMENT presentes : proposer un filtre qui ne rend rien
         # est pire que ne pas le proposer.
