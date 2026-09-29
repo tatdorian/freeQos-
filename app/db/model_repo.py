@@ -71,7 +71,10 @@ def kbps_to_mbps(value: Any) -> float | None:
         nombre = float(value)
     except (TypeError, ValueError) as exc:
         raise ModelValidationError(f"debit invalide : {value!r}") from exc
-    if nombre <= 0:
+    if nombre < 0:
+        # Contrat Preseem : "A negative speed returns a 400 error."
+        raise ModelValidationError(f"negative speed: {value!r}")
+    if nombre == 0:
         return None
     return nombre / 1000.0
 
@@ -261,14 +264,52 @@ class ModelRepository:
     async def list_services(self) -> list[dict[str, Any]]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(_SELECT_SERVICES + " ORDER BY reference")
-        return [self._render_service(row) for row in rows]
+            attente = await conn.fetch("SELECT * FROM model_services_unplaced ORDER BY id")
+        places = [self._render_service(row) for row in rows]
+        connus = {f["id"] for f in places}
+        sans = [_render_unplaced(r) for r in attente if r["id"] not in connus]
+        return sorted(places + sans, key=lambda f: str(f["id"]))
 
     async def get_service(self, service_id: str) -> dict[str, Any]:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(_SELECT_SERVICES + " WHERE reference = $1", service_id)
+            if row is None:
+                attente = await conn.fetchrow(
+                    "SELECT * FROM model_services_unplaced WHERE id = $1", service_id
+                )
+                if attente is not None:
+                    return _render_unplaced(attente)
         if row is None:
             raise ModelNotFoundError(f"services/{service_id} not found")
         return self._render_service(row)
+
+    async def services_without_pop(self) -> list[dict[str, Any]]:
+        """Services API encore au PoP par defaut, avec leur adresse."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT reference, host(address) AS address FROM static_clients "
+                "WHERE source = 'api' AND pop_name = $1",
+                POP_PAR_DEFAUT,
+            )
+        return [dict(r) for r in rows]
+
+    async def set_service_pop(self, service_id: str, pop_name: str) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE static_clients SET pop_name = $2, updated_at = now() "
+                "WHERE reference = $1 AND source = 'api'",
+                service_id,
+                pop_name,
+            )
+
+    async def unplaced_services(self) -> list[dict[str, Any]]:
+        """Services en attente d'adresse, avec la MAC qui permettra de la trouver."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM model_services_unplaced ORDER BY id")
+        return [
+            {"id": r["id"], "cpe_mac": r["cpe_mac"], "payload": _load_json(r["payload"]) or {}}
+            for r in rows
+        ]
 
     async def put_service(self, service_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Cree ou met a jour un service, donc un client a IP fixe.
@@ -279,10 +320,15 @@ class ModelRepository:
         """
         prefixes, mac = parse_attachments(payload.get("attachments"))
         prefixes = prefixes or normalise_prefixes(payload.get("network_prefixes"))
+        # Les debits sont valides des maintenant, adresse ou pas : un debit
+        # negatif est un 400 dans les deux cas, comme chez Preseem.
+        kbps_to_mbps(payload.get("down_speed"))
+        kbps_to_mbps(payload.get("up_speed"))
         if not prefixes:
-            raise ModelValidationError(
-                "un service doit porter au moins un prefixe reseau (attachments[].network_prefixes)"
-            )
+            # SANS ADRESSE (MAC seule, ou aucun attachement) : accepte comme
+            # chez Preseem, et garde de cote. Il devient un client des que sa
+            # MAC apparait dans une table ARP/DHCP d'un routeur.
+            return await self._put_unplaced(service_id, payload, mac)
 
         # ``parent_device_id`` est l'identifiant du point d'acces CHEZ LE
         # FACTURIER. Il est conserve tel quel dans ``access_point_ref``, et
@@ -353,13 +399,49 @@ class ModelRepository:
                 _json_list(prefixes[1:]),
             )
             complete = await conn.fetchrow(_SELECT_SERVICES + " WHERE id = $1", row["id"])
+            await conn.execute("DELETE FROM model_services_unplaced WHERE id = $1", service_id)
         return self._render_service(complete)
 
-    async def delete_service(self, service_id: str) -> None:
+    async def _put_unplaced(
+        self, service_id: str, payload: dict[str, Any], mac: str | None
+    ) -> dict[str, Any]:
         async with self._pool.acquire() as conn:
             existante = await conn.fetchrow(
                 "SELECT source FROM static_clients WHERE reference = $1", service_id
             )
+            if existante is not None and existante["source"] != "api":
+                raise ModelConflictError(
+                    f"'{service_id}' is a record entered by hand: the API does not overwrite it."
+                )
+            # Un service qui PERD son adresse cesse d'etre un client place.
+            await conn.execute(
+                "DELETE FROM static_clients WHERE reference = $1 AND source = 'api'", service_id
+            )
+            row = await conn.fetchrow(
+                """
+                INSERT INTO model_services_unplaced (id, payload, cpe_mac)
+                VALUES ($1, $2::jsonb, $3)
+                ON CONFLICT (id) DO UPDATE
+                   SET payload = EXCLUDED.payload, cpe_mac = EXCLUDED.cpe_mac,
+                       updated_at = now()
+                RETURNING *
+                """,
+                service_id,
+                json.dumps({**payload, "id": service_id}, default=str),
+                mac,
+            )
+        return _render_unplaced(row)
+
+    async def delete_service(self, service_id: str) -> None:
+        async with self._pool.acquire() as conn:
+            attente = await conn.execute(
+                "DELETE FROM model_services_unplaced WHERE id = $1", service_id
+            )
+            existante = await conn.fetchrow(
+                "SELECT source FROM static_clients WHERE reference = $1", service_id
+            )
+            if existante is None and not attente.endswith(" 0"):
+                return
             if existante is None:
                 raise ModelNotFoundError(f"services/{service_id} not found")
             if existante["source"] != "api":
@@ -449,6 +531,15 @@ class ModelRepository:
         }
 
 
+def _render_unplaced(row: asyncpg.Record) -> dict[str, Any]:
+    """Un service sans adresse, rendu tel que la facturation l'a pousse."""
+    fiche = dict(_load_json(row["payload"]) or {})
+    fiche["id"] = row["id"]
+    fiche["source"] = "api"
+    fiche["updated_at"] = row["updated_at"]
+    return fiche
+
+
 _SELECT_SERVICES = """
     SELECT id, reference, label, pop_name, host(address) AS address,
            masklen(address) AS prefix_len, vlan, sector_key,
@@ -483,6 +574,8 @@ def _positive_int(value: Any) -> int | None:
         nombre = int(float(value))
     except (TypeError, ValueError) as exc:
         raise ModelValidationError(f"debit invalide : {value!r}") from exc
+    if nombre < 0:
+        raise ModelValidationError(f"negative speed: {value!r}")
     return nombre if nombre > 0 else None
 
 

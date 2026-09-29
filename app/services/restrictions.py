@@ -330,17 +330,21 @@ class RestrictionService:
         ligne["conflicts"] = [{"rule": c.name, "detail": c.detail} for c in plan.conflicts]
         if plan.is_empty:
             return ligne
-        if dry_run or not self.shaping.enforcement_enabled:
+        # DEMANDE EXPLICITE : un exploitant qui APPLIQUE ecrit quoi qu'il
+        # arrive ; l'interrupteur ne retient que la boucle automatique.
+        explicite = not str(author).startswith("system:")
+        if dry_run or not (self.shaping.enforcement_enabled or explicite):
             ligne["state"] = ETAT_A_POSER
             ligne["reason"] = (
-                "enforcement is off: commands are computed, nothing is written "
-                "until it is on (Settings > Shaping and writing)"
-                if not self.shaping.enforcement_enabled
-                else "simulation: nothing was written"
+                "simulation: nothing was written"
+                if dry_run
+                else "enforcement is off: the automatic loop writes nothing until it is on"
             )
             return ligne
         try:
-            resultat = await self.shaping.apply(plan, dry_run=False, author=author)
+            resultat = await self.shaping.apply(
+                plan, dry_run=False, author=author, explicit=explicite
+            )
         except Exception as exc:  # noqa: BLE001
             logger.exception("Ecriture des restrictions impossible sur %s", router_name)
             ligne["state"] = ETAT_ERREUR
@@ -372,7 +376,7 @@ class RestrictionService:
 
         Seules des SUPPRESSIONS de lignes portant la marque de cette regle sont
         envoyees : lever une restriction ne pose rien et ne touche a aucune
-        autre. Le drapeau d'ecriture reste le dernier mot, comme partout.
+        autre. Geste explicite : il ecrit quoi qu'il arrive.
         """
         vises = [collector.name for collector in self.registry.collectors]
         rapport: dict[str, Any] = {
@@ -381,13 +385,6 @@ class RestrictionService:
             "routers": [],
             "applied": 0,
         }
-        if not self.shaping.enforcement_enabled:
-            rapport["state"] = ETAT_A_POSER
-            rapport["reason"] = (
-                "enforcement is off: nothing is removed from the routers "
-                "until it is on (Settings > Shaping and writing)"
-            )
-            return rapport
         for nom in sorted(vises):
             rapport["routers"].append(
                 await self._apply_one(nom, [], author, False, lift_rule_id=rule_id)

@@ -575,16 +575,17 @@ def test_analyse_distingue_les_files_tierces(
 
 # ---------------------------------------------------------------- politique
 def test_fixer_un_debit_rend_compte_de_ce_qui_a_ete_ecrit(
-    client: TestClient, routeur: FakeRouterOsClient
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
 ) -> None:
     """Fixer un plafond le POSE, et la reponse dit ce qui a ete fait.
 
-    L'ancien contrat -- enregistrer une intention, ecrire dans un second geste
-    -- laissait l'interface afficher "100 kbps impose" sur une ligne qui passait
-    dix fois plus. Le plafond part maintenant sur le routeur au moment de la
-    saisie, et quand il ne peut pas partir (ici : enforcement coupe), la reponse
-    le NOMME au lieu de laisser croire au contraire.
+    DEMANDE EXPLICITE : appliquer ecrit quoi qu'il arrive, meme interrupteur
+    coupe (il ne retient plus que les boucles automatiques).
     """
+    settings.enforcement_enabled = False
+    settings.routers[0].rw_username = "qos-rw"
+    ecriture = FauxClientEcriture()
+    client = make_client(settings, topo, routeur, ecriture=ecriture)
     reponse = client.put(
         "/api/v1/shaping/policies",
         json={
@@ -598,10 +599,8 @@ def test_fixer_un_debit_rend_compte_de_ce_qui_a_ete_ecrit(
     assert reponse.status_code == 200
     corps = reponse.json()
     assert corps["policy"]["max_down_mbps"] == 300
-    # L'enforcement est coupe dans ce bac a sable : rien n'est ecrit, et c'est dit.
-    assert corps["enforcement"]["state"] == "file-a-poser"
-    assert "enforcement" in corps["enforcement"]["reason"]
-    assert client.container.shaping._write_clients == {}  # type: ignore[attr-defined]
+    assert corps["enforcement"]["state"] == "file-posee"
+    assert ecriture.executed
 
 
 def test_fixer_un_debit_sans_poser_reste_possible(client: TestClient) -> None:
@@ -920,22 +919,22 @@ def test_duree_bornee(client: TestClient) -> None:
     assert client.post("/api/v1/shaping/boosts", json=nul).status_code == 422
 
 
-def test_boost_enregistre_meme_si_ecriture_coupee(
-    client: TestClient, topo: FauxDepotTopologie
+def test_boost_pose_meme_interrupteur_coupe(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
 ) -> None:
-    """Poser un boost doit reussir en lecture seule : le retour dit alors
-    pourquoi rien n'a ete pousse."""
+    """Poser un boost est un geste explicite : il ecrit quoi qu'il arrive."""
+    settings.enforcement_enabled = False
+    settings.routers[0].rw_username = "qos-rw"
+    ecriture = FauxClientEcriture()
+    client = make_client(settings, topo, routeur, ecriture=ecriture)
     body = client.post(
         "/api/v1/shaping/boosts",
         json={"login": "dupont", "duration_minutes": 30, "multiplier": 2},
     ).json()
 
     assert body["boost"]["down_mbps"] == 200
-    # Le rapport est celui de la pose immediate : il nomme l'obstacle plutot
-    # que de rendre un compteur a zero sans explication.
-    assert body["applied"]["state"] == "file-a-poser"
-    assert "enforcement is off" in body["applied"]["reason"]
-    assert body["applied"]["applied"] == 0
+    assert body["applied"]["state"] == "file-posee"
+    assert body["applied"]["applied"] >= 1
 
 
 def test_boost_pousse_quand_l_ecriture_est_permise(

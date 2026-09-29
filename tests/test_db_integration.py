@@ -3592,3 +3592,34 @@ async def test_les_tendances_comparent_deux_periodes(database: Database) -> None
     [t] = [r for r in await repo.subscriber_trends(days=7) if r["login"] == "trend"]
     assert t["avg_down_bps"] == 9.5e6 and t["prev_avg_down_bps"] == 8e6
     assert t["samples"] == 4 and t["capped_samples"] == 4
+
+
+async def test_service_sans_adresse_accepte_puis_place(database: Database) -> None:
+    """Contrat Preseem : un service sans IP (MAC seule, ou aucun attachement)
+    est accepte et liste ; des qu'une IP arrive, il devient un client place."""
+    from app.db.model_repo import ModelRepository
+
+    depot = ModelRepository(database.pool)
+    fiche = await depot.put_service(
+        "svc-mac",
+        {"account": "1", "down_speed": 10000, "attachments": [{"cpe_mac": "aa:bb:cc:00:00:01"}]},
+    )
+    assert fiche["id"] == "svc-mac"
+    assert [s["id"] for s in await depot.list_services()] == ["svc-mac"]
+    assert (await depot.unplaced_services())[0]["cpe_mac"] == "AA:BB:CC:00:00:01"
+
+    await depot.put_service(
+        "svc-mac",
+        {
+            "account": "1",
+            "down_speed": 10000,
+            "attachments": [{"cpe_mac": "aa:bb:cc:00:00:01", "network_prefixes": ["10.20.0.5"]}],
+        },
+    )
+    assert await depot.unplaced_services() == []
+    place = await depot.get_service("svc-mac")
+    assert place["attachments"][0]["network_prefixes"] == ["10.20.0.5/32"]
+
+    await depot.put_service("sans-rien", {"account": "2", "up_speed": 2000})
+    await depot.delete_service("sans-rien")
+    assert [s["id"] for s in await depot.list_services()] == ["svc-mac"]

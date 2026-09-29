@@ -671,6 +671,17 @@ CREATE TABLE IF NOT EXISTS model_access_points (
 
 CREATE INDEX IF NOT EXISTS idx_model_ap_site ON model_access_points (site_id);
 
+-- Services pousses SANS adresse (MAC seule, ou aucun attachement) : Preseem les
+-- accepte, on les garde tels quels. Des que la MAC est vue dans une table ARP
+-- ou DHCP d'un routeur, le service devient un client a part entiere.
+CREATE TABLE IF NOT EXISTS model_services_unplaced (
+    id          TEXT PRIMARY KEY,
+    payload     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    cpe_mac     TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- -----------------------------------------------------------------------------
 -- Ce qu'un SERVICE devient chez nous
 --

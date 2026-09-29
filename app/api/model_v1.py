@@ -209,6 +209,7 @@ async def put_object(
     repo = _repository(container)
     try:
         if collection == "services":
+            payload = await _place_by_address(container, payload)
             fiche = await repo.put_service(object_id, payload)
         elif collection == "accounts":
             fiche = await repo.put_account(object_id, payload)
@@ -216,6 +217,13 @@ async def put_object(
             fiche = await repo.put_package(object_id, payload)
         elif collection == "sites":
             fiche = await repo.put_site(object_id, payload)
+            # Un site pousse prend sa place dans l'application : il devient un
+            # PoP, visible dans les listes et l'arbre, avant meme son premier
+            # client.
+            try:
+                await container.directory.ensure_pop(str(fiche.get("name") or object_id))
+            except Exception as exc:  # noqa: BLE001 - la synchronisation prime
+                logger.warning("PoP non cree pour le site %s : %s", object_id, exc)
         else:
             fiche = await repo.put_access_point(object_id, payload)
     except (ModelNotFoundError, ModelConflictError, ModelValidationError) as exc:
@@ -228,8 +236,11 @@ async def put_object(
     if collection == "services":
         # Le compte rendu de la pose reste lisible, mais HORS du corps : la
         # reponse doit etre celle de Preseem, champ pour champ.
-        pose = await _apply_service(container, fiche)
-        response.headers["X-FreeQoS-Enforcement"] = str(pose.get("state") or "unknown")
+        if _adresse(fiche) is None:
+            response.headers["X-FreeQoS-Enforcement"] = "waiting-for-address"
+        else:
+            pose = await _apply_service(container, fiche)
+            response.headers["X-FreeQoS-Enforcement"] = str(pose.get("state") or "unknown")
     return preseem_shape(fiche)
 
 
@@ -244,15 +255,83 @@ async def delete_object(
     testent ``code == 200`` et prenaient un 204 pour un echec."""
     _collection(collection)
     repo = _repository(container)
+    avant: dict[str, Any] | None = None
     try:
         if collection == "services":
+            try:
+                avant = await repo.get_service(object_id)
+            except ModelNotFoundError:
+                avant = None
             await repo.delete_service(object_id)
         else:
             await repo.delete_object(collection, object_id)
     except (ModelNotFoundError, ModelConflictError, ModelValidationError) as exc:
         raise _translate(exc) from exc
     logger.info("%s a supprime %s/%s", caller.label, collection, object_id)
+    if avant is not None and _adresse(avant) is not None:
+        await _retire_service(container, avant)
     return {}
+
+
+def _adresse(fiche: dict[str, Any]) -> str | None:
+    """Le premier prefixe du service, ou None s'il n'en a pas encore."""
+    for attache in fiche.get("attachments") or []:
+        if isinstance(attache, dict):
+            for prefixe in attache.get("network_prefixes") or []:
+                return str(prefixe)
+    return None
+
+
+async def _place_by_address(container: ContainerDep, payload: dict[str, Any]) -> dict[str, Any]:
+    """Situe le service par son IP, comme Preseem qui voit le trafic passer.
+
+    Une session PPPoE avec cette IP, ou un reseau connecte d'un routeur qui la
+    contient : le client prend alors SA place (le PoP de ce routeur), quel que
+    soit le nom de site que la facturation lui a donne.
+    """
+    from app.db.model_repo import normalise_prefixes, parse_attachments
+
+    try:
+        prefixes, _ = parse_attachments(payload.get("attachments"))
+        prefixes = prefixes or normalise_prefixes(payload.get("network_prefixes"))
+    except ModelValidationError:
+        return payload
+    if not prefixes:
+        return payload
+    try:
+        lieu = await container.shaping.locate_address(prefixes[0])
+    except Exception:  # noqa: BLE001 - la synchronisation prime
+        lieu = None
+    if lieu and lieu.get("pop_name"):
+        return {**payload, "pop_name": lieu["pop_name"]}
+    return payload
+
+
+async def _retire_service(container: ContainerDep, fiche: dict[str, Any]) -> None:
+    """Un service supprime n'est plus bride par son debit, tout de suite.
+
+    Sur une session PPPoE, la file revient au plan de la session ; ailleurs, la
+    file du service est retiree du routeur.
+    """
+    adresse = _adresse(fiche)
+    try:
+        lieu = await container.shaping.locate_address(adresse)
+        if lieu and lieu.get("login"):
+            await container.shaping.enforce_static_client(
+                reference=str(fiche["id"]),
+                pop_name=str(lieu.get("pop_name") or ""),
+                author="api:model",
+                address=adresse,
+            )
+        else:
+            await container.shaping.enforce_static_client(
+                reference=str(fiche["id"]),
+                pop_name=str((lieu or {}).get("pop_name") or fiche.get("pop_name") or ""),
+                author="api:model",
+                removing=True,
+            )
+    except Exception as exc:  # noqa: BLE001 - la suppression est faite
+        logger.warning("File non retiree pour le service %s : %s", fiche.get("id"), exc)
 
 
 async def _apply_service(container: ContainerDep, fiche: dict[str, Any]) -> dict[str, Any]:
@@ -268,6 +347,7 @@ async def _apply_service(container: ContainerDep, fiche: dict[str, Any]) -> dict
             reference=str(fiche["id"]),
             pop_name=str(fiche.get("pop_name") or ""),
             author="api:model",
+            address=_adresse(fiche),
         )
     except Exception as exc:  # noqa: BLE001 - la synchronisation prime
         logger.warning("File non posee pour le service %s : %s", fiche.get("id"), exc)

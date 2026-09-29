@@ -1946,7 +1946,7 @@ function poseText(pose) {
   const titres = {
     'file-posee': 'Cap written on the router',
     'file-retiree': 'Queue removed from the router',
-    'file-a-poser': 'Saved, but NOTHING was written',
+    'file-a-poser': 'Saved, queue computed (simulation)',
     'ecarte': 'No queue written',
     'conflit': 'Conflict on the router',
     'sans-routeur': 'No router carries this target',

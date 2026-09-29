@@ -497,6 +497,11 @@ class Settings(BaseSettings):
     # C'est le principe commun a Preseem et LibreQoS.
     shaping_safety_factor: float = 0.90
     shaping_floor_mbps: float = 5.0
+    # Limite appliquee a un client pousse par l'API (ou saisi) SANS forfait ni
+    # debit : il prend sa place et reste bride, au lieu de passer sans limite.
+    # 0 = pas de limite par defaut.
+    default_plan_down_mbps: float = 100.0
+    default_plan_up_mbps: float = 20.0
     # Supprimer nos files devenues inutiles. A desactiver pendant une migration.
     shaping_prune: bool = True
     # Aligner le debit d'une file tierce deja posee sur la cible d'un abonne.

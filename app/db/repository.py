@@ -1031,6 +1031,26 @@ class MetricsRepository:
             )
         return _rows(rows)
 
+    async def subscriber_at_address(self, address: str) -> dict[str, Any] | None:
+        """L'abonne PPPoE/DHCP vu en dernier avec cette IP, et son site.
+
+        C'est ainsi qu'un service pousse par son IP (contrat Preseem) retrouve
+        la session qu'il designe, donc le routeur qui la porte.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT s.login, s.kind, pop.name AS pop_name
+                  FROM subscribers s
+                  LEFT JOIN pops pop ON pop.id = s.pop_id
+                 WHERE s.last_ip = $1::inet AND s.kind <> 'static'
+                 ORDER BY s.last_seen DESC NULLS LAST
+                 LIMIT 1
+                """,
+                address,
+            )
+        return dict(row) if row is not None else None
+
     async def metrics_history_days(self) -> float:
         """Jours de mesures par abonne deja en base (0 si aucune)."""
         async with self._pool.acquire() as conn:

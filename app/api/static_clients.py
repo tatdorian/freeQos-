@@ -116,6 +116,7 @@ async def _poser_la_file(
     reference: str,
     pop_name: str,
     removing: bool = False,
+    address: str | None = None,
 ) -> dict[str, Any]:
     """Applique la file de ce client, et rend ce qui s'est passe.
 
@@ -130,6 +131,7 @@ async def _poser_la_file(
             pop_name=pop_name,
             author="ui:static-client",
             removing=removing,
+            address=address,
         )
     except Exception as exc:  # noqa: BLE001 - la fiche reste valide quoi qu'il arrive
         logger.exception("Pose immediate de la file impossible pour '%s'", reference)
@@ -379,7 +381,10 @@ async def create_static_client(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     logger.info("Client statique '%s' declare depuis l'interface", created["reference"])
     created["enforcement"] = await _poser_la_file(
-        container, reference=created["reference"], pop_name=str(created["pop_name"])
+        container,
+        reference=created["reference"],
+        pop_name=str(created["pop_name"]),
+        address=str(created.get("address") or "") or None,
     )
     _redessiner_l_arbre(container)
     return created
@@ -407,7 +412,10 @@ async def update_static_client(
     except InvalidStaticClientError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     modifie["enforcement"] = await _poser_la_file(
-        container, reference=modifie["reference"], pop_name=str(modifie["pop_name"])
+        container,
+        reference=modifie["reference"],
+        pop_name=str(modifie["pop_name"]),
+        address=str(modifie.get("address") or "") or None,
     )
     _redessiner_l_arbre(container)
     return modifie

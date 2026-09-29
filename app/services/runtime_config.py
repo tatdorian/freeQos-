@@ -136,6 +136,22 @@ REGLAGES: tuple[Reglage, ...] = (
         maximum=10_000.0,
     ),
     Reglage(
+        "default_plan_down_mbps",
+        "shaping",
+        "float",
+        "Default download limit of a client pushed without package or speed (0 = none).",
+        minimum=0.0,
+        maximum=100_000.0,
+    ),
+    Reglage(
+        "default_plan_up_mbps",
+        "shaping",
+        "float",
+        "Default upload limit of a client pushed without package or speed (0 = none).",
+        minimum=0.0,
+        maximum=100_000.0,
+    ),
+    Reglage(
         "shaping_prune",
         "shaping",
         "bool",
