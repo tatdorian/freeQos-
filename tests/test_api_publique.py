@@ -386,8 +386,8 @@ def test_sans_cle_l_api_refuse_et_dit_comment_s_authentifier(pieces) -> None:
 
 
 def test_une_cle_lecture_ne_peut_pas_ecrire(pieces) -> None:
-    """Le 403 est distinct du 401 a dessein : "je ne sais pas qui tu es" et
-    "cette cle ne peut que lire" appellent deux gestes opposes."""
+    """401 comme Preseem ("API key does not have the required permission"),
+    avec la portee manquante dans le message."""
     client, _, _ = pieces
     secret = client.post("/api/v1/api-keys", json={"name": "lecture"}).json()["secret"]
     assert client.get("/model/v1/services", headers=basic(secret)).status_code == 200
@@ -396,7 +396,8 @@ def test_une_cle_lecture_ne_peut_pas_ecrire(pieces) -> None:
         headers=basic(secret),
         json={"attachments": [{"network_prefixes": ["10.0.0.5"]}]},
     )
-    assert reponse.status_code == 403
+    assert reponse.status_code == 401
+    assert "required permission" in reponse.json()["detail"]
 
 
 # =========================================================================
@@ -426,7 +427,7 @@ def test_un_put_cree_puis_remplace_sans_rien_casser(ecriture) -> None:
             "/model/v1/accounts/cust-41", headers=basic(secret), json={"name": "Mairie de Vitre"}
         )
         assert reponse.status_code == 200
-    assert len(client.get("/model/v1/accounts", headers=basic(secret)).json()) == 1
+    assert len(client.get("/model/v1/accounts", headers=basic(secret)).json()["data"]) == 1
 
 
 def test_un_identifiant_contradictoire_est_refuse(ecriture) -> None:
@@ -441,7 +442,7 @@ def test_un_identifiant_contradictoire_est_refuse(ecriture) -> None:
 
 def test_une_collection_inconnue_n_existe_pas(ecriture) -> None:
     client, secret, _, _ = ecriture
-    assert client.get("/model/v1/devices", headers=basic(secret)).status_code == 422
+    assert client.get("/model/v1/devices", headers=basic(secret)).status_code == 404
 
 
 def test_les_debits_sont_en_kbit_s_comme_chez_preseem(ecriture) -> None:
@@ -464,7 +465,8 @@ def test_les_debits_sont_en_kbit_s_comme_chez_preseem(ecriture) -> None:
     fiche = client.get("/model/v1/services/svc-1", headers=basic(secret)).json()
     assert (fiche["down_speed"], fiche["up_speed"]) == (10_000, 2_000)
     assert fiche["attachments"][0]["network_prefixes"] == ["12.12.12.12/32"]
-    assert fiche["attachments"][0]["cpe_mac"] == "00:10:0B:6E:4C:FF"
+    # Rendue comme les integrations Preseem l'envoient : en minuscules.
+    assert fiche["attachments"][0]["cpe_mac"] == "00:10:0b:6e:4c:ff"
 
 
 def test_le_forfait_fournit_le_debit_quand_le_service_n_en_porte_pas(ecriture) -> None:
@@ -529,11 +531,12 @@ def test_supprimer_un_objet_absent_repond_404(ecriture) -> None:
     assert client.delete("/model/v1/sites/inconnu", headers=basic(secret)).status_code == 404
 
 
-def test_supprimer_rend_204_et_retire_la_fiche(ecriture) -> None:
+def test_supprimer_rend_200_et_retire_la_fiche(ecriture) -> None:
+    """200 comme Preseem : les integrations testent code == 200."""
     client, secret, _, _ = ecriture
     client.put("/model/v1/sites/tour-nord", headers=basic(secret), json={"name": "Tour Nord"})
-    assert client.delete("/model/v1/sites/tour-nord", headers=basic(secret)).status_code == 204
-    assert client.get("/model/v1/sites", headers=basic(secret)).json() == []
+    assert client.delete("/model/v1/sites/tour-nord", headers=basic(secret)).status_code == 200
+    assert client.get("/model/v1/sites", headers=basic(secret)).json()["data"] == []
 
 
 # =========================================================================

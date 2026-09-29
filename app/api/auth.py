@@ -115,9 +115,9 @@ async def authenticate(request: Request, container: ContainerDep) -> ApiCaller:
 class RequireScope:
     """Dependance FastAPI : authentifie, puis exige une portee.
 
-    Le 403 est distinct du 401 a dessein : "je ne sais pas qui tu es" et "je
-    sais qui tu es, mais cette cle ne peut que lire" appellent deux gestes
-    differents cote integrateur.
+    401 ET NON 403, COMME PRESEEM : son API repond 401 "API key does not have
+    the required permission" a une cle de lecture qui ecrit. Un integrateur
+    ecrit contre ce code-la ; le message, lui, dit la portee qui manque.
     """
 
     def __init__(self, scope: str) -> None:
@@ -126,9 +126,9 @@ class RequireScope:
     async def __call__(self, caller: Annotated[ApiCaller, Depends(authenticate)]) -> ApiCaller:
         if not caller.has(self.scope):
             raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=(
-                    f"This key does not have the '{self.scope}' scope "
+                    f"API key does not have the required permission: no '{self.scope}' scope "
                     f"(granted scopes: {', '.join(caller.scopes)})"
                 ),
             )

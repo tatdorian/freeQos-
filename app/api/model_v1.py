@@ -38,7 +38,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Body, HTTPException, Path, Response, status
+from fastapi import APIRouter, Body, HTTPException, Path, Query, Response, status
 
 from app.api.auth import ReadDep, WriteDep
 from app.api.deps import ContainerDep
@@ -57,12 +57,42 @@ router = APIRouter(prefix="/model/v1", tags=["public api (model)"])
 COLLECTIONS = (*TABLES.keys(), "services")
 
 CollectionPath = Annotated[
-    str,
-    Path(
-        description="accounts, packages, sites, access_points ou services",
-        pattern="^(accounts|packages|sites|access_points|services)$",
-    ),
+    str, Path(description="accounts, packages, sites, access_points or services")
 ]
+#: Champs propres a freeQoS : Preseem ne les rend pas, un client strict ne doit
+#: pas les voir. Ils restent lisibles par l'interface, qui passe par /api/v1.
+_INTERNES = {"updated_at", "pop_name", "vlan", "enabled", "source", "site", "enforcement"}
+
+
+def _collection(nom: str) -> str:
+    """Collection connue, ou 404 comme Preseem (et non 422)."""
+    if nom not in COLLECTIONS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown object: {nom}")
+    return nom
+
+
+def preseem_shape(fiche: dict[str, Any]) -> dict[str, Any]:
+    """La fiche telle que Preseem la rend : un champ non renseigne est OMIS
+    ("If not set, this field is omitted in the returned json"), jamais null."""
+    sortie: dict[str, Any] = {}
+    for cle, valeur in fiche.items():
+        if cle in _INTERNES or valeur is None:
+            continue
+        if cle == "attachments" and isinstance(valeur, list):
+            valeur = [
+                {
+                    k: (v.lower() if k == "cpe_mac" and isinstance(v, str) else v)
+                    for k, v in a.items()
+                    if v not in (None, [])
+                }
+                if isinstance(a, dict)
+                else a
+                for a in valeur
+            ]
+        sortie[cle] = valeur
+    return sortie
+
+
 IdPath = Annotated[str, Path(min_length=1, max_length=128, description="External identifier")]
 
 
@@ -100,27 +130,59 @@ async def index(caller: ReadDep) -> dict[str, Any]:
 
 
 @router.get("/{collection}", summary="List a collection")
+@router.get("/{collection}/", include_in_schema=False)
 async def list_collection(
-    collection: CollectionPath, container: ContainerDep, caller: ReadDep
-) -> list[dict[str, Any]]:
+    collection: CollectionPath,
+    container: ContainerDep,
+    caller: ReadDep,
+    page: Annotated[int, Query(ge=1)] = 1,
+    limit: Annotated[int | None, Query(ge=1, le=10_000)] = None,
+) -> dict[str, Any]:
+    """``GET /model/v1/<objet>?page=1&limit=500`` -> ``{"data": [...]}``.
+
+    MEME FORME QUE PRESEEM : les integrations lisent ``reponse.data`` et
+    paginent avec ``page`` / ``limit``. Sans ``limit``, tout est rendu.
+    """
+    _collection(collection)
     repo = _repository(container)
     try:
         if collection == "services":
-            return await repo.list_services()
-        return await repo.list_objects(collection)
+            # Seulement ce que l'API a cree, comme chez Preseem. Une fiche saisie a
+            # la main n'appartient pas a la facturation : listee, une
+            # synchronisation qui "supprime ce qu'elle ne connait pas" la
+            # viserait et recevrait un 409 a chaque passage.
+            tout = [f for f in await repo.list_services() if f.get("source") in (None, "api")]
+        else:
+            tout = await repo.list_objects(collection)
     except (ModelNotFoundError, ModelConflictError, ModelValidationError) as exc:
         raise _translate(exc) from exc
+    total = len(tout)
+    if limit is not None:
+        tout = tout[(page - 1) * limit : page * limit]
+    return {
+        "data": [preseem_shape(f) for f in tout],
+        "paginator": {
+            "page": page,
+            "limit": limit or total,
+            "total": total,
+            "total_pages": (-(-total // limit) if limit else 1) if total else 0,
+        },
+    }
 
 
 @router.get("/{collection}/{object_id}", summary="Read a record")
 async def get_object(
     collection: CollectionPath, object_id: IdPath, container: ContainerDep, caller: ReadDep
 ) -> dict[str, Any]:
+    _collection(collection)
     repo = _repository(container)
     try:
         if collection == "services":
-            return await repo.get_service(object_id)
-        return await repo.get_object(collection, object_id)
+            fiche = await repo.get_service(object_id)
+            if fiche.get("source") not in (None, "api"):
+                raise ModelNotFoundError(f"services/{object_id} not found")
+            return preseem_shape(fiche)
+        return preseem_shape(await repo.get_object(collection, object_id))
     except (ModelNotFoundError, ModelConflictError, ModelValidationError) as exc:
         raise _translate(exc) from exc
 
@@ -131,8 +193,10 @@ async def put_object(
     object_id: IdPath,
     container: ContainerDep,
     caller: WriteDep,
+    response: Response,
     payload: Annotated[dict[str, Any], Body(default_factory=dict)],
 ) -> dict[str, Any]:
+    _collection(collection)
     corps_id = payload.get("id")
     if corps_id is not None and str(corps_id) != object_id:
         raise HTTPException(
@@ -162,21 +226,23 @@ async def put_object(
     # prochain cycle de reconciliation : une integration de facturation qui
     # active une ligne s'attend a ce que le client ait son debit tout de suite.
     if collection == "services":
-        fiche["enforcement"] = await _apply_service(container, fiche)
-    return fiche
+        # Le compte rendu de la pose reste lisible, mais HORS du corps : la
+        # reponse doit etre celle de Preseem, champ pour champ.
+        pose = await _apply_service(container, fiche)
+        response.headers["X-FreeQoS-Enforcement"] = str(pose.get("state") or "unknown")
+    return preseem_shape(fiche)
 
 
-@router.delete(
-    "/{collection}/{object_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Remove a record",
-)
+@router.delete("/{collection}/{object_id}", summary="Remove a record")
 async def delete_object(
     collection: CollectionPath,
     object_id: IdPath,
     container: ContainerDep,
     caller: WriteDep,
-) -> Response:
+) -> dict[str, Any]:
+    """200 comme Preseem ("<objet> deleted"), et non 204 : les integrations
+    testent ``code == 200`` et prenaient un 204 pour un echec."""
+    _collection(collection)
     repo = _repository(container)
     try:
         if collection == "services":
@@ -186,7 +252,7 @@ async def delete_object(
     except (ModelNotFoundError, ModelConflictError, ModelValidationError) as exc:
         raise _translate(exc) from exc
     logger.info("%s a supprime %s/%s", caller.label, collection, object_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    return {}
 
 
 async def _apply_service(container: ContainerDep, fiche: dict[str, Any]) -> dict[str, Any]:

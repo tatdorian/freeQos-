@@ -1841,6 +1841,17 @@ curl -u "$CLE:" 'https://freeqos.exemple.net/usage/v1/services?bucket=month'
 | **Méthodes** | `GET` (liste / fiche), `PUT /{id}` (crée ou remplace), `DELETE /{id}` |
 | **Unités** | **kbit/s**, comme Preseem. La conversion vers les Mbit/s internes se fait à la frontière, et nulle part ailleurs. |
 | **Portées** | `read` (les `GET`) et `write` (y ajoute `PUT` et `DELETE`) |
+| **Listes** | `GET /model/v1/<objet>?page=1&limit=500` → `{"data": [...], "paginator": {...}}` : les intégrations lisent `data`, comme chez Preseem. Sans `limit`, tout est rendu. |
+| **Codes** | `200` pour tout succès (y compris `DELETE`), `400` pour un JSON mal formé ou un identifiant contradictoire, `401` pour une clé absente, refusée **ou sans la permission** (comme Preseem), `404` pour un objet absent. |
+| **Réponses** | La fiche telle que Preseem la rend : un champ non renseigné (un débit, par exemple) est **omis**, jamais `null` ; la MAC du CPE est en minuscules. Le compte rendu de la pose de la file d'un service est dans l'en-tête `X-FreeQoS-Enforcement`, hors du corps. |
+
+**Changer de Preseem à freeQoS.** Remplacer `https://api.preseem.com/model/v1/` par
+`https://<votre-freeqos>/model/v1/` et la clé Preseem par une clé freeQoS (onglet **API**).
+Les appels, les corps JSON et les codes de retour sont les mêmes ; ils sont vérifiés en
+rejouant ceux du client PHP de référence (`tests/test_contrat_preseem.py`).
+
+Les services **saisis à la main** dans l'interface ne sont pas listés par l'API : une
+synchronisation qui supprime ce qu'elle ne connaît pas ne les vise donc jamais.
 
 **Pourquoi `PUT` et pas `POST`.** La facturation est la source de vérité, et elle
 resynchronise : elle doit pouvoir **rejouer son inventaire entier** sans se demander ce

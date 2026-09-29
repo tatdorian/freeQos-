@@ -86,7 +86,7 @@ class Database:
 
         indice = self._connect_hint(last_error)
         raise RuntimeError(
-            f"Connexion a PostgreSQL impossible : {last_error}." + (f" {indice}" if indice else "")
+            f"Cannot connect to PostgreSQL: {last_error}." + (f" {indice}" if indice else "")
         ) from last_error
 
     async def _create_database(self) -> bool:
