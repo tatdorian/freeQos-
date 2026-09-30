@@ -37,6 +37,7 @@ import logging
 import socket
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from app.collectors.mikrotik import MikrotikCollector
@@ -56,6 +57,11 @@ PATH_TARGET = "/ip/traffic-flow/target"
 ETAT_POSE = "pose"
 ETAT_A_POSER = "a poser"
 ETAT_ERREUR = "erreur"
+
+
+def dans_un_conteneur() -> bool:
+    """Vrai quand l'application tourne dans un conteneur Docker."""
+    return Path("/.dockerenv").exists()
 
 
 def local_address_for(host: str, port: int = 8728) -> str | None:
@@ -215,6 +221,51 @@ class NetflowExportService:
             return self.collector_address
         return local_address_for(collector.config.host, collector.config.port)
 
+    async def resolve_collector(self, collector: MikrotikCollector) -> str | None:
+        """L'adresse a laquelle CE routeur doit envoyer ses flux.
+
+        DANS DOCKER, l'adresse locale est celle du conteneur (172.x) : le routeur
+        ne peut pas l'atteindre. Le routeur, lui, sait d'ou vient notre session
+        API (/user/active) : c'est l'adresse de l'hote telle qu'il la voit, et
+        le port NetFlow y est publie. Aucune saisie : le deploiement reste une
+        seule commande.
+        """
+        if self.collector_address:
+            return self.collector_address
+        locale = local_address_for(collector.config.host, collector.config.port)
+        if dans_un_conteneur():
+            vue = await self._adresse_vue_par(collector)
+            if vue:
+                return vue
+        return locale
+
+    async def _adresse_vue_par(self, collector: MikrotikCollector) -> str | None:
+        client = getattr(collector, "_client", None)
+        lire = getattr(client, "active_users", None)
+        if lire is None:
+            return None
+        try:
+            lignes = await asyncio.wait_for(asyncio.to_thread(lire), timeout=10.0)
+        except Exception as exc:  # noqa: BLE001 - l'adresse locale reste le repli
+            logger.info("Sessions actives illisibles sur %s : %s", collector.name, exc)
+            return None
+        utilisateur = collector.config.username
+        candidates = [
+            str(ligne.get("address") or "").strip()
+            for ligne in lignes or []
+            if str(ligne.get("via") or "").startswith("api")
+            and _is_ip(str(ligne.get("address") or "").strip())
+        ]
+        miennes = [
+            str(ligne.get("address") or "").strip()
+            for ligne in lignes or []
+            if ligne.get("name") == utilisateur
+            and str(ligne.get("via") or "").startswith("api")
+            and _is_ip(str(ligne.get("address") or "").strip())
+        ]
+        choix = miennes or candidates
+        return choix[0] if choix else None
+
     async def _read(
         self, collector: MikrotikCollector
     ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -228,7 +279,7 @@ class NetflowExportService:
 
     async def state_of(self, collector: MikrotikCollector) -> RouterExportState:
         etat = RouterExportState(router=collector.name, host=collector.config.host)
-        etat.collector = self.collector_for(collector)
+        etat.collector = await self.resolve_collector(collector)
         # Les flux partent du loopback : on s'assure de le connaitre AVANT de
         # calculer la cible (lu sur le routeur s'il n'est ni declare ni decouvert).
         chercher = getattr(collector, "ensure_loopback", None)

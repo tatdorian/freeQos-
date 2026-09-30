@@ -1,6 +1,14 @@
-# Lab / dev : TimescaleDB + l'application hors-bande.
-# En production le controleur tourne sur une VM de management, jamais sur le chemin
-# des paquets et jamais sur un PoP.
+# Deploiement en UNE commande, rien a preparer :
+#
+#     docker compose up -d --build
+#
+# puis ouvrir http://<serveur>:8000 et creer le premier compte. Pas de .env a
+# ecrire (il reste possible pour surcharger un reglage), pas de fichier
+# d'inventaire : les routeurs s'ajoutent depuis l'interface, la cle de
+# chiffrement est generee au premier demarrage, l'adresse NetFlow annoncee aux
+# routeurs est deduite toute seule.
+#
+# Le controleur tourne hors-bande : jamais sur le chemin des paquets.
 
 services:
   timescaledb:
@@ -13,8 +21,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-qos}
       # Le controleur ecrit en continu : on evite les checkpoints trop agressifs.
       TIMESCALEDB_TELEMETRY: "off"
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+    # Base NON publiee sur l'hote : l'application la joint par le reseau
+    # interne, et un PostgreSQL deja present sur le serveur ne bloque rien.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -33,8 +41,10 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
+    # .env FACULTATIF : sans lui, les valeurs par defaut suffisent.
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-qos}:${POSTGRES_PASSWORD:-changeme}@timescaledb:5432/${POSTGRES_DB:-qos}
     ports:
@@ -45,8 +55,6 @@ services:
       # erreur nulle part, juste un onglet Trafic qui reste vide.
       - "${NETFLOW_PORT:-2055}:2055/udp"
     volumes:
-      # Inventaire des routeurs monte en lecture seule (les mots de passe restent en env).
-      - ./config:/app/config:ro
       # Cle de chiffrement generee au premier demarrage. Volume NOMME et non
       # bind-mount : elle survit a un docker compose down/up, qui recree le
       # conteneur. La perdre rendrait illisibles les mots de passe des routeurs

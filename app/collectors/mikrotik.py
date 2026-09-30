@@ -154,6 +154,8 @@ class RouterOsReadClient(Protocol):
 
     def traffic_flow(self) -> dict[str, Any]: ...
 
+    def active_users(self) -> list[dict[str, Any]]: ...
+
     def traffic_flow_targets(self) -> list[dict[str, Any]]: ...
 
     def queue_types(self) -> list[dict[str, Any]]: ...
@@ -534,6 +536,11 @@ class LibrouterosReadClient:
         files.
         """
         return self._query("/ip/firewall/mangle")
+
+    def active_users(self) -> list[dict[str, Any]]:
+        """Sessions ouvertes sur le routeur (/user/active) : dont la NOTRE, avec
+        l'adresse depuis laquelle le routeur nous voit."""
+        return self._query("/user/active")
 
     def traffic_flow(self) -> dict[str, Any]:
         """Reglage d'export NetFlow du routeur : actif, et sur quelles interfaces.

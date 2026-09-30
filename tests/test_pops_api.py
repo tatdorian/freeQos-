@@ -185,11 +185,11 @@ def test_inventaire_expose_les_deux_sources(
     assert body["secrets_available"] is True
 
 
-def test_retirer_puis_restaurer_un_routeur_fichier(
+def test_retirer_un_routeur_fichier_l_efface_pour_de_bon(
     client: TestClient, repo: InMemoryRoutersRepository
 ) -> None:
-    """Un routeur fichier peut etre ecarte depuis l'interface, puis restaure,
-    sans toucher au YAML."""
+    """DEMANDE EXPLICITE : un routeur retire disparait, sans bandeau "Restore".
+    (La route de restauration reste pour l'API, l'interface ne la propose plus.)"""
     # 'pop-test' vient de l'inventaire fichier (conftest).
     assert "pop-test" in {c.name for c in client.container.collection.collectors}
 

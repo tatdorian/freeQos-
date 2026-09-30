@@ -3972,19 +3972,9 @@ async function loadRouters() {
         '</div>' : '') +
       '</div>';
   });
-  // Routeurs fichier retires a la main : proposer de les restaurer.
-  (data.hidden || []).forEach((h) => {
-    html += '<div class="notice"><strong>' + esc(h.name) + '</strong> is removed from ' +
-      'the file inventory.' +
-      '<div class="actions" style="margin-top:.5rem">' +
-      '<button class="sm" data-restore-file="' + esc(h.name) + '">Restore</button>' +
-      '</div></div>';
-  });
   notice.innerHTML = html;
   notice.querySelectorAll('[data-hide-file]').forEach((b) =>
     b.addEventListener('click', () => hideFileRouter(b.dataset.hideFile)));
-  notice.querySelectorAll('[data-restore-file]').forEach((b) =>
-    b.addEventListener('click', () => restoreFileRouter(b.dataset.restoreFile)));
   document.getElementById('btn-save').disabled = !data.secrets_available;
 
   const host = document.getElementById('routers-table');
@@ -4105,17 +4095,9 @@ async function showRouterExport(name) {
  *  cote interface, de retirer un routeur fichier — et il est reversible. */
 async function hideFileRouter(name) {
   if (!confirm('Remove "' + name + '" from the inventory?\n\n' +
-    'The router is dropped (polling and warnings), without changing ' +
-    'config/routers.yml. You will be able to restore it.')) return;
+    'The router, its site and its history are deleted for good.')) return;
   try {
     await api('/pops/routers/file/' + encodeURIComponent(name), { method: 'DELETE' });
-    await loadRouters();
-  } catch (err) { alert(err.message); }
-}
-
-async function restoreFileRouter(name) {
-  try {
-    await api('/pops/routers/file/' + encodeURIComponent(name) + '/restore', { method: 'POST' });
     await loadRouters();
   } catch (err) { alert(err.message); }
 }

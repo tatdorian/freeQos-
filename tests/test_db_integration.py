@@ -3656,3 +3656,42 @@ async def test_latence_par_abonne_mediane_et_p95(database: Database) -> None:
     assert ligne["samples"] == 11
     assert ligne["median_ms"] == 15.0
     assert ligne["best_ms"] == 10.0
+
+
+async def test_pop_nord_et_sud_effaces_de_la_base(database: Database) -> None:
+    """DEMANDE EXPLICITE : plus aucune trace de pop-nord / pop-sud, ni bandeau
+    "Restore", ni site, ni abonne, ni historique. Un site actif reste."""
+    from types import SimpleNamespace
+
+    from app.config import Settings
+    from app.db.routers_repo import RoutersRepository
+    from app.services.pop_cleanup import purge_removed_routers
+
+    directory = PgDirectory(database.pool)
+    nord = await directory.ensure_pop("PoP Nord", "10.0.0.1")
+    await directory.ensure_pop("pop-sud")
+    await directory.ensure_subscriber("client-nord", pop_id=nord, plan=Plan(10, 2, "mock"))
+    garde = await directory.ensure_pop("Alpha")
+    from app.services.crypto import SecretBox, generate_key
+
+    routeurs = RoutersRepository(database.pool, SecretBox(generate_key()))
+    await routeurs.hide_file_router("pop-nord")
+    await routeurs.hide_file_router("pop-sud")
+
+    conteneur = SimpleNamespace(
+        settings=Settings(_env_file=None, database_url="postgresql://x/y"),
+        routers_repo=routeurs,
+        repository=MetricsRepository(database.pool),
+        directory=directory,
+    )
+    retires = await purge_removed_routers(conteneur)
+
+    assert sorted(retires) == ["PoP Nord", "pop-sud"]
+    assert await routeurs.list_hidden_file_routers() == []
+    restants = {p["name"] for p in await MetricsRepository(database.pool).list_pops()}
+    assert restants == {"Alpha"}
+    async with database.pool.acquire() as conn:
+        assert (
+            await conn.fetchval("SELECT count(*) FROM subscribers WHERE login='client-nord'") == 0
+        )
+    assert garde

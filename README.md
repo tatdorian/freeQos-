@@ -113,17 +113,24 @@ CPE n'est reconnu nulle part reste sans secteur : sa file est posée à la racin
 
 ---
 
-## Démarrage rapide (lab)
+## Déploiement : une seule commande
 
 ```bash
-cp .env.example .env                       # adapter POSTGRES_PASSWORD au minimum
-cp config/routers.example.yml config/routers.yml
-export MT_POP_1_PASSWORD='...'             # jamais dans un fichier versionné
-
 docker compose up -d --build
-open http://localhost:8000/                # tableau de bord
-open http://localhost:8000/docs            # API
 ```
+
+C'est tout. Ouvrir ensuite `http://<serveur>:8000/`, créer le premier compte, puis ajouter
+les routeurs depuis l'onglet **Devices** : types CAKE, premières files et export NetFlow
+sont posés automatiquement. Rien à préparer :
+
+- pas de `.env` à écrire (il reste possible pour surcharger un réglage, cf. `.env.example`) ;
+- pas de fichier d'inventaire : les routeurs vivent en base, mot de passe chiffré ;
+- la clé de chiffrement est générée au premier démarrage et conservée dans un volume ;
+- l'adresse NetFlow annoncée aux routeurs est déduite toute seule (le routeur dit
+  d'où il voit l'application) ;
+- la base n'est pas publiée sur l'hôte : un PostgreSQL déjà présent ne gêne pas.
+
+Mise à jour : `git pull && docker compose up -d --build` (données conservées).
 
 > **`failed to solve: DeadlineExceeded … registry-1.docker.io … i/o timeout`** : le serveur
 > n'atteint pas Docker Hub (pare-feu, proxy, DNS, IPv6 cassé) — ce n'est pas le code. Le build
