@@ -1853,7 +1853,7 @@ function gaugeSvg(downBps, upBps, maxBps, qoe) {
     '<text x="150" y="114" text-anchor="middle" font-size="10" fill="var(--up)">&uarr;' +
       esc(bpsShort(upBps)) + '</text>' +
     '</svg>' +
-    '<svg width="46" height="128" viewBox="0 0 46 128"><text class="lbl" x="23" y="10" ' +
+    '<svg width="46" height="128" viewBox="0 0 46 128"><text class="lbl" fill="var(--muted)" x="23" y="10" ' +
       'text-anchor="middle">Score</text>' +
     '<rect x="14" y="14" width="18" height="120" rx="3" fill="var(--surface-2)"></rect>' +
     '<rect x="14" y="' + (14 + 120 - qh) + '" width="18" height="' + qh + '" rx="3" fill="' +
@@ -1910,112 +1910,124 @@ function renderQueuePanels() {
   const naSq = sqCell('n/d', 'none');
   const naCell = '<td class="num na">' + naSq + '</td>';
 
-  // ---- Live Queue State
-  const dwn = (t, s) => '<td class="num">' + sqCell(t, s) + '</td>';
+  // ---- Right now
+  // Un NOEUD n'a ni plan ni limite : son debit se lit contre la capacite de son
+  // lien quand elle est connue, sinon sans couleur. Sa latence et son score sont
+  // ceux de son PIRE client : c'est celui-la qu'on appellera.
+  const envNoeud = isClient ? {} : ((exec.envByPop || {})[node.name] || {});
+  const capaNoeud = isClient ? 0 : (envNoeud.capacity || envNoeud.nominal || 0) * 1e6;
+  const refDown = isClient ? effDown : capaNoeud;
+  const refUp = isClient ? effUp : 0;
+  const sevDebit = (v, ref) => (ref > 0 ? severity(pct(v, ref)) : 'none');
+  const dwn = (t, sv) => '<td class="num">' + sqCell(t, sv) + '</td>';
   live.innerHTML =
     '<h3>Right now</h3>' +
-    '<table class="lq-table"><thead><tr><th></th><th>Download</th><th>Upload</th></tr></thead><tbody>' +
-    // UN NOEUD (PoP) N'A PAS DE PLAN : c'est un point de connexion. Plan et
-    // limite ne s'affichent que pour un client.
-    (isClient
-      ? '<tr><td>Limit applied</td>' + dwn(mbps(effDown / 1e6), 'ok') + dwn(mbps(effUp / 1e6), 'ok') +
-        '</tr>' +
-        '<tr><td>Plan</td><td class="num na">' + sqCell(mbps(confDown / 1e6), 'none') +
-        '</td><td class="num na">' + sqCell(mbps(confUp / 1e6), 'none') + '</td></tr>'
-      : '') +
+    '<table class="lq-table"><thead><tr><th></th><th>&darr; Down</th><th>&uarr; Up</th></tr></thead><tbody>' +
     '<tr><td>Throughput</td>' + (synth ? naCell + naCell
-      : dwn(bpsText(down), severity(pct(down, effDown))) +
-        dwn(bpsText(up), severity(pct(up, effUp)))) + '</tr>' +
-    '<tr><td>RTT</td><td class="num">' + rttSq(rttMs) + '</td><td class="num">' + rttSq(rttMs) + '</td></tr>' +
-    '<tr><td>Experience</td><td class="num">' + qooSq + '</td><td class="num">' + qooSq + '</td></tr>' +
+      : dwn(bpsText(down), sevDebit(down, refDown)) + dwn(bpsText(up), sevDebit(up, refUp))) + '</tr>' +
+    (isClient
+      ? '<tr><td>Plan</td>' + dwn(mbps(confDown / 1e6), 'none') + dwn(mbps(confUp / 1e6), 'none') + '</tr>'
+      : '') +
+    '<tr><td>' + (isClient ? 'Latency' : 'Worst latency') + '</td><td class="num" colspan="2">' +
+      rttSq(rttMs) + '</td></tr>' +
+    '<tr><td>' + (isClient ? 'Score' : 'Worst score') + '</td><td class="num" colspan="2">' +
+      qooSq + '</td></tr>' +
     '</tbody></table>';
 
-  // ---- Node Snapshot (jauge, ou n/d si aucune mesure)
-  snap.innerHTML = '<h3>Load vs limit</h3>' +
-    (synth
-      ? '<div class="empty">No measurement for this node yet ' +
-        '(shown from the topology).</div>'
-      : gaugeSvg(down, up, Math.max(isClient ? effDown : nodeCapacity(node), down, 1), qoe));
-
-  // ---- Node Details
-  const limitedBy = isClient
-    ? ({ plan: 'Plan', override: 'Override', boost: 'Boost' }[client.limit_source] || client.limit_source || '-')
-    : 'Sum of its clients';
   if (isClient) {
-    const origine = { api: 'pushed by the API', ui: 'set by hand', default: 'default plan' };
+    // ---- Usage du plan + ce qui fait le score
+    const composantes = note
+      ? [['Baseline', note.rtt_ms != null ? Math.round(note.rtt_ms) + ' ms' : '-'],
+        ['Under load', note.bloat_ms != null ? '+' + Math.round(note.bloat_ms) + ' ms' : '-'],
+        ['Grade', note.grade || '-']]
+      : [['Baseline', rttMs != null ? Math.round(rttMs) + ' ms' : '-'], ['Under load', '-']];
+    snap.innerHTML = '<h3>Plan usage</h3>' +
+      (effDown > 0 ? gaugeSvg(down, up, effDown, qoe)
+        : '<div class="empty">No limit on this client.</div>') +
+      '<div class="lq-chips" title="Score = the lower of: baseline latency, latency added under load">' +
+      composantes.map((c) => '<span><i>' + esc(c[0]) + '</i> <b>' + esc(c[1]) + '</b></span>').join('') +
+      '</div>';
+
     const src = String(client.plan_source || '');
-    const deQui = src.startsWith('api') ? origine.api : src.startsWith('ui') ? origine.ui
-      : src.startsWith('default') ? origine.default : src.startsWith('static') ? 'client record' : (src || '-');
+    const deQui = src.startsWith('api') ? 'API' : src.startsWith('ui') ? 'Set by hand'
+      : src.startsWith('default') ? 'Default plan' : src.startsWith('static') ? 'Client record' : (src || '-');
     det.innerHTML =
-      '<h3>Plan and limit</h3>' +
+      '<h3>Plan</h3>' +
       '<div class="lq-kv">' +
         '<span class="k">Plan</span><span class="v">' +
           esc(mbps(confDown / 1e6) + ' / ' + mbps(confUp / 1e6)) + '</span>' +
-        '<span class="k">Plan source</span><span class="v">' + esc(deQui) + '</span>' +
-        '<span class="k">Limit applied</span><span class="v">' +
-          esc(mbps(effDown / 1e6) + ' / ' + mbps(effUp / 1e6)) + '</span>' +
-        '<span class="k">Limit comes from</span><span class="v">' + esc(limitedBy) + '</span>' +
-        '<span class="k">Attached to</span><span class="v">' + esc(client.pop_name || '-') + '</span>' +
+        '<span class="k">Source</span><span class="v">' + esc(deQui) + '</span>' +
+        (client.limit_source && client.limit_source !== 'plan'
+          ? '<span class="k">Limit applied</span><span class="v">' +
+            esc(mbps(effDown / 1e6) + ' / ' + mbps(effUp / 1e6)) + ' (' + esc(client.limit_source) + ')</span>'
+          : '') +
+        '<span class="k">Link</span><span class="v">' + esc(client.pop_name || '-') + '</span>' +
       '</div>' +
-      '<div class="lq-note">The plan belongs to the client: it is pushed by the billing API ' +
-        'or changed on the Plans page, and applied on the router right away.</div>' +
-      '<div class="actions" style="margin-top:.6rem">' +
-        '<button class="sm primary" id="lq-plan">Change this client\'s plan</button> ' +
-        '<button class="sm" id="lq-open">Open in the tree</button></div>';
+      '<div class="actions" style="margin-top:.8rem">' +
+        '<button class="sm primary" id="lq-plan">Change plan</button></div>';
   } else {
+    // ---- Les clients de ce lien, le plus mal servi en tete
+    const clients = (node.subs || []).map((c) => {
+      const n = qoeOf(c.subscriber_id);
+      const plan = (Number(c.effective_down_mbps) || Number(c.plan_down_mbps) || 0) * 1e6;
+      const debit = mesureFraiche(c) ? (Number(c.tx_bps) || 0) : 0;
+      return { c, score: n ? n.score : qoeScore(c.rtt_ms), usage: plan > 0 ? debit / plan : null, debit };
+    }).sort((x, y) => (x.score ?? 101) - (y.score ?? 101) || (y.usage ?? 0) - (x.usage ?? 0));
+    const barre = (u) => {
+      if (u == null) return '<span class="na">no limit</span>';
+      const v = Math.min(100, Math.round(u * 100));
+      const sv = severity(v);
+      return '<span class="mini-bar ' + sv + '"><span style="width:' + v + '%"></span></span>' +
+        '<span class="pct-hint">' + v + '%</span>';
+    };
+    snap.innerHTML = '<h3>Clients on this link</h3>' +
+      (clients.length
+        ? '<table class="lq-table lq-clients"><thead><tr><th>Client</th>' +
+          '<th title="Download now vs its plan">Plan used</th><th class="num">Latency</th>' +
+          '<th class="num" title="Lower of: latency at rest, latency added under load">Score</th>' +
+          '</tr></thead><tbody>' +
+          clients.slice(0, 8).map((x) => '<tr data-lq-client="' + esc(x.c.subscriber_id) + '">' +
+            '<td><a href="#">' + esc(x.c.login) + '</a></td>' +
+            '<td>' + barre(x.usage) + '</td>' +
+            '<td class="num">' + rttSq(x.c.rtt_ms) + '</td>' +
+            '<td class="num">' + (x.score == null ? sqCell('-', 'none') : sqCell(String(Math.round(x.score)), qoeSev(x.score))) +
+            '</td></tr>').join('') +
+          '</tbody></table>' +
+          (clients.length > 8 ? '<div class="pct-hint">+' + (clients.length - 8) + ' more</div>' : '')
+        : '<div class="empty">No client measured on this link yet.</div>');
+
+    const env = (exec.envByPop || {})[node.name] || {};
+    const capa = env.capacity || env.nominal || null;
+    const vendu = node.confDown / 1e6;
+    const charge = capa ? Math.round((node.tx / 1e6 / capa) * 100) : null;
+    const ratio = capa ? vendu / capa : null;
     det.innerHTML =
-      '<h3>Connection point</h3>' +
+      '<h3>Link</h3>' +
       '<div class="lq-kv">' +
+        '<span class="k">Capacity</span><span class="v">' +
+          (capa ? esc(mbps(capa)) : sqCell('unknown', 'none')) + '</span>' +
+        '<span class="k">Load now</span><span class="v">' +
+          (charge == null ? esc(bpsText(down)) : sqCell(charge + '%', severity(charge))) + '</span>' +
         '<span class="k">Clients</span><span class="v">' + esc(node.circuits) + '</span>' +
-        '<span class="k">Flowing now</span><span class="v">' +
-          (synth ? 'n/d' : esc(bpsText(down) + ' / ' + bpsText(up))) + '</span>' +
+        '<span class="k">Sold (&Sigma; plans)</span><span class="v">' + esc(mbps(vendu)) + '</span>' +
+        (ratio != null
+          ? '<span class="k">Oversubscription</span><span class="v">' +
+            sqCell(ratio.toFixed(1) + '&times;', ratio <= 1 ? 'ok' : ratio <= 3 ? 'warn' : 'crit') + '</span>'
+          : '') +
       '</div>' +
-      sharedCapacityBlock(node) +
-      '<div class="lq-note">A site is a connection point: it has a <b>capacity</b> (its link), ' +
-        'not a plan. Plans are set per client, on the <b>Plans</b> page.</div>' +
-      '<div class="actions" style="margin-top:.6rem">' +
-        '<button class="sm" id="lq-open">Set the link capacity in the tree</button></div>';
+      '<div class="actions" style="margin-top:.8rem">' +
+        '<button class="sm primary" id="lq-site-plans">Plans of these clients</button></div>';
   }
 
-  const open = document.getElementById('lq-open');
-  if (open) open.addEventListener('click', () => { location.hash = '#/network'; });
   const plan = document.getElementById('lq-plan');
   if (plan) plan.addEventListener('click', () => openClientPlan(client.login));
-}
-
-/** Bloc "capacite partagee" d'un noeud : l'enveloppe du parent (backhaul), le
- *  debit vendu (somme des plans) et la sur-souscription. C'est le coeur du
- *  topology-aware shaping : les circuits se disputent CETTE enveloppe, meme si
- *  la somme de leurs plans la depasse. */
-/** Capacite d'un noeud, en bit/s : son enveloppe (backhaul) si elle est connue. */
-function nodeCapacity(node) {
-  const env = (exec.envByPop || {})[node.name] || {};
-  const cap = env.capacity || env.nominal || null;
-  return cap ? cap * 1e6 : node.effDown;
-}
-
-function sharedCapacityBlock(node) {
-  const env = (exec.envByPop || {})[node.name] || {};
-  const envDown = env.capacity || env.nominal || null;   // Mbps
-  const soldDown = node.confDown / 1e6;                   // somme des plans
-  const measured = node.tx / 1e6;
-  if (!envDown) {
-    return '<div class="lq-note">Shared envelope unknown: no backhaul measured ' +
-      'for this PoP. Add its antenna (Devices tab) or set it on its link.</div>';
-  }
-  const ratio = soldDown / envDown;
-  const sev = ratio <= 1 ? 'ok' : ratio <= 2 ? 'warn' : 'crit';
-  return '<div class="lq-kv" style="margin-top:.6rem">' +
-    '<span class="k">Shared capacity</span><span class="v">' + esc(mbps(envDown)) + '</span>' +
-    '<span class="k">Sold (&Sigma; plans)</span><span class="v">' + esc(mbps(soldDown)) + '</span>' +
-    '<span class="k">Flowing (measured)</span><span class="v">' + esc(mbps(measured)) + '</span>' +
-    '<span class="k">Oversubscription</span><span class="v">' +
-      '<span class="sq ' + sev + '"></span>' + ratio.toFixed(1) + '&times;</span>' +
-    '</div>' +
-    '<div class="lq-note">' + (ratio > 1
-      ? 'Sold plans total <b>' + ratio.toFixed(1) + '&times;</b> the envelope: ' +
-        'circuits share the parent under load (this is intended, CAKE arbitrates).'
-      : 'Under the envelope: no oversubscription on this parent.') + '</div>';
+  const planSite = document.getElementById('lq-site-plans');
+  if (planSite) planSite.addEventListener('click', () => openClientPlan(node.name));
+  snap.querySelectorAll('[data-lq-client]').forEach((tr) => tr.addEventListener('click', (e) => {
+    e.preventDefault();
+    exec.selected = { type: 'client', id: Number(tr.dataset.lqClient) };
+    renderQueuePanels();
+  }));
 }
 
 /** Ce que la pose immediate a REELLEMENT fait, rendu tel quel.

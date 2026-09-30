@@ -522,6 +522,17 @@ select[multiple] { background-image: none; padding-right: .6rem; cursor: auto; }
 .lq-kv { display: grid; grid-template-columns: auto 1fr; gap: .45rem 1rem; font-size: .86rem; }
 .lq-kv .k { color: var(--muted); }
 .lq-kv .v { text-align: right; font-variant-numeric: tabular-nums; }
+.lq-chips { display: flex; flex-wrap: wrap; gap: .4rem; justify-content: center; margin-top: .6rem; }
+.lq-chips span { background: var(--surface-2); border-radius: 999px; padding: .2rem .6rem; font-size: .78rem; }
+.lq-chips i { color: var(--muted); font-style: normal; }
+.lq-clients tbody tr { cursor: pointer; }
+.lq-clients tbody tr:hover td { background: var(--surface-2); }
+.lq-clients td { font-size: .84rem; }
+.mini-bar { display: inline-block; width: 70px; height: 6px; border-radius: 3px; background: var(--surface-2);
+  vertical-align: middle; overflow: hidden; margin-right: .35rem; }
+.mini-bar > span { display: block; height: 100%; background: var(--ok); }
+.mini-bar.warn > span { background: var(--warn); }
+.mini-bar.crit > span { background: var(--crit); }
 .lq-rate { display: flex; align-items: center; gap: .45rem; margin-top: .9rem; flex-wrap: wrap; }
 .lq-rate input { width: 90px; }
 .lq-note { font-size: .76rem; color: var(--faint); margin-top: .7rem; }
