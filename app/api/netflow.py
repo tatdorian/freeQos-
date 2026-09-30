@@ -687,6 +687,15 @@ async def pairs(
             f"{d['client']}|{d['address']}": int(d["down_bytes"]) + int(d["up_bytes"])
             for d in directes
         },
+        # DEBIT EN COURS, sens par sens, calcule sur la duree reelle de chaque
+        # flux : c'est le chiffre a comparer a un test de bande passante.
+        "live_rates": {
+            f"{d['client']}|{d['address']}": {
+                "down_bps": int(d.get("down_bps") or 0),
+                "up_bps": int(d.get("up_bps") or 0),
+            }
+            for d in directes
+        },
         "window_seconds": round(collecteur.window_seconds, 1) if collecteur is not None else 0.0,
     }
 

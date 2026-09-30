@@ -2377,10 +2377,16 @@ async function loadFlowPairs() {
   remplirFacette('flow-pairs-pop', 'All PoPs', facettes.pops, FLOW.pop);
   remplirFacette('flow-pairs-category', 'All categories', facettes.categories, FLOW.category);
   const direct = new Set((data.live || []).map((c) => c[0] + '|' + c[1]));
-  const octetsDirect = data.live_bytes || {};
-  const fenetre = data.window_seconds || 0;
-  const periode = FLOW.minutes * 60;
+  // DEBITS EN COURS, sens par sens, calcules sur la duree reelle de chaque flux.
+  const debitsDirect = data.live_rates || {};
   const lignes = data.pairs || [];
+  // ↓ recu par le client / ↑ envoye par le client, en bit/s.
+  const deuxSens = (bas, haut) => '<span class="nowrap">&darr; ' + bpsText(bas) +
+    '</span><br><span class="nowrap">&uarr; ' + bpsText(haut) + '</span>';
+  // Debit VECU : volume / temps ou la conversation a reellement echange sur la
+  // periode -- et non volume / periode entiere, qui diluait un test de deux
+  // minutes dans une heure.
+  const debitActif = (octets, actif) => (actif > 0 ? (Number(octets || 0) * 8) / actif : 0);
 
   // UN BLOC PAR CLIENT. La ligne de tete donne sa consommation totale ; on
   // deplie pour voir avec quelles adresses elle se fait, et a quel debit.
@@ -2388,16 +2394,19 @@ async function loadFlowPairs() {
   lignes.forEach((r) => {
     const cle = String(r.client);
     if (!clients.has(cle)) {
-      clients.set(cle, { tete: r, lignes: [], down: 0, up: 0, direct: 0, vivants: 0 });
+      clients.set(cle, {
+        tete: r, lignes: [], down: 0, up: 0, vivants: 0, directBas: 0, directHaut: 0,
+      });
     }
     const c = clients.get(cle);
     c.lignes.push(r);
     c.down += Number(r.down_bytes || 0);
     c.up += Number(r.up_bytes || 0);
     const paire = r.client + '|' + r.address;
-    if (direct.has(paire)) {
+    if (debitsDirect[paire]) {
       c.vivants += 1;
-      c.direct += Number(octetsDirect[paire] || 0);
+      c.directBas += Number(debitsDirect[paire].down_bps || 0);
+      c.directHaut += Number(debitsDirect[paire].up_bps || 0);
     }
   });
   const groupes = Array.from(clients.values())
@@ -2438,10 +2447,11 @@ async function loadFlowPairs() {
       '<td>' + esc(protoName(r.protocol)) + '</td>' +
       '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
       '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
-      '<td class="num">' +
-        debitText(Number(r.down_bytes || 0) + Number(r.up_bytes || 0), periode) + '</td>' +
-      '<td class="num">' + (direct.has(paire)
-        ? '<b>' + debitText(octetsDirect[paire] || 0, fenetre) + '</b>'
+      '<td class="num">' + (Number(r.active_s) > 0
+        ? deuxSens(debitActif(r.down_bytes, r.active_s), debitActif(r.up_bytes, r.active_s))
+        : '<span class="hint">-</span>') + '</td>' +
+      '<td class="num">' + (debitsDirect[paire]
+        ? '<b>' + deuxSens(debitsDirect[paire].down_bps, debitsDirect[paire].up_bps) + '</b>'
         : '<span class="hint">-</span>') + '</td>' +
       '</tr>';
   };
@@ -2456,19 +2466,25 @@ async function loadFlowPairs() {
         (r.pop_name ? ' <span class="hint">' + esc(r.pop_name) + '</span>' : '') +
         '<span class="spacer"></span>' +
         '<span class="flow-client-sum">' +
-          '<span>&darr; ' + bytesText(c.down) + '</span>' +
-          '<span>&uarr; ' + bytesText(c.up) + '</span>' +
-          '<span>' + debitText(c.down + c.up, periode) + ' avg</span>' +
+          '<span title="Received by the client over the period">&darr; ' +
+            bytesText(c.down) + '</span>' +
+          '<span title="Sent by the client over the period">&uarr; ' + bytesText(c.up) + '</span>' +
           '<span>' + (c.vivants
-            ? '<b>' + debitText(c.direct, fenetre) + '</b> live'
+            ? 'live <b>&darr; ' + bpsText(c.directBas) + ' &uarr; ' + bpsText(c.directHaut) + '</b>'
             : '<span class="hint">idle</span>') + '</span>' +
           '<span class="hint">' + c.lignes.length + ' address(es)</span>' +
         '</span>' +
       '</summary>' +
       '<div class="table-wrap"><table><thead><tr><th>Destination</th><th>Service</th>' +
         '<th>Category</th><th class="num">Port</th><th>Proto</th>' +
-        '<th class="num">Down</th><th class="num">Up</th>' +
-        '<th class="num">Avg rate</th><th class="num">Live</th>' +
+        '<th class="num" title="Volume received by the client over the selected period">' +
+          '&darr; Received</th>' +
+        '<th class="num" title="Volume sent by the client over the selected period">' +
+          '&uarr; Sent</th>' +
+        '<th class="num" title="Rate while the conversation was actually active: volume / active time">' +
+          'Rate when active</th>' +
+        '<th class="num" title="Current rate, from the real duration of each flow (NetFlow)">' +
+          'Live</th>' +
       '</tr></thead><tbody>' + c.lignes.map(conversation).join('') +
       '</tbody></table></div></details>';
   }).join('');

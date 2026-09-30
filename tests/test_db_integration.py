@@ -3340,6 +3340,19 @@ async def test_les_destinations_se_regroupent_par_lieu(database: Database) -> No
                 ("10.0.0.4", "1.2.3.4", 700, 0),
             ],
         )
+        # Les volumes par periode vivent dans les tranches de 5 minutes.
+        await conn.execute("TRUNCATE flow_destination_buckets")
+        await conn.executemany(
+            "INSERT INTO flow_destination_buckets (bucket, client, address, down_bytes, "
+            "up_bytes, flows) VALUES (now(), $1::inet, $2::inet, $3, $4, 1)",
+            [
+                ("10.0.0.2", "45.57.0.1", 5_000, 100),
+                ("10.0.0.3", "45.57.0.1", 3_000, 100),
+                ("10.0.0.2", "45.57.0.2", 1_000, 0),
+                ("10.0.0.2", "8.8.8.8", 500, 50),
+                ("10.0.0.4", "1.2.3.4", 700, 0),
+            ],
+        )
 
     repo = DestinationsRepository(database.pool)
     lieux = await repo.by_location(minutes=60)
@@ -3695,3 +3708,42 @@ async def test_pop_nord_et_sud_effaces_de_la_base(database: Database) -> None:
             await conn.fetchval("SELECT count(*) FROM subscribers WHERE login='client-nord'") == 0
         )
     assert garde
+
+
+async def _ecrire_paire(database: Database, ts: datetime, octets: int, actif: float) -> None:
+    from app.db.flows_repo import FlowsRepository
+    from app.services.flows import DestinationCounters, FlushBatch
+
+    lot = FlushBatch(
+        ts=ts,
+        subscribers=[],
+        apps=[],
+        hosts=[],
+        destinations=[
+            DestinationCounters(
+                client="100.64.1.11",
+                address="8.8.4.4",
+                down_bytes=octets,
+                up_bytes=octets,
+                flows=20,
+                active_s=actif,
+            )
+        ],
+    )
+    await FlowsRepository(database.pool).write_batch(lot)
+
+
+async def test_la_periode_ne_somme_que_ses_propres_minutes(database: Database) -> None:
+    """L'ancien trafic (hier) ne s'ajoute plus a la derniere heure."""
+    from app.db.destinations_repo import DestinationsRepository
+
+    maintenant = datetime.now(tz=UTC)
+    await _ecrire_paire(database, maintenant - timedelta(days=1), 2_900_000_000, 60.0)
+    await _ecrire_paire(database, maintenant - timedelta(minutes=1), 6_750_000, 60.0)
+    await _ecrire_paire(database, maintenant, 5_850_000, 52.0)
+
+    (paire,) = await DestinationsRepository(database.pool).pairs(minutes=60)
+    assert paire["down_bytes"] == 12_600_000
+    assert paire["active_s"] == pytest.approx(112.0)
+    # 12,6 Mo en 112 s actives = 0,9 Mbit/s, le chiffre du test.
+    assert paire["down_bytes"] * 8 / paire["active_s"] == pytest.approx(0.9e6, rel=0.01)

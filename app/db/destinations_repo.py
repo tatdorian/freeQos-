@@ -32,6 +32,32 @@ INTEL_COLUMNS = """
 """
 
 
+def _sur_la_periode(minutes: str) -> str:
+    """``flow_destinations`` restreinte a la PERIODE : volumes de ses tranches.
+
+    La table elle-meme cumule depuis la premiere vue du couple -- des jours
+    parfois. L'afficher sous "derniere heure" etait faux : un test de deux
+    minutes apparaissait a 2,7 Gio. Les volumes, le nombre de flux et le temps
+    actif viennent donc des tranches de 5 minutes de la periode ; la ligne
+    d'origine ne fournit plus que ce qui decrit la conversation.
+    """
+    return f"""(
+        SELECT f.client, f.address, f.subscriber_id, f.port, f.protocol, f.app,
+               f.first_seen, f.last_seen,
+               b.down_bytes, b.up_bytes, b.flows, b.active_s
+          FROM flow_destinations f
+          JOIN (SELECT client, address,
+                       sum(down_bytes)::bigint AS down_bytes,
+                       sum(up_bytes)::bigint   AS up_bytes,
+                       sum(flows)::bigint      AS flows,
+                       sum(active_s)           AS active_s
+                  FROM flow_destination_buckets
+                 WHERE bucket > now() - make_interval(mins => {minutes}) - interval '5 minutes'
+                 GROUP BY client, address) b
+            ON b.client = f.client AND b.address = f.address
+    )"""
+
+
 class DestinationsRepository:
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
@@ -84,7 +110,9 @@ class DestinationsRepository:
                        (array_agg(d.port ORDER BY d.last_seen DESC))[1]     AS port,
                        (array_agg(d.protocol ORDER BY d.last_seen DESC))[1] AS protocol,
                        (array_agg(d.app ORDER BY d.last_seen DESC))[1]      AS app
-                FROM flow_destinations d
+                FROM """
+                + _sur_la_periode("$1")
+                + """ d
                 LEFT JOIN ip_intel i ON i.address = d.address
                 WHERE d.last_seen >= now() - make_interval(mins => $1)
                   AND ($2::bigint IS NULL OR d.subscriber_id = $2)
@@ -157,9 +185,12 @@ class DestinationsRepository:
                        d.down_bytes,
                        d.up_bytes,
                        d.flows,
+                       d.active_s,
                        d.first_seen,
                        d.last_seen
-                FROM flow_destinations d
+                FROM """
+                + _sur_la_periode("$1")
+                + """ d
                 LEFT JOIN ip_intel i    ON i.address = d.address
                 LEFT JOIN subscribers s ON s.id = d.subscriber_id
                 LEFT JOIN pops p        ON p.id = s.pop_id
@@ -239,6 +270,7 @@ class DestinationsRepository:
         customer_networks: list[str],
         infrastructure_networks: list[str],
         ports: list[int],
+        own_addresses: list[str] | None = None,
     ) -> int:
         """Efface les conversations qui n'en sont pas.
 
@@ -258,16 +290,23 @@ class DestinationsRepository:
             resultat = await conn.execute(
                 """
                 DELETE FROM flow_destinations
-                 WHERE ($1::text[] IS NOT NULL
-                        AND address <<= ANY($1::text[]::inet[]))
-                    OR ($2::text[] IS NOT NULL
-                        AND (address <<= ANY($2::text[]::inet[])
-                             OR client <<= ANY($2::text[]::inet[])))
-                    OR ($3::int[] IS NOT NULL AND port = ANY($3::int[]))
+                 WHERE (($1::text[] IS NOT NULL
+                         AND address <<= ANY($1::text[]::inet[]))
+                     OR ($2::text[] IS NOT NULL
+                         AND (address <<= ANY($2::text[]::inet[])
+                              OR client <<= ANY($2::text[]::inet[])))
+                     OR ($3::int[] IS NOT NULL AND port = ANY($3::int[])))
+                   -- UN CLIENT QUI JOINT UN DE NOS ROUTEURS (ping, test de bande
+                   -- passante vers son loopback) : gardee a l'ecriture, elle ne
+                   -- doit pas etre effacee ensuite. Entre deux routeurs, si.
+                   AND NOT ($4::text[] IS NOT NULL
+                            AND address = ANY($4::text[]::inet[])
+                            AND NOT client = ANY($4::text[]::inet[]))
                 """,
                 customer_networks or None,
                 infrastructure_networks or None,
                 ports or None,
+                own_addresses or None,
             )
         efface = int(resultat.rsplit(" ", 1)[-1] or 0)
         if efface:
@@ -306,6 +345,7 @@ class DestinationsRepository:
                  OR coalesce(i.country, '') ILIKE '%' || $3 || '%'
                  OR coalesce(i.service, '') ILIKE '%' || $3 || '%')
         """
+        periode = _sur_la_periode("$1")
         async with self._pool.acquire() as conn:
             points = await conn.fetch(
                 f"""
@@ -323,7 +363,7 @@ class DestinationsRepository:
                        (array_agg(host(d.address)
                                   ORDER BY d.down_bytes + d.up_bytes DESC))[1:40]
                                                               AS top_addresses
-                FROM flow_destinations d
+                FROM {periode} d
                 JOIN ip_intel i ON i.address = d.address
                 WHERE {filtres}
                   AND i.latitude IS NOT NULL AND i.longitude IS NOT NULL
@@ -344,7 +384,7 @@ class DestinationsRepository:
                        count(DISTINCT i.city)                 AS cities,
                        sum(d.down_bytes)::bigint              AS down_bytes,
                        sum(d.up_bytes)::bigint                AS up_bytes
-                FROM flow_destinations d
+                FROM {periode} d
                 LEFT JOIN ip_intel i ON i.address = d.address
                 WHERE {filtres}
                 GROUP BY i.country
@@ -358,7 +398,7 @@ class DestinationsRepository:
                 f"""
                 SELECT count(DISTINCT d.address)                    AS addresses,
                        coalesce(sum(d.down_bytes + d.up_bytes), 0)::bigint AS bytes
-                FROM flow_destinations d
+                FROM {periode} d
                 LEFT JOIN ip_intel i ON i.address = d.address
                 WHERE {filtres}
                   AND (i.latitude IS NULL OR i.longitude IS NULL)
@@ -406,7 +446,9 @@ class DestinationsRepository:
                        sum(d.down_bytes)::bigint       AS down_bytes,
                        sum(d.up_bytes)::bigint         AS up_bytes,
                        max(d.last_seen)                AS last_seen
-                FROM flow_destinations d
+                FROM """
+                + _sur_la_periode("$1")
+                + """ d
                 LEFT JOIN ip_intel i ON i.address = d.address
                 WHERE d.last_seen >= now() - make_interval(mins => $1)
                 GROUP BY i.service, i.category
@@ -444,9 +486,12 @@ class DestinationsRepository:
                        d.down_bytes,
                        d.up_bytes,
                        d.flows,
+                       d.active_s,
                        d.first_seen,
                        d.last_seen
-                FROM flow_destinations d
+                FROM """
+                + _sur_la_periode("$2")
+                + """ d
                 -- JOINTURE EXTERNE, et c'est tout l'interet : une machine sans
                 -- fiche d'abonne doit apparaitre avec son adresse plutot que de
                 -- disparaitre de la liste de ceux qui joignent cette adresse.
@@ -742,6 +787,11 @@ class DestinationsRepository:
         async with self._pool.acquire() as conn:
             resultat = await conn.execute(
                 "DELETE FROM flow_destinations WHERE last_seen < now() - make_interval(secs => $1)",
+                older_than_s,
+            )
+            await conn.execute(
+                "DELETE FROM flow_destination_buckets "
+                "WHERE bucket < now() - make_interval(secs => $1)",
                 older_than_s,
             )
         return int(resultat.rsplit(" ", 1)[-1] or 0)
