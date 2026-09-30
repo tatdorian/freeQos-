@@ -1915,11 +1915,14 @@ function renderQueuePanels() {
   live.innerHTML =
     '<h3>Right now</h3>' +
     '<table class="lq-table"><thead><tr><th></th><th>Download</th><th>Upload</th></tr></thead><tbody>' +
-    '<tr><td>Limit applied</td>' + (synth ? naCell + naCell
-      : dwn(mbps(effDown / 1e6), 'ok') + dwn(mbps(effUp / 1e6), 'ok')) + '</tr>' +
-    '<tr><td>Plan</td>' + (synth ? naCell + naCell
-      : '<td class="num na">' + sqCell(mbps(confDown / 1e6), 'none') +
-        '</td><td class="num na">' + sqCell(mbps(confUp / 1e6), 'none') + '</td>') + '</tr>' +
+    // UN NOEUD (PoP) N'A PAS DE PLAN : c'est un point de connexion. Plan et
+    // limite ne s'affichent que pour un client.
+    (isClient
+      ? '<tr><td>Limit applied</td>' + dwn(mbps(effDown / 1e6), 'ok') + dwn(mbps(effUp / 1e6), 'ok') +
+        '</tr>' +
+        '<tr><td>Plan</td><td class="num na">' + sqCell(mbps(confDown / 1e6), 'none') +
+        '</td><td class="num na">' + sqCell(mbps(confUp / 1e6), 'none') + '</td></tr>'
+      : '') +
     '<tr><td>Throughput</td>' + (synth ? naCell + naCell
       : dwn(bpsText(down), severity(pct(down, effDown))) +
         dwn(bpsText(up), severity(pct(up, effUp)))) + '</tr>' +
@@ -1932,66 +1935,65 @@ function renderQueuePanels() {
     (synth
       ? '<div class="empty">No measurement for this node yet ' +
         '(shown from the topology).</div>'
-      : gaugeSvg(down, up, Math.max(effDown, down, 1), qoe));
+      : gaugeSvg(down, up, Math.max(isClient ? effDown : nodeCapacity(node), down, 1), qoe));
 
   // ---- Node Details
   const limitedBy = isClient
     ? ({ plan: 'Plan', override: 'Override', boost: 'Boost' }[client.limit_source] || client.limit_source || '-')
     : 'Sum of its clients';
-  const override = isClient
-    ? (client.limit_source === 'override' || client.limit_source === 'boost'
-        ? mbps(client.effective_down_mbps || 0) + ' / ' + mbps(client.effective_up_mbps || 0)
-        : 'None')
-    : '—';
-  const dPre = isClient ? bestUnitMbps(client.effective_down_mbps) : '';
-  const uPre = isClient ? bestUnitMbps(client.effective_up_mbps) : '';
-  det.innerHTML =
-    '<h3>Limits and settings</h3>' +
-    '<div class="lq-kv">' +
-      '<span class="k">Plan</span><span class="v">' +
-        (synth ? 'n/d' : esc(mbps(confDown / 1e6) + ' / ' + mbps(confUp / 1e6))) + '</span>' +
-      '<span class="k">Limit applied</span><span class="v">' +
-        (synth ? 'n/d' : esc(mbps(effDown / 1e6) + ' / ' + mbps(effUp / 1e6))) + '</span>' +
-      '<span class="k">Forced rate</span><span class="v">' + esc(override) + '</span>' +
-      '<span class="k">Limit comes from</span><span class="v">' + esc(limitedBy) + '</span>' +
-      '<span class="k">Attached to</span><span class="v">' +
-        esc(isClient ? (client.pop_name || '-') : title) + '</span>' +
-    '</div>' +
-    (isClient
-      ? '<div class="lq-rate">D <input id="lq-d" type="number" min="0" step="any" value="' + esc(dPre) +
-          '"> U <input id="lq-u" type="number" min="0" step="any" value="' + esc(uPre) + '">' +
-          '<button class="sm primary" id="lq-save">Save</button>' +
-          '<button class="sm" id="lq-clear">Clear</button></div>' +
-        '<div class="lq-note">Rate in Mbps. Save writes an override on this subscriber ' +
-          '(visible afterwards in the Shaping plan).</div>' +
-        '<div class="actions" style="margin-top:.6rem">' +
-          '<button class="sm" id="lq-open">Open in the tree</button></div>' +
-        '<div id="lq-result"></div>'
-      : sharedCapacityBlock(node) +
-        '<div class="lq-note">' + (synth
-          ? '<b>Node from the topology.</b> No subscriber measured here yet: ' +
-            'its queues will appear on the next collection cycle. The parent rate ' +
-            '(the shared envelope) is already set on its link, <b>Bandwidth</b> button ' +
-            'in the tree.'
-          : '<b>' + node.circuits + ' circuit(s).</b> A node is an ' +
-            'aggregate: unfold it and select a client to force a rate. The parent ' +
-            'rate (the shared envelope) is set on its link, <b>Bandwidth</b> ' +
-            'button in the tree.') + '</div>' +
-        '<div class="actions" style="margin-top:.6rem">' +
-          '<button class="sm" id="lq-open">Set the envelope in the tree</button></div>');
+  if (isClient) {
+    const origine = { api: 'pushed by the API', ui: 'set by hand', default: 'default plan' };
+    const src = String(client.plan_source || '');
+    const deQui = src.startsWith('api') ? origine.api : src.startsWith('ui') ? origine.ui
+      : src.startsWith('default') ? origine.default : src.startsWith('static') ? 'client record' : (src || '-');
+    det.innerHTML =
+      '<h3>Plan and limit</h3>' +
+      '<div class="lq-kv">' +
+        '<span class="k">Plan</span><span class="v">' +
+          esc(mbps(confDown / 1e6) + ' / ' + mbps(confUp / 1e6)) + '</span>' +
+        '<span class="k">Plan source</span><span class="v">' + esc(deQui) + '</span>' +
+        '<span class="k">Limit applied</span><span class="v">' +
+          esc(mbps(effDown / 1e6) + ' / ' + mbps(effUp / 1e6)) + '</span>' +
+        '<span class="k">Limit comes from</span><span class="v">' + esc(limitedBy) + '</span>' +
+        '<span class="k">Attached to</span><span class="v">' + esc(client.pop_name || '-') + '</span>' +
+      '</div>' +
+      '<div class="lq-note">The plan belongs to the client: it is pushed by the billing API ' +
+        'or changed on the Plans page, and applied on the router right away.</div>' +
+      '<div class="actions" style="margin-top:.6rem">' +
+        '<button class="sm primary" id="lq-plan">Change this client\'s plan</button> ' +
+        '<button class="sm" id="lq-open">Open in the tree</button></div>';
+  } else {
+    det.innerHTML =
+      '<h3>Connection point</h3>' +
+      '<div class="lq-kv">' +
+        '<span class="k">Clients</span><span class="v">' + esc(node.circuits) + '</span>' +
+        '<span class="k">Flowing now</span><span class="v">' +
+          (synth ? 'n/d' : esc(bpsText(down) + ' / ' + bpsText(up))) + '</span>' +
+      '</div>' +
+      sharedCapacityBlock(node) +
+      '<div class="lq-note">A site is a connection point: it has a <b>capacity</b> (its link), ' +
+        'not a plan. Plans are set per client, on the <b>Plans</b> page.</div>' +
+      '<div class="actions" style="margin-top:.6rem">' +
+        '<button class="sm" id="lq-open">Set the link capacity in the tree</button></div>';
+  }
 
   const open = document.getElementById('lq-open');
   if (open) open.addEventListener('click', () => { location.hash = '#/network'; });
-  const save = document.getElementById('lq-save');
-  if (save) save.addEventListener('click', () => saveClientRate(client));
-  const clear = document.getElementById('lq-clear');
-  if (clear) clear.addEventListener('click', () => clearClientRate(client));
+  const plan = document.getElementById('lq-plan');
+  if (plan) plan.addEventListener('click', () => openClientPlan(client.login));
 }
 
 /** Bloc "capacite partagee" d'un noeud : l'enveloppe du parent (backhaul), le
  *  debit vendu (somme des plans) et la sur-souscription. C'est le coeur du
  *  topology-aware shaping : les circuits se disputent CETTE enveloppe, meme si
  *  la somme de leurs plans la depasse. */
+/** Capacite d'un noeud, en bit/s : son enveloppe (backhaul) si elle est connue. */
+function nodeCapacity(node) {
+  const env = (exec.envByPop || {})[node.name] || {};
+  const cap = env.capacity || env.nominal || null;
+  return cap ? cap * 1e6 : node.effDown;
+}
+
 function sharedCapacityBlock(node) {
   const env = (exec.envByPop || {})[node.name] || {};
   const envDown = env.capacity || env.nominal || null;   // Mbps
@@ -2046,34 +2048,6 @@ function poseText(pose) {
 function bestUnitMbps(mbpsValue) {
   const n = Number(mbpsValue);
   return n ? +n.toFixed(3) : '';
-}
-
-async function saveClientRate(client) {
-  const host = document.getElementById('lq-result');
-  const down = document.getElementById('lq-d').value;
-  const up = document.getElementById('lq-u').value;
-  try {
-    const reponse = await api('/shaping/policies', {
-      method: 'PUT',
-      body: JSON.stringify({
-        scope: 'subscriber', target_key: client.login,
-        max_down_mbps: down === '' ? null : Number(down),
-        max_up_mbps: up === '' ? null : Number(up),
-        enabled: true, note: 'forced from Live queues',
-      }),
-    });
-    if (host) host.innerHTML = poseText(reponse.enforcement);
-    await loadExec();
-  } catch (err) {
-    if (host) host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
-  }
-}
-
-async function clearClientRate(client) {
-  try {
-    await api('/shaping/policies/subscriber/' + encodeURIComponent(client.login), { method: 'DELETE' });
-    await loadExec();
-  } catch (err) { alert(err.message); }
 }
 
 /* ---------------------------------------------------------------- trafic
@@ -8114,6 +8088,175 @@ async function resetSetting(name) {
  *  QUI RISQUE DE PARTIR, QUI EST PRET A MONTER EN GAMME, et combien d'abonnes
  *  chaque site peut encore prendre. Tout vient de ce qui est deja mesure :
  *  debit, plan, latence sous charge. */
+/* ------------------------------------------------------------------ plans */
+
+/** LE PLAN APPARTIENT AU CLIENT. Un PoP n'est qu'un point de connexion : il a
+ *  une capacite, pas un plan. Le plan d'un client est pousse par la facturation
+ *  (API Preseem) ou saisi ici ; la derniere ecriture gagne. Sans plan, le
+ *  client recoit le plan par defaut. */
+const PLANS = { data: null, editing: null, focus: null };
+
+async function loadPlans() {
+  // Un plan en cours de saisie ne doit pas etre efface par le rafraichissement.
+  if (PLANS.editing) return;
+  PLANS.data = await api('/plans');
+  const d = PLANS.data;
+  const bas = document.getElementById('plans-default-down');
+  const haut = document.getElementById('plans-default-up');
+  if (bas && document.activeElement !== bas && document.activeElement !== haut) {
+    bas.value = d.default.down_mbps == null ? 0 : d.default.down_mbps;
+    haut.value = d.default.up_mbps == null ? 0 : d.default.up_mbps;
+  }
+  const s = d.summary || {};
+  document.getElementById('plans-stats').innerHTML =
+    statCard('', 'Clients', String(s.clients || 0), '', 'every client known to the network') +
+    statCard('', 'Pushed by the API', String(s.api || 0), '', 'billing is the source') +
+    statCard('', 'Set here', String(s.manual || 0), '', 'until the next API push') +
+    statCard('', 'Default plan', String(s.default || 0), '',
+      d.default.down_mbps ? mbps(d.default.down_mbps) + ' / ' + mbps(d.default.up_mbps || 0)
+        : 'no limit');
+  renderPlanPackages();
+  renderPlanClients();
+}
+
+const ORIGINE_PLAN = {
+  api: ['ok', 'API'],
+  ui: ['warn', 'Set here'],
+  default: ['none', 'Default'],
+};
+
+function renderPlanClients() {
+  const host = document.getElementById('plans-clients');
+  const d = PLANS.data;
+  if (!host || !d) return;
+  const q = (document.getElementById('plans-search').value || '').trim().toLowerCase();
+  const origine = document.getElementById('plans-origin').value;
+  const lignes = (d.clients || []).filter((c) =>
+    (!origine || c.origin === origine) &&
+    (!q || [c.login, c.pop_name, c.address, c.service_id].some((v) =>
+      String(v || '').toLowerCase().includes(q))));
+  document.getElementById('plans-count').textContent = lignes.length + ' client(s)';
+  if (!lignes.length) {
+    host.innerHTML = '<div class="empty">' + ((d.clients || []).length
+      ? 'No client matches this filter.' : 'No client yet: they appear as soon as they connect.') +
+      '</div>';
+    return;
+  }
+  const debit = (v) => (v == null ? '<span class="na">no limit</span>' : esc(mbps(v)));
+  const forfaits = d.packages || [];
+  host.innerHTML = '<table><thead><tr><th>Client</th><th>Site</th><th>Address</th>' +
+    '<th class="num">&darr; Download</th><th class="num">&uarr; Upload</th>' +
+    '<th>Source</th><th>Last change</th><th></th></tr></thead><tbody>' +
+    lignes.slice(0, 500).map((c) => {
+      const o = ORIGINE_PLAN[c.origin] || ['none', c.origin];
+      const detail = c.origin === 'api'
+        ? (c.service_id ? 'service ' + c.service_id : '') + (c.package_id ? ' · package ' + c.package_id : '')
+        : c.origin === 'ui' ? (c.updated_by ? 'by ' + c.updated_by : '')
+          : '';
+      const edition = PLANS.editing === c.login;
+      const ligne = '<tr' + (PLANS.focus === c.login ? ' class="row-focus"' : '') + '>' +
+        '<td><b>' + esc(c.login) + '</b>' + (c.kind === 'static' ? ' <span class="badge">static IP</span>' : '') +
+          '</td>' +
+        '<td>' + esc(c.pop_name || '-') + '</td>' +
+        '<td><code>' + esc(c.address || '-') + '</code></td>' +
+        '<td class="num">' + debit(c.down_mbps) + '</td>' +
+        '<td class="num">' + debit(c.up_mbps) + '</td>' +
+        '<td>' + sqCell(o[1], o[0]) + (detail ? '<span class="hint">' + esc(detail) + '</span>' : '') +
+          '</td>' +
+        '<td>' + (c.updated_at ? esc(depuis(c.updated_at)) : '<span class="na">-</span>') + '</td>' +
+        '<td class="nowrap"><button class="sm" data-plan-edit="' + esc(c.login) + '">Change</button>' +
+          (c.origin !== 'default'
+            ? ' <button class="sm" data-plan-reset="' + esc(c.login) + '">Default</button>' : '') +
+        '</td></tr>';
+      if (!edition) return ligne;
+      return ligne + '<tr class="plan-edit"><td colspan="8"><form class="lq-rate" data-plan-form="' +
+          esc(c.login) + '" style="margin:0">' +
+        (forfaits.length
+          ? 'Package <select name="package" style="width:auto"><option value="">— custom rate —</option>' +
+            forfaits.map((f) => '<option value="' + esc(f.id) + '"' +
+              (f.id === c.package_id ? ' selected' : '') + '>' + esc(f.name || f.id) + ' (' +
+              esc(mbps(f.down_mbps || 0)) + ' / ' + esc(mbps(f.up_mbps || 0)) + ')</option>').join('') +
+            '</select> or ' : '') +
+        '&darr; <input name="down" type="number" min="0" step="any" style="width:6rem" value="' +
+          esc(c.down_mbps == null ? '' : c.down_mbps) + '"> Mbps ' +
+        '&uarr; <input name="up" type="number" min="0" step="any" style="width:6rem" value="' +
+          esc(c.up_mbps == null ? '' : c.up_mbps) + '"> Mbps ' +
+        '<button class="sm primary" type="submit">Save and apply</button> ' +
+        '<button class="sm" type="button" data-plan-cancel>Cancel</button>' +
+        '<span class="hint" style="display:inline"> Applied on the router right away. ' +
+          'The next API push for this client replaces it.</span>' +
+        '</form></td></tr>';
+    }).join('') + '</tbody></table>';
+
+  host.querySelectorAll('[data-plan-edit]').forEach((b) => b.addEventListener('click', () => {
+    PLANS.editing = b.dataset.planEdit;
+    renderPlanClients();
+  }));
+  host.querySelectorAll('[data-plan-cancel]').forEach((b) => b.addEventListener('click', () => {
+    PLANS.editing = null;
+    renderPlanClients();
+  }));
+  host.querySelectorAll('[data-plan-reset]').forEach((b) => b.addEventListener('click', () =>
+    savePlan(b.dataset.planReset, null)));
+  host.querySelectorAll('[data-plan-form]').forEach((f) => f.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const forfait = f.package ? f.package.value : '';
+    const corps = forfait ? { package_id: forfait } : {
+      down_mbps: Number(f.down.value) > 0 ? Number(f.down.value) : null,
+      up_mbps: Number(f.up.value) > 0 ? Number(f.up.value) : null,
+    };
+    if (!forfait && corps.down_mbps == null && corps.up_mbps == null) {
+      alert('Enter a rate, or choose a package.');
+      return;
+    }
+    savePlan(f.dataset.planForm, corps);
+  }));
+}
+
+async function savePlan(login, corps) {
+  const res = document.getElementById('plans-result');
+  try {
+    const r = corps
+      ? await api('/plans/' + encodeURIComponent(login), { method: 'PUT', body: JSON.stringify(corps) })
+      : await api('/plans/' + encodeURIComponent(login), { method: 'DELETE' });
+    const c = r.client || {};
+    res.innerHTML = '<div class="notice ok"><b>' + esc(login) + '</b>: ' +
+      esc(c.down_mbps == null ? 'no limit' : mbps(c.down_mbps)) + ' / ' +
+      esc(c.up_mbps == null ? 'no limit' : mbps(c.up_mbps)) +
+      (corps ? '' : ' (default plan)') + '</div>' + poseText(r.enforcement);
+  } catch (err) {
+    res.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+  PLANS.editing = null;
+  PLANS.focus = login;
+  await loadPlans();
+}
+
+function renderPlanPackages() {
+  const host = document.getElementById('plans-packages');
+  const forfaits = (PLANS.data && PLANS.data.packages) || [];
+  if (!host) return;
+  host.innerHTML = forfaits.length
+    ? '<table><thead><tr><th>Package</th><th>Id</th><th class="num">&darr; Download</th>' +
+      '<th class="num">&uarr; Upload</th></tr></thead><tbody>' +
+      forfaits.map((f) => '<tr><td><b>' + esc(f.name || f.id) + '</b></td><td><code>' + esc(f.id) +
+        '</code></td><td class="num">' + esc(f.down_mbps ? mbps(f.down_mbps) : '-') +
+        '</td><td class="num">' + esc(f.up_mbps ? mbps(f.up_mbps) : '-') + '</td></tr>').join('') +
+      '</tbody></table>'
+    : '<div class="empty">No package pushed yet (<code>PUT /model/v1/packages/&lt;id&gt;</code>). ' +
+      'Packages are optional: a service can carry its own rates.</div>';
+}
+
+/** Ouvre la page Plans sur un client (depuis l'onglet Executive). */
+function openClientPlan(login) {
+  PLANS.focus = login;
+  location.hash = '#/plans';
+  setTimeout(() => {
+    const champ = document.getElementById('plans-search');
+    if (champ) { champ.value = login; renderPlanClients(); }
+  }, 300);
+}
+
 /** Pourquoi les listes sont vides, quand c'est faute de donnees.
  *
  *  "Nobody shows a sign of leaving" sur une installation d'hier ne veut pas
@@ -8215,6 +8358,7 @@ const LOADERS = {
   traffic: loadTraffic,
   network: loadNetwork,
   subscribers: loadSubscribers,
+  plans: loadPlans,
   insights: loadInsights,
   pops: loadRouters,
   api: loadApi,
@@ -8328,6 +8472,29 @@ document.getElementById('btn-test').addEventListener('click', testConnection);
 /* ------------------------------------------------------- trafic et API */
 document.getElementById('flow-range').addEventListener('change', loadTraffic);
 document.getElementById('exec-lat-search').addEventListener('input', renderLatencyClients);
+document.getElementById('plans-search').addEventListener('input', renderPlanClients);
+document.getElementById('plans-origin').addEventListener('change', renderPlanClients);
+document.getElementById('plans-default-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const res = document.getElementById('plans-default-result');
+  try {
+    for (const [nom, id] of [['default_plan_down_mbps', 'plans-default-down'],
+      ['default_plan_up_mbps', 'plans-default-up']]) {
+      await api('/settings/' + nom, {
+        method: 'PUT',
+        body: JSON.stringify({ value: Number(document.getElementById(id).value) || 0 }),
+      });
+    }
+    const r = await api('/plans/refresh', { method: 'POST' }).catch(() => ({ ok: false }));
+    res.innerHTML = r.ok
+      ? '<div class="notice ok">Default plan saved and applied to every client without a plan.</div>'
+      : '<div class="notice warn">Default plan saved. It reaches the routers at the next cycle ' +
+        '(a few minutes).</div>';
+  } catch (err) {
+    res.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+  await loadPlans();
+});
 document.getElementById('exec-lat-filter').addEventListener('change', renderLatencyClients);
 document.getElementById('flow-vantage').addEventListener('change', loadTraffic);
 document.querySelectorAll('#flow-vantage-seg button').forEach((b) => {

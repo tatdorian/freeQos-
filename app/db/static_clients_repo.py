@@ -237,6 +237,20 @@ class StaticClientsRepository:
             raise StaticClientNotFoundError(f"unknown static-IP client {client_id}")
         return _to_row(row)
 
+    async def set_plan(
+        self, reference: str, down_mbps: float | None, up_mbps: float | None
+    ) -> bool:
+        """Plan d'un client a IP fixe ; NULL/NULL = plan par defaut."""
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                "UPDATE static_clients SET plan_down_mbps = $2, plan_up_mbps = $3, "
+                "updated_at = now() WHERE reference = $1",
+                reference,
+                down_mbps,
+                up_mbps,
+            )
+        return not resultat.endswith(" 0")
+
     async def by_vlan(self) -> list[dict[str, Any]]:
         """Les clients declares, groupes par VLAN.
 

@@ -3747,3 +3747,18 @@ async def test_la_periode_ne_somme_que_ses_propres_minutes(database: Database) -
     assert paire["active_s"] == pytest.approx(112.0)
     # 12,6 Mo en 112 s actives = 0,9 Mbit/s, le chiffre du test.
     assert paire["down_bytes"] * 8 / paire["active_s"] == pytest.approx(0.9e6, rel=0.01)
+
+
+async def test_plans_par_client_derniere_ecriture_gagne(database: Database) -> None:
+    from app.db.plans_repo import ClientPlansRepository
+
+    depot = ClientPlansRepository(database.pool)
+    await depot.set("dupont", down_mbps=300, up_mbps=50, source="api", service_id="svc-1")
+    await depot.set("dupont", down_mbps=500, up_mbps=100, source="ui", updated_by="admin")
+    ligne = (await depot.get_many(["dupont"]))["dupont"]
+    assert (ligne["down_mbps"], ligne["source"], ligne["service_id"]) == (500, "ui", None)
+
+    await depot.set("martin", down_mbps=50, up_mbps=10, source="api", service_id="svc-9")
+    assert await depot.delete_by_service("svc-9") == ["martin"]
+    assert "martin" not in await depot.list_all()
+    assert await depot.delete("dupont") is True

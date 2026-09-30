@@ -474,7 +474,9 @@ class Settings(BaseSettings):
     mock_backhaul_seed: int = 1337
 
     # --- Plans abonnes ---
-    plan_provider: Literal["mock", "freeradius_sql"] = "mock"
+    # "clients" : le plan de chaque client (API Preseem ou page Plans), sinon le
+    # plan par defaut. "mock" invente un plan par login (tests, demos seulement).
+    plan_provider: Literal["clients", "mock", "freeradius_sql"] = "clients"
     radius_dsn: str | None = None
     radius_rate_attribute: str = "Mikrotik-Rate-Limit"
     radius_default_down_mbps: float = 100.0
