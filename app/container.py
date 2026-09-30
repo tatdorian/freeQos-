@@ -34,6 +34,7 @@ from app.db.destinations_repo import DestinationsRepository
 from app.db.directory import Directory, PgDirectory
 from app.db.flows_repo import FlowsRepository, NetflowExportersRepository
 from app.db.model_repo import ModelRepository
+from app.db.plans_repo import ClientPlansRepository
 from app.db.repository import MetricsRepository
 from app.db.routers_repo import RoutersRepository
 from app.db.settings_repo import SettingsRepository
@@ -74,7 +75,17 @@ from app.services.unplaced import JOB_PLACE_SERVICES, place_unplaced
 logger = logging.getLogger(__name__)
 
 
-def build_plan_provider(settings: Settings) -> PlanProvider:
+def build_plan_provider(settings: Settings, plans_repo: Any = None) -> PlanProvider:
+    # Avec une base, on n'invente JAMAIS de plan : "mock" (ancienne valeur de
+    # .env.example) est lu comme "clients". Le simulateur ne sert plus qu'aux
+    # tests sans base.
+    if settings.plan_provider == "clients" or (
+        settings.plan_provider == "mock" and plans_repo is not None
+    ):
+        from app.services.plans import ClientPlanProvider
+
+        logger.info("Plans abonnes : par client (API ou page Plans), sinon plan par defaut")
+        return ClientPlanProvider(plans_repo, settings)
     if settings.plan_provider == "freeradius_sql":
         if not settings.radius_dsn:
             raise ValueError("PLAN_PROVIDER=freeradius_sql exige RADIUS_DSN")
@@ -174,6 +185,7 @@ class Container:
     users_repo: UsersStore | None = None
     login_throttle: LoginThrottle | None = None
     model_repo: ModelRepository | None = None
+    client_plans_repo: ClientPlansRepository | None = None
     flows_repo: FlowsRepository | None = None
     exporters_repo: NetflowExportersRepository | None = None
     destinations_repo: DestinationsRepository | None = None
@@ -237,7 +249,8 @@ async def build_container(settings: Settings) -> Container:
     writer = PgMetricsWriter(database.pool)
     repository = MetricsRepository(database.pool)
     directory = PgDirectory(database.pool)
-    plan_provider = build_plan_provider(settings)
+    client_plans_repo = ClientPlansRepository(database.pool)
+    plan_provider = build_plan_provider(settings, client_plans_repo)
     backhaul_provider = build_backhaul_provider(settings)
 
     cle, source, chemin = load_or_create_key(
@@ -577,6 +590,7 @@ async def build_container(settings: Settings) -> Container:
         users_repo=users_repo,
         login_throttle=LoginThrottle(),
         model_repo=model_repo,
+        client_plans_repo=client_plans_repo,
         flows_repo=flows_repo,
         exporters_repo=exporters_repo,
         destinations_repo=destinations_repo,

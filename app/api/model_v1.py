@@ -209,7 +209,7 @@ async def put_object(
     repo = _repository(container)
     try:
         if collection == "services":
-            payload = await _place_by_address(container, payload)
+            payload, lieu = await _place_by_address(container, payload)
             fiche = await repo.put_service(object_id, payload)
         elif collection == "accounts":
             fiche = await repo.put_account(object_id, payload)
@@ -236,6 +236,8 @@ async def put_object(
     if collection == "services":
         # Le compte rendu de la pose reste lisible, mais HORS du corps : la
         # reponse doit etre celle de Preseem, champ pour champ.
+        if lieu and lieu.get("login"):
+            await _record_client_plan(container, fiche, str(lieu["login"]))
         if _adresse(fiche) is None:
             response.headers["X-FreeQoS-Enforcement"] = "waiting-for-address"
         else:
@@ -270,6 +272,14 @@ async def delete_object(
     logger.info("%s a supprime %s/%s", caller.label, collection, object_id)
     if avant is not None and _adresse(avant) is not None:
         await _retire_service(container, avant)
+    depot = getattr(container, "client_plans_repo", None)
+    if collection == "services" and depot is not None:
+        # Le client dont le plan venait de ce service retombe sur le plan par
+        # defaut, tout de suite.
+        from app.services.plans import apply_now
+
+        for login in await depot.delete_by_service(object_id):
+            await apply_now(container, login, author="api:model")
     return {}
 
 
@@ -282,7 +292,9 @@ def _adresse(fiche: dict[str, Any]) -> str | None:
     return None
 
 
-async def _place_by_address(container: ContainerDep, payload: dict[str, Any]) -> dict[str, Any]:
+async def _place_by_address(
+    container: ContainerDep, payload: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     """Situe le service par son IP, comme Preseem qui voit le trafic passer.
 
     Une session PPPoE avec cette IP, ou un reseau connecte d'un routeur qui la
@@ -295,16 +307,47 @@ async def _place_by_address(container: ContainerDep, payload: dict[str, Any]) ->
         prefixes, _ = parse_attachments(payload.get("attachments"))
         prefixes = prefixes or normalise_prefixes(payload.get("network_prefixes"))
     except ModelValidationError:
-        return payload
+        return payload, None
     if not prefixes:
-        return payload
+        return payload, None
     try:
         lieu = await container.shaping.locate_address(prefixes[0])
     except Exception:  # noqa: BLE001 - la synchronisation prime
         lieu = None
     if lieu and lieu.get("pop_name"):
-        return {**payload, "pop_name": lieu["pop_name"]}
-    return payload
+        return {**payload, "pop_name": lieu["pop_name"]}, lieu
+    return payload, lieu
+
+
+async def _record_client_plan(container: ContainerDep, fiche: dict[str, Any], login: str) -> None:
+    """Le service designe CE client (sa session) : son plan devient celui du client.
+
+    C'est ce plan que la page Plans affiche, avec sa source ("API") et l'heure
+    de la derniere poussee ; la facturation peut le repousser autant de fois
+    qu'elle veut, la derniere ecriture gagne.
+    """
+    depot = getattr(container, "client_plans_repo", None)
+    if depot is None:
+        return
+
+    def mbps(kbps: Any) -> float | None:
+        return float(kbps) / 1000 if kbps else None
+
+    try:
+        await depot.set(
+            login,
+            down_mbps=mbps(fiche.get("down_speed")),
+            up_mbps=mbps(fiche.get("up_speed")),
+            source="api",
+            package_id=fiche.get("package") or None,
+            service_id=str(fiche["id"]),
+            updated_by="api:model",
+        )
+        from app.services.plans import apply_now
+
+        await apply_now(container, login, author="api:model")
+    except Exception as exc:  # noqa: BLE001 - la synchronisation prime
+        logger.warning("Plan du client %s non enregistre : %s", login, exc)
 
 
 async def _retire_service(container: ContainerDep, fiche: dict[str, Any]) -> None:

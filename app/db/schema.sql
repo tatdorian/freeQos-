@@ -1176,3 +1176,23 @@ FROM backhaul_metrics m
 JOIN backhauls b ON b.id = m.backhaul_id
 LEFT JOIN pops p ON p.id = b.pop_id
 ORDER BY m.backhaul_id, m.ts DESC;
+
+-- -----------------------------------------------------------------------------
+-- PLAN PAR CLIENT
+--
+-- Le plan appartient au CLIENT, jamais au PoP (un point de connexion). Il vient
+-- de la facturation (API Preseem : un service pousse sur l'IP de ce client),
+-- ou d'une saisie dans la page Plans ; le dernier ecrit gagne -- la facturation
+-- peut le repousser plusieurs fois par jour. Sans ligne ici, le client recoit
+-- le plan par defaut (DEFAULT_PLAN_*), comme tout nouveau client detecte.
+-- Debits a NULL = "plan par defaut" explicitement demande.
+CREATE TABLE IF NOT EXISTS client_plans (
+    login       TEXT PRIMARY KEY,
+    down_mbps   DOUBLE PRECISION,
+    up_mbps     DOUBLE PRECISION,
+    package_id  TEXT,
+    source      TEXT NOT NULL,          -- 'api' | 'ui'
+    service_id  TEXT,                   -- service Preseem a l'origine du plan
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

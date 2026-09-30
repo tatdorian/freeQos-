@@ -34,6 +34,7 @@ from app.api import (
     metrics,
     model_v1,
     netflow,
+    plans,
     pop_census,
     routers_admin,
     shaping,
@@ -193,6 +194,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         netflow,
         traffic_rules,
         api_keys,
+        plans,
     ):
         app.include_router(module.router, prefix=settings.api_prefix, dependencies=proteges)
     # API PUBLIQUE. Volontairement HORS du prefixe d'exploitation : son chemin

@@ -485,7 +485,8 @@ class MetricsRepository:
                 f"""
                 SELECT s.id AS subscriber_id, s.login, s.kind, s.pop_id,
                        pop.name AS pop_name,
-                       s.plan_down_mbps, s.plan_up_mbps, s.last_seen, s.last_ip,
+                       s.plan_down_mbps, s.plan_up_mbps, s.plan_source, s.last_seen,
+                       s.last_ip,
                        l.ts, l.rx_bps, l.tx_bps, l.rtt_ms, l.session_uptime_s,
                        p.max_down_mbps  AS override_down_mbps,
                        p.max_up_mbps    AS override_up_mbps,
@@ -1028,6 +1029,21 @@ class MetricsRepository:
                  ORDER BY s.login
                 """,
                 days,
+            )
+        return _rows(rows)
+
+    async def plan_roster(self) -> list[dict[str, Any]]:
+        """Tous les clients connus et le plan qu'ils portent, pour la page Plans."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT s.id AS subscriber_id, s.login, s.kind, p.name AS pop_name,
+                       s.plan_down_mbps, s.plan_up_mbps, s.plan_source,
+                       host(s.last_ip) AS address, s.last_seen
+                  FROM subscribers s
+                  LEFT JOIN pops p ON p.id = s.pop_id
+                 ORDER BY s.login
+                """
             )
         return _rows(rows)
 
