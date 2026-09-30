@@ -913,6 +913,25 @@ $$;
 
 CREATE INDEX IF NOT EXISTS idx_flow_destinations_seen ON flow_destinations (last_seen DESC);
 CREATE INDEX IF NOT EXISTS idx_flow_destinations_addr ON flow_destinations (address);
+
+-- LE VOLUME PAR PERIODE. flow_destinations cumule depuis la PREMIERE vue du
+-- couple : afficher ce cumul sous "derniere heure" montrait des jours de trafic
+-- (2,7 Gio pour un test de deux minutes). Ici, une ligne par couple et par
+-- tranche de 5 minutes : la periode choisie ne somme que ses tranches.
+-- ``active_s`` = temps ou la conversation a reellement echange (duree portee par
+-- les enregistrements NetFlow) : volume / temps actif = debit vecu par le client.
+CREATE TABLE IF NOT EXISTS flow_destination_buckets (
+    bucket      TIMESTAMPTZ NOT NULL,
+    client      INET NOT NULL,
+    address     INET NOT NULL,
+    down_bytes  BIGINT NOT NULL DEFAULT 0,
+    up_bytes    BIGINT NOT NULL DEFAULT 0,
+    flows       BIGINT NOT NULL DEFAULT 0,
+    active_s    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    PRIMARY KEY (bucket, client, address)
+);
+CREATE INDEX IF NOT EXISTS idx_flow_dest_buckets_pair
+    ON flow_destination_buckets (client, address, bucket DESC);
 CREATE INDEX IF NOT EXISTS idx_flow_destinations_sub  ON flow_destinations (subscriber_id);
 
 -- Ce qu'on sait d'une adresse atteinte.

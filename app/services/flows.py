@@ -36,9 +36,11 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import time
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any, ClassVar
 
 from app.collectors.netflow import Flow
 from app.services import ipfinder
@@ -303,6 +305,11 @@ class DestinationCounters:
     down_bytes: int = 0
     up_bytes: int = 0
     flows: int = 0
+    #: Secondes pendant lesquelles la conversation a reellement echange dans la
+    #: fenetre (duree portee par les enregistrements). Diviser un volume par la
+    #: PERIODE entiere donnait un debit dilue ; par ce temps actif, on retrouve
+    #: le debit tel que le client l'a vecu.
+    active_s: float = 0.0
 
     @property
     def total_bytes(self) -> int:
@@ -352,11 +359,29 @@ class FlowAggregator:
     #: p2p peut toucher des milliers d'adresses en une minute : sans plafond,
     #: une fenetre de collecte deviendrait une fenetre d'ecriture en base.
     destination_limit: int = 2_000
+    #: Expiration active posee sur les routeurs (1 min) : un enregistrement porte
+    #: au plus ce temps de trafic, et un flux vivant en reemet un a ce rythme.
+    active_timeout_s: float = 60.0
+    clock: Any = time.monotonic
 
     _subs: dict[tuple[int, str], SubscriberCounters] = field(default_factory=dict)
     _apps: dict[tuple[int, str], AppCounters] = field(default_factory=dict)
     _hosts: dict[tuple[str, int | None], HostCounters] = field(default_factory=dict)
     _dests: dict[tuple[str, str], DestinationCounters] = field(default_factory=dict)
+    #: Debit EN COURS : par conversation, le dernier enregistrement de chaque flux
+    #: (5-uplet) -> (arrivee, descendant, bit/s). Survit aux fenetres.
+    _live: dict[tuple[str, str], dict[tuple[Any, ...], tuple[float, bool, float]]] = field(
+        default_factory=dict
+    )
+    #: Point de mesure retenu pour chaque conversation : le meme paquet est
+    #: exporte par le PoP PUIS par la sortie internet, il ne compte qu'une fois.
+    _pair_vantage: dict[tuple[str, str], str] = field(default_factory=dict)
+    #: Ce qui decrit une conversation en cours (abonne, port, protocole, usage),
+    #: garde tant qu'elle est vivante : la fenetre, elle, se vide a chaque flush.
+    _live_meta: dict[tuple[str, str], tuple[int | None, int, int, str]] = field(
+        default_factory=dict
+    )
+    _vantage_courant: str = ""
     flows_seen: int = 0
     flows_matched: int = 0
     #: Destinations ecartees faute de place dans la fenetre. Un compteur qui
@@ -396,6 +421,7 @@ class FlowAggregator:
         octets = flow.octets * max(sampling_rate, 1)
         paquets = flow.packets * max(sampling_rate, 1)
         self.flows_seen += 1
+        self._vantage_courant = vantage
 
         source = self.index.lookup(flow.src)
         destination = self.index.lookup(flow.dst)
@@ -525,6 +551,8 @@ class FlowAggregator:
             self.destinations_infra += 1
             return
         cle = (client, remote)
+        if not self._vantage_retenu(cle, self._vantage_courant):
+            return
         compteurs = self._dests.get(cle)
         if compteurs is None:
             if len(self._dests) >= self.destination_limit:
@@ -545,6 +573,72 @@ class FlowAggregator:
             compteurs.down_bytes += octets
         else:
             compteurs.up_bytes += octets
+        duree = self._duree_s(flow)
+        compteurs.active_s = min(self.active_timeout_s, max(compteurs.active_s, duree))
+        # Debit de CE flux = son volume sur la duree qu'il couvre. Le dernier
+        # enregistrement de chaque flux remplace le precedent.
+        self._live_meta[cle] = (
+            compteurs.subscriber_id,
+            compteurs.port,
+            compteurs.protocol,
+            compteurs.app,
+        )
+        cle_flux = (flow.src, flow.dst, flow.src_port, flow.dst_port, flow.protocol)
+        self._live.setdefault(cle, {})[cle_flux] = (
+            self.clock(),
+            descendant,
+            octets * 8 / duree,
+        )
+
+    def _duree_s(self, flow: Flow) -> float:
+        """Duree couverte par l'enregistrement, bornee a l'expiration active.
+
+        Sans horodatage, on suppose l'enregistrement plein (expiration active) :
+        c'est le cas d'un flux long, le seul dont le debit compte vraiment.
+        """
+        if flow.duration_ms is None:
+            return self.active_timeout_s
+        return min(self.active_timeout_s, max(1.0, flow.duration_ms / 1000))
+
+    _RANG_VANTAGE: ClassVar[dict[str, int]] = {"pop": 0, "unknown": 2, "": 2}
+
+    def _vantage_retenu(self, cle: tuple[str, str], vantage: str) -> bool:
+        """Un seul point de mesure par conversation, le plus proche du client."""
+        actuel = self._pair_vantage.get(cle)
+        if actuel is None or actuel == vantage:
+            self._pair_vantage[cle] = vantage
+            return True
+        rang = self._RANG_VANTAGE
+        if rang.get(vantage, 1) < rang.get(actuel, 1):
+            self._pair_vantage[cle] = vantage
+            return True
+        return False
+
+    def live_rates(self) -> dict[tuple[str, str], tuple[float, float]]:
+        """Debit EN COURS de chaque conversation, (descendant, montant) en bit/s.
+
+        Un flux vivant reemet un enregistrement a chaque expiration active : il
+        reste compte tant que son dernier enregistrement date de moins que ce
+        delai (plus une marge). Plus de division d'un volume d'une minute par
+        l'age de la fenetre -- c'est ce qui triplait le chiffre affiche.
+        """
+        limite = self.clock() - (self.active_timeout_s + 15.0)
+        sortie: dict[tuple[str, str], tuple[float, float]] = {}
+        for cle in list(self._live):
+            flux = {k: v for k, v in self._live[cle].items() if v[0] >= limite}
+            if not flux:
+                del self._live[cle]
+                self._pair_vantage.pop(cle, None)
+                self._live_meta.pop(cle, None)
+                continue
+            self._live[cle] = flux
+            bas = sum(bps for _t, desc, bps in flux.values() if desc)
+            haut = sum(bps for _t, desc, bps in flux.values() if not desc)
+            sortie[cle] = (bas, haut)
+        return sortie
+
+    def live_meta(self, cle: tuple[str, str]) -> tuple[int | None, int, int, str] | None:
+        return self._live_meta.get(cle)
 
     @property
     def destinations_in_window(self) -> int:
@@ -643,4 +737,6 @@ class FlowAggregator:
         self._apps = {}
         self._hosts = {}
         self._dests = {}
+        # Purge des conversations terminees (et de leur point de mesure).
+        self.live_rates()
         return lot

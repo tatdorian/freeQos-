@@ -250,6 +250,33 @@ class FlowsRepository:
                         for d in batch.destinations
                     ],
                 )
+                # Le meme volume, date : c'est lui que les periodes somment.
+                await conn.executemany(
+                    """
+                    INSERT INTO flow_destination_buckets (bucket, client, address,
+                                                          down_bytes, up_bytes, flows, active_s)
+                    VALUES (date_bin('5 minutes', $1::timestamptz, '2000-01-01'::timestamptz),
+                            $2::inet, $3::inet, $4, $5, $6, $7)
+                    ON CONFLICT (bucket, client, address) DO UPDATE
+                       SET down_bytes = flow_destination_buckets.down_bytes
+                                        + EXCLUDED.down_bytes,
+                           up_bytes   = flow_destination_buckets.up_bytes + EXCLUDED.up_bytes,
+                           flows      = flow_destination_buckets.flows + EXCLUDED.flows,
+                           active_s   = flow_destination_buckets.active_s + EXCLUDED.active_s
+                    """,
+                    [
+                        (
+                            batch.ts,
+                            d.client,
+                            d.address,
+                            d.down_bytes,
+                            d.up_bytes,
+                            d.flows,
+                            float(d.active_s),
+                        )
+                        for d in batch.destinations
+                    ],
+                )
                 # LA FILE D'ATTENTE DE L'ENRICHISSEMENT.
                 #
                 # Une adresse jamais vue entre ici avec resolved_at a NULL, et

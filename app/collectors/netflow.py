@@ -52,14 +52,23 @@ FIELDS: dict[int, str] = {
     11: "dst_port",  # destinationTransportPort
     12: "dst",  # destinationIPv4Address
     14: "output_snmp",  # egressInterface
+    21: "last_ms",  # LAST_SWITCHED / flowEndSysUpTime (ms)
+    22: "first_ms",  # FIRST_SWITCHED / flowStartSysUpTime (ms)
     23: "bytes",  # postOctetDeltaCount (meme flux, apres le point d'observation)
     24: "packets",  # postPacketDeltaCount
     27: "src",  # sourceIPv6Address
     28: "dst",  # destinationIPv6Address
     58: "vlan",  # vlanId
     59: "post_vlan",  # postVlanId
-    85: "bytes",  # octetTotalCount
-    86: "packets",  # packetTotalCount
+    # octetTotalCount (85) / packetTotalCount (86) : cumuls depuis le debut du
+    # flux, reemis a chaque expiration active. Les additionner comptait
+    # plusieurs fois le meme octet : ils ne servent qu'a defaut de delta.
+    85: "bytes_total",
+    86: "packets_total",
+    150: "start_s",  # flowStartSeconds
+    151: "end_s",  # flowEndSeconds
+    152: "start_ms",  # flowStartMilliseconds
+    153: "end_ms",  # flowEndMilliseconds
 }
 
 #: Champs dont la valeur est une adresse et non un entier.
@@ -93,6 +102,10 @@ class Flow:
     tos: int | None = None
     input_snmp: int | None = None
     output_snmp: int | None = None
+    #: Duree couverte par l'enregistrement (premier -> dernier paquet), en ms.
+    #: C'est elle qui transforme un volume en DEBIT : un enregistrement peut
+    #: porter jusqu'a une minute de trafic (expiration active).
+    duration_ms: int | None = None
 
 
 @dataclass(frozen=True)
@@ -187,6 +200,7 @@ class NetflowDecoder:
                     tos=champs[14],
                     input_snmp=champs[3],
                     output_snmp=champs[4],
+                    duration_ms=_duree(champs[7], champs[8]),
                 )
             )
         return DecodedPacket(
@@ -410,13 +424,35 @@ def _to_flow(valeurs: dict[str, object]) -> Flow | None:
         src_port=_int(valeurs.get("src_port")),
         dst_port=_int(valeurs.get("dst_port")),
         protocol=_int(valeurs.get("protocol")),
-        octets=_int(valeurs.get("bytes")),
-        packets=_int(valeurs.get("packets")),
+        octets=_int(valeurs.get("bytes", valeurs.get("bytes_total"))),
+        packets=_int(valeurs.get("packets", valeurs.get("packets_total"))),
         vlan=_opt_int(valeurs.get("vlan")) or _opt_int(valeurs.get("post_vlan")),
         tos=_opt_int(valeurs.get("tos")),
         input_snmp=_opt_int(valeurs.get("input_snmp")),
         output_snmp=_opt_int(valeurs.get("output_snmp")),
+        duration_ms=_duree_enregistrement(valeurs),
     )
+
+
+def _duree(premier: object, dernier: object) -> int | None:
+    """Ecart entre deux horodatages en ms (compteur 32 bits qui peut boucler)."""
+    if not isinstance(premier, int) or not isinstance(dernier, int):
+        return None
+    ecart = (dernier - premier) % (1 << 32)
+    # Plus d'une heure pour un seul enregistrement : horodatages incoherents.
+    return ecart if ecart <= 3_600_000 else None
+
+
+def _duree_enregistrement(valeurs: dict[str, object]) -> int | None:
+    if "first_ms" in valeurs and "last_ms" in valeurs:
+        return _duree(valeurs["first_ms"], valeurs["last_ms"])
+    debut, fin = valeurs.get("start_ms"), valeurs.get("end_ms")
+    if isinstance(debut, int) and isinstance(fin, int) and fin >= debut:
+        return fin - debut if fin - debut <= 3_600_000 else None
+    debut, fin = valeurs.get("start_s"), valeurs.get("end_s")
+    if isinstance(debut, int) and isinstance(fin, int) and fin >= debut:
+        return (fin - debut) * 1000 if fin - debut <= 3_600 else None
+    return None
 
 
 def _int(value: object) -> int:

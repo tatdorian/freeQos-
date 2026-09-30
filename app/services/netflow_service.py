@@ -343,12 +343,15 @@ class NetflowService:
                 # passage, les lignes ecrites avant que le filtre n'existe
                 # resteraient affichees pendant toute la retention -- une
                 # semaine de BFD entre routeurs dans la liste des conversations.
+                from app.collectors.mikrotik import own_addresses
+
                 await self.destinations_repo.purge_infrastructure(
                     customer_networks=[str(r) for r in self.aggregator.customer_networks],
                     infrastructure_networks=[
                         str(r) for r in self.aggregator.infrastructure_networks
                     ],
                     ports=sorted(self.aggregator.infrastructure_ports),
+                    own_addresses=sorted(own_addresses()),
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.debug("Nettoyage des conversations d'exploitation impossible : %s", exc)
@@ -420,20 +423,31 @@ class NetflowService:
         connait pas l'annuaire, et l'appelant (l'API) sait le faire sans
         bloquer la reception.
         """
-        return [
-            {
-                "client": d.client,
-                "subscriber_id": d.subscriber_id,
-                "address": d.address,
-                "port": d.port,
-                "protocol": d.protocol,
-                "app": d.app,
-                "down_bytes": d.down_bytes,
-                "up_bytes": d.up_bytes,
-                "flows": d.flows,
-            }
-            for d in self.aggregator.live_destinations(limit)
-        ]
+        # LE DEBIT EN COURS vient de la duree portee par chaque enregistrement,
+        # sens par sens -- plus d'un volume d'une minute divise par l'age de la
+        # fenetre. Les volumes de la fenetre restent rendus pour l'affichage.
+        fenetre = {(d.client, d.address): d for d in self.aggregator.live_destinations(100_000)}
+        lignes: list[dict[str, Any]] = []
+        for (client, adresse), (bas, haut) in self.aggregator.live_rates().items():
+            meta = self.aggregator.live_meta((client, adresse)) or (None, 0, 0, "")
+            vue = fenetre.get((client, adresse))
+            lignes.append(
+                {
+                    "client": client,
+                    "subscriber_id": meta[0],
+                    "address": adresse,
+                    "port": meta[1],
+                    "protocol": meta[2],
+                    "app": meta[3],
+                    "down_bytes": vue.down_bytes if vue else 0,
+                    "up_bytes": vue.up_bytes if vue else 0,
+                    "flows": vue.flows if vue else 0,
+                    "down_bps": round(bas),
+                    "up_bps": round(haut),
+                }
+            )
+        lignes.sort(key=lambda x: x["down_bps"] + x["up_bps"], reverse=True)
+        return lignes[:limit]
 
     # ------------------------------------------------------- point de mesure
     def active_vantages(self, *, max_age_s: float = VANTAGE_FRESH_S) -> list[str]:
