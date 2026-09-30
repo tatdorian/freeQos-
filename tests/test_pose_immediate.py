@@ -307,12 +307,11 @@ async def test_seule_la_file_de_ce_client_est_ecrite(
     assert noms == ["freeqos-mairie"]
 
 
-async def test_un_client_sans_debit_a_une_file_illimitee_pour_etre_mesure(
+async def test_un_client_sans_debit_recoit_la_limite_par_defaut(
     settings_francophonie: Settings, routeur: FakeRouterOsClient, ecriture: FauxClientEcriture
 ) -> None:
-    """Le compteur de sa file est le SEUL compteur de trafic d'un client a IP
-    fixe. Sans debit saisi, il recoit donc une file 0/0 : elle ne bride rien,
-    mais sa bande passante s'affiche comme celle des autres."""
+    """DEMANDE EXPLICITE : un client pousse sans forfait prend sa place et
+    recoit la limite par defaut (100/20 Mbps), au lieu de passer sans limite."""
     service = _service(
         settings_francophonie,
         routeur,
@@ -328,6 +327,27 @@ async def test_un_client_sans_debit_a_une_file_illimitee_pour_etre_mesure(
     assert rapport["state"] == ShapingService.ETAT_POSEE
     files = [a for a in ecriture.executed if a.path == "/queue/simple"]
     assert [a.name for a in files] == ["freeqos-mairie"]
+    assert files[0].fields["max-limit"] == "20000000/100000000"
+
+
+async def test_sans_limite_par_defaut_la_file_mesure_sans_brider(
+    settings_francophonie: Settings, routeur: FakeRouterOsClient, ecriture: FauxClientEcriture
+) -> None:
+    """Limite par defaut a 0 : la file 0/0 reste, seul compteur de trafic d'un
+    client a IP fixe."""
+    settings_francophonie.default_plan_down_mbps = 0
+    settings_francophonie.default_plan_up_mbps = 0
+    service = _service(
+        settings_francophonie,
+        routeur,
+        ecriture,
+        InventaireMemoire([_client_statique(plan_down_mbps=None, plan_up_mbps=None)]),
+    )
+    await service.registry.reload()
+
+    await service.enforce_static_client(reference="mairie", pop_name="francophonie", author="test")
+
+    files = [a for a in ecriture.executed if a.path == "/queue/simple"]
     assert files[0].fields["max-limit"] == "0/0"
 
 
@@ -353,11 +373,11 @@ async def test_un_pop_qui_ne_correspond_a_rien_est_dit_tout_de_suite(
     assert ecriture.executed == []
 
 
-async def test_enforcement_desactive_calcule_sans_ecrire(
+async def test_enregistrer_un_client_ecrit_meme_interrupteur_coupe(
     settings_francophonie: Settings, routeur: FakeRouterOsClient, ecriture: FauxClientEcriture
 ) -> None:
-    """Le verrou global reste le dernier mot. Mais l'exploitant apprend que sa
-    file est prete et ce qui la retient, au lieu d'un silence."""
+    """DEMANDE EXPLICITE : plus de "Saved, but NOTHING was written". Enregistrer
+    ou pousser un client ecrit sa file quoi qu'il arrive."""
     settings_francophonie.enforcement_enabled = False
     service = _service(
         settings_francophonie, routeur, ecriture, InventaireMemoire([_client_statique()])
@@ -368,9 +388,8 @@ async def test_enforcement_desactive_calcule_sans_ecrire(
         reference="mairie", pop_name="francophonie", author="test"
     )
 
-    assert rapport["state"] == ShapingService.ETAT_A_POSER
-    assert "enforcement" in rapport["reason"]
-    assert ecriture.executed == []
+    assert rapport["state"] == ShapingService.ETAT_POSEE
+    assert [a.name for a in ecriture.executed if a.path == "/queue/simple"] == ["freeqos-mairie"]
 
 
 async def test_un_routeur_muet_ne_fait_pas_perdre_la_declaration(

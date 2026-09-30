@@ -69,6 +69,7 @@ from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
 from app.services.rtt import PathProber, RttProber
 from app.services.runtime_config import RuntimeConfig
 from app.services.shaping import ShapingService, discover_with_devices
+from app.services.unplaced import JOB_PLACE_SERVICES, place_unplaced
 
 logger = logging.getLogger(__name__)
 
@@ -595,6 +596,13 @@ async def build_container(settings: Settings) -> Container:
         await noms_dns.refresh(list(registry.collectors))
 
     scheduler.add_job(JOB_DNS_NAMES, 120.0, lire_noms_dns)
+
+    # Services pousses par l'API avec la seule MAC du CPE : places des que la
+    # MAC apparait dans une table ARP/DHCP d'un routeur.
+    async def placer_services() -> None:
+        await place_unplaced(conteneur)
+
+    scheduler.add_job(JOB_PLACE_SERVICES, 120.0, placer_services)
 
     # PoPs vides que plus rien ne declare (routeur retire, essai jamais relie) :
     # retires pour ne plus encombrer l'arbre et les listes.

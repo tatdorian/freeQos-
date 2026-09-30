@@ -23,6 +23,7 @@ vivra dans un module distinct.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import threading
 import time
@@ -665,13 +666,49 @@ def remember_upstream(router_name: str, gateway: str | None, interface: str | No
 _PROPRIETAIRES: dict[str, tuple[str, str | None]] = {}
 
 
+#: Routeur -> reseaux directement connectes ``(reseau, interface)``. C'est ce qui
+#: situe un client pousse par son IP : l'adresse 10.20.0.5 est derriere le
+#: routeur qui porte 10.20.0.1/24.
+_RESEAUX_CONNECTES: dict[str, list[tuple[Any, str | None]]] = {}
+
+
 def remember_addresses(router_name: str, addresses: list[dict[str, Any]]) -> None:
     for adresse in [a for a, (r, _i) in _PROPRIETAIRES.items() if r == router_name]:
         del _PROPRIETAIRES[adresse]
+    reseaux: list[tuple[Any, str | None]] = []
     for row in addresses:
         brut = str(row.get("address") or "").split("/")[0].strip()
         if brut:
             _PROPRIETAIRES[brut] = (router_name, str(row.get("interface") or "") or None)
+        if parse_flag(row.get("disabled")):
+            continue
+        try:
+            reseau = ipaddress.ip_interface(str(row.get("address") or "").strip()).network
+        except ValueError:
+            continue
+        if reseau.prefixlen < reseau.max_prefixlen:
+            reseaux.append((reseau, str(row.get("interface") or "") or None))
+    _RESEAUX_CONNECTES[router_name] = reseaux
+
+
+def router_serving(address: str | None) -> tuple[str, str | None] | None:
+    """``(routeur, interface)`` dont un reseau CONNECTE contient cette adresse.
+
+    Le prefixe le plus long l'emporte : un /24 client prime sur un /16 agrege.
+    """
+    if not address:
+        return None
+    try:
+        ip = ipaddress.ip_interface(str(address).strip()).ip
+    except ValueError:
+        return None
+    meilleur: tuple[int, str, str | None] | None = None
+    for routeur, reseaux in _RESEAUX_CONNECTES.items():
+        for reseau, interface in reseaux:
+            if ip.version == reseau.version and ip in reseau:
+                if meilleur is None or reseau.prefixlen > meilleur[0]:
+                    meilleur = (reseau.prefixlen, routeur, interface)
+    return (meilleur[1], meilleur[2]) if meilleur else None
 
 
 def router_owning(address: str | None) -> str | None:

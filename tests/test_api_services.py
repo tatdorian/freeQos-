@@ -280,14 +280,33 @@ def destinations() -> FauxDestinations:
     return depot
 
 
+class ShapingEnregistreur:
+    """Interrupteur coupe ; garde les plans qu'on lui fait appliquer."""
+
+    enforcement_enabled = False
+
+    def __init__(self) -> None:
+        self.plans: list[Any] = []
+        self.explicites: list[bool] = []
+
+    async def apply(self, plan: Any, **kwargs: Any) -> Any:
+        from app.enforcement.routeros import ActionOutcome, ApplyResult
+
+        self.plans.append(plan)
+        self.explicites.append(bool(kwargs.get("explicit")))
+        resultat = ApplyResult(router_name=plan.router_name, dry_run=False)
+        resultat.outcomes = [ActionOutcome(action=a, ok=True) for a in plan.actions]
+        return resultat
+
+
 @pytest.fixture
 def restrictions(settings: Settings, router_config: RouterConfig) -> RestrictionService:
     client = FakeRouterOsClient()
     collector = MikrotikCollector(router_config, client=client)
     registry = SimpleNamespace(collectors=[collector])
-    # L'ecriture est coupee : c'est l'etat par defaut du controleur, et celui
-    # dans lequel ces tests doivent verifier qu'on ne pose rien.
-    shaping = SimpleNamespace(enforcement_enabled=False)
+    # Interrupteur coupe : il ne retient plus que la boucle automatique. Un
+    # geste explicite (enregistrer, appliquer, lever) ecrit quand meme.
+    shaping = ShapingEnregistreur()
     return RestrictionService(
         shaping=shaping,  # type: ignore[arg-type]
         registry=registry,  # type: ignore[arg-type]
@@ -416,20 +435,23 @@ def regle(**kwargs: Any) -> dict[str, Any]:
     return corps
 
 
-def test_enregistrer_une_regle_n_ecrit_rien_sur_les_routeurs(
+def test_enregistrer_une_regle_la_pose_meme_interrupteur_coupe(
     client: TestClient, restrictions: RestrictionService
 ) -> None:
-    """LA PROMESSE LA PLUS IMPORTANTE DU LOT. Une regle saisie est une
-    intention ; la pose est un geste separe, et il reste soumis a
-    l'interrupteur d'ecriture."""
+    """DEMANDE EXPLICITE : quand l'exploitant applique, ca ecrit quoi qu'il
+    arrive. L'interrupteur ne retient que la boucle automatique."""
     reponse = client.post("/api/v1/traffic-rules", json=regle())
     assert reponse.status_code == 201
-    # Ecriture coupee : la pose automatique est tentee, rien n'est ecrit, et
-    # la regle le dit.
-    assert reponse.json()["last_state"] == "a poser"
+    assert reponse.json()["last_state"] == "posee"
+    assert restrictions.shaping.explicites == [True]  # type: ignore[attr-defined]
 
-    collector = restrictions.registry.collectors[0]
-    assert collector._client.firewall_address_list_rows == []  # noqa: SLF001
+
+async def test_la_boucle_automatique_reste_retenue_par_l_interrupteur(
+    restrictions: RestrictionService,
+) -> None:
+    rapport = await restrictions.reconcile()
+    assert rapport["state"] == "a poser"
+    assert restrictions.shaping.plans == []  # type: ignore[attr-defined]
 
 
 def test_une_regle_sans_critere_est_refusee_par_l_api(client: TestClient) -> None:
@@ -498,14 +520,12 @@ def test_la_pose_est_une_simulation_par_defaut(client: TestClient) -> None:
     assert any(PATH_ADDRESS_LIST.split("/")[-1] in a or "freeqos" in a for a in routeur["actions"])
 
 
-def test_l_ecriture_reste_bloquee_tant_que_l_enforcement_est_coupe(client: TestClient) -> None:
-    """Meme en demandant explicitement l'ecriture. Le drapeau global a le
-    dernier mot, et la reponse dit pourquoi plutot que d'echouer."""
+def test_appliquer_ecrit_meme_interrupteur_coupe(client: TestClient) -> None:
+    """Appliquer est un geste explicite : il ecrit quoi qu'il arrive."""
     client.post("/api/v1/traffic-rules", json=regle())
     rapport = client.post("/api/v1/traffic-rules/apply?dry_run=false").json()
     assert rapport["enforcement_enabled"] is False
-    assert rapport["state"] == "a poser"
-    assert "enforcement is off" in rapport["routers"][0]["reason"]
+    assert rapport["state"] == "posee"
 
 
 def test_le_plan_vise_la_liste_de_la_regle(client: TestClient) -> None:
@@ -515,16 +535,14 @@ def test_le_plan_vise_la_liste_de_la_regle(client: TestClient) -> None:
     assert dst_list_name(cree["id"]) in commandes
 
 
-def test_supprimer_une_regle_ecriture_coupee_dit_qu_elle_n_est_pas_levee(
+def test_supprimer_une_regle_la_leve_meme_interrupteur_coupe(
     client: TestClient,
 ) -> None:
-    """L'interrupteur d'ecriture reste le dernier mot, meme pour lever. La
-    reponse le DIT : croire un trafic rouvert alors qu'il est toujours bloque
-    est exactement l'erreur a eviter."""
+    """Lever est un geste explicite : le trafic est rouvert tout de suite."""
     cree = client.post("/api/v1/traffic-rules", json=regle()).json()
     reponse = client.delete(f"/api/v1/traffic-rules/{cree['id']}")
     assert reponse.status_code == 200
-    assert reponse.json()["lift"]["state"] == "a poser"
+    assert reponse.json()["lift"]["state"] == "levee"
     assert client.get("/api/v1/traffic-rules").json()["rules"] == []
 
 
@@ -538,7 +556,9 @@ class FauxShaping:
         self.routeur = routeur
         self.plans: list[Any] = []
 
-    async def apply(self, plan: Any, *, dry_run: bool = True, author: str | None = None) -> Any:
+    async def apply(
+        self, plan: Any, *, dry_run: bool = True, author: str | None = None, **_: Any
+    ) -> Any:
         from app.enforcement.routeros import ActionOutcome, ApplyResult
 
         self.plans.append(plan)
@@ -983,9 +1003,9 @@ def test_creer_une_regle_la_pose_aussitot_sur_les_routeurs(
     assert any(a.path == PATH_ADDRESS_LIST for a in ecriture.plans[0].actions)
 
 
-def test_creer_une_regle_ecriture_coupee_le_dit(client: TestClient) -> None:
+def test_creer_une_regle_interrupteur_coupe_la_pose_quand_meme(client: TestClient) -> None:
     corps = client.post("/api/v1/traffic-rules", json=regle()).json()
-    assert corps["apply"]["state"] == "a poser"
+    assert corps["apply"]["state"] == "posee"
 
 
 # ============================================================ carte et recherche

@@ -44,6 +44,12 @@ async def declared_pop_names(container: Any) -> set[str]:
     if container.static_clients_repo is not None:
         for client in await container.static_clients_repo.list_all():
             ajoute(client.get("pop_name"))
+    # Sites pousses par l'API (contrat Preseem) : ils ont leur place dans
+    # l'application, meme avant qu'un routeur ou un client les porte.
+    modele = getattr(container, "model_repo", None)
+    if modele is not None:
+        for site in await modele.list_objects("sites"):
+            ajoute(site.get("name"))
     return noms
 
 

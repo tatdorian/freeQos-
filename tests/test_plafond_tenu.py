@@ -387,10 +387,11 @@ async def test_l_audit_denonce_le_plafond_reste_en_base(
     assert audit["leaking"] == 1
 
 
-async def test_enforcement_coupe_le_dit_au_lieu_de_laisser_croire(
+async def test_appliquer_ecrit_meme_interrupteur_coupe(
     settings: Settings, routeur_lecture: FakeRouterOsClient
 ) -> None:
-    """En lecture seule, la saisie reussit -- et le rapport nomme l'obstacle."""
+    """DEMANDE EXPLICITE : quand l'exploitant applique, ca ecrit quoi qu'il
+    arrive. L'interrupteur ne retient que les boucles automatiques."""
     settings.enforcement_enabled = False
     ecriture = RouteurQuiSeSouvient(routeur_lecture)
     service = _service(
@@ -403,9 +404,8 @@ async def test_enforcement_coupe_le_dit_au_lieu_de_laisser_croire(
 
     rapport = await service.enforce_subscriber(login="test-ba", author="test")
 
-    assert rapport["state"] == "file-a-poser"
-    assert "enforcement" in rapport["reason"]
-    assert ecriture.executed == []
+    assert rapport["state"] == "file-posee"
+    assert ecriture.executed
 
 
 async def test_un_abonne_sans_routeur_est_nomme_comme_tel(

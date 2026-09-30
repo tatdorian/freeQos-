@@ -33,6 +33,7 @@ from app.collectors.mikrotik import (
     remember_addresses,
     remember_loopback,
     remember_upstream,
+    router_serving,
 )
 from app.collectors.parsing import parse_flag
 from app.collectors.topology import (
@@ -1143,6 +1144,29 @@ class ShapingService:
         # dit ce qui est vrai a l'instant ou l'on ecrit.
         sessions = {s.login: s for s in await collector.collect()}
 
+        # UN SERVICE POUSSE PAR L'IP D'UNE SESSION PPPoE EST CETTE SESSION.
+        #
+        # Chez Preseem, la facturation designe le client par son IP ; elle ne
+        # sait rien des sessions. Poser une seconde file sur la meme cible ne
+        # brideait rien (RouterOS n'applique que la premiere) et le service
+        # finissait "ecarte". Le debit du service devient donc le plan de la
+        # session qui porte cette IP, et aucune file en double n'est creee.
+        statiques = await self._static_clients_for(collector)
+        login_par_ip = {
+            str(s.address): login for login, s in sessions.items() if getattr(s, "address", None)
+        }
+        # L'IP d'une session de CE routeur suffit : le site pousse par la
+        # facturation peut ne correspondre a aucun PoP.
+        deja = {c.reference for c in statiques}
+        for client in await self._static_clients_all():
+            if client.reference not in deja and str(client.address).split("/")[0] in login_par_ip:
+                statiques.append(client)
+        services_de_session: dict[str, StaticClient] = {}
+        for client in statiques:
+            hote, _, longueur = str(client.address).partition("/")
+            if longueur in ("", "32", "128") and hote in login_par_ip:
+                services_de_session[login_par_ip[hote]] = client
+
         # Les sites que CE routeur dessert : le sien, et tous les VLAN qui
         # portent des clients derriere lui. Compare a une egalite de nom, c'est
         # ce qui empeche un abonne range dans un site de VLAN de disparaitre de
@@ -1162,33 +1186,41 @@ class ShapingService:
             surcharge = surcharges_abonnes.get(login, {})
             secteur = rattachements.get(login)
             session = sessions.pop(login, None)
+            plan_bas, plan_haut = ligne.get("plan_down_mbps"), ligne.get("plan_up_mbps")
+            service = services_de_session.get(login)
+            if service is not None:
+                plan_bas, plan_haut = self._plan_du_service(service)
             abonnes.append(
                 self._cible_abonne(
                     login,
                     collector=collector,
                     session=session,
-                    plan_down=ligne.get("plan_down_mbps"),
-                    plan_up=ligne.get("plan_up_mbps"),
+                    plan_down=plan_bas,
+                    plan_up=plan_haut,
                     surcharge=surcharge,
                     parent=parent_par_noeud.get(secteur) if secteur else None,
                 )
             )
 
         # Sessions ouvertes que la base ne connait pas encore (abonne apparu
-        # entre deux cycles de collecte). Une surcharge posee a la main doit
-        # s'appliquer des maintenant, sans attendre le prochain tour.
+        # entre deux cycles de collecte). Une surcharge posee a la main, ou un
+        # service pousse sur son IP, doit s'appliquer des maintenant.
         for login, session in sessions.items():
             surcharge = surcharges_abonnes.get(login, {})
-            if not surcharge:
+            service = services_de_session.get(login)
+            if not surcharge and service is None:
                 continue
+            plan_bas, plan_haut = (
+                self._plan_du_service(service) if service is not None else (None, None)
+            )
             secteur = rattachements.get(login)
             abonnes.append(
                 self._cible_abonne(
                     login,
                     collector=collector,
                     session=session,
-                    plan_down=None,
-                    plan_up=None,
+                    plan_down=plan_bas,
+                    plan_up=plan_haut,
                     surcharge=surcharge,
                     parent=parent_par_noeud.get(secteur) if secteur else None,
                 )
@@ -1199,7 +1231,10 @@ class ShapingService:
         # aucune difference entre les deux natures.
         ports_par_vlan = self._ports_par_vlan(router_name)
         interfaces_par_vlan = self._interfaces_par_vlan(router_name)
-        for client in await self._static_clients_for(collector):
+        fusionnes = {c.reference for c in services_de_session.values()}
+        for client in statiques:
+            if client.reference in fusionnes:
+                continue
             surcharge = surcharges_abonnes.get(client.reference, {})
             secteur = client.sector_key or rattachements.get(client.reference)
             parent = parent_par_noeud.get(secteur) if secteur else None
@@ -1279,12 +1314,69 @@ class ShapingService:
         """
         retenus: list[StaticClient] = []
         for client in await self._static_clients_all():
+            # L'IP D'ABORD (contrat Preseem) : un client dont l'adresse tombe
+            # dans un reseau connecte d'un routeur est derriere CE routeur, quel
+            # que soit le nom de site que la facturation lui a donne.
+            porteur = router_serving(client.address)
+            if porteur is not None:
+                if porteur[0] == collector.name:
+                    retenus.append(client)
+                continue
             # Passe par le SITE et non par le seul nom de PoP : depuis qu'un
             # VLAN qui porte des clients est un site, une fiche peut tres bien
             # etre declaree sur "Francophonie", qui est un VLAN de ce routeur.
             if collector.name in await self._routers_for_site(client.pop_name):
                 retenus.append(client)
         return retenus
+
+    async def locate_address(self, address: str | None) -> dict[str, Any] | None:
+        """Ou se trouve le client qui porte cette IP : routeur, site, et session.
+
+        Deux faits, dans cet ordre : une session PPPoE ouverte avec cette
+        adresse (le client EST cet abonne), puis un reseau connecte d'un
+        routeur qui la contient (le client est derriere ce routeur). C'est ce
+        qui permet de pousser un client par sa seule IP, comme chez Preseem.
+        """
+        if not address:
+            return None
+        hote = str(address).split("/")[0]
+        if self.metrics is not None and hasattr(self.metrics, "subscriber_at_address"):
+            try:
+                abonne = await self.metrics.subscriber_at_address(hote)
+            except Exception:  # noqa: BLE001 - la localisation par reseau reste
+                abonne = None
+            if abonne and abonne.get("pop_name"):
+                routeurs = await self._routers_for_site(str(abonne["pop_name"]))
+                if routeurs:
+                    return {
+                        "via": "session",
+                        "login": str(abonne["login"]),
+                        "router": routeurs[0],
+                        "pop_name": str(abonne["pop_name"]),
+                    }
+        porteur = router_serving(address)
+        if porteur is not None:
+            collecteur = next((c for c in self.registry.collectors if c.name == porteur[0]), None)
+            if collecteur is not None:
+                return {
+                    "via": "connected-network",
+                    "login": None,
+                    "router": collecteur.name,
+                    "interface": porteur[1],
+                    "pop_name": collecteur.config.effective_pop_name,
+                }
+        return None
+
+    def _plan_du_service(self, client: StaticClient) -> tuple[float | None, float | None]:
+        if client.plan_down_mbps is None and client.plan_up_mbps is None:
+            return self._default_plan()
+        return client.plan_down_mbps, client.plan_up_mbps
+
+    def _default_plan(self) -> tuple[float | None, float | None]:
+        """Limite d'un client pousse sans forfait ni debit (0 = aucune)."""
+        bas = float(getattr(self.settings, "default_plan_down_mbps", 0) or 0)
+        haut = float(getattr(self.settings, "default_plan_up_mbps", 0) or 0)
+        return (bas or None), (haut or None)
 
     def _cible_statique(
         self,
@@ -1299,14 +1391,20 @@ class ShapingService:
         boost prime sur la surcharge, qui prime sur le plan. Seule l'origine du
         plan change -- la fiche au lieu de RADIUS -- et l'interface reste vide,
         parce que ce client n'en a pas a lui.
+
+        SANS FORFAIT, LA LIMITE PAR DEFAUT : un client pousse sans debit prend
+        sa place et reste bride, au lieu de passer sans limite.
         """
+        bas, haut = client.plan_down_mbps, client.plan_up_mbps
+        if bas is None and haut is None:
+            bas, haut = self._default_plan()
         return SubscriberTarget(
             login=client.reference,
             interface="",
             kind=KIND_STATIC,
             address=client.address,
-            plan_down_mbps=client.plan_down_mbps,
-            plan_up_mbps=client.plan_up_mbps,
+            plan_down_mbps=bas,
+            plan_up_mbps=haut,
             override_down_mbps=surcharge.get("max_down_mbps"),
             override_up_mbps=surcharge.get("max_up_mbps"),
             boost_down_mbps=surcharge.get("boost_down_mbps"),
@@ -1573,8 +1671,14 @@ class ShapingService:
         author: str,
         removing: bool = False,
         dry_run: bool = False,
+        address: str | None = None,
     ) -> dict[str, Any]:
         """Pose (ou retire) la file de CE client, tout de suite.
+
+        L'IP SITUE LE CLIENT (contrat Preseem) : sur une session PPPoE ouverte,
+        c'est la file de cette session qui recoit le debit ; dans un reseau
+        connecte d'un routeur, c'est ce routeur qui porte la file. Le nom de
+        site ne sert qu'a defaut.
 
         POURQUOI NE PAS ATTENDRE LA RECONCILIATION. Elle passe toutes les deux
         minutes et fait le travail -- mais entre la declaration et son passage,
@@ -1590,27 +1694,35 @@ class ShapingService:
         retrait ne peut pas emporter le PoP meme calcule avec ``prune``.
         """
         routeurs = self.registry.collectors
-        match = resolve_pop(pop_name, routeurs)
+        lieu = None if removing else await self.locate_address(address)
+        match = resolve_pop(lieu["pop_name"] if lieu else pop_name, routeurs)
         rapport: dict[str, Any] = {
             "reference": reference,
             "pop_name": match.pop_name or pop_name,
             "pop_declared": pop_name,
-            "pop_resolution": match.resolution,
+            "pop_resolution": ("by address: " + lieu["via"]) if lieu else match.resolution,
             "enforcement_enabled": self._enforcement_enabled,
             "applied": 0,
             "routers": [],
         }
-        if not match.found:
+        cibles = [c for c in routeurs if lieu and c.name == lieu["router"]] or (
+            list(match.collectors) if match.found else []
+        )
+        if not cibles:
             rapport["state"] = self.ETAT_SANS_ROUTEUR
             rapport["reason"] = explain_pop(match, pop_name, routeurs)
             return rapport
 
-        nom_file = self.queue_name_for(reference)
-        for collector in match.collectors:
+        # Sur une session : c'est SA file qui porte le debit du service.
+        cle = str(lieu["login"]) if lieu and lieu.get("login") else reference
+        if cle != reference:
+            rapport["session"] = cle
+        nom_file = self.queue_name_for(cle)
+        for collector in cibles:
             rapport["routers"].append(
                 await self._enforce_one(
                     collector.name,
-                    reference=reference,
+                    reference=cle,
                     queue_name=nom_file,
                     author=author,
                     removing=removing,
@@ -2103,18 +2215,13 @@ class ShapingService:
                 ligne["reason"] = "no queue for this client on the router"
             return ligne
 
-        if dry_run or not self._enforcement_enabled:
+        if dry_run:
             ligne["state"] = self.ETAT_A_POSER
-            ligne["reason"] = (
-                "enforcement is off: the queue is computed, nothing is written "
-                "until it is on (Settings > Shaping and writing)"
-                if not self._enforcement_enabled
-                else "simulation: nothing was written"
-            )
+            ligne["reason"] = "simulation: nothing was written"
             return ligne
 
         try:
-            resultat = await self.apply(restreint, dry_run=False, author=author)
+            resultat = await self.apply(restreint, dry_run=False, author=author, explicit=True)
         except Exception as exc:  # noqa: BLE001 - la fiche est deja enregistree
             logger.exception("Ecriture impossible sur %s pour '%s'", router_name, reference)
             ligne["state"] = self.ETAT_ERREUR
@@ -2693,7 +2800,12 @@ class ShapingService:
 
     # ---------------------------------------------------------------- apply
     async def apply(
-        self, plan: Plan, *, dry_run: bool = True, author: str | None = None
+        self,
+        plan: Plan,
+        *,
+        dry_run: bool = True,
+        author: str | None = None,
+        explicit: bool = False,
     ) -> ApplyResult:
         """Execute un plan.
 
@@ -2704,8 +2816,13 @@ class ShapingService:
         demande venue de l'interface, ou "system:*" pour les boucles automatiques.
         Il est journalise dans ``enforcement_audit`` : une commande sans auteur
         est intracable.
+
+        ``explicit`` : un geste humain ou une integration qui APPLIQUE un client
+        (enregistrer une fiche, pousser un service). DEMANDE EXPLICITE : ca
+        ecrit quoi qu'il arrive ; l'interrupteur ne retient que les boucles
+        automatiques.
         """
-        if not dry_run and not self._enforcement_enabled:
+        if not dry_run and not self._enforcement_enabled and not explicit:
             raise EnforcementDisabledError(
                 "The controller is read-only. Turn enforcement on in "
                 "Settings > Shaping and writing, or set ENFORCEMENT_ENABLED to true."

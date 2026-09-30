@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, HTTPException, Path, Query, status
 from pydantic import BaseModel
 
 from app.api.deps import CollectionDep, ContainerDep, RepositoryDep, SchedulerDep
@@ -99,6 +99,49 @@ async def latency(container: ContainerDep, collection: CollectionDep) -> dict[st
             "internet_targets": list(settings.latency_internet_targets),
         },
         "routers": routeurs,
+    }
+
+
+@router.get("/latency/clients", summary="Latency by client: the experience each one lives")
+async def latency_by_client(
+    container: ContainerDep,
+    collection: CollectionDep,
+    repo: RepositoryDep,
+    minutes: Annotated[int, Query(ge=5, le=10_080)] = 60,
+) -> dict[str, Any]:
+    """CHAQUE CLIENT, SA LATENCE. Mediane et p95 sur la periode, gigue et perte
+    de la derniere serie, latence sous charge (bufferbloat) et score
+    d'experience. Le pire ressenti en tete : c'est lui qu'on appelle d'abord."""
+    from app.services.latency_clients import build_rows, summary
+
+    latences = await repo.latency_by_subscriber(minutes=minutes)
+    charge: dict[int, dict[str, Any]] = {}
+    try:
+        bloat = await repo.bufferbloat(minutes=minutes)
+        for b in bloat.get("subscribers") or []:
+            charge[int(b["subscriber_id"])] = b
+    except Exception:  # noqa: BLE001 - sans charge, la latence a vide reste
+        charge = {}
+    sonde = collection.rtt_prober
+    series: dict[int, dict[str, Any]] = {}
+    if sonde is not None:
+        for lat in latences:
+            detail = sonde.detail(int(lat["subscriber_id"]))
+            if detail:
+                series[int(lat["subscriber_id"])] = detail
+    lignes = build_rows(latences, charge, series)
+    settings = container.settings
+    return {
+        "enabled": collection.rtt_enabled,
+        "minutes": minutes,
+        "method": {
+            "count": settings.rtt_count,
+            "interval_ms": settings.rtt_ping_interval_ms,
+            "every_s": settings.rtt_interval_s,
+            "source": "the client's own PoP router (/ping), under load and at rest",
+        },
+        "summary": summary(lignes),
+        "clients": lignes,
     }
 
 

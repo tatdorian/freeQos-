@@ -561,11 +561,17 @@ def test_les_doublons_de_prefixes_sont_replies() -> None:
     assert normalise_prefixes(["10.0.0.0/29", "10.0.0.0/29"]) == ["10.0.0.0/29"]
 
 
-def test_un_debit_nul_ou_negatif_vaut_absence() -> None:
+def test_un_debit_nul_vaut_absence_un_negatif_est_refuse() -> None:
     """Zero chez un integrateur veut dire "pas de limite", pas "zero bit par
-    seconde" -- et poser une file a 0 couperait le client."""
+    seconde" -- et poser une file a 0 couperait le client. Un negatif est un
+    400, comme chez Preseem ("A negative speed returns a 400 error")."""
+    import pytest
+
+    from app.db.model_repo import ModelValidationError
+
     assert kbps_to_mbps(0) is None
-    assert kbps_to_mbps(-5) is None
+    with pytest.raises(ModelValidationError):
+        kbps_to_mbps(-5)
     assert kbps_to_mbps(None) is None
     assert mbps_to_kbps(None) is None
 
