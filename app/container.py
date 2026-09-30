@@ -63,7 +63,7 @@ from app.services.dns_names import JOB_DNS_NAMES, DnsNames
 from app.services.intel import JOB_INTEL, IntelService
 from app.services.netflow_export import JOB_NETFLOW_EXPORT, NetflowExportService
 from app.services.netflow_service import JOB_NETFLOW, NetflowService
-from app.services.pop_cleanup import JOB_PURGE_POPS, purge_empty_pops
+from app.services.pop_cleanup import JOB_PURGE_POPS, purge_empty_pops, purge_removed_routers
 from app.services.registry import RouterRegistry
 from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
 from app.services.rtt import PathProber, RttProber
@@ -607,9 +607,16 @@ async def build_container(settings: Settings) -> Container:
     # PoPs vides que plus rien ne declare (routeur retire, essai jamais relie) :
     # retires pour ne plus encombrer l'arbre et les listes.
     async def purge_pops() -> None:
+        await purge_removed_routers(conteneur)
         await purge_empty_pops(conteneur)
 
     scheduler.add_job(JOB_PURGE_POPS, 600.0, purge_pops)
+    # Des le demarrage, et pas dix minutes plus tard : un routeur retire (et les
+    # anciens PoPs de demonstration) ne doit plus s'afficher nulle part.
+    try:
+        await purge_removed_routers(conteneur)
+    except Exception:  # noqa: BLE001 - le menage ne bloque jamais le demarrage
+        logger.exception("Menage des routeurs retires impossible")
     return conteneur
 
 

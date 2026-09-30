@@ -241,6 +241,9 @@ class FakeRouterOsClient:
             raise self.raise_on_firewall
         return [dict(row) for row in self.firewall_mangle_rows]
 
+    def active_users(self) -> list[dict[str, Any]]:
+        return list(getattr(self, "active_user_rows", []))
+
     def traffic_flow(self) -> dict[str, Any]:
         if self.raise_on_traffic_flow is not None:
             raise self.raise_on_traffic_flow

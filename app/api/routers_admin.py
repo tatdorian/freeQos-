@@ -183,12 +183,15 @@ async def list_routers(container: ContainerDep) -> dict[str, Any]:
 async def hide_file_router(container: ContainerDep, name: str) -> None:
     """Ecarte un routeur declare dans le fichier (ou ignore faute de secret).
 
-    Le fichier reste la source de verite, mais ce nom est desormais ignore par
-    le registre — sans editer le YAML ni redemarrer. Reversible via /restore.
+    Le nom est ignore par le registre, et son site, ses abonnes et leur
+    historique sont supprimes pour de bon : rien n'en reste a l'ecran.
     """
+    from app.services.pop_cleanup import purge_removed_routers
+
     repository = _require_repository(container)
     await repository.hide_file_router(name, reason="retire depuis l'interface")
     await _apply(container)
+    await purge_removed_routers(container)
 
 
 @router.post(

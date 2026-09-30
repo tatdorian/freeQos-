@@ -323,6 +323,23 @@ class RoutersRepository:
                 reason,
             )
 
+    async def clear_hidden_file_routers(self, *, keep: set[str] | None = None) -> None:
+        """Oublie les marqueurs qui ne designent plus aucun routeur fichier."""
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "DELETE FROM hidden_file_routers WHERE NOT (name = ANY($1::text[]))",
+                sorted(keep or set()),
+            )
+
+    async def delete_by_names(self, names: list[str]) -> int:
+        """Supprime les routeurs declares en base sous ces noms (casse ignoree)."""
+        async with self._pool.acquire() as conn:
+            result = await conn.execute(
+                "DELETE FROM routers WHERE lower(name) = ANY($1::text[])",
+                [n.lower() for n in names],
+            )
+        return int(result.split()[-1]) if result else 0
+
     async def unhide_file_router(self, name: str) -> bool:
         async with self._pool.acquire() as conn:
             result = await conn.execute("DELETE FROM hidden_file_routers WHERE name = $1", name)
