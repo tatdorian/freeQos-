@@ -180,6 +180,9 @@ class CollectionService:
         # Sonde de latence optionnelle. Sans elle, rtt_ms reste NULL : la colonne
         # existe depuis la phase 1, elle attendait juste une source.
         self.rtt_prober = rtt_prober
+        #: Client a IP fixe SEUL sur sa VLAN (sans PPPoE) -> interface VLAN. Le
+        #: shaping y pose sa file, la mesure y lit son compteur.
+        self.sole_vlan_interfaces: dict[str, str] = {}
         # Latence par segment (PoP -> amont, PoP -> internet), meme drapeau.
         self.path_prober = path_prober
         # Activation vivante de la sonde : amorcee par l'env, ensuite pilotee
@@ -467,20 +470,29 @@ class CollectionService:
             # Cle de suivi prefixee : elle ne peut pas entrer en collision avec
             # celle d'une session PPPoE, qui est '<routeur>/<login>'.
             key = f"static/{client.reference}"
-            octets = _counters_for(compteurs.get(collector.name, {}) if collector else {}, client)
-            if octets == (None, None) and collector is not None and client.vlan is not None:
-                # Pas de file : le compteur de l'interface VLAN, s'il n'appartient
-                # qu'a ce client. Cle de suivi DISTINCTE : le jour ou sa file est
-                # posee, passer d'un compteur a l'autre sous la meme cle ferait
-                # un delta absurde (des gigaoctets en dix secondes).
+            octets: tuple[int | None, int | None] = (None, None)
+            vlan = None
+            if collector is not None and client.vlan is not None:
+                # SEUL CLIENT DE SA VLAN (et pas de PPPoE dessus) : l'interface
+                # VLAN EST ce client. Son compteur mesure TOUT son trafic, quelle
+                # que soit l'adresse qui l'emet (le routeur du client a souvent
+                # une autre IP que celle saisie) -- et sa file vise cette
+                # interface (cf. ShapingService). Cle de suivi DISTINCTE : passer
+                # d'un compteur a l'autre sous la meme cle ferait un delta absurde.
                 vlan = sole_vlan_counter(
                     compteurs_vlan.get(collector.name, {}),
                     client.vlan,
                     clients_on_vlan=par_vlan.get((collector.name, client.vlan), 0),
                 )
-                if vlan is not None:
-                    octets = (vlan.rx_bytes, vlan.tx_bytes)
-                    key = f"static/{client.reference}@{vlan.interface}"
+            if vlan is not None:
+                octets = (vlan.rx_bytes, vlan.tx_bytes)
+                key = f"static/{client.reference}@{vlan.interface}"
+                self.sole_vlan_interfaces[client.reference] = vlan.interface
+            else:
+                self.sole_vlan_interfaces.pop(client.reference, None)
+                octets = _counters_for(
+                    compteurs.get(collector.name, {}) if collector else {}, client
+                )
             active_keys.add(key)
             rate = self.rates.update(
                 key,

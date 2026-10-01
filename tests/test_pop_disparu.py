@@ -341,3 +341,72 @@ async def test_un_routeur_injoignable_ne_se_dedouble_pas() -> None:
     assert passerelle.kind == "gateway"
     assert passerelle.attributes["unreachable"] is True
     assert [lien.target_key for lien in snapshot.links.values()] == [router_node_key("MAIN-GW")]
+
+
+async def test_un_voisin_qui_porte_le_nom_d_un_routeur_declare_est_ce_routeur() -> None:
+    """DEMANDE EXPLICITE : comparer ce que l'arbre decouvre aux routeurs deja
+    declares. Le voisin n'annonce ni l'adresse de management ni une MAC connue,
+    mais son identite est le nom saisi (casse ignoree)."""
+    from app.collectors.topology import router_node_key
+    from app.services.shaping import ShapingService
+
+    temoin = FakeRouterOsClient(identity="DS-CCR")
+    temoin.add_interface("ether2", speed="1Gbps")
+    temoin.neighbor_rows = [
+        {
+            "interface": "ether2",
+            "identity": "nas-bassora",
+            "address": "192.0.2.77",
+            "mac-address": "AA:00:00:00:00:42",
+            "platform": "MikroTik",
+        }
+    ]
+    muet = FakeRouterOsClient(identity="NAS-BASSORA")
+    muet.raise_on_neighbors = ConnectionRefusedError("refused")
+    clients = {"DS-CCR": temoin, "NAS-BASSORA": muet}
+    configs = [
+        RouterConfig(name="DS-CCR", host="10.0.0.1", username="u", password="p", role="core"),
+        RouterConfig(name="NAS-BASSORA", host="10.0.9.9", username="u", password="p"),
+    ]
+    settings = _settings(configs)
+    registre = RouterRegistry(settings, client_factory=lambda c: clients[c.name])
+    await registre.reload()
+    snapshot = await ShapingService(settings, registry=registre).discover()
+
+    assert "mac:AA:00:00:00:00:42" not in snapshot.nodes
+    assert [lien.target_key for lien in snapshot.links.values()] == [router_node_key("NAS-BASSORA")]
+
+
+async def test_un_routeur_devenu_muet_est_reconnu_par_ses_adresses_d_avant() -> None:
+    """Lu une premiere fois, puis injoignable : ses adresses d'interface (lues a
+    la decouverte reussie) le reconnaissent encore quand un voisin l'annonce."""
+    from app.collectors import mikrotik
+    from app.collectors.topology import router_node_key
+    from app.services.shaping import ShapingService
+
+    mikrotik.remember_addresses("NAS-X", [{"address": "10.7.7.2/30", "interface": "ether1"}])
+    temoin = FakeRouterOsClient(identity="DS-CCR")
+    temoin.add_interface("ether2", speed="1Gbps")
+    temoin.neighbor_rows = [
+        {
+            "interface": "ether2",
+            "identity": "MikroTik",
+            "address": "10.7.7.2",
+            "mac-address": "AA:00:00:00:00:43",
+            "platform": "MikroTik",
+        }
+    ]
+    muet = FakeRouterOsClient(identity="NAS-X")
+    muet.raise_on_neighbors = ConnectionRefusedError("refused")
+    clients = {"DS-CCR": temoin, "NAS-X": muet}
+    configs = [
+        RouterConfig(name="DS-CCR", host="10.0.0.1", username="u", password="p", role="core"),
+        RouterConfig(name="NAS-X", host="10.0.8.8", username="u", password="p"),
+    ]
+    settings = _settings(configs)
+    registre = RouterRegistry(settings, client_factory=lambda c: clients[c.name])
+    await registre.reload()
+    snapshot = await ShapingService(settings, registry=registre).discover()
+
+    assert "mac:AA:00:00:00:00:43" not in snapshot.nodes
+    assert [lien.target_key for lien in snapshot.links.values()] == [router_node_key("NAS-X")]

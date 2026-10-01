@@ -343,7 +343,10 @@ class FlowsRepository:
                 FROM subscribers s
                 LEFT JOIN static_clients c
                        ON c.reference = s.login AND c.enabled
-                WHERE c.address IS NOT NULL OR s.last_ip IS NOT NULL
+                -- Un client a IP fixe dont la fiche a ete supprimee ne garde pas
+                -- sa derniere adresse : elle designerait encore un client parti.
+                WHERE c.address IS NOT NULL
+                   OR (s.last_ip IS NOT NULL AND s.kind <> 'static')
                 """
             )
         sortie: list[tuple[str, int]] = []

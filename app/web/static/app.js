@@ -4461,8 +4461,12 @@ function clientCell(ligne) {
     return '<a href="#" data-svc-sub="' + esc(ligne.subscriber_id) + '">' +
       esc(ligne.login) + '</a>';
   }
+  // Pas de fiche : on dit OU elle est (routeur · interface), lu dans la table
+  // d'adresses des routeurs -- bien plus utile que "non declaree".
+  const ou = ligne.where;
   return '<code>' + esc(ligne.client || '?') + '</code>' +
-    ' <span class="hint">undeclared</span>';
+    ' <span class="hint">' + (ou ? 'on ' + esc(ou.router) + (ou.interface ? ' · ' + esc(ou.interface) : '')
+      : 'undeclared') + '</span>';
 }
 
 /** Le domaine sous lequel un nom inverse est enregistre.

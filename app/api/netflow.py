@@ -619,7 +619,7 @@ async def connections(
             ligne["pending"] = connu.get("resolved_at") is None
     # Nos routeurs ne sont pas des destinations.
     lignes = [ligne for ligne in lignes if not mark_internal(ligne)]
-    _noms(container, lignes)
+    _ou_sans_fiche(_noms(container, lignes))
     return {
         "window_open": service.listening,
         "tracked": service.track_destinations,
@@ -628,6 +628,42 @@ async def connections(
         "window_seconds": round(service.window_seconds, 1),
         "connections": lignes,
     }
+
+
+async def _rattacher(container: Any, lignes: list[dict[str, Any]]) -> None:
+    """L'historique sans fiche est rattache avec l'index A JOUR (reseau de VLAN
+    d'un client, adresse saisie depuis) : sans attendre les fenetres suivantes."""
+    collecteur = getattr(container, "netflow", None)
+    depot = getattr(container, "flows_repo", None)
+    if collecteur is None or depot is None:
+        return
+    a_voir = {
+        str(ligne["client"]): collecteur.aggregator.index.lookup(str(ligne["client"]))
+        for ligne in lignes
+        if not ligne.get("login") and ligne.get("client")
+    }
+    ids = sorted({sid for sid in a_voir.values() if sid})
+    if not ids:
+        return
+    fiches = await depot.subscribers_by_id(ids)
+    for ligne in lignes:
+        sid = a_voir.get(str(ligne.get("client")))
+        fiche = fiches.get(sid) if sid else None
+        if fiche:
+            ligne["subscriber_id"] = sid
+            ligne["login"] = fiche.get("login")
+            ligne["kind"] = fiche.get("kind")
+            ligne["pop_name"] = ligne.get("pop_name") or fiche.get("pop_name")
+
+
+def _ou_sans_fiche(lignes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Une machine sans fiche est situee : routeur et interface qui la portent."""
+    from app.services.vlan_index import where_is
+
+    for ligne in lignes:
+        if not ligne.get("login"):
+            ligne["where"] = where_is(str(ligne.get("client") or "") or None)
+    return lignes
 
 
 @router.get("/netflow/pairs", summary="Who talks to whom: client and destination reached")
@@ -666,6 +702,7 @@ async def pairs(
         limit=limit,
     )
     collecteur = container.netflow
+    await _rattacher(container, lignes)
     directes = (
         [
             ligne
@@ -678,7 +715,7 @@ async def pairs(
     return {
         "minutes": minutes,
         "app": app,
-        "pairs": _noms(container, mark_all(lignes)),
+        "pairs": _ou_sans_fiche(_noms(container, mark_all(lignes))),
         "live": [(str(d["client"]), str(d["address"])) for d in directes],
         # Les valeurs REELLEMENT presentes : proposer un filtre qui ne rend rien
         # est pire que ne pas le proposer.
