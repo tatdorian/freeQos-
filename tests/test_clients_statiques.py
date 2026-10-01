@@ -822,8 +822,11 @@ async def test_un_vlan_qui_porte_du_pppoe_ne_mesure_pas_le_client(settings: Sett
     assert writer.subscriber_rows[-1][1].tx_bps is None
 
 
-async def test_la_file_du_client_prime_sur_le_compteur_du_vlan(settings: Settings) -> None:
-    """Une file qui vise son adresse ne compte QUE lui : elle gagne."""
+async def test_seul_sur_sa_vlan_le_client_est_mesure_par_son_vlan(settings: Settings) -> None:
+    """Constate : un client par VLAN faisait du trafic depuis une AUTRE IP de son
+    VLAN (celle de son routeur) ; la file sur l'adresse saisie ne le voyait pas,
+    l'onglet Subscribers restait a zero alors que l'arbre (compteur VLAN) le
+    montrait. Seul sur sa VLAN, c'est le compteur du VLAN qui fait foi."""
     clock = Clock()
     client = routeur_vlan(rx=1_000, tx=10_000)
     client.simple_queue_rows = [{"name": "q", "target": "10.60.0.2/32", "bytes": "0/0"}]
@@ -832,11 +835,36 @@ async def test_la_file_du_client_prime_sur_le_compteur_du_vlan(settings: Setting
     )
     await service.collect_subscribers()
     clock.advance(10)
-    client.interfaces_rows[-1].update({"rx-byte": "999000", "tx-byte": "999000"})
-    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.2/32", "bytes": "100/1000"}]
+    client.interfaces_rows[-1].update({"rx-byte": "11000", "tx-byte": "110000"})
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.2/32", "bytes": "0/0"}]
     await service.collect_subscribers()
 
-    assert writer.subscriber_rows[-1][1].tx_bps == pytest.approx(800)
+    assert writer.subscriber_rows[-1][1].tx_bps == pytest.approx(80_000)
+    assert service.sole_vlan_interfaces == {fiche_vlan().reference: "vlan2060"}
+
+
+def test_seul_sur_sa_vlan_sa_file_vise_l_interface() -> None:
+    from app.enforcement.planner import SubscriberTarget
+    from app.models import KIND_STATIC
+
+    seul = SubscriberTarget(
+        login="nestle",
+        plan_down_mbps=10,
+        plan_up_mbps=2,
+        interface="vlan2060",
+        kind=KIND_STATIC,
+        address="10.60.0.2/32",
+    )
+    assert seul.queue_target() == "vlan2060"
+    partage = SubscriberTarget(
+        login="x",
+        plan_down_mbps=10,
+        plan_up_mbps=2,
+        interface="",
+        kind=KIND_STATIC,
+        address="10.60.0.2/32",
+    )
+    assert partage.queue_target() == "10.60.0.2/32"
 
 
 def test_le_client_vlan_pend_sous_son_vlan_relie_par_un_lien_mesure() -> None:

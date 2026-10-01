@@ -30,6 +30,7 @@ from app.collectors.config_graph import (
 )
 from app.collectors.mikrotik import (
     MikrotikCollector,
+    own_addresses,
     remember_addresses,
     remember_loopback,
     remember_upstream,
@@ -37,6 +38,7 @@ from app.collectors.mikrotik import (
 )
 from app.collectors.parsing import parse_flag
 from app.collectors.topology import (
+    GENERIC_NAMES,
     KIND_RADIO,
     KIND_SECTOR,
     TopologyNode,
@@ -252,6 +254,10 @@ class ShapingService:
         # Etat courant du drapeau. La base fait foi une fois amorcee ; la
         # variable d'environnement ne sert plus qu'a la valeur initiale.
         self._enforcement_enabled = settings.enforcement_enabled
+        #: Client a IP fixe seul sur sa VLAN -> interface VLAN (partage avec la
+        #: collecte). Sa file vise l'interface : tout son trafic est bride,
+        #: quelle que soit l'adresse qui l'emet.
+        self.sole_vlan_interfaces: dict[str, str] = {}
         # Ce qu'a fait le DERNIER passage de la boucle de reconciliation. C'est
         # elle qui ecrit sur les routeurs ; sans cette trace, l'exploitant n'a
         # aucun moyen de voir qu'elle tourne, et croit que rien ne se passe.
@@ -436,6 +442,37 @@ class ShapingService:
                 # ne repond pas.
                 if collector.config.host:
                     ip_candidats.setdefault(str(collector.config.host), set()).add(cle_hs)
+                # CE QU'ON SAVAIT DE LUI AU PASSAGE PRECEDENT (identite, MAC,
+                # adresses, loopback) le reconnait encore quand un voisin
+                # l'annonce : sans cela, une lecture ratee le faisait apparaitre
+                # en double, comme un equipement inconnu.
+                # Ses adresses lues a la derniere decouverte reussie.
+                for adresse, (porteur, _iface) in own_addresses().items():
+                    if porteur == collector.config.name:
+                        ip_candidats.setdefault(adresse, set()).add(cle_hs)
+                avant = (
+                    self.last_snapshot.nodes.get(cle_hs) if self.last_snapshot is not None else None
+                )
+                if avant is not None:
+                    for mac in avant.attributes.get("macs") or []:
+                        normalisee = normalize_mac(mac)
+                        if normalisee:
+                            mac_candidats.setdefault(normalisee, set()).add(cle_hs)
+                    identite_avant = str(avant.attributes.get("identity") or "").strip().lower()
+                    if identite_avant:
+                        name_candidats.setdefault(identite_avant, set()).add(cle_hs)
+                    for adresse in avant.attributes.get("addresses") or []:
+                        brut = str(adresse or "").split("/")[0].strip()
+                        if brut:
+                            ip_candidats.setdefault(brut, set()).add(cle_hs)
+                    loopback_avant = avant.attributes.get("loopback")
+                    if loopback_avant and collector.config.name not in loopbacks_par_routeur:
+                        loopbacks_par_routeur[collector.config.name] = str(loopback_avant)
+                    for cle_attr in ("macs", "identity"):
+                        if avant.attributes.get(cle_attr):
+                            snapshot.nodes[cle_hs].attributes.setdefault(
+                                cle_attr, avant.attributes[cle_attr]
+                            )
                 continue
             # L'export n'est pas un parametre de build_from_router : on le retire
             # avant de deballer, puis on l'analyse a part.
@@ -558,6 +595,19 @@ class ShapingService:
                 router_addresses.append(
                     (cle, collector.config.name, analyse.get("addresses") or [])
                 )
+
+        # LE NOM DECLARE EST AUSSI UN INDICE. Un voisin annonce son identite
+        # RouterOS ; l'exploitant a souvent nomme le routeur pareil a la saisie
+        # (NAS-BASSORA / nas-bassora). Une identite deja vue l'emporte : ce n'est
+        # qu'un indice de plus, ecarte s'il designe deux routeurs.
+        for collector in collectors:
+            cle_nom = router_node_key(collector.config.name)
+            for nom in (collector.config.name, collector.config.effective_pop_name):
+                texte = str(nom or "").strip().lower()
+                if texte and texte not in GENERIC_NAMES:
+                    name_candidats.setdefault(texte, set()).add(cle_nom)
+            if collector.config.loopback:
+                ip_candidats.setdefault(str(collector.config.loopback), set()).add(cle_nom)
 
         # Un routeur gere vu en voisin par un autre ne doit PAS faire un doublon :
         # on replie ces cases decouvertes dans le routeur gere correspondant, les
@@ -1400,7 +1450,7 @@ class ShapingService:
             bas, haut = self._default_plan()
         return SubscriberTarget(
             login=client.reference,
-            interface="",
+            interface=self.sole_vlan_interfaces.get(client.reference, ""),
             kind=KIND_STATIC,
             address=client.address,
             plan_down_mbps=bas,
