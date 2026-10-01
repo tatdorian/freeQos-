@@ -611,6 +611,41 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_DNS_NAMES, 120.0, lire_noms_dns)
 
+    # Un client declare par VLAN possede le reseau de sa VLAN : l'adresse de son
+    # routeur (100.100.105.242 sur vlan2060) lui est rattachee, au lieu de
+    # s'afficher "undeclared".
+    async def reseaux_des_vlan() -> list[tuple[str, int]]:
+        from app.collectors.mikrotik import _RESEAUX_CONNECTES, router_serving
+        from app.services.vlan_index import vlan_prefixes
+
+        instantane = shaping.last_snapshot
+        if instantane is None or static_clients_repo is None:
+            return []
+        vlans = {
+            routeur: {
+                nom: chemin.vlan_id
+                for nom, chemin in (chemins or {}).items()
+                if getattr(chemin, "vlan_id", None) is not None
+            }
+            for routeur, chemins in instantane.interface_paths.items()
+        }
+        ids = await directory.list_subscriber_logins()
+        clients: list[tuple[int, int, set[str]]] = []
+        for fiche in await static_clients_repo.list_all():
+            if not fiche.get("enabled", True) or not fiche.get("vlan"):
+                continue
+            sid = ids.get(str(fiche["reference"]))
+            if sid is None:
+                continue
+            routeurs = set(await shaping._routers_for_site(str(fiche.get("pop_name") or "")))
+            porteur = router_serving(str(fiche.get("address") or "") or None)
+            if porteur is not None:
+                routeurs.add(porteur[0])
+            clients.append((sid, int(fiche["vlan"]), routeurs))
+        return vlan_prefixes(clients, vlans, dict(_RESEAUX_CONNECTES))
+
+    netflow.vlan_prefixes = reseaux_des_vlan
+
     # Services pousses par l'API avec la seule MAC du CPE : places des que la
     # MAC apparait dans une table ARP/DHCP d'un routeur.
     async def placer_services() -> None:

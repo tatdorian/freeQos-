@@ -90,6 +90,9 @@ class NetflowService:
     #: des destinations passe par flows_repo, dans la meme transaction que le
     #: reste de la fenetre : une fenetre a moitie ecrite serait pire qu'absente.
     destinations_repo: DestinationsRepository | None = None
+    #: Reseaux des VLAN qui n'ont qu'un client declare -> ce client. Fourni par
+    #: le conteneur (il faut la decouverte et l'inventaire).
+    vlan_prefixes: Any = None
     bind: str = "0.0.0.0"  # noqa: S104 - un collecteur ecoute sur tous les liens
     port: int = 2055
     enabled: bool = False
@@ -253,7 +256,15 @@ class NetflowService:
         except Exception as exc:  # noqa: BLE001 - la collecte ne doit pas s'arreter
             logger.warning("Index des abonnes non relu : %s", exc)
             return
-        self.aggregator.set_index(PrefixIndex.build(entrees))
+        # Le reseau de la VLAN d'un client declare par VLAN (cf. vlan_index) :
+        # place AVANT les blocs declares, qui l'emportent a prefixe egal.
+        supplement: list[tuple[str, int]] = []
+        if self.vlan_prefixes is not None:
+            try:
+                supplement = list(await self.vlan_prefixes())
+            except Exception as exc:  # noqa: BLE001
+                logger.info("Reseaux de VLAN non rattaches : %s", exc)
+        self.aggregator.set_index(PrefixIndex.build([*supplement, *entrees]))
 
     def set_infrastructure(self, prefixes: list[str]) -> None:
         """Declare ce qui appartient au reseau d'exploitation.
