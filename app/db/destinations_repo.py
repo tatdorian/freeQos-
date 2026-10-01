@@ -295,13 +295,12 @@ class DestinationsRepository:
                      OR ($2::text[] IS NOT NULL
                          AND (address <<= ANY($2::text[]::inet[])
                               OR client <<= ANY($2::text[]::inet[])))
-                     OR ($3::int[] IS NOT NULL AND port = ANY($3::int[])))
-                   -- UN CLIENT QUI JOINT UN DE NOS ROUTEURS (ping, test de bande
-                   -- passante vers son loopback) : gardee a l'ecriture, elle ne
-                   -- doit pas etre effacee ensuite. Entre deux routeurs, si.
-                   AND NOT ($4::text[] IS NOT NULL
-                            AND address = ANY($4::text[]::inet[])
-                            AND NOT client = ANY($4::text[]::inet[]))
+                     OR ($3::int[] IS NOT NULL AND port = ANY($3::int[]))
+                     -- Nos routeurs ne sont pas des destinations (sonde de
+                     -- latence, ping du loopback) : effaces aussi.
+                     OR ($4::text[] IS NOT NULL
+                         AND (address = ANY($4::text[]::inet[])
+                              OR client = ANY($4::text[]::inet[]))))
                 """,
                 customer_networks or None,
                 infrastructure_networks or None,

@@ -107,16 +107,24 @@ def _ping(src: str, dst: str, type_icmp: int) -> Any:
     )
 
 
-def test_le_ping_d_un_abonne_vers_nos_routeurs_est_visible() -> None:
-    """Loopback public, ou adresse privee d'exploitation : les deux se voient."""
+def test_nos_routeurs_ne_sont_jamais_une_destination() -> None:
+    """DEMANDE EXPLICITE : "ne mets pas les destinations comme celle-la, ca ne sert
+    a rien de mettre le lien vers le routeur dans le trafic des abonnes".
+    Loopback public ou adresse d'exploitation, dans les deux sens."""
     _parc()
     a = _agregateur()
-    a.add(_ping("100.64.1.11", "11.11.11.254", 8), vantage="pop")  # requete du client
-    a.add(_ping("11.11.11.254", "100.64.1.11", 0), vantage="pop")  # reponse du routeur
-    a.add(_ping("100.64.1.11", "10.0.1.2", 8), vantage="pop")  # adresse d'exploitation
-    vues = {(d.client, d.address) for d in a.live_destinations(50)}
-    assert ("100.64.1.11", "11.11.11.254") in vues
-    assert ("100.64.1.11", "10.0.1.2") in vues
+    a.add(_ping("100.64.1.11", "11.11.11.254", 8), vantage="pop")
+    a.add(_ping("11.11.11.254", "100.64.1.11", 0), vantage="pop")
+    a.add(_ping("100.64.1.11", "10.0.1.2", 8), vantage="pop")
+    assert a.live_destinations(50) == []
+
+
+def test_la_liste_affichee_ecarte_l_historique_vers_nos_routeurs() -> None:
+    from app.services.own_network import mark_all
+
+    _parc()
+    lignes = mark_all([{"address": "11.11.11.254"}, {"address": "5.135.23.164"}])
+    assert [x["address"] for x in lignes] == ["5.135.23.164"]
 
 
 def test_la_sonde_de_latence_du_routeur_ne_noie_pas_la_liste() -> None:

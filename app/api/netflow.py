@@ -617,8 +617,8 @@ async def connections(
             ligne["country"] = connu.get("country")
             ligne["city"] = connu.get("city")
             ligne["pending"] = connu.get("resolved_at") is None
-        if mark_internal(ligne):
-            ligne["pending"] = False
+    # Nos routeurs ne sont pas des destinations.
+    lignes = [ligne for ligne in lignes if not mark_internal(ligne)]
     _noms(container, lignes)
     return {
         "window_open": service.listening,
