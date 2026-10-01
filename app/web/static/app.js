@@ -2347,6 +2347,10 @@ function remplirFacette(id, libelle, valeurs, choisi) {
 
 async function loadFlowPairs() {
   const hote = document.getElementById('flow-pairs');
+  // Une restriction en cours de saisie ne doit pas etre effacee par le
+  // rafraichissement automatique.
+  const actif = document.activeElement;
+  if (FLOW.restricting && actif && actif.closest && actif.closest('[data-restrict-form]')) return;
   const parametres = '?minutes=' + FLOW.minutes + '&limit=500' +
     (FLOW.pop ? '&pop=' + encodeURIComponent(FLOW.pop) : '') +
     (FLOW.category ? '&category=' + encodeURIComponent(FLOW.category) : '') +
@@ -2354,7 +2358,12 @@ async function loadFlowPairs() {
 
   let data;
   try {
-    data = await api('/netflow/pairs' + parametres);
+    const [paires, regles] = await Promise.all([
+      api('/netflow/pairs' + parametres),
+      api('/traffic-rules').catch(() => ({ rules: [] })),
+    ]);
+    data = paires;
+    FLOW.rules = regles.rules || [];
   } catch (err) {
     hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
     return;
@@ -2366,6 +2375,7 @@ async function loadFlowPairs() {
   // DEBITS EN COURS, sens par sens, calcules sur la duree reelle de chaque flux.
   const debitsDirect = data.live_rates || {};
   const lignes = data.pairs || [];
+  FLOW.lastPairs = lignes;
   // ↓ recu par le client / ↑ envoye par le client, en bit/s.
   const deuxSens = (bas, haut) => '<span class="nowrap">&darr; ' + bpsText(bas) +
     '</span><br><span class="nowrap">&uarr; ' + bpsText(haut) + '</span>';
@@ -2439,7 +2449,8 @@ async function loadFlowPairs() {
       '<td class="num">' + (debitsDirect[paire]
         ? '<b>' + deuxSens(debitsDirect[paire].down_bps, debitsDirect[paire].up_bps) + '</b>'
         : '<span class="hint">-</span>') + '</td>' +
-      '</tr>';
+      '<td class="nowrap">' + actionsRestriction(r) + '</td>' +
+      '</tr>' + (FLOW.restricting === paire ? formulaireRestriction(r) : '');
   };
 
   hote.innerHTML = groupes.map((c) => {
@@ -2470,7 +2481,7 @@ async function loadFlowPairs() {
         '<th class="num" title="Rate while the conversation was actually active: volume / active time">' +
           'Rate when active</th>' +
         '<th class="num" title="Current rate, from the real duration of each flow (NetFlow)">' +
-          'Live</th>' +
+          'Live</th><th></th>' +
       '</tr></thead><tbody>' + c.lignes.map(conversation).join('') +
       '</tbody></table></div></details>';
   }).join('');
@@ -2489,6 +2500,7 @@ async function loadFlowPairs() {
       openSubscriber(Number(a.dataset.svcSub));
     });
   });
+  brancherRestrictions(hote);
   hote.querySelectorAll('[data-pair-ip]').forEach((a) => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
@@ -2513,6 +2525,99 @@ async function loadFlowPairs() {
       loadFlowPairs();
     });
   });
+}
+
+/* ---------------------------------------------- bloquer / limiter une IP */
+
+/** Les restrictions qui visent DEJA cette adresse (pour tous, ou pour ce client). */
+function restrictionsSur(r) {
+  const nu = (x) => String(x || '').replace(/\/32$/, '');
+  return (FLOW.rules || []).filter((g) => (g.prefixes || []).some((x) => nu(x) === r.address) &&
+    (g.scope === 'all' || (r.login && (g.logins || []).includes(r.login))));
+}
+
+function actionsRestriction(r) {
+  const deja = restrictionsSur(r);
+  if (deja.length) {
+    return deja.map((g) => '<span class="badge ' + (g.action === 'block' ? 'crit' : 'warn') + '" title="' +
+        esc(g.name) + '">' + (g.action === 'block' ? 'blocked' : 'limited ' +
+        esc(mbps(g.limit_down_mbps || 0))) + (g.scope === 'all' ? ' · all' : '') + '</span>' +
+      ' <button class="sm" data-rule-lift="' + esc(g.id) + '">Lift</button>').join(' ');
+  }
+  const cle = esc(r.client + '|' + r.address);
+  return '<button class="sm danger" data-restrict="' + cle + '" data-action="block">Block</button> ' +
+    '<button class="sm" data-restrict="' + cle + '" data-action="limit">Limit</button>';
+}
+
+function formulaireRestriction(r) {
+  const limite = FLOW.restrictAction === 'limit';
+  const qui = r.login ? esc(r.login) : esc(r.client);
+  return '<tr class="plan-edit"><td colspan="10"><form class="lq-rate" data-restrict-form="' +
+      esc(r.client + '|' + r.address) + '" style="margin:0">' +
+    '<b>' + (limite ? 'Limit' : 'Block') + ' ' + esc(r.address) + '</b> for ' +
+    '<select name="scope" style="width:auto">' +
+      (r.login ? '<option value="client">' + qui + ' only</option>' : '') +
+      '<option value="all">every client</option></select> ' +
+    (limite
+      ? '&darr; <input name="down" type="number" min="0.01" step="any" value="1" style="width:5.5rem"> ' +
+        '&uarr; <input name="up" type="number" min="0.01" step="any" value="1" style="width:5.5rem"> Mbps '
+      : '') +
+    '<button class="sm ' + (limite ? 'primary' : 'danger') + '" type="submit">Apply now</button> ' +
+    '<button class="sm" type="button" data-restrict-cancel>Cancel</button>' +
+    '</form></td></tr>';
+}
+
+function brancherRestrictions(hote) {
+  hote.querySelectorAll('[data-restrict]').forEach((b) => b.addEventListener('click', (e) => {
+    e.preventDefault();
+    FLOW.restricting = b.dataset.restrict;
+    FLOW.restrictAction = b.dataset.action;
+    loadFlowPairs();
+  }));
+  hote.querySelectorAll('[data-restrict-cancel]').forEach((b) => b.addEventListener('click', () => {
+    FLOW.restricting = null;
+    loadFlowPairs();
+  }));
+  hote.querySelectorAll('[data-rule-lift]').forEach((b) => b.addEventListener('click', async (e) => {
+    e.preventDefault();
+    b.disabled = true;
+    try {
+      await api('/traffic-rules/' + b.dataset.ruleLift, { method: 'DELETE' });
+    } catch (err) { alert(err.message); }
+    loadFlowPairs();
+  }));
+  hote.querySelectorAll('[data-restrict-form]').forEach((f) => f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const [client, adresse] = f.dataset.restrictForm.split('|');
+    const ligne = ((FLOW.lastPairs || []).find((x) => x.client === client && x.address === adresse)) || {};
+    const pourClient = f.scope.value === 'client' && ligne.login;
+    const limite = FLOW.restrictAction === 'limit';
+    const corps = {
+      name: (limite ? 'Limit ' : 'Block ') + adresse + (pourClient ? ' for ' + ligne.login : ' for all'),
+      action: limite ? 'limit' : 'block',
+      prefixes: [adresse],
+      scope: pourClient ? 'subscribers' : 'all',
+      logins: pourClient ? [ligne.login] : [],
+    };
+    if (limite) {
+      corps.limit_down_mbps = Number(f.down.value) || null;
+      corps.limit_up_mbps = Number(f.up.value) || null;
+    }
+    const bouton = f.querySelector('button[type=submit]');
+    bouton.disabled = true;
+    try {
+      const regle = await api('/traffic-rules', { method: 'POST', body: JSON.stringify(corps) });
+      const etat = (regle.apply && regle.apply.state) || regle.last_state;
+      if (etat && etat !== 'posee') {
+        alert('Saved, but the routers answered: ' + etat +
+          ((regle.apply && regle.apply.reason) ? ' (' + regle.apply.reason + ')' : ''));
+      }
+    } catch (err) {
+      alert(err.message);
+    }
+    FLOW.restricting = null;
+    loadFlowPairs();
+  }));
 }
 
 /** La fiche complete d'une adresse, depuis l'onglet Trafic. */

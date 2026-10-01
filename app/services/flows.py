@@ -511,32 +511,17 @@ class FlowAggregator:
         remplirait de l'infrastructure de l'exploitant, et chaque adresse interne
         declencherait une requete de nom inverse pour rien.
         """
-        # UN ABONNE QUI JOINT UN DE NOS ROUTEURS (ping du loopback, de la
-        # passerelle) : la question "mon client atteint-il le routeur ?" merite
-        # sa reponse. Cette conversation est gardee meme en adresse privee ou
-        # d'exploitation, et etiquetee comme interne a l'affichage. Entre deux
-        # routeurs, ou depuis le controleur, elle reste ecartee.
+        # UN DE NOS ROUTEURS N'EST PAS UNE DESTINATION. Sonde de latence (le
+        # routeur pingue chaque abonne toutes les 10 s), ping ou test vers un
+        # loopback : du trafic d'exploitation, sans interet dans le trafic des
+        # abonnes. Il reste compte dans les volumes, pas dans "qui parle a qui".
         # Import tardif : config -> flows -> mikrotik -> config serait circulaire.
         from app.collectors.mikrotik import own_address
 
-        vers_nos_routeurs = (
-            own_address(remote) is not None
-            and own_address(client) is None  # entre deux routeurs : exploitation
-            and (subscriber_id is not None or self._is_customer(client))
-        )
-        if vers_nos_routeurs and flow.protocol == 1:
-            # ICMP : NetFlow porte le type dans le port de destination (type*256).
-            # On ne garde que le ping LANCE PAR LE CLIENT -- sa requete (8), ou la
-            # reponse du routeur (0). Les pings que le routeur envoie lui-meme a
-            # chaque abonne (la sonde de latence, toutes les 10 s) et leurs
-            # reponses noieraient la liste.
-            type_icmp = flow.dst_port // 256
-            client_emet = flow.src == client
-            if not ((client_emet and type_icmp == 8) or (not client_emet and type_icmp == 0)):
-                return
-        if not vers_nos_routeurs and (
-            not ipfinder.is_routable(remote) or self._is_customer(remote)
-        ):
+        if own_address(remote) is not None or own_address(client) is not None:
+            self.destinations_infra += 1
+            return
+        if not ipfinder.is_routable(remote) or self._is_customer(remote):
             # Ni internet, ni une destination : deux machines du reseau qui se
             # parlent. Ce n'est pas un rejet, c'est une absence de sujet -- et
             # ca ne se compte donc pas comme du trafic ecarte.
@@ -544,10 +529,9 @@ class FlowAggregator:
         # EXPLOITATION. Soit l'un des bouts appartient au reseau lui-meme, soit
         # le port de service releve du plan de gestion : un routeur peut
         # parfaitement joindre une adresse publique pour s'administrer.
-        if (
-            not vers_nos_routeurs
-            and (self._is_infrastructure(remote) or self._is_infrastructure(client))
-        ) or service_port(flow) in self.infrastructure_ports:
+        if (self._is_infrastructure(remote) or self._is_infrastructure(client)) or service_port(
+            flow
+        ) in self.infrastructure_ports:
             self.destinations_infra += 1
             return
         cle = (client, remote)

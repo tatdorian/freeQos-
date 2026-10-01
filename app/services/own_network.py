@@ -41,6 +41,10 @@ def mark_internal(row: dict[str, Any], key: str = "address") -> bool:
 
 
 def mark_all(rows: list[dict[str, Any]], key: str = "address") -> list[dict[str, Any]]:
-    for row in rows:
-        mark_internal(row, key)
-    return rows
+    """Les lignes SANS celles qui visent nos routeurs.
+
+    DEMANDE EXPLICITE : le lien vers un routeur (sonde de latence, ping du
+    loopback) n'a rien a faire dans le trafic des abonnes. Ecartees ici aussi,
+    pour que l'historique deja ecrit disparaisse sans attendre le menage.
+    """
+    return [row for row in rows if not mark_internal(row, key)]
