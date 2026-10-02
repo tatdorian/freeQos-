@@ -503,9 +503,26 @@ class CollectionService:
                 files = compteurs.get(collector.name, {}) if collector else {}
                 trouve = files.get(reseau) if reseau else None
                 octets = trouve if trouve is not None else _counters_for(files, client)
+                if octets == (None, None):
+                    octets = _counters_covering(files, client.address, within=reseau)
                 if octets != (None, None):
                     key = f"static/{client.reference}@queue"
                 else:
+                    # DERNIER RECOURS, ET IL MENT SUR L'UPLOAD : le rx de la
+                    # VLAN compte ce que le client EMET, y compris ce que sa
+                    # file jette (385 affiche pour un plafond tenu a 200).
+                    # Le dire, avec ce qui a ete cherche et ce qui existe.
+                    logger.warning(
+                        "%s : aucune file trouvee (reseau %s, adresse %s) sur %s -- "
+                        "mesure par le compteur de %s, l'upload y inclut ce que la "
+                        "file jette. Cibles de files lues : %s",
+                        client.reference,
+                        reseau,
+                        client.address,
+                        routeur_vlan,
+                        vlan.interface,
+                        sorted(files)[:30],
+                    )
                     octets = (vlan.rx_bytes, vlan.tx_bytes)
                     key = f"static/{client.reference}@{vlan.interface}"
             else:
@@ -1065,6 +1082,44 @@ def _counters_for(
         if trouve is not None:
             return trouve
     return (None, None)
+
+
+def _counters_covering(
+    compteurs: dict[str, tuple[int | None, int | None]],
+    address: str | None,
+    *,
+    within: str | None,
+) -> tuple[int | None, int | None]:
+    """La file dont la cible CONTIENT le client, la plus precise.
+
+    Reservee au client SEUL sur sa VLAN : tout ce que contient le reseau de
+    cette VLAN est a lui, il n'y a donc aucun risque de lui attribuer le trafic
+    d'un voisin. Sans reseau de VLAN connu, seul un bloc etroit (/24 et plus
+    en IPv4, /64 en IPv6) est accepte -- jamais un agregat de PoP.
+    """
+    try:
+        client = ipaddress.ip_network(str(address or ""), strict=False)
+        borne = ipaddress.ip_network(within, strict=False) if within else None
+    except ValueError:
+        return (None, None)
+    meilleur: tuple[int, tuple[int | None, int | None]] | None = None
+    for cible, octets in compteurs.items():
+        try:
+            reseau = ipaddress.ip_network(cible, strict=False)
+        except ValueError:
+            continue  # cible interface : ne dit rien de l'adresse
+        if reseau.version != client.version or reseau.prefixlen == 0:
+            continue
+        if not client.subnet_of(reseau):  # type: ignore[arg-type]
+            continue
+        if borne is not None:
+            if reseau.version != borne.version or not reseau.subnet_of(borne):  # type: ignore[arg-type]
+                continue
+        elif reseau.prefixlen < (24 if reseau.version == 4 else 64):
+            continue
+        if meilleur is None or reseau.prefixlen > meilleur[0]:
+            meilleur = (reseau.prefixlen, octets)
+    return meilleur[1] if meilleur is not None else (None, None)
 
 
 def _utcnow() -> datetime:
