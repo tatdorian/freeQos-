@@ -654,7 +654,7 @@ tr.sub-row td { background: color-mix(in srgb, var(--accent) 4%, transparent); f
 
 /* Les actions restent atteignables sans defiler horizontalement. */
 .sticky-actions {
-  position: sticky; right: 0;
+  position: sticky; right: 0; z-index: 1;
   background: var(--surface);
   box-shadow: -10px 0 10px -10px rgba(0, 0, 0, .25);
 }
@@ -734,7 +734,11 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
 
 /* Suivre une ligne sur dix colonnes demande un repere visuel. */
 tbody tr:hover td { background: color-mix(in srgb, var(--fill) 55%, transparent); }
-tbody tr:hover .sticky-actions { background: var(--surface-2); }
+/* Fond OPAQUE au survol, et plus specifique que ``tr.clickable:hover td`` :
+   un fond translucide laissait voir la colonne qui defile dessous (le badge
+   Bufferbloat superpose aux boutons Rate / Boost). */
+tbody tr:hover td.sticky-actions,
+tbody tr.clickable:hover td.sticky-actions { background: var(--surface-2); }
 
 * { scrollbar-width: thin; scrollbar-color: var(--fill-strong) transparent; }
 ::-webkit-scrollbar { width: 11px; height: 11px; }
