@@ -940,3 +940,36 @@ def test_une_file_statique_ne_vise_jamais_une_interface() -> None:
         plan_up_mbps=1,
     )
     assert cible.queue_target() == "10.60.0.0/29"
+
+
+async def test_seul_sur_sa_vlan_une_file_qui_le_contient_mesure_l_upload_reel(
+    settings: Settings,
+) -> None:
+    """Constate : plafond tenu a 200 (bandwidth-test 182/180), affiche 385 en
+    upload. La file visait le reseau, la recherche ne la trouvait pas, et la
+    mesure retombait sur le rx de la VLAN -- qui compte ce que la file JETTE."""
+    from app.collectors import mikrotik
+
+    mikrotik._RESEAUX_CONNECTES.pop("pop-test", None)  # reseau de VLAN inconnu
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    client.simple_queue_rows = [
+        {"name": "agregat", "target": "10.0.0.0/8", "bytes": "0/0"},
+        {"name": "q", "target": "10.60.0.0/29", "bytes": "0/0"},
+    ]
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    # L'interface voit 385 kbps entrer ; la file n'en laisse passer que 200.
+    client.interfaces_rows[-1].update({"rx-byte": "482250", "tx-byte": "260000"})
+    client.simple_queue_rows = [
+        {"name": "agregat", "target": "10.0.0.0/8", "bytes": "9000000/9000000"},
+        {"name": "q", "target": "10.60.0.0/29", "bytes": "250000/250000"},
+    ]
+    await service.collect_subscribers()
+
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(200_000)
+    assert ligne.tx_bps == pytest.approx(200_000)
