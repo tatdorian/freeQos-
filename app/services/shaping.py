@@ -64,7 +64,15 @@ from app.collectors.topology import (
 from app.config import Settings
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.capability import WriteCapability, inspect_write_capability
-from app.enforcement.models import PREFIX, Plan, QueueSpec, network_target, slugify
+from app.enforcement.models import (
+    MANAGED_COMMENT,
+    PREFIX,
+    Plan,
+    PlanAction,
+    QueueSpec,
+    network_target,
+    slugify,
+)
 from app.enforcement.planner import (
     LinkTarget,
     SubscriberTarget,
@@ -2440,6 +2448,91 @@ class ShapingService:
             "reason": "queue set and correct on the router",
             "applied": 0,
             "actions": [],
+        }
+
+    async def clean_queues(self, router_name: str, *, author: str | None = None) -> dict[str, Any]:
+        """Supprime TOUTES les files freeQoS d'un routeur, puis les repose.
+
+        Le bouton "repartir sur de bonnes bases" : une file restee d'une version
+        precedente (ciblee sur une interface, sur une adresse d'hier) ne se
+        corrige pas toujours par un 'set' -- elle peut masquer la bonne, puisque
+        RouterOS s'arrete a la premiere file qui correspond. Tout effacer puis
+        reposer le plan courant ne laisse que ce qui doit y etre.
+
+        Seules NOS files partent (commentaire ``freeqos:managed`` ou nom
+        ``freeqos-``) : jamais une file posee a la main ou par RADIUS. Les types
+        CAKE restent, le plan les reutilise. Geste humain : ecrit meme
+        interrupteur coupe, comme toute demande explicite.
+        """
+        etat = await self._inspect_one(self._collector(router_name))
+        nos_files = [
+            q
+            for q in etat.simple_queues
+            if MANAGED_COMMENT in str(q.get("comment") or "")
+            or str(q.get("name") or "").startswith(PREFIX)
+        ]
+        nos_files = [q for q in nos_files if q.get(".id")]
+        # Les enfants AVANT leurs parents : un parent retire en premier
+        # laisserait ses enfants orphelins le temps de la boucle.
+        parents = {str(q.get("name") or ""): str(q.get("parent") or "") for q in nos_files}
+
+        def profondeur(nom: str) -> int:
+            vus: set[str] = set()
+            n = 0
+            while nom in parents and nom not in vus:
+                vus.add(nom)
+                nom = parents[nom]
+                n += 1
+            return n
+
+        nos_files.sort(key=lambda q: profondeur(str(q.get("name") or "")), reverse=True)
+        actions = [
+            PlanAction(
+                verb="remove",
+                path="/queue/simple",
+                target_id=str(q[".id"]),
+                name=str(q.get("name") or ""),
+                reason="clean queues: start over",
+            )
+            for q in nos_files
+        ]
+        retirees = 0
+        erreurs: list[str] = []
+        # Par paquets : le coupe-circuit de taille protege des plans aberrants,
+        # pas d'un nettoyage qu'on a demande en connaissance de cause.
+        taille = max(1, self.settings.enforcement_max_actions)
+        for debut in range(0, len(actions), taille):
+            plan = Plan(router_name=router_name, actions=actions[debut : debut + taille])
+            resultat = await self.apply(plan, dry_run=False, author=author, explicit=True)
+            retirees += resultat.applied
+            erreurs += [
+                f"{o.action.name or o.action.target_id}: {o.detail}"
+                for o in resultat.outcomes
+                if not o.ok
+            ]
+
+        # Puis reposer l'etat desire, tout de suite : un routeur sans files
+        # n'est plus bride du tout jusqu'a la prochaine reconciliation.
+        recreees = 0
+        try:
+            plan = await self.plan_router(router_name, prune=False)
+            if not plan.is_empty:
+                resultat = await self.apply(plan, dry_run=False, author=author, explicit=True)
+                recreees = resultat.applied
+                erreurs += [
+                    f"{o.action.name or o.action.target_id}: {o.detail}"
+                    for o in resultat.outcomes
+                    if not o.ok
+                ]
+        except Exception as exc:  # noqa: BLE001 - le retrait est fait, il faut le dire
+            erreurs.append(f"rebuild: {type(exc).__name__}: {exc}")
+            logger.exception("Nettoyage %s : les files n'ont pas pu etre reposees", router_name)
+        return {
+            "router": router_name,
+            "removed": retirees,
+            "recreated": recreees,
+            "kept_foreign": len(etat.simple_queues) - len(nos_files),
+            "errors": erreurs,
         }
 
     async def plan_router(self, router_name: str, *, prune: bool | None = None) -> Plan:
