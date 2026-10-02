@@ -116,6 +116,12 @@ class NetflowService:
     aggregator: FlowAggregator = field(default_factory=FlowAggregator)
     exporters: dict[str, ExporterInfo] = field(default_factory=dict)
     activity: dict[str, _Activity] = field(default_factory=dict)
+    #: Interface d'ENTREE retenue pour chaque flux (exporteur + 5-uplet). Un
+    #: flux n'entre dans un routeur que par UNE interface : le meme 5-uplet
+    #: exporte depuis une deuxieme est le meme trafic, vu deux fois.
+    _entree_flux: dict[tuple[Any, ...], tuple[int, float]] = field(default_factory=dict)
+    #: Enregistrements ecartes comme doublons -- dit, pas tu.
+    duplicates_dropped: int = 0
 
     packets_received: int = 0
     packets_rejected: int = 0
@@ -238,6 +244,9 @@ class NetflowService:
             self.vantages_seen[info.vantage] = time.monotonic()
 
         for flux in paquet.flows:
+            if self._doublon(source, flux):
+                self.duplicates_dropped += 1
+                continue
             self.aggregator.add(
                 flux,
                 vantage=info.vantage,
@@ -245,6 +254,39 @@ class NetflowService:
                 exporter=source,
                 pop_name=info.pop_name,
             )
+
+    def _doublon(self, source: str, flux: Any) -> bool:
+        """Le meme flux, exporte une seconde fois depuis une autre interface.
+
+        CONSTATE : une VLAN posee sur un bridge (``lan-bridge``) fait exporter
+        chaque paquet montant DEUX fois par RouterOS -- a l'entree du bridge et
+        a celle de la VLAN. Le descendant, lui, entre par le WAN et n'est
+        exporte qu'une fois. Resultat : un upload affiche au DOUBLE du reel,
+        alors que la file, elle, le tient bien au plafond.
+
+        Un flux (meme exporteur, meme 5-uplet) n'entre que par une seule
+        interface : la premiere vue est retenue, les autres sont ecartees.
+        Sans interface d'entree annoncee, rien n'est ecarte.
+        """
+        entree = getattr(flux, "input_snmp", None)
+        if entree is None:
+            return False
+        cle = (source, flux.src, flux.dst, flux.src_port, flux.dst_port, flux.protocol)
+        maintenant = time.monotonic()
+        retenue = self._entree_flux.get(cle)
+        # Une interface retenue qui ne s'est plus manifestee depuis 5 minutes
+        # a cede la place (changement de route) : la nouvelle est retenue.
+        if retenue is None or maintenant - retenue[1] > 300.0:
+            if len(self._entree_flux) >= 200_000:
+                # Borne memoire : on oublie tout, le pire est un doublon compte
+                # pendant une fenetre.
+                self._entree_flux.clear()
+            self._entree_flux[cle] = (int(entree), maintenant)
+            return False
+        if retenue[0] == int(entree):
+            self._entree_flux[cle] = (retenue[0], maintenant)
+            return False
+        return True
 
     # --------------------------------------------------------------- fenetres
     async def refresh_index(self) -> None:
@@ -507,6 +549,7 @@ class NetflowService:
             "packets_rejected": self.packets_rejected,
             "flows_seen": self.aggregator.flows_seen,
             "flows_matched": self.aggregator.flows_matched,
+            "duplicates_dropped": self.duplicates_dropped,
             "orphan_records": self.decoder.orphan_records,
             "templates_known": len(self.decoder.templates),
             "declared_prefixes": len(self.aggregator.index),
