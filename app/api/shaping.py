@@ -831,6 +831,37 @@ async def apply_shaping(
     return {"plan": plan.to_dict(), "result": resultat.to_dict()}
 
 
+@router.post(
+    "/shaping/routers/{router_name}/clean-queues",
+    summary="Delete every freeQoS queue of a router, then lay them down again",
+)
+async def clean_router_queues(router_name: str, container: ContainerDep) -> dict[str, Any]:
+    """Repartir sur de bonnes bases : nos files partent toutes, le plan courant
+    les repose aussitot. Les files posees a la main ne sont jamais touchees."""
+    try:
+        rapport = await container.shaping.clean_queues(router_name, author="ui:clean-queues")
+    except MissingWriteCredentialsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Cannot clean the router: {type(exc).__name__}: {exc}",
+        ) from exc
+    # Les lignes de limitation des restrictions sont aussi des files freeQoS :
+    # les reposer tout de suite, sinon la restriction saute jusqu'au passage.
+    if container.restrictions is not None:
+        try:
+            r = await container.restrictions.apply_all(
+                author="ui:clean-queues", dry_run=False, router_name=router_name
+            )
+            rapport["recreated"] += int(r.get("applied") or 0)
+        except Exception as exc:  # noqa: BLE001
+            rapport["errors"].append(f"restrictions: {type(exc).__name__}: {exc}")
+    return rapport
+
+
 @router.get("/shaping/capability", summary="Real rights of the account on a router")
 async def write_capability(
     container: ContainerDep, router_name: Annotated[str, Query(alias="router")]

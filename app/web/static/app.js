@@ -4156,6 +4156,9 @@ async function loadRouters() {
             'Set up</button>' +
           '<button class="sm" data-config="' + esc(r.name) +
             '" title="See the full config (/export) the controller reads">Config</button>' +
+          '<button class="sm danger" data-clean-queues="' + esc(r.name) +
+            '" title="Delete every freeQoS queue of this router, then lay them down again">' +
+            'Reset queues</button>' +
           (r.editable
             ? '<button class="sm" data-probe="' + r.id + '">Test</button>' +
               '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button>' +
@@ -4178,6 +4181,8 @@ async function loadRouters() {
       sortie.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       followProvisioning(b.dataset.provision, sortie);
     }));
+  host.querySelectorAll('[data-clean-queues]').forEach((b) =>
+    b.addEventListener('click', () => cleanRouterQueues(b.dataset.cleanQueues, b)));
   host.querySelectorAll('[data-probe]').forEach((b) =>
     b.addEventListener('click', () => probeRouter(b.dataset.probe, b)));
   host.querySelectorAll('[data-del]').forEach((b) =>
@@ -4186,6 +4191,29 @@ async function loadRouters() {
     b.addEventListener('click', () => toggleRouter(b.dataset.toggle)));
   host.querySelectorAll('[data-hide-file]').forEach((b) =>
     b.addEventListener('click', () => hideFileRouter(b.dataset.hideFile)));
+}
+
+/** Supprime toutes les files freeQoS d'un routeur puis les repose : repartir
+ *  sur de bonnes bases. Les files posees a la main ne sont jamais touchees. */
+async function cleanRouterQueues(name, bouton) {
+  if (!confirm('Delete ALL freeQoS queues on ' + name + ' and rebuild them from scratch?\n\n' +
+    'Queues you created by hand are kept. Clients are briefly unshaped while the queues are rebuilt.')) return;
+  const sortie = document.getElementById('router-export');
+  bouton.disabled = true;
+  sortie.innerHTML = '<div class="muted">Cleaning the queues of ' + esc(name) + '…</div>';
+  try {
+    const r = await api('/shaping/routers/' + encodeURIComponent(name) + '/clean-queues', { method: 'POST' });
+    const errs = r.errors || [];
+    sortie.innerHTML = '<div class="notice ' + (errs.length ? 'err' : 'ok') + '">' +
+      esc(name) + ': ' + r.removed + ' queue(s) deleted, ' + r.recreated + ' recreated' +
+      (r.kept_foreign ? ', ' + r.kept_foreign + ' other queue(s) left untouched' : '') + '.' +
+      (errs.length ? '<br>' + errs.map(esc).join('<br>') : '') + '</div>';
+  } catch (err) {
+    sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  } finally {
+    bouton.disabled = false;
+    sortie.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
 }
 
 /** Affiche le /export complet d'un routeur + ce que le controleur en tire
