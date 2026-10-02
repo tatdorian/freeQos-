@@ -485,9 +485,19 @@ class CollectionService:
                     clients_on_vlan=par_vlan.get((collector.name, client.vlan), 0),
                 )
             if vlan is not None:
-                octets = (vlan.rx_bytes, vlan.tx_bytes)
-                key = f"static/{client.reference}@{vlan.interface}"
                 self.sole_vlan_interfaces[client.reference] = vlan.interface
+                # LA FILE D'ABORD : elle compte ce qui est PASSE. Le rx de
+                # l'interface compte ce que le client ENVOIE, paquets jetes par
+                # la file compris -- l'upload paraissait alors ignorer la limite.
+                file_vlan = (compteurs.get(collector.name, {}) if collector else {}).get(
+                    vlan.interface
+                )
+                if file_vlan is not None:
+                    octets = file_vlan
+                    key = f"static/{client.reference}@queue:{vlan.interface}"
+                else:
+                    octets = (vlan.rx_bytes, vlan.tx_bytes)
+                    key = f"static/{client.reference}@{vlan.interface}"
             else:
                 self.sole_vlan_interfaces.pop(client.reference, None)
                 octets = _counters_for(

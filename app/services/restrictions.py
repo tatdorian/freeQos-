@@ -109,6 +109,27 @@ def validate(payload: dict[str, Any]) -> None:
         )
 
 
+def vlan_networks_for(shaping: Any, logins: list[str]) -> list[str]:
+    """Reseaux des interfaces VLAN des clients seuls sur leur VLAN."""
+    from app.collectors.mikrotik import _RESEAUX_CONNECTES
+
+    interfaces = {
+        iface
+        for login in logins
+        if (iface := (getattr(shaping, "sole_vlan_interfaces", None) or {}).get(login))
+    }
+    if not interfaces:
+        return []
+    return sorted(
+        {
+            str(reseau)
+            for reseaux in _RESEAUX_CONNECTES.values()
+            for reseau, iface in reseaux
+            if iface in interfaces
+        }
+    )
+
+
 @dataclass
 class RestrictionService:
     shaping: ShapingService
@@ -155,6 +176,10 @@ class RestrictionService:
                 par_login = await self.flows_repo.prefixes_for_logins(logins)
                 for prefixes in par_login.values():
                     clients.extend(prefixes)
+            # CLIENT SEUL SUR SA VLAN : son trafic part souvent d'une autre IP
+            # que celle saisie (son routeur). Le reseau de sa VLAN entier le
+            # designe ; sans lui, "bloquer pour ce client" ne voyait rien passer.
+            clients.extend(vlan_networks_for(self.shaping, logins))
 
         return RuleTarget(
             rule_id=int(rule["id"]),
