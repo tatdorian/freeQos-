@@ -1080,3 +1080,41 @@ pre { max-width: 100%; overflow-x: auto; }
 .prov-steps .hint { display: inline; }
 .prov-result { display: flex; flex-wrap: wrap; gap: .3rem 1.2rem; margin-top: .55rem; font-size: .84rem; }
 .sq.none { background: var(--fill-strong); }
+
+/* ============================== listes deployantes a cases (cibles de regle) */
+details.pick-dd {
+  position: relative; margin: 0; padding: 0;
+  background: none; box-shadow: none; border-radius: 0;
+}
+details.pick-dd > summary,
+details.pick-dd[open] > summary {
+  display: block; margin: 0;
+  padding: .6rem 2rem .6rem .85rem; border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--fill); color: var(--text);
+  font-weight: 400;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  position: relative;
+}
+details.pick-dd > summary:hover { color: var(--text); border-color: var(--accent); }
+details.pick-dd > summary::before { content: none; }
+details.pick-dd > summary::after {
+  content: "\25BE"; position: absolute; right: .8rem; top: 50%;
+  transform: translateY(-50%); color: var(--faint);
+}
+details.pick-dd[open] > summary::after { content: "\25B4"; }
+.pick-panel {
+  position: absolute; z-index: 20; left: 0; right: 0; margin-top: .3rem;
+  background: var(--surface); border: 1px solid var(--border, var(--fill-strong));
+  border-radius: 10px; box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
+  padding: .5rem;
+}
+.pick-filter { width: 100%; margin-bottom: .4rem; }
+.pick-list { max-height: 260px; overflow-y: auto; }
+.pick-item {
+  display: flex; align-items: center; gap: .5rem;
+  padding: .35rem .4rem; border-radius: 8px; cursor: pointer;
+}
+.pick-item:hover { background: var(--fill); }
+.pick-item .hint { margin-left: auto; font-size: .75rem; }
+.pick-item[hidden] { display: none; }

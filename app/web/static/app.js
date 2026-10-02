@@ -5444,10 +5444,75 @@ function lignesNonVides(id) {
     .split(/[\s,;]+/).map((s) => s.trim()).filter(Boolean);
 }
 
+/* ------------------------------------------- cibles d'une regle, en cascade
+ *
+ *  1. un ou plusieurs SITES (PoP ou VLAN) -- on peut s'arreter la : la regle
+ *     vise tous leurs clients ;
+ *  2. ou continuer et cocher un ou plusieurs CLIENTS de ces sites. */
+const CIBLES = { sites: [], clients: [] };
+
+function coches(id) {
+  return Array.from(document.querySelectorAll('#' + id + ' input:checked')).map((c) => c.value);
+}
+
+function caseACocher(valeur, libelle, detail, coche) {
+  return '<label class="pick-item"><input type="checkbox" value="' + esc(valeur) + '"' +
+    (coche ? ' checked' : '') + '> <span>' + esc(libelle) + '</span>' +
+    (detail ? '<span class="hint">' + esc(detail) + '</span>' : '') + '</label>';
+}
+
+async function chargerCiblesRegle() {
+  const [sites, abonnes] = await Promise.all([
+    api('/pops').catch(() => []),
+    api('/subscribers/latest?limit=500&order_by=login&include_unmeasured=true').catch(() => []),
+  ]);
+  CIBLES.sites = Array.isArray(sites) ? sites : (sites.pops || []);
+  CIBLES.clients = (abonnes || []).filter((r) => r.login);
+  const deja = new Set(coches('svc-rule-pops'));
+  document.getElementById('svc-rule-pops').innerHTML = CIBLES.sites.length
+    ? CIBLES.sites.map((x) => caseACocher(x.name, x.name,
+        x.kind === 'vlan' ? 'VLAN' + (x.vlan_id ? ' ' + x.vlan_id : '') : 'PoP',
+        deja.has(x.name))).join('')
+    : '<div class="hint">No site known.</div>';
+  remplirClientsRegle();
+  majResumes();
+}
+
+/** Les clients proposes suivent les sites coches (tous, si aucun). */
+function remplirClientsRegle() {
+  const sites = new Set(coches('svc-rule-pops'));
+  const deja = new Set(coches('svc-rule-logins'));
+  const proposes = CIBLES.clients.filter((r) => !sites.size || sites.has(r.pop_name));
+  document.getElementById('svc-rule-logins').innerHTML = proposes.length
+    ? proposes.map((r) => caseACocher(r.login, r.login,
+        (r.pop_name || '') + (r.kind === 'static' ? ' · static IP' : ''),
+        deja.has(r.login))).join('')
+    : '<div class="hint">No client on these sites.</div>';
+}
+
+function majResumes() {
+  const sites = coches('svc-rule-pops');
+  const clients = coches('svc-rule-logins');
+  const resume = (liste, vide) => !liste.length ? vide
+    : liste.length <= 3 ? liste.join(', ') : liste.slice(0, 2).join(', ') + ' +' + (liste.length - 2);
+  document.getElementById('svc-rule-pops-sum').textContent =
+    resume(sites, 'Choose one or more sites');
+  document.getElementById('svc-rule-logins-sum').textContent =
+    resume(clients, sites.length ? 'All clients of the chosen sites' : 'Choose clients');
+}
+
 async function submitRule(event) {
   event.preventDefault();
   const action = document.getElementById('svc-rule-action').value;
-  const scope = document.getElementById('svc-rule-scope').value;
+  const choix = document.getElementById('svc-rule-scope').value;
+  const sites = coches('svc-rule-pops');
+  const clients = coches('svc-rule-logins');
+  if (choix === 'pick' && !sites.length && !clients.length) {
+    ruleNotice('<div class="notice err">Choose at least one site, or switch to "Every client".</div>');
+    return;
+  }
+  // Des clients coches l'emportent : la regle ne vise qu'eux. Sinon, les sites.
+  const scope = choix !== 'pick' ? 'all' : clients.length ? 'subscribers' : 'pops';
   const corps = {
     name: document.getElementById('svc-rule-name').value.trim(),
     action,
@@ -5455,8 +5520,8 @@ async function submitRule(event) {
     categories: selectedValues('svc-rule-categories'),
     prefixes: lignesNonVides('svc-rule-prefixes'),
     scope,
-    logins: scope === 'subscribers' ? lignesNonVides('svc-rule-logins') : [],
-    pops: scope === 'pops' ? selectedValues('svc-rule-pops') : [],
+    logins: scope === 'subscribers' ? clients : [],
+    pops: scope === 'pops' ? sites : [],
     protocol: document.getElementById('svc-rule-protocol').value || null,
     ports: document.getElementById('svc-rule-ports').value.trim() || null,
     note: document.getElementById('svc-rule-note').value.trim() || null,
@@ -5471,8 +5536,8 @@ async function submitRule(event) {
       'applied on the routers'));
     document.getElementById('svc-rule-form').reset();
     document.getElementById('svc-rule-limits').hidden = true;
-    document.getElementById('svc-rule-logins-field').hidden = true;
-    document.getElementById('svc-rule-pops-field').hidden = true;
+    document.getElementById('svc-rule-target').hidden = true;
+    majResumes();
     await loadServices();
   } catch (err) {
     ruleNotice('<div class="notice err">' + esc(err.message) + '</div>');
@@ -8798,17 +8863,27 @@ document.getElementById('svc-rule-action').addEventListener('change', (e) => {
   document.getElementById('svc-rule-limits').hidden = e.target.value !== 'limit';
 });
 document.getElementById('svc-rule-scope').addEventListener('change', async (e) => {
-  document.getElementById('svc-rule-logins-field').hidden = e.target.value !== 'subscribers';
-  document.getElementById('svc-rule-pops-field').hidden = e.target.value !== 'pops';
-  if (e.target.value === 'pops') {
-    // Les sites connus : PoP de routeur et sites de VLAN.
-    const sites = await api('/pops').catch(() => []);
-    const liste = Array.isArray(sites) ? sites : (sites.pops || []);
-    document.getElementById('svc-rule-pops').innerHTML = liste
-      .map((x) => '<option value="' + esc(x.name) + '">' + esc(x.name) +
-        (x.kind === 'vlan' ? ' (VLAN' + (x.vlan_id ? ' ' + esc(x.vlan_id) : '') + ')' : '') +
-        '</option>').join('');
-  }
+  const choisir = e.target.value === 'pick';
+  document.getElementById('svc-rule-target').hidden = !choisir;
+  if (choisir) await chargerCiblesRegle();
+});
+document.getElementById('svc-rule-pops').addEventListener('change', () => {
+  remplirClientsRegle();
+  majResumes();
+});
+document.getElementById('svc-rule-logins').addEventListener('change', majResumes);
+document.querySelectorAll('.pick-filter').forEach((champ) =>
+  champ.addEventListener('input', () => {
+    const q = champ.value.trim().toLowerCase();
+    document.getElementById(champ.dataset.filter).querySelectorAll('label').forEach((l) => {
+      l.hidden = !!q && !l.textContent.toLowerCase().includes(q);
+    });
+  }));
+// Une liste ouverte se referme quand on clique ailleurs.
+document.addEventListener('click', (e) => {
+  document.querySelectorAll('details.pick-dd[open]').forEach((d) => {
+    if (!d.contains(e.target)) d.open = false;
+  });
 });
 document.getElementById('exec-range').addEventListener('change', (e) => {
   state.execRange = Number(e.target.value);

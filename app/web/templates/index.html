@@ -292,9 +292,36 @@
               <label for="svc-rule-scope">For whom</label>
               <select id="svc-rule-scope">
                 <option value="all">Every client</option>
-                <option value="pops">A site (PoP or VLAN)</option>
-                <option value="subscribers">Chosen subscribers</option>
+                <option value="pick">Choose sites, then clients</option>
               </select>
+            </div>
+          </div>
+
+          <!-- Deux listes deployantes en cascade : un ou plusieurs PoP, et on
+               peut s'arreter la ; ou continuer et cocher un ou plusieurs
+               clients de ces PoP. -->
+          <div class="row-3" id="svc-rule-target" hidden>
+            <div class="field">
+              <label>1. Sites (PoP or VLAN)</label>
+              <details class="pick-dd" id="svc-rule-pops-dd">
+                <summary id="svc-rule-pops-sum">Choose one or more sites</summary>
+                <div class="pick-panel">
+                  <input type="search" class="pick-filter" data-filter="svc-rule-pops" placeholder="Filter">
+                  <div class="pick-list" id="svc-rule-pops"></div>
+                </div>
+              </details>
+              <span class="hint">Stop here to apply the rule to every client of these sites.</span>
+            </div>
+            <div class="field">
+              <label>2. Clients (optional)</label>
+              <details class="pick-dd" id="svc-rule-logins-dd">
+                <summary id="svc-rule-logins-sum">All clients of the chosen sites</summary>
+                <div class="pick-panel">
+                  <input type="search" class="pick-filter" data-filter="svc-rule-logins" placeholder="Filter">
+                  <div class="pick-list" id="svc-rule-logins"></div>
+                </div>
+              </details>
+              <span class="hint">Tick clients to narrow the rule to them only.</span>
             </div>
           </div>
 
@@ -340,15 +367,6 @@
           </div>
 
           <div class="row-3">
-            <div class="field" id="svc-rule-pops-field" hidden>
-              <label for="svc-rule-pops">Target sites</label>
-              <select id="svc-rule-pops" multiple size="4"></select>
-            </div>
-            <div class="field" id="svc-rule-logins-field" hidden>
-              <label for="svc-rule-logins">Target subscribers</label>
-              <textarea id="svc-rule-logins" rows="3"
-                        placeholder="dupont&#10;martin"></textarea>
-            </div>
             <div class="field">
               <label for="svc-rule-protocol">Protocol (optional)</label>
               <select id="svc-rule-protocol">
