@@ -229,6 +229,15 @@ class CollectionService:
                 continue
             sessions_by_router.append((collector, outcome))
 
+        # Compteurs des FILES, lus une fois par routeur et par cycle. C'est la
+        # seule mesure de l'upload qui soit prise APRES le plafond : le rx d'une
+        # interface (PPPoE, VLAN) compte ce que le client EMET, y compris ce que
+        # sa file jette. Constate : plafond tenu a 200 (bandwidth-test 180/182),
+        # upload affiche a 385.
+        files_par_routeur = await self._queue_counters_for(
+            [collector for collector, sessions in sessions_by_router if sessions]
+        )
+
         rows: list[tuple[int, SubscriberSample]] = []
         # tuple[str | None, object] : le second membre est un datetime, mais le
         # contrat Directory.touch_subscribers l'accepte en ``object`` (invariance
@@ -251,7 +260,6 @@ class CollectionService:
 
             for session in sessions:
                 key = f"{collector.name}/{session.login}"
-                active_keys.add(key)
                 try:
                     subscriber_id = await self.directory.ensure_subscriber(
                         session.login,
@@ -264,11 +272,21 @@ class CollectionService:
                     continue
                 self._known_logins.add(session.login)
 
+                rx_octets, tx_octets = session.rx_bytes, session.tx_bytes
+                par_file = _counters_for_address(
+                    files_par_routeur.get(collector.name, {}), session.address
+                )
+                if par_file != (None, None):
+                    # Cle distincte : passer d'un compteur a l'autre sous la
+                    # meme cle ferait un delta absurde.
+                    rx_octets, tx_octets = par_file
+                    key = f"{key}@queue"
+                active_keys.add(key)
                 rate = self.rates.update(
                     key,
                     ts=monotonic,
-                    rx_bytes=session.rx_bytes,
-                    tx_bytes=session.tx_bytes,
+                    rx_bytes=rx_octets,
+                    tx_bytes=tx_octets,
                     uptime_s=session.uptime_s,
                 )
                 rows.append(
@@ -310,6 +328,7 @@ class CollectionService:
             active_keys=active_keys,
             rtt_targets=rtt_targets,
             errors=errors,
+            queue_counters=files_par_routeur,
         )
 
         self.rates.prune(active_keys)
@@ -336,6 +355,27 @@ class CollectionService:
         await self._finalize(result)
         return result
 
+    @staticmethod
+    async def _queue_counters_for(
+        collectors: list[MikrotikCollector],
+    ) -> dict[str, dict[str, tuple[int | None, int | None]]]:
+        """Compteurs des files simples de ces routeurs, lus en parallele. Un
+        routeur illisible rend un dictionnaire vide : ses abonnes retombent sur
+        leurs compteurs d'interface, sans bloquer les autres."""
+        compteurs: dict[str, dict[str, tuple[int | None, int | None]]] = {}
+        if not collectors:
+            return compteurs
+        mesures = await asyncio.gather(
+            *(c.queue_counters() for c in collectors), return_exceptions=True
+        )
+        for collector, mesure in zip(collectors, mesures, strict=True):
+            if isinstance(mesure, BaseException):
+                logger.warning("Compteurs de files illisibles sur %s : %s", collector.name, mesure)
+                compteurs[collector.name] = {}
+            else:
+                compteurs[collector.name] = mesure
+        return compteurs
+
     async def _collect_static_clients(
         self,
         *,
@@ -346,6 +386,7 @@ class CollectionService:
         active_keys: set[str],
         rtt_targets: list[tuple[int, str, MikrotikCollector]],
         errors: list[str],
+        queue_counters: dict[str, dict[str, tuple[int | None, int | None]]] | None = None,
     ) -> None:
         """Materialise les clients a IP fixe declares, et les mesure si on peut.
 
@@ -388,19 +429,12 @@ class CollectionService:
             for match in par_client.values()
             for collector in match.collectors
         }
-        compteurs: dict[str, dict[str, tuple[int | None, int | None]]] = {}
-        if routeurs:
-            noms = list(routeurs)
-            mesures = await asyncio.gather(
-                *(routeurs[nom].queue_counters() for nom in noms),
-                return_exceptions=True,
+        compteurs = dict(queue_counters or {})
+        compteurs.update(
+            await self._queue_counters_for(
+                [c for nom, c in routeurs.items() if nom not in compteurs]
             )
-            for nom, mesure in zip(noms, mesures, strict=True):
-                if isinstance(mesure, BaseException):
-                    logger.warning("Compteurs de files illisibles sur %s : %s", nom, mesure)
-                    compteurs[nom] = {}
-                else:
-                    compteurs[nom] = mesure
+        )
 
         # Compteurs des interfaces VLAN, lus seulement sur les routeurs qui
         # portent au moins un client declare par son VLAN. C'est la mesure de
@@ -1062,6 +1096,21 @@ def vlan_network_for(router: str, interface: str, address: str | None) -> str | 
     except ValueError:
         pass
     return str(reseaux[0])
+
+
+def _counters_for_address(
+    compteurs: dict[str, tuple[int | None, int | None]], address: str | None
+) -> tuple[int | None, int | None]:
+    """Compteurs de la file qui vise EXACTEMENT cette adresse (``a.b.c.d`` ou
+    ``a.b.c.d/32``). Jamais une file plus large : elle porterait aussi le
+    trafic des voisins."""
+    if not address:
+        return (None, None)
+    hote = _single_host(address)
+    for cle in (address, f"{hote}/32" if hote else None, hote):
+        if cle and cle in compteurs:
+            return compteurs[cle]
+    return (None, None)
 
 
 def _counters_for(

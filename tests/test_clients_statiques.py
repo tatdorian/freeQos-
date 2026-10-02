@@ -973,3 +973,44 @@ async def test_seul_sur_sa_vlan_une_file_qui_le_contient_mesure_l_upload_reel(
     ligne = writer.subscriber_rows[-1][1]
     assert ligne.rx_bps == pytest.approx(200_000)
     assert ligne.tx_bps == pytest.approx(200_000)
+
+
+async def test_pppoe_l_upload_vient_de_la_file_pas_du_rx_de_l_interface(
+    settings: Settings,
+) -> None:
+    """Le rx de l'interface PPPoE compte ce que le client EMET, avant que sa
+    file n'en jette une partie : 385 affiche pour un plafond tenu a 200. La
+    file, elle, ne compte que ce qui est passe."""
+    clock = Clock()
+    client = FakeRouterOsClient()
+    client.add_session("dupont", address="10.20.0.10", rx_byte=0, tx_byte=0)
+    client.simple_queue_rows = [
+        {"name": "freeqos-dupont", "target": "10.20.0.10/32", "bytes": "0/0"}
+    ]
+    service, writer, _ = build_service(settings, client, InventaireMemoire([]), clock=clock)
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.advance("dupont", rx_delta=481_250, tx_delta=250_000)
+    client.simple_queue_rows = [
+        {"name": "freeqos-dupont", "target": "10.20.0.10/32", "bytes": "250000/250000"}
+    ]
+    await service.collect_subscribers()
+
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(200_000)
+    assert ligne.tx_bps == pytest.approx(200_000)
+
+
+async def test_pppoe_sans_file_reste_mesure_par_son_interface(settings: Settings) -> None:
+    clock = Clock()
+    client = FakeRouterOsClient()
+    client.add_session("dupont", address="10.20.0.10", rx_byte=0, tx_byte=0)
+    service, writer, _ = build_service(settings, client, InventaireMemoire([]), clock=clock)
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.advance("dupont", rx_delta=125_000, tx_delta=250_000)
+    await service.collect_subscribers()
+
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(100_000)
+    assert ligne.tx_bps == pytest.approx(200_000)
