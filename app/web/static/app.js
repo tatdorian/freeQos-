@@ -5214,7 +5214,8 @@ function renderRules(data) {
           (r.protocol ? ' <span class="hint">' + esc(r.protocol) +
             (r.ports ? ':' + esc(r.ports) : '') + '</span>' : '') + '</td>' +
         '<td>' + (r.scope === 'subscribers'
-          ? esc((r.logins || []).length) + ' subscriber(s)' : 'everyone') + '</td>' +
+          ? esc((r.logins || []).join(', ') || '0 subscriber')
+          : r.scope === 'pops' ? 'site: ' + esc((r.pops || []).join(', ')) : 'everyone') + '</td>' +
         '<td>' + (r.enabled
           ? '<span class="badge ok">active</span>' : '<span class="badge">suspended</span>') +
           '</td>' +
@@ -5314,7 +5315,9 @@ async function previewRule(id) {
       '<div class="ip-facts">' +
         '<div><span>Target addresses</span><b>' + esc(vue.address_count) + '</b></div>' +
         '<div><span>Target clients</span>' + (vue.rule.scope === 'subscribers'
-          ? esc(vue.client_count) + ' prefix(es)' : 'everyone') + '</div>' +
+          ? esc(vue.client_count) + ' prefix(es)'
+          : vue.rule.scope === 'pops' ? 'site: ' + esc((vue.rule.pops || []).join(', ')) : 'everyone') +
+          '</div>' +
         '<div><span>Routers</span>' +
           esc((vue.routers || []).join(', ') || 'none') + '</div>' +
       '</div>' +
@@ -5405,6 +5408,7 @@ async function submitRule(event) {
     prefixes: lignesNonVides('svc-rule-prefixes'),
     scope,
     logins: scope === 'subscribers' ? lignesNonVides('svc-rule-logins') : [],
+    pops: scope === 'pops' ? selectedValues('svc-rule-pops') : [],
     protocol: document.getElementById('svc-rule-protocol').value || null,
     ports: document.getElementById('svc-rule-ports').value.trim() || null,
     note: document.getElementById('svc-rule-note').value.trim() || null,
@@ -5420,6 +5424,7 @@ async function submitRule(event) {
     document.getElementById('svc-rule-form').reset();
     document.getElementById('svc-rule-limits').hidden = true;
     document.getElementById('svc-rule-logins-field').hidden = true;
+    document.getElementById('svc-rule-pops-field').hidden = true;
     await loadServices();
   } catch (err) {
     ruleNotice('<div class="notice err">' + esc(err.message) + '</div>');
@@ -8744,8 +8749,18 @@ document.getElementById('svc-rule-form').addEventListener('submit', submitRule);
 document.getElementById('svc-rule-action').addEventListener('change', (e) => {
   document.getElementById('svc-rule-limits').hidden = e.target.value !== 'limit';
 });
-document.getElementById('svc-rule-scope').addEventListener('change', (e) => {
+document.getElementById('svc-rule-scope').addEventListener('change', async (e) => {
   document.getElementById('svc-rule-logins-field').hidden = e.target.value !== 'subscribers';
+  document.getElementById('svc-rule-pops-field').hidden = e.target.value !== 'pops';
+  if (e.target.value === 'pops') {
+    // Les sites connus : PoP de routeur et sites de VLAN.
+    const sites = await api('/pops').catch(() => []);
+    const liste = Array.isArray(sites) ? sites : (sites.pops || []);
+    document.getElementById('svc-rule-pops').innerHTML = liste
+      .map((x) => '<option value="' + esc(x.name) + '">' + esc(x.name) +
+        (x.kind === 'vlan' ? ' (VLAN' + (x.vlan_id ? ' ' + esc(x.vlan_id) : '') + ')' : '') +
+        '</option>').join('');
+  }
 });
 document.getElementById('exec-range').addEventListener('change', (e) => {
   state.execRange = Number(e.target.value);

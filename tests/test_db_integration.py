@@ -3762,3 +3762,13 @@ async def test_plans_par_client_derniere_ecriture_gagne(database: Database) -> N
     assert await depot.delete_by_service("svc-9") == ["martin"]
     assert "martin" not in await depot.list_all()
     assert await depot.delete("dupont") is True
+
+
+async def test_regle_par_site_enregistree(database: Database) -> None:
+    from app.db.traffic_rules_repo import TrafficRulesRepository
+
+    depot = TrafficRulesRepository(database.pool)
+    regle = await depot.create(
+        {"name": "site-x", "prefixes": ["1.2.3.4"], "scope": "pops", "pops": ["VLAN 2060"]}
+    )
+    assert (regle["scope"], regle["pops"]) == ("pops", ["VLAN 2060"])
