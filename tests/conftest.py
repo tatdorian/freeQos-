@@ -1,0 +1,431 @@
+"""Doubles de test partages.
+
+Objectif : toute la logique du controleur doit etre testable sans PostgreSQL,
+sans routeur et sans radio. Seuls les modules d'acces (PgMetricsWriter,
+PgDirectory, MetricsRepository) supposent une vraie base ; ils sont couverts par
+les tests d'integration optionnels.
+"""
+
+from __future__ import annotations
+
+import os
+from typing import Any
+
+import pytest
+
+# La suite historique teste les routes SANS session : l'authentification y est
+# coupee. Les tests de connexion (test_comptes.py) la rallument explicitement.
+os.environ.setdefault("AUTH_ENABLED", "false")
+
+from app.collectors.mikrotik import MikrotikCollector
+from app.config import BackhaulConfig, RouterConfig, Settings
+
+
+@pytest.fixture(autouse=True)
+def _loopbacks_oublies():
+    """Le loopback detecte est retenu par nom de routeur, au niveau du module :
+    sans cet oubli, un test en heriterait d'un autre."""
+    from app.collectors.mikrotik import forget_loopbacks
+
+    forget_loopbacks()
+    yield
+    forget_loopbacks()
+
+
+class FakeRouterOsClient:
+    """Faux routeur RouterOS : renvoie les tables /ppp/active et /interface.
+
+    Les valeurs imitent la reponse reelle de l'API binaire, y compris les cles a
+    tirets et les compteurs sous forme de chaines.
+    """
+
+    def __init__(
+        self,
+        active: list[dict[str, Any]] | None = None,
+        interfaces: list[dict[str, Any]] | None = None,
+        *,
+        identity: str = "fake-chr",
+    ) -> None:
+        self.active = active if active is not None else []
+        self.interfaces_rows = interfaces if interfaces is not None else []
+        self._identity = identity
+        self.calls = 0
+        self.closed = False
+        self.raise_on_ppp: Exception | None = None
+        self.pings: list[tuple[str, int]] = []
+        self.ping_sources: list[str | None] = []
+        self.ping_intervals: list[str | None] = []
+        # Topologie et files, pour la phase 2.
+        self.neighbor_rows: list[dict[str, Any]] = []
+        self.ethernet_rows: list[dict[str, Any]] = []
+        self.address_rows: list[dict[str, Any]] = []
+        self.simple_queue_rows: list[dict[str, Any]] = []
+        # Pare-feu : lu pour le diagnostic fasttrack, ecrit pour les
+        # restrictions de trafic (address-list, filter, mangle).
+        self.firewall_filter_rows: list[dict[str, Any]] = []
+        self.firewall_address_list_rows: list[dict[str, Any]] = []
+        self.firewall_mangle_rows: list[dict[str, Any]] = []
+        self.raise_on_firewall: Exception | None = None
+        # Export NetFlow : le reglage du routeur, et ses collecteurs declares.
+        # Les defauts REELS de RouterOS : export coupe, et surtout un flux encore
+        # actif qui n'est exporte qu'au bout de trente minutes.
+        self.traffic_flow_row: dict[str, Any] = {
+            "enabled": "false",
+            "interfaces": "",
+            "active-flow-timeout": "30m",
+            "inactive-flow-timeout": "15s",
+        }
+        self.traffic_flow_target_rows: list[dict[str, Any]] = []
+        self.raise_on_traffic_flow: Exception | None = None
+        self.queue_type_rows: list[dict[str, Any]] = []
+        self.queue_tree_rows: list[dict[str, Any]] = []
+        self.raise_on_neighbors: Exception | None = None
+        self.raise_on_queues: Exception | None = None
+        # Presence sur VLAN routee : table ARP, VLAN declarees, serveurs PPPoE.
+        self.arp_rows: list[dict[str, Any]] = []
+        # Configuration : c'est elle qui porte la hierarchie reelle.
+        self.route_rows: list[dict[str, Any]] = []
+        self.bridge_port_rows: list[dict[str, Any]] = []
+        self.bonding_rows: list[dict[str, Any]] = []
+        self.ospf_neighbor_rows: list[dict[str, Any]] = []
+        self.bgp_session_rows: list[dict[str, Any]] = []
+        # Router-id lu par les chemins structures (/routing/id, instances
+        # OSPF/BGP). C'est le loopback quand aucune interface ne s'appelle 'lo'.
+        self.router_id_rows: list[str] = []
+        self.raise_on_routing_ids: Exception | None = None
+        self.vlan_rows: list[dict[str, Any]] = []
+        self.pppoe_server_rows: list[dict[str, Any]] = []
+        self.raise_on_arp: Exception | None = None
+        # Recensement : les sources que l'ARP seule ne remplace pas.
+        self.dhcp_lease_rows: list[dict[str, Any]] = []
+        self.dhcp_server_rows: list[dict[str, Any]] = []
+        self.bridge_host_rows: list[dict[str, Any]] = []
+        self.raise_on_dhcp: Exception | None = None
+        self.raise_on_bridge_hosts: Exception | None = None
+        # Un routeur purement L3 n'a pas cette table : le collecteur doit le
+        # supporter sans echouer.
+        self.raise_on_pppoe_servers: Exception | None = None
+        # Par defaut : compte de lecture seule, comme qos-ro.
+        self.user_rows: list[dict[str, Any]] = [{"name": "qos-ro", "group": "qos-ro"}]
+        self.group_rows: list[dict[str, Any]] = [{"name": "qos-ro", "policy": "read,api,test"}]
+        self.raise_on_users: Exception | None = None
+        # Debit instantane rendu par /interface/monitor-traffic, par interface.
+        self.monitor_rates: dict[str, tuple[float, float]] = {}
+        self.raise_on_monitor: Exception | None = None
+        self.ping_reply: str | None = "12ms"
+        self.ping_error: Exception | None = None
+        # Config complete facon /export (texte). Vide par defaut.
+        self.export_text: str = ""
+
+    def ppp_active(self) -> list[dict[str, Any]]:
+        self.calls += 1
+        if self.raise_on_ppp is not None:
+            raise self.raise_on_ppp
+        return [dict(row) for row in self.active]
+
+    def interfaces(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.interfaces_rows]
+
+    def identity(self) -> str | None:
+        return self._identity
+
+    def system_resource(self) -> dict[str, Any]:
+        return {
+            "version": "7.21.5 (stable)",
+            "board-name": "CHR",
+            "uptime": "1w2d03:04:05",
+            "cpu-load": "3",
+            "free-memory": "201326592",
+        }
+
+    # --- Topologie et files (phase 2) ---
+    def neighbors(self) -> list[dict[str, Any]]:
+        if self.raise_on_neighbors is not None:
+            raise self.raise_on_neighbors
+        return [dict(row) for row in self.neighbor_rows]
+
+    def ethernet(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.ethernet_rows]
+
+    def monitor_traffic(self, interface: str) -> dict[str, Any]:
+        if self.raise_on_monitor is not None:
+            raise self.raise_on_monitor
+        rx, tx = self.monitor_rates.get(interface, (0.0, 0.0))
+        return {
+            "name": interface,
+            "rx-bits-per-second": str(int(rx)),
+            "tx-bits-per-second": str(int(tx)),
+            "rx-packets-per-second": "1200",
+            "tx-packets-per-second": "9800",
+        }
+
+    def addresses(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.address_rows]
+
+    def export_config(self) -> str:
+        return self.export_text
+
+    def routes(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.route_rows]
+
+    def bridge_ports(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.bridge_port_rows]
+
+    def bondings(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.bonding_rows]
+
+    def ospf_neighbors(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.ospf_neighbor_rows]
+
+    def bgp_sessions(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.bgp_session_rows]
+
+    def routing_ids(self) -> list[str]:
+        if self.raise_on_routing_ids is not None:
+            raise self.raise_on_routing_ids
+        return list(self.router_id_rows)
+
+    def dns_cache(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in getattr(self, "dns_cache_rows", [])]
+
+    def arp(self) -> list[dict[str, Any]]:
+        if self.raise_on_arp is not None:
+            raise self.raise_on_arp
+        return [dict(row) for row in self.arp_rows]
+
+    def vlans(self) -> list[dict[str, Any]]:
+        return [dict(row) for row in self.vlan_rows]
+
+    def pppoe_servers(self) -> list[dict[str, Any]]:
+        if self.raise_on_pppoe_servers is not None:
+            raise self.raise_on_pppoe_servers
+        return [dict(row) for row in self.pppoe_server_rows]
+
+    def dhcp_leases(self) -> list[dict[str, Any]]:
+        if self.raise_on_dhcp is not None:
+            raise self.raise_on_dhcp
+        return [dict(row) for row in self.dhcp_lease_rows]
+
+    def dhcp_servers(self) -> list[dict[str, Any]]:
+        if self.raise_on_dhcp is not None:
+            raise self.raise_on_dhcp
+        return [dict(row) for row in self.dhcp_server_rows]
+
+    def bridge_hosts(self) -> list[dict[str, Any]]:
+        if self.raise_on_bridge_hosts is not None:
+            raise self.raise_on_bridge_hosts
+        return [dict(row) for row in self.bridge_host_rows]
+
+    def simple_queues(self) -> list[dict[str, Any]]:
+        if self.raise_on_queues is not None:
+            raise self.raise_on_queues
+        return [dict(row) for row in self.simple_queue_rows]
+
+    def queue_types(self) -> list[dict[str, Any]]:
+        if self.raise_on_queues is not None:
+            raise self.raise_on_queues
+        return [dict(row) for row in self.queue_type_rows]
+
+    def firewall_filters(self) -> list[dict[str, Any]]:
+        if self.raise_on_firewall is not None:
+            raise self.raise_on_firewall
+        return [dict(row) for row in self.firewall_filter_rows]
+
+    def firewall_address_list(self) -> list[dict[str, Any]]:
+        if self.raise_on_firewall is not None:
+            raise self.raise_on_firewall
+        return [dict(row) for row in self.firewall_address_list_rows]
+
+    def firewall_mangle(self) -> list[dict[str, Any]]:
+        if self.raise_on_firewall is not None:
+            raise self.raise_on_firewall
+        return [dict(row) for row in self.firewall_mangle_rows]
+
+    def active_users(self) -> list[dict[str, Any]]:
+        return list(getattr(self, "active_user_rows", []))
+
+    def traffic_flow(self) -> dict[str, Any]:
+        if self.raise_on_traffic_flow is not None:
+            raise self.raise_on_traffic_flow
+        return dict(self.traffic_flow_row)
+
+    def traffic_flow_targets(self) -> list[dict[str, Any]]:
+        if self.raise_on_traffic_flow is not None:
+            raise self.raise_on_traffic_flow
+        return [dict(row) for row in self.traffic_flow_target_rows]
+
+    def queue_trees(self) -> list[dict[str, Any]]:
+        if self.raise_on_queues is not None:
+            raise self.raise_on_queues
+        return [dict(row) for row in self.queue_tree_rows]
+
+    def users(self) -> list[dict[str, Any]]:
+        if self.raise_on_users is not None:
+            raise self.raise_on_users
+        return [dict(row) for row in self.user_rows]
+
+    def user_groups(self) -> list[dict[str, Any]]:
+        if self.raise_on_users is not None:
+            raise self.raise_on_users
+        return [dict(row) for row in self.group_rows]
+
+    def grant_write(self, username: str = "qos-ro") -> None:
+        """Donne les droits d'ecriture a ce compte, comme le ferait un
+        exploitant qui se connecte deja avec un compte complet."""
+        self.user_rows = [{"name": username, "group": "full"}]
+        self.group_rows = [{"name": "full", "policy": "read,write,api,test,policy"}]
+
+    def ping(
+        self,
+        address: str,
+        count: int = 1,
+        src_address: str | None = None,
+        interval: str | None = None,
+    ) -> list[dict[str, Any]]:
+        self.pings.append((address, count))
+        self.ping_intervals.append(interval)
+        self.ping_sources.append(src_address)
+        if self.ping_error is not None:
+            raise self.ping_error
+        if self.ping_reply is None:
+            # Abonne silencieux : RouterOS renvoie des lignes sans champ 'time'.
+            return [{"seq": str(i), "host": address} for i in range(count)]
+        return [
+            {"seq": str(i), "host": address, "time": self.ping_reply, "ttl": "64"}
+            for i in range(count)
+        ]
+
+    def close(self) -> None:
+        self.closed = True
+
+    # --- aides de scenario -------------------------------------------------
+    def add_session(
+        self,
+        login: str,
+        *,
+        address: str = "10.20.0.10",
+        uptime: str = "01:00:00",
+        rx_byte: int = 0,
+        tx_byte: int = 0,
+        interface_name: str | None = None,
+    ) -> None:
+        self.active.append(
+            {
+                ".id": f"*{len(self.active) + 1:X}",
+                "name": login,
+                "service": "pppoe",
+                "caller-id": "AA:BB:CC:DD:EE:FF",
+                "address": address,
+                "uptime": uptime,
+                "session-id": f"0x{len(self.active) + 1:08X}",
+            }
+        )
+        self.interfaces_rows.append(
+            {
+                ".id": f"*{len(self.interfaces_rows) + 100:X}",
+                "name": interface_name or f"<pppoe-{login}>",
+                "type": "pppoe-in",
+                "running": "true",
+                "rx-byte": str(rx_byte),
+                "tx-byte": str(tx_byte),
+            }
+        )
+
+    def advance(
+        self, login: str, *, rx_delta: int, tx_delta: int, uptime: str | None = None
+    ) -> None:
+        """Simule l'ecoulement du temps : les compteurs avancent."""
+        for row in self.interfaces_rows:
+            if login in str(row.get("name", "")):
+                row["rx-byte"] = str(int(row["rx-byte"]) + rx_delta)
+                row["tx-byte"] = str(int(row["tx-byte"]) + tx_delta)
+        if uptime is not None:
+            for row in self.active:
+                if row.get("name") == login:
+                    row["uptime"] = uptime
+
+    def add_interface(
+        self,
+        name: str,
+        *,
+        kind: str = "ether",
+        rx_byte: int = 0,
+        tx_byte: int = 0,
+        speed: str | None = "1Gbps",
+        running: str = "true",
+    ) -> None:
+        """Ajoute un PORT physique : c'est lui qui porte le debit d'un lien."""
+        self.interfaces_rows.append(
+            {
+                ".id": f"*{len(self.interfaces_rows) + 200:X}",
+                "name": name,
+                "type": kind,
+                "running": running,
+                "rx-byte": str(rx_byte),
+                "tx-byte": str(tx_byte),
+            }
+        )
+        if speed is not None:
+            self.ethernet_rows.append({"name": name, "speed": speed})
+
+    def advance_interface(self, name: str, *, rx_delta: int, tx_delta: int) -> None:
+        for row in self.interfaces_rows:
+            if row.get("name") == name:
+                row["rx-byte"] = str(int(row["rx-byte"]) + rx_delta)
+                row["tx-byte"] = str(int(row["tx-byte"]) + tx_delta)
+
+    def restart_session(self, login: str, *, uptime: str = "00:00:05") -> None:
+        """Simule une reconnexion PPPoE : compteurs remis a zero."""
+        for row in self.interfaces_rows:
+            if login in str(row.get("name", "")):
+                row["rx-byte"] = "0"
+                row["tx-byte"] = "0"
+        for row in self.active:
+            if row.get("name") == login:
+                row["uptime"] = uptime
+
+
+@pytest.fixture
+def router_config() -> RouterConfig:
+    return RouterConfig(
+        name="pop-test",
+        host="192.0.2.11",
+        username="qos-ro",
+        password="secret-de-lab",
+        pop_name="PoP Test",
+    )
+
+
+@pytest.fixture
+def fake_client() -> FakeRouterOsClient:
+    return FakeRouterOsClient()
+
+
+@pytest.fixture
+def collector(router_config: RouterConfig, fake_client: FakeRouterOsClient) -> MikrotikCollector:
+    return MikrotikCollector(router_config, client=fake_client)
+
+
+@pytest.fixture
+def settings(router_config: RouterConfig) -> Settings:
+    return Settings(
+        database_url="postgresql://test:test@localhost:5432/test",
+        routers=[router_config],
+        backhauls=[
+            BackhaulConfig(
+                name="bh-test",
+                pop_name="PoP Test",
+                uisp_device_id="device-1",
+                nominal_capacity_mbps=500,
+            )
+        ],
+        backhaul_provider="mock",
+        plan_provider="mock",
+        scheduler_enabled=False,
+        db_auto_migrate=False,
+        # Les tests partent d'un controleur en lecture seule et activent
+        # l'ecriture explicitement quand ils en ont besoin.
+        enforcement_enabled=False,
+        subscriber_interval_s=10,
+        min_rate_interval_s=1.0,
+    )

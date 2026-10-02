@@ -1,0 +1,1047 @@
+"""API de topologie et d'enforcement.
+
+Ces endpoints touchent au seul chemin du projet capable d'ecrire sur un
+equipement : les tests portent d'abord sur ce qui doit l'empecher.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Any
+from urllib.parse import quote
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api.deps import get_container
+from app.config import Settings
+from app.enforcement.models import MANAGED_COMMENT
+from app.main import register_routes
+from tests.conftest import FakeRouterOsClient
+from tests.test_api import build_container
+from tests.test_enforcement import FauxClientEcriture
+
+
+class FauxDepotTopologie:
+    """Depot en memoire, meme contrat que la version PostgreSQL."""
+
+    def __init__(self) -> None:
+        self.saved_nodes = 0
+        self.saved_links = 0
+        self.node_kinds: dict[str, str | None] = {}
+        self._policies: dict[tuple[str, str], dict[str, Any]] = {}
+        self.audit_rows: list[dict[str, Any]] = []
+        self.link_rows: list[dict[str, Any]] = []
+        self.node_rows: list[dict[str, Any]] = []
+        self.attachment_rows: dict[str, str] = {}
+        self.series_rows: list[dict[str, Any]] = []
+        self.flags: dict[str, bool] = {}
+        # Etat de la boucle fermee QoE (phase 4), meme contrat que la version
+        # PostgreSQL : sans resserrage enregistre, les liens sortent intacts.
+        self.qoe_states: dict[str, dict[str, Any]] = {}
+
+    async def save_snapshot(self, snapshot):
+        self.saved_nodes += len(snapshot.nodes)
+        self.saved_links += len(snapshot.links)
+        return {"nodes": len(snapshot.nodes), "links": len(snapshot.links)}
+
+    async def nodes(self):
+        return self.node_rows
+
+    async def links(self):
+        return self.link_rows
+
+    async def link(self, key):
+        for ligne in self.link_rows:
+            if ligne["key"] == key:
+                return ligne
+        return None
+
+    async def interface_series(self, *, router_name, interface, minutes=60, bucket_seconds=30):
+        return [
+            ligne
+            for ligne in self.series_rows
+            if ligne.get("router_name", router_name) == router_name
+            and ligne.get("interface", interface) == interface
+        ]
+
+    async def interface_latest(self):
+        return list(self.series_rows)
+
+    async def attachments(self):
+        return dict(self.attachment_rows)
+
+    async def qoe_link_states(self):
+        return dict(self.qoe_states)
+
+    async def qoe_trims(self):
+        return {
+            cle: float(etat["trim_factor"])
+            for cle, etat in self.qoe_states.items()
+            if float(etat["trim_factor"]) < 1.0
+        }
+
+    async def save_qoe_link_state(self, *, link_key, **kwargs):
+        self.qoe_states[link_key] = {"link_key": link_key, **kwargs}
+
+    async def set_node_kind(self, key, kind):
+        self.node_kinds[key] = kind
+
+    def _node_exists(self, key):
+        return any(n.get("key") == key for n in self.node_rows) or key in self.node_kinds
+
+    async def set_node_position(self, key, x, y):
+        self.node_positions = getattr(self, "node_positions", {})
+        self.node_positions[key] = (x, y)
+        return self._node_exists(key)
+
+    async def set_node_parent(self, key, parent_key):
+        if parent_key is not None and parent_key == key:
+            raise ValueError("un equipement ne peut pas etre son propre parent")
+        self.node_parents = getattr(self, "node_parents", {})
+        self.node_parents[key] = parent_key
+        return self._node_exists(key)
+
+    async def set_node_hidden(self, key, hidden):
+        self.node_hidden = getattr(self, "node_hidden", {})
+        self.node_hidden[key] = hidden
+        return self._node_exists(key)
+
+    async def add_manual_link(self, source_key, target_key):
+        if source_key == target_key:
+            raise ValueError("un lien ne peut pas relier un noeud a lui-meme")
+        self.manual_links = getattr(self, "manual_links", [])
+        key = f"manual:{source_key}|{target_key}"
+        self.manual_links.append(key)
+        return key
+
+    async def hide_link(self, key):
+        self.hidden_links = getattr(self, "hidden_links", set())
+        exists = any(row["key"] == key for row in self.link_rows) or key in getattr(
+            self, "manual_links", []
+        )
+        self.hidden_links.add(key)
+        return exists
+
+    async def aliases(self):
+        return dict(getattr(self, "_aliases", {}))
+
+    async def merge_nodes(self, alias_key, canonical_key):
+        if alias_key == canonical_key:
+            raise ValueError("un noeud ne peut pas etre fusionne avec lui-meme")
+        self._aliases = getattr(self, "_aliases", {})
+        canonical_key = self._aliases.get(canonical_key, canonical_key)
+        if alias_key == canonical_key:
+            raise ValueError("fusion circulaire refusee")
+        self._aliases[alias_key] = canonical_key
+        for a, c in list(self._aliases.items()):
+            if c == alias_key:
+                self._aliases[a] = canonical_key
+
+    async def unmerge_node(self, alias_key):
+        self._aliases = getattr(self, "_aliases", {})
+        return self._aliases.pop(alias_key, None) is not None
+
+    async def upsert_policy(self, **kwargs):
+        cle = (kwargs["scope"], kwargs["target_key"])
+        self._policies[cle] = {**kwargs}
+        return self._policies[cle]
+
+    async def delete_policy(self, scope, target_key):
+        return self._policies.pop((scope, target_key), None) is not None
+
+    async def set_boost(
+        self, *, scope, target_key, down_mbps, up_mbps, expires_at, reason=None, updated_by=None
+    ):
+        cle = (scope, target_key)
+        ligne = self._policies.setdefault(cle, {"scope": scope, "target_key": target_key})
+        ligne.update(
+            {
+                "boost_down_mbps": down_mbps,
+                "boost_up_mbps": up_mbps,
+                "boost_expires_at": expires_at,
+                "boost_reason": reason,
+                "updated_by": updated_by,
+            }
+        )
+        return ligne
+
+    async def clear_boost(self, scope, target_key):
+        ligne = self._policies.get((scope, target_key))
+        if not ligne or ligne.get("boost_expires_at") is None:
+            return False
+        ligne.update(
+            {
+                "boost_down_mbps": None,
+                "boost_up_mbps": None,
+                "boost_expires_at": None,
+                "boost_reason": None,
+            }
+        )
+        return True
+
+    async def active_boosts(self, scope=None):
+        from datetime import UTC, datetime
+
+        maintenant = datetime.now(tz=UTC)
+        resultat = []
+        for ligne in self._policies.values():
+            echeance = ligne.get("boost_expires_at")
+            if echeance is None or echeance <= maintenant:
+                continue
+            if scope not in (None, ligne["scope"]):
+                continue
+            resultat.append({**ligne, "seconds_left": (echeance - maintenant).total_seconds()})
+        return resultat
+
+    async def expired_boosts(self):
+        from datetime import UTC, datetime
+
+        maintenant = datetime.now(tz=UTC)
+        return [
+            ligne
+            for ligne in self._policies.values()
+            if ligne.get("boost_expires_at") and ligne["boost_expires_at"] <= maintenant
+        ]
+
+    async def purge_expired_boosts(self):
+        echus = await self.expired_boosts()
+        for ligne in echus:
+            ligne.update(
+                {
+                    "boost_down_mbps": None,
+                    "boost_up_mbps": None,
+                    "boost_expires_at": None,
+                    "boost_reason": None,
+                }
+            )
+        return len(echus)
+
+    async def get_flag(self, name):
+        return self.flags.get(name)
+
+    async def set_flag(self, name, value, *, updated_by=None, reason=None):
+        self.flags[name] = value
+
+    async def flag_detail(self, name):
+        if name not in self.flags:
+            return None
+        return {"name": name, "value": self.flags[name], "reason": None}
+
+    async def policies(self, scope=None):
+        return [p for p in self._policies.values() if scope in (None, p["scope"])]
+
+    async def policy_map(self, scope):
+        return {p["target_key"]: p for p in await self.policies(scope)}
+
+    async def record_audit(self, router_name, *, dry_run, outcomes, author=None):
+        for action, ok, detail in outcomes:
+            self.audit_rows.append(
+                {
+                    "ts": "2026-09-08T00:00:00Z",
+                    "router_name": router_name,
+                    "verb": action.verb,
+                    "path": action.path,
+                    "command": action.command,
+                    "dry_run": dry_run,
+                    "ok": ok,
+                    "detail": detail,
+                    "author": author,
+                    "changes": {k: list(v) for k, v in action.changes.items()}
+                    if action.changes
+                    else None,
+                }
+            )
+        return len(outcomes)
+
+    async def audit(self, *, limit=100):
+        return self.audit_rows[-limit:]
+
+
+@pytest.fixture
+def topo() -> FauxDepotTopologie:
+    depot = FauxDepotTopologie()
+    depot.link_rows = [
+        {
+            "key": "router:pop-test|ether2|mac:DC:9F:DB:11:22:33",
+            "source_key": "router:pop-test",
+            "target_key": "mac:DC:9F:DB:11:22:33",
+            "source_name": "PoP Test",
+            "target_name": "bh-test",
+            "target_kind": "radio",
+            "kind": "ethernet",
+            "interface": "ether2",
+            "capacity_mbps": 1000.0,
+            "discovered_by": "pop-test",
+            "max_down_mbps": None,
+            "max_up_mbps": None,
+            # Debit mesure du port qui porte ce lien.
+            "rx_bps": 12_000_000.0,
+            "tx_bps": 340_000_000.0,
+            "running": True,
+            "port_capacity_mbps": 1000.0,
+            "measured_at": datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+            "measure_fresh": True,
+            "interface_links": 1,
+        }
+    ]
+    depot.series_rows = [
+        {
+            "bucket": datetime(2026, 1, 1, 11, 59, tzinfo=UTC),
+            "rx_bps": 11_000_000.0,
+            "tx_bps": 300_000_000.0,
+            "rx_peak_bps": 12_000_000.0,
+            "tx_peak_bps": 340_000_000.0,
+            "capacity_mbps": 1000.0,
+        }
+    ]
+    return depot
+
+
+@pytest.fixture
+def routeur() -> FakeRouterOsClient:
+    client = FakeRouterOsClient()
+    client.add_session("dupont", rx_byte=0, tx_byte=0)
+    client.neighbor_rows = [
+        {
+            "interface": "ether2",
+            "identity": "bh-test",
+            "mac-address": "DC:9F:DB:11:22:33",
+            "platform": "Ubiquiti",
+        }
+    ]
+    client.ethernet_rows = [{"name": "ether2", "speed": "1Gbps"}]
+    return client
+
+
+def make_client(settings, topo, routeur, *, ecriture=None) -> TestClient:
+    container = build_container(settings, topology_repo=topo, client=routeur)
+    if ecriture is not None:
+        container.shaping._write_client_factory = lambda config: ecriture
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: container
+    tc = TestClient(app)
+    tc.container = container  # type: ignore[attr-defined]
+    return tc
+
+
+@pytest.fixture
+def client(settings: Settings, topo, routeur) -> TestClient:
+    return make_client(settings, topo, routeur)
+
+
+# -------------------------------------------------------- debit d'un lien
+CLE_LIEN = "router:pop-test|ether2|mac:DC:9F:DB:11:22:33"
+
+
+def test_le_debit_d_un_lien_est_expose_avec_son_historique(client: TestClient) -> None:
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/throughput").json()
+
+    assert body["link"]["tx_bps"] == 340_000_000.0
+    assert body["link"]["rx_bps"] == 12_000_000.0
+    assert len(body["series"]) == 1
+    assert body["measurement"]["source"] == "port"
+
+
+def test_un_port_partage_est_signale_comme_tel(client: TestClient, topo) -> None:
+    """Deux voisins sur le meme port : le chiffre est celui du PORT. Le
+    presenter comme le debit d'un seul voisin serait faux."""
+    topo.link_rows[0]["interface_links"] = 2
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/throughput").json()
+
+    assert body["measurement"]["source"] == "port-partage"
+    assert "2 neighbours" in body["measurement"]["note"]
+
+
+def test_un_lien_sans_port_local_le_dit(client: TestClient, topo) -> None:
+    """Une adjacence declaree par UISP n'a pas de compteur d'octets cote
+    routeur : on l'annonce au lieu d'afficher zero."""
+    topo.link_rows[0]["interface"] = None
+    topo.link_rows[0]["interface_links"] = 0
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/throughput").json()
+
+    assert body["measurement"]["source"] == "aucune"
+    assert body["series"] == []
+
+
+def test_lien_inconnu_renvoie_404(client: TestClient) -> None:
+    reponse = client.get("/api/v1/topology/links/inexistant/throughput")
+    assert reponse.status_code == 404
+
+
+def test_mesure_instantanee_interroge_le_routeur(client: TestClient, routeur) -> None:
+    routeur.monitor_rates["ether2"] = (9_000_000, 250_000_000)
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/live").json()
+
+    assert body["source"] == "monitor-traffic"
+    assert body["tx_bps"] == 250_000_000
+    assert body["rx_bps"] == 9_000_000
+
+
+def test_mesure_instantanee_impossible_retombe_sur_les_compteurs(
+    client: TestClient, routeur
+) -> None:
+    """Version de RouterOS, droits, port virtuel : la commande peut echouer.
+    L'operateur voulait un chiffre, pas une erreur -- on lui rend le dernier
+    connu en disant pourquoi."""
+    routeur.raise_on_monitor = RuntimeError("no such command")
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/live").json()
+
+    assert body["source"] == "compteurs"
+    assert body["tx_bps"] == 340_000_000.0
+    assert "no such command" in body["detail"]
+
+
+def test_mesure_instantanee_sans_port_local(client: TestClient, topo) -> None:
+    topo.link_rows[0]["interface"] = None
+
+    body = client.get("/api/v1/topology/links/" + quote(CLE_LIEN, safe="") + "/live").json()
+
+    assert body["source"] == "aucune"
+    assert body["rx_bps"] is None
+
+
+# --------------------------------------------------------------- topologie
+def test_topologie_documente_ses_sources(client: TestClient) -> None:
+    """L'operateur doit savoir d'ou vient chaque arete du graphe."""
+    body = client.get("/api/v1/topology").json()
+    assert "/ip/neighbor" in body["sources"]["neighbors"]
+    assert "caller-id" in body["sources"]["pppoe"]
+    assert body["counts"]["links"] == 1
+
+
+def test_decouverte(client: TestClient, topo: FauxDepotTopologie) -> None:
+    body = client.post("/api/v1/topology/discover").json()
+    assert body["nodes"] >= 2  # le PoP et son voisin radio
+    assert body["links"] == 1
+    assert topo.saved_links == 1
+
+
+def test_correction_manuelle_du_role(client: TestClient, topo: FauxDepotTopologie) -> None:
+    """La classification automatique est une heuristique : l'operateur tranche."""
+    reponse = client.patch("/api/v1/topology/nodes/mac:AA:BB?kind=sector")
+    assert reponse.status_code == 200
+    assert topo.node_kinds["mac:AA:BB"] == "sector"
+
+
+def test_deplacer_une_case(client: TestClient, topo: FauxDepotTopologie) -> None:
+    """Ranger une case persiste sa position, sans toucher aucun routeur."""
+    cle = "router:pop-test"
+    topo.node_rows = [{"key": cle, "name": "PoP Test", "kind": "pop"}]
+    reponse = client.patch(
+        "/api/v1/topology/nodes/" + quote(cle, safe="") + "/layout",
+        json={"x": 120.5, "y": 40.0},
+    )
+    assert reponse.status_code == 200
+    assert topo.node_positions[cle] == (120.5, 40.0)
+
+
+def test_deplacer_une_case_inconnue_est_404(client: TestClient) -> None:
+    reponse = client.patch("/api/v1/topology/nodes/mac:INCONNU/layout", json={"x": 1, "y": 2})
+    assert reponse.status_code == 404
+
+
+def test_reparenter_une_case(client: TestClient, topo: FauxDepotTopologie) -> None:
+    """Glisser une case sous une autre force le parent dans l'arbre affiche."""
+    topo.node_rows = [
+        {"key": "mac:DC:9F:DB:11:22:33", "name": "bh-test", "kind": "radio"},
+        {"key": "router:pop-test", "name": "PoP Test", "kind": "pop"},
+    ]
+    reponse = client.patch(
+        "/api/v1/topology/nodes/" + quote("mac:DC:9F:DB:11:22:33", safe="") + "/parent",
+        json={"parent_key": "router:pop-test"},
+    )
+    assert reponse.status_code == 200
+    assert topo.node_parents["mac:DC:9F:DB:11:22:33"] == "router:pop-test"
+
+
+def test_une_case_ne_peut_pas_etre_son_propre_parent(
+    client: TestClient, topo: FauxDepotTopologie
+) -> None:
+    topo.node_rows = [{"key": "router:pop-test", "name": "PoP Test", "kind": "pop"}]
+    reponse = client.patch(
+        "/api/v1/topology/nodes/" + quote("router:pop-test", safe="") + "/parent",
+        json={"parent_key": "router:pop-test"},
+    )
+    assert reponse.status_code == 400
+
+
+def test_creer_un_lien_a_la_main(client: TestClient, topo: FauxDepotTopologie) -> None:
+    """L'operateur peut ajouter une adjacence que la decouverte a manquee."""
+    reponse = client.post(
+        "/api/v1/topology/links",
+        json={"source_key": "router:pop-test", "target_key": "mac:DC:9F:DB:11:22:33"},
+    )
+    assert reponse.status_code == 200
+    assert reponse.json()["key"] == "manual:router:pop-test|mac:DC:9F:DB:11:22:33"
+    assert "manual:router:pop-test|mac:DC:9F:DB:11:22:33" in topo.manual_links
+
+
+def test_un_lien_ne_relie_pas_un_noeud_a_lui_meme(client: TestClient) -> None:
+    reponse = client.post(
+        "/api/v1/topology/links",
+        json={"source_key": "router:pop-test", "target_key": "router:pop-test"},
+    )
+    assert reponse.status_code == 400
+
+
+def test_retirer_un_lien(client: TestClient, topo: FauxDepotTopologie) -> None:
+    from urllib.parse import quote
+
+    reponse = client.delete("/api/v1/topology/links/" + quote(CLE_LIEN, safe=""))
+    assert reponse.status_code == 200
+    assert CLE_LIEN in topo.hidden_links
+
+
+def test_retirer_un_lien_inconnu_est_404(client: TestClient) -> None:
+    assert client.delete("/api/v1/topology/links/inexistant").status_code == 404
+
+
+def test_fusion_manuelle_replie_une_case_sur_une_autre(
+    client: TestClient, topo: FauxDepotTopologie
+) -> None:
+    """Quand l'automatique n'a pas pu prouver l'identite, l'operateur tranche :
+    les deux cases n'en font plus qu'une dans l'arbre."""
+    topo.node_rows = [
+        {"key": "mac:AA:00:00:00:00:06", "name": "MikroTik", "kind": "pop"},
+        {"key": "router:pop-altair", "name": "PoP Altair", "kind": "pop"},
+    ]
+    reponse = client.post(
+        "/api/v1/topology/merge",
+        json={"alias_key": "mac:AA:00:00:00:00:06", "canonical_key": "router:pop-altair"},
+    )
+    assert reponse.status_code == 200
+    assert topo._aliases["mac:AA:00:00:00:00:06"] == "router:pop-altair"
+
+    # /topology ne montre plus qu'UNE case, marquee comme fusion manuelle.
+    body = client.get("/api/v1/topology").json()
+    cles = [n["key"] for n in body["nodes"]]
+    assert "mac:AA:00:00:00:00:06" not in cles
+    canon = next(n for n in body["nodes"] if n["key"] == "router:pop-altair")
+    assert canon["manual_aliases"] == ["mac:AA:00:00:00:00:06"]
+
+
+def test_fusion_manuelle_sur_soi_meme_refusee(client: TestClient) -> None:
+    reponse = client.post(
+        "/api/v1/topology/merge", json={"alias_key": "router:x", "canonical_key": "router:x"}
+    )
+    assert reponse.status_code == 400
+
+
+def test_annuler_une_fusion_manuelle(client: TestClient, topo: FauxDepotTopologie) -> None:
+    topo._aliases = {"mac:AA:00:00:00:00:06": "router:pop-altair"}
+    from urllib.parse import quote
+
+    reponse = client.delete("/api/v1/topology/merge/" + quote("mac:AA:00:00:00:00:06", safe=""))
+    assert reponse.status_code == 200
+    assert "mac:AA:00:00:00:00:06" not in topo._aliases
+
+
+def test_annuler_une_fusion_inconnue_est_404(client: TestClient) -> None:
+    assert client.delete("/api/v1/topology/merge/inexistant").status_code == 404
+
+
+def test_reparenter_reinitialise_avec_null(client: TestClient, topo: FauxDepotTopologie) -> None:
+    """parent_key null retablit l'orientation automatique."""
+    topo.node_rows = [{"key": "mac:DC:9F:DB:11:22:33", "name": "bh-test", "kind": "radio"}]
+    reponse = client.patch(
+        "/api/v1/topology/nodes/" + quote("mac:DC:9F:DB:11:22:33", safe="") + "/parent",
+        json={"parent_key": None},
+    )
+    assert reponse.status_code == 200
+    assert topo.node_parents["mac:DC:9F:DB:11:22:33"] is None
+
+
+# ------------------------------------------------- analyse de l'existant
+def test_analyse_distingue_les_files_tierces(
+    settings: Settings, topo, routeur: FakeRouterOsClient
+) -> None:
+    routeur.simple_queue_rows = [
+        {".id": "*1", "name": "freeqos-dupont", "comment": MANAGED_COMMENT},
+        {".id": "*2", "name": "queue-radius", "comment": ""},
+    ]
+    body = make_client(settings, topo, routeur).get("/api/v1/shaping/state").json()
+
+    assert body[0]["counts"]["managed"] == 1
+    assert body[0]["counts"]["foreign"] == 1
+
+
+# ---------------------------------------------------------------- politique
+def test_fixer_un_debit_rend_compte_de_ce_qui_a_ete_ecrit(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    """Fixer un plafond le POSE, et la reponse dit ce qui a ete fait.
+
+    DEMANDE EXPLICITE : appliquer ecrit quoi qu'il arrive, meme interrupteur
+    coupe (il ne retient plus que les boucles automatiques).
+    """
+    settings.enforcement_enabled = False
+    settings.routers[0].rw_username = "qos-rw"
+    ecriture = FauxClientEcriture()
+    client = make_client(settings, topo, routeur, ecriture=ecriture)
+    reponse = client.put(
+        "/api/v1/shaping/policies",
+        json={
+            "scope": "link",
+            "target_key": "router:pop-test|ether2|mac:DC:9F:DB:11:22:33",
+            "max_down_mbps": 300,
+            "max_up_mbps": 100,
+        },
+    )
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["policy"]["max_down_mbps"] == 300
+    assert corps["enforcement"]["state"] == "file-posee"
+    assert ecriture.executed
+
+
+def test_fixer_un_debit_sans_poser_reste_possible(client: TestClient) -> None:
+    """``apply_now=false`` garde l'ancien comportement : enregistrer, rien de plus."""
+    corps = client.put(
+        "/api/v1/shaping/policies?apply_now=false",
+        json={"scope": "subscriber", "target_key": "dupont", "max_down_mbps": 12},
+    ).json()
+
+    assert corps["policy"]["max_down_mbps"] == 12
+    assert corps["enforcement"] is None
+
+
+def test_validation_des_debits(client: TestClient) -> None:
+    mauvais = {"scope": "link", "target_key": "x", "max_down_mbps": -5}
+    assert client.put("/api/v1/shaping/policies", json=mauvais).status_code == 422
+    assert (
+        client.put(
+            "/api/v1/shaping/policies", json={"scope": "inconnu", "target_key": "x"}
+        ).status_code
+        == 422
+    )
+
+
+def test_retrait_d_une_surcharge(client: TestClient) -> None:
+    client.put(
+        "/api/v1/shaping/policies",
+        json={"scope": "subscriber", "target_key": "dupont", "max_down_mbps": 50},
+    )
+    assert client.delete("/api/v1/shaping/policies/subscriber/dupont").status_code == 200
+    assert client.delete("/api/v1/shaping/policies/subscriber/dupont").status_code == 404
+
+
+# --------------------------------------------------------------------- plan
+def test_le_plan_montre_les_commandes_exactes(client: TestClient) -> None:
+    body = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
+
+    assert body["router"] == "pop-test"
+    commandes = [a["command"] for a in body["actions"]]
+    assert any(c.startswith("/queue/type/add") and "kind=cake" in c for c in commandes)
+    assert any(c.startswith("/queue/simple/add") for c in commandes)
+    # Chaque action porte sa raison, pas seulement sa commande.
+    assert all(a["reason"] for a in body["actions"])
+
+
+def test_la_surcharge_se_retrouve_dans_le_plan(client: TestClient) -> None:
+    """Le lien est a 1 Gbps ; on impose 300 Mbps, le plan doit le refleter."""
+    client.put(
+        "/api/v1/shaping/policies",
+        json={
+            "scope": "link",
+            "target_key": "router:pop-test|ether2|mac:DC:9F:DB:11:22:33",
+            "max_down_mbps": 300,
+            "max_up_mbps": 300,
+        },
+    )
+    body = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
+
+    parents = [a for a in body["actions"] if "parent-" in (a["name"] or "")]
+    assert parents, "le parent devrait etre planifie"
+    # 300 Mbps exactement : une surcharge n'est pas re-multipliee par le facteur.
+    assert "300000000/300000000" in parents[0]["command"]
+
+
+def test_plan_sur_routeur_inconnu(client: TestClient) -> None:
+    assert client.post("/api/v1/shaping/plan", json={"router": "absent"}).status_code == 404
+
+
+# -------------------------------------------------------- VERROUS d'ecriture
+def test_application_reelle_exige_une_confirmation(client: TestClient) -> None:
+    reponse = client.post("/api/v1/shaping/apply", json={"router": "pop-test", "dry_run": False})
+    assert reponse.status_code == 400
+    assert "confirm" in reponse.json()["detail"]
+
+
+def test_application_reelle_refusee_si_enforcement_desactive(client: TestClient) -> None:
+    """Le drapeau global est le dernier rempart."""
+    reponse = client.post(
+        "/api/v1/shaping/apply",
+        json={"router": "pop-test", "dry_run": False, "confirm": True},
+    )
+    assert reponse.status_code == 409
+    assert "ENFORCEMENT_ENABLED" in reponse.json()["detail"]
+
+
+def test_dry_run_par_defaut(client: TestClient, topo: FauxDepotTopologie) -> None:
+    body = client.post("/api/v1/shaping/apply", json={"router": "pop-test"}).json()
+
+    assert body["result"]["dry_run"] is True
+    assert body["result"]["ok"] is True
+    # Meme simule, tout est journalise.
+    assert topo.audit_rows and all(r["dry_run"] for r in topo.audit_rows)
+
+
+def test_application_reelle_journalisee(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    settings.enforcement_enabled = True
+    settings.routers[0].rw_username = "qos-rw"
+    ecriture = FauxClientEcriture()
+    client = make_client(settings, topo, routeur, ecriture=ecriture)
+
+    body = client.post(
+        "/api/v1/shaping/apply",
+        json={"router": "pop-test", "dry_run": False, "confirm": True},
+    ).json()
+
+    assert body["result"]["ok"] is True
+    assert body["result"]["applied"] > 0
+    assert len(ecriture.executed) == body["result"]["applied"]
+    # Le journal garde la trace exacte de ce qui a ete envoye.
+    assert topo.audit_rows and not topo.audit_rows[0]["dry_run"]
+    assert topo.audit_rows[0]["command"].startswith("/queue/")
+
+
+def test_journal_expose(client: TestClient) -> None:
+    client.post("/api/v1/shaping/apply", json={"router": "pop-test"})
+    rows = client.get("/api/v1/shaping/audit").json()
+    assert rows and "command" in rows[0]
+
+
+# ------------------------------------- rattachement au BON backhaul
+def test_sans_rattachement_l_abonne_n_a_pas_de_parent(client: TestClient) -> None:
+    """Deviner serait pire que ne rien faire : rattacher un abonne au mauvais
+    backhaul fausserait toute la gestion de contention."""
+    body = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
+
+    files_abonnes = [
+        a
+        for a in body["actions"]
+        if a["path"] == "/queue/simple" and "parent-" not in (a["name"] or "")
+    ]
+    assert files_abonnes
+    assert all("parent=" not in a["command"] for a in files_abonnes)
+    # Et le plan le dit explicitement.
+    assert body["unparented_subscribers"] == len(files_abonnes)
+    assert "caller-id" in body["notes"][0]
+
+
+def test_avec_rattachement_le_parent_est_le_bon_lien(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    """La jointure caller-id / UISP donne le secteur, donc le lien traverse."""
+    topo.attachment_rows = {"dupont": "mac:DC:9F:DB:11:22:33"}
+    client = make_client(settings, topo, routeur)
+
+    body = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
+
+    file_abonne = next(
+        a for a in body["actions"] if a["path"] == "/queue/simple" and a["name"] == "freeqos-dupont"
+    )
+    assert "parent=freeqos-parent-bh-test" in file_abonne["command"]
+    assert body["unparented_subscribers"] == 0
+
+
+def test_rattachement_vers_un_lien_inconnu_reste_sans_parent(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    """Un secteur connu d'UISP mais absent des liens de ce routeur ne doit pas
+    produire un parent inexistant : RouterOS rejetterait la commande."""
+    topo.attachment_rows = {"dupont": "mac:ZZ:ZZ:ZZ:ZZ:ZZ:ZZ"}
+    client = make_client(settings, topo, routeur)
+
+    body = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
+
+    file_abonne = next(a for a in body["actions"] if a["name"] == "freeqos-dupont")
+    assert "parent=" not in file_abonne["command"]
+
+
+# ==========================================================================
+# Bascule de l'enforcement depuis l'interface
+# ==========================================================================
+
+
+def test_etat_initial_lecture_seule(client: TestClient) -> None:
+    body = client.get("/api/v1/shaping/enforcement").json()
+    assert body["enabled"] is False
+    assert body["locked"] is False
+
+
+def test_activation_exige_une_confirmation(client: TestClient) -> None:
+    """Autoriser l'ecriture sur des routeurs de production merite un geste."""
+    reponse = client.put("/api/v1/shaping/enforcement", json={"enabled": True})
+
+    assert reponse.status_code == 400
+    assert "confirm" in reponse.json()["detail"]
+    assert client.container.shaping.enforcement_enabled is False  # type: ignore[attr-defined]
+
+
+def test_activation_leve_le_verrou_global_mais_pas_les_autres(client: TestClient) -> None:
+    """Les verrous sont independants : activer l'enforcement ne dispense pas
+    d'avoir un compte d'ecriture sur le routeur."""
+    avant = client.post(
+        "/api/v1/shaping/apply",
+        json={"router": "pop-test", "dry_run": False, "confirm": True},
+    )
+    assert avant.status_code == 409
+    assert "read-only" in avant.json()["detail"]
+
+    client.put(
+        "/api/v1/shaping/enforcement",
+        json={"enabled": True, "confirm": True, "reason": "bascule de nuit"},
+    )
+    assert client.container.shaping.enforcement_enabled is True  # type: ignore[attr-defined]
+
+    apres = client.post(
+        "/api/v1/shaping/apply",
+        json={"router": "pop-test", "dry_run": False, "confirm": True},
+    )
+    # Le verrou global est leve : l'ecriture est tentee avec le compte
+    # configure, sans exiger de declaration rw_*.
+    assert apres.status_code == 200
+
+
+def test_coupure_immediate_sans_confirmation(client: TestClient) -> None:
+    """Revenir en lecture seule ne doit jamais demander de ceremonie."""
+    client.put("/api/v1/shaping/enforcement", json={"enabled": True, "confirm": True})
+
+    reponse = client.put("/api/v1/shaping/enforcement", json={"enabled": False})
+
+    assert reponse.status_code == 200
+    assert client.container.shaping.enforcement_enabled is False  # type: ignore[attr-defined]
+
+
+def test_bascule_persistee(client: TestClient, topo: FauxDepotTopologie) -> None:
+    from app.services.shaping import FLAG_ENFORCEMENT
+
+    client.put(
+        "/api/v1/shaping/enforcement",
+        json={"enabled": True, "confirm": True, "reason": "essai"},
+    )
+    assert topo.flags[FLAG_ENFORCEMENT] is True
+
+
+def test_verrou_interdit_la_bascule(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    """Un exploitant qui tient a la friction du redemarrage doit pouvoir la garder."""
+    settings.enforcement_locked = True
+    client = make_client(settings, topo, routeur)
+
+    reponse = client.put("/api/v1/shaping/enforcement", json={"enabled": True, "confirm": True})
+
+    assert reponse.status_code == 409
+    assert "ENFORCEMENT_LOCKED" in reponse.json()["detail"]
+    assert client.container.shaping.enforcement_enabled is False  # type: ignore[attr-defined]
+
+
+def test_la_base_prime_sur_l_environnement(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    """Une bascule faite depuis l'interface ne doit pas etre perdue au redemarrage."""
+    from app.services.shaping import FLAG_ENFORCEMENT
+
+    topo.flags[FLAG_ENFORCEMENT] = True
+    settings.enforcement_enabled = False
+    client = make_client(settings, topo, routeur)
+
+    import asyncio
+
+    asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        client.container.shaping.load_flags()  # type: ignore[attr-defined]
+    )
+    assert client.container.shaping.enforcement_enabled is True  # type: ignore[attr-defined]
+
+
+# ==========================================================================
+# Boost
+# ==========================================================================
+
+
+def test_boost_par_multiplicateur(client: TestClient, topo: FauxDepotTopologie) -> None:
+    reponse = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 60, "multiplier": 3},
+    )
+
+    assert reponse.status_code == 200
+    boost = reponse.json()["boost"]
+    # Le plan de reference est 100/20 Mbps.
+    assert boost["down_mbps"] == 300
+    assert boost["up_mbps"] == 60
+    assert boost["duration_minutes"] == 60
+
+
+def test_boost_par_debit_explicite(client: TestClient) -> None:
+    body = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 15, "down_mbps": 800},
+    ).json()
+
+    assert body["boost"]["down_mbps"] == 800
+    assert body["boost"]["up_mbps"] is None
+
+
+def test_boost_sans_debit_refuse(client: TestClient) -> None:
+    reponse = client.post(
+        "/api/v1/shaping/boosts", json={"login": "dupont", "duration_minutes": 60}
+    )
+    assert reponse.status_code == 400
+
+
+def test_boost_sur_abonne_inconnu(client: TestClient) -> None:
+    reponse = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "inconnu", "duration_minutes": 60, "multiplier": 2},
+    )
+    assert reponse.status_code == 404
+
+
+def test_duree_bornee(client: TestClient) -> None:
+    """Un boost d'un an ne serait plus un boost."""
+    trop_long = {"login": "dupont", "duration_minutes": 60 * 24 * 400, "multiplier": 2}
+    assert client.post("/api/v1/shaping/boosts", json=trop_long).status_code == 422
+    nul = {"login": "dupont", "duration_minutes": 0, "multiplier": 2}
+    assert client.post("/api/v1/shaping/boosts", json=nul).status_code == 422
+
+
+def test_boost_pose_meme_interrupteur_coupe(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    """Poser un boost est un geste explicite : il ecrit quoi qu'il arrive."""
+    settings.enforcement_enabled = False
+    settings.routers[0].rw_username = "qos-rw"
+    ecriture = FauxClientEcriture()
+    client = make_client(settings, topo, routeur, ecriture=ecriture)
+    body = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 30, "multiplier": 2},
+    ).json()
+
+    assert body["boost"]["down_mbps"] == 200
+    assert body["applied"]["state"] == "file-posee"
+    assert body["applied"]["applied"] >= 1
+
+
+def test_boost_pousse_quand_l_ecriture_est_permise(
+    settings: Settings, topo: FauxDepotTopologie, routeur: FakeRouterOsClient
+) -> None:
+    settings.enforcement_enabled = True
+    settings.routers[0].rw_username = "qos-rw"
+    ecriture = FauxClientEcriture()
+    client = make_client(settings, topo, routeur, ecriture=ecriture)
+
+    body = client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 30, "multiplier": 4},
+    ).json()
+
+    assert body["applied"]["state"] == "file-posee"
+    assert body["applied"]["applied"] >= 1
+    # La commande poussee porte bien le debit boostee : 100 x 4 = 400 Mbps.
+    commandes = [a.command for a in ecriture.executed]
+    assert any("400000000" in c for c in commandes)
+
+
+def test_boost_visible_dans_la_liste(client: TestClient) -> None:
+    client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 45, "multiplier": 2, "reason": "geste co"},
+    )
+    boosts = client.get("/api/v1/shaping/boosts").json()
+
+    assert len(boosts) == 1
+    assert boosts[0]["target_key"] == "dupont"
+    assert boosts[0]["boost_reason"] == "geste co"
+
+
+def test_retrait_anticipe(client: TestClient) -> None:
+    client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 60, "multiplier": 2},
+    )
+
+    assert client.delete("/api/v1/shaping/boosts/dupont").status_code == 200
+    assert client.get("/api/v1/shaping/boosts").json() == []
+    # Retirer deux fois n'est pas une erreur silencieuse.
+    assert client.delete("/api/v1/shaping/boosts/dupont").status_code == 404
+
+
+def test_le_boost_apparait_dans_le_plan(client: TestClient) -> None:
+    client.post(
+        "/api/v1/shaping/boosts",
+        json={"login": "dupont", "duration_minutes": 60, "down_mbps": 750},
+    )
+    plan = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
+
+    file_abonne = next(a for a in plan["actions"] if a["name"] == "freeqos-dupont")
+    assert "750000000" in file_abonne["command"]
+
+
+# ------------------------------------------- boucle fermee QoE (phase 4)
+def test_l_etat_de_la_boucle_qoe_est_lisible(client: TestClient, topo) -> None:
+    """Une boucle qui resserre sans qu'on puisse voir ce qu'elle a decide, ni
+    quand, est une boucle que personne ne laissera active."""
+    topo.qoe_states = {
+        CLE_LIEN: {
+            "link_key": CLE_LIEN,
+            "sector_key": "mac:DC:9F:DB:11:22:33",
+            "trim_factor": 0.8,
+            "healthy_cycles": 0,
+            "scored_count": 5,
+            "degraded_count": 3,
+            "worst_score": 14.0,
+            "last_action": "tighten",
+            "last_reason": "3/5 abonne(s) sous 55",
+        }
+    }
+
+    reponse = client.get("/api/v1/shaping/qoe")
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    # Les seuils sont exposes avec l'etat : sans eux, "0.8" ne veut rien dire.
+    assert corps["score_threshold"] == 55.0
+    assert corps["trim_floor"] == 0.5
+    assert corps["sectors"][0]["trim_factor"] == 0.8
+    assert corps["sectors"][0]["last_action"] == "tighten"
+
+
+def test_un_cycle_de_boucle_qoe_se_declenche_a_la_demande(client: TestClient, topo) -> None:
+    """Un cycle hors cadence sur un parc sain : on evalue, on ne touche a rien."""
+    topo.attachment_rows = {"dupont": "mac:DC:9F:DB:11:22:33"}
+
+    reponse = client.post("/api/v1/shaping/qoe/run")
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["scored"] == 1
+    assert corps["sectors"][0]["action"] == "hold"
+    assert corps["sectors"][0]["trim_after"] == 1.0
+    assert corps["routers"] == [] and corps["plans"] == []
+
+
+def test_un_abonne_sans_secteur_ne_declenche_aucune_decision(client: TestClient) -> None:
+    """Note connue mais rattachement inconnu : on ne devine pas un secteur, donc
+    l'abonne ne pese sur aucune decision."""
+    reponse = client.post("/api/v1/shaping/qoe/run")
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["scored"] == 1
+    assert corps["sectors"] == []
+    assert corps["routers"] == []

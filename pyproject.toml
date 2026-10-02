@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "freeqos"
+version = "0.1.0"
+description = "Controleur QoS/QoE souverain hors-bande pour WISP (MikroTik RouterOS 7 + Ubiquiti UISP)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.3",
+    "asyncpg>=0.29",
+    "httpx>=0.27",
+    "librouteros>=3.2",
+    "jinja2>=3.1",
+    "pyyaml>=6.0",
+    "cryptography>=42.0",
+]
+
+[project.optional-dependencies]
+snmp = ["pysnmp>=6.2"]
+# Geolocalisation SANS APPEL SORTANT : lit une base MaxMind locale (.mmdb)
+# designee par IPFINDER_GEOIP_DB. C'est la seule forme de geolocalisation qui
+# n'envoie a personne les adresses que vos clients atteignent.
+geoip = ["geoip2>=4.8"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "anyio>=4.0",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+    "pre-commit>=3.7",
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.db" = ["*.sql"]
+"app.web" = ["templates/*.html", "static/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4"]
+ignore = ["B008"]
+
+# mypy --strict sur app/ : c'est exactement le controle qui aurait attrape le bug
+# de cablage P0-3 (parametre annote Any). Les bibliotheques tierces sans stubs
+# (RouterOS, asyncpg) sont ignorees a l'import ; tout le reste est verifie.
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["app"]
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# geoip2 est un extra facultatif : son absence ne doit pas faire echouer le
+# typage, exactement comme les bibliotheques sans stubs.
+module = ["librouteros.*", "asyncpg", "asyncpg.*", "geoip2.*"]
+ignore_missing_imports = true

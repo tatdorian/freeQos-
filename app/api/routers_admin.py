@@ -1,0 +1,392 @@
+"""Gestion des PoPs depuis l'interface.
+
+Ces endpoints ecrivent en base, jamais sur un equipement : ils declarent quels
+routeurs INTERROGER. Le controleur reste hors-bande et en lecture seule vis-a-vis
+du reseau.
+
+Le mot de passe entre par ces routes et n'en ressort jamais : il est chiffre a
+l'ecriture et aucune reponse ne le contient, meme chiffre.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from typing import Annotated, Any, Literal
+
+from fastapi import APIRouter, HTTPException, Path, status
+from pydantic import BaseModel, Field, SecretStr
+
+from app.api.deps import ContainerDep
+from app.config import RouterConfig, RouterRole
+from app.db.routers_repo import DuplicateRouterError, RouterNotFoundError, RoutersRepository
+from app.services import provisioning
+from app.services.crypto import SecretUnavailableError
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["pops"])
+
+
+class RouterInput(BaseModel):
+    name: str = Field(min_length=1, max_length=64, description="Unique identifier of the PoP")
+    host: str = Field(min_length=1, max_length=255, description="Management IP or hostname")
+    password: SecretStr = Field(min_length=1)
+    port: int = Field(default=8728, ge=1, le=65535)
+    username: str = Field(default="qos-ro", min_length=1, max_length=64)
+    role: Literal["pop", "core", "gateway"] = "pop"
+    pop_name: str | None = Field(default=None, max_length=128)
+    enabled: bool = True
+    use_ssl: bool = False
+    # Posture TLS quand use_ssl est vrai (defaut : strict). "fingerprint" exige
+    # tls_fingerprint (SHA-256). "insecure" desactive la verification, un choix
+    # assume et visible.
+    tls_verify: Literal["strict", "fingerprint", "insecure"] = "strict"
+    tls_fingerprint: str | None = Field(default=None, max_length=128)
+    # Identite du routeur dans la topologie. Vide = deduite (adresse /32 sur une
+    # interface 'lo*', ou router-id de l'export) puis affichee pour correction.
+    loopback: str | None = Field(default=None, max_length=64)
+    timeout_s: float = Field(default=5.0, ge=0.5, le=60.0)
+    pppoe_interface_pattern: str = "<pppoe-{login}>"
+
+
+class RouterUpdate(BaseModel):
+    """Mise a jour partielle : omettre le mot de passe le laisse inchange."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    host: str | None = Field(default=None, min_length=1, max_length=255)
+    password: SecretStr | None = None
+    port: int | None = Field(default=None, ge=1, le=65535)
+    username: str | None = Field(default=None, min_length=1, max_length=64)
+    role: Literal["pop", "core", "gateway"] | None = None
+    pop_name: str | None = None
+    enabled: bool | None = None
+    use_ssl: bool | None = None
+    tls_verify: Literal["strict", "fingerprint", "insecure"] | None = None
+    tls_fingerprint: str | None = Field(default=None, max_length=128)
+    loopback: str | None = Field(default=None, max_length=64)
+    timeout_s: float | None = Field(default=None, ge=0.5, le=60.0)
+    pppoe_interface_pattern: str | None = None
+
+
+def _require_repository(container: ContainerDep) -> RoutersRepository:
+    if container.routers_repo is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Dynamic inventory unavailable (database not initialised)",
+        )
+    return container.routers_repo
+
+
+def _guard_secrets(container: ContainerDep) -> None:
+    """Refuse d'enregistrer un secret s'il ne peut pas etre chiffre.
+
+    Mieux vaut un refus explicite qu'un mot de passe de routeur ecrit en clair
+    dans PostgreSQL.
+    """
+    if not container.secrets.available:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=container.secrets.unavailable_reason,
+        )
+
+
+@router.get("/pops/health", summary="Health of the collected routers (CPU, memory, uptime)")
+async def routers_health(container: ContainerDep) -> dict[str, Any]:
+    """Ce que les routeurs eux-memes disent de leur etat, en direct.
+
+    Un routeur a 95 % de CPU n'appliquera pas les files qu'on lui envoie, et un
+    routeur qui vient de redemarrer a perdu les siennes -- deux causes de "mon
+    abonne n'est pas bride" qui n'ont rien a voir avec le controleur et qui ne
+    se voyaient nulle part.
+
+    Une commande de lecture par routeur. Un routeur muet est rendu avec son
+    erreur plutot qu'omis : une liste courte qui ne dit pas qui manque est
+    exactement ce qu'on cherche a eviter.
+    """
+    collecteurs = container.registry.collectors
+    resultats = await asyncio.gather(
+        *(collecteur.health() for collecteur in collecteurs), return_exceptions=True
+    )
+    routeurs: list[dict[str, Any]] = []
+    for collecteur, resultat in zip(collecteurs, resultats, strict=True):
+        if isinstance(resultat, BaseException):
+            logger.warning("Sante illisible sur %s : %s", collecteur.name, resultat)
+            routeurs.append(
+                {
+                    "router": collecteur.name,
+                    "pop_name": collecteur.config.effective_pop_name,
+                    "host": collecteur.config.host,
+                    "reachable": False,
+                    "error": f"{type(resultat).__name__}: {resultat}",
+                }
+            )
+            continue
+        routeurs.append(resultat)
+    return {
+        "routers": routeurs,
+        "unreachable": sum(1 for r in routeurs if not r.get("reachable")),
+    }
+
+
+@router.get("/pops/routers", summary="Router inventory (file + database)")
+async def list_routers(container: ContainerDep) -> dict[str, Any]:
+    stored: list[dict[str, Any]] = []
+    if container.routers_repo is not None:
+        stored = await container.routers_repo.list_public()
+
+    registry = container.registry
+    actifs = {entry["name"]: entry for entry in registry.describe()}
+
+    # Les routeurs de l'inventaire fichier n'ont pas de ligne en base : on les
+    # expose quand meme, marques non modifiables.
+    depuis_fichier = [
+        {
+            "id": None,
+            "name": entry["name"],
+            "host": entry["host"],
+            "port": entry["port"],
+            "username": entry["username"],
+            "role": entry["role"],
+            "pop_name": entry["pop"],
+            "enabled": True,
+            "source": "file",
+            "editable": False,
+            "active": True,
+        }
+        for entry in registry.describe()
+        if entry["source"] == "file"
+    ]
+    depuis_base = [
+        {**row, "source": "db", "editable": True, "active": row["name"] in actifs} for row in stored
+    ]
+    hidden: list[dict[str, Any]] = []
+    if container.routers_repo is not None:
+        try:
+            hidden = await container.routers_repo.list_hidden_file_routers()
+        except Exception:  # noqa: BLE001 - une base cassee ne doit pas vider la liste
+            hidden = []
+    return {
+        "routers": depuis_fichier + depuis_base,
+        "secrets_available": container.secrets.available,
+        "secrets_reason": container.secrets.unavailable_reason,
+        "skipped": registry.skipped,
+        "hidden": hidden,
+    }
+
+
+@router.delete(
+    "/pops/routers/file/{name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a router from the file inventory",
+)
+async def hide_file_router(container: ContainerDep, name: str) -> None:
+    """Ecarte un routeur declare dans le fichier (ou ignore faute de secret).
+
+    Le nom est ignore par le registre, et son site, ses abonnes et leur
+    historique sont supprimes pour de bon : rien n'en reste a l'ecran.
+    """
+    from app.services.pop_cleanup import purge_removed_routers
+
+    repository = _require_repository(container)
+    await repository.hide_file_router(name, reason="retire depuis l'interface")
+    await _apply(container)
+    await purge_removed_routers(container)
+
+
+@router.post(
+    "/pops/routers/file/{name}/restore",
+    summary="Show a previously removed file router again",
+)
+async def restore_file_router(container: ContainerDep, name: str) -> dict[str, Any]:
+    repository = _require_repository(container)
+    restored = await repository.unhide_file_router(name)
+    await _apply(container)
+    return {"name": name, "restored": restored}
+
+
+@router.post("/pops/routers/test", summary="Test a connection without saving it")
+async def test_connection(payload: RouterInput, container: ContainerDep) -> dict[str, Any]:
+    """Ouvre une session API en lecture seule et renvoie l'identite du routeur.
+
+    Permet de valider IP, port et identifiants avant d'enregistrer quoi que ce
+    soit. La connexion est refermee immediatement.
+    """
+    config = RouterConfig(
+        name=payload.name,
+        host=payload.host,
+        port=payload.port,
+        username=payload.username,
+        password=payload.password,
+        role=RouterRole(payload.role),
+        pop_name=payload.pop_name,
+        use_ssl=payload.use_ssl,
+        tls_verify=payload.tls_verify,
+        tls_fingerprint=payload.tls_fingerprint,
+        timeout_s=payload.timeout_s,
+        pppoe_interface_pattern=payload.pppoe_interface_pattern,
+    )
+    probe = container.registry.build_probe(config)
+    try:
+        result = await probe.probe()
+    except Exception as exc:  # noqa: BLE001 - le diagnostic est la reponse
+        return {
+            "reachable": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "hint": _hint_for(exc, config),
+        }
+    finally:
+        try:
+            probe.close()
+        except Exception:  # noqa: BLE001
+            pass
+    return result
+
+
+def _hint_for(exc: Exception, config: RouterConfig) -> str:
+    """Traduit les erreurs les plus frequentes en action concrete."""
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if "timeout" in text or "timed out" in text:
+        return (
+            f"No answer on {config.host}:{config.port}. Check the route from this "
+            f"machine (nc -zv {config.host} {config.port}) and that the API service "
+            "is on: /ip service set api disabled=no"
+        )
+    if "refused" in text:
+        return (
+            f"Connection refused on port {config.port}. The API service is "
+            "probably disabled, or restricted to other addresses "
+            "(/ip service print)."
+        )
+    if "trap" in text or "cannot log in" in text or "invalid user" in text:
+        return (
+            "Credentials refused. Check the account and that its group has the "
+            "'api' and 'read' policies (policy=read,api,test)."
+        )
+    if "ssl" in text or "certificate" in text:
+        return "TLS error: check that the api-ssl service is on, on port 8729."
+    return "See the controller logs for the details."
+
+
+@router.post(
+    "/pops/routers",
+    status_code=status.HTTP_201_CREATED,
+    summary="Save a router",
+)
+async def create_router(payload: RouterInput, container: ContainerDep) -> dict[str, Any]:
+    repository = _require_repository(container)
+    _guard_secrets(container)
+    try:
+        created = await repository.create(
+            payload.model_dump(exclude={"password"}),
+            payload.password.get_secret_value(),
+        )
+    except DuplicateRouterError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except SecretUnavailableError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    await _apply(container)
+    logger.info("Routeur '%s' enregistre depuis l'interface", created["name"])
+    # MISE EN SERVICE IMMEDIATE : CAKE, premieres files, export NetFlow, arbre.
+    # En tache de fond : la reponse n'attend pas le routeur, l'interface suit
+    # l'avancement sur /pops/routers/{id}/provisioning.
+    created["provisioning"] = provisioning.start(container, str(created["name"]))
+    return created
+
+
+@router.patch("/pops/routers/{router_id}", summary="Edit a router")
+async def update_router(
+    payload: RouterUpdate,
+    container: ContainerDep,
+    router_id: Annotated[int, Path(ge=1)],
+) -> dict[str, Any]:
+    repository = _require_repository(container)
+    password = payload.password.get_secret_value() if payload.password else None
+    if password:
+        _guard_secrets(container)
+    try:
+        updated = await repository.update(
+            router_id, payload.model_dump(exclude={"password"}), password
+        )
+    except RouterNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DuplicateRouterError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    await _apply(container)
+    # Adresse, compte ou mot de passe corriges : on remet tout en place aussitot.
+    if updated.get("enabled", True):
+        updated["provisioning"] = provisioning.start(container, str(updated["name"]))
+    return updated
+
+
+def _connu(container: ContainerDep, router_name: str) -> None:
+    if not any(c.name == router_name for c in container.registry.collectors):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Router '{router_name}' is not collected",
+        )
+
+
+@router.get("/pops/provisioning/{router_name}", summary="Progress of the automatic setup")
+async def provisioning_status(container: ContainerDep, router_name: str) -> dict[str, Any]:
+    """Par NOM : les routeurs du fichier routers.yml n'ont pas d'identifiant en base."""
+    return provisioning.status(router_name) or {"router": router_name, "state": "none"}
+
+
+@router.post("/pops/provisioning/{router_name}", summary="Run the automatic setup again")
+async def provision_again(container: ContainerDep, router_name: str) -> dict[str, Any]:
+    _connu(container, router_name)
+    return provisioning.start(container, router_name)
+
+
+@router.delete(
+    "/pops/routers/{router_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Remove a router from the inventory",
+)
+async def delete_router(
+    container: ContainerDep,
+    router_id: Annotated[int, Path(ge=1)],
+) -> None:
+    repository = _require_repository(container)
+    try:
+        await repository.delete(router_id)
+    except RouterNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    await _apply(container)
+
+
+@router.post("/pops/routers/{router_id}/probe", summary="Test a saved router")
+async def probe_router(
+    container: ContainerDep,
+    router_id: Annotated[int, Path(ge=1)],
+) -> dict[str, Any]:
+    repository = _require_repository(container)
+    try:
+        stored = await repository.get_public(router_id)
+    except RouterNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    collector = next((c for c in container.registry.collectors if c.name == stored["name"]), None)
+    if collector is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Router not loaded (disabled, or unreadable secret)",
+        )
+    try:
+        result = await collector.probe()
+    except Exception as exc:  # noqa: BLE001
+        message = f"{type(exc).__name__}: {exc}"
+        await repository.record_failure(router_id, message)
+        return {"reachable": False, "error": message, "hint": _hint_for(exc, collector.config)}
+
+    await repository.record_success(router_id, result)
+    return result
+
+
+async def _apply(container: ContainerDep) -> None:
+    """Recharge l'inventaire et remet les collecteurs a jour, sans redemarrage."""
+    collectors = await container.registry.reload()
+    container.collection.set_collectors(collectors)

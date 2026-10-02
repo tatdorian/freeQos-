@@ -1,0 +1,1084 @@
+"""L'onglet Services vu par son API : ce qu'elle promet, et ce qu'elle refuse.
+
+CE QUE CES TESTS PROTEGENT
+--------------------------
+1. LA VUE EN DIRECT DOIT ETRE EN DIRECT. ``/netflow/connections`` lit l'agregat
+   EN MEMOIRE du collecteur, pas la base : c'est la seule reponse a "qu'est-ce
+   que ce client fait la, maintenant". Si elle se mettait a lire la base, elle
+   rendrait la minute precedente sans que rien ne le signale.
+2. UNE ADRESSE VUE IL Y A DEUX SECONDES DOIT DEJA ETRE NOMMEE quand elle tombe
+   dans un bloc publie. Attendre le passage de la boucle afficherait "inconnue"
+   pour du Netflix parfaitement identifiable.
+3. ENREGISTRER UNE REGLE N'ECRIT RIEN. C'est la promesse la plus importante du
+   lot : croire qu'un trafic est bloque alors qu'il ne l'est pas est l'erreur
+   la plus couteuse que ce produit puisse induire.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api.deps import get_container
+from app.collectors.mikrotik import MikrotikCollector
+from app.collectors.netflow import Flow
+from app.config import RouterConfig, Settings
+from app.enforcement.restrictions import PATH_ADDRESS_LIST, PATH_FILTER, dst_list_name, tag
+from app.main import register_routes
+from app.services.flows import FlowAggregator, PrefixIndex
+from app.services.intel import IntelService
+from app.services.netflow_service import NetflowService
+from app.services.restrictions import RestrictionService
+from tests.conftest import FakeRouterOsClient
+
+MAINTENANT = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+
+
+class FauxDestinations:
+    """Depot de destinations en memoire. Assez pour les routes de lecture."""
+
+    def __init__(self) -> None:
+        self.rows: list[dict[str, Any]] = []
+        self.intel: dict[str, dict[str, Any]] = {}
+        self.resolus: list[str] = []
+        self.oublies: list[str] = []
+
+    async def top(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return list(self.rows)
+
+    async def by_service(self, **kwargs: Any) -> list[dict[str, Any]]:
+        return [
+            {
+                "service": "netflix",
+                "category": "streaming",
+                "addresses": 3,
+                "clients": 2,
+                "subscribers": 1,
+                "down_bytes": 900_000,
+                "up_bytes": 12_000,
+                "last_seen": MAINTENANT,
+            }
+        ]
+
+    async def detail(self, address: str, **kwargs: Any) -> dict[str, Any]:
+        return {
+            "address": address,
+            "intel": self.intel.get(address),
+            "totals": {
+                "down_bytes": 900_000,
+                "up_bytes": 12_000,
+                "clients": 2,
+                "subscribers": 1,
+            },
+            "clients": [
+                {
+                    "client": "10.0.0.2",
+                    "subscriber_id": 1,
+                    "login": "dupont",
+                    "kind": "pppoe",
+                    "pop_name": "PoP Test",
+                    "port": 443,
+                    "protocol": 6,
+                    "app": "web",
+                    "down_bytes": 900_000,
+                    "up_bytes": 12_000,
+                    "flows": 40,
+                    "first_seen": MAINTENANT,
+                    "last_seen": MAINTENANT,
+                },
+                {
+                    "client": "10.9.9.9",
+                    "subscriber_id": None,
+                    "login": None,
+                    "kind": None,
+                    "pop_name": None,
+                    "port": 0,
+                    "protocol": 1,
+                    "app": "diagnostic",
+                    "down_bytes": 84,
+                    "up_bytes": 84,
+                    "flows": 1,
+                    "first_seen": MAINTENANT,
+                    "last_seen": MAINTENANT,
+                },
+            ],
+        }
+
+    async def intel_for(self, addresses: list[str]) -> dict[str, dict[str, Any]]:
+        return {a: self.intel[a] for a in addresses if a in self.intel}
+
+    async def get_intel(self, address: str) -> dict[str, Any] | None:
+        return self.intel.get(address)
+
+    async def pending(self, **kwargs: Any) -> list[str]:
+        # La file d'attente est vide : ces tests portent sur les routes, pas sur
+        # la boucle d'enrichissement, qui a les siens.
+        return []
+
+    async def count_pending(self, **kwargs: Any) -> int:
+        return 0
+
+    async def forget_resolution(self, address: str) -> None:
+        self.oublies.append(address)
+
+    async def save_intel(self, verdicts: list[dict[str, Any]]) -> int:
+        for verdict in verdicts:
+            self.intel[str(verdict["address"])] = dict(verdict)
+            self.resolus.append(str(verdict["address"]))
+        return len(verdicts)
+
+    async def addresses_for(self, **kwargs: Any) -> list[str]:
+        return []
+
+    async def by_location(self, **kwargs: Any) -> dict[str, Any]:
+        self.lieux_demandes = kwargs
+        return {
+            "points": [
+                {
+                    "country": "FR",
+                    "city": "Paris",
+                    "region": "Ile-de-France",
+                    "latitude": 48.86,
+                    "longitude": 2.35,
+                    "addresses": 1,
+                    "clients": 2,
+                    "down_bytes": 900_000,
+                    "up_bytes": 12_000,
+                    "services": ["netflix"],
+                    "orgs": [],
+                    "top_addresses": ["45.57.12.34"],
+                }
+            ],
+            "countries": [{"country": "FR", "addresses": 1, "clients": 2, "cities": 1}],
+            "unlocated": {"addresses": 0, "bytes": 0},
+        }
+
+
+class FauxFlows:
+    async def subscribers_by_id(self, ids: list[int]) -> dict[int, dict[str, Any]]:
+        return {
+            1: {
+                "id": 1,
+                "login": "dupont",
+                "kind": "pppoe",
+                "pop_name": "PoP Test",
+                "plan_down_mbps": 100.0,
+                "plan_up_mbps": 20.0,
+            }
+        }
+
+    async def prefixes_for_logins(self, logins: list[str]) -> dict[str, list[str]]:
+        return {login: ["10.0.0.2/32"] for login in logins}
+
+
+class FauxRegles:
+    """Depot de regles en memoire, avec le meme contrat que le vrai."""
+
+    def __init__(self) -> None:
+        self.rows: dict[int, dict[str, Any]] = {}
+        self.suivant = 1
+
+    async def list_all(self, *, enabled_only: bool = False) -> list[dict[str, Any]]:
+        return [r for r in self.rows.values() if r["enabled"] or not enabled_only]
+
+    async def get(self, rule_id: int) -> dict[str, Any]:
+        from app.db.traffic_rules_repo import RuleNotFoundError
+
+        if rule_id not in self.rows:
+            raise RuleNotFoundError(f"regle {rule_id} inconnue")
+        return dict(self.rows[rule_id])
+
+    async def create(self, payload: dict[str, Any]) -> dict[str, Any]:
+        from app.db.traffic_rules_repo import RuleConflictError
+
+        if any(r["name"] == payload["name"] for r in self.rows.values()):
+            raise RuleConflictError("une regle s'appelle deja ainsi")
+        ligne = {
+            "id": self.suivant,
+            "last_applied_at": None,
+            "last_state": None,
+            "last_detail": None,
+            **payload,
+        }
+        self.rows[self.suivant] = ligne
+        self.suivant += 1
+        return dict(ligne)
+
+    async def update(self, rule_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        ligne = await self.get(rule_id)
+        ligne.update(payload)
+        self.rows[rule_id] = ligne
+        return dict(ligne)
+
+    async def delete(self, rule_id: int) -> None:
+        await self.get(rule_id)
+        del self.rows[rule_id]
+
+    async def record_apply(self, rule_id: int, *, state: str, detail: str) -> None:
+        self.rows[rule_id]["last_state"] = state
+        self.rows[rule_id]["last_detail"] = detail
+        self.rows[rule_id]["last_applied_at"] = MAINTENANT
+
+
+@pytest.fixture
+def netflow() -> NetflowService:
+    """Un collecteur avec une fenetre DEJA remplie, sans socket ni datagramme.
+
+    On alimente l'agregateur directement : ce qui est teste ici est la route,
+    pas le decodage -- celui-ci a ses propres tests.
+    """
+    service = NetflowService(
+        enabled=True,
+        aggregator=FlowAggregator(index=PrefixIndex.build([("10.0.0.0/29", 1)])),
+    )
+    service.aggregator.add(
+        Flow(
+            src="45.57.12.34",
+            dst="10.0.0.2",
+            src_port=443,
+            dst_port=51000,
+            protocol=6,
+            octets=900_000,
+            packets=700,
+        ),
+        vantage="edge",
+    )
+    return service
+
+
+@pytest.fixture
+def destinations() -> FauxDestinations:
+    depot = FauxDestinations()
+    depot.rows = [
+        {
+            "address": "45.57.12.34",
+            "hostname": "ipv4-c001.1.oca.nflxvideo.net",
+            "service": "netflix",
+            "category": "streaming",
+            "source": "reverse name",
+            "org": None,
+            "asn": None,
+            "country": None,
+            "resolved_at": MAINTENANT,
+            "clients": 2,
+            "subscribers": 1,
+            "down_bytes": 900_000,
+            "up_bytes": 12_000,
+            "flows": 40,
+            "last_seen": MAINTENANT,
+            "first_seen": MAINTENANT,
+            "port": 443,
+            "protocol": 6,
+            "app": "web",
+        }
+    ]
+    return depot
+
+
+class ShapingEnregistreur:
+    """Interrupteur coupe ; garde les plans qu'on lui fait appliquer."""
+
+    enforcement_enabled = False
+
+    def __init__(self) -> None:
+        self.plans: list[Any] = []
+        self.explicites: list[bool] = []
+
+    async def apply(self, plan: Any, **kwargs: Any) -> Any:
+        from app.enforcement.routeros import ActionOutcome, ApplyResult
+
+        self.plans.append(plan)
+        self.explicites.append(bool(kwargs.get("explicit")))
+        resultat = ApplyResult(router_name=plan.router_name, dry_run=False)
+        resultat.outcomes = [ActionOutcome(action=a, ok=True) for a in plan.actions]
+        return resultat
+
+
+@pytest.fixture
+def restrictions(settings: Settings, router_config: RouterConfig) -> RestrictionService:
+    client = FakeRouterOsClient()
+    collector = MikrotikCollector(router_config, client=client)
+    registry = SimpleNamespace(collectors=[collector])
+    # Interrupteur coupe : il ne retient plus que la boucle automatique. Un
+    # geste explicite (enregistrer, appliquer, lever) ecrit quand meme.
+    shaping = ShapingEnregistreur()
+    return RestrictionService(
+        shaping=shaping,  # type: ignore[arg-type]
+        registry=registry,  # type: ignore[arg-type]
+        rules_repo=FauxRegles(),  # type: ignore[arg-type]
+        destinations=FauxDestinations(),  # type: ignore[arg-type]
+        flows_repo=FauxFlows(),  # type: ignore[arg-type]
+    )
+
+
+@pytest.fixture
+def container(
+    settings: Settings,
+    netflow: NetflowService,
+    destinations: FauxDestinations,
+    restrictions: RestrictionService,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        settings=settings,
+        netflow=netflow,
+        flows_repo=FauxFlows(),
+        destinations_repo=destinations,
+        traffic_rules_repo=restrictions.rules_repo,
+        restrictions=restrictions,
+        intel=IntelService(destinations=destinations, rdns_enabled=False),  # type: ignore[arg-type]
+        exporters_repo=None,
+    )
+
+
+@pytest.fixture
+def client(settings: Settings, container: SimpleNamespace) -> TestClient:
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: container
+    return TestClient(app)
+
+
+# ===================================================================== lecture
+
+
+def test_les_connexions_en_cours_viennent_de_la_memoire_du_collecteur(
+    client: TestClient, netflow: NetflowService
+) -> None:
+    """LA SEULE VUE EN DIRECT. Elle doit rendre ce que la fenetre porte a cet
+    instant, y compris ce qui n'a jamais ete ecrit en base."""
+    corps = client.get("/api/v1/netflow/connections").json()
+    assert corps["tracked"] is True
+    assert len(corps["connections"]) == 1
+    ligne = corps["connections"][0]
+    assert ligne["address"] == "45.57.12.34"
+    assert ligne["down_bytes"] == 900_000
+    # L'identifiant est traduit en login : '#1' n'aide personne. L'adresse du
+    # client est rendue en plus, pour les machines qui n'ont pas de fiche.
+    assert ligne["login"] == "dupont"
+    assert ligne["client"] == "10.0.0.2"
+    assert ligne["pop_name"] == "PoP Test"
+    # La fenetre n'a pas ete consommee par la lecture.
+    assert netflow.aggregator.destinations_in_window == 1
+
+
+def test_une_adresse_pas_encore_enrichie_est_quand_meme_nommee(client: TestClient) -> None:
+    """LE CATALOGUE REPOND TOUT DE SUITE. Afficher "inconnue" pour du Netflix
+    parfaitement identifiable, le temps qu'une boucle passe, ferait douter de
+    l'outil au premier regard."""
+    ligne = client.get("/api/v1/netflow/connections").json()["connections"][0]
+    assert ligne["service"] == "netflix"
+    assert ligne["category"] == "streaming"
+    assert ligne["source"] == "catalogue"
+    # Et on dit qu'elle n'a pas encore ete enrichie, plutot que de le taire.
+    assert ligne["pending"] is True
+
+
+def test_les_destinations_rendent_aussi_la_repartition_par_service(client: TestClient) -> None:
+    corps = client.get("/api/v1/netflow/destinations?minutes=60").json()
+    assert corps["destinations"][0]["service"] == "netflix"
+    assert corps["services"][0]["category"] == "streaming"
+
+
+def test_la_fiche_d_une_adresse_dit_qui_la_joint(client: TestClient) -> None:
+    """Y COMPRIS CE QUI N'A PAS DE FICHE. Une machine non declaree joint bien
+    cette adresse : la masquer ferait disparaitre de la liste ce qu'on vient
+    justement de lancer pour verifier."""
+    corps = client.get("/api/v1/netflow/destinations/45.57.12.34").json()
+    assert corps["address"] == "45.57.12.34"
+    assert corps["clients"][0]["login"] == "dupont"
+    assert corps["clients"][1]["client"] == "10.9.9.9"
+    assert corps["clients"][1]["login"] is None
+    # Le verdict du catalogue est recalcule a la volee, meme sans rien en base.
+    assert corps["catalogue"]["service"] == "netflix"
+    assert corps["catalogue"]["matched_prefix"] == "45.57.0.0/17"
+
+
+def test_une_adresse_invalide_est_refusee_proprement(client: TestClient) -> None:
+    reponse = client.get("/api/v1/netflow/destinations/pas-une-adresse")
+    assert reponse.status_code == 422
+    assert "invalid" in reponse.json()["detail"]
+
+
+def test_relancer_l_analyse_remet_l_adresse_dans_la_file(
+    client: TestClient, destinations: FauxDestinations
+) -> None:
+    reponse = client.post("/api/v1/netflow/destinations/45.57.12.34/resolve")
+    assert reponse.status_code == 200
+    assert destinations.oublies == ["45.57.12.34"]
+    # Et le verdict est reecrit dans la foulee, sans attendre la boucle.
+    assert destinations.intel["45.57.12.34"]["service"] == "netflix"
+
+
+def test_le_catalogue_dit_ce_qu_il_sait_et_ce_qu_il_ignore(client: TestClient) -> None:
+    corps = client.get("/api/v1/netflow/catalogue").json()
+    par_cle = {s["key"]: s for s in corps["services"]}
+    assert par_cle["netflix"]["prefixes"] > 0
+    # YouTube n'a aucun bloc propre : la page doit pouvoir le DIRE, sinon un
+    # exploitant croira que la regle part avec des adresses.
+    assert par_cle["youtube"]["prefixes"] == 0
+    assert par_cle["cloudflare"]["note"]
+    assert "streaming" in corps["categories"]
+
+
+# ================================================================ restrictions
+
+
+def regle(**kwargs: Any) -> dict[str, Any]:
+    corps: dict[str, Any] = {"name": "Pas de Netflix", "services": ["netflix"]}
+    corps.update(kwargs)
+    return corps
+
+
+def test_enregistrer_une_regle_la_pose_meme_interrupteur_coupe(
+    client: TestClient, restrictions: RestrictionService
+) -> None:
+    """DEMANDE EXPLICITE : quand l'exploitant applique, ca ecrit quoi qu'il
+    arrive. L'interrupteur ne retient que la boucle automatique."""
+    reponse = client.post("/api/v1/traffic-rules", json=regle())
+    assert reponse.status_code == 201
+    assert reponse.json()["last_state"] == "posee"
+    assert restrictions.shaping.explicites == [True]  # type: ignore[attr-defined]
+
+
+async def test_la_boucle_automatique_reste_retenue_par_l_interrupteur(
+    restrictions: RestrictionService,
+) -> None:
+    rapport = await restrictions.reconcile()
+    assert rapport["state"] == "a poser"
+    assert restrictions.shaping.plans == []  # type: ignore[attr-defined]
+
+
+def test_une_regle_sans_critere_est_refusee_par_l_api(client: TestClient) -> None:
+    reponse = client.post(
+        "/api/v1/traffic-rules", json={"name": "vide", "services": [], "categories": []}
+    )
+    assert reponse.status_code == 422
+    assert "must target some traffic" in reponse.json()["detail"]
+
+
+def test_un_service_inconnu_est_refuse_par_l_api(client: TestClient) -> None:
+    reponse = client.post("/api/v1/traffic-rules", json=regle(services=["netflixx"]))
+    assert reponse.status_code == 422
+
+
+def test_deux_regles_ne_peuvent_pas_porter_le_meme_nom(client: TestClient) -> None:
+    assert client.post("/api/v1/traffic-rules", json=regle()).status_code == 201
+    assert client.post("/api/v1/traffic-rules", json=regle()).status_code == 409
+
+
+def test_vider_les_criteres_d_une_regle_existante_est_refuse(client: TestClient) -> None:
+    """LA VALIDATION PORTE SUR LA REGLE TELLE QU'ELLE SERA, pas sur le fragment
+    envoye : retirer le dernier service la rendrait sans critere, donc visant
+    tout internet."""
+    cree = client.post("/api/v1/traffic-rules", json=regle()).json()
+    reponse = client.patch(f"/api/v1/traffic-rules/{cree['id']}", json={"services": []})
+    assert reponse.status_code == 422
+    assert "must target some traffic" in reponse.json()["detail"]
+
+
+def test_suspendre_une_regle_ne_la_supprime_pas(client: TestClient) -> None:
+    cree = client.post("/api/v1/traffic-rules", json=regle()).json()
+    reponse = client.patch(f"/api/v1/traffic-rules/{cree['id']}", json={"enabled": False})
+    assert reponse.status_code == 200
+    assert reponse.json()["enabled"] is False
+    assert len(client.get("/api/v1/traffic-rules").json()["rules"]) == 1
+
+
+def test_l_apercu_dit_ce_que_la_regle_vise_aujourd_hui(client: TestClient) -> None:
+    """Une regle est un critere, pas une photo : avant de la poser, il faut
+    pouvoir regarder ce qu'elle couvre reellement."""
+    cree = client.post("/api/v1/traffic-rules", json=regle()).json()
+    vue = client.get(f"/api/v1/traffic-rules/{cree['id']}/preview").json()
+    assert vue["address_count"] > 0
+    assert "45.57.0.0/17" in vue["addresses"]
+    assert vue["routers"] == ["pop-test"]
+
+
+def test_une_regle_par_abonne_borne_le_cote_client(client: TestClient) -> None:
+    cree = client.post(
+        "/api/v1/traffic-rules",
+        json=regle(name="Netflix chez Dupont", scope="subscribers", logins=["dupont"]),
+    ).json()
+    vue = client.get(f"/api/v1/traffic-rules/{cree['id']}/preview").json()
+    assert vue["clients"] == ["10.0.0.2/32"]
+
+
+def test_la_pose_est_une_simulation_par_defaut(client: TestClient) -> None:
+    client.post("/api/v1/traffic-rules", json=regle())
+    rapport = client.post("/api/v1/traffic-rules/apply").json()
+    assert rapport["dry_run"] is True
+    assert rapport["applied"] == 0
+    # Les commandes sont MONTREES : c'est ce que l'exploitant valide.
+    routeur = rapport["routers"][0]
+    assert routeur["router"] == "pop-test"
+    assert any(PATH_ADDRESS_LIST.split("/")[-1] in a or "freeqos" in a for a in routeur["actions"])
+
+
+def test_appliquer_ecrit_meme_interrupteur_coupe(client: TestClient) -> None:
+    """Appliquer est un geste explicite : il ecrit quoi qu'il arrive."""
+    client.post("/api/v1/traffic-rules", json=regle())
+    rapport = client.post("/api/v1/traffic-rules/apply?dry_run=false").json()
+    assert rapport["enforcement_enabled"] is False
+    assert rapport["state"] == "posee"
+
+
+def test_le_plan_vise_la_liste_de_la_regle(client: TestClient) -> None:
+    cree = client.post("/api/v1/traffic-rules", json=regle()).json()
+    rapport = client.post("/api/v1/traffic-rules/apply").json()
+    commandes = " ".join(rapport["routers"][0]["actions"])
+    assert dst_list_name(cree["id"]) in commandes
+
+
+def test_supprimer_une_regle_la_leve_meme_interrupteur_coupe(
+    client: TestClient,
+) -> None:
+    """Lever est un geste explicite : le trafic est rouvert tout de suite."""
+    cree = client.post("/api/v1/traffic-rules", json=regle()).json()
+    reponse = client.delete(f"/api/v1/traffic-rules/{cree['id']}")
+    assert reponse.status_code == 200
+    assert reponse.json()["lift"]["state"] == "levee"
+    assert client.get("/api/v1/traffic-rules").json()["rules"] == []
+
+
+class FauxShaping:
+    """Ecriture active, executee sur le faux routeur : juste assez pour voir
+    ce qu'une levee retire vraiment."""
+
+    enforcement_enabled = True
+
+    def __init__(self, routeur: FakeRouterOsClient) -> None:
+        self.routeur = routeur
+        self.plans: list[Any] = []
+
+    async def apply(
+        self, plan: Any, *, dry_run: bool = True, author: str | None = None, **_: Any
+    ) -> Any:
+        from app.enforcement.routeros import ActionOutcome, ApplyResult
+
+        self.plans.append(plan)
+        tables = {
+            PATH_ADDRESS_LIST: "firewall_address_list_rows",
+            PATH_FILTER: "firewall_filter_rows",
+        }
+        resultat = ApplyResult(router_name=plan.router_name, dry_run=dry_run)
+        for action in plan.actions:
+            assert action.verb == "remove"
+            attribut = tables[action.path]
+            lignes = getattr(self.routeur, attribut)
+            setattr(self.routeur, attribut, [r for r in lignes if r[".id"] != action.target_id])
+            resultat.outcomes.append(ActionOutcome(action=action, ok=True))
+        return resultat
+
+
+def poser(routeur: FakeRouterOsClient, rule_id: int, adresse: str) -> None:
+    """Le routeur tel qu'il est apres la pose d'un blocage sur une adresse."""
+    routeur.firewall_address_list_rows.append(
+        {
+            ".id": f"*A{rule_id}",
+            "list": dst_list_name(rule_id),
+            "address": adresse,
+            "comment": tag(rule_id, "dst"),
+        }
+    )
+    for role in ("drop-up", "drop-down"):
+        routeur.firewall_filter_rows.append(
+            {
+                ".id": f"*F{rule_id}{role}",
+                "chain": "forward",
+                "action": "drop",
+                "comment": tag(rule_id, role),
+            }
+        )
+
+
+def test_suspendre_une_regle_la_leve_aussitot_sur_le_routeur(
+    client: TestClient, restrictions: RestrictionService
+) -> None:
+    """LE BUG SIGNALE : une adresse restreinte le restait apres la levee de la
+    regle, faute d'ecriture avant la reconciliation suivante. Suspendre doit
+    retirer tout de suite ce que la regle avait pose -- et rien d'autre."""
+    routeur = restrictions.registry.collectors[0]._client  # noqa: SLF001
+    restrictions.shaping = FauxShaping(routeur)  # type: ignore[assignment]
+    levee = client.post(
+        "/api/v1/traffic-rules", json=regle(name="IP", services=[], prefixes=["203.0.113.9"])
+    ).json()
+    autre = client.post("/api/v1/traffic-rules", json=regle()).json()
+    poser(routeur, levee["id"], "203.0.113.9")
+    poser(routeur, autre["id"], "45.57.0.0/17")
+
+    reponse = client.patch(f"/api/v1/traffic-rules/{levee['id']}", json={"enabled": False})
+
+    assert reponse.status_code == 200
+    corps = reponse.json()
+    assert corps["lift"]["state"] == "levee"
+    assert corps["lift"]["applied"] == 3
+    assert corps["last_state"] == "levee"
+    # L'autre restriction est intacte.
+    assert [r["list"] for r in routeur.firewall_address_list_rows] == [dst_list_name(autre["id"])]
+    assert len(routeur.firewall_filter_rows) == 2
+    assert all(f"r{autre['id']}" in r["comment"] for r in routeur.firewall_filter_rows)
+
+
+def test_supprimer_une_regle_la_leve_aussitot_sur_le_routeur(
+    client: TestClient, restrictions: RestrictionService
+) -> None:
+    routeur = restrictions.registry.collectors[0]._client  # noqa: SLF001
+    restrictions.shaping = FauxShaping(routeur)  # type: ignore[assignment]
+    cree = client.post(
+        "/api/v1/traffic-rules", json=regle(name="IP", services=[], prefixes=["203.0.113.9"])
+    ).json()
+    poser(routeur, cree["id"], "203.0.113.9")
+
+    reponse = client.delete(f"/api/v1/traffic-rules/{cree['id']}")
+
+    assert reponse.status_code == 200
+    assert reponse.json()["lift"]["state"] == "levee"
+    assert routeur.firewall_address_list_rows == []
+    assert routeur.firewall_filter_rows == []
+
+
+def test_un_plan_refuse_par_le_coupe_circuit_n_est_pas_affiche_pose(
+    client: TestClient, restrictions: RestrictionService
+) -> None:
+    """Un plan refuse n'a RIEN ecrit. L'afficher "posee" faisait croire a une
+    restriction posee -- ou levee -- qui ne l'etait pas."""
+    from app.enforcement.routeros import ApplyResult
+
+    class Refus(FauxShaping):
+        async def apply(self, plan: Any, **kwargs: Any) -> Any:
+            return ApplyResult(
+                router_name=plan.router_name, dry_run=False, aborted_reason="trop d'actions"
+            )
+
+    routeur = restrictions.registry.collectors[0]._client  # noqa: SLF001
+    restrictions.shaping = Refus(routeur)  # type: ignore[assignment]
+    client.post("/api/v1/traffic-rules", json=regle())
+    rapport = client.post("/api/v1/traffic-rules/apply?dry_run=false").json()
+    assert rapport["state"] == "erreur"
+    assert "trop d'actions" in rapport["routers"][0]["reason"]
+
+
+# ================================================== la boucle qui nomme
+
+
+class FauxFile:
+    """Une file d'attente d'enrichissement, en memoire.
+
+    Elle imite le contrat exact du depot reel : ``pending`` ne rend que ce qui
+    n'a pas encore ete resolu, et ``save_intel`` marque la resolution. C'est ce
+    couple qui fait que la decouverte se termine au lieu de tourner en rond.
+    """
+
+    def __init__(self, attente: list[str]) -> None:
+        self.attente = list(attente)
+        self.enregistres: list[dict[str, Any]] = []
+
+    async def pending(self, *, limit: int = 50, max_attempts: int = 3) -> list[str]:
+        return self.attente[:limit]
+
+    async def count_pending(self, **kwargs: Any) -> int:
+        return len(self.attente)
+
+    async def save_intel(self, verdicts: list[dict[str, Any]]) -> int:
+        self.enregistres.extend(verdicts)
+        for verdict in verdicts:
+            if verdict["address"] in self.attente:
+                self.attente.remove(verdict["address"])
+        return len(verdicts)
+
+    async def forget_resolution(self, address: str) -> None:
+        self.attente.append(address)
+
+    async def get_intel(self, address: str) -> dict[str, Any] | None:
+        for verdict in reversed(self.enregistres):
+            if verdict["address"] == address:
+                return verdict
+        return None
+
+
+async def test_une_adresse_vue_est_nommee_au_passage_suivant() -> None:
+    """C'EST TOUTE LA PROMESSE DU DYNAMIQUE. Personne ne declare l'adresse : le
+    fait qu'un client l'ait atteinte la met en file, et la boucle la nomme."""
+    file = FauxFile(["45.57.12.34"])
+    service = IntelService(destinations=file, rdns_enabled=False)  # type: ignore[arg-type]
+
+    assert await service.resolve_pending() == 1
+    verdict = file.enregistres[0]
+    assert verdict["service"] == "netflix"
+    assert verdict["category"] == "streaming"
+    # La file s'est videe : sans cela, la meme adresse serait redemandee a
+    # chaque passage, pour toujours.
+    assert file.attente == []
+
+
+async def test_une_adresse_sans_nom_est_quand_meme_marquee_resolue() -> None:
+    """ "Cette adresse n'a pas de nom" EST une reponse. Sans date de resolution,
+    la majorite d'internet -- qui n'a pas de nom inverse -- resterait en file et
+    genererait une requete DNS perpetuelle."""
+    file = FauxFile(["198.51.100.7"])
+    service = IntelService(destinations=file, rdns_enabled=False)  # type: ignore[arg-type]
+
+    assert await service.resolve_pending() == 1
+    verdict = file.enregistres[0]
+    assert verdict["service"] is None
+    assert verdict["resolved_at"] is not None
+
+
+async def test_le_nom_inverse_se_lit_sans_toucher_au_reseau_dans_les_tests() -> None:
+    """Le resolveur est injecte : la boucle ne doit jamais dependre d'un DNS
+    joignable pour etre testee -- ni, en exploitation, pour rendre la main."""
+    file = FauxFile(["203.0.113.9"])
+    service = IntelService(destinations=file, rdns_enabled=True)  # type: ignore[arg-type]
+    service.resolver.cache["203.0.113.9"] = "ipv4-c001.1.oca.nflxvideo.net"
+
+    await service.resolve_pending()
+    verdict = file.enregistres[0]
+    assert verdict["service"] == "netflix"
+    assert verdict["source"] == "reverse name"
+    assert verdict["hostname"] == "ipv4-c001.1.oca.nflxvideo.net"
+
+
+async def test_l_enrichissement_coupe_ne_consomme_pas_la_file() -> None:
+    file = FauxFile(["45.57.12.34"])
+    service = IntelService(destinations=file, enabled=False)  # type: ignore[arg-type]
+    assert await service.resolve_pending() == 0
+    assert file.attente == ["45.57.12.34"]
+
+
+async def test_l_etat_dit_combien_d_adresses_attendent() -> None:
+    """UN COMPTEUR QUI NE DESCEND JAMAIS dit une chose precise : le resolveur
+    ne repond pas, ou la cadence est trop lente pour ce qui est decouvert."""
+    file = FauxFile(["45.57.12.34", "8.8.8.8"])
+    service = IntelService(destinations=file, rdns_enabled=False)  # type: ignore[arg-type]
+    assert (await service.status())["pending"] == 2
+    await service.resolve_pending()
+    etat = await service.status()
+    assert etat["pending"] == 0
+    assert etat["resolved"] == 2
+
+
+async def test_une_machine_sans_fiche_apparait_dans_les_connexions_en_cours(
+    settings: Settings, destinations: FauxDestinations, restrictions: RestrictionService
+) -> None:
+    """LE CAS QUI A REVELE L'ANGLE MORT : un ping lance depuis un poste qui
+    n'est pas un abonne declare. Le flux traverse le reseau, le collecteur le
+    voit, et l'interface doit le montrer -- sous l'adresse du poste."""
+    netflow = NetflowService(
+        enabled=True,
+        # L'espace client se declare SUR LE SERVICE : c'est lui qui le repose
+        # sur l'agregateur au demarrage, et le poser sur l'agregateur seul
+        # serait efface.
+        customer_networks=("10.0.0.0/8",),
+        aggregator=FlowAggregator(index=PrefixIndex.build([("10.0.0.0/29", 1)])),
+    )
+    netflow.aggregator.add(
+        Flow(src="10.9.9.9", dst="45.57.12.34", protocol=1, octets=84, packets=1),
+        vantage="edge",
+    )
+    conteneur = SimpleNamespace(
+        settings=settings,
+        netflow=netflow,
+        flows_repo=FauxFlows(),
+        destinations_repo=destinations,
+        traffic_rules_repo=restrictions.rules_repo,
+        restrictions=restrictions,
+        intel=IntelService(destinations=destinations, rdns_enabled=False),  # type: ignore[arg-type]
+        exporters_repo=None,
+    )
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: conteneur
+
+    with TestClient(app) as http:
+        corps = http.get("/api/v1/netflow/connections").json()
+
+    assert len(corps["connections"]) == 1
+    ligne = corps["connections"][0]
+    assert ligne["client"] == "10.9.9.9"
+    assert ligne["login"] is None
+    assert ligne["address"] == "45.57.12.34"
+    assert ligne["service"] == "netflix"
+
+
+# ============================================ qui parle a qui, et a quel debit
+
+
+class FauxPaires(FauxDestinations):
+    """Ajoute la lecture par couple (client, destination)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.demandes: list[dict[str, Any]] = []
+
+    async def pairs_facets(self, **kwargs: Any) -> dict[str, list[str]]:
+        return {
+            "pops": ["PoP Test"],
+            "categories": ["streaming", "nuage"],
+            "services": ["netflix", "google"],
+            "apps": ["web", "diagnostic"],
+        }
+
+    async def pairs(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.demandes.append(dict(kwargs))
+        app = kwargs.get("app")
+        toutes = [
+            {
+                "client": "10.0.0.2",
+                "address": "45.57.12.34",
+                "subscriber_id": 1,
+                "login": "dupont",
+                "kind": "pppoe",
+                "pop_name": "PoP Test",
+                "port": 443,
+                "protocol": 6,
+                "app": "web",
+                "hostname": "ipv4-c001.1.oca.nflxvideo.net",
+                "service": "netflix",
+                "category": "streaming",
+                "down_bytes": 900_000,
+                "up_bytes": 12_000,
+                "flows": 40,
+                "first_seen": MAINTENANT,
+                "last_seen": MAINTENANT,
+            },
+            {
+                "client": "10.9.9.9",
+                "address": "8.8.8.8",
+                "subscriber_id": None,
+                "login": None,
+                "kind": None,
+                "pop_name": None,
+                "port": 0,
+                "protocol": 1,
+                "app": "diagnostic",
+                "hostname": None,
+                "service": "google",
+                "category": "nuage",
+                "down_bytes": 84,
+                "up_bytes": 84,
+                "flows": 1,
+                "first_seen": MAINTENANT,
+                "last_seen": MAINTENANT,
+            },
+        ]
+        return [r for r in toutes if app is None or r["app"] == app]
+
+
+def client_avec_paires(
+    settings: Settings, netflow: NetflowService
+) -> tuple[TestClient, FauxPaires]:
+    depot = FauxPaires()
+    conteneur = SimpleNamespace(
+        settings=settings,
+        netflow=netflow,
+        flows_repo=FauxFlows(),
+        destinations_repo=depot,
+        traffic_rules_repo=None,
+        restrictions=None,
+        intel=IntelService(destinations=depot, rdns_enabled=False),  # type: ignore[arg-type]
+        exporters_repo=None,
+    )
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: conteneur
+    return TestClient(app), depot
+
+
+def test_une_famille_d_usage_s_ouvre_sur_ses_conversations(
+    settings: Settings, netflow: NetflowService
+) -> None:
+    """« autre, 3 Kio » ne dit pas AVEC QUI.
+
+    Le tableau par usage agrege justement ce detail, et celui par adresse fond
+    tous les clients ensemble : le couple est la seule forme qui montre la
+    conversation.
+    """
+    http, depot = client_avec_paires(settings, netflow)
+    corps = http.get("/api/v1/netflow/pairs?minutes=60&app=diagnostic").json()
+
+    assert depot.demandes[0]["app"] == "diagnostic"
+    assert len(corps["pairs"]) == 1
+    ligne = corps["pairs"][0]
+    assert ligne["client"] == "10.9.9.9"
+    assert ligne["address"] == "8.8.8.8"
+    # Une machine sans fiche parle autant que les autres.
+    assert ligne["login"] is None
+
+
+def test_les_conversations_en_cours_sont_marquees(
+    settings: Settings, netflow: NetflowService
+) -> None:
+    """La periode dit ce qui s'est passe, la fenetre en cours ce qui se passe.
+    Les confondre ferait lire un trafic termine comme un trafic actif."""
+    http, _ = client_avec_paires(settings, netflow)
+    corps = http.get("/api/v1/netflow/pairs?minutes=60").json()
+
+    # Le collecteur porte une conversation 10.0.0.2 -> 45.57.12.34 en memoire.
+    assert ["10.0.0.2", "45.57.12.34"] in corps["live"]
+    assert corps["live_bytes"]["10.0.0.2|45.57.12.34"] == 900_000
+
+
+def test_la_duree_de_la_fenetre_est_rendue(settings: Settings, netflow: NetflowService) -> None:
+    """SANS ELLE, PAS DE DEBIT. Des octets sans duree ne sont qu'un volume :
+    « 3 Kio » ne dit pas si c'est un filet continu ou une rafale."""
+    http, _ = client_avec_paires(settings, netflow)
+    assert "window_seconds" in http.get("/api/v1/netflow/pairs").json()
+    assert "window_seconds" in http.get("/api/v1/netflow/connections").json()
+
+
+def test_la_vue_en_direct_se_filtre_par_usage(settings: Settings, netflow: NetflowService) -> None:
+    """Le filtre porte AVANT la limite : sinon demander 'diagnostic' sur une
+    fenetre dominee par le web rendrait cent lignes de web et zero de ce qu'on
+    a demande."""
+    http, _ = client_avec_paires(settings, netflow)
+    assert len(http.get("/api/v1/netflow/connections?app=web").json()["connections"]) == 1
+    assert http.get("/api/v1/netflow/connections?app=diagnostic").json()["connections"] == []
+
+
+def test_les_conversations_se_filtrent_par_pop_et_par_categorie(
+    settings: Settings, netflow: NetflowService
+) -> None:
+    """RECHERCHER PAR CLIENT, PAR PoP, PAR FAMILLE.
+
+    Une liste de deux cents conversations n'est pas consultable : ce qu'on
+    cherche est toujours "ce PoP", "ce client", "ce service". Les filtres sont
+    la reponse, et ils se cumulent.
+    """
+    http, depot = client_avec_paires(settings, netflow)
+    http.get("/api/v1/netflow/pairs?pop=PoP%20Test&category=streaming&q=dupont")
+
+    demande = depot.demandes[0]
+    assert demande["pop"] == "PoP Test"
+    assert demande["category"] == "streaming"
+    assert demande["search"] == "dupont"
+
+
+def test_les_filtres_proposes_sont_ceux_qui_existent(
+    settings: Settings, netflow: NetflowService
+) -> None:
+    """Proposer tous les PoPs de l'inventaire ferait choisir un filtre qui ne
+    rend rien -- et on chercherait la panne plutot que le filtre."""
+    http, _ = client_avec_paires(settings, netflow)
+    facettes = http.get("/api/v1/netflow/pairs").json()["facets"]
+
+    assert facettes["pops"] == ["PoP Test"]
+    assert "streaming" in facettes["categories"]
+    assert "diagnostic" in facettes["apps"]
+
+
+def test_creer_une_regle_la_pose_aussitot_sur_les_routeurs(
+    client: TestClient, restrictions: RestrictionService
+) -> None:
+    """Plus de bouton "appliquer" : enregistrer une regle, ecriture active, la
+    pose tout de suite sur les routeurs."""
+    from app.enforcement.routeros import ActionOutcome, ApplyResult
+
+    class Enregistreur:
+        enforcement_enabled = True
+
+        def __init__(self) -> None:
+            self.plans: list[Any] = []
+
+        async def apply(self, plan: Any, **kwargs: Any) -> Any:
+            self.plans.append(plan)
+            resultat = ApplyResult(router_name=plan.router_name, dry_run=False)
+            resultat.outcomes = [ActionOutcome(action=a, ok=True) for a in plan.actions]
+            return resultat
+
+    ecriture = Enregistreur()
+    restrictions.shaping = ecriture  # type: ignore[assignment]
+    corps = client.post("/api/v1/traffic-rules", json=regle()).json()
+
+    assert corps["apply"]["state"] == "posee"
+    assert corps["last_state"] == "posee"
+    assert ecriture.plans
+    assert any(a.path == PATH_ADDRESS_LIST for a in ecriture.plans[0].actions)
+
+
+def test_creer_une_regle_interrupteur_coupe_la_pose_quand_meme(client: TestClient) -> None:
+    corps = client.post("/api/v1/traffic-rules", json=regle()).json()
+    assert corps["apply"]["state"] == "posee"
+
+
+# ============================================================ carte et recherche
+
+
+def test_la_carte_rend_les_lieux_et_dit_si_la_localisation_est_coupee(
+    client: TestClient, destinations: FauxDestinations
+) -> None:
+    """Une carte vide parce que la localisation est coupee et une carte vide
+    parce que rien n'a ete atteint n'appellent pas le meme geste : la reponse
+    doit permettre de les distinguer."""
+    corps = client.get("/api/v1/netflow/locations?minutes=120&category=streaming&q=par").json()
+    assert corps["geoip_enabled"] is False
+    assert corps["points"][0]["city"] == "Paris"
+    assert corps["countries"][0]["country"] == "FR"
+    # Les filtres de la page atteignent le depot tels quels.
+    assert destinations.lieux_demandes["minutes"] == 120
+    assert destinations.lieux_demandes["category"] == "streaming"
+    assert destinations.lieux_demandes["search"] == "par"
+
+
+def test_trouver_une_ip_la_nomme_sans_l_ecrire(
+    client: TestClient, destinations: FauxDestinations
+) -> None:
+    """N'importe quelle adresse se consulte, et la consulter n'ecrit RIEN : une
+    recherche ne doit pas faire entrer l'adresse dans l'historique du reseau."""
+    corps = client.get("/api/v1/netflow/lookup/45.57.12.34").json()
+    assert corps["address"] == "45.57.12.34"
+    assert corps["routable"] is True
+    assert corps["catalogue"]["service"] == "netflix"
+    assert corps["live"]["service"] == "netflix"
+    assert corps["seen"]["totals"]["clients"] == 2
+    # Les sources coupees sont dites, pour que l'interface explique un vide.
+    assert corps["sources"]["geoip"] is False
+    assert destinations.resolus == []
+    assert destinations.intel == {}
+
+
+def test_une_adresse_privee_n_est_pas_analysee(client: TestClient) -> None:
+    corps = client.get("/api/v1/netflow/lookup/10.1.2.3").json()
+    assert corps["routable"] is False
+    assert corps["live"] is None
+
+
+def test_une_saisie_qui_n_est_ni_adresse_ni_nom_est_refusee(client: TestClient) -> None:
+    reponse = client.get("/api/v1/netflow/lookup/pas une adresse")
+    assert reponse.status_code == 422
+
+
+def test_un_nom_de_domaine_se_cherche_par_ses_adresses(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api import netflow as routes
+
+    async def resolveur(nom: str) -> list[str]:
+        assert nom == "netflix.com"
+        return ["45.57.12.34", "45.57.12.35"]
+
+    monkeypatch.setattr(routes, "_adresses_du_nom", resolveur)
+    corps = client.get("/api/v1/netflow/lookup/Netflix.com.").json()
+    assert corps["resolved_from"] == "netflix.com"
+    assert corps["address"] == "45.57.12.34"
+    assert corps["other_addresses"] == ["45.57.12.35"]
+
+
+def test_un_nom_qui_ne_resout_pas_est_un_404(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.api import netflow as routes
+
+    async def muet(nom: str) -> list[str]:
+        return []
+
+    monkeypatch.setattr(routes, "_adresses_du_nom", muet)
+    reponse = client.get("/api/v1/netflow/lookup/inexistant.example")
+    assert reponse.status_code == 404
