@@ -2922,6 +2922,25 @@ function renderDecouverte(data) {
 
 /* --------------------------------------------------------------- abonnes */
 
+/** Le routeur porte le bon plafond, mais le debit MESURE le depasse nettement
+ *  dans un sens : ce trafic ne passe pas par la file. "held" serait faux.
+ *  Cause la plus frequente : un test adresse AU ROUTEUR lui-meme (bandwidth-test
+ *  ou ping vers son adresse), que ses files simples ne tiennent que dans un sens ;
+ *  sinon le fasttrack, ou un trafic qui ne traverse pas ce routeur. */
+function depassement(r) {
+  if (typeof mesureFraiche === 'function' && !mesureFraiche(r)) return '';
+  const sens = [];
+  const trop = (mesure, limite) => limite > 0 && mesure > limite * 1.3 + 50e3;
+  if (trop(Number(r.tx_bps) || 0, (Number(r.effective_down_mbps) || 0) * 1e6)) sens.push('&darr;');
+  if (trop(Number(r.rx_bps) || 0, (Number(r.effective_up_mbps) || 0) * 1e6)) sens.push('&uarr;');
+  if (!sens.length) return '';
+  return '<span class="badge crit" style="margin-left:.35rem" title="The router carries this cap, ' +
+    'but the measured rate is well above it: this traffic does not go through the queue. ' +
+    'Most often a test addressed to the router itself (bandwidth-test or ping to one of its ' +
+    'addresses): test towards a host beyond the router. Otherwise: fasttrack, or traffic that ' +
+    'does not cross this router.">exceeded ' + sens.join(' ') + '</span>';
+}
+
 /** Libelle de la limite appliquee, et d'ou elle vient.
  *  Afficher le plan RADIUS quand une surcharge existe serait mensonger : ce
  *  n'est pas ce que le routeur applique. */
@@ -2982,7 +3001,7 @@ function limitCell(r, etat) {
   if (!down && !up) return '<span style="color:var(--faint)">-</span>';
 
   const texte = esc(mbps(down || 0) + ' / ' + mbps(up || 0));
-  const sceau = limitProof(etat);
+  const sceau = depassement(r) || limitProof(etat);
   if (r.limit_source === 'plan') return texte + sceau;
 
   const marque = r.limit_source === 'boost'
