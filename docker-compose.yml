@@ -1,0 +1,66 @@
+# Deploiement en UNE commande, rien a preparer :
+#
+#     docker compose up -d --build
+#
+# puis ouvrir http://<serveur>:8000 et creer le premier compte. Pas de .env a
+# ecrire (il reste possible pour surcharger un reglage), pas de fichier
+# d'inventaire : les routeurs s'ajoutent depuis l'interface, la cle de
+# chiffrement est generee au premier demarrage, l'adresse NetFlow annoncee aux
+# routeurs est deduite toute seule.
+#
+# Le controleur tourne hors-bande : jamais sur le chemin des paquets.
+
+services:
+  timescaledb:
+    image: ${TIMESCALE_IMAGE:-timescale/timescaledb:latest-pg16}
+    container_name: freeqos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-qos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-qos}
+      # Le controleur ecrit en continu : on evite les checkpoints trop agressifs.
+      TIMESCALEDB_TELEMETRY: "off"
+    # Base NON publiee sur l'hote : l'application la joint par le reseau
+    # interne, et un PostgreSQL deja present sur le serveur ne bloque rien.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-qos} -d ${POSTGRES_DB:-qos}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      args:
+        PYTHON_IMAGE: ${PYTHON_IMAGE:-python:3.11-slim}
+    container_name: freeqos-app
+    restart: unless-stopped
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    # .env FACULTATIF : sans lui, les valeurs par defaut suffisent.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-qos}:${POSTGRES_PASSWORD:-changeme}@timescaledb:5432/${POSTGRES_DB:-qos}
+    ports:
+      - "${APP_PORT:-8000}:8000"
+      # Ecoute NetFlow (v5, v9, IPFIX). EN UDP, et c'est le piege classique :
+      # sans le suffixe /udp, Docker publie du TCP et les datagrammes exportes
+      # par les routeurs n'atteignent jamais le collecteur -- sans la moindre
+      # erreur nulle part, juste un onglet Trafic qui reste vide.
+      - "${NETFLOW_PORT:-2055}:2055/udp"
+    volumes:
+      # Cle de chiffrement generee au premier demarrage. Volume NOMME et non
+      # bind-mount : elle survit a un docker compose down/up, qui recree le
+      # conteneur. La perdre rendrait illisibles les mots de passe des routeurs
+      # enregistres depuis l'interface.
+      - qosdata:/app/data
+
+volumes:
+  pgdata:
+  qosdata:

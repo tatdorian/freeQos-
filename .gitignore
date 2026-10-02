@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+config/routers.yml
+config/routers.json
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+pgdata/
+
+# Cle de chiffrement : ne doit JAMAIS etre versionnee.
+data/
+*.key
+.idea/
+.vscode/

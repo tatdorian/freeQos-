@@ -1,0 +1,1016 @@
+"""Clients a IP fixe : de la fiche declaree jusqu'a la file RouterOS.
+
+Ce fichier verrouille les trois promesses du chantier :
+
+  1. les deux natures COEXISTENT -- ajouter des clients statiques ne change
+     rien au chemin PPPoE ;
+  2. elles se DISTINGUENT partout ou il le faut (base, topologie, interface) ;
+  3. elles suivent ENSUITE exactement le meme chemin plan() / apply().
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from types import SimpleNamespace
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app.api.deps import get_container
+from app.collectors.mikrotik import MikrotikCollector
+from app.collectors.radius import MockPlanProvider
+from app.collectors.topology import (
+    KIND_SECTOR,
+    KIND_STATIC,
+    TopologyNode,
+    TopologySnapshot,
+    attach_static_clients,
+    static_client_node_key,
+)
+from app.collectors.uisp import MockBackhaulProvider
+from app.config import Settings
+from app.db.directory import InMemoryDirectory
+from app.db.static_clients_repo import (
+    DuplicateStaticClientError,
+    InvalidStaticClientError,
+    StaticClientNotFoundError,
+    normalise_address,
+    to_model,
+)
+from app.db.writer import InMemoryMetricsWriter
+from app.enforcement.planner import TARGET_INTERFACE, SubscriberTarget
+from app.main import register_routes
+from app.models import KIND_PPPOE, StaticClient
+from app.models import KIND_STATIC as SUB_KIND_STATIC
+from app.services.collection import PLAN_SOURCE_STATIC, CollectionService
+from app.services.shaping import ShapingService
+from tests.conftest import FakeRouterOsClient
+from tests.test_api import build_container
+from tests.test_collection_service import Clock
+from tests.test_shaping_service import DepotBoosts, MetriquesMinimales, make_service
+
+
+class InventaireMemoire:
+    """Double de StaticClientsRepository : ne garde que ce que lit le service."""
+
+    def __init__(self, clients: list[StaticClient] | None = None) -> None:
+        self.clients = clients or []
+        self.lectures = 0
+        self.erreur: Exception | None = None
+
+    async def load_enabled(self) -> list[StaticClient]:
+        self.lectures += 1
+        if self.erreur is not None:
+            raise self.erreur
+        return list(self.clients)
+
+
+def fiche(**kwargs) -> StaticClient:
+    base = {
+        "reference": "mairie-vitre",
+        "pop_name": "PoP Test",
+        "address": "10.0.0.5/32",
+        "plan_down_mbps": 200.0,
+        "plan_up_mbps": 50.0,
+    }
+    return StaticClient(**{**base, **kwargs})
+
+
+# =========================================================================
+# 1. Identite : un seul espace de noms, un discriminant explicite
+# =========================================================================
+
+
+def test_l_adresse_ne_fait_pas_partie_de_l_identite() -> None:
+    """Le nom de file doit survivre a un demenagement.
+
+    C'est l'argument qui a fait ecarter un identifiant synthetique du type
+    'static:<vlan>:<ip>' : la cle de reconciliation en aurait dependu, et
+    changer l'IP d'un client aurait detruit puis recree sa file, en perdant au
+    passage ses surcharges et son historique.
+    """
+    avant = SubscriberTarget(
+        login="mairie-vitre",
+        interface="",
+        plan_down_mbps=200,
+        plan_up_mbps=50,
+        kind=SUB_KIND_STATIC,
+        address="10.0.0.5/32",
+    )
+    apres = SubscriberTarget(
+        login="mairie-vitre",
+        interface="",
+        plan_down_mbps=200,
+        plan_up_mbps=50,
+        kind=SUB_KIND_STATIC,
+        address="192.168.7.9/32",
+    )
+    assert avant.queue_name == apres.queue_name
+    assert avant.queue_target() != apres.queue_target()
+
+
+def test_un_client_statique_vise_toujours_son_adresse() -> None:
+    """Il n'a pas d'interface a lui : la viser briderait ses voisins de VLAN."""
+    cible = SubscriberTarget(
+        login="mairie",
+        interface="",
+        plan_down_mbps=100,
+        plan_up_mbps=20,
+        kind=SUB_KIND_STATIC,
+        address="10.0.0.5",
+    )
+    assert cible.queue_target() == "10.0.0.5/32"
+    # Meme quand la configuration globale demande des files par interface.
+    assert cible.queue_target(TARGET_INTERFACE) == "10.0.0.5/32"
+
+
+def test_le_sous_reseau_declare_est_conserve() -> None:
+    """Un professionnel a qui on a vendu un /29 doit voir son bloc plafonne,
+    pas seulement sa premiere adresse."""
+    cible = SubscriberTarget(
+        login="clinique",
+        interface="",
+        plan_down_mbps=500,
+        plan_up_mbps=500,
+        kind=SUB_KIND_STATIC,
+        address="10.0.0.0/29",
+    )
+    assert cible.queue_target() == "10.0.0.0/29"
+
+
+def test_une_session_pppoe_reste_ramenee_a_un_hote() -> None:
+    """Le chemin PPPoE ne doit RIEN changer : un prefixe large sur une session
+    serait une erreur de saisie qui shaperait les voisins de l'abonne."""
+    cible = SubscriberTarget(
+        login="dupont",
+        interface="<pppoe-dupont>",
+        plan_down_mbps=100,
+        plan_up_mbps=20,
+        kind=KIND_PPPOE,
+        address="10.20.0.10/24",
+    )
+    assert cible.queue_target() == "10.20.0.10/32"
+    assert cible.queue_target(TARGET_INTERFACE) == "<pppoe-dupont>"
+
+
+@pytest.mark.parametrize(
+    ("saisie", "attendu"),
+    [
+        ("10.0.0.5", "10.0.0.5/32"),
+        ("10.0.0.5/32", "10.0.0.5/32"),
+        ("10.0.0.0/29", "10.0.0.0/29"),
+        # Adresse d'hote portant un prefixe large : lue comme "le bloc du client".
+        ("10.0.0.5/29", "10.0.0.0/29"),
+        ("2001:db8::1", "2001:db8::1/128"),
+    ],
+)
+def test_normalisation_des_adresses(saisie: str, attendu: str) -> None:
+    assert normalise_address(saisie) == attendu
+
+
+@pytest.mark.parametrize("saisie", ["", "pas-une-ip", "0.0.0.0", "127.0.0.1"])
+def test_adresses_refusees(saisie: str) -> None:
+    with pytest.raises(InvalidStaticClientError):
+        normalise_address(saisie)
+
+
+# =========================================================================
+# 2. Collecte : materialisation et mesure
+# =========================================================================
+
+
+def build_service(
+    settings: Settings,
+    client: FakeRouterOsClient,
+    inventaire: InventaireMemoire,
+    clock: Clock | None = None,
+) -> tuple[CollectionService, InMemoryMetricsWriter, InMemoryDirectory]:
+    clock = clock or Clock()
+    collectors = [MikrotikCollector(cfg, client=client) for cfg in settings.routers]
+    writer = InMemoryMetricsWriter()
+    directory = InMemoryDirectory()
+    service = CollectionService(
+        settings,
+        collectors=collectors,
+        backhaul_provider=MockBackhaulProvider(clock=clock),
+        plan_provider=MockPlanProvider(),
+        directory=directory,
+        writer=writer,
+        backhauls=[],
+        clock=clock,
+        static_clients=inventaire,
+    )
+    return service, writer, directory
+
+
+async def test_un_client_declare_devient_un_abonne(settings: Settings) -> None:
+    client = FakeRouterOsClient()
+    inventaire = InventaireMemoire([fiche()])
+    service, writer, directory = build_service(settings, client, inventaire)
+
+    resultat = await service.collect_subscribers()
+
+    assert resultat.ok, resultat.errors
+    assert "mairie-vitre" in directory.subscribers
+    sid = directory.subscribers["mairie-vitre"]
+    assert directory.kinds[sid] == SUB_KIND_STATIC
+    # Le plan vient de la fiche, et le dit.
+    assert directory.plans[sid].source == PLAN_SOURCE_STATIC
+    assert directory.plans[sid].down_mbps == 200.0
+    # Il a bien produit un echantillon, meme sans trafic mesurable.
+    assert [s.login for _, s in writer.subscriber_rows] == ["mairie-vitre"]
+
+
+async def test_les_deux_natures_cohabitent(settings: Settings) -> None:
+    """La preuve que rien n'est casse : meme cycle, meme ecriture, deux natures."""
+    client = FakeRouterOsClient()
+    client.add_session("dupont", rx_byte=0, tx_byte=0)
+    inventaire = InventaireMemoire([fiche()])
+    service, writer, directory = build_service(settings, client, inventaire)
+
+    await service.collect_subscribers()
+
+    logins = sorted(s.login for _, s in writer.subscriber_rows)
+    assert logins == ["dupont", "mairie-vitre"]
+    assert directory.kinds[directory.subscribers["dupont"]] == KIND_PPPOE
+    assert directory.kinds[directory.subscribers["mairie-vitre"]] == SUB_KIND_STATIC
+
+
+async def test_le_debit_vient_des_compteurs_de_sa_file(settings: Settings) -> None:
+    """La file posee sur son adresse est le seul compteur par client dont on
+    dispose : sans session PPPoE, aucune interface ne porte son trafic."""
+    client = FakeRouterOsClient()
+    clock = Clock()
+    inventaire = InventaireMemoire([fiche()])
+    service, writer, _ = build_service(settings, client, inventaire, clock=clock)
+
+    # RouterOS rend la paire du point de vue de la CIBLE : <upload>/<download>.
+    client.simple_queue_rows = [
+        {"name": "freeqos-mairie-vitre", "target": "10.0.0.5/32", "bytes": "1000/5000"}
+    ]
+    await service.collect_subscribers()  # premiere mesure : pas encore de debit
+
+    clock.advance(10)
+    client.simple_queue_rows = [
+        {"name": "freeqos-mairie-vitre", "target": "10.0.0.5/32", "bytes": "2000/15000"}
+    ]
+    await service.collect_subscribers()
+
+    dernier = writer.subscriber_rows[-1][1]
+    # 1000 octets montants en 10 s = 800 bps ; 10000 descendants = 8000 bps.
+    assert dernier.rx_bps == pytest.approx(800)
+    assert dernier.tx_bps == pytest.approx(8000)
+
+
+async def test_sans_file_le_client_existe_mais_sans_debit(settings: Settings) -> None:
+    """Limite assumee : pas de file posee, pas de mesure. Mieux vaut un trou
+    qu'un zero, qui se lirait comme une absence de trafic."""
+    client = FakeRouterOsClient()
+    inventaire = InventaireMemoire([fiche()])
+    service, writer, _ = build_service(settings, client, inventaire)
+
+    await service.collect_subscribers()
+
+    echantillon = writer.subscriber_rows[-1][1]
+    assert echantillon.rx_bps is None
+    assert echantillon.tx_bps is None
+    assert echantillon.rx_bytes is None
+
+
+async def test_sans_file_le_debit_vient_de_netflow(settings: Settings) -> None:
+    """Un client ajoute a la main dont aucune file ne compte le trafic (pas
+    encore posee, ou son trafic ne traverse pas le routeur de son PoP) prend
+    le debit que NetFlow a mesure sur la derniere fenetre."""
+    from app.services.flows import SubscriberCounters
+    from app.services.netflow_service import NetflowService
+
+    client = FakeRouterOsClient()
+    inventaire = InventaireMemoire([fiche()])
+    service, writer, directory = build_service(settings, client, inventaire)
+    await service.collect_subscribers()
+    sid = directory.subscribers["mairie-vitre"]
+
+    netflow = NetflowService(enabled=True)
+    netflow.packets_received = 10
+    netflow.last_flush_at = datetime.now(tz=UTC)
+    lot = SimpleNamespace(
+        subscribers=[
+            # Vu a deux points : on garde le plus grand, jamais la somme.
+            SubscriberCounters(sid, "edge", down_bytes=75_000, up_bytes=7_500),
+            SubscriberCounters(sid, "pop", down_bytes=60_000, up_bytes=7_500),
+        ]
+    )
+    netflow._note_rates(lot, 60.0)  # noqa: SLF001
+    service.netflow = netflow
+
+    await service.collect_subscribers()
+
+    echantillon = writer.subscriber_rows[-1][1]
+    assert echantillon.tx_bps == pytest.approx(10_000)  # 75 000 o * 8 / 60 s
+    assert echantillon.rx_bps == pytest.approx(1_000)
+
+
+async def test_netflow_coupe_ne_fait_pas_passer_le_client_a_zero(settings: Settings) -> None:
+    """Sans flux recus, le zero de NetFlow ne veut rien dire : le trou reste."""
+    from app.services.netflow_service import NetflowService
+
+    client = FakeRouterOsClient()
+    service, writer, _ = build_service(settings, client, InventaireMemoire([fiche()]))
+    service.netflow = NetflowService(enabled=True)
+
+    await service.collect_subscribers()
+
+    assert writer.subscriber_rows[-1][1].rx_bps is None
+
+
+async def test_un_inventaire_illisible_ne_casse_pas_le_cycle_pppoe(
+    settings: Settings,
+) -> None:
+    client = FakeRouterOsClient()
+    client.add_session("dupont", rx_byte=0, tx_byte=0)
+    inventaire = InventaireMemoire([fiche()])
+    inventaire.erreur = RuntimeError("base injoignable")
+    service, writer, _ = build_service(settings, client, inventaire)
+
+    resultat = await service.collect_subscribers()
+
+    assert [s.login for _, s in writer.subscriber_rows] == ["dupont"]
+    assert not resultat.ok
+    assert any("static-IP inventory" in e for e in resultat.errors)
+
+
+async def test_sans_inventaire_le_comportement_est_inchange(settings: Settings) -> None:
+    """Un deploiement 100 % PPPoE ne doit rien voir de ce chantier."""
+    client = FakeRouterOsClient()
+    client.add_session("dupont", rx_byte=0, tx_byte=0)
+    collectors = [MikrotikCollector(cfg, client=client) for cfg in settings.routers]
+    writer = InMemoryMetricsWriter()
+    service = CollectionService(
+        settings,
+        collectors=collectors,
+        backhaul_provider=MockBackhaulProvider(),
+        plan_provider=MockPlanProvider(),
+        directory=InMemoryDirectory(),
+        writer=writer,
+        backhauls=[],
+    )
+
+    resultat = await service.collect_subscribers()
+
+    assert resultat.ok
+    assert [s.login for _, s in writer.subscriber_rows] == ["dupont"]
+
+
+# =========================================================================
+# 3. Topologie : une nature a part, comptee dans le partage
+# =========================================================================
+
+
+def test_le_client_est_pose_sous_son_secteur_declare() -> None:
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="uisp:ap-1", name="Secteur Altair", kind=KIND_SECTOR))
+
+    poses = attach_static_clients(snapshot, [fiche(sector_key="uisp:ap-1")])
+
+    assert poses == 1
+    noeud = snapshot.nodes[static_client_node_key("mairie-vitre")]
+    # Sa propre nature : le confondre avec un CPE ferait croire a une
+    # decouverte la ou il n'y a qu'une declaration.
+    assert noeud.kind == KIND_STATIC
+    assert noeud.attributes["declared"] is True
+    assert any(
+        lien.source_key == "uisp:ap-1" and lien.target_key == noeud.key
+        for lien in snapshot.links.values()
+    )
+    # Le rattachement remonte : c'est lui qui fera compter le client dans le
+    # partage d'un lien congestionne.
+    assert snapshot.subscriber_sectors["mairie-vitre"] == "uisp:ap-1"
+
+
+def test_sans_secteur_le_client_pend_sous_son_pop() -> None:
+    """Moins precis, mais jamais faux : on prefere un rattachement large a un
+    client flottant hors de l'arbre."""
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:pop-test", name="PoP Test", kind="pop"))
+
+    attach_static_clients(snapshot, [fiche()], pop_keys={"PoP Test": "router:pop-test"})
+
+    cle = static_client_node_key("mairie-vitre")
+    assert any(
+        lien.source_key == "router:pop-test" and lien.target_key == cle
+        for lien in snapshot.links.values()
+    )
+
+
+def test_un_secteur_inconnu_est_signale_sans_perdre_le_client() -> None:
+    snapshot = TopologySnapshot()
+
+    attach_static_clients(snapshot, [fiche(sector_key="uisp:fantome")])
+
+    # Le noeud existe quand meme : l'operateur doit VOIR son client.
+    assert static_client_node_key("mairie-vitre") in snapshot.nodes
+    assert any("unknown sector" in avertissement for avertissement in snapshot.warnings)
+
+
+# =========================================================================
+# 4. Shaping : le meme chemin, jusqu'a la commande RouterOS
+# =========================================================================
+
+
+@pytest.fixture
+def routeur() -> FakeRouterOsClient:
+    """Routeur nu : aucune session PPPoE, pour isoler le chemin statique."""
+    client = FakeRouterOsClient()
+    client.ethernet_rows = [{"name": "ether2", "speed": "1Gbps"}]
+    return client
+
+
+def service_avec_inventaire(
+    settings: Settings, routeur: FakeRouterOsClient, clients: list[StaticClient]
+) -> ShapingService:
+    service = make_service(
+        settings,
+        routeur,
+        repository=DepotBoosts(),
+        static_clients=InventaireMemoire(clients),
+    )
+    service.metrics = MetriquesMinimales([])
+    return service
+
+
+async def test_le_client_statique_produit_une_cible(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    service = service_avec_inventaire(settings, routeur, [fiche()])
+    await service.registry.reload()
+
+    _, abonnes = await service.build_targets("pop-test")
+
+    assert len(abonnes) == 1
+    cible = abonnes[0]
+    assert cible.kind == SUB_KIND_STATIC
+    assert cible.interface == ""
+    assert cible.queue_target() == "10.0.0.5/32"
+
+
+async def test_seul_le_pop_concerne_recoit_ses_clients(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    service = service_avec_inventaire(
+        settings, routeur, [fiche(), fiche(reference="ailleurs", pop_name="PoP Lointain")]
+    )
+    await service.registry.reload()
+
+    _, abonnes = await service.build_targets("pop-test")
+
+    assert [a.login for a in abonnes] == ["mairie-vitre"]
+
+
+async def test_le_plan_ecrit_la_meme_commande_que_pour_un_abonne(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """La preuve de bout en bout : le client statique traverse plan() et en
+    ressort avec une file /queue/simple ordinaire."""
+    settings.enforcement_enabled = True
+    service = service_avec_inventaire(settings, routeur, [fiche()])
+    await service.registry.reload()
+
+    liens, abonnes = await service.build_targets("pop-test")
+    plan = await service.plan("pop-test", links=liens, subscribers=abonnes)
+
+    ajouts = [a for a in plan.actions if a.verb == "add" and a.path == "/queue/simple"]
+    assert [a.fields["name"] for a in ajouts] == ["freeqos-mairie-vitre"]
+    assert ajouts[0].fields["target"] == "10.0.0.5/32"
+    # 50 Mbps montant / 200 Mbps descendant, format RouterOS.
+    assert ajouts[0].fields["max-limit"] == "50000000/200000000"
+
+
+async def test_la_surcharge_manuelle_s_applique_aussi_aux_statiques(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Meme hierarchie de debits que pour un abonne PPPoE : la surcharge
+    manuelle prime sur le plan declare."""
+    settings.enforcement_enabled = True
+    depot = DepotBoosts()
+
+    async def policy_map(scope):
+        if scope == "subscriber":
+            return {"mairie-vitre": {"max_down_mbps": 20.0, "max_up_mbps": 5.0}}
+        return {}
+
+    depot.policy_map = policy_map  # type: ignore[method-assign]
+    service = make_service(
+        settings, routeur, repository=depot, static_clients=InventaireMemoire([fiche()])
+    )
+    service.metrics = MetriquesMinimales([])
+    await service.registry.reload()
+
+    liens, abonnes = await service.build_targets("pop-test")
+    plan = await service.plan("pop-test", links=liens, subscribers=abonnes)
+
+    ajouts = [a for a in plan.actions if a.verb == "add" and a.path == "/queue/simple"]
+    assert ajouts[0].fields["max-limit"] == "5000000/20000000"
+
+
+async def test_un_client_desactive_disparait_du_plan(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """load_enabled ne rend que les fiches actives : suspendre un client
+    retire sa file au cycle suivant, sans perdre sa fiche."""
+    service = service_avec_inventaire(settings, routeur, [])
+    await service.registry.reload()
+
+    _, abonnes = await service.build_targets("pop-test")
+
+    assert abonnes == []
+
+
+async def test_le_pop_d_un_client_statique_est_retrouve_sans_metrique(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Un client boostee le jour de sa saisie n'a pas encore d'echantillon :
+    l'inventaire doit suffire a savoir quel routeur replanifier."""
+    service = service_avec_inventaire(settings, routeur, [fiche()])
+    await service.registry.reload()
+
+    assert await service._routers_for_logins({"mairie-vitre"}) == ["pop-test"]
+
+
+# =========================================================================
+# 5. API d'administration
+# =========================================================================
+
+
+class InventaireApi:
+    """Double du depot, cote API : garde des lignes en memoire comme la base."""
+
+    def __init__(self) -> None:
+        self.lignes: list[dict] = []
+        self._next_id = 1
+
+    async def list_all(self, *, pop_name: str | None = None) -> list[dict]:
+        return [
+            dict(ligne)
+            for ligne in self.lignes
+            if pop_name is None or ligne["pop_name"] == pop_name
+        ]
+
+    async def get(self, client_id: int) -> dict:
+        for ligne in self.lignes:
+            if ligne["id"] == client_id:
+                return dict(ligne)
+        raise StaticClientNotFoundError(str(client_id))
+
+    async def load_enabled(self) -> list[StaticClient]:
+        return [to_model(ligne) for ligne in self.lignes if ligne["enabled"]]
+
+    async def create(self, payload: dict) -> dict:
+        if any(ligne["reference"] == payload["reference"] for ligne in self.lignes):
+            raise DuplicateStaticClientError(payload["reference"])
+        ligne = {**payload, "id": self._next_id, "address": normalise_address(payload["address"])}
+        self._next_id += 1
+        self.lignes.append(ligne)
+        return dict(ligne)
+
+    async def update(self, client_id: int, payload: dict) -> dict:
+        ligne = await self.get(client_id)
+        if "address" in payload and payload["address"] is not None:
+            payload = {**payload, "address": normalise_address(payload["address"])}
+        ligne.update({k: v for k, v in payload.items() if v is not None})
+        self.lignes = [ligne if x["id"] == client_id else x for x in self.lignes]
+        return dict(ligne)
+
+    async def delete(self, client_id: int) -> None:
+        avant = len(self.lignes)
+        self.lignes = [x for x in self.lignes if x["id"] != client_id]
+        if len(self.lignes) == avant:
+            raise StaticClientNotFoundError(str(client_id))
+
+
+@pytest.fixture
+def api_client(settings: Settings) -> tuple[TestClient, InventaireApi]:
+    inventaire = InventaireApi()
+    container = build_container(settings, static_clients_repo=inventaire)
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: container
+    return TestClient(app), inventaire
+
+
+def test_api_declare_puis_liste(api_client) -> None:
+    client, _ = api_client
+    reponse = client.post(
+        "/api/v1/static-clients",
+        json={
+            "reference": "mairie-vitre",
+            "pop_name": "PoP Test",
+            "address": "10.0.0.5",
+            "plan_down_mbps": 200,
+        },
+    )
+    assert reponse.status_code == 201, reponse.text
+    assert reponse.json()["address"] == "10.0.0.5/32"
+
+    liste = client.get("/api/v1/static-clients").json()
+    assert [f["reference"] for f in liste] == ["mairie-vitre"]
+
+
+def test_api_refuse_une_adresse_invalide(api_client) -> None:
+    client, _ = api_client
+    reponse = client.post(
+        "/api/v1/static-clients",
+        json={"reference": "x", "pop_name": "PoP Test", "address": "pas-une-ip"},
+    )
+    assert reponse.status_code == 400
+
+
+def test_api_refuse_un_doublon(api_client) -> None:
+    client, _ = api_client
+    corps = {"reference": "mairie", "pop_name": "PoP Test", "address": "10.0.0.5"}
+    assert client.post("/api/v1/static-clients", json=corps).status_code == 201
+    assert client.post("/api/v1/static-clients", json=corps).status_code == 409
+
+
+def test_api_modifie_et_retire(api_client) -> None:
+    client, inventaire = api_client
+    cree = client.post(
+        "/api/v1/static-clients",
+        json={"reference": "mairie", "pop_name": "PoP Test", "address": "10.0.0.5"},
+    ).json()
+
+    modifie = client.patch(f"/api/v1/static-clients/{cree['id']}", json={"address": "10.0.0.0/29"})
+    assert modifie.status_code == 200
+    assert modifie.json()["address"] == "10.0.0.0/29"
+
+    assert client.delete(f"/api/v1/static-clients/{cree['id']}").status_code == 204
+    assert inventaire.lignes == []
+    assert client.delete(f"/api/v1/static-clients/{cree['id']}").status_code == 404
+
+
+def test_api_vlan_hors_bornes_refuse(api_client) -> None:
+    client, _ = api_client
+    reponse = client.post(
+        "/api/v1/static-clients",
+        json={"reference": "x", "pop_name": "PoP Test", "address": "10.0.0.5", "vlan": 9999},
+    )
+    assert reponse.status_code == 422
+
+
+# =========================================================================
+# 6. Non-regression : RADIUS ne doit pas parler a la place de l'inventaire
+# =========================================================================
+
+
+async def test_radius_ne_reecrit_pas_le_plan_d_un_client_statique(
+    settings: Settings,
+) -> None:
+    """Piege reel : le job de rafraichissement des plans interrogeait RADIUS
+    pour TOUS les abonnes.
+
+    Un serveur RADIUS qui repond quand meme -- catch-all, plan par defaut, ou
+    simplement un fournisseur de test -- ecraserait alors le debit declare dans
+    l'inventaire par une valeur inventee. Pour un client a IP fixe, la fiche
+    fait foi : RADIUS n'a rien a dire sur lui.
+    """
+    client = FakeRouterOsClient()
+    client.add_session("dupont", rx_byte=0, tx_byte=0)
+    inventaire = InventaireMemoire([fiche()])
+    service, _, directory = build_service(settings, client, inventaire)
+
+    await service.collect_subscribers()
+    sid_statique = directory.subscribers["mairie-vitre"]
+    assert directory.plans[sid_statique].source == PLAN_SOURCE_STATIC
+
+    # MockPlanProvider fabrique un plan pour N'IMPORTE QUEL login.
+    assert await service.plan_provider.get_plan("mairie-vitre") is not None
+
+    resultat = await service.refresh_plans()
+
+    assert resultat.ok
+    # L'abonne PPPoE a bien ete rafraichi...
+    assert directory.plans[directory.subscribers["dupont"]].source.startswith("mock:")
+    # ... et le client statique a garde le plan de sa fiche.
+    assert directory.plans[sid_statique].source == PLAN_SOURCE_STATIC
+    assert directory.plans[sid_statique].down_mbps == 200.0
+
+
+# ---------------------------------------------------------------------------
+# UNE SEULE SOURCE POUR LES ABONNES, DONC UNE SEULE CASE
+#
+# Un client a IP fixe declare a aussi une case dans le graphe : elle sert a
+# calculer son rattachement a un secteur pendant la decouverte, et c'est sa
+# seule raison d'etre. La rendre EN PLUS le faisait apparaitre DEUX FOIS dans
+# l'arbre -- sa propre case, et son compte dans les abonnes de son PoP -- alors
+# que c'est le meme client.
+# ---------------------------------------------------------------------------
+async def test_l_arbre_ne_sert_pas_les_cases_de_clients_statiques() -> None:
+    from app.api.shaping import topology as lire_topologie
+    from app.models import KIND_STATIC
+
+    class DepotGraphe:
+        async def nodes(self):
+            return [
+                {"key": "router:pop", "name": "PoP Altair", "kind": "pop", "attributes": {}},
+                {"key": "static:mairie", "name": "mairie", "kind": KIND_STATIC, "attributes": {}},
+            ]
+
+        async def links(self):
+            return [
+                {
+                    "key": "l1",
+                    "source_key": "router:pop",
+                    "target_key": "static:mairie",
+                    "kind": "static",
+                    "interface": None,
+                    "attributes": {},
+                }
+            ]
+
+        async def aliases(self):
+            return {}
+
+    class FauxShaping:
+        last_snapshot = None
+        last_discovery_at = None
+
+    class FauxConteneur:
+        topology_repo = DepotGraphe()
+        shaping = FauxShaping()
+
+    reponse = await lire_topologie(FauxConteneur())
+
+    assert [n["key"] for n in reponse["nodes"]] == ["router:pop"]
+    assert reponse["links"] == [], "le lien vers le client part avec sa case"
+    assert reponse["counts"]["nodes"] == 1
+
+
+# =========================================================================
+# 5. Client declare par son VLAN : mesure par l'interface, place sous son VLAN
+# =========================================================================
+
+
+def routeur_vlan(*, rx: int, tx: int, pppoe: bool = False) -> FakeRouterOsClient:
+    client = FakeRouterOsClient()
+    client.vlan_rows = [{"name": "vlan2060", "vlan-id": "2060", "interface": "ether2"}]
+    client.interfaces_rows.append(
+        {"name": "vlan2060", "type": "vlan", "rx-byte": str(rx), "tx-byte": str(tx)}
+    )
+    if pppoe:
+        client.pppoe_server_rows = [{"interface": "vlan2060", "service-name": "pppoe"}]
+    return client
+
+
+def fiche_vlan(**kwargs) -> StaticClient:
+    return fiche(reference="nestle", address="10.60.0.2/32", vlan=2060, **kwargs)
+
+
+async def test_sans_file_le_client_seul_sur_son_vlan_est_mesure_par_l_interface(
+    settings: Settings,
+) -> None:
+    """Le cas du terrain : un client ajoute a la main sur un VLAN, ecriture
+    coupee, donc aucune file. RouterOS compte deja tout ce qui passe sur
+    l'interface VLAN -- et quand le client y est seul, c'est SON trafic."""
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "2000", "tx-byte": "35000"})
+    await service.collect_subscribers()
+
+    dernier = writer.subscriber_rows[-1][1]
+    # rx de l'interface = ce que le client envoie (upload) ; tx = son download.
+    assert dernier.rx_bps == pytest.approx(800)
+    assert dernier.tx_bps == pytest.approx(20_000)
+
+
+async def test_deux_clients_sur_le_meme_vlan_ne_prennent_pas_son_compteur(
+    settings: Settings,
+) -> None:
+    """A deux, le compteur du VLAN est leur SOMME : l'attribuer a l'un des
+    deux serait inventer une mesure. Ils restent sans debit plutot que faux."""
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    autre = fiche(reference="voisin", address="10.60.0.3/32", vlan=2060)
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan(), autre]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "2000", "tx-byte": "35000"})
+    await service.collect_subscribers()
+
+    assert all(s.tx_bps is None for _, s in writer.subscriber_rows[-2:])
+
+
+async def test_un_vlan_qui_porte_du_pppoe_ne_mesure_pas_le_client(settings: Settings) -> None:
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000, pppoe=True)
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "2000", "tx-byte": "35000"})
+    await service.collect_subscribers()
+
+    assert writer.subscriber_rows[-1][1].tx_bps is None
+
+
+def test_le_client_vlan_pend_sous_son_vlan_relie_par_un_lien_mesure() -> None:
+    """Le lien routeur -> VLAN nomme l'interface : c'est ce qui lui fait
+    afficher le debit que RouterOS compte sur ce VLAN, au lieu d'un
+    rattachement declare que personne ne mesure."""
+    from app.collectors.topology import KIND_VLAN, vlan_node_key
+
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:pop-test", name="PoP Test", kind="pop"))
+
+    attach_static_clients(
+        snapshot,
+        [fiche_vlan()],
+        pop_keys={"PoP Test": "router:pop-test"},
+        vlan_sites={"nestle": ("pop-test", "vlan2060", 2060)},
+    )
+
+    cle_vlan = vlan_node_key("pop-test", 2060)
+    assert snapshot.nodes[cle_vlan].kind == KIND_VLAN
+    assert snapshot.nodes[cle_vlan].name == "VLAN 2060"
+    amont = next(lk for lk in snapshot.links.values() if lk.target_key == cle_vlan)
+    assert amont.source_key == "router:pop-test"
+    assert amont.interface == "vlan2060"
+    assert amont.discovered_by == "pop-test"
+    # Le client pend sous le VLAN, et SEULEMENT sous lui.
+    parents = [
+        lk.source_key
+        for lk in snapshot.links.values()
+        if lk.target_key == static_client_node_key("nestle")
+    ]
+    assert parents == [cle_vlan]
+    # Pas un secteur : le VLAN n'entre pas dans les rattachements radio.
+    assert "nestle" not in snapshot.subscriber_sectors
+
+
+def test_un_secteur_declare_reste_prioritaire_sur_le_vlan() -> None:
+    snapshot = TopologySnapshot()
+    snapshot.add_node(TopologyNode(key="router:pop-test", name="PoP Test", kind="pop"))
+    snapshot.add_node(TopologyNode(key="uisp:ap-1", name="Secteur Altair", kind=KIND_SECTOR))
+
+    attach_static_clients(
+        snapshot,
+        [fiche_vlan(sector_key="uisp:ap-1")],
+        vlan_sites={"nestle": ("pop-test", "vlan2060", 2060)},
+    )
+
+    assert not any(n.kind == "vlan" for n in snapshot.nodes.values())
+
+
+def test_l_interface_du_vlan_vient_de_la_configuration_du_routeur(settings: Settings) -> None:
+    """Un identifiant pose sur deux interfaces ne designe aucune des deux."""
+    from app.collectors.config_graph import InterfacePath
+    from app.services.shaping import static_vlan_sites
+
+    collectors = [MikrotikCollector(cfg, client=FakeRouterOsClient()) for cfg in settings.routers]
+    piles = {
+        "pop-test": {
+            "vlan2060": InterfacePath(name="vlan2060", kind="vlan", vlan_id=2060),
+            "vlan70": InterfacePath(name="vlan70", kind="vlan", vlan_id=70),
+            "vlan70-bis": InterfacePath(name="vlan70-bis", kind="vlan", vlan_id=70),
+        }
+    }
+    sites = static_vlan_sites([fiche_vlan(), fiche(reference="ambigu", vlan=70)], collectors, piles)
+    assert sites == {"nestle": ("pop-test", "vlan2060", 2060)}
+
+
+def _reseau_vlan() -> None:
+    import ipaddress
+
+    from app.collectors import mikrotik
+
+    mikrotik._RESEAUX_CONNECTES["pop-test"] = [(ipaddress.ip_network("10.60.0.0/29"), "vlan2060")]
+
+
+async def test_seul_sur_sa_vlan_sa_file_vise_le_reseau_de_la_vlan(settings: Settings) -> None:
+    """Constate sur le terrain : une file qui vise l'INTERFACE VLAN ne compte
+    jamais l'upload (0 octet) ; une file sur une ADRESSE tient les deux sens.
+    Seul sur sa VLAN, le client est donc vise par le RESEAU de sa VLAN."""
+    _reseau_vlan()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    service, _writer, _ = build_service(settings, client, InventaireMemoire([fiche_vlan()]))
+    await service.collect_subscribers()
+    assert service.sole_vlan_networks == {fiche_vlan().reference: "10.60.0.0/29"}
+
+
+async def test_seul_sur_sa_vlan_la_file_mesure_les_deux_sens(settings: Settings) -> None:
+    """La mesure vient de SA file (ce qui est passe), pas du rx de l'interface
+    qui compte aussi ce que la file jette."""
+    _reseau_vlan()
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.0/29", "bytes": "0/0"}]
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "500000", "tx-byte": "260000"})
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.0/29", "bytes": "250000/247000"}]
+    await service.collect_subscribers()
+
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(200_000)
+    assert ligne.tx_bps == pytest.approx(197_600)
+
+
+def test_une_file_statique_ne_vise_jamais_une_interface() -> None:
+    from app.enforcement.planner import SubscriberTarget
+    from app.models import KIND_STATIC
+
+    cible = SubscriberTarget(
+        login="x",
+        interface="vlan2060",
+        kind=KIND_STATIC,
+        address="10.60.0.0/29",
+        plan_down_mbps=1,
+        plan_up_mbps=1,
+    )
+    assert cible.queue_target() == "10.60.0.0/29"
+
+
+async def test_seul_sur_sa_vlan_une_file_qui_le_contient_mesure_l_upload_reel(
+    settings: Settings,
+) -> None:
+    """Constate : plafond tenu a 200 (bandwidth-test 182/180), affiche 385 en
+    upload. La file visait le reseau, la recherche ne la trouvait pas, et la
+    mesure retombait sur le rx de la VLAN -- qui compte ce que la file JETTE."""
+    from app.collectors import mikrotik
+
+    mikrotik._RESEAUX_CONNECTES.pop("pop-test", None)  # reseau de VLAN inconnu
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    client.simple_queue_rows = [
+        {"name": "agregat", "target": "10.0.0.0/8", "bytes": "0/0"},
+        {"name": "q", "target": "10.60.0.0/29", "bytes": "0/0"},
+    ]
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    # L'interface voit 385 kbps entrer ; la file n'en laisse passer que 200.
+    client.interfaces_rows[-1].update({"rx-byte": "482250", "tx-byte": "260000"})
+    client.simple_queue_rows = [
+        {"name": "agregat", "target": "10.0.0.0/8", "bytes": "9000000/9000000"},
+        {"name": "q", "target": "10.60.0.0/29", "bytes": "250000/250000"},
+    ]
+    await service.collect_subscribers()
+
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(200_000)
+    assert ligne.tx_bps == pytest.approx(200_000)
+
+
+async def test_pppoe_l_upload_vient_de_la_file_pas_du_rx_de_l_interface(
+    settings: Settings,
+) -> None:
+    """Le rx de l'interface PPPoE compte ce que le client EMET, avant que sa
+    file n'en jette une partie : 385 affiche pour un plafond tenu a 200. La
+    file, elle, ne compte que ce qui est passe."""
+    clock = Clock()
+    client = FakeRouterOsClient()
+    client.add_session("dupont", address="10.20.0.10", rx_byte=0, tx_byte=0)
+    client.simple_queue_rows = [
+        {"name": "freeqos-dupont", "target": "10.20.0.10/32", "bytes": "0/0"}
+    ]
+    service, writer, _ = build_service(settings, client, InventaireMemoire([]), clock=clock)
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.advance("dupont", rx_delta=481_250, tx_delta=250_000)
+    client.simple_queue_rows = [
+        {"name": "freeqos-dupont", "target": "10.20.0.10/32", "bytes": "250000/250000"}
+    ]
+    await service.collect_subscribers()
+
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(200_000)
+    assert ligne.tx_bps == pytest.approx(200_000)
+
+
+async def test_pppoe_sans_file_reste_mesure_par_son_interface(settings: Settings) -> None:
+    clock = Clock()
+    client = FakeRouterOsClient()
+    client.add_session("dupont", address="10.20.0.10", rx_byte=0, tx_byte=0)
+    service, writer, _ = build_service(settings, client, InventaireMemoire([]), clock=clock)
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.advance("dupont", rx_delta=125_000, tx_delta=250_000)
+    await service.collect_subscribers()
+
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(100_000)
+    assert ligne.tx_bps == pytest.approx(200_000)

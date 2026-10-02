@@ -1,0 +1,336 @@
+"""Inventaire vivant des routeurs.
+
+Fusionne deux sources et maintient la liste des collecteurs a chaud, sans
+redemarrage :
+
+  1. l'inventaire FICHIER (YAML/env) : secrets en variables d'environnement,
+     lecture seule depuis l'interface. C'est la posture d'origine, preservee ;
+  2. la BASE : routeurs ajoutes depuis l'interface, secrets chiffres au repos.
+
+En cas d'homonymie le fichier gagne : une declaration versionnee et revue doit
+primer sur une saisie faite dans un formulaire.
+
+Les collecteurs inchanges sont REUTILISES d'un rechargement a l'autre. Deux
+raisons : ne pas rouvrir une session API a chaque modification, et surtout ne pas
+perdre la continuite du calcul de debit (le RateTracker est indexe par nom de
+routeur, un collecteur recree repartirait sans point de reference).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import logging
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from typing import Any
+
+from app.collectors.mikrotik import MikrotikCollector, RouterOsReadClient
+from app.config import MissingSecretError, RouterConfig, Settings
+from app.db.routers_repo import RoutersRepository
+
+logger = logging.getLogger(__name__)
+
+SOURCE_FILE = "file"
+SOURCE_DB = "db"
+
+
+@dataclass(frozen=True)
+class RouterEntry:
+    config: RouterConfig
+    source: str
+    router_id: int | None = None
+
+
+def _empreinte_secret(config: RouterConfig) -> str:
+    """Empreinte du mot de passe, pour DETECTER son changement sans le porter.
+
+    Le comparer en clair dans un tuple le mettrait a portee d'un ``repr`` ou
+    d'une trace ; on n'a besoin que de savoir s'il a bouge.
+    """
+    try:
+        secret = config.resolve_password() or ""
+    except Exception:  # noqa: BLE001 - un secret illisible est traite en amont
+        return "?"
+    return hashlib.sha256(secret.encode()).hexdigest()
+
+
+def _fingerprint(config: RouterConfig) -> tuple[Any, ...]:
+    """Ce qui, en changeant, impose de ROUVRIR la session API.
+
+    Strictement les parametres de CONNEXION. Tout le reste (role, PoP, loopback,
+    motif d'interface PPPoE) ne change que la facon d'interpreter ce qu'on lit :
+    ``reload()`` rafraichit alors la configuration du collecteur sans toucher a
+    la connexion, ce qui preserve la continuite du calcul de debit.
+
+    Le MOT DE PASSE en fait partie. Il n'y etait pas : corriger des identifiants
+    depuis l'interface ne prenait donc effet qu'au redemarrage suivant, et le
+    routeur restait injoignable sans que rien n'explique pourquoi.
+    """
+    return (
+        config.host,
+        config.port,
+        config.username,
+        config.use_ssl,
+        config.tls_verify,
+        config.tls_fingerprint,
+        config.timeout_s,
+        _empreinte_secret(config),
+    )
+
+
+class RouterRegistry:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        repository: RoutersRepository | None = None,
+        client_factory: Callable[[RouterConfig], RouterOsReadClient] | None = None,
+    ) -> None:
+        self._settings = settings
+        self._repository = repository
+        self._client_factory = client_factory
+        self._collectors: dict[str, MikrotikCollector] = {}
+        self._fingerprints: dict[str, tuple[Any, ...]] = {}
+        self._sources: dict[str, str] = {}
+        self._ids: dict[str, int | None] = {}
+        # Routeurs ecartes, chacun {name, reason} : garder le nom permet de
+        # proposer "Retirer" dans l'interface plutot qu'un simple message.
+        self.skipped: list[dict[str, str]] = []
+
+    @property
+    def collectors(self) -> list[MikrotikCollector]:
+        return list(self._collectors.values())
+
+    def source_of(self, name: str) -> str | None:
+        return self._sources.get(name)
+
+    def inventory_signature(self) -> tuple[tuple[Any, ...], ...]:
+        """Ce qui, en changeant, doit faire REDECOUVRIR la topologie.
+
+        L'arbre est construit a partir de l'inventaire ; quand l'inventaire
+        bouge, l'arbre ment jusqu'a la decouverte suivante -- au plus tard un
+        quart d'heure plus tard avec la cadence par defaut. Un routeur ajoute
+        n'apparaissait donc pas, un routeur supprime restait affiche, et rien ne
+        le disait.
+
+        L'interface appelait bien une decouverte apres un AJOUT, mais elle est le
+        mauvais endroit pour porter cette garantie : elle ne le faisait ni sur une
+        suppression, ni sur une desactivation, ni quand l'inventaire change par
+        un autre chemin (appel direct a l'API, edition du fichier YAML, autre
+        onglet ouvert). Le declencheur appartient au serveur.
+
+        Le role et le PoP en font partie, pas seulement la liste des noms : le
+        role decide de la nature du noeud dans l'arbre (passerelle / coeur / PoP,
+        donc sa hauteur), et le PoP de son libelle.
+        """
+        return tuple(
+            sorted(
+                (
+                    name,
+                    collector.config.host,
+                    collector.config.port,
+                    str(collector.config.role),
+                    collector.config.effective_pop_name or "",
+                    collector.config.loopback or "",
+                )
+                for name, collector in self._collectors.items()
+            )
+        )
+
+    def describe(self) -> list[dict[str, object]]:
+        return [
+            {
+                "name": name,
+                "source": self._sources.get(name),
+                "router_id": self._ids.get(name),
+                "host": collector.config.host,
+                "port": collector.config.port,
+                "role": collector.config.role.value,
+                "pop": collector.config.effective_pop_name,
+                "username": collector.config.username,
+                "editable": self._sources.get(name) == SOURCE_DB,
+            }
+            for name, collector in self._collectors.items()
+        ]
+
+    # ------------------------------------------------------------------
+    async def _hidden_names(self) -> set[str]:
+        """Routeurs ecartes a la main depuis l'interface (persistes en base).
+
+        Une base absente ou un depot sans cette capacite ne doit rien casser :
+        on retombe alors sur un ensemble vide.
+        """
+        if self._repository is None or not hasattr(self._repository, "hidden_file_routers"):
+            return set()
+        try:
+            return await self._repository.hidden_file_routers()
+        except Exception:  # noqa: BLE001
+            logger.warning("Liste des routeurs masques illisible")
+            return set()
+
+    async def _charger_base(self) -> tuple[list[RouterConfig], list[dict[str, str]]]:
+        """Configs et ecartes du depot, quelle que soit sa generation.
+
+        Un double de test peut n'exposer que ``load_configs`` : on ne lui
+        impose pas la variante detaillee pour autant.
+        """
+        detaille = getattr(self._repository, "load_configs_with_report", None)
+        if callable(detaille):
+            configs, ecartes = await detaille()
+            return list(configs), list(ecartes)
+        assert self._repository is not None
+        return list(await self._repository.load_configs()), []
+
+    async def resolve_entries(self) -> list[RouterEntry]:
+        entries: dict[str, RouterEntry] = {}
+        skipped: list[dict[str, str]] = []
+        hidden = await self._hidden_names()
+
+        if self._repository is not None:
+            try:
+                configs, ecartes = await self._charger_base()
+                for config in configs:
+                    if config.name in hidden:
+                        continue
+                    router_id = await self._repository.find_id_by_name(config.name)
+                    entries[config.name] = RouterEntry(config, SOURCE_DB, router_id)
+                # Les fiches ecartees par le depot (secret illisible, ligne
+                # invalide) remontent ici. Sans cela, un PoP disparaissait de la
+                # collecte, de l'arbre et de la detection ARP en ne laissant
+                # qu'une ligne dans le journal du serveur.
+                skipped.extend(e for e in ecartes if e["name"] not in hidden)
+            except Exception as exc:  # noqa: BLE001
+                # Une base momentanement indisponible ne doit pas vider l'inventaire
+                # fichier : on garde ce qu'on peut. Mais on le DIT : jusqu'ici
+                # l'inventaire en base s'evaporait en silence.
+                logger.exception("Chargement des routeurs en base impossible")
+                skipped.append(
+                    {
+                        "name": "",
+                        "reason": (
+                            f"database inventory unreadable ({type(exc).__name__}: {exc}). "
+                            f"Routers declared in the database are missing from collection "
+                            f"and from the tree until this is resolved."
+                        ),
+                        "source": "db",
+                    }
+                )
+
+        for config in self._settings.enabled_routers:
+            # Un routeur masque a la main disparait de l'inventaire ET des
+            # avertissements : c'est le "Retirer" demande depuis l'interface.
+            if config.name in hidden:
+                entries.pop(config.name, None)
+                continue
+            try:
+                config.resolve_password()
+            except MissingSecretError as exc:
+                logger.error("Routeur ignore : %s", exc)
+                skipped.append(
+                    {
+                        "name": config.name,
+                        "reason": str(exc),
+                        "source": SOURCE_FILE,
+                        "host": config.host,
+                        "pop_name": config.effective_pop_name or "",
+                        "role": str(config.role),
+                    }
+                )
+                continue
+            # Le fichier prime sur la base en cas d'homonymie.
+            entries[config.name] = RouterEntry(config, SOURCE_FILE)
+
+        self.skipped = skipped
+        return list(entries.values())
+
+    async def reload(self) -> list[MikrotikCollector]:
+        entries = await self.resolve_entries()
+        wanted = {entry.config.name: entry for entry in entries}
+
+        for name in list(self._collectors):
+            if name not in wanted:
+                self._retire(name)
+
+        for name, entry in wanted.items():
+            fingerprint = _fingerprint(entry.config)
+            existing = self._collectors.get(name)
+            if existing is not None and self._fingerprints.get(name) == fingerprint:
+                # Connexion inchangee : on la garde, avec l'historique de debit.
+                #
+                # Mais on RAFRAICHIT la configuration. Le collecteur portait
+                # sinon celle de sa creation, indefiniment : modifier le role
+                # d'un routeur depuis l'interface -- donc sa nature et sa hauteur
+                # dans l'arbre -- ou son loopback -- donc son identite -- ne
+                # changeait rien avant un redemarrage, et rien ne le disait.
+                existing.config = entry.config
+                self._sources[name] = entry.source
+                self._ids[name] = entry.router_id
+                continue
+            if existing is not None:
+                self._retire(name)
+            self._collectors[name] = self._build(entry.config)
+            self._fingerprints[name] = fingerprint
+            self._sources[name] = entry.source
+            self._ids[name] = entry.router_id
+
+        logger.info(
+            "Inventaire recharge : %d routeur(s) actif(s)%s",
+            len(self._collectors),
+            f", {len(self.skipped)} ignore(s)" if self.skipped else "",
+        )
+        return self.collectors
+
+    def _build(self, config: RouterConfig) -> MikrotikCollector:
+        client = self._client_factory(config) if self._client_factory else None
+        return MikrotikCollector(config, client=client)
+
+    def _retire(self, name: str) -> None:
+        collector = self._collectors.pop(name, None)
+        self._fingerprints.pop(name, None)
+        self._sources.pop(name, None)
+        self._ids.pop(name, None)
+        if collector is not None:
+            try:
+                collector.close()
+            except Exception:  # noqa: BLE001
+                pass
+            logger.info("Routeur '%s' retire de l'inventaire", name)
+
+    def adopt(self, collectors: Sequence[MikrotikCollector], *, source: str = SOURCE_FILE) -> None:
+        """Enregistre des collecteurs deja construits.
+
+        Sert au demarrage sans base et aux tests : le registre doit connaitre
+        les collecteurs pour que la topologie et le shaping sachent a qui parler,
+        meme quand personne n'a appele reload().
+        """
+        for collector in collectors:
+            nom = collector.name
+            self._collectors[nom] = collector
+            self._fingerprints[nom] = _fingerprint(collector.config)
+            self._sources[nom] = source
+            self._ids.setdefault(nom, None)
+
+    def build_probe(self, config: RouterConfig) -> MikrotikCollector:
+        """Collecteur jetable pour tester une configuration non encore enregistree."""
+        return self._build(config)
+
+    def close_all(self) -> None:
+        for name in list(self._collectors):
+            self._retire(name)
+
+
+def collectors_from_settings(
+    settings: Settings,
+    client_factory: Callable[[RouterConfig], RouterOsReadClient] | None = None,
+) -> Sequence[MikrotikCollector]:
+    """Raccourci sans base, conserve pour les tests et le mode degrade."""
+    registry = RouterRegistry(settings, client_factory=client_factory)
+    collectors = []
+    for config in settings.enabled_routers:
+        try:
+            config.resolve_password()
+        except MissingSecretError as exc:
+            logger.error("Routeur ignore : %s", exc)
+            continue
+        collectors.append(registry.build_probe(config))
+    return collectors

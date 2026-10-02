@@ -1,0 +1,1076 @@
+"""API de topologie et d'enforcement (phase 2).
+
+Le parcours est volontairement en trois temps :
+
+  GET  /topology            ce que le controleur comprend du reseau
+  GET  /shaping/state       ce qui est DEJA configure sur les routeurs
+  POST /shaping/plan        ce qu'il faudrait changer, avec les commandes exactes
+  POST /shaping/apply       execution, uniquement sur ordre explicite
+
+Aucun endpoint de lecture n'ecrit sur un equipement. Le seul qui le fasse exige
+``dry_run=false`` ET ``ENFORCEMENT_ENABLED=true``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from datetime import UTC, datetime, timedelta
+from typing import Annotated, Any, Literal
+
+from fastapi import APIRouter, HTTPException, Query, status
+from pydantic import BaseModel, Field, model_validator
+
+from app.api.deps import ContainerDep, RepositoryDep
+from app.db.topology_repo import TopologyRepository
+from app.enforcement.routeros import MissingWriteCredentialsError
+from app.models import KIND_STATIC
+from app.services.shaping import (
+    EnforcementDisabledError,
+    EnforcementLockedError,
+    discover_with_devices,
+)
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(tags=["shaping"])
+
+
+def _require_topology(container: ContainerDep) -> TopologyRepository:
+    if container.topology_repo is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Topology unavailable (database not initialised)",
+        )
+    return container.topology_repo
+
+
+def _attributs(ligne: dict[str, Any]) -> dict[str, Any]:
+    """Les ``attributes`` d'un noeud ou d'un lien, toujours en dictionnaire.
+
+    Ils arrivent en objet quand ils viennent du snapshot en memoire, et en JSON
+    brut quand ils viennent de la base -- aucun codec JSONB n'est enregistre sur
+    le pool. Une lecture qui ne gere qu'une des deux formes marche en test et
+    rend silencieusement faux en production.
+    """
+    attributs = ligne.get("attributes")
+    if isinstance(attributs, str):
+        try:
+            attributs = json.loads(attributs)
+        except ValueError:
+            return {}
+    return attributs if isinstance(attributs, dict) else {}
+
+
+def _miroir(lien: dict[str, Any]) -> bool:
+    """Ce lien est-il la seconde vue d'un cable deja compte ?"""
+    return bool(_attributs(lien).get("mirror_of"))
+
+
+# --------------------------------------------------------------- topologie
+@router.get("/topology", summary="Network graph as the controller understands it")
+async def topology(container: ContainerDep) -> dict[str, Any]:
+    repo = _require_topology(container)
+    noeuds = await repo.nodes()
+    liens = await repo.links()
+    aliases = await repo.aliases()
+    # Reconciliation : un meme equipement vu plusieurs fois (PoP gere ET voisin
+    # du coeur, casses differentes, IPv4/IPv6) devient UNE case, ses adresses
+    # rassemblees. Sans elle, l'arbre dedouble les routeurs. ``aliases`` ajoute les
+    # fusions tranchees a la main par l'operateur.
+    from app.collectors.topology import reconcile_topology
+
+    noeuds, liens = reconcile_topology(noeuds, liens, aliases)
+    # Marque, sur chaque case canonique, les fusions MANUELLES qu'elle porte : la
+    # seule sorte qu'on puisse defaire (la fusion automatique, elle, se refait au
+    # chargement suivant).
+    for noeud in noeuds:
+        manuelles = [k for k in noeud.get("members", []) if k in aliases]
+        if manuelles:
+            noeud["manual_aliases"] = manuelles
+
+    # L'ARBRE NE MONTRE QUE DES ABONNES DECLARES.
+    #
+    # Les adresses reperees en ARP sur une VLAN routee y figuraient comme cases
+    # "?IP". Elles n'ont pourtant rien d'un abonne : une imprimante, un
+    # equipement d'un autre operateur ou une machine de passage laissent la meme
+    # trace. Melees a l'infrastructure, elles encombraient l'arbre de cases que
+    # rien ne permettait de qualifier -- et qu'aucun geste ne retirait, puisque
+    # la decouverte les reposait au chargement suivant.
+    #
+    # Elles restent entierement disponibles la ou elles servent VRAIMENT : dans
+    # 'GET /static-clients/candidates', c'est-a-dire l'onglet des clients a IP
+    # fixe, ou l'operateur les examine une par une et en declare ce qui est un
+    # client. Une fois declare, le client entre dans l'arbre -- par la liste des
+    # abonnes, comme tous les autres.
+    #
+    # UNE SEULE SOURCE POUR LES ABONNES, DONC UNE SEULE CASE. Les clients a IP
+    # fixe declares ont aussi une case dans le graphe : elle sert a calculer
+    # leur rattachement a un secteur pendant la decouverte, et c'est sa seule
+    # raison d'etre. La rendre EN PLUS ferait apparaitre chacun d'eux deux fois
+    # -- sa propre case, et son compte dans les abonnes du PoP -- alors que
+    # c'est le meme client. On la garde donc pour le calcul et on ne la sert
+    # pas : l'arbre lit les abonnes dans la liste des abonnes, un point c'est
+    # tout, et les deux natures y sont traitees pareil.
+    #
+    # MEME RAISON POUR LE CPE D'UN ABONNE PPPoE. Son routeur est vu en voisin
+    # par le PoP, donc pose en case d'equipement decouvert, alors que le meme
+    # boitier est DEJA l'abonne compte sous ce PoP. La decouverte les a recolles
+    # par le 'caller-id' de la session (cf. 'mark_subscriber_cpes') ; ici on
+    # applique la meme regle qu'aux clients a IP fixe -- la case sert au calcul
+    # du rattachement, elle n'est pas servie a l'arbre.
+    abonnes_du_graphe = {
+        n["key"]
+        for n in noeuds
+        if n.get("kind") == KIND_STATIC or _attributs(n).get("subscriber_cpe")
+    }
+    if abonnes_du_graphe:
+        noeuds = [n for n in noeuds if n["key"] not in abonnes_du_graphe]
+        liens = [
+            lien
+            for lien in liens
+            if lien["source_key"] not in abonnes_du_graphe
+            and lien["target_key"] not in abonnes_du_graphe
+        ]
+
+    # Les avertissements de la DERNIERE decouverte, qu'elle vienne du job
+    # periodique ou du bouton. Sans cela, un arbre de cases isolees ne disait
+    # pas ce qui manquait pour les relier -- et le job, lui, jetait ces
+    # messages en silence.
+    derniere = container.shaping.last_snapshot
+    # Positions des cases QUI N'ONT PAS D'EQUIPEMENT : les abonnes de l'arbre,
+    # calcules a l'affichage. Sans cette carte, elles reviendraient a leur place
+    # automatique au premier rechargement -- ce qui revient a ne pas pouvoir les
+    # deplacer du tout.
+    try:
+        layout = await repo.node_layout()
+    except Exception:  # noqa: BLE001 - un arbre sans positions vaut mieux que pas d'arbre
+        logger.exception("Positions libres illisibles")
+        layout = {}
+    return {
+        "nodes": noeuds,
+        "links": liens,
+        "layout": layout,
+        # Le compte des liens est celui des CABLES, pas des observations : un
+        # cable vu par ses deux bouts a deux lignes, dont l'une est marquee
+        # miroir. Les compter toutes annoncait plus de liens que le reseau n'en
+        # porte.
+        "counts": {"nodes": len(noeuds), "links": sum(1 for lien in liens if not _miroir(lien))},
+        "warnings": list(derniere.warnings) if derniere is not None else [],
+        "discovered_at": (
+            container.shaping.last_discovery_at.isoformat()
+            if container.shaping.last_discovery_at is not None
+            else None
+        ),
+        "sources": {
+            "neighbors": "/ip/neighbor (MNDP, LLDP, CDP) - physical adjacency",
+            "config_subnets": "/ip/address - router<->router links through a shared /30",
+            "ethernet": "/interface/ethernet - negotiated port speed",
+            "addresses": "/ip/address - L3 segment of the link",
+            "uisp": "UISP /devices - radio links and current capacity",
+            "pppoe": "/ppp/active caller-id - CPE MAC, ties the subscriber to its sector",
+            "counters": "/interface rx-byte,tx-byte - measured rate of the port carrying the link",
+            "routes": (
+                "/ip/route - the default route says WHO IS ABOVE. It is the "
+                "hierarchy as the router applies it, not a guess."
+            ),
+            "routing": (
+                "/routing/ospf/neighbor, /routing/bgp/session - PROVEN "
+                "adjacencies: two routers exchanging routes, not two devices "
+                "that merely see each other on a switch."
+            ),
+            "stacking": (
+                "/interface/vlan, /interface/bridge/port, /interface/bonding - "
+                "which physical port a given traffic leaves through, hence which "
+                "link a client belongs to."
+            ),
+            "arp": (
+                "/ip/arp on VLANs without PPPoE - presence of an undeclared "
+                "address. A candidate for a human to confirm, never shaped."
+            ),
+        },
+    }
+
+
+@router.get("/topology/routers/{router_name}/export", summary="Full config of a PoP")
+async def router_export(router_name: str, container: ContainerDep) -> dict[str, Any]:
+    """Renvoie le ``/export`` brut d'un routeur et son analyse (adresses, tunnels,
+    commentaires) : de quoi VOIR tout ce que le controleur percoit de sa config.
+    Lecture seule ; ``/export`` ne modifie rien sur l'equipement."""
+    try:
+        return await container.shaping.export_router(router_name)
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Router '{router_name}' is not in the active inventory",
+        ) from exc
+
+
+@router.post("/topology/discover", summary="Run topology discovery again")
+async def discover(container: ContainerDep) -> dict[str, Any]:
+    """Lecture seule sur tous les PoPs, puis persistance du graphe."""
+    # Les deux sources de radios : le fournisseur statique (mock/UISP/env-airOS)
+    # et les antennes ajoutees depuis l'interface. Leurs fiches se rattachent au
+    # graphe par la MAC, exactement de la meme facon.
+    #
+    # Meme fonction que le job periodique : le bouton ne doit pas produire un
+    # arbre different de celui que le planificateur construit tout seul.
+    snapshot = await discover_with_devices(
+        container.shaping,
+        (container.backhaul_provider, container.collection.antennas_provider),
+    )
+    return {
+        "nodes": len(snapshot.nodes),
+        "links": len(snapshot.links),
+        "warnings": snapshot.warnings,
+    }
+
+
+@router.post("/topology/forget-stale", summary="Forget the vanished devices of the tree")
+async def forget_stale(
+    container: ContainerDep,
+    older_than_minutes: Annotated[
+        int,
+        Query(
+            ge=5,
+            le=60 * 24 * 365,
+            description="Minimum age, in minutes, since the device was last seen",
+        ),
+    ] = 60,
+    confirm: Annotated[bool, Query(description="Required: this action erases")] = False,
+) -> dict[str, Any]:
+    """Retire du graphe ce qu'aucune decouverte ne revoit depuis un moment.
+
+    La persistance du graphe n'efface jamais rien, a dessein : un equipement
+    momentanement invisible ne doit pas disparaitre de l'arbre. Le revers, c'est
+    qu'une adresse de gestion changee, un lien de test demonte ou un voisin
+    croise pendant une migration y restent pour toujours. C'est le geste qui
+    manquait pour les retirer, sans avoir a masquer les cases une par une.
+
+    Les routeurs de l'inventaire ne sont JAMAIS concernes : leur case est
+    declaree, pas decouverte. Les liens et fusions poses a la main non plus.
+    """
+    repo = _require_topology(container)
+    if not confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This action erases boxes from the tree: 'confirm' must be true.",
+        )
+    compte = await repo.forget_stale(older_than_minutes=older_than_minutes)
+    return {
+        "forgotten_nodes": compte["nodes"],
+        "forgotten_links": compte["links"],
+        "older_than_minutes": older_than_minutes,
+        "detail": (
+            "Inventory routers and links added by hand are kept. "
+            "Run the discovery again: whatever still exists will come back."
+        ),
+    }
+
+
+@router.get("/topology/links/{key:path}/throughput", summary="Measured throughput of a link")
+async def link_throughput(
+    key: str,
+    container: ContainerDep,
+    minutes: Annotated[int, Query(ge=1, le=10080, description="History window")] = 60,
+    bucket_seconds: Annotated[int, Query(ge=5, le=3600, alias="bucket")] = 30,
+) -> dict[str, Any]:
+    """Le debit d'un lien, maintenant et sur la fenetre demandee.
+
+    La mesure vient des compteurs du PORT qui porte le lien : c'est le seul
+    endroit ou RouterOS compte des octets. ``interface_links`` a plus de 1
+    signale un port partage par plusieurs voisins, donc un debit cumule.
+    """
+    repo = _require_topology(container)
+    lien = await repo.link(key)
+    if lien is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown link: {key}")
+
+    series: list[dict[str, Any]] = []
+    if lien.get("discovered_by") and lien.get("interface"):
+        series = await repo.interface_series(
+            router_name=lien["discovered_by"],
+            interface=lien["interface"],
+            minutes=minutes,
+            bucket_seconds=bucket_seconds,
+        )
+
+    return {
+        "link": lien,
+        "series": series,
+        "window_minutes": minutes,
+        "bucket_seconds": bucket_seconds,
+        # Dit noir sur blanc d'ou vient le chiffre, pour qu'un port partage ou
+        # un lien radio sans compteur ne passe pas pour une mesure du lien.
+        "measurement": _origine_mesure(lien),
+    }
+
+
+@router.get("/topology/links/{key:path}/live", summary="Measure this link now")
+async def link_live(key: str, container: ContainerDep) -> dict[str, Any]:
+    """Interroge le routeur pour le debit INSTANTANE du port.
+
+    ``/interface/monitor-traffic`` est une commande de lecture : elle ne change
+    rien sur l'equipement. Si elle echoue (version, droits, port sans
+    compteur), on retombe sur la derniere mesure collectee en disant pourquoi,
+    plutot que de renvoyer une erreur a l'operateur qui voulait juste un chiffre.
+    """
+    repo = _require_topology(container)
+    lien = await repo.link(key)
+    if lien is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown link: {key}")
+
+    routeur, interface = lien.get("discovered_by"), lien.get("interface")
+    if not routeur or not interface:
+        return {
+            "key": key,
+            "source": "aucune",
+            "detail": (
+                "No router port carries this link "
+                "(adjacency declared by UISP): there is no counter to read."
+            ),
+            "rx_bps": None,
+            "tx_bps": None,
+        }
+
+    try:
+        mesure = await container.collection.measure_link(routeur, interface)
+    except KeyError:
+        detail = f"Router '{routeur}' is not in the active inventory"
+    except Exception as exc:  # noqa: BLE001 - on degrade, on ne casse pas
+        detail = f"{type(exc).__name__}: {exc}"
+        logger.warning("Mesure instantanee impossible sur %s/%s : %s", routeur, interface, exc)
+    else:
+        return {
+            "key": key,
+            "router_name": routeur,
+            "interface": interface,
+            "source": "monitor-traffic",
+            "measured_at": datetime.now(tz=UTC),
+            **mesure,
+        }
+
+    return {
+        "key": key,
+        "router_name": routeur,
+        "interface": interface,
+        "source": "compteurs",
+        "detail": detail,
+        "measured_at": lien.get("measured_at"),
+        "rx_bps": lien.get("rx_bps"),
+        "tx_bps": lien.get("tx_bps"),
+    }
+
+
+def _origine_mesure(lien: dict[str, Any]) -> dict[str, Any]:
+    partage = int(lien.get("interface_links") or 0)
+    if not lien.get("interface"):
+        origine, note = "aucune", "Link without a local port: no byte counter."
+    elif partage > 1:
+        origine, note = (
+            "port-partage",
+            f"{partage} neighbours are seen on {lien['interface']}: "
+            "the rate shown is the port's, not this neighbour's alone.",
+        )
+    else:
+        origine, note = "port", f"Counters of {lien['interface']} on {lien.get('discovered_by')}."
+    return {"source": origine, "interface_links": partage, "note": note}
+
+
+class NodePosition(BaseModel):
+    x: float | None = None
+    y: float | None = None
+
+
+class NodeParent(BaseModel):
+    # Cle du parent force ; null retablit l'orientation automatique par role.
+    parent_key: str | None = None
+
+
+class NodeVisibility(BaseModel):
+    hidden: bool = False
+
+
+# Les routes a suffixe sont declarees AVANT la route "role" en {key:path} : cette
+# derniere est gloutonne (le convertisseur path avale les slashs), donc sans cet
+# ordre elle capterait "mac:AA/layout" avant la route dediee.
+@router.patch("/topology/nodes/{key:path}/layout", summary="Move a box of the tree")
+async def set_node_layout(
+    key: str, payload: NodePosition, container: ContainerDep
+) -> dict[str, Any]:
+    """Range une case a l'endroit choisi. Purement cosmetique : aucun routeur
+    n'est touche par un deplacement."""
+    repo = _require_topology(container)
+    trouve = await repo.set_node_position(key, payload.x, payload.y)
+    if not trouve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Noeud inconnu : {key}")
+    return {"key": key, "pos_x": payload.x, "pos_y": payload.y}
+
+
+@router.patch("/topology/nodes/{key:path}/parent", summary="Re-parent a box (drag a link)")
+async def set_node_parent(key: str, payload: NodeParent, container: ContainerDep) -> dict[str, Any]:
+    """Force le parent d'un equipement dans l'arbre affiche.
+
+    Glisser une case sous une autre exprime la vraie hierarchie quand la
+    detection automatique se trompe. C'est un reglage d'AFFICHAGE : il ne
+    reconfigure pas le routage, il corrige l'arbre que le controleur montre.
+    """
+    repo = _require_topology(container)
+    try:
+        trouve = await repo.set_node_parent(key, payload.parent_key or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if not trouve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Noeud inconnu : {key}")
+    return {"key": key, "parent_override": payload.parent_key or None}
+
+
+@router.patch("/topology/nodes/{key:path}/visibility", summary="Hide or show a box again")
+async def set_node_visibility(
+    key: str, payload: NodeVisibility, container: ContainerDep
+) -> dict[str, Any]:
+    repo = _require_topology(container)
+    trouve = await repo.set_node_hidden(key, payload.hidden)
+    if not trouve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Noeud inconnu : {key}")
+    return {"key": key, "hidden": payload.hidden}
+
+
+class LinkInput(BaseModel):
+    source_key: str
+    target_key: str
+
+
+@router.post("/topology/links", summary="Create a link by hand between two nodes")
+async def create_link(payload: LinkInput, container: ContainerDep) -> dict[str, Any]:
+    """Ajoute une adjacence que la decouverte a manquee. Purement affichage :
+    aucun equipement n'est reconfigure. Retirable ensuite via DELETE."""
+    repo = _require_topology(container)
+    try:
+        key = await repo.add_manual_link(payload.source_key, payload.target_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"key": key, "source_key": payload.source_key, "target_key": payload.target_key}
+
+
+@router.delete("/topology/links/{key:path}", summary="Remove a link from the tree")
+async def delete_link(key: str, container: ContainerDep) -> dict[str, Any]:
+    """Ecarte un lien (adjacence erronee de la decouverte, ou lien manuel).
+    Reversible : la decouverte ne le recree pas tant qu'il est masque."""
+    repo = _require_topology(container)
+    trouve = await repo.hide_link(key)
+    if not trouve:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown link: {key}")
+    return {"key": key, "hidden": True}
+
+
+class MergeInput(BaseModel):
+    # alias_key est replie sur canonical_key : ces deux cases sont le meme materiel.
+    alias_key: str
+    canonical_key: str
+
+
+@router.post("/topology/merge", summary="Declare that two boxes are the same device")
+async def merge_nodes(payload: MergeInput, container: ContainerDep) -> dict[str, Any]:
+    """Fusion tranchee par l'operateur, quand l'automatique n'a pas pu prouver
+    l'identite (nom generique, pas de MAC commune). C'est le levier de precision
+    maximale : l'arbre montre alors UNE case la ou la detection en laissait deux.
+    Reversible via DELETE. Purement affichage : aucun equipement n'est touche."""
+    repo = _require_topology(container)
+    try:
+        await repo.merge_nodes(payload.alias_key, payload.canonical_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"alias_key": payload.alias_key, "canonical_key": payload.canonical_key}
+
+
+@router.delete("/topology/merge/{alias_key:path}", summary="Undo a manual merge")
+async def unmerge_node(alias_key: str, container: ContainerDep) -> dict[str, Any]:
+    """Defait une fusion posee a la main : la case redevient distincte."""
+    repo = _require_topology(container)
+    trouve = await repo.unmerge_node(alias_key)
+    if not trouve:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown merge: {alias_key}"
+        )
+    return {"alias_key": alias_key, "unmerged": True}
+
+
+@router.patch("/topology/nodes/{key:path}", summary="Correct the role of a device")
+async def set_node_kind(
+    key: str,
+    container: ContainerDep,
+    kind: Annotated[
+        Literal["gateway", "core", "pop", "radio", "sector", "cpe", "client", "unknown"] | None,
+        Query(description="Forced role; omit to go back to detection"),
+    ] = None,
+) -> dict[str, Any]:
+    """La classification automatique est une heuristique : l'operateur tranche."""
+    repo = _require_topology(container)
+    await repo.set_node_kind(key, kind)
+    return {"key": key, "kind_override": kind}
+
+
+# ------------------------------------------------------- etat du shaping
+@router.get("/shaping/state", summary="What is already configured on the routers")
+async def shaping_state(
+    container: ContainerDep,
+    router_name: Annotated[str | None, Query(alias="router")] = None,
+) -> list[dict[str, Any]]:
+    """Analyse de l'existant, sans rien modifier.
+
+    Distingue explicitement ce qui appartient au controleur de ce qui a ete pose
+    par l'operateur ou par RADIUS.
+    """
+    etats = await container.shaping.inspect(router_name)
+    return [etat.to_dict() for etat in etats]
+
+
+@router.get("/shaping/points", summary="Where shaping applies on the network")
+async def shaping_points(
+    container: ContainerDep,
+    router_name: Annotated[str | None, Query(alias="router")] = None,
+) -> dict[str, Any]:
+    """La CARTE du shaping : quels points du reseau sont brides, et a combien.
+
+    Rend un arbre -- chaque lien parent porte les abonnes qui passent par lui --
+    parce que c'est la hierarchie que RouterOS applique vraiment : un abonne a
+    100 Mbps sous un backhaul plafonne a 80 partage ces 80 avec ses voisins.
+
+    Les points SANS file y figurent aussi, avec leur motif. Une carte qui ne
+    montrerait que ce qui marche laisserait chercher le reste dans le journal
+    des commandes, c'est-a-dire nulle part.
+
+    Lecture seule, meme enforcement actif : cette page regarde, la boucle de
+    reconciliation ecrit. ``last_reconcile`` dit quand elle est passee pour la
+    derniere fois et ce qu'elle a fait.
+    """
+    return await container.shaping.shaping_points(router_name)
+
+
+# ---------------------------------------------------------------- politique
+def _en_mbps(
+    mbps: float | None, kbps: float | None, gbps: float | None, champ: str
+) -> float | None:
+    """Ramene un debit a l'unite interne unique : le Mbps.
+
+    Melanger les unites en base serait une fabrique a bugs ; on convertit donc a
+    l'entree. Fournir deux unites pour le meme champ est ambigu, donc refuse.
+    """
+    fournis = [(v, u) for v, u in ((mbps, "mbps"), (kbps, "kbps"), (gbps, "gbps")) if v is not None]
+    if len(fournis) > 1:
+        raise ValueError(
+            f"{champ}: one unit at a time ({', '.join(u for _, u in fournis)} given together)"
+        )
+    if not fournis:
+        return None
+    valeur, unite = fournis[0]
+    if unite == "kbps":
+        return valeur / 1000.0
+    if unite == "gbps":
+        return valeur * 1000.0
+    return valeur
+
+
+class PolicyInput(BaseModel):
+    """Surcharge permanente de debit.
+
+    Le debit s'exprime au choix en kbps, Mbps ou Gbps : un lien radio de secours
+    ou un abonne bride se comptent souvent en centaines de kilobits, ou saisir
+    0.512 Mbps serait absurde.
+    """
+
+    scope: Literal["link", "subscriber"]
+    target_key: str = Field(min_length=1, max_length=256)
+    max_down_mbps: float | None = Field(default=None, ge=0, le=100_000)
+    max_up_mbps: float | None = Field(default=None, ge=0, le=100_000)
+    max_down_kbps: float | None = Field(default=None, ge=0, le=100_000_000)
+    max_up_kbps: float | None = Field(default=None, ge=0, le=100_000_000)
+    max_down_gbps: float | None = Field(default=None, ge=0, le=100)
+    max_up_gbps: float | None = Field(default=None, ge=0, le=100)
+    enabled: bool = True
+    note: str | None = Field(default=None, max_length=500)
+
+    @model_validator(mode="after")
+    def _normaliser(self) -> PolicyInput:
+        self.max_down_mbps = _en_mbps(
+            self.max_down_mbps, self.max_down_kbps, self.max_down_gbps, "download"
+        )
+        self.max_up_mbps = _en_mbps(self.max_up_mbps, self.max_up_kbps, self.max_up_gbps, "upload")
+        return self
+
+
+@router.get("/shaping/policies", summary="Rate overrides set by hand")
+async def list_policies(
+    container: ContainerDep,
+    scope: Annotated[Literal["link", "subscriber"] | None, Query()] = None,
+) -> list[dict[str, Any]]:
+    return await _require_topology(container).policies(scope)
+
+
+@router.put("/shaping/policies", summary="Set the rate of a link or a subscriber")
+async def set_policy(
+    payload: PolicyInput,
+    container: ContainerDep,
+    apply_now: Annotated[bool, Query()] = True,
+) -> dict[str, Any]:
+    """Enregistre le plafond ET LE POSE TOUT DE SUITE sur le routeur.
+
+    POURQUOI CE N'EST PLUS UN SIMPLE ENREGISTREMENT. Jusqu'ici, fixer un debit
+    n'ecrivait qu'une ligne en base : il fallait ensuite demander un plan, puis
+    l'appliquer a la main -- ou attendre la reconciliation, qui ne passe que si
+    l'enforcement est actif. Entre-temps, l'interface affichait "100 kbps
+    impose" sur un abonne qui passait 497 kbps. Elle presentait une INTENTION
+    comme un FAIT, ce qui est la pire chose qu'un controleur puisse faire.
+
+    Desormais la reponse porte ``enforcement``, qui dit ce qui a REELLEMENT ete
+    ecrit, sur quel routeur, ou ce qui l'en a empeche (enforcement coupe, abonne
+    hors ligne, file masquee...). ``apply_now=false`` retrouve l'ancien
+    comportement pour un appel qui veut seulement enregistrer.
+    """
+    repo = _require_topology(container)
+    enregistre = await repo.upsert_policy(
+        scope=payload.scope,
+        target_key=payload.target_key,
+        max_down_mbps=payload.max_down_mbps,
+        max_up_mbps=payload.max_up_mbps,
+        enabled=payload.enabled,
+        note=payload.note,
+        updated_by="ui",
+    )
+    pose = None
+    if apply_now:
+        pose = await _poser_le_plafond(container, payload.scope, payload.target_key)
+    return {
+        "policy": enregistre,
+        "enforcement": pose,
+        "next_step": "GET /shaping/limits to check that the cap is held",
+    }
+
+
+@router.delete("/shaping/policies/{scope}/{target_key:path}", summary="Remove an override")
+async def delete_policy(
+    scope: Literal["link", "subscriber"],
+    target_key: str,
+    container: ContainerDep,
+    apply_now: Annotated[bool, Query()] = True,
+) -> dict[str, Any]:
+    """Retire le plafond ET remet le routeur d'accord avec la nouvelle regle.
+
+    Retirer une surcharge ne veut pas dire supprimer la file : l'abonne retombe
+    sur son plan souscrit, et c'est CE debit-la qu'il faut pousser. Laisser
+    l'ancien plafond en place sur le routeur aurait bride un client a qui on
+    vient de rendre son debit -- une panne d'autant plus difficile a voir que
+    l'interface, elle, affichait deja le bon chiffre.
+    """
+    supprime = await _require_topology(container).delete_policy(scope, target_key)
+    if not supprime:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown override")
+    pose = None
+    if apply_now:
+        pose = await _poser_le_plafond(container, scope, target_key, removing=True)
+    return {"deleted": True, "enforcement": pose}
+
+
+async def _poser_le_plafond(
+    container: ContainerDep, scope: str, target_key: str, *, removing: bool = False
+) -> dict[str, Any]:
+    """Ecrit le plafond sur le routeur concerne, sans jamais faire echouer la saisie.
+
+    La surcharge est DEJA enregistree quand on arrive ici : un routeur muet ne
+    doit pas faire perdre la saisie a l'exploitant. Le rapport rendu dit alors
+    ce qui n'a pas pu etre ecrit, et la reconciliation rattrapera.
+    """
+    try:
+        return await container.shaping.enforce_policy(
+            scope, target_key, author="ui", removing=removing
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Pose immediate impossible pour %s '%s'", scope, target_key)
+        return {
+            "state": "erreur",
+            "reason": f"{type(exc).__name__}: {exc}",
+            "applied": 0,
+            "routers": [],
+        }
+
+
+@router.get("/shaping/limits", summary="Are the applied caps actually held?")
+async def limit_audit(
+    container: ContainerDep,
+    router_name: Annotated[str | None, Query(alias="router")] = None,
+    live: Annotated[
+        bool, Query(description="Read the routers now instead of the background result")
+    ] = False,
+) -> dict[str, Any]:
+    """Verifie sur le routeur que chaque plafond decide s'applique VRAIMENT.
+
+    Trois questions differentes, souvent confondues : ce que le controleur VEUT
+    poser (le plan), ce qu'il a ECRIT (le journal), et ce que le reseau APPLIQUE
+    (ici). Une file peut exister, porter le bon debit -- et ne rien brider :
+
+    - le FASTTRACK fait sauter les files simples aux connexions etablies ;
+    - une file MASQUEE par une autre placee plus haut ne recoit aucun trafic ;
+    - une file DESACTIVEE a la main se lit normalement et ne bride rien ;
+    - un ECART de debit signale un plafond change mais jamais repousse.
+
+    Lecture seule.
+    """
+    return await container.shaping.limit_audit(router_name, live=live)
+
+
+# ------------------------------------------------- boucle fermee QoE (phase 4)
+@router.get("/shaping/qoe", summary="What the closed QoE loop decided, per sector")
+async def qoe_loop_state(container: ContainerDep) -> dict[str, Any]:
+    """Etat de la boucle fermee : quel secteur est resserre, de combien, pourquoi.
+
+    Lecture seule. C'est la contrepartie lisible du job automatique : une boucle
+    qui resserre sans qu'on puisse voir ce qu'elle a decide, ni quand, est une
+    boucle que personne ne laissera active. Les commandes reellement envoyees,
+    elles, restent dans le journal d'enforcement.
+    """
+    etats = await _require_topology(container).qoe_link_states()
+    settings = container.settings
+    return {
+        "enabled": container.shaping.enforcement_enabled,
+        "interval_s": settings.qoe_loop_interval_s,
+        "window_minutes": settings.qoe_window_minutes,
+        "score_threshold": settings.qoe_score_threshold,
+        "min_degraded_subscribers": settings.qoe_min_degraded_subscribers,
+        "trim_step": settings.qoe_trim_step,
+        "trim_floor": settings.qoe_trim_floor,
+        "recovery_cycles": settings.qoe_recovery_cycles,
+        "sectors": list(etats.values()),
+    }
+
+
+@router.post("/shaping/qoe/run", summary="Trigger one pass of the closed QoE loop")
+async def qoe_loop_run(container: ContainerDep) -> dict[str, Any]:
+    """Un cycle hors cadence : lecture des scores, decision, plan, application.
+
+    Rien n'est ecrit tant que l'enforcement est desactive -- la decision est
+    quand meme prise et le plan calcule, ce qui permet de LIRE ce que la boucle
+    ferait avant de lui donner la main.
+    """
+    return await container.shaping.adjust_for_qoe()
+
+
+# --------------------------------------------------------------------- plan
+class PlanRequest(BaseModel):
+    router: str = Field(min_length=1)
+
+
+@router.post("/shaping/plan", summary="Compute the commands, without sending anything")
+async def build_shaping_plan(
+    payload: PlanRequest, container: ContainerDep, metrics: RepositoryDep
+) -> dict[str, Any]:
+    """Produit le plan : la liste exacte des commandes RouterOS qui seraient
+    envoyees, avec pour chacune la raison et ce qui change."""
+    try:
+        liens, abonnes = await container.shaping.build_targets(payload.router)
+        plan = await container.shaping.plan(payload.router, links=liens, subscribers=abonnes)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Cannot read the router: {type(exc).__name__}: {exc}",
+        ) from exc
+
+    orphelins = [a.login for a in abonnes if a.parent is None]
+    donnees = plan.to_dict()
+    donnees["unparented_subscribers"] = len(orphelins)
+    if orphelins:
+        donnees["notes"] = [
+            f"{len(orphelins)} subscriber(s) without an identified backhaul: their "
+            "queue is created without a parent. The last mile is shaped, but "
+            "contention on the backhaul is not. The attachment comes from joining "
+            "the PPPoE caller-id with the UISP stations."
+        ]
+    return donnees
+
+
+class ApplyRequest(BaseModel):
+    router: str = Field(min_length=1)
+    # Defaut volontairement sur : appliquer pour de vrai doit etre un choix.
+    dry_run: bool = True
+    confirm: bool = False
+
+
+@router.post("/shaping/apply", summary="Apply a plan (writes to the router)")
+async def apply_shaping(
+    payload: ApplyRequest, container: ContainerDep, metrics: RepositoryDep
+) -> dict[str, Any]:
+    """Recalcule le plan puis l'execute.
+
+    Le plan est RECALCULE juste avant d'appliquer, volontairement : appliquer un
+    plan calcule il y a dix minutes reviendrait a ecrire sur un etat qui a pu
+    changer entre-temps.
+    """
+    if not payload.dry_run and not payload.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Real apply: 'confirm' must be true",
+        )
+    try:
+        liens, abonnes = await container.shaping.build_targets(payload.router)
+        plan = await container.shaping.plan(payload.router, links=liens, subscribers=abonnes)
+        resultat = await container.shaping.apply(plan, dry_run=payload.dry_run, author="ui")
+    except EnforcementDisabledError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except MissingWriteCredentialsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{exc}. Declare rw_username and rw_password_env for this router, "
+                "and create the qos-rw account with policy=read,write,api,test."
+            ),
+        ) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return {"plan": plan.to_dict(), "result": resultat.to_dict()}
+
+
+@router.post(
+    "/shaping/routers/{router_name}/clean-queues",
+    summary="Delete every freeQoS queue of a router, then lay them down again",
+)
+async def clean_router_queues(router_name: str, container: ContainerDep) -> dict[str, Any]:
+    """Repartir sur de bonnes bases : nos files partent toutes, le plan courant
+    les repose aussitot. Les files posees a la main ne sont jamais touchees."""
+    try:
+        rapport = await container.shaping.clean_queues(router_name, author="ui:clean-queues")
+    except MissingWriteCredentialsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Cannot clean the router: {type(exc).__name__}: {exc}",
+        ) from exc
+    # Les lignes de limitation des restrictions sont aussi des files freeQoS :
+    # les reposer tout de suite, sinon la restriction saute jusqu'au passage.
+    if container.restrictions is not None:
+        try:
+            r = await container.restrictions.apply_all(
+                author="ui:clean-queues", dry_run=False, router_name=router_name
+            )
+            rapport["recreated"] += int(r.get("applied") or 0)
+        except Exception as exc:  # noqa: BLE001
+            rapport["errors"].append(f"restrictions: {type(exc).__name__}: {exc}")
+    return rapport
+
+
+@router.get("/shaping/capability", summary="Real rights of the account on a router")
+async def write_capability(
+    container: ContainerDep, router_name: Annotated[str, Query(alias="router")]
+) -> dict[str, Any]:
+    """Interroge le routeur : ce compte a-t-il vraiment le droit d'ecrire ?
+
+    Lit /user et /user/group plutot que de se fier a l'inventaire. Un verdict
+    ``null`` signifie indeterminable — la commande sera tentee et RouterOS aura
+    le dernier mot.
+    """
+    try:
+        verdict = await container.shaping.write_capability(router_name)
+    except KeyError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return verdict.to_dict()
+
+
+@router.get("/shaping/audit", summary="Log of the commands sent")
+async def audit(
+    container: ContainerDep, limit: Annotated[int, Query(ge=1, le=500)] = 100
+) -> list[dict[str, Any]]:
+    return await _require_topology(container).audit(limit=limit)
+
+
+# ------------------------------------------------- bascule de l'enforcement
+class EnforcementInput(BaseModel):
+    enabled: bool
+    reason: str | None = Field(default=None, max_length=300)
+    # Activer l'ecriture sur des routeurs de production merite un geste explicite.
+    confirm: bool = False
+
+
+@router.get("/shaping/enforcement", summary="State of the write flag")
+async def enforcement_state(container: ContainerDep) -> dict[str, Any]:
+    detail = None
+    if container.topology_repo is not None:
+        from app.services.shaping import FLAG_ENFORCEMENT
+
+        detail = await container.topology_repo.flag_detail(FLAG_ENFORCEMENT)
+    return {
+        "enabled": container.shaping.enforcement_enabled,
+        "locked": container.shaping.enforcement_locked,
+        "env_default": container.settings.enforcement_enabled,
+        "last_change": detail,
+    }
+
+
+@router.put("/shaping/enforcement", summary="Allow or stop writing to the routers")
+async def set_enforcement(payload: EnforcementInput, container: ContainerDep) -> dict[str, Any]:
+    """Bascule sans redemarrage.
+
+    Activer exige une confirmation ; couper n'en demande pas — revenir en
+    lecture seule doit toujours etre immediat.
+    """
+    if payload.enabled and not payload.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=("Enabling enforcement allows writing to your routers: 'confirm' must be true."),
+        )
+    try:
+        return await container.shaping.set_enforcement(payload.enabled, reason=payload.reason)
+    except EnforcementLockedError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+# ------------------------------------------------------------------ boost
+class BoostInput(BaseModel):
+    """Coup de debit temporaire sur un abonne PPPoE."""
+
+    login: str = Field(min_length=1, max_length=128)
+    duration_minutes: int = Field(ge=1, le=60 * 24 * 7)
+    down_mbps: float | None = Field(default=None, gt=0, le=100_000)
+    up_mbps: float | None = Field(default=None, gt=0, le=100_000)
+    down_kbps: float | None = Field(default=None, gt=0, le=100_000_000)
+    up_kbps: float | None = Field(default=None, gt=0, le=100_000_000)
+    down_gbps: float | None = Field(default=None, gt=0, le=100)
+    up_gbps: float | None = Field(default=None, gt=0, le=100)
+    # Alternative pratique : multiplier le plan plutot que saisir un debit.
+    multiplier: float | None = Field(default=None, gt=1, le=50)
+    reason: str | None = Field(default=None, max_length=300)
+    apply_now: bool = True
+
+    @model_validator(mode="after")
+    def _normaliser(self) -> BoostInput:
+        self.down_mbps = _en_mbps(self.down_mbps, self.down_kbps, self.down_gbps, "download")
+        self.up_mbps = _en_mbps(self.up_mbps, self.up_kbps, self.up_gbps, "upload")
+        return self
+
+
+async def _fiche_statique(container: Any, reference: str) -> dict[str, Any] | None:
+    """Retrouve un client a IP fixe dans l'inventaire, sous la forme d'une
+    ligne de metriques (memes cles) pour que l'appelant n'ait pas a distinguer."""
+    repo = getattr(container, "static_clients_repo", None)
+    if repo is None:
+        return None
+    for client in await repo.load_enabled():
+        if client.reference == reference:
+            return {
+                "login": client.reference,
+                "kind": KIND_STATIC,
+                "pop_name": client.pop_name,
+                "plan_down_mbps": client.plan_down_mbps,
+                "plan_up_mbps": client.plan_up_mbps,
+            }
+    return None
+
+
+@router.get("/shaping/boosts", summary="Running boosts")
+async def list_boosts(container: ContainerDep) -> list[dict[str, Any]]:
+    return await _require_topology(container).active_boosts()
+
+
+@router.post("/shaping/boosts", summary="Give a temporary rate boost")
+async def create_boost(
+    payload: BoostInput, container: ContainerDep, metrics: RepositoryDep
+) -> dict[str, Any]:
+    """Pose un boost puis, si demande, l'applique immediatement.
+
+    Il expire tout seul : un job verifie l'echeance et ramene la file au debit
+    normal. Sans cela le boost resterait indefiniment, la file RouterOS ne
+    sachant rien de sa duree.
+    """
+    repo = _require_topology(container)
+
+    abonne = next(
+        (
+            row
+            for row in await metrics.subscriber_latest(limit=5000, order_by="login")
+            if row["login"] == payload.login
+        ),
+        None,
+    )
+    if abonne is None:
+        # Un client a IP fixe declare a l'instant n'a pas encore d'echantillon :
+        # sa fiche suffit a le booster, il est joignable en permanence.
+        abonne = await _fiche_statique(container, payload.login)
+    if abonne is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No active subscriber nor declared client for '{payload.login}'",
+        )
+
+    down, up = payload.down_mbps, payload.up_mbps
+    if payload.multiplier is not None:
+        down = down or (abonne.get("plan_down_mbps") or 0) * payload.multiplier or None
+        up = up or (abonne.get("plan_up_mbps") or 0) * payload.multiplier or None
+    if down is None and up is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Give a rate (down_mbps / down_kbps / down_gbps, same for upload) or a multiplier"
+            ),
+        )
+
+    expire_le = datetime.now(tz=UTC) + timedelta(minutes=payload.duration_minutes)
+    politique = await repo.set_boost(
+        scope="subscriber",
+        target_key=payload.login,
+        down_mbps=down,
+        up_mbps=up,
+        expires_at=expire_le,
+        reason=payload.reason,
+        updated_by="ui",
+    )
+
+    resultat: dict[str, Any] = {
+        "boost": {
+            "login": payload.login,
+            "down_mbps": politique["boost_down_mbps"],
+            "up_mbps": politique["boost_up_mbps"],
+            "expires_at": expire_le,
+            "duration_minutes": payload.duration_minutes,
+        },
+        "applied": None,
+    }
+
+    if payload.apply_now:
+        resultat["applied"] = await _apply_for_subscriber(container, payload.login, author="ui")
+    return resultat
+
+
+@router.delete("/shaping/boosts/{login}", summary="Remove a boost before it expires")
+async def clear_boost(
+    login: str,
+    container: ContainerDep,
+    apply_now: Annotated[bool, Query()] = True,
+) -> dict[str, Any]:
+    retire = await _require_topology(container).clear_boost("subscriber", login)
+    if not retire:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No boost running")
+    applique = await _apply_for_subscriber(container, login, author="ui") if apply_now else None
+    return {"cleared": True, "applied": applique}
+
+
+async def _apply_for_subscriber(
+    container: ContainerDep, login: str, *, author: str | None = None
+) -> dict[str, Any] | None:
+    """Pose le debit de CET abonne sur le routeur qui le porte.
+
+    Meme chemin que la saisie d'un plafond : plan complet du routeur, puis
+    restriction a la chaine de cette seule file. Un boost n'a aucune raison de
+    reecrire les files des voisins, et le rapport rendu nomme ce qui a empeche
+    l'ecriture quand rien n'est pousse (enforcement coupe, abonne hors ligne,
+    file masquee) au lieu d'un simple compteur a zero.
+
+    Ne leve pas : poser un boost doit reussir meme quand l'ecriture est coupee.
+    """
+    try:
+        return await container.shaping.enforce_subscriber(login=login, author=author or "ui")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Application impossible pour l'abonne '%s'", login)
+        return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}

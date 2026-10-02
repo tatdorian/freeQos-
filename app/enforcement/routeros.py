@@ -1,0 +1,267 @@
+"""Execution des commandes sur RouterOS.
+
+SEUL module du projet qui ecrit sur un equipement.
+
+Separation des comptes : ce client utilise ``qos-rw``, jamais ``qos-ro``. Un
+routeur sans identifiants d'ecriture ne peut simplement pas etre modifie, ce qui
+donne un moyen sur de mettre un PoP hors de portee de l'enforcement.
+
+Les commandes ne sont jamais construites ici : elles arrivent deja formees dans
+le plan, ce qui garantit que ce qui est execute est exactement ce que
+l'operateur a vu.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+from dataclasses import dataclass, field
+from typing import Any, Protocol
+
+from app.config import MissingSecretError, RouterConfig
+from app.enforcement.capability import permission_hint
+from app.enforcement.models import Plan, PlanAction
+
+logger = logging.getLogger(__name__)
+
+
+class RouterOsWriteClient(Protocol):
+    """Contrat d'ecriture, volontairement minimal."""
+
+    def execute(self, action: PlanAction) -> dict[str, Any]: ...
+
+    def close(self) -> None: ...
+
+
+class MissingWriteCredentialsError(RuntimeError):
+    """Le routeur n'a pas d'identifiants d'ecriture : il est hors de portee."""
+
+
+def write_config(config: RouterConfig, *, require_separate: bool = False) -> RouterConfig:
+    """Configuration a utiliser pour ecrire sur ce routeur.
+
+    Un compte ``rw_*`` distinct, s'il est declare, est utilise : la separation
+    des privileges reste possible et recommandee.
+
+    Sinon on retombe sur le compte configure. Refuser ici reviendrait a se fier a
+    une DECLARATION plutot qu'aux droits reels : beaucoup d'exploitants se
+    connectent deja avec un compte qui possede la politique 'write'. C'est le
+    routeur qui tranche, pas l'inventaire.
+
+    ``require_separate`` (REQUIRE_SEPARATE_WRITE_ACCOUNT) retablit l'exigence
+    stricte pour qui tient a deux comptes distincts.
+    """
+    if config.rw_username:
+        if not config.rw_password_env:
+            raise MissingWriteCredentialsError(
+                f"router '{config.name}': rw_username is set but rw_password_env is missing"
+            )
+        clone = config.model_copy(
+            update={
+                "username": config.rw_username,
+                "password": None,
+                "password_env": config.rw_password_env,
+            }
+        )
+        try:
+            clone.resolve_password()
+        except MissingSecretError as exc:
+            raise MissingWriteCredentialsError(str(exc)) from exc
+        return clone
+
+    if require_separate:
+        raise MissingWriteCredentialsError(
+            f"routeur '{config.name}' : REQUIRE_SEPARATE_WRITE_ACCOUNT=true exige "
+            "un compte d'ecriture distinct. Declarez rw_username et "
+            "rw_password_env, ou desactivez cette exigence."
+        )
+
+    # Repli sur le compte configure : ses droits reels feront foi.
+    logger.info(
+        "Routeur '%s' : pas de compte d'ecriture distinct, utilisation de '%s'",
+        config.name,
+        config.username,
+    )
+    try:
+        config.resolve_password()
+    except MissingSecretError as exc:
+        raise MissingWriteCredentialsError(str(exc)) from exc
+    return config
+
+
+class LibrouterosWriteClient:
+    """Client d'ecriture reel (librouteros, API binaire)."""
+
+    def __init__(self, config: RouterConfig, *, require_separate: bool = False) -> None:
+        self._config = write_config(config, require_separate=require_separate)
+        self._api: Any = None
+        self._lock = threading.Lock()
+
+    def _ensure(self) -> Any:
+        if self._api is None:
+            from librouteros import connect
+            from librouteros.login import plain
+
+            kwargs: dict[str, Any] = {
+                "host": self._config.host,
+                "port": self._config.port,
+                "username": self._config.username,
+                "password": self._config.resolve_password(),
+                "timeout": self._config.timeout_s,
+                "login_method": plain,
+            }
+            if self._config.use_ssl:
+                # Meme posture TLS que le canal de lecture, choisie par routeur :
+                # le module qui ECRIT n'impose plus une desactivation en dur.
+                from app.services.tls import ssl_wrapper_for
+
+                kwargs["ssl_wrapper"] = ssl_wrapper_for(self._config)
+            self._api = connect(**kwargs)
+            logger.warning(
+                "Connexion en ECRITURE ouverte sur %s (%s) avec le compte %s",
+                self._config.name,
+                self._config.host,
+                self._config.username,
+            )
+        return self._api
+
+    def close(self) -> None:
+        with self._lock:
+            self._drop()
+
+    def _drop(self) -> None:
+        if self._api is not None:
+            try:
+                self._api.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._api = None
+
+    def execute(self, action: PlanAction) -> dict[str, Any]:
+        with self._lock:
+            try:
+                api = self._ensure()
+                chemin = api.path(*[p for p in action.path.split("/") if p])
+                if action.verb == "add":
+                    resultat = chemin.add(**action.fields)
+                    return {"id": str(resultat)}
+                if action.verb == "set":
+                    # SANS .id, C'EST UN REGLAGE GLOBAL et non une ligne d'une
+                    # collection : /ip/traffic-flow, par exemple, n'a qu'un seul
+                    # etat et RouterOS refuse un .id sur ce chemin. Envoyer un
+                    # .id vide echouerait la ou la commande est parfaitement
+                    # valide.
+                    if action.target_id:
+                        chemin.update(**{".id": action.target_id, **action.fields})
+                    else:
+                        chemin.update(**action.fields)
+                    return {"id": action.target_id or ""}
+                if action.verb == "remove":
+                    chemin.remove(action.target_id)
+                    return {"id": action.target_id}
+                raise ValueError(f"verbe inconnu : {action.verb}")
+            except Exception:
+                self._drop()
+                raise
+
+
+@dataclass(slots=True)
+class ActionOutcome:
+    action: PlanAction
+    ok: bool
+    detail: str = ""
+
+
+@dataclass(slots=True)
+class ApplyResult:
+    """Compte rendu d'une application, pour l'audit et l'interface."""
+
+    router_name: str
+    dry_run: bool
+    outcomes: list[ActionOutcome] = field(default_factory=list)
+    aborted_reason: str | None = None
+
+    @property
+    def applied(self) -> int:
+        return sum(1 for o in self.outcomes if o.ok)
+
+    @property
+    def failed(self) -> int:
+        return sum(1 for o in self.outcomes if not o.ok)
+
+    @property
+    def ok(self) -> bool:
+        return self.failed == 0 and self.aborted_reason is None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "router": self.router_name,
+            "dry_run": self.dry_run,
+            "ok": self.ok,
+            "applied": self.applied,
+            "failed": self.failed,
+            "aborted_reason": self.aborted_reason,
+            "results": [
+                {
+                    "command": o.action.command,
+                    "summary": o.action.summary(),
+                    "ok": o.ok,
+                    "detail": o.detail,
+                }
+                for o in self.outcomes
+            ],
+        }
+
+
+async def apply_plan(
+    plan: Plan,
+    client: RouterOsWriteClient,
+    *,
+    dry_run: bool = True,
+    stop_on_error: bool = True,
+    max_actions: int = 500,
+) -> ApplyResult:
+    """Execute un plan, action par action, dans l'ordre.
+
+    ``dry_run`` est le defaut : rien n'est envoye tant qu'on ne demande pas
+    explicitement le contraire.
+
+    ``max_actions`` est un coupe-circuit : un plan anormalement gros signale
+    presque toujours un etat desire mal calcule (inventaire vide, capacite
+    perdue), et il vaut mieux s'arreter que de reecrire tout un PoP.
+    """
+    resultat = ApplyResult(router_name=plan.router_name, dry_run=dry_run)
+    username = getattr(getattr(client, "_config", None), "username", "?")
+
+    if len(plan.actions) > max_actions:
+        resultat.aborted_reason = (
+            f"{len(plan.actions)} actions exceed the safety limit "
+            f"({max_actions}). Check the desired state before forcing."
+        )
+        logger.error("Plan refuse sur %s : %s", plan.router_name, resultat.aborted_reason)
+        return resultat
+
+    for action in plan.actions:
+        if dry_run:
+            resultat.outcomes.append(ActionOutcome(action=action, ok=True, detail="dry run"))
+            continue
+        try:
+            retour = await asyncio.to_thread(client.execute, action)
+            resultat.outcomes.append(
+                ActionOutcome(action=action, ok=True, detail=str(retour.get("id") or ""))
+            )
+            logger.info("[%s] %s", plan.router_name, action.command)
+        except Exception as exc:  # noqa: BLE001
+            message = f"{type(exc).__name__}: {exc}"
+            indice = permission_hint(exc, username)
+            if indice:
+                message = f"{message} — {indice}"
+            resultat.outcomes.append(ActionOutcome(action=action, ok=False, detail=message))
+            logger.error("[%s] ECHEC %s -> %s", plan.router_name, action.command, message)
+            if stop_on_error:
+                resultat.aborted_reason = (
+                    "stopped after a failure: the next actions may depend on this one"
+                )
+                break
+    return resultat
