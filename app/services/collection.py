@@ -183,6 +183,9 @@ class CollectionService:
         #: Client a IP fixe SEUL sur sa VLAN (sans PPPoE) -> interface VLAN. Le
         #: shaping y pose sa file, la mesure y lit son compteur.
         self.sole_vlan_interfaces: dict[str, str] = {}
+        #: Meme client -> reseau de sa VLAN : c'est lui que sa file vise (une
+        #: file sur l'interface ne voit pas l'upload).
+        self.sole_vlan_networks: dict[str, str] = {}
         # Latence par segment (PoP -> amont, PoP -> internet), meme drapeau.
         self.path_prober = path_prober
         # Activation vivante de la sonde : amorcee par l'env, ensuite pilotee
@@ -486,20 +489,28 @@ class CollectionService:
                 )
             if vlan is not None:
                 self.sole_vlan_interfaces[client.reference] = vlan.interface
-                # LA FILE D'ABORD : elle compte ce qui est PASSE. Le rx de
-                # l'interface compte ce que le client ENVOIE, paquets jetes par
-                # la file compris -- l'upload paraissait alors ignorer la limite.
-                file_vlan = (compteurs.get(collector.name, {}) if collector else {}).get(
-                    vlan.interface
-                )
-                if file_vlan is not None:
-                    octets = file_vlan
-                    key = f"static/{client.reference}@queue:{vlan.interface}"
+                routeur_vlan = collector.name if collector is not None else ""
+                reseau = vlan_network_for(routeur_vlan, vlan.interface, client.address)
+                if reseau:
+                    self.sole_vlan_networks[client.reference] = reseau
+                else:
+                    self.sole_vlan_networks.pop(client.reference, None)
+                # LA FILE D'ABORD : elle compte ce qui est PASSE, dans les deux
+                # sens. Constate : une file qui vise l'INTERFACE ne voit jamais
+                # l'upload (0 octet), et le rx de l'interface compte aussi ce
+                # que la file jette. Ordre : file sur le reseau de la VLAN, file
+                # sur l'adresse saisie, et seulement a defaut le compteur VLAN.
+                files = compteurs.get(collector.name, {}) if collector else {}
+                trouve = files.get(reseau) if reseau else None
+                octets = trouve if trouve is not None else _counters_for(files, client)
+                if octets != (None, None):
+                    key = f"static/{client.reference}@queue"
                 else:
                     octets = (vlan.rx_bytes, vlan.tx_bytes)
                     key = f"static/{client.reference}@{vlan.interface}"
             else:
                 self.sole_vlan_interfaces.pop(client.reference, None)
+                self.sole_vlan_networks.pop(client.reference, None)
                 octets = _counters_for(
                     compteurs.get(collector.name, {}) if collector else {}, client
                 )
@@ -1014,6 +1025,26 @@ def sole_vlan_counter(
     if seul.pppoe or (seul.rx_bytes is None and seul.tx_bytes is None):
         return None
     return seul
+
+
+def vlan_network_for(router: str, interface: str, address: str | None) -> str | None:
+    """Le reseau de l'interface VLAN qui contient l'adresse du client (sinon le
+    premier reseau de cette interface)."""
+    import ipaddress as _ip
+
+    from app.collectors.mikrotik import _RESEAUX_CONNECTES
+
+    reseaux = [r for r, i in _RESEAUX_CONNECTES.get(router, []) if i == interface]
+    if not reseaux:
+        return None
+    try:
+        hote = _ip.ip_interface(str(address or "")).ip
+        for reseau in reseaux:
+            if hote in reseau:
+                return str(reseau)
+    except ValueError:
+        pass
+    return str(reseaux[0])
 
 
 def _counters_for(

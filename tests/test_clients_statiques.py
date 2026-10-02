@@ -822,51 +822,6 @@ async def test_un_vlan_qui_porte_du_pppoe_ne_mesure_pas_le_client(settings: Sett
     assert writer.subscriber_rows[-1][1].tx_bps is None
 
 
-async def test_seul_sur_sa_vlan_le_client_est_mesure_par_son_vlan(settings: Settings) -> None:
-    """Constate : un client par VLAN faisait du trafic depuis une AUTRE IP de son
-    VLAN (celle de son routeur) ; la file sur l'adresse saisie ne le voyait pas,
-    l'onglet Subscribers restait a zero alors que l'arbre (compteur VLAN) le
-    montrait. Seul sur sa VLAN, c'est le compteur du VLAN qui fait foi."""
-    clock = Clock()
-    client = routeur_vlan(rx=1_000, tx=10_000)
-    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.2/32", "bytes": "0/0"}]
-    service, writer, _ = build_service(
-        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
-    )
-    await service.collect_subscribers()
-    clock.advance(10)
-    client.interfaces_rows[-1].update({"rx-byte": "11000", "tx-byte": "110000"})
-    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.2/32", "bytes": "0/0"}]
-    await service.collect_subscribers()
-
-    assert writer.subscriber_rows[-1][1].tx_bps == pytest.approx(80_000)
-    assert service.sole_vlan_interfaces == {fiche_vlan().reference: "vlan2060"}
-
-
-def test_seul_sur_sa_vlan_sa_file_vise_l_interface() -> None:
-    from app.enforcement.planner import SubscriberTarget
-    from app.models import KIND_STATIC
-
-    seul = SubscriberTarget(
-        login="nestle",
-        plan_down_mbps=10,
-        plan_up_mbps=2,
-        interface="vlan2060",
-        kind=KIND_STATIC,
-        address="10.60.0.2/32",
-    )
-    assert seul.queue_target() == "vlan2060"
-    partage = SubscriberTarget(
-        login="x",
-        plan_down_mbps=10,
-        plan_up_mbps=2,
-        interface="",
-        kind=KIND_STATIC,
-        address="10.60.0.2/32",
-    )
-    assert partage.queue_target() == "10.60.0.2/32"
-
-
 def test_le_client_vlan_pend_sous_son_vlan_relie_par_un_lien_mesure() -> None:
     """Le lien routeur -> VLAN nomme l'interface : c'est ce qui lui fait
     afficher le debit que RouterOS compte sur ce VLAN, au lieu d'un
@@ -932,23 +887,56 @@ def test_l_interface_du_vlan_vient_de_la_configuration_du_routeur(settings: Sett
     assert sites == {"nestle": ("pop-test", "vlan2060", 2060)}
 
 
-async def test_seul_sur_sa_vlan_la_file_de_l_interface_fait_foi(settings: Settings) -> None:
-    """Le rx de l'interface compte ce que le client ENVOIE, y compris ce que la
-    file jette : l'upload semblait depasser la limite. La file sur l'interface
-    compte ce qui est passe, elle l'emporte."""
+def _reseau_vlan() -> None:
+    import ipaddress
+
+    from app.collectors import mikrotik
+
+    mikrotik._RESEAUX_CONNECTES["pop-test"] = [(ipaddress.ip_network("10.60.0.0/29"), "vlan2060")]
+
+
+async def test_seul_sur_sa_vlan_sa_file_vise_le_reseau_de_la_vlan(settings: Settings) -> None:
+    """Constate sur le terrain : une file qui vise l'INTERFACE VLAN ne compte
+    jamais l'upload (0 octet) ; une file sur une ADRESSE tient les deux sens.
+    Seul sur sa VLAN, le client est donc vise par le RESEAU de sa VLAN."""
+    _reseau_vlan()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    service, _writer, _ = build_service(settings, client, InventaireMemoire([fiche_vlan()]))
+    await service.collect_subscribers()
+    assert service.sole_vlan_networks == {fiche_vlan().reference: "10.60.0.0/29"}
+
+
+async def test_seul_sur_sa_vlan_la_file_mesure_les_deux_sens(settings: Settings) -> None:
+    """La mesure vient de SA file (ce qui est passe), pas du rx de l'interface
+    qui compte aussi ce que la file jette."""
+    _reseau_vlan()
     clock = Clock()
     client = routeur_vlan(rx=1_000, tx=10_000)
-    client.simple_queue_rows = [{"name": "q", "target": "vlan2060", "bytes": "0/0"}]
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.0/29", "bytes": "0/0"}]
     service, writer, _ = build_service(
         settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
     )
     await service.collect_subscribers()
     clock.advance(10)
-    # Le client pousse 1,1 Mbit/s, la file n'en laisse passer que 100 kbit/s.
-    client.interfaces_rows[-1].update({"rx-byte": str(1_000 + 1_375_000), "tx-byte": "155000"})
-    client.simple_queue_rows = [{"name": "q", "target": "vlan2060", "bytes": "125000/145000"}]
+    client.interfaces_rows[-1].update({"rx-byte": "500000", "tx-byte": "260000"})
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.0/29", "bytes": "250000/247000"}]
     await service.collect_subscribers()
 
     ligne = writer.subscriber_rows[-1][1]
-    assert ligne.rx_bps == pytest.approx(100_000)
-    assert ligne.tx_bps == pytest.approx(116_000)
+    assert ligne.rx_bps == pytest.approx(200_000)
+    assert ligne.tx_bps == pytest.approx(197_600)
+
+
+def test_une_file_statique_ne_vise_jamais_une_interface() -> None:
+    from app.enforcement.planner import SubscriberTarget
+    from app.models import KIND_STATIC
+
+    cible = SubscriberTarget(
+        login="x",
+        interface="vlan2060",
+        kind=KIND_STATIC,
+        address="10.60.0.0/29",
+        plan_down_mbps=1,
+        plan_up_mbps=1,
+    )
+    assert cible.queue_target() == "10.60.0.0/29"

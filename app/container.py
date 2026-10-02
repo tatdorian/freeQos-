@@ -646,6 +646,7 @@ async def build_container(settings: Settings) -> Container:
 
     netflow.vlan_prefixes = reseaux_des_vlan
     shaping.sole_vlan_interfaces = collection.sole_vlan_interfaces
+    shaping.sole_vlan_networks = collection.sole_vlan_networks
 
     # Services pousses par l'API avec la seule MAC du CPE : places des que la
     # MAC apparait dans une table ARP/DHCP d'un routeur.

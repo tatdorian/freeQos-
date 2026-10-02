@@ -3767,6 +3767,8 @@ async def test_plans_par_client_derniere_ecriture_gagne(database: Database) -> N
 async def test_regle_par_site_enregistree(database: Database) -> None:
     from app.db.traffic_rules_repo import TrafficRulesRepository
 
+    async with database.pool.acquire() as conn:
+        await conn.execute("DELETE FROM traffic_rules WHERE name = 'site-x'")
     depot = TrafficRulesRepository(database.pool)
     regle = await depot.create(
         {"name": "site-x", "prefixes": ["1.2.3.4"], "scope": "pops", "pops": ["VLAN 2060"]}

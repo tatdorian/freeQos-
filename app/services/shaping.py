@@ -258,6 +258,7 @@ class ShapingService:
         #: collecte). Sa file vise l'interface : tout son trafic est bride,
         #: quelle que soit l'adresse qui l'emet.
         self.sole_vlan_interfaces: dict[str, str] = {}
+        self.sole_vlan_networks: dict[str, str] = {}
         # Ce qu'a fait le DERNIER passage de la boucle de reconciliation. C'est
         # elle qui ecrit sur les routeurs ; sans cette trace, l'exploitant n'a
         # aucun moyen de voir qu'elle tourne, et croit que rien ne se passe.
@@ -1450,9 +1451,12 @@ class ShapingService:
             bas, haut = self._default_plan()
         return SubscriberTarget(
             login=client.reference,
-            interface=self.sole_vlan_interfaces.get(client.reference, ""),
+            # JAMAIS l'interface : une file qui la vise ne voit pas l'upload.
+            # Seul sur sa VLAN, le client est vise par le RESEAU de sa VLAN --
+            # les deux sens, et toutes les IP du VLAN (son routeur compris).
+            interface="",
             kind=KIND_STATIC,
-            address=client.address,
+            address=self.sole_vlan_networks.get(client.reference) or client.address,
             plan_down_mbps=bas,
             plan_up_mbps=haut,
             override_down_mbps=surcharge.get("max_down_mbps"),
