@@ -4717,6 +4717,25 @@ async function openDestination(address) {
   hote.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+/** Fermer la fiche d'une adresse : par sa croix, ou par Echap. Delegue au
+ *  document, parce que la fiche est rendue a trois endroits (Services, Trafic,
+ *  recherche) et que chacun la remplace a chaque ouverture. */
+function fermerFicheIp(carte) {
+  const hote = carte && carte.parentElement;
+  if (!hote) return;
+  hote.innerHTML = '';
+  if (hote.id === 'svc-detail' && typeof SVC !== 'undefined') SVC.detail = null;
+}
+document.addEventListener('click', (e) => {
+  const bouton = e.target.closest && e.target.closest('[data-ip-close]');
+  if (bouton) fermerFicheIp(bouton.closest('.ip-card'));
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const ouvertes = document.querySelectorAll('.ip-card [data-ip-close]');
+  if (ouvertes.length) fermerFicheIp(ouvertes[ouvertes.length - 1].closest('.ip-card'));
+});
+
 /** La fiche complete d'une adresse, rendue en HTML.
  *
  *  UNE SEULE IMPLEMENTATION pour les deux onglets. Elle etait ecrite dans
@@ -4746,7 +4765,8 @@ function ipCard(fiche, periodeSecondes, actions) {
 
   return '<div class="ip-card">' +
     '<h3><code>' + esc(fiche.address) + '</code> ' + svcBadge(famille) +
-      (lieu(intel) ? ' ' + lieu(intel) : '') + '</h3>' +
+      (lieu(intel) ? ' ' + lieu(intel) : '') +
+      '<button class="sm ip-close" data-ip-close title="Close (Esc)" aria-label="Close">&times;</button></h3>' +
     (position ? miniMapHtml(intel.latitude, intel.longitude, intel.city || intel.country) : '') +
     '<div class="ip-facts">' +
       fait('Service', service ? '<b>' + esc(service) + '</b>' : null) +
