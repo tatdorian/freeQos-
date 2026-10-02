@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["traffic restrictions"])
 
 Action = Literal["block", "limit"]
-Scope = Literal["all", "subscribers"]
+Scope = Literal["all", "subscribers", "pops"]
 Protocol = Literal["tcp", "udp", "icmp"]
 
 
@@ -72,6 +72,11 @@ class RuleInput(BaseModel):
     )
     scope: Scope = "all"
     logins: list[str] = Field(default_factory=list, max_length=500)
+    pops: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="Sites (PoP or VLAN site) when scope is 'pops'",
+    )
     routers: list[str] = Field(
         default_factory=list,
         max_length=100,
@@ -109,6 +114,7 @@ class RuleUpdate(BaseModel):
     ports: str | None = Field(default=None, max_length=64)
     scope: Scope | None = None
     logins: list[str] | None = Field(default=None, max_length=500)
+    pops: list[str] | None = Field(default=None, max_length=100)
     routers: list[str] | None = Field(default=None, max_length=100)
     enabled: bool | None = None
     note: str | None = Field(default=None, max_length=1000)
@@ -295,7 +301,11 @@ async def preview_rule(
         "address_count": len(cible.destinations),
         "clients": list(cible.clients[:limit]),
         "client_count": len(cible.clients),
-        "routers": _service(container).routers_for(regle),
+        "routers": (
+            sorted(await _service(container).site_targets(regle))
+            if regle.get("scope") == "pops"
+            else _service(container).routers_for(regle)
+        ),
     }
 
 

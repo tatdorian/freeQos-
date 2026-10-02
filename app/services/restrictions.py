@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -103,6 +103,8 @@ def validate(payload: dict[str, Any]) -> None:
         raise InvalidRuleError(
             "a cap without a rate caps nothing: enter a download rate, an upload rate, or both."
         )
+    if str(payload.get("scope") or "all") == "pops" and not payload.get("pops"):
+        raise InvalidRuleError("scope 'site' without any site: the rule would target nobody.")
     if str(payload.get("scope") or "all") == "subscribers" and not payload.get("logins"):
         raise InvalidRuleError(
             "scope 'chosen subscribers' without any subscriber: the rule would target nobody."
@@ -206,6 +208,36 @@ class RestrictionService:
         regles = await self.rules_repo.list_all(enabled_only=True)
         return [await self.resolve(regle) for regle in regles]
 
+    async def site_targets(self, rule: dict[str, Any]) -> dict[str, tuple[str, ...]]:
+        """``routeur -> clients vises`` pour une regle "pour ce site".
+
+        Un site de ROUTEUR : tout le trafic qui passe par ce routeur (aucun
+        filtre client). Un site de VLAN : le reseau de cette VLAN sur son
+        routeur -- les autres clients du meme routeur ne sont pas touches.
+        """
+        from app.collectors.mikrotik import _RESEAUX_CONNECTES
+        from app.services.pop_match import normalise_pop
+
+        sites = {normalise_pop(s["name"]): s for s in await self.shaping._pop_sites()}
+        tout: set[str] = set()
+        reseaux: dict[str, set[str]] = {}
+        for nom_site in rule.get("pops") or []:
+            site = sites.get(normalise_pop(str(nom_site)))
+            if site is not None and site.get("kind") == "vlan" and site.get("vlan_interface"):
+                routeur = str(site.get("router_name") or "")
+                iface = str(site["vlan_interface"])
+                blocs = {str(r) for r, i in _RESEAUX_CONNECTES.get(routeur, []) if i == iface}
+                if routeur and blocs:
+                    reseaux.setdefault(routeur, set()).update(blocs)
+                continue
+            for routeur in await self.shaping._routers_for_site(str(nom_site)):
+                tout.add(routeur)
+        sortie: dict[str, tuple[str, ...]] = dict.fromkeys(tout, ())
+        for routeur, blocs in reseaux.items():
+            if routeur not in tout:
+                sortie[routeur] = tuple(sorted(blocs))
+        return sortie
+
     def routers_for(self, rule: dict[str, Any]) -> list[str]:
         """Les routeurs concernes par une regle.
 
@@ -279,6 +311,13 @@ class RestrictionService:
         # epinglee sur le PoP Altair ne doit pas apparaitre sur le PoP Vega.
         par_routeur: dict[str, list[RuleTarget]] = {nom: [] for nom in vises}
         for regle, cible in zip(actives, cibles, strict=True):
+            if str(regle.get("scope") or "all") == "pops":
+                # PAR SITE : seuls les routeurs du site, et pour un site de
+                # VLAN, seulement le reseau de cette VLAN sur son routeur.
+                for nom, clients in (await self.site_targets(regle)).items():
+                    if nom in par_routeur:
+                        par_routeur[nom].append(replace(cible, clients=clients))
+                continue
             for nom in self.routers_for(regle):
                 if nom in par_routeur:
                     par_routeur[nom].append(cible)

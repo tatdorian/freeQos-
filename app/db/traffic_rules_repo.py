@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 COLUMNS = """
     id, name, action, limit_down_mbps, limit_up_mbps, services, categories,
-    prefixes, protocol, ports, scope, logins, routers, enabled, note,
+    prefixes, protocol, ports, scope, logins, routers, pops, enabled, note,
     last_applied_at, last_state, last_detail, created_at, updated_at
 """
 
@@ -44,11 +44,12 @@ CHAMPS = (
     "scope",
     "logins",
     "routers",
+    "pops",
     "enabled",
     "note",
 )
 
-CHAMPS_JSON = ("services", "categories", "prefixes", "logins", "routers")
+CHAMPS_JSON = ("services", "categories", "prefixes", "logins", "routers", "pops")
 
 
 class RuleNotFoundError(LookupError):
@@ -93,9 +94,10 @@ class TrafficRulesRepository:
                     f"""
                     INSERT INTO traffic_rules (name, action, limit_down_mbps, limit_up_mbps,
                                                services, categories, prefixes, protocol,
-                                               ports, scope, logins, routers, enabled, note)
+                                               ports, scope, logins, routers, enabled, note,
+                                               pops)
                     VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10,
-                            $11::jsonb, $12::jsonb, $13, $14)
+                            $11::jsonb, $12::jsonb, $13, $14, $15::jsonb)
                     RETURNING {COLUMNS}
                     """,  # noqa: S608
                     valeurs.get("name"),
@@ -112,6 +114,7 @@ class TrafficRulesRepository:
                     valeurs.get("routers", "[]"),
                     bool(valeurs.get("enabled", True)),
                     valeurs.get("note"),
+                    valeurs.get("pops", "[]"),
                 )
         except asyncpg.UniqueViolationError as exc:
             raise RuleConflictError(f"a rule is already named '{payload.get('name')}'") from exc

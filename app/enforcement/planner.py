@@ -153,11 +153,6 @@ class SubscriberTarget:
           adresse, et elargir serait shaper les voisins de l'abonne).
         """
         if self.kind == KIND_STATIC:
-            # SEUL CLIENT DE SA VLAN : l'interface VLAN est la sienne, et viser
-            # son adresse laissait passer le trafic emis depuis une autre IP du
-            # VLAN (celle de son routeur, typiquement) -- ni bride ni compte.
-            if self.interface:
-                return self.interface
             return network_target(self.address)
         if mode == TARGET_INTERFACE:
             return self.interface or None
