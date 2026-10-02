@@ -930,3 +930,25 @@ def test_l_interface_du_vlan_vient_de_la_configuration_du_routeur(settings: Sett
     }
     sites = static_vlan_sites([fiche_vlan(), fiche(reference="ambigu", vlan=70)], collectors, piles)
     assert sites == {"nestle": ("pop-test", "vlan2060", 2060)}
+
+
+async def test_seul_sur_sa_vlan_la_file_de_l_interface_fait_foi(settings: Settings) -> None:
+    """Le rx de l'interface compte ce que le client ENVOIE, y compris ce que la
+    file jette : l'upload semblait depasser la limite. La file sur l'interface
+    compte ce qui est passe, elle l'emporte."""
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    client.simple_queue_rows = [{"name": "q", "target": "vlan2060", "bytes": "0/0"}]
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    # Le client pousse 1,1 Mbit/s, la file n'en laisse passer que 100 kbit/s.
+    client.interfaces_rows[-1].update({"rx-byte": str(1_000 + 1_375_000), "tx-byte": "155000"})
+    client.simple_queue_rows = [{"name": "q", "target": "vlan2060", "bytes": "125000/145000"}]
+    await service.collect_subscribers()
+
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(100_000)
+    assert ligne.tx_bps == pytest.approx(116_000)

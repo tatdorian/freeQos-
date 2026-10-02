@@ -49,6 +49,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.collectors.parsing import parse_flag
 from app.enforcement.models import (
     MANAGED_COMMENT,
     Plan,
@@ -464,12 +465,44 @@ def plan_restrictions(
         for chemin, role, champs in desired_lines(cible):
             voulues.add((chemin, cible.slug, role))
             posee = existantes[chemin].get((cible.slug, role))
+            lignes_table = {PATH_FILTER: state.filters, PATH_MANGLE: state.mangle}.get(chemin)
+            avant, rang_avant = (
+                _premiere_etrangere(lignes_table, champs.get("chain", "forward"))
+                if lignes_table is not None
+                else (None, 0)
+            )
+            mal_placee = (
+                posee is not None
+                and lignes_table is not None
+                and avant is not None
+                and next(
+                    (i for i, r in enumerate(lignes_table) if r.get(".id") == posee.get(".id")),
+                    -1,
+                )
+                > rang_avant
+            )
+            if mal_placee and posee is not None:
+                # Posee derriere une regle de l'exploitant : elle ne voit rien.
+                # Retiree puis reposee en tete.
+                plan.actions.append(
+                    PlanAction(
+                        verb="remove",
+                        path=chemin,
+                        target_id=str(posee.get(".id") or ""),
+                        name=f"{cible.name} ({role})",
+                        reason="placed after a rule that accepts the traffic first",
+                    )
+                )
+                posee = None
             if posee is None:
+                ajout = dict(champs)
+                if avant is not None:
+                    ajout["place-before"] = avant
                 plan.actions.append(
                     PlanAction(
                         verb="add",
                         path=chemin,
-                        fields=champs,
+                        fields=ajout,
                         name=f"{cible.name} ({role})",
                         reason=f"restriction '{cible.name}': {role}",
                     )
@@ -523,6 +556,25 @@ def plan_restrictions(
                 )
             )
     return plan
+
+
+def _premiere_etrangere(rows: Sequence[dict[str, Any]], chain: str) -> tuple[str | None, int]:
+    """``(id, rang)`` de la premiere regle de la chaine qui n'est pas a nous.
+
+    NOS REGLES DOIVENT PASSER AVANT ELLE. Ajoutees en fin de chaine, elles
+    venaient apres un "accept established" ou un "accept LAN" de l'exploitant :
+    le drop n'etait jamais atteint, la restriction s'affichait posee et ne
+    bloquait rien.
+    """
+    for rang, row in enumerate(rows):
+        if str(row.get("chain") or "") != chain or parse_tag(row.get("comment")) is not None:
+            continue
+        if parse_flag(row.get("disabled")) or parse_flag(row.get("dynamic")):
+            continue
+        ident = str(row.get(".id") or "")
+        if ident:
+            return ident, rang
+    return None, len(rows)
 
 
 def plan_lift(router_name: str, rule_id: int, state: RouterRestrictionState) -> Plan:
