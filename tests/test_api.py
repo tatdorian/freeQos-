@@ -823,3 +823,53 @@ async def test_les_sites_d_un_routeur_sont_son_pop_et_ses_vlan() -> None:
     assert sorted(await _pops_du_routeur(Depot(), conteneur, "NAS-FRANCOPHONIE")) == [1, 2]
     # Routeur inconnu : aucun site, donc aucune donnee -- jamais tout le reseau.
     assert await _pops_du_routeur(Depot(), conteneur, "inconnu") == []
+
+
+async def test_bilan_d_un_routeur_internet_clients_et_ecart() -> None:
+    """L'ecart Internet - clients est le trafic que personne n'explique : test
+    de debit, gestion, client non declare. Sens unifie : down vers les clients."""
+    from types import SimpleNamespace
+
+    from app.api.metrics import _bilan_routeur
+
+    class Depot:
+        async def list_pops(self) -> list[dict[str, Any]]:
+            return [{"id": 1, "name": "Francophonie", "router_name": None}]
+
+        async def throughput_now(self, **kwargs: Any) -> dict[str, Any]:
+            assert kwargs["pop_ids"] == [1]
+            return {"tx_bps": 40e6, "rx_bps": 5e6}
+
+    conteneur = SimpleNamespace(
+        registry=SimpleNamespace(
+            collectors=[
+                SimpleNamespace(
+                    name="NAS", config=SimpleNamespace(effective_pop_name="Francophonie")
+                )
+            ]
+        )
+    )
+    ports = [
+        {
+            "router_name": "NAS",
+            "interface": "ether1",
+            "upstream": True,
+            "rx_bps": 48e6,
+            "tx_bps": 6e6,
+            "capacity_mbps": 100.0,
+            "link_name": "Internet",
+        },
+        {
+            "router_name": "NAS",
+            "interface": "vlan2060",
+            "upstream": False,
+            "rx_bps": 5e6,
+            "tx_bps": 45e6,
+        },
+    ]
+    bilan = await _bilan_routeur(Depot(), conteneur, "NAS", ports)
+
+    assert bilan["internet"]["down_bps"] == 48e6  # rx de l'uplink = vers les clients
+    assert bilan["clients"] == {"down_bps": 40e6, "up_bps": 5e6}
+    assert bilan["unaccounted"]["down_bps"] == 8e6
+    assert bilan["unaccounted"]["up_bps"] == 1e6
