@@ -2212,7 +2212,12 @@ function renderQueuePanels() {
     '<tr><td>Throughput</td>' + (synth ? naCell + naCell
       : dwn(bpsText(down), sevDebit(down, refDown)) + dwn(bpsText(up), sevDebit(up, refUp))) + '</tr>' +
     (isClient
-      ? '<tr><td>Plan</td>' + dwn(mbps(confDown / 1e6), 'none') + dwn(mbps(confUp / 1e6), 'none') + '</tr>'
+      // Sans plan, la LIMITE appliquee : "Plan 0.0 Mbps" se lisait comme un
+      // client bride a zero, alors qu'il est plafonne a la main.
+      ? (confDown || confUp
+        ? '<tr><td>Plan</td>' + dwn(mbps(confDown / 1e6), 'none') + dwn(mbps(confUp / 1e6), 'none') + '</tr>'
+        : '<tr><td>Limit <span class="pct-hint">no plan</span></td>' +
+          dwn(mbps(effDown / 1e6), 'none') + dwn(mbps(effUp / 1e6), 'none') + '</tr>')
       : '') +
     '<tr><td>' + (isClient ? 'Latency' : 'Worst latency') + '</td><td class="num" colspan="2">' +
       rttSq(rttMs, rttMs == null ? perduIci : null) + '</td></tr>' +
@@ -2227,7 +2232,7 @@ function renderQueuePanels() {
         ['Under load', note.bloat_ms != null ? '+' + Math.round(note.bloat_ms) + ' ms' : '-'],
         ['Grade', note.grade || '-']]
       : [['Baseline', rttMs != null ? Math.round(rttMs) + ' ms' : '-'], ['Under load', '-']];
-    snap.innerHTML = '<h3>Plan usage</h3>' +
+    snap.innerHTML = '<h3>' + (confDown || confUp ? 'Plan usage' : 'Limit usage') + '</h3>' +
       (effDown > 0 ? gaugeSvg(down, up, effDown, qoe)
         : '<div class="empty">No limit on this client.</div>') +
       '<div class="lq-chips" title="Score = the lower of: baseline latency, latency added under load">' +
@@ -2241,7 +2246,9 @@ function renderQueuePanels() {
       '<h3>Plan</h3>' +
       '<div class="lq-kv">' +
         '<span class="k">Plan</span><span class="v">' +
-          esc(mbps(confDown / 1e6) + ' / ' + mbps(confUp / 1e6)) + '</span>' +
+          (confDown || confUp ? esc(mbps(confDown / 1e6) + ' / ' + mbps(confUp / 1e6))
+            : '<span class="na" title="Limited by hand (forced) or by default">no plan</span>') +
+          '</span>' +
         '<span class="k">Source</span><span class="v">' + esc(deQui) + '</span>' +
         (client.limit_source && client.limit_source !== 'plan'
           ? '<span class="k">Limit applied</span><span class="v">' +
