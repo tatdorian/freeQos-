@@ -109,8 +109,11 @@ def test_le_resserrage_atteint_la_file_du_lien() -> None:
 
 # ---------------------------------------------------------------- etat desire
 def test_etat_desire_complet() -> None:
+    # Le lien vise le segment des abonnes : c'est ce qui lui permet de les
+    # porter (cf. test_un_lien_sur_interface_ne_porte_pas_les_abonnes).
     types, files, _ = desired_state(
-        links=[lien()], subscribers=[abonne(parent="freeqos-parent-bh-altair")]
+        links=[lien(subnet="10.20.0.0/24")],
+        subscribers=[abonne(parent="freeqos-parent-bh-altair")],
     )
 
     assert [t.name for t in types] == [QUEUE_TYPE_UP, QUEUE_TYPE_DOWN]
@@ -653,3 +656,33 @@ def test_serialisation_du_plan() -> None:
     assert donnees["router"] == "pop-altair"
     assert donnees["counts"]["add"] == 4
     assert all("command" in a and "summary" in a for a in donnees["actions"])
+
+
+def test_un_lien_sur_interface_ne_porte_pas_les_abonnes() -> None:
+    """Constate : la file du lien visait l'interface vlan2060, et la file du
+    client pendait dessous. RouterOS n'admet un paquet dans une file enfant que
+    s'il correspond aussi au parent ; une file d'interface ne voit que le
+    descendant. L'upload du client ne traversait donc jamais sa file : ni
+    plafonne (896 kbps pour 100 vendus), ni compte (0 bps affiche)."""
+    vlan = lien("2060-Nestle-Siege", interface="vlan2060-nestle-siege")
+    client = abonne("nestle", down=0.1, up=0.1, parent=vlan.queue_name, address="11.11.11.2")
+
+    _, files, _ = desired_state(links=[vlan], subscribers=[client])
+
+    par_nom = {f.name: f for f in files}
+    assert par_nom[vlan.queue_name].target == "vlan2060-nestle-siege"  # la file du lien reste
+    assert par_nom[client.queue_name].parent is None
+
+
+def test_un_lien_sur_reseau_porte_les_abonnes_qu_il_contient() -> None:
+    reseau = lien("bh-altair", subnet="10.20.0.0/24")
+    dedans = abonne("dupont", parent=reseau.queue_name, address="10.20.0.10")
+    dehors = abonne("martin", parent=reseau.queue_name, address="10.99.0.10")
+
+    _, files, _ = desired_state(links=[reseau], subscribers=[dedans, dehors])
+
+    par_nom = {f.name: f for f in files}
+    assert par_nom[dedans.queue_name].parent == reseau.queue_name
+    # Hors du segment du lien : RouterOS n'y ferait passer qu'une partie du
+    # trafic. Pas de parent plutot qu'un plafond a moitie tenu.
+    assert par_nom[dehors.queue_name].parent is None
