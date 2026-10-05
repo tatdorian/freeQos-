@@ -77,6 +77,95 @@ async function apiBrut(path, options) {
   return body;
 }
 
+const AUTH = { user: null, ready: false, mode: 'login', started: false, passwordMin: 12 };
+
+/* ------------------------------------------------- force du mot de passe
+ *
+ *  Reprend les regles du SERVEUR (longueur, mots de passe connus, repetition,
+ *  email) pour prevenir AVANT l'envoi plutot qu'apres un refus. Le serveur
+ *  reste le seul juge : cette jauge n'autorise rien. */
+const MDP_COMMUNS = new Set(('password passw0rd motdepasse motdepass azerty azertyuiop qwerty ' +
+  'qwertyuiop qwertz abcdef abcdefgh abcdefghijkl admin administrator administrateur root toor ' +
+  'changeme changeit secret default freeqos mikrotik routeros preseem wisp network reseau internet ' +
+  'fibre wifi iloveyou monkey dragon football soleil chocolat bonjour salut master letmein welcome ' +
+  'bienvenue login connexion utilisateur user guest invite test testtest demo').split(' '));
+
+function suiteTriviale(bas) {
+  if (bas.length > 14) return false;
+  for (const suite of ['0123456789', 'abcdefghijklmnopqrstuvwxyz', 'azertyuiop', 'qwertyuiop']) {
+    for (const sens of [suite, suite.split('').reverse().join('')]) {
+      for (let i = 0; i + 6 <= sens.length; i++) if (bas.includes(sens.slice(i, i + 6))) return true;
+    }
+  }
+  return false;
+}
+
+function forceMdp(mdp, email) {
+  const min = AUTH.passwordMin || 12;
+  if (!mdp) return { score: 0, ok: false, label: 'At least ' + min + ' characters. A short sentence works best.' };
+  if (mdp.length < min) {
+    const manque = min - mdp.length;
+    return { score: 0, ok: false, label: manque + ' more character' + (manque > 1 ? 's' : '') + ' needed' };
+  }
+  const bas = mdp.toLowerCase();
+  if (new Set(bas).size < 6) return { score: 0, ok: false, label: 'Too repetitive: use more different characters' };
+  const racine = bas.replace(/[\d\W_]+$/, '');
+  if (MDP_COMMUNS.has(bas) || MDP_COMMUNS.has(racine) || suiteTriviale(bas)) {
+    return { score: 0, ok: false, label: 'Too common: among the first passwords an attacker tries' };
+  }
+  const local = (email || '').trim().toLowerCase().split('@')[0];
+  if (local.length >= 4 && bas.includes(local)) return { score: 0, ok: false, label: 'Must not contain the email address' };
+  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((r) => r.test(mdp)).length;
+  const score = Math.min(4, 1 + (mdp.length >= 16) + (mdp.length >= 20) + (classes >= 3));
+  return { score, ok: true, label: ['', 'Acceptable', 'Good', 'Strong', 'Very strong'][score] };
+}
+
+/** Jauge en quatre barres sous un champ de mot de passe. */
+function jaugeMdp(hote, mdp, email) {
+  if (!hote) return;
+  const f = forceMdp(mdp, email);
+  hote.className = 'pwd-meter s' + f.score + (mdp && !f.ok ? ' bad' : '');
+  hote.innerHTML = '<span class="pwd-bars"><i></i><i></i><i></i><i></i></span>' +
+    '<span class="pwd-label">' + esc(f.label) + '</span>';
+}
+
+/** Navigateur et systeme, lus dans l'User-Agent : "Firefox on Windows". */
+function appareil(ua) {
+  if (!ua) return 'Unknown device';
+  if (/curl|python|httpx|wget|go-http|okhttp|postman/i.test(ua)) return 'Script (' + ua.split(/[\s/]/)[0] + ')';
+  const nav = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox'
+    : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  const os = /Windows/.test(ua) ? 'Windows' : /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android'
+    : /Mac OS X|Macintosh/.test(ua) ? 'macOS' : /CrOS/.test(ua) ? 'ChromeOS' : /Linux/.test(ua) ? 'Linux' : '';
+  return nav + (os ? ' on ' + os : '');
+}
+
+function dateLongue(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' ' +
+    d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/* Champs de mot de passe : oeil pour afficher, alerte Verr. Maj. Delegues au
+ * document : ils valent aussi pour les formulaires crees plus tard. */
+document.addEventListener('click', (e) => {
+  const oeil = e.target.closest('[data-eye]');
+  if (!oeil) return;
+  const champ = document.getElementById(oeil.dataset.eye);
+  if (!champ) return;
+  const montrer = champ.type === 'password';
+  champ.type = montrer ? 'text' : 'password';
+  oeil.classList.toggle('on', montrer);
+  oeil.setAttribute('aria-label', montrer ? 'Hide password' : 'Show password');
+  oeil.title = oeil.getAttribute('aria-label');
+  champ.focus();
+});
+['keydown', 'keyup'].forEach((type) => document.addEventListener(type, (e) => {
+  if (!e.target.matches || !e.target.matches('#auth-password, #auth-confirm') || !e.getModifierState) return;
+  document.getElementById('auth-caps').hidden = !e.getModifierState('CapsLock');
+}));
+
 /* ----------------------------------------------------------- connexion
  *
  *  L'interface ne charge RIEN tant qu'aucune session n'est ouverte : toutes
@@ -84,8 +173,6 @@ async function apiBrut(path, options) {
  *  (aucun compte en base), l'ecran de connexion sert a creer le premier,
  *  qui est en edition. Le grade est tenu par le serveur ; l'interface se
  *  contente de le dire (bandeau "lecture seule"). */
-const AUTH = { user: null, ready: false, mode: 'login', started: false };
-
 function showAuthGate(mode, message) {
   AUTH.mode = mode;
   const setup = mode === 'setup';
@@ -98,7 +185,11 @@ function showAuthGate(mode, message) {
   document.getElementById('auth-confirm-row').hidden = !setup;
   document.getElementById('auth-confirm').required = setup;
   document.getElementById('auth-password').autocomplete = setup ? 'new-password' : 'current-password';
+  document.getElementById('auth-password').minLength = setup ? AUTH.passwordMin : 0;
   document.getElementById('auth-submit').textContent = setup ? 'Create and log in' : 'Log in';
+  const jauge = document.getElementById('auth-meter');
+  jauge.hidden = !setup;
+  if (setup) jaugeMdp(jauge, document.getElementById('auth-password').value, document.getElementById('auth-email').value);
   document.getElementById('auth-error').innerHTML = message
     ? '<div class="notice warn">' + esc(message) + '</div>' : '';
   setTimeout(() => document.getElementById('auth-email').focus(), 0);
@@ -119,6 +210,46 @@ function startApp(user) {
   route();
   refreshHealth();
   AUTH.started = true;
+  annoncerConnexionPrecedente();
+}
+
+/** "Derniere connexion : il y a 3 h, depuis 10.0.0.5 (Firefox on Windows)".
+ *  Le moyen le plus simple de remarquer que quelqu'un d'autre s'est servi du
+ *  compte. Passe par sessionStorage : la page se recharge parfois juste apres
+ *  la connexion. */
+function annoncerConnexionPrecedente() {
+  let precedente = null;
+  try {
+    const brut = sessionStorage.getItem('freeqos-prev-login');
+    sessionStorage.removeItem('freeqos-prev-login');
+    if (brut) precedente = JSON.parse(brut);
+  } catch (e) { /* stockage indisponible : rien a annoncer */ }
+  if (precedente === null) return;
+  const texte = precedente
+    ? 'Previous login ' + depuis(precedente.at) + ' (' + dateLongue(precedente.at) + ') from ' +
+      (precedente.address || 'an unknown address') + ' · ' + appareil(precedente.user_agent)
+    : 'First login on this account.';
+  toast('<b>Welcome back.</b> ' + esc(texte) +
+    ' <a href="#/settings" data-close-toast>Not you? Review your sessions</a>', 12000);
+}
+
+/** Message discret en bas d'ecran, qui se ferme seul. */
+function toast(html, duree) {
+  let pile = document.getElementById('toasts');
+  if (!pile) {
+    pile = document.createElement('div');
+    pile.id = 'toasts';
+    pile.setAttribute('role', 'status');
+    document.body.appendChild(pile);
+  }
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = '<div>' + html + '</div><button type="button" class="toast-x" aria-label="Close">&times;</button>';
+  const fermer = () => { el.classList.add('out'); setTimeout(() => el.remove(), 250); };
+  el.querySelector('.toast-x').addEventListener('click', fermer);
+  el.querySelectorAll('[data-close-toast]').forEach((a) => a.addEventListener('click', fermer));
+  pile.appendChild(el);
+  if (duree) setTimeout(fermer, duree);
 }
 
 async function boot() {
@@ -130,6 +261,7 @@ async function boot() {
     return;
   }
   AUTH.authDisabled = etat.auth_enabled === false;
+  if (etat.password_min) AUTH.passwordMin = etat.password_min;
   if (etat.user) { startApp(etat.user); return; }
   showAuthGate(etat.setup_required ? 'setup' : 'login');
 }
@@ -139,9 +271,13 @@ async function submitAuth(event) {
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
   const erreur = document.getElementById('auth-error');
-  if (AUTH.mode === 'setup' && password !== document.getElementById('auth-confirm').value) {
-    erreur.innerHTML = '<div class="notice err">The two passwords differ.</div>';
-    return;
+  if (AUTH.mode === 'setup') {
+    const f = forceMdp(password, email);
+    if (!f.ok) { erreur.innerHTML = '<div class="notice err">' + esc(f.label) + '</div>'; return; }
+    if (password !== document.getElementById('auth-confirm').value) {
+      erreur.innerHTML = '<div class="notice err">The two passwords differ.</div>';
+      return;
+    }
   }
   const bouton = document.getElementById('auth-submit');
   bouton.disabled = true;
@@ -151,10 +287,14 @@ async function submitAuth(event) {
     });
     document.getElementById('auth-password').value = '';
     document.getElementById('auth-confirm').value = '';
+    erreur.innerHTML = '';
+    try { sessionStorage.setItem('freeqos-prev-login', JSON.stringify(r.previous_login || false)); } catch (e) { /* rien */ }
     if (AUTH.started) { location.reload(); return; }
     startApp(r.user);
   } catch (err) {
-    erreur.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    const bloque = /too many/i.test(err.message);
+    erreur.innerHTML = '<div class="notice ' + (bloque ? 'warn' : 'err') + '">' + esc(err.message) + '</div>';
+    document.getElementById('auth-password').select();
     // Un compte a ete cree entre-temps (autre navigateur) : on passe en connexion.
     if (AUTH.mode === 'setup' && /already exists/i.test(err.message)) showAuthGate('login', err.message);
   } finally {
@@ -169,17 +309,58 @@ async function logout() {
 
 /* ------------------------------------------------------------- comptes */
 
+const EVENEMENTS_AUTH = {
+  login_ok: ['Login', 'ok'],
+  login_failed: ['Failed login', 'crit'],
+  login_locked: ['Blocked: too many failures', 'crit'],
+  logout: ['Logout', ''],
+  setup: ['First account created', 'file'],
+  password_changed: ['Password changed', 'file'],
+  password_change_failed: ['Wrong current password', 'crit'],
+  session_closed: ['Session closed', ''],
+  sessions_closed: ['Other sessions closed', ''],
+  user_created: ['Account created', 'file'],
+  user_updated: ['Account changed', 'warn'],
+  user_deleted: ['Account deleted', 'warn'],
+};
+
+/** Champ de mot de passe avec son oeil (et sa jauge, pour un NOUVEAU mot de passe). */
+function champMdp(id, placeholder, nouveau) {
+  return '<span class="pwd-field"><input type="password" id="' + id + '" placeholder="' + esc(placeholder) + '"' +
+    ' autocomplete="' + (nouveau ? 'new-password' : 'current-password') + '" required maxlength="256"' +
+    (nouveau ? ' minlength="' + AUTH.passwordMin + '" data-meter="' + id + '-meter"' : '') + '>' +
+    '<button type="button" class="pwd-eye" data-eye="' + id + '" aria-label="Show password" title="Show password">' +
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span>' +
+    (nouveau ? '<div class="pwd-meter" id="' + id + '-meter"></div>' : '');
+}
+
+/** Branche les jauges des champs "nouveau mot de passe" d'un bloc. */
+function brancherJauges(hote, email) {
+  hote.querySelectorAll('input[data-meter]').forEach((champ) => {
+    const jauge = document.getElementById(champ.dataset.meter);
+    const maj = () => jaugeMdp(jauge, champ.value, typeof email === 'function' ? email() : email);
+    champ.addEventListener('input', maj);
+    maj();
+  });
+}
+
 /** Les comptes, dans Reglages. Un compte d'edition les gere tous (email, mot
- *  de passe, grade) ; tout compte peut changer son propre mot de passe. */
+ *  de passe, grade) et lit le journal des connexions ; tout compte change son
+ *  propre mot de passe et voit (et ferme) ses propres sessions. */
 async function renderAccounts() {
   const host = document.getElementById('settings-accounts');
   if (!host) return;
   const moi = AUTH.user || {};
   const monMdp =
-    '<form class="acc-form" id="acc-self-form"><b>My password</b>' +
-      '<input type="password" id="acc-self-current" placeholder="Current password" autocomplete="current-password" required>' +
-      '<input type="password" id="acc-self-new" placeholder="New password (8+ characters)" autocomplete="new-password" minlength="8" required>' +
-      '<button class="sm" type="submit">Change</button><span id="acc-self-result"></span></form>';
+    '<div class="acc-block"><h3>My password</h3>' +
+    '<form class="acc-form" id="acc-self-form">' +
+      champMdp('acc-self-current', 'Current password', false) +
+      champMdp('acc-self-new', 'New password (' + AUTH.passwordMin + '+ characters)', true) +
+      '<button class="sm" type="submit">Change</button><span id="acc-self-result"></span></form>' +
+    '<p class="hint acc-hint">Changing it logs out your other browsers. Prefer a short sentence ' +
+      '(&ldquo;the router sleeps at noon&rdquo;) to a short complicated word.</p></div>';
+  const mesSessions = '<div class="acc-block"><h3>My sessions</h3><div id="acc-sessions">' +
+    '<div class="hint">Loading…</div></div></div>';
   if (AUTH.authDisabled) {
     host.innerHTML = '<div class="notice warn">Authentication is off (<code>AUTH_ENABLED=false</code>): ' +
       'anyone who reaches this page has full rights.</div>';
@@ -187,8 +368,9 @@ async function renderAccounts() {
   }
   if (moi.role !== 'edit') {
     host.innerHTML = '<div class="acc-me">Logged in as <b>' + esc(moi.email) + '</b> ' +
-      '<span class="badge">read only</span></div>' + monMdp;
+      '<span class="badge">read only</span></div>' + monMdp + mesSessions;
     brancherMonMdp();
+    chargerSessions();
     return;
   }
   let comptes = [];
@@ -199,15 +381,17 @@ async function renderAccounts() {
     return;
   }
   host.innerHTML =
+    '<div class="acc-block"><h3>Who can log in</h3>' +
     '<div class="table-wrap"><table><thead><tr><th>Email</th><th>Role</th><th>State</th>' +
       '<th>Last login</th><th>Created by</th><th></th></tr></thead><tbody>' +
       comptes.map((u) => '<tr data-user="' + u.id + '">' +
         '<td><b>' + esc(u.email) + '</b>' + (u.id === moi.id ? ' <span class="pct-hint">(you)</span>' : '') + '</td>' +
-        '<td><select data-acc-role>' +
+        '<td><select data-acc-role aria-label="Role">' +
           '<option value="read"' + (u.role === 'read' ? ' selected' : '') + '>Read only</option>' +
           '<option value="edit"' + (u.role === 'edit' ? ' selected' : '') + '>Edit</option></select></td>' +
         '<td>' + (u.disabled ? '<span class="badge warn">disabled</span>' : '<span class="badge ok">active</span>') + '</td>' +
-        '<td>' + esc(u.last_login_at ? depuis(u.last_login_at) : 'never') + '</td>' +
+        '<td title="' + esc(u.last_login_at ? dateLongue(u.last_login_at) : '') + '">' +
+          esc(u.last_login_at ? depuis(u.last_login_at) : 'never') + '</td>' +
         '<td>' + esc(u.created_by || '-') + '</td>' +
         '<td class="nowrap acc-actions">' +
           '<button class="sm" data-acc-pwd>Set password</button>' +
@@ -216,25 +400,34 @@ async function renderAccounts() {
     '</tbody></table></div>' +
     '<form class="acc-form" id="acc-new-form"><b>New account</b>' +
       '<input type="email" id="acc-new-email" placeholder="Email" required maxlength="254" autocomplete="off">' +
-      '<input type="password" id="acc-new-pwd" placeholder="Password (8+ characters)" minlength="8" required autocomplete="new-password">' +
-      '<select id="acc-new-role"><option value="read">Read only</option><option value="edit">Edit</option></select>' +
+      champMdp('acc-new-pwd', 'Password (' + AUTH.passwordMin + '+ characters)', true) +
+      '<select id="acc-new-role" aria-label="Role"><option value="read">Read only</option><option value="edit">Edit</option></select>' +
       '<button class="sm primary" type="submit">Create</button></form>' +
     '<div id="acc-result"></div>' +
     '<div class="exec-legend"><span><b>Read only</b>: sees everything, every change is refused by the server.</span>' +
-      '<span><b>Edit</b>: can change everything, including accounts.</span></div>' +
-    monMdp;
+      '<span><b>Edit</b>: can change everything, including accounts.</span></div></div>' +
+    monMdp + mesSessions +
+    '<div class="acc-block"><h3>Login journal</h3>' +
+      '<div class="toolbar acc-journal-bar">' +
+        '<select id="acc-journal-filter" aria-label="Events shown"><option value="">All events</option>' +
+          '<option value="fail">Failures and blocks</option><option value="admin">Account changes</option></select>' +
+        '<input type="search" id="acc-journal-email" placeholder="Filter by email" maxlength="254">' +
+      '</div><div id="acc-journal"><div class="hint">Loading…</div></div></div>';
 
   const resultat = (html) => { document.getElementById('acc-result').innerHTML = html; };
   const faire = async (fn, ok) => {
-    try { await fn(); resultat('<div class="notice ok">' + esc(ok) + '</div>'); await renderAccounts(); }
+    try { await fn(); await renderAccounts(); resultat('<div class="notice ok">' + esc(ok) + '</div>'); }
     catch (err) { resultat('<div class="notice err">' + esc(err.message) + '</div>'); }
   };
+  brancherJauges(host.querySelector('#acc-new-form'), () => document.getElementById('acc-new-email').value);
   document.getElementById('acc-new-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const email = document.getElementById('acc-new-email').value.trim();
+    const mdp = document.getElementById('acc-new-pwd').value;
+    const f = forceMdp(mdp, email);
+    if (!f.ok) { resultat('<div class="notice err">' + esc(f.label) + '</div>'); return; }
     faire(() => api('/users', { method: 'POST', body: JSON.stringify({
-      email, password: document.getElementById('acc-new-pwd').value,
-      role: document.getElementById('acc-new-role').value,
+      email, password: mdp, role: document.getElementById('acc-new-role').value,
     }) }), 'Account ' + email + ' created.');
   });
   host.querySelectorAll('tr[data-user]').forEach((tr) => {
@@ -244,11 +437,31 @@ async function renderAccounts() {
       faire(() => api('/users/' + id, { method: 'PATCH', body: JSON.stringify({ role: e.target.value }) }),
         'Role of ' + email + ' changed.');
     });
+    // Mot de passe d'un autre compte : une ligne qui s'ouvre sous le compte,
+    // champ masque et jauge -- pas une boite prompt() qui l'affiche en clair.
     tr.querySelector('[data-acc-pwd]').addEventListener('click', () => {
-      const mdp = prompt('New password for ' + email + ' (8+ characters):');
-      if (!mdp) return;
-      faire(() => api('/users/' + id, { method: 'PATCH', body: JSON.stringify({ password: mdp }) }),
-        'Password of ' + email + ' changed; their sessions are closed.');
+      const suivante = tr.nextElementSibling;
+      if (suivante && suivante.classList.contains('acc-pwd-row')) { suivante.remove(); return; }
+      const ligne = document.createElement('tr');
+      ligne.className = 'acc-pwd-row';
+      const champ = 'acc-pwd-' + id;
+      ligne.innerHTML = '<td colspan="6"><form class="acc-form acc-inline">' +
+        '<span class="hint">New password for <b>' + esc(email) + '</b> — their sessions will be closed.</span>' +
+        champMdp(champ, 'New password (' + AUTH.passwordMin + '+ characters)', true) +
+        '<button class="sm primary" type="submit">Save</button>' +
+        '<button class="sm" type="button" data-cancel>Cancel</button></form></td>';
+      tr.after(ligne);
+      brancherJauges(ligne, email);
+      document.getElementById(champ).focus();
+      ligne.querySelector('[data-cancel]').addEventListener('click', () => ligne.remove());
+      ligne.querySelector('form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const mdp = document.getElementById(champ).value;
+        const f = forceMdp(mdp, email);
+        if (!f.ok) { resultat('<div class="notice err">' + esc(f.label) + '</div>'); return; }
+        faire(() => api('/users/' + id, { method: 'PATCH', body: JSON.stringify({ password: mdp }) }),
+          'Password of ' + email + ' changed; their sessions are closed.');
+      });
     });
     tr.querySelector('[data-acc-toggle]').addEventListener('click', (e) => {
       const couper = e.target.textContent === 'Disable';
@@ -261,21 +474,116 @@ async function renderAccounts() {
     });
   });
   brancherMonMdp();
+  chargerSessions();
+  const relire = () => chargerJournal();
+  document.getElementById('acc-journal-filter').addEventListener('change', relire);
+  let minuterie = null;
+  document.getElementById('acc-journal-email').addEventListener('input', () => {
+    clearTimeout(minuterie);
+    minuterie = setTimeout(relire, 300);
+  });
+  chargerJournal();
+}
+
+/** Mes sessions : chaque navigateur connecte a MON compte, d'ou, et depuis
+ *  quand. Une ligne inconnue se ferme d'un clic. */
+async function chargerSessions() {
+  const hote = document.getElementById('acc-sessions');
+  if (!hote) return;
+  let sessions;
+  try {
+    sessions = await apiBrut('/auth/sessions');
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const autres = sessions.filter((s) => !s.current).length;
+  hote.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Device</th><th>Address</th>' +
+    '<th>Opened</th><th>Last activity</th><th></th></tr></thead><tbody>' +
+    sessions.map((s) => '<tr><td><b>' + esc(appareil(s.user_agent)) + '</b>' +
+        (s.current ? ' <span class="badge ok">this browser</span>' : '') + '</td>' +
+      '<td><code>' + esc(s.address || '-') + '</code></td>' +
+      '<td title="' + esc(dateLongue(s.created_at)) + '">' + esc(depuis(s.created_at)) + '</td>' +
+      '<td title="' + esc(dateLongue(s.last_seen)) + '">' + esc(depuis(s.last_seen)) + '</td>' +
+      '<td class="nowrap">' + (s.current ? '' : '<button class="sm" data-close-session="' + esc(s.id) + '">Log out</button>') +
+      '</td></tr>').join('') +
+    '</tbody></table></div>' +
+    '<div class="acc-sessions-foot"><span class="hint">A session ends after a day without activity, ' +
+      'and after 30 days in any case.</span>' +
+      (autres ? '<button class="sm danger" id="acc-close-others">Log out the ' + autres + ' other session' + (autres > 1 ? 's' : '') + '</button>' : '') +
+    '</div>';
+  hote.querySelectorAll('[data-close-session]').forEach((b) => b.addEventListener('click', async () => {
+    try { await api('/auth/sessions/' + b.dataset.closeSession, { method: 'DELETE' }); }
+    catch (err) { toast(esc(err.message), 6000); }
+    chargerSessions();
+  }));
+  const tout = document.getElementById('acc-close-others');
+  if (tout) tout.addEventListener('click', async () => {
+    if (!confirm('Log out every other browser connected to your account?')) return;
+    try {
+      const r = await api('/auth/sessions/close-others', { method: 'POST' });
+      toast(esc(r.closed + ' session' + (r.closed > 1 ? 's' : '') + ' closed.'), 5000);
+    } catch (err) { toast(esc(err.message), 6000); }
+    chargerSessions();
+  });
+}
+
+/** Journal des connexions (comptes d'edition) : qui s'est connecte, d'ou, qui
+ *  a echoue, qui a change quoi. */
+async function chargerJournal() {
+  const hote = document.getElementById('acc-journal');
+  if (!hote) return;
+  const email = (document.getElementById('acc-journal-email').value || '').trim();
+  const filtre = document.getElementById('acc-journal-filter').value;
+  let lignes;
+  try {
+    lignes = await apiBrut('/auth/events?limit=300' + (email ? '&email=' + encodeURIComponent(email) : ''));
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const echecs = new Set(['login_failed', 'login_locked', 'password_change_failed']);
+  const admin = new Set(['user_created', 'user_updated', 'user_deleted', 'setup', 'password_changed']);
+  if (filtre === 'fail') lignes = lignes.filter((e) => echecs.has(e.event));
+  if (filtre === 'admin') lignes = lignes.filter((e) => admin.has(e.event));
+  const recents = lignes.filter((e) => echecs.has(e.event) && Date.now() - new Date(e.at).getTime() < 86400e3).length;
+  hote.innerHTML = (recents >= 10
+    ? '<div class="notice warn">' + recents + ' failed attempts in the last 24 h: someone may be guessing a password. ' +
+      'Check the addresses below; a block is applied automatically after 5 failures.</div>' : '') +
+    (lignes.length ? '<div class="table-wrap acc-journal"><table><thead><tr><th>When</th><th>Event</th><th>Account</th>' +
+      '<th>By</th><th>Address</th><th>Device</th><th>Detail</th></tr></thead><tbody>' +
+      lignes.slice(0, 200).map((e) => {
+        const [libelle, ton] = EVENEMENTS_AUTH[e.event] || [e.event, ''];
+        return '<tr><td class="nowrap" title="' + esc(new Date(e.at).toLocaleString('fr-FR')) + '">' + esc(dateLongue(e.at)) + '</td>' +
+          '<td><span class="badge ' + ton + '">' + esc(libelle) + '</span></td>' +
+          '<td>' + esc(e.email || '-') + '</td>' +
+          '<td>' + esc(e.actor && e.actor !== e.email ? e.actor : '') + '</td>' +
+          '<td><code>' + esc(e.address || '-') + '</code></td>' +
+          '<td>' + esc(e.user_agent ? appareil(e.user_agent) : '') + '</td>' +
+          '<td class="acc-detail">' + esc(e.detail || '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>'
+      : '<div class="empty">No event' + (filtre || email ? ' matching this filter' : ' yet') + '.</div>');
 }
 
 function brancherMonMdp() {
   const form = document.getElementById('acc-self-form');
   if (!form) return;
+  brancherJauges(form, () => (AUTH.user || {}).email);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const sortie = document.getElementById('acc-self-result');
+    const nouveau = document.getElementById('acc-self-new').value;
+    const f = forceMdp(nouveau, (AUTH.user || {}).email);
+    if (!f.ok) { sortie.innerHTML = '<span class="badge crit">' + esc(f.label) + '</span>'; return; }
     try {
       await api('/auth/password', { method: 'POST', body: JSON.stringify({
         current: document.getElementById('acc-self-current').value,
-        new: document.getElementById('acc-self-new').value,
+        new: nouveau,
       }) });
       form.reset();
-      sortie.innerHTML = '<span class="badge ok">changed</span>';
+      jaugeMdp(document.getElementById('acc-self-new-meter'), '', '');
+      sortie.innerHTML = '<span class="badge ok">changed — your other sessions are closed</span>';
+      chargerSessions();
     } catch (err) {
       sortie.innerHTML = '<span class="badge crit">' + esc(err.message) + '</span>';
     }
@@ -9351,6 +9659,11 @@ document.getElementById('sub-search').addEventListener('input', (e) => {
 });
 
 document.getElementById('auth-form').addEventListener('submit', submitAuth);
+['auth-password', 'auth-email'].forEach((id) => document.getElementById(id).addEventListener('input', () => {
+  if (AUTH.mode !== 'setup') return;
+  jaugeMdp(document.getElementById('auth-meter'), document.getElementById('auth-password').value,
+    document.getElementById('auth-email').value);
+}));
 document.getElementById('ins-days').addEventListener('change', loadInsights);
 document.getElementById('global-search').addEventListener('input', (e) => {
   clearTimeout(GS.timer);

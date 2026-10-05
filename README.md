@@ -154,12 +154,25 @@ passe) : il a les droits d'**édition**. Ensuite, toute l'interface exige une co
 | **Lecture seule** | Tout voir. Toute modification est **refusée par le serveur** (403), quelle que soit la page — pas seulement masquée |
 | **Édition** | Tout faire, y compris gérer les comptes dans *Settings › Accounts* : email, mot de passe et grade de chacun, désactivation, suppression |
 
-- Chacun peut changer son propre mot de passe (*Settings › Accounts › My password*).
+- Chacun peut changer son propre mot de passe (*Settings › Accounts › My password*),
+  voir **ses sessions ouvertes** (navigateur, adresse, dernière activité) et les fermer
+  à distance (*My sessions*).
 - Il reste toujours au moins un compte d'édition actif : le dernier ne peut être ni
   supprimé, ni rétrogradé, ni désactivé.
-- Mots de passe hachés (scrypt), session par cookie `HttpOnly` + `SameSite=Strict`,
-  expirant après `SESSION_TTL_HOURS` sans activité ; 5 échecs de connexion bloquent
-  5 minutes. Changer le mot de passe ou le grade d'un compte ferme ses sessions.
+
+**Sécurité de la connexion**
+
+| Mesure | Détail |
+|---|---|
+| Mots de passe | 12 caractères minimum ; refusés s'ils sont connus des listes de devinette (`Password2024!`, `azerty123456`…), trop répétitifs ou s'ils reprennent l'email. Pas de règle de composition imposée : une phrase longue vaut mieux. Hachés en scrypt, jamais stockés |
+| Devinette en ligne | 5 échecs (par email **et** par adresse) bloquent 5 min, puis 10, 20, 40 min… jusqu'à 1 h à chaque récidive. L'écran prévient quand il reste 2 essais. Le changement de mot de passe a le même frein |
+| Session | Cookie `HttpOnly` + `SameSite=Strict` (+ `Secure` en HTTPS). Expire après `SESSION_TTL_HOURS` (24 h) sans activité et, quoi qu'il arrive, après `SESSION_MAX_HOURS` (30 jours). 10 sessions au plus par compte. Changer le mot de passe ou le grade ferme les autres sessions |
+| Journal | Connexions réussies, refusées, bloquées, déconnexions, comptes créés / modifiés / supprimés : table `auth_events` (6 mois), lisible dans *Settings › Accounts › Login journal*, et dans les logs du conteneur (`auth login_failed …`, exploitable par fail2ban). À chaque connexion, l'écran rappelle **la précédente** (quand, d'où, quel navigateur) |
+| Navigateur | En-têtes posés sur chaque réponse : CSP stricte (aucun script hors du contrôleur), `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`, HSTS en HTTPS, `Cache-Control: no-store` sur l'API. Les écritures venant d'un autre site sont refusées (`Origin` + `Sec-Fetch-Site`) |
+
+> **Derrière un proxy HTTPS** (nginx, Traefik…) : définissez `FORWARDED_ALLOW_IPS=<adresse du
+> proxy>` pour qu'uvicorn croie son `X-Forwarded-Proto`. Le cookie part alors en `Secure`
+> et HSTS est posé.
 - L'API externe (`/model/v1`, `/usage/v1`) garde ses **clés d'API** ; `/health` reste
   ouvert pour le healthcheck.
 

@@ -117,8 +117,10 @@ def test_un_mauvais_mot_de_passe_et_un_email_inconnu_repondent_pareil(
 def test_cinq_echecs_bloquent_la_connexion(app_client: TestClient) -> None:
     setup(app_client)
     app_client.cookies.clear()
-    for _ in range(5):
+    for _ in range(4):
         assert login(app_client, "admin@exemple.fr", "mauvais-mdp") == 401
+    # Le cinquieme echec annonce le blocage tout de suite, sans attendre l'essai suivant.
+    assert login(app_client, "admin@exemple.fr", "mauvais-mdp") == 429
     # Meme le BON mot de passe attend la fin du blocage.
     assert login(app_client, "admin@exemple.fr") == 429
 
