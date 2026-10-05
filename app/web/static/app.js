@@ -552,6 +552,14 @@ function renderThroughput(container, points, options) {
   const su = seriesSummary(up);
   sd.peak = Math.max(sd.peak, ...downPk);
   su.peak = Math.max(su.peak, ...upPk);
+  // MAINTENANT = le dernier cycle de collecte quand le serveur le donne. La
+  // derniere valeur de la serie est la moyenne d'un pas dont la duree suit la
+  // periode (20 s sur 1 h, 8 min sur 24 h), souvent pas termine : "now"
+  // changeait avec la periode choisie.
+  if (opt.now) {
+    sd.now = Number(opt.now.tx_bps) || 0;
+    su.now = Number(opt.now.rx_bps) || 0;
+  }
   const fig = (label, v) => '<div><span>' + label + '</span><b>' + esc(bpsText(v)) + '</b></div>';
   const resume = document.createElement('div');
   resume.className = 'chart-summary';
@@ -835,14 +843,61 @@ async function loadPortsLive() {
   });
 }
 
+/* Filtres du graphe de debit : par routeur, ou par client. */
+const TP = { router: '', clientId: null, charge: false, clients: [], routeurs: [], sites: [] };
+
+/** Remplit les deux filtres, une fois : la liste des routeurs et celle des
+ *  clients changent rarement, les relire a chaque rafraichissement couterait
+ *  une requete toutes les 10 s pour rien. */
+async function remplirFiltresDebit() {
+  if (TP.charge) return;
+  TP.charge = true;
+  const [routeurs, clients, sites] = await Promise.all([
+    api('/pops/routers').catch(() => []),
+    api('/subscribers/latest?limit=500&order_by=login&include_unmeasured=true').catch(() => []),
+    api('/pops').catch(() => []),
+  ]);
+  TP.sites = Array.isArray(sites) ? sites : [];
+  const liste = Array.isArray(routeurs) ? routeurs : (routeurs.routers || []);
+  TP.routeurs = liste;
+  document.getElementById('tp-router').innerHTML = '<option value="">All routers</option>' +
+    liste.map((r) => '<option value="' + esc(r.name) + '">' + esc(r.name) +
+      (r.pop_name && r.pop_name !== r.name ? ' (' + esc(r.pop_name) + ')' : '') +
+      '</option>').join('');
+  document.getElementById('tp-router').value = TP.router;
+  TP.clients = (clients || []).filter((c) => c.login);
+  remplirClientsDebit();
+}
+
+/** Les clients proposes suivent le routeur choisi (son PoP et ses VLAN). */
+function remplirClientsDebit() {
+  const routeur = TP.router;
+  const sites = new Set();
+  if (routeur) {
+    sites.add(routeur);
+    TP.routeurs.forEach((r) => { if (r.name === routeur && r.pop_name) sites.add(r.pop_name); });
+    // Les sites VLAN que porte ce routeur.
+    TP.sites.forEach((x) => { if (x.router_name === routeur) sites.add(x.name); });
+  }
+  document.getElementById('tp-clients').innerHTML = TP.clients
+    .filter((c) => !routeur || sites.has(c.pop_name) || sites.has(c.router_name))
+    .map((c) => '<option value="' + esc(c.login) + '">' + esc(c.pop_name || '') + '</option>')
+    .join('');
+}
+
 async function loadThroughput() {
   const minutes = state.rangeMinutes;
   // Environ 180 points quelle que soit la fenetre : au-dela, le trace se brouille
   // et la requete grossit pour rien.
   const bucket = Math.max(10, Math.round((minutes * 60) / 180 / 10) * 10);
-  const data = await api('/throughput?minutes=' + minutes + '&bucket_seconds=' + bucket);
+  // Filtres : un client l'emporte sur un routeur (il en fait partie).
+  const filtre = TP.clientId ? '&subscriber_id=' + TP.clientId
+    : TP.router ? '&router=' + encodeURIComponent(TP.router) : '';
+  remplirFiltresDebit();
+  const data = await api('/throughput?minutes=' + minutes + '&bucket_seconds=' + bucket + filtre);
   state.lastPoints = data.points;
-  renderThroughput(document.getElementById('throughput-chart'), data.points);
+  state.lastNow = data.now || null;
+  renderThroughput(document.getElementById('throughput-chart'), data.points, { now: data.now });
 }
 
 async function loadTopTalkers() {
@@ -8729,7 +8784,8 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
 window.addEventListener('hashchange', route);
 window.addEventListener('resize', () => {
   if (state.view === 'dashboard' && state.lastPoints.length) {
-    renderThroughput(document.getElementById('throughput-chart'), state.lastPoints);
+    renderThroughput(document.getElementById('throughput-chart'), state.lastPoints,
+      { now: state.lastNow });
   }
 });
 
@@ -8896,6 +8952,26 @@ document.addEventListener('click', (e) => {
   document.querySelectorAll('details.pick-dd[open]').forEach((d) => {
     if (!d.contains(e.target)) d.open = false;
   });
+});
+document.getElementById('tp-router').addEventListener('change', (e) => {
+  TP.router = e.target.value;
+  // Un client d'un autre routeur n'a plus de sens : on repart de tous.
+  TP.clientId = null;
+  document.getElementById('tp-client').value = '';
+  remplirClientsDebit();
+  loadThroughput();
+});
+document.getElementById('tp-client').addEventListener('change', (e) => {
+  const saisi = e.target.value.trim();
+  const trouve = TP.clients.find((c) => c.login === saisi);
+  if (saisi && !trouve) {
+    e.target.setCustomValidity('Unknown client');
+    e.target.reportValidity();
+    return;
+  }
+  e.target.setCustomValidity('');
+  TP.clientId = trouve ? trouve.subscriber_id : null;
+  loadThroughput();
 });
 document.getElementById('exec-range').addEventListener('change', (e) => {
   state.execRange = Number(e.target.value);

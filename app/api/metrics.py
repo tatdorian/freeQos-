@@ -534,13 +534,29 @@ async def overview(repo: RepositoryDep) -> dict[str, Any]:
 async def throughput(
     repo: RepositoryDep,
     window: TimeRangeDep,
+    container: ContainerDep,
     pop_id: Annotated[int | None, Query()] = None,
+    subscriber_id: Annotated[
+        int | None, Query(description="Only this client (subscriber id)")
+    ] = None,
+    router: Annotated[
+        str | None,
+        Query(description="Only the clients of this router: its PoP and the VLAN sites it carries"),
+    ] = None,
 ) -> dict[str, Any]:
+    pop_ids = await _pops_du_routeur(repo, container, router) if router else None
     points = await repo.throughput_series(
         start=window.start,
         end=window.end,
         bucket_seconds=window.bucket_seconds,
         pop_id=pop_id,
+        subscriber_id=subscriber_id,
+        pop_ids=pop_ids,
+    )
+    # "Maintenant" = le dernier cycle de collecte, pas le dernier pas de la
+    # serie : sinon il change avec la periode affichee.
+    maintenant = await repo.throughput_now(
+        pop_id=pop_id, subscriber_id=subscriber_id, pop_ids=pop_ids
     )
     return {
         "start": window.start,
@@ -548,7 +564,24 @@ async def throughput(
         "bucket_seconds": window.bucket_seconds,
         "orientation": "rx=subscribers upload, tx=subscribers download (router point of view)",
         "points": points,
+        "now": maintenant,
     }
+
+
+async def _pops_du_routeur(repo: Any, container: Any, router: str) -> list[int]:
+    """Les sites d'un routeur : son PoP, et les sites VLAN qu'il porte. Un
+    routeur inconnu rend une liste VIDE -- donc aucune donnee -- et jamais
+    "tout le reseau", qui laisserait croire a un filtre applique."""
+    noms = {router.strip().lower()}
+    for collector in getattr(container.registry, "collectors", []):
+        if collector.name == router:
+            noms.add(str(collector.config.effective_pop_name or "").strip().lower())
+    return [
+        int(p["id"])
+        for p in await repo.list_pops()
+        if str(p.get("router_name") or "").strip().lower() in noms
+        or str(p.get("name") or "").strip().lower() in noms
+    ]
 
 
 @router.get("/network/tree", summary="PoP tree -> backhauls, capacity and load")
