@@ -1944,9 +1944,10 @@ async def test_la_sante_d_un_site_se_mesure_sur_ses_limites_appliquees(
     assert derniere_charge(site) == pytest.approx(96.0, abs=1)
     # Tout le reseau : 96 kbps sur 100.1 Mbps de limites -- presque rien.
     assert derniere_charge(await repo.heatmap(minutes=15, buckets=15)) < 1
-    # Un routeur ET la VLAN qu'il porte : 96 kbps sur 100.1 Mbps de limites.
+    # Un routeur ET la VLAN qu'il porte : la charge est celle de son client le
+    # PLUS charge (96 % pour nestle), pas 96 kbps noyes dans 100.1 Mbps.
     routeur = await repo.heatmap(minutes=15, buckets=15, pop_names=["PoP Altair", "VLAN 2060"])
-    assert derniere_charge(routeur) == pytest.approx(96e3 / 100.1e6 * 100, abs=0.1)
+    assert derniere_charge(routeur) == pytest.approx(96.0, abs=1)
 
 
 async def test_cycle_de_vie_d_un_resserrage_qoe(database: Database) -> None:

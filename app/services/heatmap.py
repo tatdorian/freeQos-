@@ -151,6 +151,9 @@ def build_heatmap(
 
         tx = float(cell.get("tx_sum") or 0.0)
         pct = (tx / reference_down_bps * 100.0) if reference_down_bps > 0 else None
+        if cell.get("util_max") is not None:
+            # Un noeud : la charge de son client le plus charge (cf. heatmap).
+            pct = float(cell["util_max"]) * 100.0
         util_cells.append(
             {
                 "ts": ts,
