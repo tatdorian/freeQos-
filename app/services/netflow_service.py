@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -116,6 +117,9 @@ class NetflowService:
     aggregator: FlowAggregator = field(default_factory=FlowAggregator)
     exporters: dict[str, ExporterInfo] = field(default_factory=dict)
     activity: dict[str, _Activity] = field(default_factory=dict)
+    #: Reconnait un exporteur parmi NOS routeurs : adresse -> (nom, vantage,
+    #: PoP), ou None. Fourni par le conteneur (il connait l'inventaire).
+    identify_exporter: Callable[[str], tuple[str, str, str | None] | None] | None = None
     #: Interface d'ENTREE retenue pour chaque flux (exporteur + 5-uplet). Un
     #: flux n'entre dans un routeur que par UNE interface : le meme 5-uplet
     #: exporte depuis une deuxieme est le meme trafic, vu deux fois.
@@ -324,6 +328,51 @@ class NetflowService:
             [*self.infrastructure_networks, *prefixes]
         )
 
+    async def auto_declare_exporters(self) -> list[str]:
+        """Declare TOUT SEUL un exporteur inconnu qui est l'un de nos routeurs.
+
+        Un routeur qui exporte vers le controleur est deja dans l'inventaire :
+        lui demander a l'exploitant de dire "c'est le coeur" ou "c'est le PoP
+        Francophonie" est une saisie qu'on sait faire a sa place. Seuls les
+        exporteurs encore 'unknown' sont touches : une declaration faite a la
+        main n'est JAMAIS ecrasee. Rend les adresses declarees.
+        """
+        if self.exporters_repo is None or self.identify_exporter is None:
+            return []
+        try:
+            lignes = await self.exporters_repo.list_all()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Exporteurs non relus pour la declaration auto : %s", exc)
+            return []
+        faits: list[str] = []
+        for ligne in lignes:
+            if str(ligne.get("vantage")) != "unknown":
+                continue
+            adresse = str(ligne["address"])
+            try:
+                trouve = self.identify_exporter(adresse)
+            except Exception:  # noqa: BLE001 - une reconnaissance ratee n'est pas grave
+                trouve = None
+            if trouve is None:
+                continue
+            nom, vantage, pop = trouve
+            try:
+                await self.exporters_repo.update(
+                    int(ligne["id"]),
+                    {
+                        "name": ligne.get("name") or nom,
+                        "vantage": vantage,
+                        "pop_name": pop if vantage == "pop" else None,
+                        "note": f"declared automatically: router {nom}",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Declaration auto de l'exporteur %s impossible : %s", adresse, exc)
+                continue
+            faits.append(adresse)
+            logger.info("Exporteur %s reconnu : %s (%s)", adresse, nom, vantage)
+        return faits
+
     async def refresh_exporters(self) -> None:
         if self.exporters_repo is None:
             return
@@ -375,6 +424,7 @@ class NetflowService:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Activite des exporteurs non enregistree : %s", exc)
         self.last_flush_at = datetime.now(tz=UTC)
+        await self.auto_declare_exporters()
         await self.refresh_exporters()
         await self.refresh_index()
         if self.flows_repo is not None and self.host_retention_s > 0:
@@ -562,3 +612,37 @@ class NetflowService:
             "infrastructure_networks": len(self.aggregator.infrastructure_networks),
             "last_error": self.last_error,
         }
+
+
+def identify_exporter(address: str, collectors: list[Any]) -> tuple[str, str, str | None] | None:
+    """(nom, vantage, PoP) d'un exporteur qui est l'un de NOS routeurs, sinon None.
+
+    Le routeur se retrouve par son adresse de connexion, ou par une adresse
+    lue dans sa table d'adresses ou detectee comme sa loopback.
+
+    Le point de vue se deduit de son role, puis de sa route par defaut :
+    - coeur ou passerelle declares -> ``edge`` ;
+    - une route par defaut vers un equipement qui N'EST PAS l'un de nos
+      routeurs : c'est lui qui parle a l'exterieur -> ``edge`` ;
+    - sinon (sa passerelle est un de nos routeurs) -> ``pop``, avec son site.
+    """
+    from app.collectors.mikrotik import own_address, router_owning, upstream_of
+
+    nom: str | None = None
+    for collector in collectors:
+        if str(collector.config.host) == address:
+            nom = collector.name
+            break
+    if nom is None:
+        trouve = own_address(address)
+        nom = trouve[0] if trouve else router_owning(address)
+    if nom is None:
+        return None
+    collecteur = next((c for c in collectors if c.name == nom), None)
+    if collecteur is None:
+        return None
+    role = str(getattr(collecteur.config, "role", "pop") or "pop")
+    passerelle, _interface = upstream_of(nom)
+    exterieur = bool(passerelle) and router_owning(passerelle) is None
+    vantage = "edge" if role in ("core", "gateway") or exterieur else "pop"
+    return nom, vantage, collecteur.config.effective_pop_name
