@@ -454,7 +454,17 @@ function severity(p) {
  *  "pas de mesure" : c'est le pire cas -- ligne saturee qui jette les pings,
  *  ou client hors ligne. L'afficher "-" en gris le cachait. */
 function pingsPerdus(detail) {
-  return !!detail && Number(detail.sent) > 0 && !Number(detail.received);
+  if (!detail || !(Number(detail.sent) > 0) || Number(detail.received)) return false;
+  // Si TOUS les clients mesures sont muets a la fois, c'est la SONDE qui ne
+  // recoit rien (source injoignable, pare-feu) : pas une perte de chaque client.
+  return !sondeMuette();
+}
+
+/** Tous les clients sondes (au moins deux) sans aucune reponse : la sonde. */
+function sondeMuette() {
+  const series = ((typeof exec !== 'undefined' && exec.subs) || [])
+    .map((x) => x.rtt_detail).filter((d) => d && Number(d.sent) > 0);
+  return series.length >= 2 && series.every((d) => !Number(d.received));
 }
 const SANS_REPONSE = 'All pings of the last series were lost: line saturated (the queue drops ' +
   'them) or client unreachable';
@@ -1426,6 +1436,10 @@ function renderExecSummary(host) {
       tendus.slice(0, 3).map(nomLien).join(', ')]);
   }
   if (notes.poor) faits.push(['crit', notes.poor + ' client(s) with a poor experience']);
+  if (sondeMuette()) {
+    faits.push(['warn', 'The latency probe gets no reply from any client: the probe is at fault, ' +
+      'not the clients (check the routers can ping their clients)']);
+  }
   // "Tout va bien" ne peut pas s'afficher quand la majorite des clients notes
   // n'a qu'une experience moyenne : la tuile d'a cote disait "0 % good".
   const notesConnues = notes.good + notes.fair + notes.poor;

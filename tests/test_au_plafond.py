@@ -119,3 +119,29 @@ async def test_sans_reponse_depuis_le_loopback_la_sonde_part_sans_source() -> No
     # La fois suivante, directement sans source.
     await collecteur.ping_stats("10.0.0.5", 5)
     assert client.ping_sources[-1] is None and len(client.ping_sources) == 3
+
+
+def test_le_diagnostic_de_la_sonde_rend_la_reponse_brute(settings) -> None:  # type: ignore[no-untyped-def]
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.api.deps import get_container
+    from app.main import register_routes
+    from tests.conftest import FakeRouterOsClient
+    from tests.test_api import build_container
+
+    routeur = FakeRouterOsClient()
+    routeur.ping_reply = "7ms"
+    conteneur = build_container(settings, client=routeur)
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: conteneur
+    corps = (
+        TestClient(app)
+        .get("/api/v1/rtt/diagnose", params={"router": "pop-test", "address": "10.0.0.5"})
+        .json()
+    )
+    dernier = corps["attempts"][-1]
+    assert dernier["source"] is None
+    assert dernier["stats"]["received"] == 5 and dernier["raw"]
