@@ -734,7 +734,8 @@ def test_sans_rattachement_l_abonne_n_a_pas_de_parent(client: TestClient) -> Non
         if a["path"] == "/queue/simple" and "parent-" not in (a["name"] or "")
     ]
     assert files_abonnes
-    assert all("parent=" not in a["command"] for a in files_abonnes)
+    # Sans parent = "parent=none", ecrit explicitement pour pouvoir en RETIRER un.
+    assert all("parent=none" in a["command"] for a in files_abonnes)
     # Et le plan le dit explicitement.
     assert body["unparented_subscribers"] == len(files_abonnes)
     assert "caller-id" in body["notes"][0]
@@ -770,7 +771,7 @@ def test_rattachement_vers_un_lien_inconnu_reste_sans_parent(
     body = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
 
     file_abonne = next(a for a in body["actions"] if a["name"] == "freeqos-dupont")
-    assert "parent=" not in file_abonne["command"]
+    assert "parent=none" in file_abonne["command"]
 
 
 # ==========================================================================

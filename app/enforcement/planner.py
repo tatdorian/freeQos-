@@ -852,7 +852,7 @@ def _is_disabled(row: dict[str, Any]) -> bool:
 # Valeur que RouterOS applique quand il ne RENVOIE pas le champ. Sans cette
 # table, demander explicitement ``disabled=no`` sur un routeur qui omet le champ
 # produirait un ecart permanent -- donc un ``set`` a chaque cycle, pour toujours.
-_DEFAUTS_ABSENTS = {"disabled": "no"}
+_DEFAUTS_ABSENTS = {"disabled": "no", "parent": "none"}
 
 
 def _diff_fields(
