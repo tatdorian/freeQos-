@@ -644,6 +644,40 @@ class MetricsRepository:
             )
         return _rows(records)
 
+    async def throughput_now(
+        self, *, pop_id: int | None = None, max_age_s: int = 120
+    ) -> dict[str, Any] | None:
+        """Le debit du reseau au DERNIER cycle de collecte, et a lui seul.
+
+        Independant de la fenetre affichee : la derniere valeur d'une serie
+        par pas est la moyenne d'un pas de 20 s sur une heure, de 8 min sur un
+        jour -- et souvent d'un pas pas encore termine. "Maintenant" changeait
+        donc avec la periode choisie.
+        """
+        async with self._pool.acquire() as conn:
+            record = await conn.fetchrow(
+                """
+                WITH dernier AS (
+                    SELECT max(m.ts) AS ts
+                      FROM subscriber_metrics m
+                      JOIN subscribers s ON s.id = m.subscriber_id
+                     WHERE m.ts > now() - make_interval(secs => $2)
+                       AND ($1::int IS NULL OR s.pop_id = $1)
+                )
+                SELECT d.ts,
+                       sum(m.rx_bps) AS rx_bps,
+                       sum(m.tx_bps) AS tx_bps
+                  FROM dernier d
+                  JOIN subscriber_metrics m ON m.ts = d.ts
+                  JOIN subscribers s ON s.id = m.subscriber_id
+                 WHERE ($1::int IS NULL OR s.pop_id = $1)
+                 GROUP BY d.ts
+                """,
+                pop_id,
+                float(max_age_s),
+            )
+        return dict(record) if record is not None else None
+
     async def overview(self) -> dict[str, Any]:
         """Chiffres de tete du tableau de bord, en une seule requete."""
         async with self._pool.acquire() as conn:

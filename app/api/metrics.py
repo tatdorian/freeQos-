@@ -542,12 +542,16 @@ async def throughput(
         bucket_seconds=window.bucket_seconds,
         pop_id=pop_id,
     )
+    # "Maintenant" = le dernier cycle de collecte, pas le dernier pas de la
+    # serie : sinon il change avec la periode affichee.
+    maintenant = await repo.throughput_now(pop_id=pop_id)
     return {
         "start": window.start,
         "end": window.end,
         "bucket_seconds": window.bucket_seconds,
         "orientation": "rx=subscribers upload, tx=subscribers download (router point of view)",
         "points": points,
+        "now": maintenant,
     }
 
 
