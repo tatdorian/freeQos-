@@ -68,5 +68,9 @@ async def index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
         "index.html",
-        {"js_version": asset_version("app.js"), "css_version": asset_version("app.css")},
+        {
+            "js_version": asset_version("app.js"),
+            "css_version": asset_version("app.css"),
+            "theme_version": asset_version("theme.js"),
+        },
     )

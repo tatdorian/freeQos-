@@ -9,12 +9,7 @@
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
   <!-- Le theme choisi s'applique AVANT le premier affichage : sinon la page
        s'ouvre en clair puis bascule en sombre, ce qui clignote. -->
-  <script>
-    try {
-      var t = localStorage.getItem('freeqos-theme');
-      if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-    } catch (e) {}
-  </script>
+  <script src="/static/theme.js?v={{ theme_version }}"></script>
   <link rel="stylesheet" href="/static/app.css?v={{ css_version }}">
 </head>
 <body>
@@ -27,10 +22,18 @@
       <h1 id="auth-title">Log in</h1>
       <p class="auth-sub" id="auth-sub">freeQoS controller</p>
       <label>Email<input type="email" id="auth-email" autocomplete="username" required maxlength="254"></label>
-      <label>Password<input type="password" id="auth-password" autocomplete="current-password" required maxlength="256"></label>
+      <label>Password
+        <span class="pwd-field">
+          <input type="password" id="auth-password" autocomplete="current-password" required maxlength="256">
+          <button type="button" class="pwd-eye" data-eye="auth-password" aria-label="Show password" title="Show password"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+        </span>
+      </label>
+      <div class="pwd-meter" id="auth-meter" hidden></div>
+      <div class="caps-warn" id="auth-caps" hidden>Caps Lock is on</div>
       <label id="auth-confirm-row" hidden>Confirm password<input type="password" id="auth-confirm" autocomplete="new-password" maxlength="256"></label>
       <div id="auth-error"></div>
       <button class="primary" type="submit" id="auth-submit">Log in</button>
+      <p class="auth-foot" id="auth-foot">Locked after 5 failed attempts &middot; every login is recorded</p>
     </form>
   </div>
   <header class="top">

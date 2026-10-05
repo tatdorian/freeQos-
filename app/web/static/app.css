@@ -988,13 +988,76 @@ body.gated header.top, body.gated main { visibility: hidden; }
 }
 .readonly-banner[hidden] { display: none; }
 
-.acc-form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-top: 1rem; font-size: .86rem; }
-.acc-form b { flex: 0 0 100%; }
-.acc-form input { flex: 1 1 200px; max-width: 280px; }
+.acc-form { display: flex; flex-wrap: wrap; gap: .5rem; align-items: flex-start; margin-top: 1rem; font-size: .86rem; }
+.acc-form > b, .acc-form > .hint { flex: 0 0 100%; }
+.acc-form > input { flex: 1 1 200px; max-width: 280px; }
+.acc-form > .pwd-field { flex: 1 1 220px; max-width: 300px; }
+.acc-form > .pwd-meter { flex: 0 0 100%; order: 10; }
 .acc-form select { width: auto; }
 .acc-me { margin-bottom: .4rem; }
 #settings-accounts td select { width: auto; }
 .acc-actions button + button { margin-left: .35rem; }
+/* Les comptes sont une seule carte en quatre blocs : comptes, mon mot de
+   passe, mes sessions, journal. Un filet les separe, un titre les nomme. */
+.acc-block + .acc-block { margin-top: 1.4rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
+.acc-block > h3 { margin: 0 0 .7rem; font-size: 1rem; }
+.acc-block .acc-form:first-of-type { margin-top: 0; }
+.acc-hint { margin: .5rem 0 0; font-size: .78rem; }
+.acc-pwd-row td { background: var(--surface-2); }
+.acc-inline { margin: .2rem 0; }
+.acc-sessions-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .6rem; margin-top: .7rem; }
+.acc-sessions-foot .hint { font-size: .78rem; }
+.acc-journal-bar { margin-bottom: .6rem; }
+.acc-journal { max-height: 420px; overflow: auto; }
+.acc-journal td { font-size: .8rem; }
+.acc-detail { color: var(--muted); }
+/* Les boutons d'un formulaire de compte ont la hauteur des champs voisins. */
+.acc-form > button { height: 2.55rem; padding: 0 1.05rem; }
+
+/* ---------------------------------------------------- mots de passe */
+.pwd-field { position: relative; display: block; }
+.pwd-field input { width: 100%; padding-right: 2.4rem; }
+.pwd-eye {
+  position: absolute; right: .25rem; top: 50%; transform: translateY(-50%);
+  width: 2rem; height: 1.8rem; padding: 0; margin: 0 !important;
+  display: grid; place-items: center;
+  background: transparent; border: 0; box-shadow: none; color: var(--faint); cursor: pointer;
+}
+.pwd-eye:hover { color: var(--text); background: var(--fill); }
+.pwd-eye.on { color: var(--accent); }
+.pwd-eye svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pwd-meter { display: flex; align-items: center; gap: .55rem; font-size: .74rem; color: var(--muted); min-height: 1.1rem; }
+.pwd-meter[hidden] { display: none; }
+.pwd-bars { display: inline-grid; grid-template-columns: repeat(4, 22px); gap: 3px; flex: 0 0 auto; }
+.pwd-bars i { height: 4px; border-radius: 2px; background: var(--fill-strong); transition: background .2s; }
+.pwd-meter.s1 .pwd-bars i:nth-child(-n+1) { background: var(--warn); }
+.pwd-meter.s2 .pwd-bars i:nth-child(-n+2) { background: color-mix(in srgb, var(--warn) 50%, var(--ok)); }
+.pwd-meter.s3 .pwd-bars i:nth-child(-n+3),
+.pwd-meter.s4 .pwd-bars i { background: var(--ok); }
+.pwd-meter.bad .pwd-label { color: var(--crit); }
+.caps-warn { font-size: .75rem; color: var(--warn); margin-top: -.4rem; }
+.caps-warn[hidden] { display: none; }
+.auth-foot { margin: .2rem 0 0; text-align: center; font-size: .7rem; color: var(--faint); line-height: 1.4; }
+
+/* -------------------------------------------------------- messages */
+#toasts {
+  position: fixed; right: 16px; bottom: 16px; z-index: 120;
+  display: flex; flex-direction: column; gap: .5rem; max-width: min(440px, calc(100vw - 32px));
+}
+.toast {
+  display: flex; gap: .6rem; align-items: flex-start;
+  padding: .75rem .85rem .75rem 1rem; border-radius: var(--radius-sm);
+  background: var(--surface); box-shadow: var(--shadow-lift); font-size: .84rem; line-height: 1.45;
+  animation: toast-in .25s ease-out;
+}
+.toast a { white-space: nowrap; }
+.toast.out { opacity: 0; transform: translateY(6px); transition: opacity .2s, transform .2s; }
+.toast-x {
+  margin: -.2rem -.2rem 0 auto; padding: 0 .35rem; flex: 0 0 auto;
+  background: transparent; border: 0; box-shadow: none; color: var(--faint); font-size: 1.15rem; line-height: 1;
+}
+.toast-x:hover { color: var(--text); background: var(--fill); }
+@keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 /* =================================================== ports en direct */
 .chart-source { font-size: .75rem; color: var(--muted); margin-top: .5rem; }

@@ -607,6 +607,23 @@ CREATE TABLE IF NOT EXISTS app_sessions (
 );
 CREATE INDEX IF NOT EXISTS app_sessions_user_idx ON app_sessions (user_id);
 
+-- Journal des connexions et des changements de compte : qui s'est connecte,
+-- d'ou, qui a echoue, qui a cree ou retire un compte. Une session volee ou une
+-- devinette en cours se voient ICI, pas dans les journaux du conteneur que
+-- personne ne lit. Pas de cle etrangere : un compte supprime garde sa trace.
+CREATE TABLE IF NOT EXISTS auth_events (
+    id          BIGSERIAL PRIMARY KEY,
+    at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    event       TEXT NOT NULL,
+    email       TEXT,
+    actor       TEXT,
+    address     TEXT,
+    user_agent  TEXT,
+    detail      TEXT
+);
+CREATE INDEX IF NOT EXISTS auth_events_at_idx ON auth_events (at DESC);
+CREATE INDEX IF NOT EXISTS auth_events_email_idx ON auth_events (email, at DESC);
+
 CREATE TABLE IF NOT EXISTS api_keys (
     id           SERIAL PRIMARY KEY,
     name         TEXT NOT NULL,

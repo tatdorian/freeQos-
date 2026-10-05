@@ -3671,6 +3671,58 @@ async def test_les_comptes_et_leurs_sessions(database: Database) -> None:
     assert await repo.count() == 1
 
 
+async def test_journal_des_connexions_et_sessions_en_base(database: Database) -> None:
+    """Le journal se relit par compte et par type ; les sessions se listent, se
+    ferment une a une par leur identifiant court, sont plafonnees par compte et
+    meurent a leur duree maximale, quelle que soit l'activite."""
+    from app.db.users_repo import MAX_SESSIONS_PER_USER, SESSION_ID_LEN, UsersRepository
+    from app.services.accounts import token_digest
+
+    async with database.pool.acquire() as conn:
+        await conn.execute("TRUNCATE app_users, app_sessions, auth_events RESTART IDENTITY CASCADE")
+    repo = UsersRepository(database.pool)
+    ttl = timedelta(hours=1)
+
+    await repo.record_event("login_failed", email="a@x.fr", address="10.0.0.9", user_agent="ua")
+    await repo.record_event("login_ok", email="a@x.fr", actor="a@x.fr", address="10.0.0.1")
+    await repo.record_event("login_ok", email="b@x.fr", actor="b@x.fr")
+    tous = await repo.events()
+    assert [e["event"] for e in tous] == ["login_ok", "login_ok", "login_failed"]
+    derniere = await repo.events(limit=1, email="a@x.fr", event="login_ok")
+    assert derniere[0]["address"] == "10.0.0.1"
+
+    compte = await repo.create(email="a@x.fr", password_hash="h", role="edit", created_by=None)
+    jetons = [f"jeton-{i}" for i in range(MAX_SESSIONS_PER_USER + 2)]
+    for jeton in jetons:
+        await repo.open_session(
+            token_hash=token_digest(jeton),
+            user_id=compte["id"],
+            ttl=ttl,
+            user_agent="Firefox",
+            address="10.0.0.1",
+        )
+    sessions = await repo.sessions_of(compte["id"])
+    assert len(sessions) == MAX_SESSIONS_PER_USER
+    # Les plus anciennes sont parties, la plus recente est la.
+    assert await repo.session_user(token_digest(jetons[0]), ttl=ttl) is None
+    assert await repo.session_user(token_digest(jetons[-1]), ttl=ttl) is not None
+
+    cible = token_digest(jetons[-1])[:SESSION_ID_LEN]
+    assert await repo.close_session_of(compte["id"], cible) is True
+    assert await repo.close_session_of(compte["id"], cible) is False
+    assert await repo.close_session_of(compte["id"], "pas-hexa-du-tout") is False
+    assert await repo.close_session_of(compte["id"] + 1, token_digest(jetons[-2])[:16]) is False
+
+    vieille = token_digest(jetons[-2])
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE app_sessions SET created_at = now() - interval '31 days' WHERE token_hash = $1",
+            vieille,
+        )
+    assert await repo.session_user(vieille, ttl=ttl, max_age=timedelta(days=30)) is None
+    assert await repo.session_user(vieille, ttl=ttl) is not None
+
+
 async def test_les_ports_en_direct_montrent_tout_port_mesure(database: Database) -> None:
     """Un port que la decouverte n'a relie a rien doit quand meme montrer son
     debit : c'est la que se voit un test lance depuis un CPE ou entre routeurs."""
