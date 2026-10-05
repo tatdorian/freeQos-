@@ -405,9 +405,20 @@ function severity(p) {
 
 /** Latence : les seuils sont ceux qui comptent pour un usage temps reel
  *  (visio, jeu). Au-dela de 100 ms l'experience se degrade nettement. */
+/** La derniere serie de pings est-elle ENTIEREMENT perdue ? Ce n'est pas
+ *  "pas de mesure" : c'est le pire cas -- ligne saturee qui jette les pings,
+ *  ou client hors ligne. L'afficher "-" en gris le cachait. */
+function pingsPerdus(detail) {
+  return !!detail && Number(detail.sent) > 0 && !Number(detail.received);
+}
+const SANS_REPONSE = 'All pings of the last series were lost: line saturated (the queue drops ' +
+  'them) or client unreachable';
+
 function rtt(value, detail) {
   if (value === null || value === undefined) {
-    return '<span style="color:var(--faint)">-</span>';
+    return pingsPerdus(detail)
+      ? '<span style="color:var(--crit)" title="' + esc(SANS_REPONSE) + '">no reply</span>'
+      : '<span style="color:var(--faint)">-</span>';
   }
   const ms = Number(value);
   const color = ms < 30 ? 'var(--ok)' : ms < 100 ? 'var(--warn)' : 'var(--crit)';
@@ -1856,7 +1867,7 @@ function renderNodeTable(host) {
     return;
   }
   const rttSq = (ms, detail) => (ms === null || ms === undefined)
-    ? sqCell('-', 'none')
+    ? (pingsPerdus(detail) ? sqCell('no reply', 'crit', SANS_REPONSE) : sqCell('-', 'none'))
     : sqCell(Math.round(ms) + ' ms', rttSevJs(ms), rttDetailText(detail));
   const naSq = '<span class="na">-</span>';
   // Le debit ET sa part de la limite, dans la meme cellule : c'est la part qui
@@ -2067,8 +2078,12 @@ function renderQueuePanels() {
   // Noeud issu de la seule topologie (aucun abonne mesure) : tout ce qui est
   // "live" reste en n/d — on ne fabrique pas de zeros.
   const synth = !isClient && !!node.synthetic;
-  const rttSq = (ms) => (ms === null || ms === undefined)
-    ? sqCell('-', 'none') : sqCell(Math.round(ms) + 'ms', rttSevJs(ms));
+  const rttSq = (ms, detail) => (ms === null || ms === undefined)
+    ? (pingsPerdus(detail) ? sqCell('no reply', 'crit', SANS_REPONSE) : sqCell('-', 'none'))
+    : sqCell(Math.round(ms) + 'ms', rttSevJs(ms));
+  // Un noeud est "sans reponse" des qu'UN de ses clients l'est : c'est son pire.
+  const perduIci = isClient ? client.rtt_detail
+    : ((node.subs || []).map((x) => x.rtt_detail).find(pingsPerdus) || null);
   const qooSq = qooCell(note, rttMs);
   const naSq = sqCell('n/d', 'none');
   const naCell = '<td class="num na">' + naSq + '</td>';
@@ -2092,7 +2107,7 @@ function renderQueuePanels() {
       ? '<tr><td>Plan</td>' + dwn(mbps(confDown / 1e6), 'none') + dwn(mbps(confUp / 1e6), 'none') + '</tr>'
       : '') +
     '<tr><td>' + (isClient ? 'Latency' : 'Worst latency') + '</td><td class="num" colspan="2">' +
-      rttSq(rttMs) + '</td></tr>' +
+      rttSq(rttMs, rttMs == null ? perduIci : null) + '</td></tr>' +
     '<tr><td>' + (isClient ? 'Score' : 'Worst score') + '</td><td class="num" colspan="2">' +
       qooSq + '</td></tr>' +
     '</tbody></table>';
@@ -2152,7 +2167,7 @@ function renderQueuePanels() {
           clients.slice(0, 8).map((x) => '<tr data-lq-client="' + esc(x.c.subscriber_id) + '">' +
             '<td><a href="#">' + esc(x.c.login) + '</a></td>' +
             '<td>' + barre(x.usage) + '</td>' +
-            '<td class="num">' + rttSq(x.c.rtt_ms) + '</td>' +
+            '<td class="num">' + rttSq(x.c.rtt_ms, x.c.rtt_detail) + '</td>' +
             '<td class="num">' + (x.score == null ? sqCell('-', 'none') : sqCell(String(Math.round(x.score)), qoeSev(x.score))) +
             '</td></tr>').join('') +
           '</tbody></table>' +
