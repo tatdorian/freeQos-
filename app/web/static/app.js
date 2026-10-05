@@ -204,6 +204,7 @@ function startApp(user) {
   document.getElementById('readonly-banner').hidden = user.role === 'edit';
   document.getElementById('user-chip').hidden = false;
   document.getElementById('user-email').textContent = user.email;
+  document.getElementById('user-avatar').textContent = initiales(user.email, AUTH.authDisabled);
   document.getElementById('user-role').textContent = user.role === 'edit' ? 'edit' : 'read only';
   document.getElementById('user-role').className = 'badge ' + (user.role === 'edit' ? 'file' : '');
   document.getElementById('logout-btn').hidden = AUTH.authDisabled === true;
@@ -211,6 +212,14 @@ function startApp(user) {
   refreshHealth();
   AUTH.started = true;
   annoncerConnexionPrecedente();
+}
+
+/** "jean.dupont@x.fr" -> "JD", "admin@x.fr" -> "AD". */
+function initiales(email, sansCompte) {
+  if (sansCompte || !email) return '–';
+  const parts = String(email).split('@')[0].split(/[._-]+/).filter(Boolean);
+  const lettres = parts.length >= 2 ? parts[0][0] + parts[1][0] : (parts[0] || '?').slice(0, 2);
+  return lettres.toUpperCase();
 }
 
 /** "Derniere connexion : il y a 3 h, depuis 10.0.0.5 (Firefox on Windows)".
@@ -2676,7 +2685,7 @@ function renderQueuePanels() {
             'hand (forced) or by default">no plan</span>') + '</span>' +
         (ratio != null
           ? '<span class="k">Oversubscription</span><span class="v">' +
-            sqCell(ratio.toFixed(1) + '&times;', ratio <= 1 ? 'ok' : ratio <= 3 ? 'warn' : 'crit') + '</span>'
+            sqCell(ratio.toFixed(1) + '×', ratio <= 1 ? 'ok' : ratio <= 3 ? 'warn' : 'crit') + '</span>'
           : '') +
       '</div>' +
       '<div class="actions" style="margin-top:.8rem">' +
@@ -5331,7 +5340,7 @@ function renderServiceTable(services) {
         '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
         '<td style="min-width:140px">' + meter(somme, total || 1, '') + '</td>' +
         '<td>' + (r.service
-          ? '<button class="sm" data-svc-restrict="' + esc(r.service) + '">Restreindre</button>'
+          ? '<button class="sm" data-svc-restrict="' + esc(r.service) + '">Restrict</button>'
           : '') + '</td></tr>';
     }).join('') + '</tbody></table>';
   hote.querySelectorAll('[data-svc-restrict]').forEach((b) => {
@@ -9334,6 +9343,10 @@ async function show(view) {
   const titre = document.getElementById('page-title');
   if (lien && titre) titre.textContent = lien.textContent.trim();
   document.title = (lien ? lien.textContent.trim() + ' · ' : '') + 'freeQoS';
+  document.getElementById('pb-title').textContent = lien ? lien.textContent.trim() : '';
+  DIRECT.ok = null;
+  DIRECT.echec = null;
+  majDirect();
   // La page se charge DES SON OUVERTURE, et le dit : un rond a cote du titre
   // tant que ses donnees arrivent. Une page vide sans signe se lit "il n'y a
   // rien", alors qu'elle veut dire "ca arrive".
@@ -9362,6 +9375,9 @@ function appError(message) {
     'problem followed an update, reload the page (Ctrl+Shift+R).</span></div>';
 }
 
+/** Derniere mise a jour reussie et dernier echec de l'onglet affiche. */
+const DIRECT = { ok: null, echec: null };
+
 let refreshing = false;
 async function refresh() {
   // UN CHARGEMENT EN COURS NE BLOQUE QUE LE MEME ONGLET.
@@ -9376,12 +9392,20 @@ async function refresh() {
   refreshing = vue;
   try {
     await LOADERS[vue]();
-    if (state.view === vue) appError(null);
+    if (state.view === vue) {
+      appError(null);
+      DIRECT.ok = Date.now();
+      DIRECT.echec = null;
+    }
   } catch (err) {
     console.error('Rafraichissement impossible :', err);
-    if (state.view === vue) appError(err && err.message ? err.message : String(err));
+    if (state.view === vue) {
+      appError(err && err.message ? err.message : String(err));
+      DIRECT.echec = Date.now();
+    }
   } finally {
     if (refreshing === vue) refreshing = false;
+    if (state.view === vue) { majDirect(); construireSommaire(); }
   }
 }
 
@@ -9693,31 +9717,160 @@ boot();
 // Les vues d'edition ne se rafraichissent pas toutes seules : ce serait effacer
 // un formulaire en cours de saisie, ou un plan qu'on est en train de lire.
 const VUES_FIGEES = new Set(['pops', 'settings']);
-setInterval(() => {
-  // Rien ne se rafraichit derriere l'ecran de connexion.
-  if (!AUTH.ready) return;
-  if (VUES_FIGEES.has(state.view)) return;
+/** Pourquoi le direct est suspendu en ce moment, ou null s'il tourne. */
+function pauseDirect() {
   // L'arbre porte le debit des liens : le laisser vivre pour ne pas afficher un
   // debit perime. Mais on ne rafraichit PAS pendant qu'on deplace une case,
   // qu'une case est selectionnee (panneau ouvert), ou qu'un menu est ouvert :
   // ce serait annuler le geste en cours.
   if (state.view === 'network' && (topo.dragging || topo.selected || topo.linkMode ||
-      (document.activeElement && document.activeElement.tagName === 'SELECT'))) return;
+      (document.activeElement && document.activeElement.tagName === 'SELECT'))) {
+    return 'Paused while you edit the tree';
+  }
   // Vue Files live : ne pas ecraser un champ de debit en cours de saisie.
   if (state.view === 'exec' && document.activeElement &&
-      document.activeElement.tagName === 'INPUT') return;
+      document.activeElement.tagName === 'INPUT') return 'Paused while you type';
   // Trafic : ne pas ecraser un FORMULAIRE en cours de saisie (regle, exporteur).
   // Un champ de recherche ou de filtre, lui, n'arrete plus le direct : un clic
   // dans la recherche figeait la page pour toujours.
   if (state.view === 'traffic' && document.activeElement &&
       ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) &&
-      document.activeElement.closest('form')) return;
+      document.activeElement.closest('form')) return 'Paused while you fill the form';
+  return null;
+}
+
+setInterval(() => {
+  // Rien ne se rafraichit derriere l'ecran de connexion.
+  if (!AUTH.ready) return;
+  if (VUES_FIGEES.has(state.view)) return;
+  if (pauseDirect()) return;
   refresh();
   // Le tiroir d'un lien suit le meme rythme : on regarde un debit justement
   // quand il bouge.
   if (state.link) openLink(state.link.key, state.link.minutes, true);
 }, 10000);
 setInterval(() => { if (AUTH.ready) refreshHealth(); }, 15000);
+
+/* ------------------------------------------------------- barre de page
+ *
+ *  L'ETAT DU DIRECT SE VOIT. Les pages se rafraichissent toutes les 10 s, mais
+ *  rien ne le disait : un chiffre fige (rafraichissement en pause pendant une
+ *  saisie, API en panne) ne se distinguait pas d'un chiffre frais. La barre dit
+ *  "Live · updated 4 s ago", "Paused while you type", ou "Update failed". */
+function depuisCourt(ts) {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return s + ' s ago';
+  const m = Math.round(s / 60);
+  return m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago';
+}
+
+function majDirect() {
+  const pastille = document.getElementById('live-state');
+  const texte = document.getElementById('live-text');
+  if (!pastille || !texte) return;
+  let classe = 'live';
+  let libelle;
+  const pause = state.view ? pauseDirect() : null;
+  if (DIRECT.echec && (!DIRECT.ok || DIRECT.echec > DIRECT.ok)) {
+    classe = 'err';
+    libelle = 'Update failed' + (DIRECT.ok ? ' · data from ' + depuisCourt(DIRECT.ok) : '');
+  } else if (!DIRECT.ok) {
+    classe = 'wait';
+    libelle = 'Loading…';
+  } else if (VUES_FIGEES.has(state.view)) {
+    classe = 'still';
+    libelle = 'Loaded ' + depuisCourt(DIRECT.ok) + ' · not auto-refreshed';
+  } else if (pause) {
+    classe = 'pause';
+    libelle = pause;
+  } else {
+    libelle = 'Live · updated ' + depuisCourt(DIRECT.ok);
+  }
+  pastille.className = 'live ' + classe;
+  if (texte.textContent !== libelle) { texte.textContent = libelle; pastille.title = libelle; }
+}
+setInterval(majDirect, 1000);
+document.getElementById('refresh-btn').addEventListener('click', () => { if (AUTH.ready) refresh(); });
+
+/** Le sommaire de la page : une pastille par section visible, pour y sauter.
+ *  Reconstruit apres chaque chargement (une section peut apparaitre avec ses
+ *  donnees) ; rien n'est touche si la liste n'a pas change. */
+function construireSommaire() {
+  const nav = document.getElementById('page-toc');
+  const vue = document.getElementById('view-' + state.view);
+  if (!nav || !vue) return;
+  const titres = [...vue.querySelectorAll('h2')].filter((h) => h.offsetParent !== null &&
+    !h.closest('details:not([open]) > :not(summary)') && libelleAide(h, true));
+  const signature = state.view + '|' + titres.map((h) => libelleAide(h, true)).join('|');
+  if (nav.dataset.sig === signature) return;
+  nav.dataset.sig = signature;
+  if (titres.length < 3) { nav.innerHTML = ''; return; }
+  nav.innerHTML = titres.map((h, i) => {
+    if (!h.id) h.id = 'sec-' + state.view + '-' + i;
+    return '<a href="#" data-toc="' + h.id + '">' + esc(libelleAide(h, true).split(' — ')[0]) + '</a>';
+  }).join('');
+  suivreSommaire();
+}
+
+document.getElementById('page-toc').addEventListener('click', (e) => {
+  const lien = e.target.closest('[data-toc]');
+  if (!lien) return;
+  e.preventDefault();
+  const cible = document.getElementById(lien.dataset.toc);
+  if (cible) cible.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+/** La section en cours de lecture est allumee dans le sommaire. */
+function suivreSommaire() {
+  const nav = document.getElementById('page-toc');
+  const liens = nav ? [...nav.querySelectorAll('[data-toc]')] : [];
+  if (!liens.length) return;
+  const barre = document.getElementById('page-bar').getBoundingClientRect().bottom;
+  let actif = liens[0];
+  liens.forEach((a) => {
+    const h = document.getElementById(a.dataset.toc);
+    if (h && h.getBoundingClientRect().top <= barre + 40) actif = a;
+  });
+  // En bas de page, la derniere section est forcement celle qu'on lit.
+  if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) actif = liens[liens.length - 1];
+  liens.forEach((a) => a.classList.toggle('active', a === actif));
+  if (actif && nav.scrollWidth > nav.clientWidth) {
+    const g = actif.offsetLeft - nav.offsetLeft;
+    if (g < nav.scrollLeft || g + actif.offsetWidth > nav.scrollLeft + nav.clientWidth) {
+      nav.scrollTo({ left: g - 24, behavior: 'smooth' });
+    }
+  }
+}
+let sommairePrevu = false;
+window.addEventListener('scroll', () => {
+  if (sommairePrevu) return;
+  sommairePrevu = true;
+  requestAnimationFrame(() => { sommairePrevu = false; suivreSommaire(); });
+}, { passive: true });
+
+/* La barre se "colle" : une sentinelle juste au-dessus d'elle sort de l'ecran,
+ * la barre prend un fond et montre le nom de la page. Sur petit ecran, elle se
+ * colle sous la barre d'onglets, dont la hauteur varie. */
+function hauteurBandeau() {
+  const tete = document.querySelector('header.top');
+  const h = tete && getComputedStyle(tete).position === 'sticky' ? tete.offsetHeight : 0;
+  document.documentElement.style.setProperty('--topbar-h', h + 'px');
+  return h;
+}
+let observateurBarre = null;
+function surveillerBarre() {
+  if (observateurBarre) observateurBarre.disconnect();
+  observateurBarre = new IntersectionObserver(([e]) => {
+    document.getElementById('page-bar').classList.toggle('stuck', !e.isIntersecting);
+  }, { rootMargin: '-' + hauteurBandeau() + 'px 0px 0px 0px' });
+  observateurBarre.observe(document.getElementById('page-bar-sentinel'));
+}
+surveillerBarre();
+// La barre d'onglets change de hauteur (compte affiche apres la connexion,
+// rotation de l'ecran) : la barre de page se recale dessous.
+const recaler = () => { clearTimeout(surveillerBarre.t); surveillerBarre.t = setTimeout(surveillerBarre, 100); };
+window.addEventListener('resize', recaler);
+if (window.ResizeObserver) new ResizeObserver(recaler).observe(document.querySelector('header.top'));
 
 // Boutons "aller a" : un lien #ancre casserait le routage par #/onglet.
 document.addEventListener('click', (e) => {
@@ -9831,8 +9984,9 @@ const AIDE = {
     r: 'This is volume (GB), not speed: a client streaming all evening outweighs one who ran a short speed test.',
   },
   'where the traffic goes': {
-    t: 'The two places NetFlow can be measured: at the internet edge (above the core) and on the PoP routers.',
-    m: 'Chosen automatically: the internet edge is used when it sends flows; the PoPs take over only when it is silent. A byte is never counted twice.',
+    t: 'Map of the destinations your clients reach: each country and city sized by the volume exchanged with it.',
+    m: 'From NetFlow: each remote address is located from its address block (geolocation database). Hover a point for its volume and clients; click it to open the detail of that place.',
+    r: 'A location is that of the server’s block, not of the company: a CDN often answers from a nearby city even for a foreign service.',
   },
   'which services the traffic comes from': {
     t: 'Traffic grouped by recognised service (YouTube, Netflix, Steam, Microsoft updates…).',
@@ -9927,6 +10081,24 @@ const AIDE = {
   'operational settings': {
     t: 'Settings stored in the database and applied without restart.',
     r: '“default” = the value from the environment / built-in default. Apply writes it; the source column then says “database”.',
+  },
+  'sec|services and ip location': {
+    t: 'What NetFlow keeps about the destinations your clients reach, and how addresses are named (catalogue, reverse DNS, registry, geolocation).',
+    r: 'Volumes per client are measured whatever these say; they only decide what is kept per destination and how much naming work (and outbound queries) the controller does.',
+  },
+  'sec|shaping': {
+    t: 'How queues are computed and written: safety factor on measured capacity, floor rate, default plan, adoption of queues freeQoS did not create, and how a queue targets the client.',
+    r: 'A change here is applied at the next reconciliation (or right away with Reset queues in Devices).',
+  },
+  'sec|cake': {
+    t: 'Parameters of the CAKE queues — the queue discipline that keeps latency low while a line is full.',
+    r: 'Keep the defaults unless you know why: overhead and MPU must match the encapsulation (PPPoE, VLAN) for the rate to be exact; rtt sets how fast CAKE reacts.',
+  },
+  'sec|write safeguards': 'Limits that stop an automatic loop from changing too much at once (circuit breaker), and whether a separate write account is required on the routers.',
+  'sec|traffic': 'Where the volume of each client is counted when both the internet edge and the PoPs export NetFlow — so a byte is never counted twice.',
+  'sec|collection cadences': {
+    t: 'How often each collection runs.',
+    r: 'Shorter = fresher figures, but more load on the routers and the database. A 10 s subscriber poll and a 30 s latency probe suit most networks.',
   },
   'what stays out of reach of the interface': 'Settings that can only change in the environment (.env) — the database address, the encryption key… — because the interface itself depends on them.',
   // ---------------------------------------------------------- comptes

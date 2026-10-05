@@ -61,9 +61,14 @@
       <a href="#/settings" data-view="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a>
     </nav>
     <div class="user-chip" id="user-chip" hidden>
-      <span class="user-email" id="user-email"></span>
-      <span class="badge" id="user-role"></span>
-      <button type="button" class="sm" id="logout-btn">Log out</button>
+      <a class="user-card" href="#/settings" title="My account: password and sessions">
+        <span class="avatar" id="user-avatar" aria-hidden="true"></span>
+        <span class="user-id">
+          <span class="user-email" id="user-email"></span>
+          <span class="badge" id="user-role"></span>
+        </span>
+      </a>
+      <button type="button" class="sm user-logout" id="logout-btn" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3"/><path d="M10 16l-4-4 4-4"/><path d="M6 12h10"/></svg></button>
     </div>
     <div class="sidebar-foot">
       <span class="version">Out-of-band QoS</span>
@@ -74,6 +79,18 @@
 
   <main>
     <div class="page-head"><h1 id="page-title">Dashboard</h1></div>
+    <!-- BARRE DE PAGE, collee en haut au defilement : le nom de la page (une
+         fois le grand titre sorti de l'ecran), les sections de la page pour y
+         sauter, et l'etat du direct (mis a jour il y a N s, en pause, en echec). -->
+    <div class="page-bar-sentinel" id="page-bar-sentinel" aria-hidden="true"></div>
+    <div class="page-bar" id="page-bar">
+      <span class="pb-title" id="pb-title" aria-hidden="true"></span>
+      <nav class="page-toc" id="page-toc" aria-label="Sections of this page"></nav>
+      <div class="pb-tools">
+        <span class="live" id="live-state" role="status" aria-live="polite"><i aria-hidden="true"></i><span id="live-text">Loading…</span></span>
+        <button type="button" class="sm pb-refresh" id="refresh-btn" title="Refresh now" aria-label="Refresh now"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/></svg></button>
+      </div>
+    </div>
     <div class="readonly-banner" id="readonly-banner" hidden>Read-only access: you can view everything, changes are refused.</div>
     <!-- UN ECHEC DE CHARGEMENT DOIT SE VOIR. Sans ce bandeau, une API en erreur
          laissait l'onglet vide ou fige sur ses anciennes lignes : indiscernable

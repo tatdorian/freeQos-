@@ -211,10 +211,69 @@ main {
 }
 #app-error[hidden] { display: none; }
 
-.page-head { margin-bottom: 1.6rem; }
+.page-head { margin-bottom: .55rem; }
 .page-head h1 {
   margin: 0; font-size: 2.1rem; line-height: 1.12; font-weight: 700; letter-spacing: -.03em;
 }
+
+/* --------------------------------------------------------- barre de page
+   Collee en haut au defilement : nom de la page (quand le grand titre a
+   disparu), sommaire des sections, etat du direct. Sa hauteur ne change pas
+   quand elle se colle : rien ne saute sous le doigt. */
+.page-bar-sentinel { height: 1px; margin-bottom: -1px; }
+.page-bar {
+  position: sticky; top: var(--topbar-h, 0px); z-index: 25;
+  display: flex; align-items: center; gap: .75rem; min-height: 2.6rem;
+  margin: 0 -2.5rem 1.2rem; padding: .45rem 2.5rem;
+  border-bottom: 1px solid transparent;
+  transition: background .2s ease, border-color .2s ease;
+}
+.page-bar.stuck {
+  background: var(--topbar-bg);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom-color: var(--border);
+}
+.pb-title {
+  flex: 0 0 auto; font-weight: 700; font-size: 1rem; letter-spacing: -.02em;
+  max-width: 0; opacity: 0; overflow: hidden; white-space: nowrap;
+  transition: max-width .25s ease, opacity .2s ease;
+}
+.page-bar.stuck .pb-title { max-width: 14rem; opacity: 1; }
+.page-toc {
+  flex: 1 1 auto; min-width: 0; display: flex; gap: .3rem; overflow-x: auto; scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent);
+}
+.page-toc::-webkit-scrollbar { display: none; }
+.page-toc:empty { -webkit-mask-image: none; mask-image: none; }
+.page-toc a {
+  flex: 0 0 auto; padding: .26rem .7rem; border-radius: 999px;
+  font-size: .78rem; font-weight: 500; color: var(--muted); white-space: nowrap;
+  text-decoration: none; transition: background .15s ease, color .15s ease;
+}
+.page-toc a:hover { background: var(--fill); color: var(--text); text-decoration: none; }
+.page-toc a.active { background: var(--accent-dim); color: var(--accent); }
+.pb-tools { flex: 0 0 auto; margin-left: auto; display: flex; align-items: center; gap: .4rem; }
+.live {
+  display: inline-flex; align-items: center; gap: .45rem; white-space: nowrap;
+  font-size: .75rem; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: 0 0 auto; }
+.live.live i { background: var(--ok); animation: pouls 2s ease-in-out infinite; }
+.live.pause i, .live.still i { background: var(--faint); }
+.live.wait i { background: var(--accent); animation: pouls 1s ease-in-out infinite; }
+.live.err { color: var(--crit); }
+.live.err i { background: var(--crit); }
+@keyframes pouls {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent); opacity: 1; }
+  50% { opacity: .45; }
+}
+.pb-refresh { width: 2rem; height: 2rem; padding: 0; display: grid; place-items: center; }
+.pb-refresh svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.pb-refresh.is-busy svg { display: none; }
+/* Un titre de section vise depuis le sommaire s'arrete SOUS la barre. */
+main h2 { scroll-margin-top: calc(var(--topbar-h, 0px) + 4.2rem); }
 
 section { display: none; }
 section.active { display: block; animation: apparition .25s ease; }
@@ -614,8 +673,9 @@ tr.sub-row td { background: color-mix(in srgb, var(--accent) 4%, transparent); f
   border-radius: var(--radius); padding: 1.05rem; font-size: .86rem;
   box-shadow: var(--shadow);
   align-self: flex-start;
-  position: sticky; top: 1.5rem;
-  max-height: calc(100vh - 3rem); overflow: auto;
+  /* Sous la barre de page collee en haut, pas derriere elle. */
+  position: sticky; top: 4rem;
+  max-height: calc(100vh - 5rem); overflow: auto;
 }
 .topo-panel .muted { color: var(--faint); }
 .topo-panel h4 { margin: 0 0 .6rem; font-size: 1rem; word-break: break-all; }
@@ -784,6 +844,8 @@ tbody tr.clickable:hover td.sticky-actions { background: var(--surface-2); }
   .sidebar-foot .version { display: none; }
   main { margin-left: 0; padding: 1.3rem 1rem 3rem; }
   .page-head h1 { font-size: 1.7rem; }
+  .page-bar { margin: 0 -1rem 1rem; padding: .4rem 1rem; gap: .5rem; }
+  .page-bar.stuck .pb-title { display: none; }
   .topo-editor { flex-direction: column; }
   .topo-panel { flex: 1 1 auto; width: 100%; position: static; max-height: none; }
 }
@@ -975,13 +1037,30 @@ body.gated header.top, body.gated main { visibility: hidden; }
 .auth-card button { margin-top: .3rem; padding: .6rem; font-size: .92rem; }
 #auth-error .notice { margin: 0; }
 
+/* Le compte connecte : une carte (initiales, email, grade) qui mene a "mon
+   compte", et un bouton de deconnexion a cote. */
 .user-chip {
-  display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .5rem;
-  padding: .6rem .55rem 0; border-top: 1px solid var(--border); font-size: .76rem;
+  display: flex; align-items: center; gap: .4rem;
+  padding: .65rem .2rem 0; border-top: 1px solid var(--border); font-size: .76rem;
 }
 .user-chip[hidden] { display: none; }
-.user-email { flex: 1 1 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
-.user-chip button { margin-left: auto; }
+.user-card {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: .55rem;
+  padding: .35rem .4rem; border-radius: 10px; color: var(--text); text-decoration: none;
+}
+.user-card:hover { background: var(--fill); text-decoration: none; }
+.avatar {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: linear-gradient(145deg, #5e5ce6, #0a84ff); color: #fff;
+  font-size: .72rem; font-weight: 700; letter-spacing: .02em;
+}
+.user-id { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: .15rem; }
+.user-email { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-weight: 500; }
+.user-id .badge { font-size: .64rem; padding: .05rem .45rem; }
+.user-logout { flex: 0 0 auto; width: 2rem; height: 2rem; padding: 0; display: grid; place-items: center; color: var(--muted); }
+.user-logout:hover { color: var(--crit); }
+.user-logout svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; }
 .readonly-banner {
   margin: -.4rem 0 1rem; padding: .55rem .9rem; border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--warn) 14%, transparent); font-size: .84rem;
@@ -1119,6 +1198,8 @@ pre { max-width: 100%; overflow-x: auto; }
   .brand { order: 0; }
   .user-chip { order: 2; flex-wrap: nowrap; padding: 0; border-top: 0; min-width: 0; }
   .user-chip .user-email { flex: 0 1 auto; max-width: 16ch; }
+  .user-card { padding: .15rem .3rem; }
+  .user-id .badge { display: none; }
   .sidebar-foot { order: 3; }
   nav.tabs { order: 4; flex: 1 1 100%; }
 }
@@ -1126,6 +1207,13 @@ pre { max-width: 100%; overflow-x: auto; }
   /* Les pastilles d'explication passent a la ligne plutot que de deborder. */
   .mode { white-space: normal; border-radius: 10px; max-width: 100%; }
   .user-chip .user-email { display: none; }
+  /* Marque, recherche et compte tiennent sur UNE ligne : l'avatar suffit. */
+  .user-id { display: none; }
+  .user-chip { gap: .15rem; }
+  .user-card { gap: 0; padding: .1rem; }
+  .global-search { flex-basis: 110px; }
+  /* Le point suffit (son texte reste en infobulle) : la place va au sommaire. */
+  .live span { display: none; }
 }
 
 /* Boutons d'une ligne de tableau : cote a cote, jamais empiles (chaque ligne
@@ -1228,12 +1316,13 @@ button.danger.is-busy::after { border-top-color: var(--crit); }
 /* ============================================================ info-bulles */
 .info {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 1.05em; height: 1.05em; margin-left: .35em; vertical-align: .1em;
-  border-radius: 50%; border: 1px solid currentColor;
-  font: italic 600 .68em/1 Georgia, serif; text-transform: none; letter-spacing: 0;
-  color: var(--faint); cursor: help; opacity: .75; user-select: none;
+  width: 13px; height: 13px; margin-left: .38em; vertical-align: .08em;
+  border-radius: 50%; border: 1.2px solid currentColor;
+  font: italic 700 9px/1 Georgia, serif; text-transform: none; letter-spacing: 0;
+  color: var(--faint); cursor: help; opacity: .85; user-select: none;
+  transition: color .15s ease, background .15s ease;
 }
-.info:hover, .info:focus-visible { color: var(--accent); opacity: 1; outline: none; }
+.info:hover, .info:focus-visible { color: var(--accent); background: var(--accent-dim); opacity: 1; outline: none; }
 /* La bulle est une petite fiche : titre, ce que c'est, comment c'est mesure,
    l'echelle en couleurs, comment le lire, quoi faire. Survol = apercu ; clic
    sur le (i) = epinglee (texte selectionnable, utilisable au doigt). */
