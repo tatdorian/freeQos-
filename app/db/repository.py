@@ -584,6 +584,8 @@ class MetricsRepository:
         end: datetime,
         bucket_seconds: int = 10,
         pop_id: int | None = None,
+        subscriber_id: int | None = None,
+        pop_ids: list[int] | None = None,
     ) -> list[dict[str, Any]]:
         """Debit agrege de tout le reseau, par pas de temps.
 
@@ -604,6 +606,8 @@ class MetricsRepository:
                       JOIN subscribers s ON s.id = m.subscriber_id
                      WHERE m.ts >= $1 AND m.ts < $2
                        AND ($4::int IS NULL OR s.pop_id = $4)
+                       AND ($5::bigint IS NULL OR s.id = $5)
+                       AND ($6::int[] IS NULL OR s.pop_id = ANY($6))
                      GROUP BY bucket, m.subscriber_id
                 ),
                 -- LA POINTE, PAS SEULEMENT LA MOYENNE. Un cycle de collecte
@@ -619,6 +623,8 @@ class MetricsRepository:
                       JOIN subscribers s ON s.id = m.subscriber_id
                      WHERE m.ts >= $1 AND m.ts < $2
                        AND ($4::int IS NULL OR s.pop_id = $4)
+                       AND ($5::bigint IS NULL OR s.id = $5)
+                       AND ($6::int[] IS NULL OR s.pop_id = ANY($6))
                      GROUP BY m.ts
                 ),
                 pointes AS (
@@ -641,8 +647,55 @@ class MetricsRepository:
                 end,
                 timedelta(seconds=bucket_seconds),
                 pop_id,
+                subscriber_id,
+                pop_ids,
             )
         return _rows(records)
+
+    async def throughput_now(
+        self,
+        *,
+        pop_id: int | None = None,
+        subscriber_id: int | None = None,
+        pop_ids: list[int] | None = None,
+        max_age_s: int = 120,
+    ) -> dict[str, Any] | None:
+        """Le debit du reseau au DERNIER cycle de collecte, et a lui seul.
+
+        Independant de la fenetre affichee : la derniere valeur d'une serie
+        par pas est la moyenne d'un pas de 20 s sur une heure, de 8 min sur un
+        jour -- et souvent d'un pas pas encore termine. "Maintenant" changeait
+        donc avec la periode choisie.
+        """
+        async with self._pool.acquire() as conn:
+            record = await conn.fetchrow(
+                """
+                WITH dernier AS (
+                    SELECT max(m.ts) AS ts
+                      FROM subscriber_metrics m
+                      JOIN subscribers s ON s.id = m.subscriber_id
+                     WHERE m.ts > now() - make_interval(secs => $2)
+                       AND ($1::int IS NULL OR s.pop_id = $1)
+                       AND ($3::bigint IS NULL OR s.id = $3)
+                       AND ($4::int[] IS NULL OR s.pop_id = ANY($4))
+                )
+                SELECT d.ts,
+                       sum(m.rx_bps) AS rx_bps,
+                       sum(m.tx_bps) AS tx_bps
+                  FROM dernier d
+                  JOIN subscriber_metrics m ON m.ts = d.ts
+                  JOIN subscribers s ON s.id = m.subscriber_id
+                 WHERE ($1::int IS NULL OR s.pop_id = $1)
+                       AND ($3::bigint IS NULL OR s.id = $3)
+                       AND ($4::int[] IS NULL OR s.pop_id = ANY($4))
+                 GROUP BY d.ts
+                """,
+                pop_id,
+                float(max_age_s),
+                subscriber_id,
+                pop_ids,
+            )
+        return dict(record) if record is not None else None
 
     async def overview(self) -> dict[str, Any]:
         """Chiffres de tete du tableau de bord, en une seule requete."""

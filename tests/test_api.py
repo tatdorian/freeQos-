@@ -265,6 +265,9 @@ class FakeRepository:
     async def throughput_series(self, **kwargs: Any) -> list[dict[str, Any]]:
         return [{"bucket": NOW, "rx_bps": 5_000_000.0, "tx_bps": 40_000_000.0, "subscribers": 1}]
 
+    async def throughput_now(self, **kwargs: Any) -> dict[str, Any] | None:
+        return {"ts": NOW, "rx_bps": 4_000_000.0, "tx_bps": 30_000_000.0}
+
     async def network_tree(self) -> list[dict[str, Any]]:
         return [
             {
@@ -668,6 +671,8 @@ def test_throughput(client: TestClient) -> None:
     assert body["bucket_seconds"] == 30
     assert body["points"][0]["tx_bps"] == 40_000_000.0
     assert "subscribers upload" in body["orientation"]
+    # "Maintenant" vient du dernier cycle, pas du dernier pas de la serie.
+    assert body["now"]["tx_bps"] == 30_000_000.0
 
 
 def test_network_tree(client: TestClient) -> None:
@@ -790,3 +795,31 @@ def test_suppression_d_un_pop_exige_confirmation(client: TestClient) -> None:
     reponse = client.delete("/api/v1/pops/1")
     assert reponse.status_code == 400
     assert "Permanent deletion" in reponse.json()["detail"]
+
+
+async def test_les_sites_d_un_routeur_sont_son_pop_et_ses_vlan() -> None:
+    from types import SimpleNamespace
+
+    from app.api.metrics import _pops_du_routeur
+
+    class Depot:
+        async def list_pops(self) -> list[dict[str, Any]]:
+            return [
+                {"id": 1, "name": "Francophonie", "router_name": None},
+                {"id": 2, "name": "2060-Nestle-Siege", "router_name": "NAS-FRANCOPHONIE"},
+                {"id": 3, "name": "Altair", "router_name": None},
+            ]
+
+    conteneur = SimpleNamespace(
+        registry=SimpleNamespace(
+            collectors=[
+                SimpleNamespace(
+                    name="NAS-FRANCOPHONIE",
+                    config=SimpleNamespace(effective_pop_name="Francophonie"),
+                )
+            ]
+        )
+    )
+    assert sorted(await _pops_du_routeur(Depot(), conteneur, "NAS-FRANCOPHONIE")) == [1, 2]
+    # Routeur inconnu : aucun site, donc aucune donnee -- jamais tout le reseau.
+    assert await _pops_du_routeur(Depot(), conteneur, "inconnu") == []
