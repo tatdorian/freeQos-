@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import asyncpg
 import pytest
@@ -1885,6 +1886,64 @@ async def test_la_heatmap_porte_les_echantillons_de_chaque_pas(
     assert cellule["basis"] == "composite"
     assert cellule["severity"] == "crit"
     assert cellule["bloat_ms"] is not None and cellule["bloat_ms"] > 200
+
+
+async def test_la_sante_d_un_site_se_mesure_sur_ses_limites_appliquees(
+    database: Database, now: datetime
+) -> None:
+    """Constate : « Node VLAN 2060 » affichait une charge de 0 % alors que son
+    client tournait a 96 % de sa limite. La sante portait sur TOUT le reseau,
+    et la reference ne comptait que les plans vendus -- or ce client est
+    plafonne a la main (100 kbps), sans plan."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+    vlan = await directory.ensure_pop("VLAN 2060")
+    altair = await directory.ensure_pop("PoP Altair")
+    nestle = await directory.ensure_subscriber("nestle", pop_id=vlan)
+    gros = await directory.ensure_subscriber("gros", pop_id=altair, plan=Plan(100, 100, "mock"))
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO shaping_policies (scope, target_key, max_down_mbps, max_up_mbps) "
+            "VALUES ('subscriber', 'nestle', 0.1, 0.1)"
+        )
+    await writer.write_subscriber_metrics(
+        [
+            (
+                nestle,
+                SubscriberSample(
+                    ts=now,
+                    login="nestle",
+                    router_name="r",
+                    pop_name="p",
+                    tx_bps=96e3,
+                    rx_bps=96e3,
+                    rtt_ms=7.0,
+                ),
+            ),
+            (
+                gros,
+                SubscriberSample(
+                    ts=now,
+                    login="gros",
+                    router_name="r",
+                    pop_name="p",
+                    tx_bps=0.0,
+                    rx_bps=0.0,
+                    rtt_ms=10.0,
+                ),
+            ),
+        ]
+    )
+
+    def derniere_charge(heat: dict[str, Any]) -> float:
+        util = next(r for r in heat["rows"] if r["key"] == "utilisation")
+        return [c for c in util["cells"] if c["value"] is not None][-1]["value"]
+
+    site = await repo.heatmap(minutes=15, buckets=15, pop_name="VLAN 2060")
+    assert derniere_charge(site) == pytest.approx(96.0, abs=1)
+    # Tout le reseau : 96 kbps sur 100.1 Mbps de limites -- presque rien.
+    assert derniere_charge(await repo.heatmap(minutes=15, buckets=15)) < 1
 
 
 async def test_cycle_de_vie_d_un_resserrage_qoe(database: Database) -> None:

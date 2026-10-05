@@ -385,7 +385,9 @@ class MetricsRepository:
             )
         return lignes
 
-    async def heatmap(self, *, minutes: int = 15, buckets: int = 15) -> dict[str, Any]:
+    async def heatmap(
+        self, *, minutes: int = 15, buckets: int = 15, pop_name: str | None = None
+    ) -> dict[str, Any]:
         """Heatmap executif facon LibreQoS : QoE, RTT et utilisation dans le temps.
 
         Chaque ligne est une bande de cellules colorees (une par pas de temps).
@@ -405,6 +407,10 @@ class MetricsRepository:
                            avg(COALESCE(rx_bps, 0) + COALESCE(tx_bps, 0)) AS charge
                       FROM subscriber_metrics
                      WHERE ts > now() - $1::interval
+                       -- Un SITE (le noeud selectionne), ou tout le reseau.
+                       AND ($3::text IS NULL OR subscriber_id IN (
+                            SELECT s.id FROM subscribers s JOIN pops p ON p.id = s.pop_id
+                             WHERE p.name = $3))
                      GROUP BY bucket, subscriber_id
                 )
                 SELECT bucket,
@@ -427,11 +433,23 @@ class MetricsRepository:
                 """,
                 timedelta(minutes=minutes),
                 timedelta(seconds=bucket_s),
+                pop_name,
             )
+            # LA LIMITE REELLEMENT APPLIQUEE, pas seulement le plan vendu : un
+            # client plafonne a la main (sans plan) comptait pour zero, et sa
+            # charge s'affichait a 0 % alors qu'il tournait a 96 % de sa limite.
             sold_down = await conn.fetchval(
-                "SELECT coalesce(sum(plan_down_mbps), 0) FROM subscribers"
+                """
+                SELECT coalesce(sum(coalesce(pol.max_down_mbps, s.plan_down_mbps)), 0)
+                  FROM subscribers s
+                  LEFT JOIN shaping_policies pol
+                         ON pol.scope = 'subscriber' AND pol.target_key = s.login
+                  LEFT JOIN pops p ON p.id = s.pop_id
+                 WHERE ($1::text IS NULL OR p.name = $1)
+                """,
+                pop_name,
             )
-            if not sold_down:
+            if not sold_down and pop_name is None:
                 sold_down = await conn.fetchval(
                     "SELECT coalesce(sum(capacity_mbps), 0) FROM backhaul_latest "
                     "WHERE ts > now() - INTERVAL '5 minutes'"

@@ -1166,12 +1166,15 @@ async function loadExec() {
   // meme temps que le reste et s'affichent chacun a leur arrivee, au lieu de
   // faire attendre tout l'ecran derriere la requete la plus lente.
   const heures = Math.max(1, Math.ceil(minutes / 60));
-  const pHeat = grab(api('/heatmap?minutes=' + minutes + '&buckets=' + buckets));
+  // La sante dans le temps suit la SELECTION : elle se recharge pour le site
+  // choisi (cf. chargerSante). Ici, le premier chargement.
+  exec.heatParams = { minutes, buckets };
+  exec.heatSite = undefined;
+  const pHeat = grab(chargerSante());
   const pPoints = api('/capacity/hotspots?hours=' + heures).catch(() => null);
   const pLatence = api('/latency').catch(() => null);
   api('/latency/clients?minutes=' + Math.max(5, minutes)).catch(() => null)
     .then((lc) => { exec.latencyClients = lc; renderLatencyClients(); });
-  pHeat.then((heat) => renderHeatmap(document.getElementById('exec-heatmap'), heat));
   pLatence.then((latence) => {
     exec.latency = latence;
     renderLatencySegments(document.getElementById('exec-latency'), latence);
@@ -1996,7 +1999,36 @@ function gaugeSvg(downBps, upBps, maxBps, qoe) {
 /** Les trois panneaux (Live Queue State | Node Snapshot | Node Details) pour le
  *  noeud ou le client selectionne dans le tableau. Reproduit l'ecran LibreQoS :
  *  un noeud est un agregat (lecture seule), un client peut recevoir un override. */
+/** Le site dont on montre la sante : celui du noeud choisi, ou celui du
+ *  client choisi. null = tout le reseau. */
+function siteSelectionne() {
+  const sel = exec.selected;
+  if (!sel) return null;
+  if (sel.type === 'node') return sel.name;
+  const c = (exec.subsById || {})[sel.id];
+  return c && c.pop_name ? c.pop_name : null;
+}
+
+/** LA SANTE DANS LE TEMPS DU SITE SELECTIONNE. Elle portait sur tout le
+ *  reseau tout en s'affichant sous "Node VLAN 2060" : 0 % de charge pour un
+ *  site a 96 % de sa limite. Rechargee seulement quand le site change. */
+async function chargerSante() {
+  const p = exec.heatParams;
+  if (!p) return null;
+  const site = siteSelectionne();
+  if (site === exec.heatSite) return null;
+  exec.heatSite = site;
+  const titre = document.getElementById('exec-heat-title');
+  if (titre) titre.textContent = 'Health over time' + (site ? ' — ' + site : ' — whole network');
+  const heat = await api('/heatmap?minutes=' + p.minutes + '&buckets=' + p.buckets +
+    (site ? '&pop=' + encodeURIComponent(site) : ''));
+  // Une reponse arrivee apres un autre clic ne doit pas ecraser la bonne.
+  if (site === exec.heatSite) renderHeatmap(document.getElementById('exec-heatmap'), heat);
+  return heat;
+}
+
 function renderQueuePanels() {
+  chargerSante().catch(() => {});
   const live = document.getElementById('lq-live');
   const snap = document.getElementById('lq-snapshot');
   const det = document.getElementById('lq-details');
@@ -2140,7 +2172,14 @@ function renderQueuePanels() {
         '<span class="k">Load now</span><span class="v">' +
           (charge == null ? esc(bpsText(down)) : sqCell(charge + '%', severity(charge))) + '</span>' +
         '<span class="k">Clients</span><span class="v">' + esc(node.circuits) + '</span>' +
-        '<span class="k">Sold (&Sigma; plans)</span><span class="v">' + esc(mbps(vendu)) + '</span>' +
+        // Les limites APPLIQUEES (plan, limite forcee ou boost) a cote des plans
+        // vendus : un client plafonne a la main sans plan donnait "Sold 0.0
+        // Mbps", qu'on lisait comme "rien n'est limite".
+        '<span class="k">Limits applied (&Sigma;)</span><span class="v">' +
+          (node.effDown ? esc(mbps(node.effDown / 1e6)) : sqCell('none', 'none')) + '</span>' +
+        '<span class="k">Sold (&Sigma; plans)</span><span class="v">' +
+          (vendu ? esc(mbps(vendu)) : '<span class="na" title="No plan: the limits are set by ' +
+            'hand (forced) or by default">no plan</span>') + '</span>' +
         (ratio != null
           ? '<span class="k">Oversubscription</span><span class="v">' +
             sqCell(ratio.toFixed(1) + '&times;', ratio <= 1 ? 'ok' : ratio <= 3 ? 'warn' : 'crit') + '</span>'
