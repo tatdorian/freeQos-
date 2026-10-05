@@ -113,16 +113,24 @@ async def test_un_routeur_en_erreur_n_empeche_pas_les_autres() -> None:
 
 
 async def test_oubli_des_abonnes_deconnectes() -> None:
-    """L'etat ne doit pas croitre indefiniment au fil des sessions."""
+    """L'etat ne doit pas croitre indefiniment au fil des sessions -- mais un
+    abonne absent d'UN cycle garde sa latence tant qu'elle est fraiche : sinon
+    elle repassait a "-" a chaque raté de collecte."""
     client = FakeRouterOsClient()
-    prober = RttProber(batch_size=10, clock=Horloge())
+    horloge = Horloge()
+    prober = RttProber(batch_size=10, clock=horloge)
     await prober.probe(
         [(1, "10.0.0.1", make_collector(client)), (2, "10.0.0.2", make_collector(client))]
     )
     assert prober.stats()["tracked"] == 2
 
     prober.forget_all_but({1})
-    assert prober.stats()["tracked"] == 1
+    assert prober.stats()["tracked"] == 2  # mesure fraiche : elle reste
+    assert prober.get(2) is not None
+
+    horloge.advance(prober.max_age_s + 1)
+    prober.forget_all_but({1})
+    assert prober.stats()["tracked"] == 1  # perimee : oubliee
 
 
 async def test_sans_cible_aucun_ping() -> None:

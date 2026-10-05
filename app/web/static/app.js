@@ -11,7 +11,52 @@ const API = '/api/v1';
 
 /* ------------------------------------------------------------------ outils */
 
+/* ------------------------------------------------- rond de chargement
+ *
+ *  UN BOUTON QUI DECLENCHE UNE REQUETE TOURNE JUSQU'A LA REPONSE. Fait ici,
+ *  une seule fois, plutot que dans chacun des cent gestionnaires : le dernier
+ *  bouton clique (il y a moins d'une seconde) est rattache aux requetes qu'il
+ *  lance, et rendu indisponible le temps qu'elles aboutissent -- ce qui evite
+ *  aussi le double clic qui pose deux fois la meme regle. */
+let dernierClic = null;
+document.addEventListener('click', (e) => {
+  const bouton = e.target.closest && e.target.closest('button');
+  if (bouton && !bouton.disabled) dernierClic = { bouton, t: Date.now() };
+}, true);
+const enCours = new WeakMap();
+
+function boutonOccupe() {
+  if (!dernierClic || Date.now() - dernierClic.t > 1000) return null;
+  const b = dernierClic.bouton;
+  return b.isConnected ? b : null;
+}
+
+function marquer(bouton, delta) {
+  const n = (enCours.get(bouton) || 0) + delta;
+  enCours.set(bouton, Math.max(0, n));
+  const actif = n > 0;
+  bouton.classList.toggle('is-busy', actif);
+  bouton.setAttribute('aria-busy', actif ? 'true' : 'false');
+  if (actif) {
+    if (!('busyWasDisabled' in bouton.dataset)) bouton.dataset.busyWasDisabled = bouton.disabled ? '1' : '';
+    bouton.disabled = true;
+  } else if ('busyWasDisabled' in bouton.dataset) {
+    bouton.disabled = bouton.dataset.busyWasDisabled === '1';
+    delete bouton.dataset.busyWasDisabled;
+  }
+}
+
 async function api(path, options) {
+  const bouton = boutonOccupe();
+  if (bouton) marquer(bouton, +1);
+  try {
+    return await apiBrut(path, options);
+  } finally {
+    if (bouton) marquer(bouton, -1);
+  }
+}
+
+async function apiBrut(path, options) {
   const res = await fetch(API + path, {
     headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
     credentials: 'same-origin',
@@ -8885,7 +8930,15 @@ async function show(view) {
   const titre = document.getElementById('page-title');
   if (lien && titre) titre.textContent = lien.textContent.trim();
   document.title = (lien ? lien.textContent.trim() + ' · ' : '') + 'freeQoS';
-  await refresh();
+  // La page se charge DES SON OUVERTURE, et le dit : un rond a cote du titre
+  // tant que ses donnees arrivent. Une page vide sans signe se lit "il n'y a
+  // rien", alors qu'elle veut dire "ca arrive".
+  if (titre) titre.classList.add('page-loading');
+  try {
+    await refresh();
+  } finally {
+    if (titre && state.view === view) titre.classList.remove('page-loading');
+  }
 }
 
 /** Un echec de chargement doit SE VOIR.
