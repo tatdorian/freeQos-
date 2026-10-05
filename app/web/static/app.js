@@ -2014,7 +2014,8 @@ function renderNodeTable(host) {
           '</span>' : '') + '</td>' +
       '<td class="num">' + n.circuits + '</td>' +
       txCell + rxCell + effCell + confCell +
-      '<td class="num">' + rttSq(n.rttMax) + '</td>' +
+      '<td class="num">' + ((n.subs || []).some((x) => pingsPerdus(x.rtt_detail))
+        ? sqCell('no reply', 'crit', SANS_REPONSE) : rttSq(n.rttMax)) + '</td>' +
       '<td class="num">' + qooCell(n.qoe, n.rttMax) + '</td></tr>';
 
     const subRows = !open ? '' : n.subs.map((s) => {
@@ -2220,7 +2221,10 @@ function renderQueuePanels() {
           dwn(mbps(effDown / 1e6), 'none') + dwn(mbps(effUp / 1e6), 'none') + '</tr>')
       : '') +
     '<tr><td>' + (isClient ? 'Latency' : 'Worst latency') + '</td><td class="num" colspan="2">' +
-      rttSq(rttMs, rttMs == null ? perduIci : null) + '</td></tr>' +
+      // Un client SANS REPONSE est le pire de tous : il l'emporte sur la
+      // latence des autres (« 12 ms » s'affichait a cote d'un « no reply »).
+      (pingsPerdus(perduIci) ? sqCell('no reply', 'crit', SANS_REPONSE) : rttSq(rttMs)) +
+      '</td></tr>' +
     '<tr><td>' + (isClient ? 'Score' : 'Worst score') + '</td><td class="num" colspan="2">' +
       qooSq + '</td></tr>' +
     '</tbody></table>';
