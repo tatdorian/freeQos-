@@ -795,3 +795,31 @@ def test_suppression_d_un_pop_exige_confirmation(client: TestClient) -> None:
     reponse = client.delete("/api/v1/pops/1")
     assert reponse.status_code == 400
     assert "Permanent deletion" in reponse.json()["detail"]
+
+
+async def test_les_sites_d_un_routeur_sont_son_pop_et_ses_vlan() -> None:
+    from types import SimpleNamespace
+
+    from app.api.metrics import _pops_du_routeur
+
+    class Depot:
+        async def list_pops(self) -> list[dict[str, Any]]:
+            return [
+                {"id": 1, "name": "Francophonie", "router_name": None},
+                {"id": 2, "name": "2060-Nestle-Siege", "router_name": "NAS-FRANCOPHONIE"},
+                {"id": 3, "name": "Altair", "router_name": None},
+            ]
+
+    conteneur = SimpleNamespace(
+        registry=SimpleNamespace(
+            collectors=[
+                SimpleNamespace(
+                    name="NAS-FRANCOPHONIE",
+                    config=SimpleNamespace(effective_pop_name="Francophonie"),
+                )
+            ]
+        )
+    )
+    assert sorted(await _pops_du_routeur(Depot(), conteneur, "NAS-FRANCOPHONIE")) == [1, 2]
+    # Routeur inconnu : aucun site, donc aucune donnee -- jamais tout le reseau.
+    assert await _pops_du_routeur(Depot(), conteneur, "inconnu") == []

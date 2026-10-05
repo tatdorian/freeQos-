@@ -85,12 +85,20 @@
       <div class="card">
         <div class="chart-head">
           <span class="mode">Download above, upload below &middot; solid = average, dotted = peak</span>
-          <select id="range-select" style="width:auto">
-            <option value="15">15 minutes</option>
-            <option value="60" selected>1 hour</option>
-            <option value="360">6 hours</option>
-            <option value="1440">24 hours</option>
-          </select>
+          <span class="inline" style="gap:.5rem;flex-wrap:wrap;margin-left:auto">
+            <select id="tp-router" style="width:auto" title="Only the clients of this router">
+              <option value="">All routers</option>
+            </select>
+            <input id="tp-client" list="tp-clients" style="width:13rem" type="search"
+                   placeholder="All clients" title="Only this client" autocomplete="off">
+            <datalist id="tp-clients"></datalist>
+            <select id="range-select" style="width:auto">
+              <option value="15">15 minutes</option>
+              <option value="60" selected>1 hour</option>
+              <option value="360">6 hours</option>
+              <option value="1440">24 hours</option>
+            </select>
+          </span>
         </div>
         <div id="throughput-chart"></div>
         <div class="chart-source">Sum of <b>subscriber sessions</b> (PPPoE and static clients). Traffic that
