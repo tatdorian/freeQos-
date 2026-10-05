@@ -36,6 +36,48 @@ async def rtt_state(container: ContainerDep, collection: CollectionDep) -> dict[
     }
 
 
+@router.get("/rtt/diagnose", summary="Run the latency probe by hand, with and without source")
+async def rtt_diagnose(
+    collection: CollectionDep,
+    router_name: Annotated[str, Query(alias="router", description="Router that pings")],
+    address: Annotated[str, Query(description="Client address to ping")],
+) -> dict[str, Any]:
+    """LA MEME SERIE QUE LA SONDE, a la demande, et la reponse BRUTE de RouterOS.
+
+    Deux essais : depuis le loopback (comme la sonde), puis sans source. Quand
+    tous les clients repondent « no reply », c'est ce qui dit pourquoi : chemin
+    retour vers le loopback, pare-feu, ou droit 'test' manquant sur le compte.
+    """
+    import asyncio
+
+    from app.collectors.mikrotik import ping_stats_from_rows
+
+    collecteur = next((c for c in collection.collectors if c.name == router_name), None)
+    if collecteur is None:
+        raise HTTPException(status_code=404, detail=f"unknown router: {router_name}")
+    source = await collecteur.ensure_loopback()
+    essais: list[dict[str, Any]] = []
+    for src in ([source] if source else []) + [None]:
+        try:
+            lignes = await asyncio.wait_for(
+                asyncio.to_thread(collecteur._sonde.ping, address, 5, src, "200ms"),  # noqa: SLF001
+                timeout=15,
+            )
+            stats = ping_stats_from_rows(lignes, 5)
+            essais.append(
+                {"source": src, "stats": stats.to_dict(), "raw": [dict(x) for x in lignes][:10]}
+            )
+        except Exception as exc:  # noqa: BLE001 - le diagnostic dit l'erreur
+            essais.append({"source": src, "error": f"{type(exc).__name__}: {exc}"})
+    return {
+        "router": router_name,
+        "address": address,
+        "loopback": source,
+        "probe_skips_loopback": bool(getattr(collecteur, "_ping_sans_source", False)),
+        "attempts": essais,
+    }
+
+
 @router.put("/rtt", summary="Turn the latency probe (RTT) on or off")
 async def set_rtt(
     payload: RttToggle, container: ContainerDep, collection: CollectionDep
