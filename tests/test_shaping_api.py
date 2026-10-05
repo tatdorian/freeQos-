@@ -745,6 +745,9 @@ def test_avec_rattachement_le_parent_est_le_bon_lien(
 ) -> None:
     """La jointure caller-id / UISP donne le secteur, donc le lien traverse."""
     topo.attachment_rows = {"dupont": "mac:DC:9F:DB:11:22:33"}
+    # Le lien vise le segment des abonnes : seul un tel lien peut porter leurs
+    # files (une file d'interface ne voit pas leur upload).
+    topo.link_rows[0]["attributes"] = {"local_networks": ["10.20.0.0/24"]}
     client = make_client(settings, topo, routeur)
 
     body = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
