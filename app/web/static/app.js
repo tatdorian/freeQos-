@@ -4497,6 +4497,7 @@ async function loadRouters() {
  *  sur de bonnes bases. Les files posees a la main ne sont jamais touchees. */
 async function cleanRouterQueues(name, bouton) {
   if (!confirm('Delete ALL freeQoS queues on ' + name + ' and rebuild them from scratch?\n\n' +
+    'Every client of this router goes back to its plan: limits forced in Subscribers (Rate) are lifted.\n' +
     'Queues you created by hand are kept. Clients are briefly unshaped while the queues are rebuilt.')) return;
   const sortie = document.getElementById('router-export');
   bouton.disabled = true;
@@ -4507,6 +4508,7 @@ async function cleanRouterQueues(name, bouton) {
     sortie.innerHTML = '<div class="notice ' + (errs.length ? 'err' : 'ok') + '">' +
       esc(name) + ': ' + r.removed + ' queue(s) deleted, ' + r.recreated + ' recreated' +
       (r.kept_foreign ? ', ' + r.kept_foreign + ' other queue(s) left untouched' : '') + '.' +
+      ((r.limits_reset || []).length ? ' Back to their plan: ' + r.limits_reset.map(esc).join(', ') + '.' : '') +
       (errs.length ? '<br>' + errs.map(esc).join('<br>') : '') + '</div>';
   } catch (err) {
     sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
@@ -8712,19 +8714,33 @@ function renderPlanClients() {
         : c.origin === 'ui' ? (c.updated_by ? 'by ' + c.updated_by : '')
           : '';
       const edition = PLANS.editing === c.login;
+      const force = c.forced_down_mbps != null || c.forced_up_mbps != null;
       const ligne = '<tr' + (PLANS.focus === c.login ? ' class="row-focus"' : '') + '>' +
         '<td><b>' + esc(c.login) + '</b>' + (c.kind === 'static' ? ' <span class="badge">static IP</span>' : '') +
           '</td>' +
         '<td>' + esc(c.pop_name || '-') + '</td>' +
         '<td><code>' + esc(c.address || '-') + '</code></td>' +
-        '<td class="num">' + debit(c.down_mbps) + '</td>' +
-        '<td class="num">' + debit(c.up_mbps) + '</td>' +
-        '<td>' + sqCell(o[1], o[0]) + (detail ? '<span class="hint">' + esc(detail) + '</span>' : '') +
-          '</td>' +
+        // Une limite FORCEE (Subscribers > Rate) prime sur le plan : c'est elle
+        // qu'on affiche, le plan en dessous. Sinon la page disait 100/20 pour un
+        // client bride a 300k/750k.
+        (force
+          ? '<td class="num">' + debit(c.forced_down_mbps) +
+              '<span class="hint">plan ' + debit(c.down_mbps) + '</span></td>' +
+            '<td class="num">' + debit(c.forced_up_mbps) +
+              '<span class="hint">plan ' + debit(c.up_mbps) + '</span></td>' +
+            '<td>' + sqCell('Forced', 'warn', 'Limit set by hand in Subscribers (Rate): it overrides ' +
+              'the plan until you change the plan here or reset the queues') +
+              '<span class="hint">plan: ' + esc(o[1]) + '</span></td>'
+          : '<td class="num">' + debit(c.down_mbps) + '</td>' +
+            '<td class="num">' + debit(c.up_mbps) + '</td>' +
+            '<td>' + sqCell(o[1], o[0]) + (detail ? '<span class="hint">' + esc(detail) + '</span>' : '') +
+              '</td>') +
         '<td>' + (c.updated_at ? esc(depuis(c.updated_at)) : '<span class="na">-</span>') + '</td>' +
         '<td class="nowrap"><button class="sm" data-plan-edit="' + esc(c.login) + '">Change</button>' +
-          (c.origin !== 'default'
-            ? ' <button class="sm" data-plan-reset="' + esc(c.login) + '">Default</button>' : '') +
+          (c.origin !== 'default' || force
+            ? ' <button class="sm" data-plan-reset="' + esc(c.login) + '"' +
+              (force ? ' title="Lift the forced limit and go back to the default plan"' : '') +
+              '>Default</button>' : '') +
         '</td></tr>';
       if (!edition) return ligne;
       return ligne + '<tr class="plan-edit"><td colspan="8"><form class="lq-rate" data-plan-form="' +
@@ -8742,6 +8758,7 @@ function renderPlanClients() {
         '<button class="sm primary" type="submit">Save and apply</button> ' +
         '<button class="sm" type="button" data-plan-cancel>Cancel</button>' +
         '<span class="hint" style="display:inline"> Applied on the router right away. ' +
+          (force ? '<b>Lifts the forced limit set in Subscribers.</b> ' : '') +
           'The next API push for this client replaces it.</span>' +
         '</form></td></tr>';
     }).join('') + '</tbody></table>';
@@ -8781,7 +8798,8 @@ async function savePlan(login, corps) {
     res.innerHTML = '<div class="notice ok"><b>' + esc(login) + '</b>: ' +
       esc(c.down_mbps == null ? 'no limit' : mbps(c.down_mbps)) + ' / ' +
       esc(c.up_mbps == null ? 'no limit' : mbps(c.up_mbps)) +
-      (corps ? '' : ' (default plan)') + '</div>' + poseText(r.enforcement);
+      (corps ? '' : ' (default plan)') +
+      (r.forced_limit_lifted ? ' — forced limit lifted' : '') + '</div>' + poseText(r.enforcement);
   } catch (err) {
     res.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
   }

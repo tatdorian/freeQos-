@@ -75,6 +75,7 @@ async def _roster(container: ContainerDep) -> list[dict[str, Any]]:
         for fs in await container.static_clients_repo.list_all():
             statiques[str(fs["reference"])] = fs
     defaut = default_plan(container.settings)
+    forcees = await _limites_forcees(container)
     sortie: list[dict[str, Any]] = []
     for ligne in lignes:
         login = str(ligne["login"])
@@ -120,8 +121,45 @@ async def _roster(container: ContainerDep) -> list[dict[str, Any]]:
             client["down_mbps"] = defaut.down_mbps
             client["up_mbps"] = defaut.up_mbps
         client["updated_at"] = _last(client["updated_at"])
+        # LA LIMITE FORCEE l'emporte sur le plan (bouton Rate de Subscribers) :
+        # la page Plans affichait 100/20 « Default » pour un client bride a la
+        # main a 300k/750k. Elle dit maintenant ce qui est REELLEMENT applique.
+        force = forcees.get(login)
+        client["forced_down_mbps"] = force[0] if force else None
+        client["forced_up_mbps"] = force[1] if force else None
         sortie.append(client)
     return sortie
+
+
+async def _limites_forcees(container: ContainerDep) -> dict[str, tuple[Any, Any]]:
+    """login -> (down, up) des limites posees a la main (Subscribers > Rate)."""
+    topo = getattr(container, "topology_repo", None)
+    if topo is None:
+        return {}
+    try:
+        lignes = await topo.policies("subscriber")
+    except Exception:  # noqa: BLE001 - la liste des plans ne doit pas tomber pour ca
+        return {}
+    return {
+        str(p["target_key"]): (p.get("max_down_mbps"), p.get("max_up_mbps"))
+        for p in lignes
+        if p.get("enabled", True)
+        and (p.get("max_down_mbps") is not None or p.get("max_up_mbps") is not None)
+    }
+
+
+async def _lever_limite_forcee(container: ContainerDep, login: str) -> bool:
+    """Retire la limite forcee d'un client : son PLAN redevient la regle.
+
+    Changer un plan sans cela n'avait aucun effet visible -- la limite posee
+    dans Subscribers continuait de primer, et l'on croyait le plan ignore."""
+    topo = getattr(container, "topology_repo", None)
+    if topo is None:
+        return False
+    try:
+        return bool(await topo.delete_policy("subscriber", login))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 @router.get("/plans", summary="The plan of every client, and where it comes from")
@@ -167,6 +205,8 @@ async def set_plan(
     if bas is None and haut is None:
         raise HTTPException(status_code=422, detail="a rate or a package is required")
     auteur = f"ui:{user.get('email')}"
+    # Un plan choisi ici est LA regle : la limite forcee ailleurs est levee.
+    leve = await _lever_limite_forcee(container, login)
     if client["kind"] == KIND_STATIC and container.static_clients_repo is not None:
         await container.static_clients_repo.set_plan(login, bas, haut)
         pose: dict[str, Any] | None = await _pose_statique(container, login, auteur)
@@ -180,7 +220,11 @@ async def set_plan(
             updated_by=str(user.get("email")),
         )
         pose = await apply_now(container, login, author=auteur)
-    return {"client": await _client(container, login), "enforcement": pose}
+    return {
+        "client": await _client(container, login),
+        "enforcement": pose,
+        "forced_limit_lifted": leve,
+    }
 
 
 @router.delete("/plans/{login}", summary="Put a client back on the default plan")
@@ -188,6 +232,7 @@ async def reset_plan(login: str, container: ContainerDep, user: UserDep) -> dict
     client = await _client(container, login)
     _depot, plans = _repos(container)
     auteur = f"ui:{user.get('email')}"
+    leve = await _lever_limite_forcee(container, login)
     pose: dict[str, Any] | None
     if client["kind"] == KIND_STATIC and container.static_clients_repo is not None:
         await container.static_clients_repo.set_plan(login, None, None)
@@ -195,7 +240,11 @@ async def reset_plan(login: str, container: ContainerDep, user: UserDep) -> dict
     else:
         await plans.delete(login)
         pose = await apply_now(container, login, author=auteur)
-    return {"client": await _client(container, login), "enforcement": pose}
+    return {
+        "client": await _client(container, login),
+        "enforcement": pose,
+        "forced_limit_lifted": leve,
+    }
 
 
 async def _pose_statique(container: ContainerDep, reference: str, auteur: str) -> dict[str, Any]:
