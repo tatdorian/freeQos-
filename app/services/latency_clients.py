@@ -81,12 +81,35 @@ def verdict(
     return (MOYEN if motifs else BON), motifs
 
 
+def sondes_muettes(series: dict[int, dict[str, Any]]) -> set[str]:
+    """Les routeurs dont AUCUN client n'a repondu a la derniere serie.
+
+    Tous les clients d'un routeur muets en meme temps, c'est la SONDE qui est
+    en cause (source injoignable, pare-feu, compte sans droit 'test'), pas
+    chacun d'eux : constate, 100 % de perte chez tous les clients de trois
+    routeurs, latence habituelle 7 a 11 ms. Il en faut au moins deux pour
+    conclure -- un client seul muet peut tres bien etre en panne."""
+    par_routeur: dict[str, list[bool]] = {}
+    for detail in series.values():
+        routeur = detail.get("router")
+        if not routeur or not detail.get("sent"):
+            continue
+        par_routeur.setdefault(str(routeur), []).append(not detail.get("received"))
+    # TOUT le reseau muet d'un coup (au moins deux clients) : la sonde, partout,
+    # meme sur un routeur qui n'a qu'un client.
+    tous = [m for muets in par_routeur.values() for m in muets]
+    if len(tous) >= 2 and all(tous):
+        return set(par_routeur)
+    return {r for r, muets in par_routeur.items() if len(muets) >= 2 and all(muets)}
+
+
 def build_rows(
     latences: list[dict[str, Any]],
     charge: dict[int, dict[str, Any]],
     series: dict[int, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Une ligne par abonne mesure, le pire ressenti en tete."""
+    muettes = sondes_muettes(series)
     lignes: list[dict[str, Any]] = []
     for lat in latences:
         sid = int(lat["subscriber_id"])
@@ -96,6 +119,11 @@ def build_rows(
         mediane = _f(lat.get("median_ms"))
         p95 = _f(lat.get("p95_ms"))
         perte = _f(serie.get("loss_pct"))
+        sonde_en_cause = str(serie.get("router") or "") in muettes
+        if sonde_en_cause:
+            # Pas une perte du client : la sonde n'a eu aucune reponse sur tout
+            # le routeur. Elle n'entre pas dans son verdict.
+            perte = None
         gonflement = _f(sous_charge.get("bloat_ms"))
         score = _f(qoe.get("score"))
         plafonnes = int(lat.get("capped_samples") or 0)
@@ -111,6 +139,11 @@ def build_rows(
         )
         if plafonnes and etat not in (AU_PLAFOND, None):
             motifs.append(f"{plafonnes} measure(s) at its plan limit set aside")
+        if sonde_en_cause:
+            motifs.append(
+                f"probe got no reply from any client of {serie.get('router')}: "
+                "check the probe, not this client"
+            )
         lignes.append(
             {
                 "subscriber_id": sid,
@@ -131,6 +164,7 @@ def build_rows(
                 "experience": etat,
                 "reasons": motifs,
                 "capped_samples": plafonnes,
+                "probe_silent": sonde_en_cause,
                 "at_cap_now": bool(lat.get("at_cap_now")),
             }
         )

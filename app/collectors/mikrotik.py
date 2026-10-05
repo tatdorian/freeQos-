@@ -1352,7 +1352,9 @@ class MikrotikCollector:
         """
         intervalle = f"{max(10, int(interval_ms))}ms"
         timeout = max(self.config.timeout_s * 2, 4.0) + count * max(interval_ms, 10) / 1000 + 1
-        source = await self.ensure_loopback()
+        # Une source qui a deja fait perdre toutes les reponses n'est plus
+        # employee sur ce routeur (cf. plus bas).
+        source = None if getattr(self, "_ping_sans_source", False) else await self.ensure_loopback()
         try:
             rows = await asyncio.wait_for(
                 asyncio.to_thread(self._sonde.ping, address, count, source, intervalle),
@@ -1376,7 +1378,28 @@ class MikrotikCollector:
                 asyncio.to_thread(self._sonde.ping, address, count, None, intervalle),
                 timeout=timeout,
             )
-        return ping_stats_from_rows(rows, count)
+        stats = ping_stats_from_rows(rows, count)
+        if source and stats.sent and not stats.received:
+            # AUCUNE reponse depuis le loopback : la reponse du client ne sait
+            # peut-etre pas revenir vers cette adresse (route, pare-feu, regle
+            # qui couvre ce bloc). Constate : 100 % de perte chez TOUS les
+            # clients a la fois, sur trois routeurs. On retente sans source ;
+            # si la, ca repond, ce routeur sonde desormais sans loopback.
+            rows = await asyncio.wait_for(
+                asyncio.to_thread(self._sonde.ping, address, count, None, intervalle),
+                timeout=timeout,
+            )
+            sans_source = ping_stats_from_rows(rows, count)
+            if sans_source.received:
+                self._ping_sans_source = True
+                logger.warning(
+                    "%s : aucune reponse aux pings partis du loopback %s, mais des "
+                    "reponses sans source -- la sonde continue sans loopback",
+                    self.config.name,
+                    source,
+                )
+                return sans_source
+        return stats
 
     async def health(self) -> dict[str, Any]:
         """Etat de sante du routeur : charge CPU, memoire, uptime, version.
