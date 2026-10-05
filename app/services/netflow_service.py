@@ -404,7 +404,7 @@ class NetflowService:
             # minutes pour une fenetre qui ne peut contenir que du vide.
             return 0
         duree = self.window_seconds
-        lot = self.aggregator.flush(datetime.now(tz=UTC))
+        lot = self.aggregator.flush(datetime.now(tz=UTC), vantage=self.effective_vantage)
         self._note_rates(lot, duree)
         ecrites = 0
         if self.flows_repo is not None and not lot.empty:
