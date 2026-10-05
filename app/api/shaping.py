@@ -835,9 +835,30 @@ async def apply_shaping(
     "/shaping/routers/{router_name}/clean-queues",
     summary="Delete every freeQoS queue of a router, then lay them down again",
 )
-async def clean_router_queues(router_name: str, container: ContainerDep) -> dict[str, Any]:
+async def clean_router_queues(
+    router_name: str,
+    container: ContainerDep,
+    reset_limits: Annotated[
+        bool, Query(description="Also lift the forced limits: every client goes back to its plan")
+    ] = True,
+) -> dict[str, Any]:
     """Repartir sur de bonnes bases : nos files partent toutes, le plan courant
-    les repose aussitot. Les files posees a la main ne sont jamais touchees."""
+    les repose aussitot. Les files posees a la main ne sont jamais touchees.
+
+    « Repartir sur de bonnes bases » vaut aussi pour les LIMITES : les plafonds
+    forces a la main (Subscribers > Rate) sont leves, chaque client revient a
+    son plan. Sans cela, le reset reposait fidelement... la limite d'essai."""
+    levees: list[str] = []
+    if reset_limits and container.topology_repo is not None:
+        try:
+            _liens, abonnes = await container.shaping.build_targets(router_name)
+            for abonne in abonnes:
+                if await container.topology_repo.delete_policy("subscriber", abonne.login):
+                    levees.append(abonne.login)
+        except KeyError:
+            pass  # routeur inconnu : clean_queues le dira
+        except Exception as exc:  # noqa: BLE001 - le reset des files passe avant
+            logger.warning("Limites forcees non levees sur %s : %s", router_name, exc)
     try:
         rapport = await container.shaping.clean_queues(router_name, author="ui:clean-queues")
     except MissingWriteCredentialsError as exc:
@@ -859,6 +880,7 @@ async def clean_router_queues(router_name: str, container: ContainerDep) -> dict
             rapport["recreated"] += int(r.get("applied") or 0)
         except Exception as exc:  # noqa: BLE001
             rapport["errors"].append(f"restrictions: {type(exc).__name__}: {exc}")
+    rapport["limits_reset"] = levees
     return rapport
 
 
