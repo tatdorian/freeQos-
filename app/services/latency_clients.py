@@ -23,6 +23,9 @@ GONFLEMENT_GRAVE_MS = 150.0
 BON = "good"
 MOYEN = "fair"
 MAUVAIS = "poor"
+#: Au plafond de son forfait toute la periode : sa latence est celle de SA
+#: propre file. Ni bon ni mauvais pour le reseau -- a part.
+AU_PLAFOND = "limit"
 
 
 def verdict(
@@ -32,10 +35,28 @@ def verdict(
     loss_pct: float | None,
     bloat_ms: float | None,
     qoe_score: float | None,
+    capped_samples: int = 0,
+    capped_median_ms: float | None = None,
+    at_cap_now: bool = False,
 ) -> tuple[str | None, list[str]]:
-    """Le ressenti du client, et ce qui le degrade, en clair."""
+    """Le ressenti du client, et ce qui le degrade, en clair.
+
+    UTILISER TOUT SON FORFAIT N'EST PAS UN PROBLEME DE RESEAU. Les mesures
+    prises quand le client tourne a sa limite sont deja ecartees de la mediane
+    (cf. AU_PLAFOND_SQL) ; un client au plafond toute la periode est classe a
+    part, et une serie de pings perdue pendant qu'il est au plafond ne compte
+    pas contre le reseau : ce sont ses propres paquets qui les retardent.
+    """
     if median_ms is None and qoe_score is None:
+        if capped_samples:
+            texte = "at its plan limit the whole period: latency of its own queue"
+            if capped_median_ms is not None:
+                texte += f" ({capped_median_ms:.0f} ms)"
+            return AU_PLAFOND, [texte + ", not a network issue"]
         return None, []
+    if at_cap_now and loss_pct is not None and loss_pct >= PERTE_MAUVAISE_PCT:
+        # Pings perdus derriere son propre trafic : on ne les compte pas.
+        loss_pct = None
     motifs: list[str] = []
     grave = False
     if median_ms is not None and median_ms > MAUVAIS_MS:
@@ -77,9 +98,19 @@ def build_rows(
         perte = _f(serie.get("loss_pct"))
         gonflement = _f(sous_charge.get("bloat_ms"))
         score = _f(qoe.get("score"))
+        plafonnes = int(lat.get("capped_samples") or 0)
         etat, motifs = verdict(
-            median_ms=mediane, p95_ms=p95, loss_pct=perte, bloat_ms=gonflement, qoe_score=score
+            median_ms=mediane,
+            p95_ms=p95,
+            loss_pct=perte,
+            bloat_ms=gonflement,
+            qoe_score=score,
+            capped_samples=plafonnes,
+            capped_median_ms=_f(lat.get("capped_median_ms")),
+            at_cap_now=bool(lat.get("at_cap_now")),
         )
+        if plafonnes and etat not in (AU_PLAFOND, None):
+            motifs.append(f"{plafonnes} measure(s) at its plan limit set aside")
         lignes.append(
             {
                 "subscriber_id": sid,
@@ -99,9 +130,11 @@ def build_rows(
                 "last_at": lat.get("last_at"),
                 "experience": etat,
                 "reasons": motifs,
+                "capped_samples": plafonnes,
+                "at_cap_now": bool(lat.get("at_cap_now")),
             }
         )
-    rang = {MAUVAIS: 0, MOYEN: 1, BON: 2, None: 3}
+    rang = {MAUVAIS: 0, MOYEN: 1, AU_PLAFOND: 2, BON: 3, None: 4}
     lignes.sort(key=lambda x: (rang.get(x["experience"], 3), -(x["median_ms"] or 0)))
     return lignes
 
@@ -112,6 +145,7 @@ def summary(lignes: list[dict[str, Any]]) -> dict[str, int]:
         BON: sum(1 for x in lignes if x["experience"] == BON),
         MOYEN: sum(1 for x in lignes if x["experience"] == MOYEN),
         MAUVAIS: sum(1 for x in lignes if x["experience"] == MAUVAIS),
+        AU_PLAFOND: sum(1 for x in lignes if x["experience"] == AU_PLAFOND),
     }
 
 

@@ -49,4 +49,4 @@ def test_le_pire_ressenti_en_tete_et_le_resume() -> None:
     assert [x["login"] for x in lignes] == ["lent", "gonfle", "rapide"]
     assert lignes[0]["jitter_ms"] == 12.3
     assert lignes[1]["loaded_ms"] == 110 and lignes[1]["qoe_score"] == 45
-    assert summary(lignes) == {"measured": 3, BON: 1, MOYEN: 0, MAUVAIS: 2}
+    assert summary(lignes) == {"measured": 3, BON: 1, MOYEN: 0, MAUVAIS: 2, "limit": 0}
