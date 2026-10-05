@@ -265,6 +265,9 @@ class FakeRepository:
     async def throughput_series(self, **kwargs: Any) -> list[dict[str, Any]]:
         return [{"bucket": NOW, "rx_bps": 5_000_000.0, "tx_bps": 40_000_000.0, "subscribers": 1}]
 
+    async def throughput_now(self, **kwargs: Any) -> dict[str, Any] | None:
+        return {"ts": NOW, "rx_bps": 4_000_000.0, "tx_bps": 30_000_000.0}
+
     async def network_tree(self) -> list[dict[str, Any]]:
         return [
             {
@@ -668,6 +671,8 @@ def test_throughput(client: TestClient) -> None:
     assert body["bucket_seconds"] == 30
     assert body["points"][0]["tx_bps"] == 40_000_000.0
     assert "subscribers upload" in body["orientation"]
+    # "Maintenant" vient du dernier cycle, pas du dernier pas de la serie.
+    assert body["now"]["tx_bps"] == 30_000_000.0
 
 
 def test_network_tree(client: TestClient) -> None:

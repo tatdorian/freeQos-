@@ -552,6 +552,14 @@ function renderThroughput(container, points, options) {
   const su = seriesSummary(up);
   sd.peak = Math.max(sd.peak, ...downPk);
   su.peak = Math.max(su.peak, ...upPk);
+  // MAINTENANT = le dernier cycle de collecte quand le serveur le donne. La
+  // derniere valeur de la serie est la moyenne d'un pas dont la duree suit la
+  // periode (20 s sur 1 h, 8 min sur 24 h), souvent pas termine : "now"
+  // changeait avec la periode choisie.
+  if (opt.now) {
+    sd.now = Number(opt.now.tx_bps) || 0;
+    su.now = Number(opt.now.rx_bps) || 0;
+  }
   const fig = (label, v) => '<div><span>' + label + '</span><b>' + esc(bpsText(v)) + '</b></div>';
   const resume = document.createElement('div');
   resume.className = 'chart-summary';
@@ -842,7 +850,8 @@ async function loadThroughput() {
   const bucket = Math.max(10, Math.round((minutes * 60) / 180 / 10) * 10);
   const data = await api('/throughput?minutes=' + minutes + '&bucket_seconds=' + bucket);
   state.lastPoints = data.points;
-  renderThroughput(document.getElementById('throughput-chart'), data.points);
+  state.lastNow = data.now || null;
+  renderThroughput(document.getElementById('throughput-chart'), data.points, { now: data.now });
 }
 
 async function loadTopTalkers() {
@@ -8729,7 +8738,8 @@ document.getElementById('theme-toggle').addEventListener('click', () => {
 window.addEventListener('hashchange', route);
 window.addEventListener('resize', () => {
   if (state.view === 'dashboard' && state.lastPoints.length) {
-    renderThroughput(document.getElementById('throughput-chart'), state.lastPoints);
+    renderThroughput(document.getElementById('throughput-chart'), state.lastPoints,
+      { now: state.lastNow });
   }
 });
 
