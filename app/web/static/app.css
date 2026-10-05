@@ -1137,3 +1137,27 @@ details.pick-dd[open] > summary::after { content: "\25B4"; }
 .pl-ports td .hint { display: block; font-size: .72rem; }
 .pl-hot td { background: color-mix(in srgb, var(--crit, #d70015) 8%, transparent); }
 .pl-more { margin: .3rem 0 0; font-size: .78rem; }
+
+/* ================================================ ronds de chargement */
+@keyframes fq-spin { to { transform: rotate(360deg); } }
+button.is-busy { position: relative; color: transparent !important; cursor: progress; }
+button.is-busy > * { visibility: hidden; }
+button.is-busy::after {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  width: 1em; height: 1em; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--text) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: fq-spin .7s linear infinite;
+}
+button.primary.is-busy::after { border-color: rgba(255, 255, 255, .35); border-top-color: #fff; }
+button.danger.is-busy::after { border-top-color: var(--crit); }
+.page-loading::after {
+  content: ""; display: inline-block; vertical-align: middle;
+  width: .7em; height: .7em; margin-left: .6em; border-radius: 50%;
+  border: 3px solid color-mix(in srgb, var(--text) 18%, transparent);
+  border-top-color: var(--accent);
+  animation: fq-spin .7s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  button.is-busy::after, .page-loading::after { animation-duration: 2s; }
+}
