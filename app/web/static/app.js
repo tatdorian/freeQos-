@@ -2457,12 +2457,13 @@ async function loadTraffic() {
   // que des gigaoctets s'affichaient juste dessous.
   const muets = (Array.isArray(exporteurs) ? exporteurs : [])
     .filter((x) => x.vantage === 'unknown' && x.packets_seen);
+  // Les routeurs de l'inventaire se declarent seuls (au cycle NetFlow) : ne
+  // reste a signaler que ce que freeQoS n'a PAS su reconnaitre.
   const avisExport = muets.length
-    ? '<div class="notice warn"><b>' + muets.length + ' undeclared exporter(s) sending flows: ' +
-      muets.slice(0, 3).map((x) => '<code>' + esc(x.address) + '</code>').join(', ') + '.</b> ' +
-      'Their traffic is counted below but belongs to no vantage point: say where each one ' +
-      'measures (internet edge or PoP) in ' +
-      '<button type="button" class="sm" data-scroll-to="flow-exporters">Exporters</button></div>'
+    ? '<div class="notice"><b>' + muets.length + ' exporter(s) not recognised as one of your ' +
+      'routers: ' + muets.slice(0, 3).map((x) => '<code>' + esc(x.address) + '</code>').join(', ') +
+      '.</b> If it is a router of yours, it is declared on its own within a minute; otherwise set ' +
+      'it in <button type="button" class="sm" data-open-exporters>Advanced: NetFlow exporters</button></div>'
     : '';
   flowNotice(flowDiagnostic(etat, exportEtat) + avisExport);
   renderVantages(points, top);
@@ -2514,7 +2515,8 @@ function renderVantages(data, top) {
     const t = p.totals || {};
     const compteIci = p.vantage === compte;
     const etat = p.active
-      ? (compteIci ? '<span class="badge file">Counting</span>'
+      ? (compteIci ? '<span class="badge file" title="Chosen automatically: the internet exit when it ' +
+          'sends flows, the PoPs otherwise. Each client is counted once.">Counting · auto</span>'
         : '<span class="badge ok">Receiving</span>')
       : (p.exporters ? '<span class="badge warn">Silent</span>'
         : '<span class="badge">No exporter</span>');
@@ -2937,8 +2939,21 @@ async function openPairAddress(address) {
 }
 
 
+// Ouvre le bloc avance replie, puis y descend.
+document.addEventListener('click', (e) => {
+  if (!(e.target.closest && e.target.closest('[data-open-exporters]'))) return;
+  const bloc = document.getElementById('flow-exporters-block');
+  if (bloc) { bloc.open = true; bloc.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+});
+
 function renderFlowExporters(rows) {
   const host = document.getElementById('flow-exporters');
+  const resume = document.getElementById('flow-exporters-sum');
+  if (resume) {
+    const liste = rows || [];
+    const auto = liste.filter((e) => String(e.note || '').startsWith('declared automatically')).length;
+    resume.textContent = liste.length ? '· ' + liste.length + ' exporter(s), ' + auto + ' recognised automatically' : '';
+  }
   if (!rows || !rows.length) {
     host.innerHTML = '<div class="empty">No exporter. Declare one below, ' +
       'or configure the export on a router: it will appear on its own, marked ' +
