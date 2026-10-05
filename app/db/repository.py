@@ -386,7 +386,12 @@ class MetricsRepository:
         return lignes
 
     async def heatmap(
-        self, *, minutes: int = 15, buckets: int = 15, pop_name: str | None = None
+        self,
+        *,
+        minutes: int = 15,
+        buckets: int = 15,
+        pop_name: str | None = None,
+        pop_names: list[str] | None = None,
     ) -> dict[str, Any]:
         """Heatmap executif facon LibreQoS : QoE, RTT et utilisation dans le temps.
 
@@ -396,6 +401,9 @@ class MetricsRepository:
         paquets, donc on ne l'invente pas.
         """
         bucket_s = max(60, (minutes * 60) // max(1, buckets))
+        # Un routeur et les sites VLAN qu'il porte : plusieurs sites d'un coup.
+        sites = list(pop_names or []) + ([pop_name] if pop_name else [])
+        filtre = sites or None
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 """
@@ -408,9 +416,9 @@ class MetricsRepository:
                       FROM subscriber_metrics
                      WHERE ts > now() - $1::interval
                        -- Un SITE (le noeud selectionne), ou tout le reseau.
-                       AND ($3::text IS NULL OR subscriber_id IN (
+                       AND ($3::text[] IS NULL OR subscriber_id IN (
                             SELECT s.id FROM subscribers s JOIN pops p ON p.id = s.pop_id
-                             WHERE p.name = $3))
+                             WHERE p.name = ANY($3)))
                      GROUP BY bucket, subscriber_id
                 )
                 SELECT bucket,
@@ -433,7 +441,7 @@ class MetricsRepository:
                 """,
                 timedelta(minutes=minutes),
                 timedelta(seconds=bucket_s),
-                pop_name,
+                filtre,
             )
             # LA LIMITE REELLEMENT APPLIQUEE, pas seulement le plan vendu : un
             # client plafonne a la main (sans plan) comptait pour zero, et sa
@@ -445,11 +453,11 @@ class MetricsRepository:
                   LEFT JOIN shaping_policies pol
                          ON pol.scope = 'subscriber' AND pol.target_key = s.login
                   LEFT JOIN pops p ON p.id = s.pop_id
-                 WHERE ($1::text IS NULL OR p.name = $1)
+                 WHERE ($1::text[] IS NULL OR p.name = ANY($1))
                 """,
-                pop_name,
+                filtre,
             )
-            if not sold_down and pop_name is None:
+            if not sold_down and filtre is None:
                 sold_down = await conn.fetchval(
                     "SELECT coalesce(sum(capacity_mbps), 0) FROM backhaul_latest "
                     "WHERE ts > now() - INTERVAL '5 minutes'"
