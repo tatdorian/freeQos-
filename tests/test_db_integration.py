@@ -872,6 +872,38 @@ async def test_maintenant_est_le_dernier_cycle_quelle_que_soit_la_periode(
     assert await repo.throughput_now(max_age_s=1) is None
 
 
+async def test_debit_filtre_par_client_ou_par_sites(database: Database, now: datetime) -> None:
+    """Le graphe de debit, pour UN client ou pour les sites d'UN routeur."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+    altair = await directory.ensure_pop("PoP Altair")
+    vega = await directory.ensure_pop("PoP Vega")
+    a = await directory.ensure_subscriber("a", pop_id=altair)
+    b = await directory.ensure_subscriber("b", pop_id=vega)
+    ts = now - timedelta(seconds=5)
+    await writer.write_subscriber_metrics(
+        [
+            (a, SubscriberSample(ts=ts, login="a", router_name="r", pop_name="p", tx_bps=1e6)),
+            (b, SubscriberSample(ts=ts, login="b", router_name="r", pop_name="p", tx_bps=4e6)),
+        ]
+    )
+    fenetre = {"start": now - timedelta(minutes=5), "end": now, "bucket_seconds": 300}
+
+    [tous] = await repo.throughput_series(**fenetre)
+    [client] = await repo.throughput_series(**fenetre, subscriber_id=a)
+    [sites] = await repo.throughput_series(**fenetre, pop_ids=[vega])
+    assert tous["tx_bps"] == pytest.approx(5e6)
+    assert client["tx_bps"] == pytest.approx(1e6)
+    assert sites["tx_bps"] == pytest.approx(4e6)
+    # Un routeur sans site connu : rien, jamais "tout le reseau".
+    assert await repo.throughput_series(**fenetre, pop_ids=[]) == []
+
+    maintenant = await repo.throughput_now(subscriber_id=b)
+    assert maintenant is not None and maintenant["tx_bps"] == pytest.approx(4e6)
+    assert await repo.throughput_now(pop_ids=[]) is None
+
+
 # ---------------------------------------------------------------------------
 # Topologie et enforcement (phase 2)
 # ---------------------------------------------------------------------------
