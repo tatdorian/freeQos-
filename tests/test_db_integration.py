@@ -905,6 +905,52 @@ async def test_debit_filtre_par_client_ou_par_sites(database: Database, now: dat
     assert await repo.throughput_now(pop_ids=[]) is None
 
 
+async def test_les_mesures_au_plafond_ne_jugent_pas_le_reseau(
+    database: Database, now: datetime
+) -> None:
+    """Un client a 100 % de sa limite : sa latence est celle de sa file. Elle
+    est ecartee de la mediane et de la sante, et comptee a part."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+    pop = await directory.ensure_pop("VLAN 2060")
+    nestle = await directory.ensure_subscriber("nestle", pop_id=pop)
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO shaping_policies (scope, target_key, max_down_mbps, max_up_mbps) "
+            "VALUES ('subscriber', 'nestle', 0.3, 0.75)"
+        )
+    lignes = []
+    for i in range(6):
+        ts = now - timedelta(seconds=10 * (i + 1))
+        plein = i < 3  # trois mesures au plafond (300k/750k), trois au repos
+        lignes.append(
+            (
+                nestle,
+                SubscriberSample(
+                    ts=ts,
+                    login="nestle",
+                    router_name="r",
+                    pop_name="p",
+                    tx_bps=300e3 if plein else 1e3,
+                    rx_bps=745e3 if plein else 1e3,
+                    rtt_ms=150.0 if plein else 8.0,
+                ),
+            )
+        )
+    await writer.write_subscriber_metrics(lignes)
+
+    [lat] = await repo.latency_by_subscriber(minutes=15)
+    assert lat["median_ms"] == pytest.approx(8.0)  # le repos seul
+    assert lat["capped_samples"] == 3
+    assert lat["capped_median_ms"] == pytest.approx(150.0)
+
+    heat = await repo.heatmap(minutes=15, buckets=15, pop_names=["VLAN 2060"])
+    rtt = next(r for r in heat["rows"] if r["key"] == "rtt")
+    valeurs = [c["value"] for c in rtt["cells"] if c["value"] is not None]
+    assert valeurs and max(valeurs) < 50  # 150 ms au plafond n'y entre pas
+
+
 # ---------------------------------------------------------------------------
 # Topologie et enforcement (phase 2)
 # ---------------------------------------------------------------------------
@@ -1825,7 +1871,9 @@ async def test_score_de_qoe_composite_par_abonne(database: Database, now: dateti
     lignes = []
     for index in range(10):
         ts = now - timedelta(seconds=30 * (10 - index))
-        charge = 0.0 if index < 5 else 90e6  # la charge arrive a mi-fenetre
+        # La charge arrive a mi-fenetre : 50 Mbps sur un plan de 100, le RESEAU
+        # sature (au plafond du forfait, la latence serait celle du client).
+        charge = 0.0 if index < 5 else 50e6
         lignes.append((sain, echantillon(ts, 12.0, charge)))
         # Le meme profil de charge, mais la latence passe de 12 a 320 ms.
         lignes.append((gonfle, echantillon(ts, 12.0 if index < 5 else 320.0, charge)))
@@ -1859,7 +1907,9 @@ async def test_la_heatmap_porte_les_echantillons_de_chaque_pas(
         abonne = await directory.ensure_subscriber(
             f"abonne-{index}", pop_id=pop_id, plan=Plan(100, 20, "mock")
         )
-        charge = 0.0 if index < 4 else 90e6
+        # 50 Mbps sur un plan de 100 : le reseau sature, PAS le forfait du client
+        # (au plafond, sa latence serait celle de sa propre file, ecartee).
+        charge = 0.0 if index < 4 else 50e6
         lignes.append(
             (
                 abonne,
