@@ -321,6 +321,10 @@ def hotspot_rows(
     for mesure in occupancy:
         routeur = str(mesure.get("router_name") or "")
         interface = str(mesure.get("interface") or "")
+        if interface == "lo":
+            # Boucle locale : aucun voisin, aucune capacite. Ses anciennes
+            # mesures restent en base le temps de la periode ; on les ignore.
+            continue
         lien = par_port.get((routeur, interface), {})
         port = (live or {}).get((routeur, interface), {})
         _passerelle, sortie = upstream.get(routeur, (None, None))

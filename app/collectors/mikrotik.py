@@ -74,11 +74,49 @@ _ROUTER_ID_PATHS = (
 
 
 def is_physical_interface(row: dict[str, Any]) -> bool:
-    """Vrai pour un port qui porte un lien, faux pour une interface de session."""
+    """Vrai pour un port qui porte un lien, faux pour une interface de session
+    ou une boucle locale (``lo``) : celle-ci ne mene a aucun voisin et n'a pas
+    de capacite -- la lister parmi les risques de saturation n'apprend rien."""
     name = str(row.get("name") or "")
     if not name or name.startswith("<"):
         return False
-    return not str(row.get("type") or "").startswith(DYNAMIC_INTERFACE_TYPES)
+    genre = str(row.get("type") or "")
+    if genre == "loopback" or (name == "lo" and genre in ("", "loopback")):
+        return False
+    return not genre.startswith(DYNAMIC_INTERFACE_TYPES)
+
+
+def inherited_capacities(
+    capacites: dict[str, float | None],
+    vlans: list[dict[str, Any]],
+    bridge_ports: list[dict[str, Any]],
+) -> dict[str, float]:
+    """La vitesse des interfaces LOGIQUES, heritee du port qui les porte.
+
+    Une VLAN n'a pas de debit negocie : elle passe par un port physique, et
+    c'est lui qui la plafonne. Un bridge vaut son port membre le plus rapide.
+    Sans cet heritage, chaque VLAN et chaque bridge tombait dans "capacite
+    inconnue" -- 52 lignes sans pourcentage sur un PoP ordinaire -- alors que
+    leur plafond est connu a un saut pres. Une VLAN posee sur un bridge herite
+    du bridge, donc de ses ports.
+    """
+    connues = {nom: v for nom, v in capacites.items() if v}
+    membres: dict[str, list[float]] = {}
+    for port in bridge_ports:
+        vitesse = connues.get(str(port.get("interface") or ""))
+        pont = str(port.get("bridge") or "")
+        if pont and vitesse:
+            membres.setdefault(pont, []).append(vitesse)
+    heritees: dict[str, float] = {
+        pont: max(vitesses) for pont, vitesses in membres.items() if pont not in connues
+    }
+    for vlan in vlans:
+        nom = str(vlan.get("name") or "")
+        parent = str(vlan.get("interface") or "")
+        vitesse = connues.get(parent) or heritees.get(parent)
+        if nom and vitesse and nom not in connues:
+            heritees[nom] = vitesse
+    return heritees
 
 
 class RouterOsReadClient(Protocol):
@@ -931,6 +969,12 @@ class MikrotikCollector:
             # exploitables ; seule la jauge de charge perd sa reference.
             logger.debug("Capacites ethernet indisponibles sur %s", self.name)
             capacites = {}
+        try:
+            capacites.update(
+                inherited_capacities(capacites, self._mesure.vlans(), self._mesure.bridge_ports())
+            )
+        except Exception:  # noqa: BLE001 - un plafond d'affichage, jamais bloquant
+            logger.debug("Capacites heritees indisponibles sur %s", self.name)
 
         ts = utcnow()
         echantillons: list[InterfaceSample] = []
