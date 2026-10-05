@@ -379,7 +379,10 @@ class FlowAggregator:
     )
     #: Point de mesure retenu pour chaque conversation : le meme paquet est
     #: exporte par le PoP PUIS par la sortie internet, il ne compte qu'une fois.
-    _pair_vantage: dict[tuple[str, str], str] = field(default_factory=dict)
+    #: (point de vue, exporteur) retenu pour chaque conversation : UNE seule
+    #: source par conversation, sinon deux exporteurs du meme point de vue la
+    #: comptaient deux fois (volume au double, debit gonfle).
+    _pair_vantage: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
     #: Ce qui decrit une conversation en cours (abonne, port, protocole, usage),
     #: garde tant qu'elle est vivante : la fenetre, elle, se vide a chaque flush.
     _live_meta: dict[tuple[str, str], tuple[int | None, int, int, str]] = field(
@@ -569,7 +572,9 @@ class FlowAggregator:
         else:
             compteurs.up_bytes += octets
         duree = self._duree_s(flow)
-        compteurs.active_s = min(self.active_timeout_s, max(compteurs.active_s, duree))
+        # Le temps actif de la fenetre = la plus longue duree couverte par un
+        # de ses enregistrements (des flux paralleles couvrent le meme temps).
+        compteurs.active_s = max(compteurs.active_s, duree)
         # Debit de CE flux = son volume sur la duree qu'il couvre. Le dernier
         # enregistrement de chaque flux remplace le precedent.
         self._live_meta[cle] = (
@@ -586,26 +591,31 @@ class FlowAggregator:
         )
 
     def _duree_s(self, flow: Flow) -> float:
-        """Duree couverte par l'enregistrement, bornee a l'expiration active.
+        """Duree REELLEMENT couverte par l'enregistrement.
 
-        Sans horodatage, on suppose l'enregistrement plein (expiration active) :
-        c'est le cas d'un flux long, le seul dont le debit compte vraiment.
+        Elle n'est plus bornee a l'expiration active SUPPOSEE (1 min) : un
+        routeur laisse a son defaut RouterOS exporte un flux long toutes les
+        30 minutes, et diviser 30 minutes de volume par une minute affichait un
+        debit trente fois trop haut (4,2 Mbps pour 270 kbps reels). Sans
+        horodatage seulement, on suppose l'enregistrement plein.
         """
         if flow.duration_ms is None:
             return self.active_timeout_s
-        return min(self.active_timeout_s, max(1.0, flow.duration_ms / 1000))
+        return max(1.0, flow.duration_ms / 1000)
 
     _RANG_VANTAGE: ClassVar[dict[str, int]] = {"pop": 0, "unknown": 2, "": 2}
 
     def _vantage_retenu(self, cle: tuple[str, str], vantage: str) -> bool:
-        """Un seul point de mesure par conversation, le plus proche du client."""
+        """Une seule SOURCE par conversation : le point de vue le plus proche du
+        client, et dans ce point de vue un seul exporteur (le premier vu)."""
+        source = (vantage, self._exporteur_courant)
         actuel = self._pair_vantage.get(cle)
-        if actuel is None or actuel == vantage:
-            self._pair_vantage[cle] = vantage
+        if actuel is None or actuel == source:
+            self._pair_vantage[cle] = source
             return True
         rang = self._RANG_VANTAGE
-        if rang.get(vantage, 1) < rang.get(actuel, 1):
-            self._pair_vantage[cle] = vantage
+        if rang.get(vantage, 1) < rang.get(actuel[0], 1):
+            self._pair_vantage[cle] = source
             return True
         return False
 
