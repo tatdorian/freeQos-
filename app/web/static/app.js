@@ -326,10 +326,22 @@ function bps(v) {
   const n = Number(v) || 0;
   if (n >= 1e9) return { v: (n / 1e9).toFixed(2), u: 'Gbps' };
   if (n >= 1e6) return { v: (n / 1e6).toFixed(1), u: 'Mbps' };
-  if (n >= 1e3) return { v: (n / 1e3).toFixed(0), u: 'Kbps' };
+  // Sous 10 Kbps, une decimale : arrondir 1.4 Kbps a "1 Kbps" faisait lire un
+  // debit stable la ou il varie de 40 %.
+  if (n >= 1e4) return { v: (n / 1e3).toFixed(0), u: 'Kbps' };
+  if (n >= 1e3) return { v: sansZero((n / 1e3).toFixed(1)), u: 'Kbps' };
   return { v: n.toFixed(0), u: 'bps' };
 }
+/** "1.0" -> "1", "2.50" -> "2.5" : un zero apres la virgule n'apprend rien. */
+function sansZero(texte) { return String(texte).replace(/\.?0+$/, ''); }
 function bpsText(v) { const b = bps(v); return b.v + ' ' + b.u; }
+/** Graduation d'axe : la valeur EXACTE de la graduation. L'echelle arrondie
+ *  peut valoir 2.5 Kbps ; l'etiqueter "3 Kbps" contredisait la pointe a 2k. */
+function bpsAxis(v) {
+  const n = Number(v) || 0;
+  const [div, u] = n >= 1e9 ? [1e9, 'Gbps'] : n >= 1e6 ? [1e6, 'Mbps'] : n >= 1e3 ? [1e3, 'Kbps'] : [1, 'bps'];
+  return sansZero((n / div).toFixed(2)) + ' ' + u;
+}
 /** Debit ultra-compact pour les etiquettes d'arete : 640M, 1.2G, 92M. */
 function bpsShort(v) {
   const n = Number(v) || 0;
@@ -582,7 +594,7 @@ function renderThroughput(container, points, options) {
       }));
     });
     if (f > 0) {
-      [[yDown(pd * f), bpsText(pd * f)], [yUp(pu * f), bpsText(pu * f)]].forEach(([yy, text]) => {
+      [[yDown(pd * f), bpsAxis(pd * f)], [yUp(pu * f), bpsAxis(pu * f)]].forEach(([yy, text]) => {
         const t = svgEl('text', { class: 'axis-label', x: M.left - 8, y: yy + 3, 'text-anchor': 'end' });
         t.textContent = text;
         svg.appendChild(t);
