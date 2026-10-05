@@ -1196,13 +1196,23 @@ async function loadExec() {
     // Le verdict nomme les liens satures : il se redessine quand ils arrivent.
     if (exec.subs) renderExecSummary(document.getElementById('exec-summary'));
   });
-  const [subsRaw, bloat, topoData, tree, rttState] = await Promise.all([
+  const [subsRaw, bloat, topoData, tree, rttState, sites, routeurs] = await Promise.all([
     grab(api('/subscribers/latest?limit=500&order_by=login')),
     api('/bufferbloat?minutes=' + minutes).catch(() => null),
     api('/topology').catch(() => null),
     api('/network/tree').catch(() => []),
     api('/rtt').catch(() => null),
+    api('/pops').catch(() => []),
+    api('/pops/routers').catch(() => null),
   ]);
+  // Qui porte quoi : un site VLAN appartient a un routeur, il se range SOUS
+  // le noeud de ce routeur (cf. ordreHierarchique), comme dans l'arbre.
+  exec.sites = {};
+  (Array.isArray(sites) ? sites : []).forEach((x) => { exec.sites[x.name] = x; });
+  exec.popDuRouteur = {};
+  (Array.isArray(routeurs) ? routeurs : ((routeurs && routeurs.routers) || [])).forEach((r) => {
+    if (r && r.name) exec.popDuRouteur[r.name] = r.pop_name || r.name;
+  });
   const subs = Array.isArray(subsRaw) ? subsRaw : [];
   renderRttControl(rttState);
   exec.bloatById = {};
@@ -1860,6 +1870,53 @@ function rttDetailText(d) {
     (d.method || '') + ' · ' + Math.round(d.age_s || 0) + ' s ago';
 }
 
+/** LES NOEUDS DANS L'ORDRE DE L'ARBRE. Un site VLAN n'est pas un PoP : il
+ *  est porte par un routeur, et se range sous lui (en retrait), comme dans
+ *  l'arbre reseau. Un routeur qui n'a de clients que dans ses VLAN recoit une
+ *  ligne parente sans chiffres propres. Rend [{ n, depth, children }]. */
+function ordreHierarchique(nodes) {
+  const parNom = new Map(nodes.map((n) => [n.name, n]));
+  const enfants = new Map();
+  const parents = [];
+  const parentDe = (n) => {
+    const site = (exec.sites || {})[n.name];
+    if (!site || site.kind !== 'vlan' || !site.router_name) return null;
+    const routeur = site.router_name;
+    const candidats = [routeur, (exec.popDuRouteur || {})[routeur]].filter(Boolean);
+    const trouve = candidats.map((c) => parNom.get(c)).find((x) => x && x !== n);
+    if (trouve) return trouve.name;
+    // Aucun client direct sur ce routeur : une ligne pour lui quand meme.
+    const nom = (exec.popDuRouteur || {})[routeur] || routeur;
+    if (!parNom.has(nom)) {
+      const vide = { name: nom, synthetic: true, kind: 'pop', circuits: 0, subs: [],
+        tx: 0, rx: 0, effDown: 0, effUp: 0, confDown: 0, confUp: 0, rttMax: null, qoe: null };
+      parNom.set(nom, vide);
+      parents.push(vide);
+    }
+    return nom;
+  };
+  const racines = [];
+  nodes.forEach((n) => {
+    const p = parentDe(n);
+    if (p) {
+      if (!enfants.has(p)) enfants.set(p, []);
+      enfants.get(p).push(n);
+    } else racines.push(n);
+  });
+  racines.push(...parents);
+  // Les racines se trient sur leur trafic ENFANTS COMPRIS : un routeur dont
+  // tout passe par ses VLAN ne doit pas finir en bas du tableau.
+  const poids = (n) => (n.tx + n.rx) + (enfants.get(n.name) || []).reduce((a, c) => a + c.tx + c.rx, 0);
+  racines.sort((a, b) => poids(b) - poids(a));
+  const ordre = [];
+  racines.forEach((r) => {
+    const siens = enfants.get(r.name) || [];
+    ordre.push({ n: r, depth: 0, children: siens.length });
+    siens.forEach((c) => ordre.push({ n: c, depth: 1, children: 0 }));
+  });
+  return ordre;
+}
+
 function renderNodeTable(host) {
   const nodes = exec.nodes;
   if (!nodes.length) {
@@ -1887,7 +1944,7 @@ function renderNodeTable(host) {
     '<th class="num">Latency</th><th class="num" title="0-100, from bufferbloat and latency">Experience</th>' +
     '</tr></thead><tbody>';
 
-  const body = nodes.map((n) => {
+  const body = ordreHierarchique(nodes).map(({ n, depth, children }) => {
     const open = exec.expanded.has(n.name);
     const sel = exec.selected && exec.selected.type === 'node' && exec.selected.name === n.name;
     // Noeud synthetique (issu de la topologie, sans abonne mesure) : debit /
@@ -1895,19 +1952,32 @@ function renderNodeTable(host) {
     const effCell = n.synthetic ? '<td class="num na">-</td>'
       : '<td class="num">' + esc(mbps(n.effDown / 1e6) + ' / ' + mbps(n.effUp / 1e6)) + '</td>';
     const confCell = n.synthetic ? '<td class="num na">-</td>'
-      : '<td class="num na">' + esc(mbps(n.confDown / 1e6) + ' / ' + mbps(n.confUp / 1e6)) + '</td>';
+      : !n.confDown && !n.confUp
+        ? '<td class="num na" title="No plan: limits set by hand (forced) or by default">no plan</td>'
+        : '<td class="num na">' + esc(mbps(n.confDown / 1e6) + ' / ' + mbps(n.confUp / 1e6)) + '</td>';
     const txCell = n.synthetic ? '<td class="num">' + naSq + '</td>'
       : '<td class="num">' + usage(n.tx, n.effDown) + '</td>';
     const rxCell = n.synthetic ? '<td class="num">' + naSq + '</td>'
       : '<td class="num">' + usage(n.rx, n.effUp) + '</td>';
+    const site = (exec.sites || {})[n.name];
+    const vlan = site && site.kind === 'vlan';
     const nodeRow =
-      '<tr class="node-row' + (sel ? ' selected' : '') + '" data-node="' + esc(n.name) + '">' +
+      '<tr class="node-row' + (sel ? ' selected' : '') + (depth ? ' node-child' : '') +
+        '" data-node="' + esc(n.name) + '">' +
       '<td>' + (n.synthetic ? ''
         : '<span class="expand" data-expand="' + esc(n.name) + '" title="Show its clients">' +
           (open ? '−' : '+') + '</span>') + '</td>' +
-      '<td><strong>' + esc(n.name) + '</strong>' +
-        (n.synthetic && n.kind ? ' <span class="badge">' + esc(KIND_LABEL[n.kind] || n.kind) +
-          '</span>' : '') + '</td>' +
+      '<td' + (depth ? ' style="padding-left:' + (0.6 + depth * 1.4) + 'rem"' : '') + '>' +
+        (depth ? '<span class="tree-elbow">└</span> ' : '') +
+        '<strong>' + esc(n.name) + '</strong>' +
+        // Le badge seulement s'il apporte quelque chose : "VLAN 2060 [VLAN 2060]"
+        // ne fait que repeter le nom.
+        (vlan && !(site.vlan_id != null && String(n.name).includes(String(site.vlan_id)))
+          ? ' <span class="badge" title="Site carried by the router above">VLAN' +
+            (site.vlan_id != null ? ' ' + esc(site.vlan_id) : '') + '</span>' : '') +
+        (children ? ' <span class="pct-hint">+ ' + children + ' VLAN site(s)</span>' : '') +
+        (n.synthetic && n.kind && !children ? ' <span class="badge">' +
+          esc(KIND_LABEL[n.kind] || n.kind) + '</span>' : '') + '</td>' +
       '<td class="num">' + n.circuits + '</td>' +
       txCell + rxCell + effCell + confCell +
       '<td class="num">' + rttSq(n.rttMax) + '</td>' +
@@ -1923,7 +1993,8 @@ function renderNodeTable(host) {
         '<td class="num">' + usage(Number(s.tx_bps) || 0, eff) + '</td>' +
         '<td class="num">' + usage(Number(s.rx_bps) || 0, effU) + '</td>' +
         '<td class="num">' + esc(mbps(s.effective_down_mbps || 0) + ' / ' + mbps(s.effective_up_mbps || 0)) + '</td>' +
-        '<td class="num na">' + esc(mbps(s.plan_down_mbps || 0) + ' / ' + mbps(s.plan_up_mbps || 0)) + '</td>' +
+        '<td class="num na">' + (!s.plan_down_mbps && !s.plan_up_mbps ? 'no plan'
+          : esc(mbps(s.plan_down_mbps || 0) + ' / ' + mbps(s.plan_up_mbps || 0))) + '</td>' +
         '<td class="num">' + rttSq(s.rtt_ms, s.rtt_detail) + '</td>' +
         '<td class="num">' + qooCell(qoeOf(s.subscriber_id), s.rtt_ms) + '</td></tr>';
     }).join('');
