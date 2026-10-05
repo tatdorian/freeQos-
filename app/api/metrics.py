@@ -624,7 +624,9 @@ def name_ports(ports: list[dict[str, Any]], routers: list[str]) -> dict[str, str
 
 
 @router.get("/ports/live", summary="Every router port with its current throughput")
-async def ports_live(repo: RepositoryDep, collection: CollectionDep) -> dict[str, Any]:
+async def ports_live(
+    repo: RepositoryDep, collection: CollectionDep, container: ContainerDep
+) -> dict[str, Any]:
     """OU PASSE LE TRAFIC EN CE MOMENT, port par port, tous routeurs confondus.
 
     La courbe du reseau additionne les SESSIONS D'ABONNES. Un trafic qui n'en
@@ -653,11 +655,63 @@ async def ports_live(repo: RepositoryDep, collection: CollectionDep) -> dict[str
             "items": resultat.items,
             "errors": list(resultat.errors)[:5],
         }
+    noms = [c.name for c in collection.collectors]
     return {
         "ports": ports,
         "upstream": amonts,
         "cycles": cycles,
-        "routers": [c.name for c in collection.collectors],
+        "routers": noms,
+        "summary": [await _bilan_routeur(repo, container, nom, ports) for nom in noms],
+    }
+
+
+async def _bilan_routeur(
+    repo: Any, container: Any, routeur: str, ports: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Ce qu'un routeur echange avec Internet, ce que ses clients en
+    consomment, et l'ECART entre les deux.
+
+    L'ecart est la vraie information : le trafic qui passe par le routeur sans
+    appartenir a aucun client connu -- test de debit, gestion des equipements,
+    client non declare. Sans ce calcul, il fallait le deduire de tete en
+    comparant deux tableaux.
+
+    Sens unifie, celui des clients : ``down`` va vers eux, ``up`` vers
+    Internet. Sur l'uplink, c'est rx/tx ; sur un port cote clients, l'inverse.
+    """
+    uplink = next((p for p in ports if p["router_name"] == routeur and p.get("upstream")), None)
+    internet = (
+        {
+            "interface": uplink["interface"],
+            "name": uplink.get("link_name"),
+            "down_bps": uplink.get("rx_bps"),
+            "up_bps": uplink.get("tx_bps"),
+            "capacity_mbps": uplink.get("capacity_mbps"),
+        }
+        if uplink is not None
+        else None
+    )
+    clients: dict[str, Any] | None = None
+    try:
+        pop_ids = await _pops_du_routeur(repo, container, routeur)
+        mesure = await repo.throughput_now(pop_ids=pop_ids) if pop_ids else None
+        if mesure is not None:
+            clients = {"down_bps": mesure.get("tx_bps"), "up_bps": mesure.get("rx_bps")}
+    except Exception:  # noqa: BLE001 - le bilan des ports ne doit pas tomber pour ca
+        clients = None
+    hors_clients: dict[str, Any] | None = None
+    if internet is not None:
+        cd = float((clients or {}).get("down_bps") or 0)
+        cu = float((clients or {}).get("up_bps") or 0)
+        hors_clients = {
+            "down_bps": max(0.0, float(internet["down_bps"] or 0) - cd),
+            "up_bps": max(0.0, float(internet["up_bps"] or 0) - cu),
+        }
+    return {
+        "router": routeur,
+        "internet": internet,
+        "clients": clients,
+        "unaccounted": hors_clients,
     }
 
 
