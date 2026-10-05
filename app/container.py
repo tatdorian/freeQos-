@@ -63,7 +63,7 @@ from app.services.crypto import KeySource, SecretBox, load_or_create_key
 from app.services.dns_names import JOB_DNS_NAMES, DnsNames
 from app.services.intel import JOB_INTEL, IntelService
 from app.services.netflow_export import JOB_NETFLOW_EXPORT, NetflowExportService
-from app.services.netflow_service import JOB_NETFLOW, NetflowService
+from app.services.netflow_service import JOB_NETFLOW, NetflowService, identify_exporter
 from app.services.pop_cleanup import JOB_PURGE_POPS, purge_empty_pops, purge_removed_routers
 from app.services.registry import RouterRegistry
 from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
@@ -460,6 +460,7 @@ async def build_container(settings: Settings) -> Container:
     await netflow.start()
     collection.netflow = netflow
     netflow.set_infrastructure(adresses_d_exploitation())
+    netflow.identify_exporter = lambda adresse: identify_exporter(adresse, registry.collectors)
 
     # Met un nom sur les adresses que NetFlow decouvre. Il ne touche jamais a la
     # reception : celle-ci se contente d'INSCRIRE l'adresse, et cette boucle-ci
