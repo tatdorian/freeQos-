@@ -176,8 +176,12 @@ class QueueSpec:
             "max-limit": self.max_limit,
             "comment": self.comment,
         }
-        if self.parent:
-            champs["parent"] = self.parent
+        # ``parent`` est TOUJOURS ecrit, "none" sans parent. Omis, il ne
+        # pouvait jamais etre RETIRE : constate, une file restee sous un parent
+        # pose sur des interfaces (ether6,lan-bridge) n'en sortait plus, et son
+        # trafic -- qui ne correspondait pas a ce parent -- n'etait ni plafonne
+        # ni compte.
+        champs["parent"] = self.parent or "none"
         if self.queue:
             champs["queue"] = self.queue
         # ``disabled`` est TOUJOURS ecrit, meme a "no".
