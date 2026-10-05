@@ -801,42 +801,106 @@ async function loadPortsLive() {
     host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
     return;
   }
-  const cycles = Object.entries(data.cycles || {}).map(([job, c]) => {
-    if (!c) return '<span class="cycle"><i class="sq none"></i>' + esc(CYCLE_LABEL[job] || job) + ': not run yet</span>';
-    const retard = c.age_s > 60;
-    const sev = !c.ok ? 'crit' : retard ? 'warn' : 'ok';
-    return '<span class="cycle" title="' + esc((c.errors || []).join(' ; ')) + '"><i class="sq ' + sev + '"></i>' +
-      esc(CYCLE_LABEL[job] || job) + ': ' + (c.ok ? 'ok' : '<b>failed</b>') + ' &middot; ' +
-      Math.round(c.age_s) + ' s ago &middot; ' + c.duration_s + ' s' +
-      (!c.ok && c.errors && c.errors.length ? ' &middot; <span class="sev-crit">' + esc(c.errors[0]) + '</span>' : '') +
-      '</span>';
-  }).join('');
   const ports = data.ports || [];
-  const actifs = ports.filter((p) => (p.rx_bps || 0) + (p.tx_bps || 0) > 2000);
-  const montres = PORTS.all ? ports : actifs.slice(0, 15);
-  const table = !ports.length
-    ? '<div class="empty">No port measured in the last two minutes: see the Ports cycle above.</div>'
-    : '<div class="table-wrap"><table><thead><tr><th>Router</th><th>Port</th><th>Towards</th>' +
-      '<th class="num">In (rx)</th><th class="num">Out (tx)</th><th class="num">Port speed</th>' +
-      '<th style="width:140px">Load</th><th>Measured</th></tr></thead><tbody>' +
-      montres.map((p) => {
-        const pic = Math.max(p.rx_bps || 0, p.tx_bps || 0);
-        return '<tr><td class="nowrap"><b>' + esc(p.router_name) + '</b></td>' +
-          '<td class="nowrap"><code>' + esc(p.interface) + '</code>' +
-            (p.upstream ? ' <span class="badge file" title="Carries the default route">uplink</span>' : '') +
-            (p.running === false ? ' <span class="badge warn">down</span>' : '') + '</td>' +
-          '<td>' + (p.link_name ? esc(p.link_name) : '<span class="na">-</span>') + '</td>' +
-          '<td class="num" style="color:var(--down)">' + esc(bpsText(p.rx_bps)) + '</td>' +
-          '<td class="num" style="color:var(--up)">' + esc(bpsText(p.tx_bps)) + '</td>' +
-          '<td class="num">' + (p.capacity_mbps ? esc(mbps(p.capacity_mbps)) : '<span class="na">-</span>') + '</td>' +
-          '<td>' + (p.capacity_mbps ? meter(pic, p.capacity_mbps * 1e6) : '<span class="na">-</span>') + '</td>' +
-          '<td class="nowrap">' + esc(depuis(p.ts)) + '</td></tr>';
-      }).join('') + '</tbody></table></div>';
-  host.innerHTML = '<div class="cycles">' + cycles + '</div>' + table +
-    '<div class="ports-foot"><span>' + actifs.length + ' port(s) with traffic, ' +
-      (ports.length - actifs.length) + ' idle</span>' +
-      '<button class="sm" id="ports-toggle">' + (PORTS.all ? 'Only ports with traffic' : 'Show every port') +
-      '</button><span class="pct-hint">In = received by the router on that port, Out = sent by it.</span></div>';
+
+  // 1. L'ETAT DES MESURES, en une pastille. Detaille seulement s'il y a un
+  //    probleme : trois lignes vertes n'apprennent rien a chaque visite.
+  const cycles = Object.entries(data.cycles || {});
+  const soucis = cycles.filter(([, c]) => !c || !c.ok || c.age_s > 60);
+  const sante = !soucis.length
+    ? '<span class="pl-health ok" title="' + esc(cycles.map(([job, c]) =>
+        (CYCLE_LABEL[job] || job) + ': ' + Math.round(c.age_s) + ' s ago').join(' · ')) +
+      '"><i class="sq ok"></i>Measurement up to date</span>'
+    : soucis.map(([job, c]) => '<span class="pl-health ' + (!c || !c.ok ? 'crit' : 'warn') + '"' +
+        (c && c.errors && c.errors.length ? ' title="' + esc(c.errors.join(' ; ')) + '"' : '') + '>' +
+        '<i class="sq ' + (!c || !c.ok ? 'crit' : 'warn') + '"></i>' + esc(CYCLE_LABEL[job] || job) + ': ' +
+        (!c ? 'not run yet' : !c.ok ? '<b>failed</b>' + (c.errors && c.errors.length
+          ? ' &middot; ' + esc(c.errors[0]) : '') : 'late (' + Math.round(c.age_s) + ' s)') +
+        '</span>').join('');
+
+  // Sens UNIFIE, celui des clients : down = vers les clients, up = vers
+  // Internet. Sur l'uplink c'est rx/tx ; sur un port cote clients, l'inverse.
+  const sens = (p) => p.upstream
+    ? { down: p.rx_bps, up: p.tx_bps } : { down: p.tx_bps, up: p.rx_bps };
+  const charge = (p) => p.capacity_mbps
+    ? Math.max(p.rx_bps || 0, p.tx_bps || 0) / (p.capacity_mbps * 1e6) * 100 : null;
+  const paire = (m) => !m ? '<span class="na">-</span>'
+    : '<span class="nowrap" style="color:var(--down)">&darr; ' + esc(bpsText(m.down_bps)) + '</span> ' +
+      '<span class="nowrap" style="color:var(--up)">&uarr; ' + esc(bpsText(m.up_bps)) + '</span>';
+
+  const bilans = new Map((data.summary || []).map((b) => [b.router, b]));
+  const routeurs = Array.from(new Set([...(data.routers || []), ...ports.map((p) => p.router_name)]));
+  if (!routeurs.length) {
+    host.innerHTML = '<div class="pl-top">' + sante + '</div>' +
+      '<div class="empty">No router collected yet. Add one in Devices.</div>';
+    return;
+  }
+
+  const cartes = routeurs.map((nom) => {
+    const siens = ports.filter((p) => p.router_name === nom);
+    const bilan = bilans.get(nom) || {};
+    const net = bilan.internet;
+    const satures = siens.filter((p) => (charge(p) || 0) >= 80);
+    const tombes = siens.filter((p) => p.running === false);
+    const actifs = siens.filter((p) => (p.rx_bps || 0) + (p.tx_bps || 0) > 2000);
+    const montres = PORTS.all ? siens : actifs;
+    const horsClients = bilan.unaccounted;
+    const ecart = horsClients && (horsClients.down_bps + horsClients.up_bps) > 50000;
+
+    const alertes = satures.map((p) => '<span class="badge crit">' + esc(p.interface) + ' at ' +
+        Math.round(charge(p)) + '%</span>').join('') +
+      tombes.map((p) => '<span class="badge warn">' + esc(p.interface) + ' down</span>').join('');
+
+    const chiffre = (titre, valeur, aide, extra) =>
+      '<div class="pl-kpi" title="' + esc(aide) + '"><span>' + titre + '</span>' + valeur +
+        (extra || '') + '</div>';
+
+    const lignes = montres.map((p) => {
+      const m = sens(p);
+      const c = charge(p);
+      return '<tr' + (c !== null && c >= 80 ? ' class="pl-hot"' : '') + '>' +
+        '<td class="nowrap"><code>' + esc(p.interface) + '</code>' +
+          (p.upstream ? ' <span class="badge file">Internet</span>' : '') +
+          (p.running === false ? ' <span class="badge warn">down</span>' : '') + '</td>' +
+        '<td>' + (p.link_name ? esc(p.link_name) : '<span class="na">-</span>') + '</td>' +
+        '<td class="num" style="color:var(--down)">' + esc(bpsText(m.down)) + '</td>' +
+        '<td class="num" style="color:var(--up)">' + esc(bpsText(m.up)) + '</td>' +
+        '<td style="width:170px">' + (c !== null ? meter(Math.max(p.rx_bps || 0, p.tx_bps || 0),
+          p.capacity_mbps * 1e6) + '<span class="hint">' + esc(mbps(p.capacity_mbps)) + ' port</span>'
+          : '<span class="na">speed unknown</span>') + '</td></tr>';
+    }).join('');
+
+    return '<div class="pl-router">' +
+      '<div class="pl-head"><b>' + esc(nom) + '</b>' +
+        (net ? '<span class="hint">uplink <code>' + esc(net.interface) + '</code>' +
+          (net.name ? ' &rarr; ' + esc(net.name) : '') + '</span>' : '') +
+        '<span class="pl-alerts">' + alertes + '</span></div>' +
+      '<div class="pl-kpis">' +
+        chiffre('Internet', paire(net), 'What this router exchanges with the outside, on its uplink port',
+          net && net.capacity_mbps ? meter(Math.max(net.down_bps || 0, net.up_bps || 0),
+            net.capacity_mbps * 1e6) : '') +
+        chiffre('Clients', paire(bilan.clients), 'Sum of the subscribers of this router (their queues)') +
+        chiffre('Not from clients', paire(horsClients),
+          'Internet traffic that belongs to no known client: bandwidth tests, device management, ' +
+          'undeclared clients. Internet minus Clients.',
+          ecart ? '<span class="hint">tests, management or undeclared clients</span>' : '') +
+      '</div>' +
+      (siens.length
+        ? '<div class="table-wrap"><table class="pl-ports"><thead><tr><th>Port</th><th>Towards</th>' +
+          '<th class="num" title="Traffic going towards the clients">&darr; To clients</th>' +
+          '<th class="num" title="Traffic going towards Internet">&uarr; To Internet</th>' +
+          '<th>Load</th></tr></thead><tbody>' +
+          (lignes || '<tr><td colspan="5" class="hint">No port with traffic right now.</td></tr>') +
+          '</tbody></table></div>' +
+          (siens.length > montres.length
+            ? '<div class="hint pl-more">' + (siens.length - montres.length) + ' idle port(s) hidden</div>' : '')
+        : '<div class="hint">No port measured in the last two minutes.</div>') +
+      '</div>';
+  }).join('');
+
+  host.innerHTML = '<div class="pl-top">' + sante +
+      '<button class="sm" id="ports-toggle">' + (PORTS.all ? 'Hide idle ports' : 'Show idle ports') +
+      '</button></div>' + cartes;
   document.getElementById('ports-toggle').addEventListener('click', () => {
     PORTS.all = !PORTS.all;
     loadPortsLive();

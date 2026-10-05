@@ -1118,3 +1118,22 @@ details.pick-dd[open] > summary::after { content: "\25B4"; }
 .pick-item:hover { background: var(--fill); }
 .pick-item .hint { margin-left: auto; font-size: .75rem; }
 .pick-item[hidden] { display: none; }
+
+/* ================================================ ports des routeurs */
+.pl-top { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .9rem; }
+.pl-top #ports-toggle { margin-left: auto; }
+.pl-health { display: inline-flex; align-items: center; gap: .4rem; font-size: .82rem; color: var(--muted); }
+.pl-health.crit { color: var(--crit, #d70015); }
+.pl-health.warn { color: var(--warn, #c93400); }
+.pl-router { border-top: 1px solid var(--border); padding: .9rem 0 .4rem; }
+.pl-router:first-of-type { border-top: 0; padding-top: 0; }
+.pl-head { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; margin-bottom: .7rem; }
+.pl-head b { font-size: 1rem; }
+.pl-alerts { margin-left: auto; display: inline-flex; gap: .35rem; flex-wrap: wrap; }
+.pl-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .6rem; margin-bottom: .8rem; }
+.pl-kpi { background: var(--fill); border-radius: 12px; padding: .65rem .8rem; display: flex; flex-direction: column; gap: .3rem; }
+.pl-kpi > span:first-child { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); }
+.pl-kpi .nowrap { font-weight: 600; margin-right: .6rem; }
+.pl-ports td .hint { display: block; font-size: .72rem; }
+.pl-hot td { background: color-mix(in srgb, var(--crit, #d70015) 8%, transparent); }
+.pl-more { margin: .3rem 0 0; font-size: .78rem; }
