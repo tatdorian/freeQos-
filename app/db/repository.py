@@ -420,8 +420,22 @@ class MetricsRepository:
                             SELECT s.id FROM subscribers s JOIN pops p ON p.id = s.pop_id
                              WHERE p.name = ANY($3)))
                      GROUP BY bucket, subscriber_id
+                ),
+                -- La limite REELLEMENT appliquee a chaque abonne (forcee, sinon
+                -- son plan) : sert a la charge du client le plus charge.
+                limites AS (
+                    SELECT s.id AS subscriber_id,
+                           coalesce(pol.max_down_mbps, s.plan_down_mbps) * 1e6 AS lim
+                      FROM subscribers s
+                      LEFT JOIN shaping_policies pol
+                             ON pol.scope = 'subscriber' AND pol.target_key = s.login
                 )
                 SELECT bucket,
+                       -- LE CLIENT LE PLUS CHARGE, rapporte a SA limite. La somme
+                       -- des debits sur la somme des limites noyait un client au
+                       -- plafond (300 kbps) sous le plan d'un voisin (100 Mbps) :
+                       -- 0,3 % pour un noeud dont un client tournait a 100 %.
+                       max(tx / nullif(l.lim, 0)) AS util_max,
                        percentile_cont(0.5) WITHIN GROUP (ORDER BY rtt)
                            FILTER (WHERE rtt IS NOT NULL) AS rtt_p50,
                        percentile_cont(0.9) WITHIN GROUP (ORDER BY rtt)
@@ -436,6 +450,7 @@ class MetricsRepository:
                        array_agg(charge ORDER BY subscriber_id)
                            FILTER (WHERE rtt IS NOT NULL) AS load_samples
                   FROM par_bucket
+                  LEFT JOIN limites l USING (subscriber_id)
                  GROUP BY bucket
                  ORDER BY bucket
                 """,
@@ -465,8 +480,14 @@ class MetricsRepository:
 
         from app.services.heatmap import build_heatmap
 
+        points = [dict(r) for r in rows]
+        if filtre is None:
+            # Tout le reseau : la charge globale face a l'enveloppe totale. Le
+            # client le plus charge ne vaut que pour un noeud.
+            for point in points:
+                point.pop("util_max", None)
         return build_heatmap(
-            [dict(r) for r in rows],
+            points,
             minutes=minutes,
             buckets=buckets,
             bucket_seconds=bucket_s,
