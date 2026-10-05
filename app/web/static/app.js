@@ -9734,145 +9734,454 @@ document.addEventListener('click', (e) => {
  *  indexe par le LIBELLE affiche ; apres chaque rendu, une petite icone (i) est
  *  posee a cote de tout libelle connu (titres, colonnes, tuiles, lignes de
  *  panneau). Un meme mot peut vouloir dire deux choses selon l'endroit : la cle
- *  "contexte|libelle" l'emporte alors sur "libelle". */
+ *  "contexte|libelle" l'emporte alors sur "libelle" (contexte du gabarit, ou
+ *  data-aide-ctx pose sur un bloc entier).
+ *
+ *  Chaque entree repond, quand c'est utile, a quatre questions :
+ *    t  : ce que c'est ;
+ *    m  : comment c'est mesure (d'ou vient le chiffre, a quel rythme) ;
+ *    s  : l'echelle de lecture, en couleurs ([ton, texte]) ;
+ *    r  : comment le lire (pieges, cas particuliers) ;
+ *    a  : quoi faire quand c'est mauvais.
+ *  Une simple chaine reste permise pour une valeur qui se passe d'echelle. */
+const OK = 'ok', WARN = 'warn', CRIT = 'crit', NA = 'none';
+const ECHELLE_LATENCE = [[OK, 'under 30 ms: good — calls, games and browsing feel instant'],
+  [WARN, '30 to 100 ms: noticeable — fine for streaming, sluggish for games'],
+  [CRIT, 'over 100 ms: poor — video calls stutter, pages hesitate']];
+const ECHELLE_SCORE = [[OK, '80 to 100: good'], [WARN, '50 to 79: fair — noticeable at busy times'],
+  [CRIT, 'under 50: poor — the client feels it'], [NA, 'grey / “-”: not measured yet']];
+const ECHELLE_CHARGE = [[OK, 'under 70%: comfortable'], [WARN, '70 to 90%: watch it — peaks start to queue'],
+  [CRIT, 'over 90%: saturated — latency rises for everyone behind it']];
+const ECHELLE_BLOAT = [[OK, 'A+ / A: up to +30 ms — imperceptible'], [WARN, 'B / C: +30 to +100 ms — calls degrade while someone downloads'],
+  [CRIT, 'D / F: over +100 ms — real-time use breaks under load']];
+
 const AIDE = {
   // ---------------------------------------------------------- sections
-  'network throughput': 'Sum of the traffic of all subscribers (PPPoE and static clients), measured every 10 s from their queues. Download above, upload below; solid line = average of each step, dotted = highest moment of the step. Traffic that belongs to no subscriber (tests between routers, management) is not in it.',
-  'routers': 'Each router, live: what it exchanges with the internet on its uplink, what its clients consume, and the gap between the two.',
-  'top consumers': 'Subscribers using the most bandwidth right now, from their last 10-second measurement.',
-  'radio backhauls': 'Radio links declared in the inventory: their capacity (current vs nominal) and how loaded they are.',
-  'saturation risks': 'Each link compared with what it can carry. Internet side = a saturation hits everyone; PoP side = only the clients behind that link. Bar = now, marker = peak of the period.',
-  'latency by client': 'The experience each subscriber gets: usual latency, bad moments, jitter, loss and latency under load, with a verdict and its reason.',
-  'load by node': 'Traffic of each node (site) compared with the sum of its clients’ limits.',
-  'queues by node': 'Each node (PoP or router) with its clients: current traffic vs limit, limits applied, plans sold, worst latency and experience. A VLAN client is listed under the router that carries it.',
-  'selection': 'Details of the node or client selected in the table above.',
-  'health over time': 'Colour per time step: experience score, latency (90th percentile) and load vs limit. For a node, load = its most loaded client against its own limit. Grey = no measurement.',
-  'who consumes': 'Volume per subscriber over the period, from NetFlow at the counting point (each client counted once).',
-  'where the traffic goes': 'The two NetFlow measuring points: internet edge and PoPs. Only one is used for counting, chosen automatically.',
-  'which services the traffic comes from': 'Traffic grouped by recognised service (YouTube, Netflix…) from the addresses reached.',
-  'who talks to whom, client by client': 'Each client and the internet addresses it exchanges with: volume, rate when active and live rate.',
-  'destinations reached': 'Internet addresses reached by your clients, with their owner, location and volume.',
-  'traffic restrictions': 'Rules that block or cap traffic towards services, categories or address ranges, for everyone, some sites or some clients.',
-  'find an ip': 'Look up any IP address or domain: owner, location, service, and which clients reach it.',
-  'every subscriber plan, usage, experience': 'All subscribers with their limit, current usage, latency and whether the router really holds the cap.',
-  'are the caps actually held': 'Compares the limit freeQoS intends with what is really written on the router.',
-  'default plan': 'Applied to every client without its own plan (0 = no limit).',
-  'clients': 'Each client and the plan applied to it, with where that plan comes from (API, set by hand, default) or the limit forced in Subscribers.',
-  'packages pushed by the api': 'Offers received from your billing / CRM through the API.',
-  'at risk of leaving': 'Clients whose experience has been poor for a while: candidates for a support call.',
-  'ready for a bigger plan': 'Clients who often hit their limit with good conditions: candidates for an upgrade.',
-  'router health': 'CPU, memory and uptime of each polled router.',
-  'polled routers': 'Routers freeQoS reads (and writes queues to). Reset queues rebuilds their freeQoS queues from scratch.',
-  'shaping and writing to the routers': 'Whether freeQoS writes queues by itself (reconciliation every 2 min). Off = it only writes when you act (Rate, plan change, Reset queues).',
-  'log of commands sent': 'Every command freeQoS sent to a router, by whom and with what result.',
+  'network throughput': {
+    t: 'Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.',
+    m: 'Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.',
+    r: 'Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Routers — live traffic as “not from clients”. Filter by router or client with the menus.',
+    a: 'A flat line at 0 while clients are online usually means the collection stopped: check the health dot at the top left and Devices › Polled routers.',
+  },
+  'routers': {
+    t: 'Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.',
+    m: 'Uplink port counters and subscriber queues, read every 10 s.',
+    r: 'A large gap (“not from clients”) is traffic of no known client: tests, management, or clients not yet declared.',
+  },
+  'routers — live traffic': {
+    t: 'Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.',
+    m: 'Uplink port counters and subscriber queues, read every 10 s. Router CPU and port load come from the same poll.',
+    s: ECHELLE_CHARGE,
+    r: 'The coloured state line at the top says whether each collection (subscribers, ports, latency) is running. A large “not from clients” share is traffic of no known client.',
+    a: 'Red collection state: open Devices › Polled routers and test the connection of that router.',
+  },
+  'top consumers': {
+    t: 'The subscribers using the most bandwidth right now.',
+    m: 'Last 10-second measurement of each subscriber’s queue, sorted by download.',
+    r: 'A client at the top of this list is not a problem in itself — it is using what it pays for. It matters when its row is red (at its limit) and the node it belongs to is saturated too.',
+  },
+  'radio backhauls': {
+    t: 'The radio links declared in the inventory (UISP / airOS), with what they can carry now and how loaded they are.',
+    m: 'Current capacity is read from the radio (it drops when the signal fades); nominal capacity is what the link is rated for. Load = traffic ÷ current capacity.',
+    s: ECHELLE_CHARGE,
+    a: 'Current capacity far below nominal: alignment, interference or rain fade — check signal and SNR on the antenna page.',
+  },
+  'saturation risks': {
+    t: 'Every link compared with what it can carry, worst first.',
+    m: 'Traffic of the link ÷ its capacity (the lowest of: rate set by hand, measured radio capacity, port speed). Bar = now; marker = the peak of the selected period.',
+    s: ECHELLE_CHARGE,
+    r: 'Internet side (gateway uplink, PoP-to-core): a saturation hits every client. PoP side (towards subscribers, VLANs, relays): only the clients behind that link. A link with “capacity unknown” cannot be judged — set its rate in the Network tree.',
+    a: 'Peak regularly over 90%: upgrade the link or lower the plans sold behind it. Only the peak is high: usually fine, links are meant to be full at the busiest minute.',
+  },
+  'latency by client': {
+    t: 'The experience each subscriber really gets, with a verdict (good / fair / poor) and the reason in plain words.',
+    m: 'The PoP router pings each client 5 times every 30 s (200 ms apart, from its loopback). Median, p95, jitter and loss come from those pings; “under load” compares latency when the client’s line is busy with latency at rest.',
+    s: [[OK, 'good: median under 30 ms, no loss, little bufferbloat'], [WARN, 'fair: 30–100 ms, spikes, some loss, or +30 to +150 ms under load'],
+      [CRIT, 'poor: over 100 ms, 2%+ loss, +150 ms under load, or score under 50'], [NA, 'at plan limit: judged apart (see below)']],
+    r: 'Samples taken while the client uses 85%+ of its plan are left out: a full line makes its own queue — that is not a network fault. “no reply” on every client of a router means the probe itself is failing, not the clients.',
+    a: 'Many poor clients behind the same node: look at that node’s load and backhaul. A single poor client: its CPE, signal or home Wi-Fi.',
+  },
+  'load by node': {
+    t: 'Traffic of each node (site) compared with the sum of its clients’ limits.',
+    m: 'Sum of the clients’ queues every 10 s, divided by the sum of their limits.',
+    r: 'This is a share of what was sold, not of the link: 100% means every client is at its cap at once, which practically never happens.',
+  },
+  'queues by node': {
+    t: 'Each node (PoP or router) with its clients: traffic now vs limit, limits applied, plans sold, worst latency and experience.',
+    m: 'Queue counters every 10 s; latency from the probe every 30 s. A VLAN client is listed under the router that carries it.',
+    r: 'Click a row to open its detail below. The “Rate” field lets you force a client’s limit by hand — it then overrides its plan until you clear it.',
+  },
+  'selection': 'Details of the node or client selected in the table above: link, plans, limits and the clients behind it.',
+  'sec|node': {
+    t: 'Detail of the selected node: its link (capacity and load), the limits and plans of its clients, and how each client is doing.',
+    r: 'Oversubscription = plans sold ÷ link capacity. Some is normal (clients are not all active at once); far above 3× the link will be full at busy hours.',
+  },
+  'sec|client': {
+    t: 'Detail of the selected client: its plan and where it comes from, the limit really applied, its usage and its latency at rest and under load.',
+  },
+  'health over time': {
+    t: 'One colour per time step for three indicators: experience score, latency and load vs limit. Read it left to right to see when things went wrong.',
+    m: 'Steps of the selected period (e.g. 5 min over 24 h). Steps where a client was at its plan limit are left out of latency and score.',
+    s: [[OK, 'green: good'], [WARN, 'orange: fair / watch'], [CRIT, 'red: poor / saturated'], [NA, 'grey: no measurement in that step']],
+    r: 'For a node: the worst client of the step. For the whole network: all clients together. A red band at the same hour every evening is a capacity problem; a red band at random times is more often radio.',
+  },
+  'who consumes': {
+    t: 'Volume per subscriber over the period.',
+    m: 'From NetFlow at the counting point, each client counted once (the best exporter for that client is used, never two).',
+    r: 'This is volume (GB), not speed: a client streaming all evening outweighs one who ran a short speed test.',
+  },
+  'where the traffic goes': {
+    t: 'The two places NetFlow can be measured: at the internet edge (above the core) and on the PoP routers.',
+    m: 'Chosen automatically: the internet edge is used when it sends flows; the PoPs take over only when it is silent. A byte is never counted twice.',
+  },
+  'which services the traffic comes from': {
+    t: 'Traffic grouped by recognised service (YouTube, Netflix, Steam, Microsoft updates…).',
+    m: 'The remote address of each flow is matched with a catalogue of published address blocks, then with its reverse name and owner. Content is never inspected — it stays encrypted.',
+    r: '“unknown” is traffic to addresses that match no catalogue entry yet; it shrinks as names are resolved.',
+  },
+  'who talks to whom, client by client': {
+    t: 'Each client and the internet addresses it exchanges with: volume, rate while active and live rate.',
+    m: 'NetFlow records of the period, grouped by client and remote address.',
+    r: '“Rate when active” divides by the time the conversation was really active, so a 10-second download at 100 Mbps shows 100 Mbps — not the 1 Mbps a whole-hour average would give.',
+  },
+  'destinations reached': {
+    t: 'Internet addresses reached by your clients, with their owner, location and volume.',
+    m: 'From NetFlow; names come from the catalogue, reverse DNS and (if enabled) the registry.',
+  },
+  'traffic restrictions': {
+    t: 'Rules that block or cap traffic towards a service, a category or an address range — for everyone, some sites, or some clients.',
+    m: 'Written on the routers as address lists plus firewall (block) or mangle + queue tree (cap). The address list is refreshed automatically from the catalogue and from what NetFlow discovers.',
+    a: 'A rule that seems to have no effect: check “Last applied” and that the router is reachable; new addresses join the list at the next refresh.',
+  },
+  'find an ip': {
+    t: 'Look up any IP address or domain: owner, location, recognised service, and which of your clients reach it.',
+    r: 'Useful when a client complains about one site: see whether others reach it too and how much traffic it carries.',
+  },
+  'every subscriber plan, usage, experience': {
+    t: 'All subscribers with their limit, current usage, latency and whether the router really holds the cap.',
+    r: 'Click a client to see its plan, its queue on the router and its history. The search box accepts a login, an IP, a MAC or a site.',
+  },
+  'are the caps actually held': {
+    t: 'Compares the limit freeQoS intends for each client with what is really written on its router.',
+    r: 'A mismatch means the router was changed by hand, a queue failed to write, or another queue matches first (RouterOS applies the first matching queue).',
+    a: 'Use Devices › Reset queues on that router to rebuild its freeQoS queues from scratch.',
+  },
+  'default plan': {
+    t: 'The limit given to every client that has no plan of its own (none pushed by the API, none set by hand).',
+    r: '0 = no limit. Changing it re-writes the queues of all clients that use it at the next reconciliation.',
+  },
+  'clients': {
+    t: 'Each client and the plan applied to it, with where that plan comes from.',
+    r: 'Source: pushed by the API (billing / CRM), set by hand here, or the default plan. A limit forced in Subscribers (Rate) overrides all three — it is shown here so you know why the plan is not what is applied.',
+  },
+  'packages pushed by the api': 'Offers received from your billing system or CRM through the public API (/model/v1/packages). Clients pushed with a package get its rates automatically.',
+  'at risk of leaving': {
+    t: 'Clients showing the signs that come before a cancellation.',
+    m: 'Any of: experience score under 50 over the period; usage down more than 70% versus the previous period; no traffic at all for 3 days or more (for a client that used to consume).',
+    a: 'Call before they do: a CPE swap, a realignment or a plan change is cheaper than a lost client.',
+  },
+  'ready for a bigger plan': {
+    t: 'Clients that live at their plan ceiling while their experience stays good — the plan limits them, not the network.',
+    m: 'At 90%+ of their plan in 15% or more of the samples of the period, with a score of 50 or more.',
+    r: 'A client at its ceiling with poor latency is not here on purpose: selling it more would not fix what is a network problem.',
+  },
+  'sites and access points room for more subscribers': {
+    t: 'How many more subscribers each site or access point can take at today’s usage.',
+    m: 'Busy-hour peak per subscriber, against a target of 80% of the capacity (above that, queues fill and latency rises before the link is full).',
+    r: 'A site where 20% or more of the clients already have a poor experience shows no room, whatever the margin on paper.',
+  },
+  'router health': {
+    t: 'CPU, memory and uptime of each polled router.',
+    s: [[OK, 'CPU under 70%: fine'], [WARN, '70–90%: busy — queues and NetFlow may lag'], [CRIT, 'over 90%: overloaded — packets and measurements suffer']],
+    a: 'A sustained high CPU on a PoP: too many simple queues for the hardware, or a firewall rule doing heavy work.',
+  },
+  'polled routers': {
+    t: 'The routers freeQoS reads (and writes queues to).',
+    r: 'Reset queues deletes every freeQoS queue of that router and rewrites them cleanly — use it when caps behave strangely. Queues not created by freeQoS are never touched.',
+  },
+  'connect a router': {
+    t: 'Add a MikroTik router: its address, API port and an account with read rights (and write rights if freeQoS should shape).',
+    r: 'The API-SSL port (8729) is preferred. A dedicated account with the “read, write, api, test” policies is enough — “test” is needed for the latency probe.',
+  },
+  'ubiquiti antennas': 'airOS access points and CPEs polled for their radio state: signal, noise, CCQ, capacity. Their capacity feeds the saturation and room-for-more calculations.',
+  'radio health access points and their cpes': {
+    t: 'Each access point and the CPEs connected to it, with the radio quality of each link.',
+    s: [[OK, 'signal above −68 dBm, SNR above 25 dB, CCQ above 90%'], [WARN, 'signal −68 to −75 dBm, SNR 20–25 dB'], [CRIT, 'signal below −75 dBm, SNR under 20 dB or CCQ under 75%']],
+    a: 'Weak signal on one CPE: alignment or obstacle. Weak on all CPEs of an AP: interference — check the noise floor and change channel.',
+  },
+  'add an antenna': 'Declare an airOS device by its address and credentials. Credentials are encrypted at rest with the controller key.',
+  'inventory': 'Every device freeQoS knows, with where it was discovered.',
+  'known sites': 'The PoPs and VLAN sites known to freeQoS. A site pushed by the API takes the place of an automatically discovered one.',
+  'shaping and writing to the routers': {
+    t: 'Whether freeQoS writes queues by itself.',
+    r: 'On: a reconciliation every 2 min writes any missing or wrong queue. Off: it writes only when you act (Rate, plan change, Reset queues). Either way, only queues marked freeqos:managed are ever modified.',
+  },
+  'log of commands sent': 'Every command freeQoS sent to a router: when, by whom (account or automatic loop), what, and the result. The first place to look when a cap changed unexpectedly.',
+  'create a key': {
+    t: 'Create a key for an external system (billing, CRM) to call the public API.',
+    r: 'The key is shown once — copy it then. “read” gives GET; “write” adds PUT and DELETE. Give each system its own key so you can revoke one without breaking the others.',
+  },
+  'endpoints': 'The public API routes, compatible with the Preseem contract: a billing system that talked to Preseem only changes the base URL and the key.',
+  'example': 'A ready-to-run call with curl. The key goes in Basic authentication as the username, with an empty password.',
+  'accounts': 'Who can log in to this interface, your own password and sessions, and (for edit accounts) the journal of logins.',
+  'operational settings': {
+    t: 'Settings stored in the database and applied without restart.',
+    r: '“default” = the value from the environment / built-in default. Apply writes it; the source column then says “database”.',
+  },
+  'what stays out of reach of the interface': 'Settings that can only change in the environment (.env) — the database address, the encryption key… — because the interface itself depends on them.',
+  // ---------------------------------------------------------- comptes
+  'who can log in': {
+    t: 'The accounts of this interface.',
+    s: [[NA, 'Read only: sees everything; every change is refused by the server'], [OK, 'Edit: can change everything, including accounts']],
+    r: 'There is always at least one active edit account: the last one cannot be deleted, demoted or disabled. Changing someone’s role or password logs them out everywhere.',
+  },
+  'my password': {
+    t: 'Change your own password. Your other browsers are logged out; this one stays connected.',
+    r: 'At least 12 characters. Passwords from attacker lists (Password2024!, azerty123…), repetitive ones or ones containing your email are refused. A short sentence is both stronger and easier to remember than a short complicated word.',
+  },
+  'my sessions': {
+    t: 'Every browser currently logged in to your account: device, address, when it logged in and when it was last active.',
+    m: 'A session ends after 24 h without activity, and after 30 days in any case. At most 10 per account — the oldest is closed beyond that.',
+    a: 'A device or address you do not recognise: log it out, then change your password.',
+  },
+  'login journal': {
+    t: 'Every login, failed attempt, block, logout and account change, with address and device. Kept 6 months.',
+    s: [[OK, 'Login'], [CRIT, 'Failed login / Blocked: someone typed a wrong password'], [WARN, 'Account changed or deleted']],
+    r: 'After 5 failures the email and the address are blocked 5 min, then 10, 20… up to 1 h if it continues. Many failures from one unknown address = someone guessing.',
+    a: 'Repeated failures on a real account from an unknown address: change that password and, if exposed to the internet, restrict access to the interface.',
+  },
+  'acc|role': 'Read only: sees everything, changes nothing (refused by the server, not just hidden). Edit: can change everything, including accounts.',
+  'acc|state': 'A disabled account can no longer log in, and its open sessions are closed at once.',
+  'acc|last login': 'Last successful login of the account.',
+  'acc|created by': 'The account that created this one (“setup” = the very first account).',
+  'acc|device': 'Browser and system, read from the browser’s User-Agent.',
+  'acc|address': 'IP address the session was opened from (behind a reverse proxy, set FORWARDED_ALLOW_IPS so this is the real client).',
+  'acc|opened': 'When this session logged in.',
+  'acc|last activity': 'Last request made with this session.',
+  'acc|when': 'Date and time of the event (hover for the full date).',
+  'acc|event': 'What happened: login, failed login, block, logout, account change…',
+  'acc|account': 'The account concerned (for a failed login, the email that was typed — it may not exist).',
+  'acc|by': 'Who made the change, when it is not the account itself (e.g. an administrator resetting a password).',
+  'acc|detail': 'Extra information: new role, why it failed, how long the block lasts…',
   // ---------------------------------------------------------- panneaux
   'right now': 'Last 10-second measurement.',
-  'clients on this link': 'The clients of this node, with how much of their limit they use, latency and score.',
-  'link': 'What freeQoS knows about this node’s link: capacity, load and the limits of its clients.',
-  'plan': 'The plan of this client, where it comes from, and the limit really applied.',
-  'plan usage': 'How much of its limit the client uses right now, and its latency at rest and under load.',
+  'clients on this link': {
+    t: 'The clients of this node with how much of their limit they use, their latency and score.',
+    r: 'Several clients red on latency at the same time as the link is loaded = the link is the bottleneck. Only one client red = look at that client.',
+  },
+  'link': {
+    t: 'What freeQoS knows about this node’s link: capacity, load, limits applied and plans sold behind it.',
+    r: 'Capacity unknown: set the rate of the link in the Network tree so load and oversubscription can be judged.',
+  },
+  'plan': {
+    t: 'The plan of this client, where it comes from, and the limit really applied.',
+    r: 'When “limit applied” differs from the plan, the limit was forced by hand (Rate) or a temporary boost is running.',
+  },
+  'plan usage': {
+    t: 'How much of its limit the client uses right now, and its latency at rest and under load.',
+    r: 'At 85%+ of its plan the client is “at plan limit”: its latency then reflects its own full queue and is not held against the network.',
+  },
   'limit usage': 'How much of its forced limit the client uses right now, and its latency at rest and under load.',
-  'who reaches this address': 'Your clients that exchanged traffic with this address over the period.',
+  'who reaches this address': 'Your clients that exchanged traffic with this address over the period, with the volume of each.',
   // ---------------------------------------------------------- tuiles
-  'traffic now': 'Download of all subscribers at the last measurement; upload below. Compared with backhaul capacity, or with the sum of limits when no capacity is declared.',
-  'client experience': 'Share of clients rated good (score 80+). Fair = 50–79, poor = under 50; unmeasured clients are counted apart.',
-  'busiest node': 'The node using the largest share of its limit right now.',
-  'latency': 'Round-trip time from the PoP router to the client (5 pings every 30 s). Median shown; under 30 ms is good, over 100 ms is poor. “no reply” = the whole last series was lost.',
-  'download': 'What clients receive (from the internet to them).',
-  'upload': 'What clients send (from them to the internet).',
-  'subscribers online': 'Subscribers measured in the last 2 minutes.',
-  'sold throughput': 'Sum of the download plans of all subscribers, and how much of it is used right now.',
-  'backhaul capacity': 'Sum of the measured capacity of the radio backhauls.',
-  'downstream': 'Total received by your subscribers over the period, at the counting point.',
-  'upstream': 'Total sent by your subscribers over the period, at the counting point.',
-  'subscribers seen': 'Subscribers with traffic seen by NetFlow at the counting point.',
-  'flows matched': 'Share of NetFlow flows attributed to a known subscriber. The rest is network management or undeclared addresses.',
-  'poor experience': 'Clients with high latency (>100 ms), loss (2%+), strong bufferbloat (+150 ms) or a score under 50.',
-  'fair': 'Noticeable but usable: latency 30–100 ms, spikes, some loss or bufferbloat of +30 to +150 ms.',
-  'good': 'Latency under 30 ms, stable, no loss.',
-  'at plan limit': 'The client used its whole plan the whole period: its latency was that of its own queue, so it is not judged as a network problem.',
+  'traffic now': {
+    t: 'Download of all subscribers at the last measurement; upload below.',
+    m: 'Sum of the subscriber queues, read every 10 s.',
+    r: 'Compared with the backhaul capacity, or with the sum of limits when no capacity is declared.',
+  },
+  'client experience': {
+    t: 'Share of measured clients with a good experience.',
+    s: ECHELLE_SCORE,
+    r: 'Clients at their plan limit and clients not measured are counted apart, so neither makes the network look worse than it is.',
+  },
+  'busiest node': {
+    t: 'The node using the largest share of its limit right now.',
+    s: ECHELLE_CHARGE,
+  },
+  'latency': {
+    t: 'Round-trip time between the PoP router and the client — how long a packet takes to go and come back.',
+    m: 'The router pings the client 5 times every 30 s (200 ms apart, from its loopback). The median of the series is shown, so one slow ping does not colour the client.',
+    s: ECHELLE_LATENCE,
+    r: '“no reply” = the whole last series was lost. If every client of a router shows it at once, the probe is failing (firewall, source address, account without the “test” right) — not the clients.',
+    a: 'High latency on one client only: its radio link or CPE. On every client of a node: the node is saturated or its backhaul is weak.',
+  },
+  'download': {
+    t: 'What your clients receive, from the internet to them.',
+    m: 'Sum of the subscriber queues (tx side of the router), read every 10 s.',
+  },
+  'upload': {
+    t: 'What your clients send, from them to the internet.',
+    m: 'Sum of the subscriber queues (rx side of the router), read every 10 s.',
+  },
+  'subscribers online': 'Subscribers with a measurement in the last 2 minutes (PPPoE session up, or static client with traffic).',
+  'sold throughput': {
+    t: 'Sum of the download plans of all subscribers, and how much of it is used right now.',
+    r: 'A few percent is normal: clients are not all active at the same time. That is what makes oversubscription possible.',
+  },
+  'backhaul capacity': 'Sum of the measured capacity of the radio backhauls declared in the inventory. “-” = no radio backhaul declared.',
+  'downstream': 'Total received by your subscribers over the period, at the counting point (each byte counted once).',
+  'upstream': 'Total sent by your subscribers over the period, at the counting point (each byte counted once).',
+  'subscribers seen': 'Subscribers with traffic seen by NetFlow at the counting point over the period.',
+  'flows matched': {
+    t: 'Share of NetFlow flows attributed to a known subscriber.',
+    r: 'The rest is network management, routers talking to each other, or addresses of clients not declared yet — those appear in the entry-aid list.',
+  },
+  'poor experience': {
+    t: 'Clients the network is failing right now.',
+    m: 'Median over 100 ms, 2%+ loss, +150 ms or more under load, or an experience score under 50.',
+    a: 'Open Latency by client and sort by verdict: the “why” column says which of these it is.',
+  },
+  'fair': 'Noticeable but usable: latency 30–100 ms, spikes, a little loss, or +30 to +150 ms under load.',
+  'good': 'Latency under 30 ms, stable, no loss, little or no bufferbloat.',
+  'at plan limit': {
+    t: 'Clients that used their whole plan the whole period.',
+    r: 'Their latency was that of their own full queue — a client downloading at its cap delays its own pings. That is the plan doing its job, not a network fault, so they are not counted as poor.',
+  },
   'clients measured': 'Clients that answered the latency probe over the period.',
   // ---------------------------------------------------------- colonnes
-  'client': 'The subscriber (PPPoE login or static-client reference).',
-  'subscriber': 'The subscriber (PPPoE login or static-client reference).',
+  'client': 'The subscriber: PPPoE login, or the reference of a static-IP client.',
+  'subscriber': 'The subscriber: PPPoE login, or the reference of a static-IP client.',
   'site': 'PoP or VLAN site the client belongs to.',
   'pop': 'Point of presence the client is attached to.',
   'node': 'A site (PoP or router) and its clients. A VLAN client is counted with the router that carries it.',
-  'address': 'IP address (or block) of the client: the queue targets it.',
-  'limit': 'The cap really applied: forced in Subscribers, otherwise the plan, otherwise the default plan.',
-  'plans': 'Sum of the plans sold. “no plan” = limited by hand or by default.',
+  'address': 'IP address (or block) of the client: its queue targets this address.',
+  'limit': {
+    t: 'The cap really applied to the client.',
+    r: 'In order of priority: the limit forced by hand in Subscribers (Rate), otherwise its plan, otherwise the default plan.',
+  },
+  'plans': 'Sum of the plans sold. “no plan” = the clients are limited by hand or by the default plan.',
   'download now': 'Current download, with its share of the limit.',
   'upload now': 'Current upload, with its share of the limit.',
-  'vs limit': 'Current download as a share of the limit. Red over 90%.',
-  'plan used': 'Current traffic as a share of the client’s limit.',
-  'experience': 'Score 0–100 combining latency at rest and latency under load. 80+ good, 50–79 fair, under 50 poor.',
-  'score': 'Experience 0–100 combining latency at rest and latency under load (bufferbloat).',
-  'p95': 'The bad moments: 95% of the pings were faster than this.',
-  'jitter': 'Variation of latency between the pings of the last series. High jitter makes calls choppy.',
-  'loss': 'Share of pings lost in the last series.',
-  'under load': 'Latency while the client’s line is busy, and how much it adds over rest (bufferbloat).',
-  'why': 'What lowered the verdict, in plain words.',
-  'bufferbloat': 'Grade of the latency increase when the line is loaded (A+ best, F worst).',
-  'source': 'Where the plan comes from: pushed by the API, set by hand, default plan — or forced in Subscribers.',
-  'last change': 'When the plan was last changed.',
+  'vs limit': { t: 'Current download as a share of the limit.', s: ECHELLE_CHARGE },
+  'plan used': { t: 'Current traffic as a share of the client’s limit.', r: 'At 85% and above the client is “at plan limit”: its latency is then left out of its verdict.' },
+  'experience': {
+    t: 'Score from 0 to 100 summing up what the client feels.',
+    m: 'The weaker of two parts: latency at rest (no penalty up to 10 ms, then −0.6 point per ms) and the latency added under load (bufferbloat: +5 ms ≈ 90, +30 ms ≈ 80, +100 ms = 50, +200 ms = 25).',
+    s: ECHELLE_SCORE,
+    r: 'The weakest part decides: low latency does not make up for heavy bufferbloat, and the reverse.',
+  },
+  'score': {
+    t: 'Experience score from 0 to 100: the weaker of latency at rest and latency added under load (bufferbloat).',
+    s: ECHELLE_SCORE,
+  },
+  'p95': {
+    t: 'The bad moments: 95% of the pings were faster than this.',
+    r: 'A p95 far above the median (3× or more, and over 100 ms) means spikes: the line is fine most of the time but stalls now and then — typical of radio interference or a queue filling up.',
+  },
+  'jitter': {
+    t: 'How much latency varies from one ping to the next in the last series.',
+    s: [[OK, 'under 10 ms: smooth'], [WARN, '10 to 30 ms: calls may crackle'], [CRIT, 'over 30 ms: choppy voice and video']],
+  },
+  'loss': {
+    t: 'Share of pings lost in the last series of 5.',
+    s: [[OK, '0%'], [WARN, 'under 2%: occasional'], [CRIT, '2% and more: calls cut, downloads slow down']],
+    r: 'A loss while the client is at its plan limit is not counted against the network: its own traffic filled the queue.',
+  },
+  'under load': {
+    t: 'Latency while the client’s line is busy, and how much the load adds over rest (bufferbloat).',
+    m: 'Pings taken while the client was transferring are compared with pings taken at rest.',
+    s: ECHELLE_BLOAT,
+    a: 'Strong bufferbloat with the client under its plan: the queue upstream (backhaul, radio) is too deep. CAKE queues on the bottleneck fix most of it.',
+  },
+  'why': 'What lowered the verdict, in plain words: high latency, spikes, loss, bufferbloat — or “at plan limit”.',
+  'bufferbloat': { t: 'Grade of the latency added when the line is loaded.', s: ECHELLE_BLOAT },
+  'source': 'Where the plan comes from: pushed by the API, set by hand, or the default plan — or a limit forced in Subscribers, which overrides all three.',
+  'last change': 'When the plan was last changed, and by what (API, an account, the default).',
   'destination': 'Internet address the client exchanged traffic with.',
-  'service': 'Recognised service behind the address (from the catalogue, the domain or the owner).',
+  'service': 'Recognised service behind the address: from the catalogue of published blocks, the domain name or the owner of the address.',
   'category': 'Family of the service: streaming, gaming, voice/video, CDN, cloud, updates…',
-  'port': 'Service port on the remote side (443 = HTTPS…). “-” for ICMP (ping).',
+  'port': 'Service port on the remote side (443 = HTTPS, 53 = DNS…). “-” for ICMP (ping).',
   'proto': 'Transport protocol: tcp, udp, icmp…',
   'received': 'Volume received by the client from this address over the period.',
   'sent': 'Volume sent by the client to this address over the period.',
-  'rate when active': 'Volume divided by the time the conversation was actually active — not by the whole period.',
-  'live': 'Current rate of the conversation, from the real duration of its last NetFlow records.',
+  'rate when active': {
+    t: 'Volume divided by the time the conversation was really active.',
+    r: 'Not divided by the whole period: a 10-second download at 100 Mbps reads 100 Mbps, which is what the client experienced.',
+  },
+  'live': 'Current rate of the conversation, from the real duration of its last NetFlow records. Empty = not active right now.',
   'down': 'Volume received by the clients.',
   'up': 'Volume sent by the clients.',
   'flows': 'Number of NetFlow records counted.',
   'seen': 'Last time it was seen.',
-  'kind': 'PPPoE subscriber or static-IP client.',
+  'kind': 'PPPoE subscriber (discovered from the router sessions) or static-IP client (declared by hand).',
   'router': 'The router concerned.',
-  'port speed': 'Negotiated speed of the port (VLAN and bridge: speed of the physical port carrying them).',
-  'load': 'Busiest direction compared with the port speed.',
-  'towards': 'Equipment on the other side of the port, when known.',
+  'port speed': 'Negotiated speed of the port (for a VLAN or bridge: the speed of the physical port carrying it).',
+  'load': { t: 'Busiest direction compared with the port speed.', s: ECHELLE_CHARGE },
+  'towards': 'Equipment on the other side of the port, when known (from discovery or the network tree).',
   'to clients': 'Traffic going towards the clients on this port.',
   'to internet': 'Traffic going towards the internet on this port.',
-  'capacity': 'What the link can carry: the lowest of the rate set by hand, the measured radio capacity and the port speed.',
-  'headroom': 'Capacity left at the peak of the period.',
-  'vantage': 'Where this exporter measures: internet edge (upstream of the core) or at the PoP. Set automatically for your routers.',
-  'sampling': '“all” = every flow exported; 1:N = one in N, volumes multiplied back.',
-  'datagrams': 'NetFlow packets received from this exporter.',
+  'capacity': {
+    t: 'What the link can carry.',
+    m: 'The lowest of: the rate set by hand on the link, the capacity measured on the radio, and the port speed.',
+    r: '“unknown” = none of the three is known: load and saturation cannot be judged for this link.',
+  },
+  'headroom': { t: 'Capacity left at the peak of the period.', r: 'Under 10% at the peak: the next growth in usage will show as latency.' },
+  'vantage': {
+    t: 'Where this exporter measures: internet edge (above the core) or at a PoP.',
+    r: 'Set automatically for your own routers. Only one vantage is used for counting, so a byte seen at both is counted once.',
+  },
+  'sampling': '“all” = every flow is exported; 1:N = one in N, volumes are multiplied back by N.',
+  'datagrams': 'NetFlow packets received from this exporter. Not increasing = the router stopped exporting, or a firewall drops UDP 2055.',
   'version': 'NetFlow format received: v5, v9 or IPFIX.',
+  'access': 'PoP to its subscribers: median of their medians (p90 when hovering). The part of the latency your access network adds.',
+  'next hop up': 'Router to its default gateway — the next hop up: the core for a PoP, the gateway for the core, the transit provider for the gateway.',
+  'where': 'Which segment adds the delay: access side, towards the core / gateway, or above it (transit, internet).',
+  'oversubscription': {
+    t: 'Plans sold ÷ capacity of the link.',
+    s: [[OK, 'up to 1×: everything sold fits at once'], [WARN, '1 to 3×: usual for residential access'], [CRIT, 'over 3×: the link will be full at busy hours']],
+    r: 'Some oversubscription is normal — clients are not all active at the same time. Watch the evening peak rather than the ratio alone.',
+  },
+  'addresses': 'Number of distinct internet addresses reached.',
+  'country': 'Country of the address, from the geolocation of its block.',
+  'cities': 'Number of distinct cities among the addresses reached.',
+  'location': 'Approximate location of the address (city, country) from its block — an indication, not a proof.',
+  'from': 'Start of the link (the upstream equipment).',
+  'to': 'End of the link (the downstream equipment).',
+  'type': 'How the link was found: discovered on the router, observed in traffic, or set by hand.',
+  'method': 'HTTP method: GET reads, PUT creates or replaces, DELETE removes.',
+  'path': 'Route of the call, after the base URL.',
+  'object': 'The collection concerned: accounts, packages, sites, access points, services.',
   // ---------------------------------------------------------- lignes de panneau
   'throughput': 'Current download and upload.',
   'worst latency': 'Latency of the worst client of the node; “no reply” if one of them lost all its pings.',
-  'worst score': 'Lowest experience score among the clients of the node.',
+  'worst score': { t: 'Lowest experience score among the clients of the node.', s: ECHELLE_SCORE },
   'load now': 'Current traffic of the node.',
   'limits applied': 'Sum of the limits really applied to the clients (forced, plan or default).',
   'sold': 'Sum of the plans sold to these clients. “no plan” = limited by hand or by default.',
-  'limit applied': 'The cap written on the router, when it differs from the plan (forced or boost).',
+  'limit applied': 'The cap written on the router, when it differs from the plan (forced by hand, or a boost).',
   // ---------------------------------------------------------- contextes
   'col|clients': 'Number of clients of this node.',
   'boost': 'Temporary extra rate given to the client; it ends on its own at the time shown.',
-  'session': 'How long the PPPoE session has been up (static clients have none).',
-  'sample': 'Age of the last measurement. \u201cstale\u201d = figures are not current.',
-  'at ceiling': 'Share of the time the client was at its limit over the period.',
+  'session': 'How long the PPPoE session has been up (static clients have none). A session that keeps restarting points to a CPE or radio problem.',
+  'sample': 'Age of the last measurement. “stale” = the figures are not current: the collection of this router is late or stopped.',
+  'at ceiling': { t: 'Share of the time the client was at 90%+ of its limit over the period.', r: '15% or more with a good experience: candidate for a bigger plan.' },
   'avg download': 'Average download over the period.',
-  'avg rate': 'Average rate over the period (volume / period).',
-  'busy-hour peak': 'Highest load reached during the busiest hour.',
-  'ccq': 'Client Connection Quality of the radio link (100% = no retransmission).',
-  'signal': 'Received radio signal, in dBm (closer to 0 is stronger; below -75 dBm is weak).',
-  'noise': 'Radio noise floor, in dBm (lower is better).',
-  'snr': 'Signal-to-noise ratio, in dB: signal minus noise. Above 25 dB is good.',
+  'avg rate': 'Average rate over the period (volume ÷ period).',
+  'busy-hour peak': 'Highest load reached during the busiest hour of the period — what the capacity must hold.',
+  'ccq': {
+    t: 'Client Connection Quality: share of radio frames that went through without retransmission.',
+    s: [[OK, '90 to 100%'], [WARN, '75 to 90%'], [CRIT, 'under 75%: flagged as an issue — retransmissions eat throughput and add latency']],
+  },
+  'signal': {
+    t: 'Strength of the radio signal received, in dBm (closer to 0 is stronger).',
+    s: [[OK, 'above −68 dBm'], [WARN, '−68 to −75 dBm'], [CRIT, 'below −75 dBm: weak — alignment or obstacle']],
+  },
+  'noise': 'Radio noise floor, in dBm (lower is better, e.g. −95 is quieter than −85). A high noise floor means interference on the channel.',
+  'snr': {
+    t: 'Signal-to-noise ratio, in dB: signal minus noise.',
+    s: [[OK, 'above 25 dB: clean'], [WARN, '20 to 25 dB: usable, lower modulation'], [CRIT, 'under 20 dB: flagged as an issue — unstable link']],
+  },
   'distance': 'Radio distance between the access point and the CPE.',
-  'cpu': 'Processor load of the router.',
+  'cpu': { t: 'Processor load of the router.', s: [[OK, 'under 70%'], [WARN, '70 to 90%'], [CRIT, 'over 90%']] },
   'memory': 'Memory used on the router.',
-  'uptime': 'Time since the last restart.',
+  'uptime': 'Time since the last restart. A recent restart nobody planned is worth a look (power, crash).',
   'measured rate': 'Rate measured on the router for this client.',
-  'forced rate': 'Limit set by hand in Subscribers (Rate): it overrides the plan.',
+  'forced rate': 'Limit set by hand in Subscribers (Rate): it overrides the plan until you clear it.',
   'on the router': 'What is really written on the router for this client.',
   'wanted': 'What freeQoS intends to write.',
-  'where the cap comes from': 'Origin of the limit: plan, forced by hand, boost or default.',
-  'why it does not throttle': 'Reason why the cap is not held on the router.',
-  'room for': 'How many more subscribers this site can take at the current usage.',
+  'where the cap comes from': 'Origin of the limit: plan, forced by hand, boost or default plan.',
+  'why it does not throttle': 'Reason why the cap is not held on the router (no queue, another queue matching first, a parent queue blocking…).',
+  'room for': { t: 'How many more subscribers this site can take at the current usage.', m: 'Busy-hour peak per subscriber against 80% of the capacity.' },
   'share': 'Share of the total traffic.',
   'usage': 'Detected application of the conversation.',
   'capacity read': 'Capacity read from the radio.',
@@ -9890,33 +10199,48 @@ const AIDE = {
   'interface': 'Router interface concerned.',
   'queue': 'freeQoS queue on the router for this client.',
   'target': 'Address or block the queue applies to.',
-  'role': 'Role of the router: PoP, core or gateway (internet exit).',
+  'role': 'Role of the router: PoP (serves clients), core, or gateway (internet exit).',
   'origin': 'Where the item comes from.',
   'package': 'Offer pushed by the API.',
-  'col|plan': 'The plan sold to the client (download/upload).',
-  'heat|experience score': 'Experience score of the step (the worst client of the node). Green 80+, orange 50–79, red under 50.',
-  'heat|latency': '90th percentile of the latency of the step: 9 pings out of 10 were faster.',
-  'heat|load vs limit': 'For a node: its most loaded client against its own limit. For the whole network: total traffic against the sum of limits.',
+  'col|plan': 'The plan sold to the client (download / upload).',
+  'heat|experience score': { t: 'Experience score of the step (the worst client of the node).', s: ECHELLE_SCORE },
+  'heat|latency': { t: '90th percentile of the latency of the step: 9 pings out of 10 were faster.', s: ECHELLE_LATENCE },
+  'heat|load vs limit': {
+    t: 'For a node: its most loaded client against its own limit. For the whole network: total traffic against the sum of limits.',
+    s: ECHELLE_CHARGE,
+  },
   'kpi|internet': 'What this router exchanges with the outside on its uplink port, with the port load.',
   'kpi|clients': 'Sum of the traffic of this router’s subscribers (their queues).',
-  'kpi|not from clients': 'Internet minus clients: traffic of no known client — bandwidth tests, device management, undeclared clients.',
-  'vantage|internet edge': 'NetFlow measured at the internet exit (above the core). Counted when it sends flows: each client once, internet traffic only.',
+  'kpi|not from clients': {
+    t: 'Internet minus clients: traffic of no known client.',
+    r: 'Bandwidth tests, device management, routers talking to each other, or clients not declared yet. A large, steady share is worth investigating.',
+  },
+  'vantage|internet edge': 'NetFlow measured at the internet exit (above the core). Used for counting whenever it sends flows: each client once, internet traffic only.',
   'vantage|pops': 'NetFlow measured on each PoP router, next to the clients. Used for counting only when the internet exit sends nothing.',
   'hot|internet side': 'Gateway uplink and PoP-to-core links: a saturation here hits every client.',
   'hot|pop side': 'Links towards subscribers, VLANs and relays: a saturation only hits what hangs below.',
 };
 
+/** Libelles variables (une adresse, un nom) : reconnus par leur forme. */
+const AIDE_MOTIFS = [
+  [/^to \d{1,3}(\.\d{1,3}){3}$/, {
+    t: 'Router to this public address (a well-known resolver, reachable everywhere): latency through your gateway and the transit above it.',
+    r: 'Compare with “Next hop up”: if this is much higher, the delay is outside your network (transit provider, internet), not in it.',
+  }],
+];
+
 /** Le libelle d'un element, sans ses badges, indices ni icones. */
-function libelleAide(el) {
+function libelleAide(el, garderCasse) {
   const copie = el.cloneNode(true);
-  copie.querySelectorAll('.info, .hint, .pct-hint, .badge, .u, .pl-alerts, .sq, button, select, input')
+  copie.querySelectorAll('.info, .hint, .pct-hint, .badge, .u, .pl-alerts, .sq, .sel-name, button, select, input')
     .forEach((x) => x.remove());
-  return copie.textContent.replace(/[↓↑↕]/g, ' ').replace(/\(.*?\)/g, ' ')
-    .replace(/[:?·Σ]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  const texte = copie.textContent.replace(/[↓↑↕]/g, ' ').replace(/\(.*?\)/g, ' ')
+    .replace(/[?·Σ]/g, ' ').replace(/:/g, ' ').replace(/\s+/g, ' ').replace(/\s*\/\s*$/, '').trim();
+  return garderCasse ? texte : texte.toLowerCase();
 }
 
 const CIBLES_AIDE = [
-  ['h2', ''], ['h3', ''], ['th', 'col'], ['.stat > .label', ''], ['.lq-kv > .k', ''],
+  ['h2', 'sec'], ['h3', 'sec'], ['th', 'col'], ['.stat > .label', ''], ['.lq-kv > .k', ''],
   ['.lq-table tbody td:first-child', ''], ['.pl-kpi > span:first-child', 'kpi'],
   ['.hot-title', 'hot'], ['.heat-label', 'heat'], ['.vantage-title', 'vantage'],
 ];
@@ -9924,53 +10248,114 @@ const CIBLES_AIDE = [
 function poserAides(racine) {
   CIBLES_AIDE.forEach(([sel, ctx]) => {
     (racine || document).querySelectorAll(sel).forEach((el) => {
-      if (el.dataset.aide) return;
-      el.dataset.aide = '1';
+      // Le texte a deja ete examine tel quel : rien a refaire. S'il a change
+      // (un titre qui prend le nom du noeud choisi), on recommence.
+      if (el.dataset.aide === el.textContent) return;
+      const ancienne = el.querySelector(':scope > .info');
+      if (ancienne) ancienne.remove();
       const brut = libelleAide(el);
-      if (!brut) return;
+      if (!brut) { el.dataset.aide = el.textContent; return; }
+      // Un bloc entier peut changer le sens des mots (data-aide-ctx) : "Role"
+      // d'un compte n'est pas "Role" d'un routeur.
+      const zone = el.closest('[data-aide-ctx]');
+      const contextes = [zone && zone.dataset.aideCtx, ctx].filter(Boolean);
       // "Health over time — NAS-FRANCOPHONIE" : la partie avant le tiret.
       const essais = [brut, brut.split(' — ')[0], brut.split(' - ')[0]];
-      let texte = null;
+      let entree = null;
       for (const e of essais) {
-        texte = (ctx && AIDE[ctx + '|' + e]) || AIDE[e];
-        if (texte) break;
+        for (const c of contextes) { entree = AIDE[c + '|' + e]; if (entree) break; }
+        entree = entree || AIDE[e];
+        if (entree) break;
       }
-      if (!texte) return;
+      if (!entree) {
+        const motif = AIDE_MOTIFS.find(([re]) => re.test(brut));
+        if (motif) entree = motif[1];
+      }
+      // A defaut d'entree, l'infobulle native d'un en-tete devient une vraie bulle.
+      if (!entree && el.title) { entree = el.title; el.removeAttribute('title'); }
+      if (!entree) { el.dataset.aide = el.textContent; return; }
       const icone = document.createElement('span');
       icone.className = 'info';
       icone.tabIndex = 0;
       icone.setAttribute('role', 'button');
-      icone.setAttribute('aria-label', texte);
-      icone.dataset.tip = texte;
+      icone.setAttribute('aria-label', texteAide(entree));
+      icone.dataset.titre = libelleAide(el, true).split(' — ')[0];
+      bullesAide.set(icone, entree);
       icone.textContent = 'i';
       // Le titre d'une liste depliable reste a lui seul le declencheur.
-      icone.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+      icone.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); montrerAide(icone, true); });
       el.appendChild(icone);
+      el.dataset.aide = el.textContent;
     });
   });
+}
+
+/** L'entree associee a chaque icone (une chaine ou une fiche structuree). */
+const bullesAide = new WeakMap();
+
+function ficheAide(entree) {
+  return typeof entree === 'string' ? { t: entree } : entree;
+}
+
+/** Version texte, pour les lecteurs d'ecran. */
+function texteAide(entree) {
+  const f = ficheAide(entree);
+  return [f.t, f.m && 'Measured: ' + f.m, (f.s || []).map((x) => x[1]).join('; '), f.r, f.a && 'What to do: ' + f.a]
+    .filter(Boolean).join(' ');
+}
+
+/** La bulle : ce que c'est, comment c'est mesure, l'echelle en couleurs,
+ *  comment le lire, quoi faire. */
+function rendreAide(titre, entree) {
+  const f = ficheAide(entree);
+  const bloc = (libelle, texte) => texte
+    ? '<div class="ib-sec"><span class="ib-k">' + libelle + '</span>' + esc(texte) + '</div>' : '';
+  return (titre ? '<div class="ib-title">' + esc(titre) + '</div>' : '') +
+    (f.t ? '<p class="ib-what">' + esc(f.t) + '</p>' : '') +
+    bloc('How it is measured', f.m) +
+    (f.s ? '<ul class="ib-scale">' + f.s.map(([ton, txt]) =>
+      '<li><span class="sq ' + ton + '"></span>' + esc(txt) + '</li>').join('') + '</ul>' : '') +
+    bloc('How to read it', f.r) +
+    bloc('What to do', f.a);
 }
 
 /* La bulle elle-meme : un seul element, pose sur le body, pour ne jamais etre
    coupe par un tableau qui defile. */
 let bulleAide = null;
-function montrerAide(icone) {
+let bulleEpinglee = null;
+function montrerAide(icone, epingler) {
   if (!bulleAide) {
     bulleAide = document.createElement('div');
     bulleAide.className = 'info-bulle';
     bulleAide.setAttribute('role', 'tooltip');
     document.body.appendChild(bulleAide);
   }
-  bulleAide.textContent = icone.dataset.tip;
+  // Un clic epingle la bulle (lecture tranquille, ou ecran tactile) ; un
+  // second clic, Echap ou un clic ailleurs la ferme.
+  if (epingler) {
+    if (bulleEpinglee === icone) { bulleEpinglee = null; cacherAide(true); return; }
+    bulleEpinglee = icone;
+  } else if (bulleEpinglee && bulleEpinglee !== icone) {
+    return;
+  }
+  bulleAide.innerHTML = rendreAide(icone.dataset.titre, bullesAide.get(icone) || '');
+  bulleAide.classList.toggle('pinned', bulleEpinglee === icone);
   bulleAide.style.display = 'block';
   const r = icone.getBoundingClientRect();
   const largeur = bulleAide.offsetWidth;
+  const hauteur = bulleAide.offsetHeight;
   const x = Math.max(8, Math.min(r.left + r.width / 2 - largeur / 2, window.innerWidth - largeur - 8));
   let y = r.bottom + 8;
-  if (y + bulleAide.offsetHeight > window.innerHeight - 8) y = r.top - bulleAide.offsetHeight - 8;
+  if (y + hauteur > window.innerHeight - 8 && r.top - hauteur - 8 >= 8) y = r.top - hauteur - 8;
   bulleAide.style.left = x + 'px';
-  bulleAide.style.top = Math.max(8, y) + 'px';
+  bulleAide.style.top = Math.max(8, Math.min(y, window.innerHeight - hauteur - 8)) + 'px';
 }
-function cacherAide() { if (bulleAide) bulleAide.style.display = 'none'; }
+function cacherAide(forcer) {
+  if (!bulleAide) return;
+  if (bulleEpinglee && forcer !== true) return;
+  if (forcer === true) bulleEpinglee = null;
+  bulleAide.style.display = 'none';
+}
 document.addEventListener('mouseover', (e) => {
   const i = e.target.closest && e.target.closest('.info');
   if (i) montrerAide(i);
@@ -9980,7 +10365,11 @@ document.addEventListener('mouseout', (e) => {
 });
 document.addEventListener('focusin', (e) => { if (e.target.classList && e.target.classList.contains('info')) montrerAide(e.target); });
 document.addEventListener('focusout', (e) => { if (e.target.classList && e.target.classList.contains('info')) cacherAide(); });
-window.addEventListener('scroll', cacherAide, true);
+document.addEventListener('click', (e) => {
+  if (bulleEpinglee && !(e.target.closest && (e.target.closest('.info') || e.target.closest('.info-bulle')))) cacherAide(true);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cacherAide(true); });
+window.addEventListener('scroll', () => cacherAide(true), true);
 
 // Apres chaque rendu : les ecrans se redessinent sans cesse (rafraichissement
 // toutes les 10 s), l'observateur pose les icones sur ce qui est nouveau.

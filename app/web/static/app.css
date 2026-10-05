@@ -1234,10 +1234,29 @@ button.danger.is-busy::after { border-top-color: var(--crit); }
   color: var(--faint); cursor: help; opacity: .75; user-select: none;
 }
 .info:hover, .info:focus-visible { color: var(--accent); opacity: 1; outline: none; }
+/* La bulle est une petite fiche : titre, ce que c'est, comment c'est mesure,
+   l'echelle en couleurs, comment le lire, quoi faire. Survol = apercu ; clic
+   sur le (i) = epinglee (texte selectionnable, utilisable au doigt). */
 .info-bulle {
-  position: fixed; z-index: 1000; display: none; max-width: 320px;
-  padding: .55rem .7rem; border-radius: 10px;
-  background: var(--text); color: var(--surface);
-  font-size: .8rem; font-weight: 400; line-height: 1.4; text-transform: none; letter-spacing: 0;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .25); pointer-events: none;
+  position: fixed; z-index: 1000; display: none; width: max-content; max-width: min(400px, calc(100vw - 16px));
+  max-height: calc(100vh - 16px); overflow: auto;
+  padding: .8rem .9rem .85rem; border-radius: 12px;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  font-size: .79rem; font-weight: 400; line-height: 1.5; text-align: left; white-space: normal;
+  text-transform: none; letter-spacing: 0;
+  box-shadow: var(--shadow-lift); pointer-events: none;
 }
+.info-bulle.pinned { pointer-events: auto; border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.ib-title { font-weight: 650; font-size: .88rem; margin-bottom: .25rem; letter-spacing: -.01em; }
+.ib-what { margin: 0; }
+.ib-sec { margin-top: .55rem; color: var(--muted); }
+.ib-k {
+  display: block; margin-bottom: .1rem; color: var(--faint);
+  font-size: .63rem; font-weight: 650; letter-spacing: .07em; text-transform: uppercase;
+}
+.ib-scale {
+  list-style: none; margin: .6rem 0 0; padding: .5rem .6rem; display: grid; gap: .28rem;
+  border-radius: 9px; background: var(--surface-2);
+}
+.ib-scale li { display: flex; align-items: baseline; gap: .1rem; }
+.ib-scale .sq { flex: 0 0 auto; transform: translateY(-1px); }
