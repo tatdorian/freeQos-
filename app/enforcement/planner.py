@@ -740,7 +740,11 @@ def build_plan(
                 PlanAction(
                     verb="set",
                     path="/queue/simple",
-                    fields={k: v for k, v in champs.items() if k != "name"},
+                    # SEULEMENT CE QUI CHANGE. Reecrire la cible, le parent et les
+                    # types a chaque changement de debit fait reconstruire la file
+                    # par RouterOS : constate, un test de debit en cours sortait
+                    # alors de sa file (ni plafonne, ni compte) jusqu'a etre relance.
+                    fields={k: champs[k] for k in changements},
                     target_id=str(existante.get(".id") or existante.get("id") or ""),
                     name=file_spec.name,
                     reason="rate or parent differs",

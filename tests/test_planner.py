@@ -311,6 +311,10 @@ def test_changement_de_debit_produit_un_set() -> None:
     assert action.summary() == (
         "modifier freeqos-dupont (max-limit 20M/100M -> 20000000/300000000)"
     )
+    # Seul le debit part : reecrire cible, parent et types faisait reconstruire
+    # la file par RouterOS, et un trafic en cours en sortait jusqu'a relance.
+    assert set(action.fields) == {"max-limit"}
+    assert "target=" not in action.command
 
 
 # ----------------------------------------------------- SURETE : propriete
