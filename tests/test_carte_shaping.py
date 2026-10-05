@@ -45,6 +45,10 @@ LIEN = {
     "interface": "ether2",
     "capacity_mbps": 1000.0,
     "discovered_by": "pop-test",
+    # Le segment des abonnes porte par ce port : c'est lui que vise la file du
+    # lien, et c'est ce qui lui permet de porter les files des abonnes (une
+    # file d'interface ne voit pas leur upload).
+    "attributes": {"local_networks": ["10.20.0.0/24"]},
 }
 
 ABONNE = {
