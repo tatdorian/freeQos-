@@ -381,7 +381,14 @@ def desired_state(
         if reseau:
             reseaux_parents.append((ipaddress.ip_network(reseau), link.queue_name))
 
-    parents_connus = {file.name for file in files}
+    # SEULS LES LIENS QUI VISENT UN RESEAU PEUVENT PORTER DES ABONNES.
+    # Constate : une file de lien posee sur une INTERFACE (vlan2060) ne voit
+    # que le descendant (bytes=0/764068740). RouterOS n'admet un paquet dans
+    # une file enfant que s'il correspond aussi a son parent : l'upload du
+    # client ne traversait donc JAMAIS sa file -- ni plafonne (896 kbps pour
+    # 100 vendus), ni compte (0 bps affiche). Un tel lien garde sa file, mais
+    # les abonnes n'y sont plus rattaches.
+    parents_connus = {nom: reseau for reseau, nom in reseaux_parents}
 
     # Deux abonnes qui reclament la MEME adresse : l'un des deux est perime
     # (session fermee dont l'IP a ete reattribuee, doublon de collecte). On ne
@@ -445,7 +452,12 @@ def desired_state(
             )
             continue
 
-        parent = subscriber.parent if subscriber.parent in parents_connus else None
+        parent = (
+            subscriber.parent
+            if subscriber.parent in parents_connus
+            and _contenu_dans(cible, parents_connus[subscriber.parent])
+            else None
+        )
         if parent is None:
             # A defaut de secteur radio connu, l'ADRESSE dit par ou l'abonne
             # passe : sa file doit alors etre rattachee a la file du lien dont
@@ -485,6 +497,16 @@ def _parent_par_adresse(target: str, reseaux: list[tuple[Any, str]]) -> str | No
     if not candidats:
         return None
     return max(candidats)[1]
+
+
+def _contenu_dans(cible: str, reseau: Any) -> bool:
+    """La cible d'une file tient-elle dans le reseau de son parent ? Sinon
+    RouterOS n'y fait passer qu'une partie du trafic, ou rien."""
+    try:
+        bloc = ipaddress.ip_network(cible, strict=False)
+    except ValueError:
+        return False
+    return bloc.version == reseau.version and bloc.subnet_of(reseau)
 
 
 def _is_managed(row: dict[str, Any]) -> bool:
