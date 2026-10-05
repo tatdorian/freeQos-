@@ -690,3 +690,41 @@ def test_un_lien_sur_reseau_porte_les_abonnes_qu_il_contient() -> None:
     # Hors du segment du lien : RouterOS n'y ferait passer qu'une partie du
     # trafic. Pas de parent plutot qu'un plafond a moitie tenu.
     assert par_nom[dehors.queue_name].parent is None
+
+
+def test_un_mauvais_parent_deja_pose_est_retire() -> None:
+    """Constate sur NAS-FRANCOPHONIE : freeqos-nestl restait sous
+    freeqos-parent-MikroTik (target=ether6,lan-bridge). Son trafic, qui passe
+    par la VLAN, ne correspondait pas a ce parent : ni plafonne (860 kbps pour
+    100), ni compte (0 bps). Le parent omis du plan ne pouvait jamais etre
+    retire ; il est desormais ecrit, "none" quand il n'y en a pas."""
+    lien_interface = lien("MikroTik", interface="ether6,lan-bridge")
+    from app.models import KIND_STATIC
+
+    client = abonne(
+        "nestl",
+        down=0.1,
+        up=0.1,
+        parent=lien_interface.queue_name,
+        address="100.100.105.240/30",
+        kind=KIND_STATIC,
+    )
+
+    _, files, _ = desired_state(links=[lien_interface], subscribers=[client])
+    existante = {
+        ".id": "*2",
+        "name": client.queue_name,
+        "target": "100.100.105.240/30",
+        "parent": lien_interface.queue_name,
+        "max-limit": "100k/100k",
+        "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
+        "comment": MANAGED_COMMENT,
+        "disabled": "false",
+    }
+    plan = build_plan(
+        "pop", desired_types=[], desired_queues=files, actual_types=[], actual_queues=[existante]
+    )
+
+    action = next(a for a in plan.actions if a.name == client.queue_name)
+    assert action.verb == "set"
+    assert action.fields == {"parent": "none"}  # et rien d'autre
