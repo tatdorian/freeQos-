@@ -477,10 +477,13 @@ async def heatmap(
     repo: RepositoryDep,
     minutes: Annotated[int, Query(ge=5, le=60 * 24, description="Observation window")] = 15,
     buckets: Annotated[int, Query(ge=5, le=120, description="Number of columns")] = 20,
+    pop: Annotated[
+        str | None, Query(description="Only the clients of this site (PoP or VLAN)")
+    ] = None,
 ) -> dict[str, Any]:
     """Bandes de cellules colorees facon LibreQoS. La ligne des retransmissions
     TCP est presente mais marquee indisponible : hors-bande, on ne l'invente pas."""
-    return await repo.heatmap(minutes=minutes, buckets=buckets)
+    return await repo.heatmap(minutes=minutes, buckets=buckets, pop_name=pop)
 
 
 @router.get("/backhauls", summary="List of radio backhauls")
