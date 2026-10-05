@@ -364,8 +364,12 @@ class FlowAggregator:
     active_timeout_s: float = 60.0
     clock: Any = time.monotonic
 
-    _subs: dict[tuple[int, str], SubscriberCounters] = field(default_factory=dict)
-    _apps: dict[tuple[int, str], AppCounters] = field(default_factory=dict)
+    #: Par (abonne, point de vue, EXPORTEUR) : un client vu par trois NAS
+    #: etait compte trois fois. On garde chaque exporteur a part, et la
+    #: fenetre ne retient que celui qui le voit le mieux (cf. flush).
+    _subs: dict[tuple[int, str, str], SubscriberCounters] = field(default_factory=dict)
+    _apps: dict[tuple[int, str, str, str], AppCounters] = field(default_factory=dict)
+    _exporteur_courant: str = ""
     _hosts: dict[tuple[str, int | None], HostCounters] = field(default_factory=dict)
     _dests: dict[tuple[str, str], DestinationCounters] = field(default_factory=dict)
     #: Debit EN COURS : par conversation, le dernier enregistrement de chaque flux
@@ -422,16 +426,17 @@ class FlowAggregator:
         paquets = flow.packets * max(sampling_rate, 1)
         self.flows_seen += 1
         self._vantage_courant = vantage
+        self._exporteur_courant = exporter or ""
 
         source = self.index.lookup(flow.src)
         destination = self.index.lookup(flow.dst)
 
         if destination is not None:
             self._credit(destination, vantage, down_bytes=octets, down_packets=paquets)
-            self._credit_app(destination, classify(flow), down_bytes=octets)
+            self._credit_app(destination, classify(flow), vantage, down_bytes=octets)
         if source is not None:
             self._credit(source, vantage, up_bytes=octets, up_packets=paquets)
-            self._credit_app(source, classify(flow), up_bytes=octets)
+            self._credit_app(source, classify(flow), vantage, up_bytes=octets)
 
         rattache = source is not None or destination is not None
         if rattache:
@@ -471,7 +476,7 @@ class FlowAggregator:
         down_packets: int = 0,
         up_packets: int = 0,
     ) -> None:
-        cle = (subscriber_id, vantage)
+        cle = (subscriber_id, vantage, self._exporteur_courant)
         compteurs = self._subs.get(cle)
         if compteurs is None:
             compteurs = SubscriberCounters(subscriber_id=subscriber_id, vantage=vantage)
@@ -483,9 +488,15 @@ class FlowAggregator:
         compteurs.flows += 1
 
     def _credit_app(
-        self, subscriber_id: int, app: str, *, down_bytes: int = 0, up_bytes: int = 0
+        self,
+        subscriber_id: int,
+        app: str,
+        vantage: str = "",
+        *,
+        down_bytes: int = 0,
+        up_bytes: int = 0,
     ) -> None:
-        cle = (subscriber_id, app)
+        cle = (subscriber_id, vantage, self._exporteur_courant, app)
         compteurs = self._apps.get(cle)
         if compteurs is None:
             compteurs = AppCounters(subscriber_id=subscriber_id, app=app)
@@ -709,11 +720,41 @@ class FlowAggregator:
             return False
         return any(adresse in reseau for reseau in self.customer_networks)
 
-    def flush(self, ts: datetime) -> FlushBatch:
+    def flush(self, ts: datetime, *, vantage: str | None = None) -> FlushBatch:
+        """Vide la fenetre. UN CLIENT EST COMPTE A UN SEUL ENDROIT.
+
+        Par point de vue, seul l'exporteur qui voit le plus de trafic de ce
+        client est retenu : un flux qui traverse plusieurs PoP n'est plus
+        additionne autant de fois. Les applications suivent : celles du point
+        de vue ``vantage`` (celui qui compte) et de ce meme exporteur -- elles
+        additionnaient jusqu'ici la bordure ET les PoP.
+        """
+        meilleurs: dict[tuple[int, str], SubscriberCounters] = {}
+        retenu: dict[tuple[int, str], str] = {}
+        for (sid, point, exporteur), c in self._subs.items():
+            cle = (sid, point)
+            actuel = meilleurs.get(cle)
+            if actuel is None or c.down_bytes + c.up_bytes > actuel.down_bytes + actuel.up_bytes:
+                meilleurs[cle] = c
+                retenu[cle] = exporteur
+        # Les applications : du point de vue qui compte (s'il a vu ce client),
+        # sinon du meilleur disponible, et toujours d'un seul exporteur.
+        points_par_client: dict[int, set[str]] = {}
+        for sid, point in meilleurs:
+            points_par_client.setdefault(sid, set()).add(point)
+        apps: dict[tuple[int, str], AppCounters] = {}
+        for (sid, point, exporteur, app), a in self._apps.items():
+            vus = points_par_client.get(sid, set())
+            choisi = vantage if vantage in vus else (sorted(vus)[0] if vus else point)
+            if point != choisi or retenu.get((sid, point)) != exporteur:
+                continue
+            cumul = apps.setdefault((sid, app), AppCounters(subscriber_id=sid, app=app))
+            cumul.down_bytes += a.down_bytes
+            cumul.up_bytes += a.up_bytes
         lot = FlushBatch(
             ts=ts,
-            subscribers=list(self._subs.values()),
-            apps=list(self._apps.values()),
+            subscribers=list(meilleurs.values()),
+            apps=list(apps.values()),
             hosts=list(self._hosts.values()),
             destinations=list(self._dests.values()),
         )
