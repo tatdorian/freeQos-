@@ -1137,7 +1137,3 @@ details.pick-dd[open] > summary::after { content: "\25B4"; }
 .pl-ports td .hint { display: block; font-size: .72rem; }
 .pl-hot td { background: color-mix(in srgb, var(--crit, #d70015) 8%, transparent); }
 .pl-more { margin: .3rem 0 0; font-size: .78rem; }
-
-/* Sites VLAN ranges sous le routeur qui les porte (Queues by node). */
-.exec-table tr.node-child td { background: color-mix(in srgb, var(--fill) 45%, transparent); }
-.exec-table .tree-elbow { color: var(--faint); margin-right: .15rem; }
