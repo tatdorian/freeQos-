@@ -9337,9 +9337,12 @@ setInterval(() => {
   // Vue Files live : ne pas ecraser un champ de debit en cours de saisie.
   if (state.view === 'exec' && document.activeElement &&
       document.activeElement.tagName === 'INPUT') return;
-  // Trafic : ne pas ecraser un formulaire d'exporteur en cours de saisie.
+  // Trafic : ne pas ecraser un FORMULAIRE en cours de saisie (regle, exporteur).
+  // Un champ de recherche ou de filtre, lui, n'arrete plus le direct : un clic
+  // dans la recherche figeait la page pour toujours.
   if (state.view === 'traffic' && document.activeElement &&
-      document.activeElement.tagName === 'INPUT') return;
+      ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) &&
+      document.activeElement.closest('form')) return;
   refresh();
   // Le tiroir d'un lien suit le meme rythme : on regarde un debit justement
   // quand il bouge.
