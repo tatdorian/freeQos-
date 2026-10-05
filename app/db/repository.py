@@ -20,6 +20,23 @@ def _rows(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
     return [dict(record) for record in records]
 
 
+#: UN CLIENT AU PLAFOND DE SON FORFAIT n'est pas un reseau en difficulte.
+#: Quand il tourne a 85 % ou plus de sa limite (dans un sens ou dans l'autre),
+#: la latence mesuree a cet instant vient de SA propre file : elle est ecartee
+#: du jugement du reseau (latence, bufferbloat, sante) et comptee a part.
+#: Suppose ``m`` (subscriber_metrics), ``s`` (subscribers) et ``pol``
+#: (shaping_policies de l'abonne, en LEFT JOIN).
+AU_PLAFOND_SQL = """(
+    (coalesce(pol.max_down_mbps, s.plan_down_mbps) > 0
+     AND coalesce(m.tx_bps, 0) >= 0.85 * coalesce(pol.max_down_mbps, s.plan_down_mbps) * 1e6)
+ OR (coalesce(pol.max_up_mbps, s.plan_up_mbps) > 0
+     AND coalesce(m.rx_bps, 0) >= 0.85 * coalesce(pol.max_up_mbps, s.plan_up_mbps) * 1e6)
+)"""
+JOINTURE_LIMITE_SQL = (
+    "LEFT JOIN shaping_policies pol ON pol.scope = 'subscriber' AND pol.target_key = s.login"
+)
+
+
 def _with_effective_limits(row: dict[str, Any]) -> dict[str, Any]:
     """Ajoute la limite REELLEMENT appliquee et d'ou elle vient.
 
@@ -282,13 +299,15 @@ class MetricsRepository:
 
         async with self._pool.acquire() as conn:
             records = await conn.fetch(
-                """
+                f"""
                 SELECT m.subscriber_id, s.login, s.kind, p.name AS pop_name,
                        m.rtt_ms,
-                       COALESCE(m.rx_bps, 0) + COALESCE(m.tx_bps, 0) AS load_bps
+                       COALESCE(m.rx_bps, 0) + COALESCE(m.tx_bps, 0) AS load_bps,
+                       {AU_PLAFOND_SQL} AS at_cap
                   FROM subscriber_metrics m
                   JOIN subscribers s ON s.id = m.subscriber_id
                   LEFT JOIN pops p   ON p.id = s.pop_id
+                  {JOINTURE_LIMITE_SQL}
                  WHERE m.ts > now() - $1::interval
                    AND m.rtt_ms IS NOT NULL
                    AND ($2::int IS NULL OR s.pop_id = $2)
@@ -310,8 +329,13 @@ class MetricsRepository:
                     "kind": record["kind"],
                     "pop_name": record["pop_name"],
                     "samples": [],
+                    "capped": 0,
                 },
             )
+            # Au plafond de son forfait : sa propre file, pas le reseau.
+            if record["at_cap"]:
+                entry["capped"] += 1
+                continue
             entry["samples"].append((record["rtt_ms"], record["load_bps"]))
 
         notes: list[dict[str, Any]] = []
@@ -334,6 +358,7 @@ class MetricsRepository:
                     "kind": entry["kind"],
                     "pop_name": entry["pop_name"],
                     **verdict.as_dict(),
+                    "capped_samples": entry["capped"],
                     "qoe": note.as_dict() if note else None,
                 }
             )
@@ -406,20 +431,24 @@ class MetricsRepository:
         filtre = sites or None
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 WITH par_bucket AS (
-                    SELECT date_bin($2::interval, ts, TIMESTAMPTZ 'epoch') AS bucket,
-                           subscriber_id,
-                           avg(rtt_ms) AS rtt,
-                           avg(COALESCE(tx_bps, 0)) AS tx,
-                           avg(COALESCE(rx_bps, 0) + COALESCE(tx_bps, 0)) AS charge
-                      FROM subscriber_metrics
-                     WHERE ts > now() - $1::interval
+                    SELECT date_bin($2::interval, m.ts, TIMESTAMPTZ 'epoch') AS bucket,
+                           m.subscriber_id,
+                           -- La latence d'un client AU PLAFOND de son forfait
+                           -- est celle de sa propre file : ecartee de la sante.
+                           avg(m.rtt_ms) FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS rtt,
+                           avg(COALESCE(m.tx_bps, 0)) AS tx,
+                           avg(COALESCE(m.rx_bps, 0) + COALESCE(m.tx_bps, 0)) AS charge
+                      FROM subscriber_metrics m
+                      JOIN subscribers s ON s.id = m.subscriber_id
+                      {JOINTURE_LIMITE_SQL}
+                     WHERE m.ts > now() - $1::interval
                        -- Un SITE (le noeud selectionne), ou tout le reseau.
-                       AND ($3::text[] IS NULL OR subscriber_id IN (
-                            SELECT s.id FROM subscribers s JOIN pops p ON p.id = s.pop_id
-                             WHERE p.name = ANY($3)))
-                     GROUP BY bucket, subscriber_id
+                       AND ($3::text[] IS NULL OR m.subscriber_id IN (
+                            SELECT s2.id FROM subscribers s2 JOIN pops p2 ON p2.id = s2.pop_id
+                             WHERE p2.name = ANY($3)))
+                     GROUP BY bucket, m.subscriber_id
                 ),
                 -- La limite REELLEMENT appliquee a chaque abonne (forcee, sinon
                 -- son plan) : sert a la charge du client le plus charge.
@@ -1155,16 +1184,23 @@ class MetricsRepository:
         """
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                """
+                f"""
                 SELECT s.id AS subscriber_id, s.login, s.kind, p.name AS pop_name,
-                       count(*) AS samples,
-                       percentile_cont(0.5) WITHIN GROUP (ORDER BY m.rtt_ms) AS median_ms,
-                       percentile_cont(0.95) WITHIN GROUP (ORDER BY m.rtt_ms) AS p95_ms,
-                       min(m.rtt_ms) AS best_ms,
+                       count(*) FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS samples,
+                       count(*) FILTER (WHERE {AU_PLAFOND_SQL}) AS capped_samples,
+                       percentile_cont(0.5) WITHIN GROUP (ORDER BY m.rtt_ms)
+                           FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS median_ms,
+                       percentile_cont(0.95) WITHIN GROUP (ORDER BY m.rtt_ms)
+                           FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS p95_ms,
+                       min(m.rtt_ms) FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS best_ms,
+                       percentile_cont(0.5) WITHIN GROUP (ORDER BY m.rtt_ms)
+                           FILTER (WHERE {AU_PLAFOND_SQL}) AS capped_median_ms,
+                       (array_agg({AU_PLAFOND_SQL} ORDER BY m.ts DESC))[1] AS at_cap_now,
                        max(m.ts) AS last_at
                   FROM subscriber_metrics m
                   JOIN subscribers s ON s.id = m.subscriber_id
                   LEFT JOIN pops p ON p.id = s.pop_id
+                  {JOINTURE_LIMITE_SQL}
                  WHERE m.ts > now() - make_interval(mins => $1)
                    AND m.rtt_ms IS NOT NULL
                  GROUP BY s.id, p.name

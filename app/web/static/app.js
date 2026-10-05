@@ -459,6 +459,31 @@ function pingsPerdus(detail) {
 const SANS_REPONSE = 'All pings of the last series were lost: line saturated (the queue drops ' +
   'them) or client unreachable';
 
+/** LE CLIENT UTILISE TOUT SON FORFAIT (85 % ou plus, dans un sens ou l'autre).
+ *  Sa latence vient alors de SA propre file : ce n'est pas le reseau qui va
+ *  mal. Elle s'affiche en neutre, et ne compte ni dans la pire latence d'un
+ *  noeud ni dans sa note. */
+function auPlafond(s) {
+  if (!s) return false;
+  const bas = (Number(s.effective_down_mbps) || 0) * 1e6;
+  const haut = (Number(s.effective_up_mbps) || 0) * 1e6;
+  return (bas > 0 && (Number(s.tx_bps) || 0) >= 0.85 * bas) ||
+    (haut > 0 && (Number(s.rx_bps) || 0) >= 0.85 * haut);
+}
+const AU_PLAFOND = 'The client is using its whole plan right now: this latency comes from its own ' +
+  'queue, not from the network. It is not counted against the network.';
+
+/** Latence d'un client, en tenant compte du plafond. */
+function rttClient(s, avecPastille) {
+  if (!auPlafond(s)) return avecPastille ? null : rtt(s.rtt_ms, s.rtt_detail);
+  const valeur = s.rtt_ms != null ? Math.round(s.rtt_ms) + ' ms'
+    : pingsPerdus(s.rtt_detail) ? 'no reply' : '-';
+  return avecPastille
+    ? sqCell(valeur + ' · at limit', 'none', AU_PLAFOND)
+    : '<span style="color:var(--muted)" title="' + esc(AU_PLAFOND) + '">' + esc(valeur) +
+      ' <small>at limit</small></span>';
+}
+
 function rtt(value, detail) {
   if (value === null || value === undefined) {
     return pingsPerdus(detail)
@@ -1044,7 +1069,7 @@ async function loadTopTalkers() {
         '<td class="num" style="color:var(--down)">' + esc(bpsText(r.tx_bps)) + '</td>' +
         '<td>' + meter(r.tx_bps, limiteDown) + '</td>' +
         '<td class="num" style="color:var(--up)">' + esc(bpsText(r.rx_bps)) + '</td>' +
-        '<td class="num">' + rtt(r.rtt_ms, r.rtt_detail) + '</td>' +
+        '<td class="num">' + rttClient(r) + '</td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
   host.querySelectorAll('tr[data-sub]').forEach((tr) => {
@@ -1305,6 +1330,8 @@ async function loadExec() {
 function clientScore(s) {
   const note = qoeOf(s.subscriber_id);
   if (note) return note.score;
+  // Au plafond : sa latence du moment est celle de sa file, pas un verdict.
+  if (auPlafond(s)) return null;
   return qoeScore(s.rtt_ms);
 }
 
@@ -1682,7 +1709,8 @@ function renderLatencyClients() {
   }
   const ms = (v, seuils) => v == null ? '<span class="na">-</span>'
     : sqCell(Math.round(v) + ' ms', v < seuils[0] ? 'ok' : v < seuils[1] ? 'warn' : 'crit');
-  const ressenti = { good: ['ok', 'Good'], fair: ['warn', 'Fair'], poor: ['crit', 'Poor'] };
+  const ressenti = { good: ['ok', 'Good'], fair: ['warn', 'Fair'], poor: ['crit', 'Poor'],
+    limit: ['none', 'At plan limit'] };
   host.innerHTML = '<table><thead><tr><th>Client</th><th>Site</th>' +
     '<th>Experience</th>' +
     '<th class="num" title="Usual latency: median over the period">Latency</th>' +
@@ -1888,7 +1916,8 @@ function aggregateNodes(subs, childCounts) {
     n.effUp += (Number(s.effective_up_mbps) || 0) * 1e6;
     n.confDown += (Number(s.plan_down_mbps) || 0) * 1e6;
     n.confUp += (Number(s.plan_up_mbps) || 0) * 1e6;
-    if (s.rtt_ms !== null && s.rtt_ms !== undefined) {
+    // Un client au plafond de son forfait ne fait pas la pire latence du noeud.
+    if (s.rtt_ms !== null && s.rtt_ms !== undefined && !auPlafond(s)) {
       n.rttMax = n.rttMax === null ? s.rtt_ms : Math.max(n.rttMax, s.rtt_ms);
     }
     // QoO du noeud = le PIRE de ses circuits, jamais la moyenne : dix abonnes en
@@ -2014,7 +2043,7 @@ function renderNodeTable(host) {
           '</span>' : '') + '</td>' +
       '<td class="num">' + n.circuits + '</td>' +
       txCell + rxCell + effCell + confCell +
-      '<td class="num">' + ((n.subs || []).some((x) => pingsPerdus(x.rtt_detail))
+      '<td class="num">' + ((n.subs || []).some((x) => pingsPerdus(x.rtt_detail) && !auPlafond(x))
         ? sqCell('no reply', 'crit', SANS_REPONSE) : rttSq(n.rttMax)) + '</td>' +
       '<td class="num">' + qooCell(n.qoe, n.rttMax) + '</td></tr>';
 
@@ -2030,7 +2059,7 @@ function renderNodeTable(host) {
         '<td class="num">' + esc(mbps(s.effective_down_mbps || 0) + ' / ' + mbps(s.effective_up_mbps || 0)) + '</td>' +
         '<td class="num na">' + (!s.plan_down_mbps && !s.plan_up_mbps ? 'no plan'
           : esc(mbps(s.plan_down_mbps || 0) + ' / ' + mbps(s.plan_up_mbps || 0))) + '</td>' +
-        '<td class="num">' + rttSq(s.rtt_ms, s.rtt_detail) + '</td>' +
+        '<td class="num">' + (rttClient(s, true) || rttSq(s.rtt_ms, s.rtt_detail)) + '</td>' +
         '<td class="num">' + qooCell(qoeOf(s.subscriber_id), s.rtt_ms) + '</td></tr>';
     }).join('');
     return nodeRow + subRows;
@@ -2191,9 +2220,17 @@ function renderQueuePanels() {
     ? (pingsPerdus(detail) ? sqCell('no reply', 'crit', SANS_REPONSE) : sqCell('-', 'none'))
     : sqCell(Math.round(ms) + 'ms', rttSevJs(ms));
   // Un noeud est "sans reponse" des qu'UN de ses clients l'est : c'est son pire.
-  const perduIci = isClient ? client.rtt_detail
-    : ((node.subs || []).map((x) => x.rtt_detail).find(pingsPerdus) || null);
-  const qooSq = qooCell(note, rttMs);
+  const clientPlafond = isClient && auPlafond(client);
+  const perduIci = isClient ? (clientPlafond ? null : client.rtt_detail)
+    : ((node.subs || []).filter((x) => !auPlafond(x)).map((x) => x.rtt_detail).find(pingsPerdus) || null);
+  // Au plafond sans note mesuree hors plafond : pas de verdict tire de la
+  // latence de sa propre file.
+  // Pings tous perdus SANS etre au plafond : un vrai signal, la note le dit
+  // (elle restait verte a 95 a cote d'un « no reply »).
+  const qooSq = clientPlafond && !note ? sqCell('-', 'none', AU_PLAFOND)
+    : isClient && pingsPerdus(client.rtt_detail)
+      ? sqCell((note ? Math.round(note.score) + ' · ' : '') + 'no reply', 'crit', SANS_REPONSE)
+      : qooCell(note, rttMs);
   const naSq = sqCell('n/d', 'none');
   const naCell = '<td class="num na">' + naSq + '</td>';
 
@@ -2223,7 +2260,8 @@ function renderQueuePanels() {
     '<tr><td>' + (isClient ? 'Latency' : 'Worst latency') + '</td><td class="num" colspan="2">' +
       // Un client SANS REPONSE est le pire de tous : il l'emporte sur la
       // latence des autres (« 12 ms » s'affichait a cote d'un « no reply »).
-      (pingsPerdus(perduIci) ? sqCell('no reply', 'crit', SANS_REPONSE) : rttSq(rttMs)) +
+      (clientPlafond ? rttClient(client, true)
+        : pingsPerdus(perduIci) ? sqCell('no reply', 'crit', SANS_REPONSE) : rttSq(rttMs)) +
       '</td></tr>' +
     '<tr><td>' + (isClient ? 'Score' : 'Worst score') + '</td><td class="num" colspan="2">' +
       qooSq + '</td></tr>' +
@@ -3593,7 +3631,7 @@ async function loadSubscribers() {
         '<td>' + (mesure ? meter(r.tx_bps, limiteDown) : '') + '</td>' +
         '<td class="num" style="color:var(--up)">' +
           (mesure ? esc(bpsText(r.rx_bps)) : trou) + '</td>' +
-        '<td class="num">' + (mesure ? rtt(r.rtt_ms, r.rtt_detail) : trou) + '</td>' +
+        '<td class="num">' + (mesure ? rttClient(r) : trou) + '</td>' +
         '<td>' + bloatBadge(bloatParId[r.subscriber_id]) + '</td>' +
         '<td>' + (parLogin[r.login]
           ? '<span class="boost-pill" title="' +
@@ -9425,6 +9463,7 @@ const AIDE = {
   'poor experience': 'Clients with high latency (>100 ms), loss (2%+), strong bufferbloat (+150 ms) or a score under 50.',
   'fair': 'Noticeable but usable: latency 30–100 ms, spikes, some loss or bufferbloat of +30 to +150 ms.',
   'good': 'Latency under 30 ms, stable, no loss.',
+  'at plan limit': 'The client used its whole plan the whole period: its latency was that of its own queue, so it is not judged as a network problem.',
   'clients measured': 'Clients that answered the latency probe over the period.',
   // ---------------------------------------------------------- colonnes
   'client': 'The subscriber (PPPoE login or static-client reference).',
