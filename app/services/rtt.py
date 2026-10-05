@@ -156,8 +156,18 @@ class RttProber:
         return par_routeur
 
     def forget_all_but(self, subscriber_ids: set[int]) -> None:
+        """Oublie les abonnes partis -- une fois leur mesure PERIMEE seulement.
+
+        Les oublier des le premier cycle ou ils manquent effacait leur latence
+        a chaque raté de collecte (routeur qui repond mal une fois, session qui
+        se reconnecte) : l'interface repassait a "-" jusqu'a la sonde suivante.
+        La derniere mesure reste donc tant qu'elle est fraiche (``max_age_s``) ;
+        l'etat reste borne, puisque tout finit par perimer.
+        """
+        maintenant = self._clock()
         for subscriber_id in self._readings.keys() - subscriber_ids:
-            del self._readings[subscriber_id]
+            if maintenant - self._readings[subscriber_id].measured_at > self.max_age_s:
+                del self._readings[subscriber_id]
 
     async def probe(self, targets: list[tuple[int, str, MikrotikCollector]]) -> int:
         """Sonde le prochain lot de CHAQUE PoP. ``targets`` = (id, ip, collecteur).
