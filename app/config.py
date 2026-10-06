@@ -225,8 +225,14 @@ class Settings(BaseSettings):
     # Connexion a l'interface (comptes 'read' / 'edit'). Ne se coupe que pour un
     # lab isole : sans elle, quiconque atteint la page peut ecrire sur les routeurs.
     auth_enabled: bool = True
-    # Duree d'une session SANS activite : chaque requete la prolonge.
-    session_ttl_hours: int = 168
+    # Duree d'une session SANS activite : chaque requete la prolonge. Une
+    # journee : le lendemain matin, on se reconnecte (un onglet reste ouvert,
+    # qui rafraichit sa page, garde sa session).
+    session_ttl_hours: int = 24
+    # Duree MAXIMALE d'une session, activite ou pas : au-dela, on se reconnecte.
+    # Un ecran d'exploitation allume en permanence redemande le mot de passe
+    # une fois par mois, une session volee ne vit pas indefiniment.
+    session_max_hours: int = 720
 
     # --- Base de donnees ---
     database_url: str = "postgresql://qos:changeme@localhost:5432/qos"

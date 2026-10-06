@@ -48,6 +48,7 @@ from app.api import (
 from app.config import Settings, get_settings
 from app.container import build_container, shutdown_container
 from app.logging_conf import setup_logging
+from app.web.headers import apply_security_headers
 from app.web.ui import STATIC_DIR
 from app.web.ui import router as ui_router
 
@@ -243,13 +244,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def chronometre(request: Request, call_next: Any) -> Any:
-        """Chaque reponse dit ce qu'elle a coute (``Server-Timing``, visible dans
+        """Chaque reponse porte les en-tetes de securite (``app.web.headers``),
+        et dit ce qu'elle a coute (``Server-Timing``, visible dans
         l'onglet Reseau du navigateur), et une requete de plus d'une seconde est
         journalisee avec sa route : une page lente se diagnostique sans outil."""
         debut = time.perf_counter()
         response = await call_next(request)
         duree_ms = (time.perf_counter() - debut) * 1000
         response.headers["Server-Timing"] = f"app;dur={duree_ms:.1f}"
+        apply_security_headers(request, response)
         if duree_ms > 1000 and request.url.path.startswith(settings.api_prefix):
             logger.warning(
                 "Requete lente : %s %s en %.0f ms", request.method, request.url.path, duree_ms
