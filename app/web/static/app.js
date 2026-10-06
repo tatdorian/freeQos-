@@ -1589,6 +1589,10 @@ async function loadExec() {
   });
   pPoints.then((points) => {
     exec.hotspots = (points && points.hotspots) || [];
+    exec.hotspotData = points || null;
+    // La capacite de chaque noeud (son lien montant) arrive avec les points
+    // de saturation : le tableau des noeuds se redessine avec elle.
+    if (exec.nodes) renderNodeTable(document.getElementById('exec-nodes'));
     renderHotspots(document.getElementById('exec-hotspots'), points);
     // Le verdict nomme les liens satures : il se redessine quand ils arrivent.
     if (exec.subs) renderExecSummary(document.getElementById('exec-summary'));
@@ -1752,6 +1756,13 @@ function renderExecSummary(host) {
     faits.push(['warn', tendus.length + ' link(s) between 70 and 90%: ' +
       tendus.slice(0, 3).map(nomLien).join(', ')]);
   }
+  // Une ANTENNE qui chute : avant que ses clients ne le sentent a la pointe.
+  ((exec.hotspotData && exec.hotspotData.radio_alerts) || []).slice(0, 4).forEach((r) => {
+    faits.push([r.share_of_nominal < 0.5 ? 'crit' : 'warn', 'Radio <b>' + esc(r.name) + '</b>' +
+      (r.pop_name ? ' <span class="pct-hint">(' + esc(r.pop_name) + ')</span>' : '') +
+      ' carries ' + esc(mbps(r.capacity_mbps)) + ' of ' + esc(mbps(r.nominal_mbps)) + ' (' +
+      Math.round(r.share_of_nominal * 100) + '% of nominal): rain, interference or alignment']);
+  });
   if (notes.poor) faits.push(['crit', notes.poor + ' client(s) with a poor experience']);
   if (sondeMuette()) {
     faits.push(['warn', 'The latency probe gets no reply from any client: the probe is at fault, ' +
@@ -1918,8 +1929,10 @@ function renderHotspots(host, data) {
         const pkQuand = (h.peak_down_mbps || 0) >= (h.peak_up_mbps || 0) ? h.peak_down_at : h.peak_up_at;
         const pkSens = (h.peak_down_mbps || 0) >= (h.peak_up_mbps || 0) ? 'down' : 'up';
         return '<div class="hot-row">' +
-          '<div class="hot-name"><b>' + esc(h.name) + '</b><span class="hint">' + esc(h.router) +
-            ' &middot; ' + esc(h.interface) + '</span></div>' +
+          '<div class="hot-name"><b>' + esc(h.name) + '</b> ' + badgeMilieu(h) +
+            '<span class="hint">' + esc(h.router) + ' &middot; ' + esc(h.interface) +
+            ' <a href="#" class="medium-edit" data-medium-router="' + esc(h.router) +
+            '" data-medium-iface="' + esc(h.interface) + '">wired / radio…</a></span></div>' +
           '<div class="hot-bar" title="Capacity ' + esc(mbps(h.capacity_mbps)) + ' (' +
             esc(h.capacity_source || '') + ')">' +
             '<div class="lb-track"><div class="lb-fill ' + sev + '" style="width:' +
@@ -1955,14 +1968,86 @@ function renderHotspots(host, data) {
         '<b>Bandwidth</b> button on the link in the <a href="#/network">network tree</a> to track their ' +
         'saturation.</div>' + inconnus.slice(0, 20).map((h) => '<div class="hot-mini"><b>' + esc(h.name) +
         '</b> <span class="pct-hint">' + esc(h.router) + ' &middot; ' + esc(h.interface) + ' &middot; ' +
-        esc(HOT_SIDE[h.side] || h.side) + '</span><span>' +
+        esc(HOT_SIDE[h.side] || h.side) + ' <a href="#" class="medium-edit" data-medium-router="' +
+        esc(h.router) + '" data-medium-iface="' + esc(h.interface) + '">wired / radio…</a>' +
+        '</span><span>' +
         esc(mbps(Math.max(h.now_down_mbps || 0, h.now_up_mbps || 0))) + ' now, peak ' +
         esc(mbps(Math.max(h.peak_down_mbps || 0, h.peak_up_mbps || 0))) + '</span></div>').join('') +
         '</details>'
       : '') +
     '<div class="exec-legend"><span><i class="sq ok"></i>under 70%</span><span><i class="sq warn"></i>70-90%</span>' +
       '<span><i class="sq crit"></i>90%+</span><span><i class="hot-peak-key"></i>peak over the period</span>' +
-      '<span>Capacity = the lowest known of: rate set on the link, measured radio capacity, port speed</span></div>';
+      '<span>Capacity: <b>wired</b> = fixed (declared, or port speed) · <b>radio</b> = read live on ' +
+      'its antenna · <b>auto</b> = the lowest known</span></div>';
+  host.querySelectorAll('.medium-edit').forEach((a) => a.addEventListener('click', (e) => {
+    e.preventDefault();
+    const ligne = lignes.find((h) => h.router === a.dataset.mediumRouter && h.interface === a.dataset.mediumIface);
+    ouvrirMilieu(ligne || { router: a.dataset.mediumRouter, interface: a.dataset.mediumIface });
+  }));
+}
+
+/** Declarer un lien filaire (capacite fixe) ou radio (capacite de l'antenne,
+ *  en direct). Fenetre a part : le rafraichissement de la page ne l'efface pas. */
+async function ouvrirMilieu(h) {
+  let infos = { media: [], antennas: [] };
+  try { infos = await api('/capacity/media'); } catch (err) { /* liste vide */ }
+  const actuel = (infos.media || []).find((m) => m.router_name === h.router && m.interface === h.interface) || {};
+  const dlg = document.createElement('dialog');
+  dlg.className = 'medium-dialog';
+  const antennes = (infos.antennas || []).filter(Boolean);
+  dlg.innerHTML = '<form method="dialog" class="medium-form">' +
+    '<h3>' + esc(h.name || h.interface) + ' <span class="pct-hint">' + esc(h.router) + ' · ' + esc(h.interface) + '</span></h3>' +
+    '<p class="hint">Where does the capacity of this link come from?</p>' +
+    '<label class="medium-opt"><input type="radio" name="medium" value=""' + (!actuel.medium ? ' checked' : '') + '>' +
+      '<span><b>Auto</b><span class="hint">The lowest known: rate set on the link, a radio matched ' +
+      'automatically, or the port speed.</span></span></label>' +
+    '<label class="medium-opt"><input type="radio" name="medium" value="wired"' + (actuel.medium === 'wired' ? ' checked' : '') + '>' +
+      '<span><b>Wired</b> (fibre, copper) <span class="hint">Fixed capacity, nothing to poll — like ' +
+      'Preseem or LibreQoS.</span>' +
+      '<span class="medium-sub">Capacity <input type="number" name="capacity" min="1" step="any" ' +
+        'placeholder="port speed' + (h.port_speed_mbps ? ' (' + esc(mbps(h.port_speed_mbps)) + ')' : '') + '" value="' +
+        esc(actuel.capacity_mbps || '') + '"> Mbps</span></span></label>' +
+    '<label class="medium-opt"><input type="radio" name="medium" value="radio"' + (actuel.medium === 'radio' ? ' checked' : '') + '>' +
+      '<span><b>Radio</b> (antenna) <span class="hint">Capacity read live on the antenna: it follows ' +
+      'rain fade, interference and alignment, and an alert fires when it drops.</span>' +
+      '<span class="medium-sub">Antenna <select name="antenna">' +
+        (antennes.length ? antennes.map((r) => '<option value="' + esc(r.name) + '"' +
+          (actuel.backhaul_name === r.name ? ' selected' : '') + '>' + esc(r.name) +
+          (r.pop_name ? ' — ' + esc(r.pop_name) : '') +
+          (r.capacity_mbps ? ' (' + esc(mbps(r.capacity_mbps)) + ' now)' : ' (silent)') + '</option>').join('')
+          : '<option value="">No antenna polled yet — add it in Devices</option>') +
+      '</select></span></span></label>' +
+    '<div class="medium-error"></div>' +
+    '<div class="actions"><button type="button" class="sm" data-cancel>Cancel</button>' +
+      '<button type="submit" class="sm primary">Save</button></div></form>';
+  document.body.appendChild(dlg);
+  const fermer = () => { dlg.close(); dlg.remove(); };
+  dlg.querySelector('[data-cancel]').addEventListener('click', fermer);
+  dlg.addEventListener('cancel', fermer);
+  dlg.querySelector('form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const milieu = f.medium.value;
+    const erreur = dlg.querySelector('.medium-error');
+    try {
+      if (!milieu) {
+        await api('/capacity/media/' + encodeURIComponent(h.router) + '/' + encodeURIComponent(h.interface),
+          { method: 'DELETE' });
+      } else {
+        await api('/capacity/media', { method: 'PUT', body: JSON.stringify({
+          router: h.router, interface: h.interface, medium: milieu,
+          capacity_mbps: milieu === 'wired' && f.capacity.value ? Number(f.capacity.value) : null,
+          backhaul_name: milieu === 'radio' ? (f.antenna.value || null) : null,
+        }) });
+      }
+      fermer();
+      toast(esc((h.name || h.interface) + ': ' + (milieu || 'auto') + '.'), 4000);
+      refresh();
+    } catch (err) {
+      erreur.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+  dlg.showModal();
 }
 
 /** Une mesure de latence lisible : la mediane, et tout le reste en infobulle. */
@@ -2133,7 +2218,7 @@ function renderLatencySegments(host, data) {
 function renderExecLegend(host) {
   if (!host) return;
   host.innerHTML =
-    '<span><b>Throughput</b> vs limit: <i class="sq ok"></i>&lt;70% <i class="sq warn"></i>70-90% ' +
+    '<span><b>Throughput</b> vs capacity (node) or limit (client): <i class="sq ok"></i>&lt;70% <i class="sq warn"></i>70-90% ' +
       '<i class="sq crit"></i>&gt;90%</span>' +
     '<span><b>Latency</b>: <i class="sq ok"></i>&lt;30 ms <i class="sq warn"></i>30-100 ms ' +
       '<i class="sq crit"></i>&gt;100 ms</span>' +
@@ -2319,6 +2404,43 @@ function vlanBadge(c) {
     (v.vlan_id != null ? ' ' + esc(v.vlan_id) : '') + '</span>';
 }
 
+/** Le lien montant d'un noeud (vers le coeur ou le transit), tel que le
+ *  donnent les points de saturation : capacite, nature (filaire / radio). */
+function nodeUplink(n) {
+  const montants = (exec.hotspotData && exec.hotspotData.uplinks) || {};
+  return montants[n.name] || montants[n.router] || null;
+}
+
+/** "300 Mbps · radio" / "1 Gbps · wired" : ce que le noeud peut porter. */
+function capaciteNoeud(lien, n) {
+  if (!lien || !lien.capacity_mbps) {
+    return '<span class="na" title="Uplink capacity unknown: declare the uplink wired or radio in ' +
+      'Saturation risks. Shown here: the sum of the clients\' limits.">' +
+      esc(mbps(n.effDown / 1e6) + ' / ' + mbps(n.effUp / 1e6)) + ' <span class="pct-hint">limits</span></span>';
+  }
+  return esc(mbps(lien.capacity_mbps)) + ' ' + badgeMilieu(lien);
+}
+
+/** Pastille de la nature d'un lien et, pour une radio, de son etat. */
+function badgeMilieu(lien) {
+  const r = lien.radio;
+  if (lien.medium === 'radio') {
+    const etat = !r || r.state === 'missing' ? ['crit', 'antenna not found']
+      : r.state === 'silent' ? ['crit', 'antenna silent']
+      : r.state === 'degraded' ? ['warn', Math.round(r.share_of_nominal * 100) + '% of nominal']
+      : ['ok', 'live'];
+    return '<span class="badge medium-radio ' + etat[0] + '" title="Radio link: capacity read live on ' +
+      esc((r && r.name) || '?') + (r && r.nominal_mbps ? ' (nominal ' + esc(mbps(r.nominal_mbps)) + ')' : '') +
+      ' — ' + esc(etat[1]) + '">radio · ' + esc(etat[1]) + '</span>';
+  }
+  if (lien.medium === 'wired') {
+    return '<span class="badge medium-wired" title="Wired link: fixed capacity (' +
+      esc(lien.capacity_source || '') + ')">wired</span>';
+  }
+  return '<span class="badge" title="Not declared: the smallest known capacity (' +
+    esc(lien.capacity_source || 'none') + '). Declare it wired or radio in Saturation risks.">auto</span>';
+}
+
 function renderNodeTable(host) {
   const nodes = exec.nodes;
   if (!nodes.length) {
@@ -2341,8 +2463,10 @@ function renderNodeTable(host) {
   const head =
     '<table class="exec-table"><thead><tr><th></th><th>Node</th><th class="num">Clients</th>' +
     '<th class="num">Download now</th><th class="num">Upload now</th>' +
-    '<th class="num" title="Cap currently applied (plan, override or boost)">Limit &darr; / &uarr;</th>' +
-    '<th class="num" title="Sum of the sold plans">Plans &darr; / &uarr;</th>' +
+    '<th class="num" title="Node: what its uplink can carry (wired, or radio read live). ' +
+      'Client: the cap applied (plan, override or boost)">Capacity / limit</th>' +
+    '<th class="num" title="Node: plans sold against the uplink capacity. Client: its plan">' +
+      'Sold / plan</th>' +
     '<th class="num">Latency</th><th class="num" title="0-100, from bufferbloat and latency">Experience</th>' +
     '</tr></thead><tbody>';
 
@@ -2351,16 +2475,27 @@ function renderNodeTable(host) {
     const sel = exec.selected && exec.selected.type === 'node' && exec.selected.name === n.name;
     // Noeud synthetique (issu de la topologie, sans abonne mesure) : debit /
     // effectif / RTT / QoO en n/d, jamais des zeros inventes.
+    // UN NOEUD N'A PAS DE PLAN : ses clients en ont. Ce qui compte pour lui,
+    // c'est ce que son lien montant PEUT PORTER (filaire, ou radio lue en
+    // direct) et la part qu'il en utilise. A defaut de capacite connue, la
+    // somme des limites de ses clients sert de reference, et le dit.
+    const lienMontant = nodeUplink(n);
+    const capa = lienMontant && lienMontant.capacity_mbps ? lienMontant.capacity_mbps * 1e6 : null;
     const effCell = n.synthetic ? '<td class="num na">-</td>'
-      : '<td class="num">' + esc(mbps(n.effDown / 1e6) + ' / ' + mbps(n.effUp / 1e6)) + '</td>';
+      : '<td class="num">' + capaciteNoeud(lienMontant, n) + '</td>';
+    const ratio = capa && n.confDown ? n.confDown / capa : null;
     const confCell = n.synthetic ? '<td class="num na">-</td>'
-      : !n.confDown && !n.confUp
-        ? '<td class="num na" title="No plan: limits set by hand (forced) or by default">no plan</td>'
-        : '<td class="num na">' + esc(mbps(n.confDown / 1e6) + ' / ' + mbps(n.confUp / 1e6)) + '</td>';
+      : ratio !== null
+        ? '<td class="num" title="Plans sold ' + esc(mbps(n.confDown / 1e6)) + ' on an uplink of ' +
+          esc(mbps(capa / 1e6)) + '">' + sqCell(ratio.toFixed(1) + '× sold',
+            ratio <= 1 ? 'ok' : ratio <= 3 ? 'warn' : 'crit') + '</td>'
+        : !n.confDown && !n.confUp
+          ? '<td class="num na" title="No plan: limits set by hand (forced) or by default">no plan</td>'
+          : '<td class="num na">' + esc(mbps(n.confDown / 1e6) + ' / ' + mbps(n.confUp / 1e6)) + '</td>';
     const txCell = n.synthetic ? '<td class="num">' + naSq + '</td>'
-      : '<td class="num">' + usage(n.tx, n.effDown) + '</td>';
+      : '<td class="num">' + usage(n.tx, capa || n.effDown) + '</td>';
     const rxCell = n.synthetic ? '<td class="num">' + naSq + '</td>'
-      : '<td class="num">' + usage(n.rx, n.effUp) + '</td>';
+      : '<td class="num">' + usage(n.rx, capa || n.effUp) + '</td>';
     const vlans = n.vlans || [];
     const nodeRow =
       '<tr class="node-row' + (sel ? ' selected' : '') + '" data-node="' + esc(n.name) + '">' +
@@ -2663,7 +2798,10 @@ function renderQueuePanels() {
         : '<div class="empty">No client measured on this link yet.</div>');
 
     const env = (exec.envByPop || {})[node.name] || {};
-    const capa = env.capacity || env.nominal || null;
+    // Le lien MONTANT du noeud, declare filaire ou radio, fait foi ; a defaut,
+    // les backhauls rattaches au PoP.
+    const montant = nodeUplink(node);
+    const capa = (montant && montant.capacity_mbps) || env.capacity || env.nominal || null;
     const vendu = node.confDown / 1e6;
     const charge = capa ? Math.round((node.tx / 1e6 / capa) * 100) : null;
     const ratio = capa ? vendu / capa : null;
@@ -2671,7 +2809,8 @@ function renderQueuePanels() {
       '<h3>Link</h3>' +
       '<div class="lq-kv">' +
         '<span class="k">Capacity</span><span class="v">' +
-          (capa ? esc(mbps(capa)) : sqCell('unknown', 'none')) + '</span>' +
+          (capa ? esc(mbps(capa)) + (montant && montant.capacity_mbps ? ' ' + badgeMilieu(montant) : '')
+            : sqCell('unknown', 'none')) + '</span>' +
         '<span class="k">Load now</span><span class="v">' +
           (charge == null ? esc(bpsText(down)) : sqCell(charge + '%', severity(charge))) + '</span>' +
         '<span class="k">Clients</span><span class="v">' + esc(node.circuits) + '</span>' +
@@ -10375,6 +10514,20 @@ const AIDE = {
   'origin': 'Where the item comes from.',
   'package': 'Offer pushed by the API.',
   'col|plan': 'The plan sold to the client (download / upload).',
+  'col|capacity / limit': {
+    t: 'On a node row: what its uplink (towards the core or the transit) can carry. On a client row: the cap applied to the client.',
+    m: 'Wired link: the capacity declared, or the port speed. Radio link: the capacity its antenna announces live (airOS / UISP). Auto: the lowest known.',
+    r: 'A node has no plan — its clients do. Its download / upload % is taken against this capacity. Grey “limits” = uplink capacity unknown: the sum of the clients’ limits is shown instead.',
+    a: 'Declare each uplink wired or radio with “wired / radio…” in Saturation risks.',
+  },
+  'col|sold / plan': {
+    t: 'On a node row: the plans sold behind it divided by its uplink capacity. On a client row: its plan.',
+    s: [[OK, 'up to 1×: everything sold fits at once'], [WARN, '1 to 3×: usual for residential access'], [CRIT, 'over 3×: the uplink will be full at busy hours']],
+  },
+  'radio': {
+    t: 'Radio link: its capacity is read live on its antenna and follows rain fade, interference and alignment.',
+    s: [[OK, 'live: at or near its nominal capacity'], [WARN, 'under 70% of nominal: degraded'], [CRIT, 'silent: no recent reading — capacity unknown']],
+  },
   'heat|experience score': { t: 'Experience score of the step (the worst client of the node).', s: ECHELLE_SCORE },
   'heat|latency': { t: '90th percentile of the latency of the step: 9 pings out of 10 were faster.', s: ECHELLE_LATENCE },
   'heat|load vs limit': {

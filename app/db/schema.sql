@@ -624,6 +624,20 @@ CREATE TABLE IF NOT EXISTS auth_events (
 CREATE INDEX IF NOT EXISTS auth_events_at_idx ON auth_events (at DESC);
 CREATE INDEX IF NOT EXISTS auth_events_email_idx ON auth_events (email, at DESC);
 
+-- Nature de chaque lien, declaree par l'exploitant : filaire (capacite fixe,
+-- ou vitesse du port) ou radio (capacite lue en direct sur l'antenne designee).
+-- Cle : le PORT (routeur, interface), identite stable des mesures de debit.
+CREATE TABLE IF NOT EXISTS link_media (
+    router_name    TEXT NOT NULL,
+    interface      TEXT NOT NULL,
+    medium         TEXT NOT NULL CHECK (medium IN ('wired', 'radio')),
+    capacity_mbps  DOUBLE PRECISION,
+    backhaul_name  TEXT,
+    updated_by     TEXT,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (router_name, interface)
+);
+
 CREATE TABLE IF NOT EXISTS api_keys (
     id           SERIAL PRIMARY KEY,
     name         TEXT NOT NULL,
