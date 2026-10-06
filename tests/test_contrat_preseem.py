@@ -206,3 +206,14 @@ def test_la_mac_du_cpe_est_rendue_en_minuscules(ecriture) -> None:  # noqa: F811
         },
     )
     assert r.json()["attachments"][0]["cpe_mac"] == "00:10:0b:6e:4c:ff"
+
+
+def test_une_ecriture_sans_identifiant_repond_missing_id(ecriture) -> None:  # noqa: F811
+    """Le client PHP de reference connait 400 "Missing ID in URI" pour DELETE ;
+    un 405 tomberait dans "Unrecognized Response"."""
+    client, secret, _, _ = ecriture
+    for methode in ("delete", "put"):
+        for chemin in (BASE + "accounts", BASE + "accounts/"):
+            r = client.request(methode.upper(), chemin, headers=basic(secret), json={})
+            assert r.status_code == 400, (methode, chemin, r.status_code)
+            assert r.json()["detail"] == "Missing ID in URI"
