@@ -26,6 +26,7 @@ surtout, ce qui met les SEUILS au meme endroit que leur justification.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # -----------------------------------------------------------------------------
@@ -374,8 +375,27 @@ def hotspot_rows(
                 ("port speed", vitesse_port),
             ]
         else:
+            # RIEN DE DECLARE : LA NATURE SE DEDUIT TOUTE SEULE. Un lien vers une
+            # radio decouverte (voisin Ubiquiti, equipement UISP), un port radio
+            # du routeur (wlan, w60g, lte) ou une antenne interrogee qui se
+            # reconnait au bout du lien : c'est un lien radio, et sa capacite est
+            # celle que l'antenne annonce en direct. Le reste est filaire.
+            antenne = antenne_du_lien(lien, radios or {})
+            nature = (
+                "radio"
+                if antenne is not None or est_radio(lien, interface)
+                else ("wired" if (lien or port or mesure) else None)
+            )
+            if antenne is not None:
+                radio = radio_state(antenne)
+                if radio is not None:
+                    radio["name"] = antenne.get("name")
             candidats = [
                 ("set on the link", _positif(lien.get("max_down_mbps"))),
+                (
+                    "radio, live",
+                    radio.get("capacity_mbps") if radio and radio.get("live") else None,
+                ),
                 ("measured link capacity", _positif(lien.get("capacity_mbps"))),
                 ("port speed", vitesse_port),
             ]
@@ -444,6 +464,8 @@ def hotspot_rows(
                 "samples": int(mesure.get("samples") or 0),
                 "state": etat,
                 "medium": nature,
+                # Declare par l'exploitant, ou deduit (auto) : l'interface le dit.
+                "medium_declared": bool(milieu.get("medium")),
                 "wired_capacity_mbps": _positif(milieu.get("capacity_mbps"))
                 if nature == "wired"
                 else None,
@@ -541,3 +563,52 @@ def node_uplinks(lignes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         if actuel is None or (ligne.get("capacity_mbps") and not actuel.get("capacity_mbps")):
             par_routeur[ligne["router"]] = ligne
     return par_routeur
+
+
+#: Ports radio de RouterOS : carte wifi, 60 GHz, modem 4G/5G.
+_PORT_RADIO = re.compile(r"^(wlan|w60g|wifi|wl\d|lte|5g|60g)", re.IGNORECASE)
+_NATURES_RADIO = {"radio", "sector"}
+
+
+def est_radio(lien: dict[str, Any], interface: str) -> bool:
+    """Le lien est-il radio, d'apres ce que la decouverte en sait ?"""
+    if str(lien.get("target_kind") or "").lower() in _NATURES_RADIO:
+        return True
+    return bool(_PORT_RADIO.match(interface or ""))
+
+
+def _identites(*valeurs: Any) -> set[str]:
+    from app.collectors.topology import normalize_mac
+
+    sortie: set[str] = set()
+    for brut in valeurs:
+        texte = str(brut or "").strip()
+        if not texte:
+            continue
+        nu = texte.split(":", 1)[1] if texte.startswith(("mac:", "uisp:")) else texte
+        sortie.add(normalize_mac(nu) or nu.lower())
+    return sortie
+
+
+def antenne_du_lien(
+    lien: dict[str, Any], radios: dict[str, dict[str, Any]]
+) -> dict[str, Any] | None:
+    """L'antenne interrogee qui se trouve au bout de ce lien, s'il y en a une.
+
+    Reconnue par son identite PHYSIQUE (identifiant UISP ou MAC, quelle que
+    soit l'ecriture), puis par son nom en dernier recours : le nom d'un lien est
+    celui que la radio annonce, celui d'une antenne celui qu'on lui a donne.
+    """
+    if not lien or not radios:
+        return None
+    du_lien = _identites(
+        lien.get("target_uisp_device_id"), lien.get("target_mac"), lien.get("target_key")
+    )
+    nom = str(lien.get("target_name") or "").strip().lower()
+    par_nom = None
+    for antenne in radios.values():
+        if du_lien & _identites(antenne.get("uisp_device_id"), antenne.get("device_key")):
+            return antenne
+        if nom and str(antenne.get("name") or "").strip().lower() == nom:
+            par_nom = antenne
+    return par_nom

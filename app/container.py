@@ -365,6 +365,39 @@ async def build_container(settings: Settings) -> Container:
         l'arbre est donc peuple des le demarrage, sans geste de l'exploitant.
         """
         await discover_with_devices(shaping, (backhaul_provider, collection.antennas_provider))
+        await enroll_antennas()
+
+    async def enroll_antennas() -> None:
+        """Les radios Ubiquiti decouvertes deviennent des antennes interrogees,
+        des que des identifiants airOS communs sont fournis (cf.
+        ``app.services.antenna_enroll``). Sans eux, rien n'est ajoute : une
+        antenne qu'on ne peut pas lire ne donnerait qu'une erreur de plus."""
+        if not (settings.airos_username and settings.airos_password):
+            return
+        from app.services.antenna_enroll import antennas_to_enroll
+
+        try:
+            nouvelles = antennas_to_enroll(
+                await topology_repo.nodes(),
+                await antennas_repo.list_public(),
+                pop_of_router={c.name: c.config.effective_pop_name for c in registry.collectors},
+                username=settings.airos_username,
+            )
+        except Exception:  # noqa: BLE001 - l'ajout automatique ne bloque pas la decouverte
+            logger.exception("Ajout automatique des antennes impossible")
+            return
+        mot_de_passe = settings.airos_password.get_secret_value()
+        for fiche in nouvelles:
+            try:
+                await antennas_repo.create(fiche, mot_de_passe)
+                logger.info(
+                    "Antenne ajoutee automatiquement : %s (%s, %s)",
+                    fiche["name"],
+                    fiche["host"],
+                    fiche["pop_name"],
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Antenne %s non ajoutee : %s", fiche["name"], exc)
 
     async def reload_inventory() -> None:
         """Relit l'inventaire, et REDECOUVRE si le graphe ne lui correspond plus.

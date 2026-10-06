@@ -1978,7 +1978,7 @@ function renderHotspots(host, data) {
     '<div class="exec-legend"><span><i class="sq ok"></i>under 70%</span><span><i class="sq warn"></i>70-90%</span>' +
       '<span><i class="sq crit"></i>90%+</span><span><i class="hot-peak-key"></i>peak over the period</span>' +
       '<span>Capacity: <b>wired</b> = fixed (declared, or port speed) · <b>radio</b> = read live on ' +
-      'its antenna · <b>auto</b> = the lowest known</span></div>';
+      'its antenna · <b>(auto)</b> = detected by itself</span></div>';
   host.querySelectorAll('.medium-edit').forEach((a) => a.addEventListener('click', (e) => {
     e.preventDefault();
     const ligne = lignes.find((h) => h.router === a.dataset.mediumRouter && h.interface === a.dataset.mediumIface);
@@ -1999,8 +1999,8 @@ async function ouvrirMilieu(h) {
     '<h3>' + esc(h.name || h.interface) + ' <span class="pct-hint">' + esc(h.router) + ' · ' + esc(h.interface) + '</span></h3>' +
     '<p class="hint">Where does the capacity of this link come from?</p>' +
     '<label class="medium-opt"><input type="radio" name="medium" value=""' + (!actuel.medium ? ' checked' : '') + '>' +
-      '<span><b>Auto</b><span class="hint">The lowest known: rate set on the link, a radio matched ' +
-      'automatically, or the port speed.</span></span></label>' +
+      '<span><b>Automatic</b> (recommended)<span class="hint">Detected by itself: a link towards a radio ' +
+      '(or a radio port) is radio and follows the antenna recognised at its end; the rest is wired.</span></span></label>' +
     '<label class="medium-opt"><input type="radio" name="medium" value="wired"' + (actuel.medium === 'wired' ? ' checked' : '') + '>' +
       '<span><b>Wired</b> (fibre, copper) <span class="hint">Fixed capacity, nothing to poll — like ' +
       'Preseem or LibreQoS.</span>' +
@@ -2424,6 +2424,13 @@ function capaciteNoeud(lien, n) {
 /** Pastille de la nature d'un lien et, pour une radio, de son etat. */
 function badgeMilieu(lien) {
   const r = lien.radio;
+  // Deduit tout seul (rien de declare) : le dire, sans en faire une alerte.
+  const auto = lien.medium_declared === false ? ' (auto)' : '';
+  if (lien.medium === 'radio' && !r && auto) {
+    return '<span class="badge medium-radio" title="Radio link detected automatically (radio neighbour ' +
+      'or radio port). No polled antenna recognised at its end: its capacity is the port speed until ' +
+      'the antenna is added in Devices.">radio' + auto + '</span>';
+  }
   if (lien.medium === 'radio') {
     const etat = !r || r.state === 'missing' ? ['crit', 'antenna not found']
       : r.state === 'silent' ? ['crit', 'antenna silent']
@@ -2431,11 +2438,11 @@ function badgeMilieu(lien) {
       : ['ok', 'live'];
     return '<span class="badge medium-radio ' + etat[0] + '" title="Radio link: capacity read live on ' +
       esc((r && r.name) || '?') + (r && r.nominal_mbps ? ' (nominal ' + esc(mbps(r.nominal_mbps)) + ')' : '') +
-      ' — ' + esc(etat[1]) + '">radio · ' + esc(etat[1]) + '</span>';
+      ' — ' + esc(etat[1]) + (auto ? ' — detected automatically' : '') + '">radio · ' + esc(etat[1]) + auto + '</span>';
   }
   if (lien.medium === 'wired') {
     return '<span class="badge medium-wired" title="Wired link: fixed capacity (' +
-      esc(lien.capacity_source || '') + ')">wired</span>';
+      esc(lien.capacity_source || '') + ')' + (auto ? ' — detected automatically' : '') + '">wired' + auto + '</span>';
   }
   return '<span class="badge" title="Not declared: the smallest known capacity (' +
     esc(lien.capacity_source || 'none') + '). Declare it wired or radio in Saturation risks.">auto</span>';
