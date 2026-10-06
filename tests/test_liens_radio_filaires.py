@@ -49,10 +49,35 @@ def _ligne(**kw):  # type: ignore[no-untyped-def]
     )[0]
 
 
-def test_sans_declaration_la_regle_automatique_reste() -> None:
+def test_sans_declaration_un_port_wlan_est_radio_tout_seul() -> None:
     ligne = _ligne()
-    assert ligne["medium"] is None
+    assert (ligne["medium"], ligne["medium_declared"]) == ("radio", False)
+    # Aucune antenne reconnue : seule la vitesse du port est connue.
     assert (ligne["capacity_mbps"], ligne["capacity_source"]) == (1000.0, "port speed")
+
+
+def test_sans_declaration_un_port_ethernet_est_filaire() -> None:
+    [ligne] = hotspot_rows(_occupation("ether1"), [], upstream={}, roles={})
+    assert ligne["medium"] == "wired"
+
+
+def test_l_antenne_au_bout_du_lien_est_reconnue_par_sa_mac() -> None:
+    """Sans rien declarer : la radio vue en voisin est l'antenne interrogee
+    (meme MAC, ecrite autrement), et sa capacite en direct fait foi."""
+    lien = {
+        "discovered_by": "nas-sud",
+        "interface": "ether2",
+        "target_kind": "radio",
+        "target_mac": "dc:9f:db:11:22:33",
+        "target_name": "NanoBeam-Sud",
+    }
+    antenne = {**_antenne(150.0), "uisp_device_id": "DC-9F-DB-11-22-33"}
+    [ligne] = hotspot_rows(
+        _occupation("ether2"), [lien], upstream={}, roles={}, radios={"BH-Sud": antenne}
+    )
+    assert (ligne["medium"], ligne["medium_declared"]) == ("radio", False)
+    assert (ligne["capacity_mbps"], ligne["capacity_source"]) == (150.0, "radio, live")
+    assert ligne["radio"]["name"] == "BH-Sud" and ligne["radio"]["state"] == "degraded"
 
 
 def test_un_lien_filaire_porte_sa_capacite_fixe() -> None:

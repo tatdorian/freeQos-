@@ -115,6 +115,26 @@ CPE n'est reconnu nulle part reste sans secteur : sa file est posée à la racin
 
 ## Déploiement : une seule commande
 
+Sur un serveur vierge (Debian, Ubuntu, Rocky…), **tout est automatique** :
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tatdorian/freeQos-/main/install.sh | sudo sh
+```
+
+ou, depuis le dépôt déjà récupéré : `sudo ./install.sh` (alias `make install-docker`).
+
+Le script installe Docker s'il manque, récupère le code, écrit un `.env` avec un mot de passe
+de base **aléatoire**, passe tout seul par un miroir si Docker Hub est injoignable, construit
+et démarre la pile, attend qu'elle réponde et affiche l'adresse de l'interface. **Le relancer
+met à jour** (code rafraîchi, image reconstruite, données et `.env` conservés).
+
+Options (à placer devant la commande) : `APP_PORT=8000`, `NETFLOW_PORT=2055`,
+`FREEQOS_DIR=/opt/freeqos`, `FREEQOS_BRANCH=main`, et surtout
+`AIROS_USERNAME=… AIROS_PASSWORD=…` : avec les identifiants communs de vos antennes
+Ubiquiti, **chaque radio découverte est ajoutée et interrogée toute seule**.
+
+Sans le script, à la main :
+
 ```bash
 docker compose up -d --build
 ```
