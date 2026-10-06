@@ -192,58 +192,6 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     }
 
 
-@router.get(
-    "/topology/tree", summary="Network tree: the routers added, their sites and their clients"
-)
-async def declared_tree(container: ContainerDep) -> dict[str, Any]:
-    """L'arbre de l'onglet Network tree, SANS DETECTION AUTOMATIQUE.
-
-    Il ne contient que les routeurs ajoutes (Devices ou API), les sites qui
-    leur sont rattaches, et -- cote interface -- les clients vus sous chacun.
-    Voisins, radios decouvertes, switches et liens deduits n'y entrent plus :
-    cf. ``app.services.declared_tree``.
-    """
-    from app.services.declared_tree import build_declared_tree
-
-    repo = _require_topology(container)
-    routeurs = [
-        {
-            "name": c.config.name,
-            "pop_name": c.config.effective_pop_name,
-            "role": str(c.config.role),
-            "host": c.config.host,
-        }
-        for c in container.registry.collectors
-    ]
-    try:
-        connus = await repo.nodes()
-    except Exception:  # noqa: BLE001 - sans positions, l'arbre reste lisible
-        logger.exception("Cases connues illisibles")
-        connus = []
-    try:
-        sites = await container.repository.pop_sites()
-    except Exception:  # noqa: BLE001
-        logger.exception("Sites illisibles")
-        sites = []
-    try:
-        mesures = await repo.interface_latest()
-    except Exception:  # noqa: BLE001
-        mesures = []
-    try:
-        layout = await repo.node_layout()
-    except Exception:  # noqa: BLE001
-        layout = {}
-    arbre = build_declared_tree(routeurs, known_nodes=connus, sites=sites, interfaces=mesures)
-    return {
-        **arbre,
-        "layout": layout,
-        "declared": True,
-        "counts": {"nodes": len(arbre["nodes"]), "links": len(arbre["links"])},
-        "warnings": [],
-        "discovered_at": None,
-    }
-
-
 @router.get("/topology/routers/{router_name}/export", summary="Full config of a PoP")
 async def router_export(router_name: str, container: ContainerDep) -> dict[str, Any]:
     """Renvoie le ``/export`` brut d'un routeur et son analyse (adresses, tunnels,
