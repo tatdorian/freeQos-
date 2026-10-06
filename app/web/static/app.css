@@ -1349,3 +1349,30 @@ button.danger.is-busy::after { border-top-color: var(--crit); }
 }
 .ib-scale li { display: flex; align-items: baseline; gap: .1rem; }
 .ib-scale .sq { flex: 0 0 auto; transform: translateY(-1px); }
+
+/* ===================================================== filaire / radio
+   Chaque lien dit d'ou vient sa capacite : fixe (filaire), lue en direct sur
+   son antenne (radio), ou la plus petite connue (auto). */
+.badge.medium-wired { color: var(--muted); background: var(--fill); }
+.badge.medium-radio { font-weight: 600; }
+.medium-edit { font-size: .72rem; margin-left: .35rem; white-space: nowrap; }
+.medium-dialog {
+  width: min(480px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--border);
+  border-radius: var(--radius); background: var(--surface); color: var(--text); box-shadow: var(--shadow-lift);
+}
+.medium-dialog::backdrop { background: rgba(0, 0, 0, .35); }
+.medium-form { display: flex; flex-direction: column; gap: .7rem; padding: 1.2rem 1.3rem 1.1rem; }
+.medium-form h3 { margin: 0; font-size: 1.05rem; }
+.medium-form > .hint { margin: -.3rem 0 .1rem; }
+.medium-opt {
+  display: flex; gap: .7rem; align-items: flex-start; padding: .7rem .8rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer;
+}
+.medium-opt:has(input:checked) { border-color: var(--accent); background: var(--accent-dim); }
+.medium-opt input[type=radio] { width: auto; margin-top: .25rem; accent-color: var(--accent); }
+.medium-opt > span { display: flex; flex-direction: column; gap: .2rem; font-size: .86rem; }
+.medium-sub { display: flex; align-items: center; gap: .45rem; margin-top: .35rem; font-size: .82rem; color: var(--muted); }
+.medium-sub input { width: 8rem; }
+.medium-sub select { width: auto; max-width: 100%; }
+.medium-opt:not(:has(input:checked)) .medium-sub { display: none; }
+.medium-form .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .2rem; }

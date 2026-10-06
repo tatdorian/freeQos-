@@ -15,23 +15,29 @@ Ces quatre reponses servent a dimensionner, pas a depanner. C'est pour cela
 qu'elles vivent sur une page a part, et qu'elles se lisent sur des jours plutot
 que sur des minutes.
 
-TOUT EST EN LECTURE. Aucune de ces analyses n'ecrit quoi que ce soit, ni en
-base, ni sur un routeur.
+Ces analyses sont en lecture : elles n'ecrivent rien sur un routeur. Seule la
+NATURE d'un lien (filaire ou radio, ``/capacity/media``) s'enregistre en base :
+c'est elle qui dit d'ou vient la capacite de ce lien.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from app.api.deps import CollectionDep, ContainerDep, RepositoryDep
 from app.services.capacity import (
+    RADIO_CHUTE,
     a_renforcer,
     hotspot_rows,
     link_row,
+    node_uplinks,
     pop_capacity_row,
+    radio_alerts,
+    radio_state,
     usage_row,
 )
 
@@ -130,10 +136,108 @@ async def hotspots(
     en_direct = await repo.ports_live()
     name_ports(en_direct, [c.name for c in collection.collectors])
     ports = {(str(p["router_name"]), str(p["interface"])): p for p in en_direct}
-    lignes = hotspot_rows(occupation, liens, upstream=amonts, roles=roles, live=ports)[:limit]
+    # Nature de chaque lien (filaire / radio) et ce que disent les antennes.
+    milieux = await _media(container)
+    antennes, maxima = await _antennes(repo)
+    toutes = hotspot_rows(
+        occupation,
+        liens,
+        upstream=amonts,
+        roles=roles,
+        live=ports,
+        media={(m["router_name"], m["interface"]): m for m in milieux},
+        radios={
+            str(b["name"]): {**b, "nominal_fallback_mbps": maxima.get(str(b["name"]))}
+            for b in antennes
+        },
+    )
+    montants = node_uplinks(toutes)
     return {
         "hours": hours,
-        "thresholds": {"busy": 0.70, "saturated": 0.90},
-        "hotspots": lignes,
+        "thresholds": {"busy": 0.70, "saturated": 0.90, "radio_drop": RADIO_CHUTE},
+        "hotspots": toutes[:limit],
         "upstream_known": sorted(n for n, (_g, i) in amonts.items() if i),
+        # Le lien montant de chaque routeur, par nom de PoP ET par routeur :
+        # c'est la capacite du NOEUD dans "Queues by node".
+        "uplinks": {
+            **montants,
+            **{
+                c.config.effective_pop_name: montants[c.name]
+                for c in collection.collectors
+                if c.name in montants
+            },
+        },
+        "radio_alerts": radio_alerts(antennes, maxima=maxima),
     }
+
+
+async def _media(container: ContainerDep) -> list[dict[str, Any]]:
+    if container.link_media_repo is None:
+        return []
+    try:
+        return await container.link_media_repo.all()
+    except Exception:  # noqa: BLE001 - sans declaration, la regle automatique s'applique
+        logger.exception("Nature des liens illisible")
+        return []
+
+
+async def _antennes(repo: RepositoryDep) -> tuple[list[dict[str, Any]], dict[str, float]]:
+    try:
+        antennes = await repo.backhaul_latest()
+    except Exception:  # noqa: BLE001
+        logger.exception("Antennes illisibles")
+        return [], {}
+    try:
+        maxima = await repo.backhaul_capacity_max(hours=24)
+    except Exception:  # noqa: BLE001
+        maxima = {}
+    return antennes, maxima
+
+
+class LinkMedium(BaseModel):
+    router: str = Field(min_length=1, max_length=128)
+    interface: str = Field(min_length=1, max_length=128)
+    medium: Literal["wired", "radio"]
+    capacity_mbps: float | None = Field(default=None, gt=0, le=1_000_000)
+    backhaul_name: str | None = Field(default=None, max_length=256)
+
+
+@router.get("/capacity/media", summary="Wired or radio, link by link, and the antennas to pick")
+async def list_media(repo: RepositoryDep, container: ContainerDep) -> dict[str, Any]:
+    antennes, maxima = await _antennes(repo)
+    return {
+        "media": await _media(container),
+        "antennas": [
+            radio_state(b, nominal_fallback=maxima.get(str(b.get("name")))) for b in antennes
+        ],
+    }
+
+
+@router.put("/capacity/media", summary="Declare a link wired (fixed capacity) or radio (live)")
+async def set_medium(payload: LinkMedium, container: ContainerDep) -> dict[str, Any]:
+    if container.link_media_repo is None:
+        raise HTTPException(status_code=503, detail="Database not initialised")
+    if payload.medium == "radio" and not payload.backhaul_name:
+        raise HTTPException(
+            status_code=422,
+            detail="A radio link needs its antenna: pick the one whose live capacity it carries",
+        )
+    return await container.link_media_repo.set(
+        router_name=payload.router,
+        interface=payload.interface,
+        medium=payload.medium,
+        capacity_mbps=payload.capacity_mbps if payload.medium == "wired" else None,
+        backhaul_name=payload.backhaul_name if payload.medium == "radio" else None,
+        updated_by="ui",
+    )
+
+
+@router.delete(
+    "/capacity/media/{router_name}/{interface:path}",
+    summary="Back to automatic (smallest known capacity)",
+    status_code=204,
+)
+async def delete_medium(router_name: str, interface: str, container: ContainerDep) -> None:
+    if container.link_media_repo is None:
+        raise HTTPException(status_code=503, detail="Database not initialised")
+    await container.link_media_repo.delete(router_name, interface)
