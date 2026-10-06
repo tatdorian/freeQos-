@@ -274,6 +274,13 @@ def a_renforcer(
 RISQUE_SURVEILLER = 0.70
 RISQUE_SATURE = 0.90
 
+#: Une radio qui ne porte plus que 70 % de sa capacite nominale a perdu
+#: quelque chose : pluie, interference, desalignement. C'est le moment de le
+#: dire, avant que ses clients ne le sentent a l'heure de pointe.
+RADIO_CHUTE = 0.70
+#: Au-dela, la derniere lecture de l'antenne n'est plus "en direct".
+RADIO_FRAICHEUR_S = 300.0
+
 COTE_INTERNET = "internet"  # le lien amont d'une passerelle : le transit
 COTE_AMONT = "upstream"  # le lien amont d'un PoP ou du coeur : vers le coeur
 COTE_POP = "pop"  # un lien aval : vers les abonnes, un VLAN, un relais
@@ -294,6 +301,8 @@ def hotspot_rows(
     upstream: dict[str, tuple[str | None, str | None]],
     roles: dict[str, str],
     live: dict[tuple[str, str], dict[str, Any]] | None = None,
+    media: dict[tuple[str, str], dict[str, Any]] | None = None,
+    radios: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Chaque port mesure, avec ce qui y passe, ce qu'il peut porter, et la marge.
 
@@ -306,6 +315,17 @@ def hotspot_rows(
     LE SENS SE DEDUIT DU COTE. Sur le lien amont d'un routeur, ce qu'il RECOIT
     est le descendant des abonnes ; sur un lien aval, c'est ce qu'il EMET. Le
     cote vient de la route par defaut lue a la decouverte, pas d'un nom.
+
+    LA NATURE DU LIEN, QUAND L'EXPLOITANT L'A DECLAREE, DECIDE DE LA SOURCE
+    (``media``, cle (routeur, interface)) :
+
+    - ``wired`` : capacite fixe saisie, ou vitesse du port. Aucune mesure radio
+      n'est prise en compte -- rien a interroger, comme Preseem ou LibreQoS ;
+    - ``radio`` : la capacite ANNONCEE EN DIRECT par l'antenne designee
+      (``radios``, par nom), bornee par la vitesse du port. Une antenne muette
+      laisse la capacite inconnue plutot que d'inventer un chiffre.
+
+    Sans declaration, la regle d'avant s'applique (la plus petite connue).
     """
     par_port: dict[tuple[str, str], dict[str, Any]] = {}
     for lien in links:
@@ -332,11 +352,33 @@ def hotspot_rows(
         role = roles.get(routeur, "pop")
         cote = (COTE_INTERNET if role == "gateway" else COTE_AMONT) if amont else COTE_POP
 
-        candidats = [
-            ("set on the link", _positif(lien.get("max_down_mbps"))),
-            ("measured link capacity", _positif(lien.get("capacity_mbps"))),
-            ("port speed", _positif(mesure.get("capacity_mbps"))),
-        ]
+        milieu = (media or {}).get((routeur, interface)) or {}
+        nature = milieu.get("medium")
+        radio = None
+        vitesse_port = _positif(mesure.get("capacity_mbps")) or _positif(port.get("capacity_mbps"))
+        if nature == "wired":
+            fixe = _positif(milieu.get("capacity_mbps"))
+            candidats = [
+                ("set on the link", _positif(lien.get("max_down_mbps"))),
+                ("wired, declared", fixe) if fixe else ("port speed", vitesse_port),
+            ]
+        elif nature == "radio":
+            radio = radio_state((radios or {}).get(str(milieu.get("backhaul_name") or "")))
+            if radio is not None:
+                radio["name"] = milieu.get("backhaul_name")
+            else:
+                radio = {"name": milieu.get("backhaul_name"), "state": "missing"}
+            candidats = [
+                ("set on the link", _positif(lien.get("max_down_mbps"))),
+                ("radio, live", radio.get("capacity_mbps") if radio.get("live") else None),
+                ("port speed", vitesse_port),
+            ]
+        else:
+            candidats = [
+                ("set on the link", _positif(lien.get("max_down_mbps"))),
+                ("measured link capacity", _positif(lien.get("capacity_mbps"))),
+                ("port speed", vitesse_port),
+            ]
         connus = [(source, v) for source, v in candidats if v is not None]
         capacite, source = (None, None)
         if connus:
@@ -401,6 +443,12 @@ def hotspot_rows(
                 "headroom_mbps": round(capacite - pic / 1e6, 1) if capacite else None,
                 "samples": int(mesure.get("samples") or 0),
                 "state": etat,
+                "medium": nature,
+                "wired_capacity_mbps": _positif(milieu.get("capacity_mbps"))
+                if nature == "wired"
+                else None,
+                "port_speed_mbps": vitesse_port,
+                "radio": radio,
             }
         )
     ordre = {"saturated": 0, "busy": 1, "ok": 2, "unknown": 3}
@@ -412,3 +460,84 @@ def hotspot_rows(
         )
     )
     return lignes
+
+
+def radio_state(
+    backhaul: dict[str, Any] | None,
+    *,
+    nominal_fallback: float | None = None,
+    now: Any = None,
+) -> dict[str, Any] | None:
+    """Ce que dit une antenne, maintenant : capacite, nominale, et son etat.
+
+    ``ok`` / ``degraded`` (sous 70 % de la nominale) / ``silent`` (plus de
+    lecture recente, ou hors ligne). La nominale est celle declaree, a defaut
+    ``nominal_fallback`` (la meilleure capacite vue recemment).
+    """
+    from datetime import UTC, datetime
+
+    if backhaul is None:
+        return None
+    maintenant = now or datetime.now(tz=UTC)
+    capacite = _positif(backhaul.get("capacity_mbps"))
+    nominale = (
+        _positif(backhaul.get("nominal_capacity_mbps"))
+        or _positif(backhaul.get("nominal_fallback_mbps"))
+        or _positif(nominal_fallback)
+    )
+    ts = backhaul.get("ts")
+    frais = ts is not None and (maintenant - ts).total_seconds() <= RADIO_FRAICHEUR_S
+    en_ligne = backhaul.get("online") is not False
+    vivant = bool(frais and en_ligne and capacite)
+    part = capacite / nominale if vivant and capacite and nominale else None
+    if not vivant:
+        etat = "silent"
+    elif part is not None and part < RADIO_CHUTE:
+        etat = "degraded"
+    else:
+        etat = "ok"
+    return {
+        "name": backhaul.get("name"),
+        "pop_name": backhaul.get("pop_name"),
+        "capacity_mbps": round(capacite, 1) if capacite else None,
+        "nominal_mbps": round(nominale, 1) if nominale else None,
+        "share_of_nominal": round(part, 3) if part is not None else None,
+        "live": vivant,
+        "measured_at": ts,
+        "state": etat,
+    }
+
+
+def radio_alerts(
+    backhauls: list[dict[str, Any]],
+    *,
+    maxima: dict[str, float] | None = None,
+    now: Any = None,
+) -> list[dict[str, Any]]:
+    """Les antennes dont la capacite a CHUTE sous 70 % de leur nominale.
+
+    Toutes les antennes interrogees sont regardees, pas seulement celles
+    rattachees a un lien : une radio qui perd la moitie de son debit est une
+    information en soi. Sans nominale declaree, la reference est la meilleure
+    capacite vue sur les dernieres 24 h (``maxima``, par nom).
+    """
+    alertes = []
+    for b in backhauls:
+        etat = radio_state(b, nominal_fallback=(maxima or {}).get(str(b.get("name"))), now=now)
+        if etat is not None and etat["state"] == "degraded":
+            alertes.append(etat)
+    alertes.sort(key=lambda a: a["share_of_nominal"] or 0)
+    return alertes
+
+
+def node_uplinks(lignes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Le lien MONTANT de chaque routeur (vers le coeur, ou le transit) :
+    c'est lui qui dit ce que le noeud entier peut porter."""
+    par_routeur: dict[str, dict[str, Any]] = {}
+    for ligne in lignes:
+        if ligne.get("side") not in (COTE_INTERNET, COTE_AMONT):
+            continue
+        actuel = par_routeur.get(ligne["router"])
+        if actuel is None or (ligne.get("capacity_mbps") and not actuel.get("capacity_mbps")):
+            par_routeur[ligne["router"]] = ligne
+    return par_routeur

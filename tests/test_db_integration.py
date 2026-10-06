@@ -4011,3 +4011,40 @@ async def test_regle_par_site_enregistree(database: Database) -> None:
         {"name": "site-x", "prefixes": ["1.2.3.4"], "scope": "pops", "pops": ["VLAN 2060"]}
     )
     assert (regle["scope"], regle["pops"]) == ("pops", ["VLAN 2060"])
+
+
+async def test_nature_des_liens_en_base(database: Database) -> None:
+    """Un lien declare filaire puis radio : la derniere declaration fait foi,
+    et la retirer rend le lien a la regle automatique."""
+    from app.db.link_media_repo import LinkMediaRepository
+
+    async with database.pool.acquire() as conn:
+        await conn.execute("TRUNCATE link_media")
+    repo = LinkMediaRepository(database.pool)
+    await repo.set(
+        router_name="nas-sud",
+        interface="wlan1",
+        medium="wired",
+        capacity_mbps=500.0,
+        backhaul_name=None,
+        updated_by="t",
+    )
+    await repo.set(
+        router_name="nas-sud",
+        interface="wlan1",
+        medium="radio",
+        capacity_mbps=None,
+        backhaul_name="BH-Sud",
+        updated_by="t",
+    )
+    [ligne] = await repo.all()
+    assert (ligne["medium"], ligne["backhaul_name"], ligne["capacity_mbps"]) == (
+        "radio",
+        "BH-Sud",
+        None,
+    )
+    assert await repo.delete("nas-sud", "wlan1") is True
+    assert await repo.all() == []
+    # La meilleure capacite vue par antenne (reference sans nominale declaree).
+    maxima = await MetricsRepository(database.pool).backhaul_capacity_max(hours=24)
+    assert isinstance(maxima, dict)

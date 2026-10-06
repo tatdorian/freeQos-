@@ -226,7 +226,32 @@ def test_l_api_des_points_de_saturation(client: TestClient) -> None:
     [ligne] = corps["hotspots"]
     assert ligne["name"] == "BH-Altair"
     assert ligne["state"] == "saturated"  # 960 Mbps sur 1 Gbps
-    assert corps["thresholds"] == {"busy": 0.70, "saturated": 0.90}
+    assert corps["thresholds"] == {"busy": 0.70, "saturated": 0.90, "radio_drop": 0.70}
+    assert corps["radio_alerts"] == []
+    assert corps["uplinks"] == {} or all("interface" in v for v in corps["uplinks"].values())
+
+
+def test_un_lien_se_declare_filaire_ou_radio(client: TestClient) -> None:
+    from app.db.link_media_repo import InMemoryLinkMediaRepository
+
+    conteneur = client.app.dependency_overrides  # type: ignore[attr-defined]
+    container = next(iter(conteneur.values()))()
+    container.link_media_repo = InMemoryLinkMediaRepository()
+    url = "/api/v1/capacity/media"
+    # Radio sans antenne designee : refuse, on ne devine pas laquelle.
+    r = client.put(url, json={"router": "pop-test", "interface": "ether2", "medium": "radio"})
+    assert r.status_code == 422
+    r = client.put(
+        url,
+        json={"router": "pop-test", "interface": "ether2", "medium": "wired", "capacity_mbps": 500},
+    )
+    assert r.status_code == 200 and r.json()["capacity_mbps"] == 500
+    corps = client.get("/api/v1/capacity/hotspots?hours=1").json()
+    assert corps["hotspots"][0]["medium"] == "wired"
+    assert corps["hotspots"][0]["capacity_source"] == "wired, declared"
+    assert client.get(url).json()["media"][0]["medium"] == "wired"
+    assert client.delete(url + "/pop-test/ether2").status_code == 204
+    assert client.get(url).json()["media"] == []
 
 
 @pytest.fixture

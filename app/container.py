@@ -33,6 +33,7 @@ from app.db.database import Database
 from app.db.destinations_repo import DestinationsRepository
 from app.db.directory import Directory, PgDirectory
 from app.db.flows_repo import FlowsRepository, NetflowExportersRepository
+from app.db.link_media_repo import LinkMediaRepository, LinkMediaStore
 from app.db.model_repo import ModelRepository
 from app.db.plans_repo import ClientPlansRepository
 from app.db.repository import MetricsRepository
@@ -183,6 +184,7 @@ class Container:
     sightings_repo: VlanSightingsRepository | None = None
     api_keys_repo: ApiKeysRepository | None = None
     users_repo: UsersStore | None = None
+    link_media_repo: LinkMediaStore | None = None
     login_throttle: LoginThrottle | None = None
     model_repo: ModelRepository | None = None
     client_plans_repo: ClientPlansRepository | None = None
@@ -280,6 +282,7 @@ async def build_container(settings: Settings) -> Container:
     # debits et des octets.
     api_keys_repo = ApiKeysRepository(database.pool)
     users_repo = UsersRepository(database.pool)
+    link_media_repo = LinkMediaRepository(database.pool)
     model_repo = ModelRepository(database.pool)
     flows_repo = FlowsRepository(database.pool)
     exporters_repo = NetflowExportersRepository(database.pool)
@@ -589,6 +592,7 @@ async def build_container(settings: Settings) -> Container:
         sightings_repo=sightings_repo,
         api_keys_repo=api_keys_repo,
         users_repo=users_repo,
+        link_media_repo=link_media_repo,
         login_throttle=LoginThrottle(),
         model_repo=model_repo,
         client_plans_repo=client_plans_repo,
