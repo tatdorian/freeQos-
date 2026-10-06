@@ -619,6 +619,23 @@ class MetricsRepository:
             )
         return _rows(records)
 
+    async def backhaul_capacity_max(self, *, hours: int = 24) -> dict[str, float]:
+        """La meilleure capacite vue par antenne sur la fenetre : la reference
+        d'une radio dont la capacite nominale n'a pas ete declaree."""
+        async with self._pool.acquire() as conn:
+            records = await conn.fetch(
+                """
+                SELECT b.name, max(m.capacity_mbps) AS max_mbps
+                  FROM backhaul_metrics m
+                  JOIN backhauls b ON b.id = m.backhaul_id
+                 WHERE m.ts > now() - make_interval(hours => $1)
+                   AND m.capacity_mbps > 0
+                 GROUP BY b.name
+                """,
+                hours,
+            )
+        return {str(r["name"]): float(r["max_mbps"]) for r in records if r["max_mbps"]}
+
     async def backhaul_metrics(
         self,
         backhaul_id: int,
