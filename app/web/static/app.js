@@ -3552,9 +3552,7 @@ function topoCompte(data) {
  *  Arbre reseau. */
 async function fetchTopo() {
   const [data, subs] = await Promise.all([
-    // L'arbre DECLARE : routeurs ajoutes, leurs sites, leurs clients. Rien de
-    // ce que la decouverte devine (voisins, radios, switches) n'y entre.
-    api('/topology/tree'),
+    api('/topology'),
     // Les abonnes, pour les rattacher a leur PoP dans l'arbre.
     api('/subscribers/latest?limit=500&order_by=login').catch(() => []),
   ]);
@@ -3570,9 +3568,7 @@ async function loadNetwork() {
   const compte = document.getElementById('net-count');
   if (compte) {
     const n = topoCompte(data);
-    compte.textContent = data.declared
-      ? n.noeuds + ' router(s) and site(s)'
-      : n.noeuds + ' device(s), ' + n.liens + ' link(s)';
+    compte.textContent = n.noeuds + ' device(s), ' + n.liens + ' link(s)';
   }
   renderDecouverte(data);
   renderTopoCanvas();
@@ -3595,12 +3591,6 @@ function renderDecouverte(data) {
   // Les deux causes restent distinguees -- c'est le renseignement utile --
   // mais sans le mode d'emploi : le bouton qui relance l'analyse est juste
   // au-dessus, et l'onglet Equipements est dans la barre.
-  if (data.declared && !topoCompte(data).noeuds) {
-    hote.innerHTML = '<div class="notice"><strong>No router added yet.</strong> ' +
-      'The tree shows only the routers you add in Devices (or through the API), ' +
-      'the sites attached to them and the clients seen behind them.</div>';
-    return;
-  }
   if (!topoCompte(data).noeuds) {
     hote.innerHTML = '<div class="notice' + (data.discovered_at ? '' : ' err') + '">' +
       (data.discovered_at
@@ -6441,7 +6431,7 @@ const NODE_H = 48;
  *  case selectionnee, et si l'on montre les liens sans debit. */
 const topo = {
   data: null, subs: [], model: null, selected: null, dragging: false,
-  rateOnly: false, linkMode: false, linkSource: null,
+  rateOnly: true, linkMode: false, linkSource: null,
   // Agregats d'abonnes ouverts, par cle. Replie par defaut : un PoP
   // d'operateur porte des centaines d'abonnes.
   abosOuverts: new Set(),
@@ -7092,8 +7082,7 @@ function renderTopoCanvas() {
     // Un client a IP fixe est une DECLARATION : son trait se dessine toujours,
     // comme celui d'un abonne -- sinon sa case flotte sous son VLAN sans rien
     // qui dise de qui elle depend.
-    const declared = n.kind === 'static' ||
-      !!(n.edge && n.edge.link && n.edge.link.declared);
+    const declared = n.kind === 'static';
     // Un lien FORCE (parent pose a la main) ou MANUEL est toujours dessine :
     // sinon un lien qu'on vient de creer disparaitrait sous "debit seulement".
     const linkKey = (n.edge && n.edge.link && n.edge.link.key) || null;
@@ -7928,9 +7917,8 @@ function renderTopologyLinks(allLinks, allNodes) {
             esc(mbps(l.max_down_mbps || 0) + ' / ' + mbps(l.max_up_mbps || 0)) + '</span>'
           : '<span style="color:var(--faint)">auto</span>') + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' +
-          (l.declared ? '<span class="hint">declared</span>'
-            : '<button class="sm" data-link-detail="' + esc(l.key) + '">Rate</button>' +
-              '<button class="sm" data-edit-link="' + esc(l.key) + '">Bandwidth</button>') +
+          '<button class="sm" data-link-detail="' + esc(l.key) + '">Rate</button>' +
+          '<button class="sm" data-edit-link="' + esc(l.key) + '">Bandwidth</button>' +
         '</div></td></tr>';
     }).join('') + '</tbody></table>';
 
