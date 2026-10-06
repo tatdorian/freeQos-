@@ -77,6 +77,95 @@ async function apiBrut(path, options) {
   return body;
 }
 
+const AUTH = { user: null, ready: false, mode: 'login', started: false, passwordMin: 12 };
+
+/* ------------------------------------------------- force du mot de passe
+ *
+ *  Reprend les regles du SERVEUR (longueur, mots de passe connus, repetition,
+ *  email) pour prevenir AVANT l'envoi plutot qu'apres un refus. Le serveur
+ *  reste le seul juge : cette jauge n'autorise rien. */
+const MDP_COMMUNS = new Set(('password passw0rd motdepasse motdepass azerty azertyuiop qwerty ' +
+  'qwertyuiop qwertz abcdef abcdefgh abcdefghijkl admin administrator administrateur root toor ' +
+  'changeme changeit secret default freeqos mikrotik routeros preseem wisp network reseau internet ' +
+  'fibre wifi iloveyou monkey dragon football soleil chocolat bonjour salut master letmein welcome ' +
+  'bienvenue login connexion utilisateur user guest invite test testtest demo').split(' '));
+
+function suiteTriviale(bas) {
+  if (bas.length > 14) return false;
+  for (const suite of ['0123456789', 'abcdefghijklmnopqrstuvwxyz', 'azertyuiop', 'qwertyuiop']) {
+    for (const sens of [suite, suite.split('').reverse().join('')]) {
+      for (let i = 0; i + 6 <= sens.length; i++) if (bas.includes(sens.slice(i, i + 6))) return true;
+    }
+  }
+  return false;
+}
+
+function forceMdp(mdp, email) {
+  const min = AUTH.passwordMin || 12;
+  if (!mdp) return { score: 0, ok: false, label: 'At least ' + min + ' characters. A short sentence works best.' };
+  if (mdp.length < min) {
+    const manque = min - mdp.length;
+    return { score: 0, ok: false, label: manque + ' more character' + (manque > 1 ? 's' : '') + ' needed' };
+  }
+  const bas = mdp.toLowerCase();
+  if (new Set(bas).size < 6) return { score: 0, ok: false, label: 'Too repetitive: use more different characters' };
+  const racine = bas.replace(/[\d\W_]+$/, '');
+  if (MDP_COMMUNS.has(bas) || MDP_COMMUNS.has(racine) || suiteTriviale(bas)) {
+    return { score: 0, ok: false, label: 'Too common: among the first passwords an attacker tries' };
+  }
+  const local = (email || '').trim().toLowerCase().split('@')[0];
+  if (local.length >= 4 && bas.includes(local)) return { score: 0, ok: false, label: 'Must not contain the email address' };
+  const classes = [/[a-z]/, /[A-Z]/, /\d/, /[^A-Za-z0-9]/].filter((r) => r.test(mdp)).length;
+  const score = Math.min(4, 1 + (mdp.length >= 16) + (mdp.length >= 20) + (classes >= 3));
+  return { score, ok: true, label: ['', 'Acceptable', 'Good', 'Strong', 'Very strong'][score] };
+}
+
+/** Jauge en quatre barres sous un champ de mot de passe. */
+function jaugeMdp(hote, mdp, email) {
+  if (!hote) return;
+  const f = forceMdp(mdp, email);
+  hote.className = 'pwd-meter s' + f.score + (mdp && !f.ok ? ' bad' : '');
+  hote.innerHTML = '<span class="pwd-bars"><i></i><i></i><i></i><i></i></span>' +
+    '<span class="pwd-label">' + esc(f.label) + '</span>';
+}
+
+/** Navigateur et systeme, lus dans l'User-Agent : "Firefox on Windows". */
+function appareil(ua) {
+  if (!ua) return 'Unknown device';
+  if (/curl|python|httpx|wget|go-http|okhttp|postman/i.test(ua)) return 'Script (' + ua.split(/[\s/]/)[0] + ')';
+  const nav = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox'
+    : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  const os = /Windows/.test(ua) ? 'Windows' : /iPhone|iPad/.test(ua) ? 'iOS' : /Android/.test(ua) ? 'Android'
+    : /Mac OS X|Macintosh/.test(ua) ? 'macOS' : /CrOS/.test(ua) ? 'ChromeOS' : /Linux/.test(ua) ? 'Linux' : '';
+  return nav + (os ? ' on ' + os : '');
+}
+
+function dateLongue(ts) {
+  if (!ts) return '-';
+  const d = new Date(ts);
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) + ' ' +
+    d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/* Champs de mot de passe : oeil pour afficher, alerte Verr. Maj. Delegues au
+ * document : ils valent aussi pour les formulaires crees plus tard. */
+document.addEventListener('click', (e) => {
+  const oeil = e.target.closest('[data-eye]');
+  if (!oeil) return;
+  const champ = document.getElementById(oeil.dataset.eye);
+  if (!champ) return;
+  const montrer = champ.type === 'password';
+  champ.type = montrer ? 'text' : 'password';
+  oeil.classList.toggle('on', montrer);
+  oeil.setAttribute('aria-label', montrer ? 'Hide password' : 'Show password');
+  oeil.title = oeil.getAttribute('aria-label');
+  champ.focus();
+});
+['keydown', 'keyup'].forEach((type) => document.addEventListener(type, (e) => {
+  if (!e.target.matches || !e.target.matches('#auth-password, #auth-confirm') || !e.getModifierState) return;
+  document.getElementById('auth-caps').hidden = !e.getModifierState('CapsLock');
+}));
+
 /* ----------------------------------------------------------- connexion
  *
  *  L'interface ne charge RIEN tant qu'aucune session n'est ouverte : toutes
@@ -84,8 +173,6 @@ async function apiBrut(path, options) {
  *  (aucun compte en base), l'ecran de connexion sert a creer le premier,
  *  qui est en edition. Le grade est tenu par le serveur ; l'interface se
  *  contente de le dire (bandeau "lecture seule"). */
-const AUTH = { user: null, ready: false, mode: 'login', started: false };
-
 function showAuthGate(mode, message) {
   AUTH.mode = mode;
   const setup = mode === 'setup';
@@ -98,7 +185,11 @@ function showAuthGate(mode, message) {
   document.getElementById('auth-confirm-row').hidden = !setup;
   document.getElementById('auth-confirm').required = setup;
   document.getElementById('auth-password').autocomplete = setup ? 'new-password' : 'current-password';
+  document.getElementById('auth-password').minLength = setup ? AUTH.passwordMin : 0;
   document.getElementById('auth-submit').textContent = setup ? 'Create and log in' : 'Log in';
+  const jauge = document.getElementById('auth-meter');
+  jauge.hidden = !setup;
+  if (setup) jaugeMdp(jauge, document.getElementById('auth-password').value, document.getElementById('auth-email').value);
   document.getElementById('auth-error').innerHTML = message
     ? '<div class="notice warn">' + esc(message) + '</div>' : '';
   setTimeout(() => document.getElementById('auth-email').focus(), 0);
@@ -113,12 +204,61 @@ function startApp(user) {
   document.getElementById('readonly-banner').hidden = user.role === 'edit';
   document.getElementById('user-chip').hidden = false;
   document.getElementById('user-email').textContent = user.email;
+  document.getElementById('user-avatar').textContent = initiales(user.email, AUTH.authDisabled);
   document.getElementById('user-role').textContent = user.role === 'edit' ? 'edit' : 'read only';
   document.getElementById('user-role').className = 'badge ' + (user.role === 'edit' ? 'file' : '');
   document.getElementById('logout-btn').hidden = AUTH.authDisabled === true;
   route();
   refreshHealth();
   AUTH.started = true;
+  annoncerConnexionPrecedente();
+}
+
+/** "jean.dupont@x.fr" -> "JD", "admin@x.fr" -> "AD". */
+function initiales(email, sansCompte) {
+  if (sansCompte || !email) return '–';
+  const parts = String(email).split('@')[0].split(/[._-]+/).filter(Boolean);
+  const lettres = parts.length >= 2 ? parts[0][0] + parts[1][0] : (parts[0] || '?').slice(0, 2);
+  return lettres.toUpperCase();
+}
+
+/** "Derniere connexion : il y a 3 h, depuis 10.0.0.5 (Firefox on Windows)".
+ *  Le moyen le plus simple de remarquer que quelqu'un d'autre s'est servi du
+ *  compte. Passe par sessionStorage : la page se recharge parfois juste apres
+ *  la connexion. */
+function annoncerConnexionPrecedente() {
+  let precedente = null;
+  try {
+    const brut = sessionStorage.getItem('freeqos-prev-login');
+    sessionStorage.removeItem('freeqos-prev-login');
+    if (brut) precedente = JSON.parse(brut);
+  } catch (e) { /* stockage indisponible : rien a annoncer */ }
+  if (precedente === null) return;
+  const texte = precedente
+    ? 'Previous login ' + depuis(precedente.at) + ' (' + dateLongue(precedente.at) + ') from ' +
+      (precedente.address || 'an unknown address') + ' · ' + appareil(precedente.user_agent)
+    : 'First login on this account.';
+  toast('<b>Welcome back.</b> ' + esc(texte) +
+    ' <a href="#/settings" data-close-toast>Not you? Review your sessions</a>', 12000);
+}
+
+/** Message discret en bas d'ecran, qui se ferme seul. */
+function toast(html, duree) {
+  let pile = document.getElementById('toasts');
+  if (!pile) {
+    pile = document.createElement('div');
+    pile.id = 'toasts';
+    pile.setAttribute('role', 'status');
+    document.body.appendChild(pile);
+  }
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.innerHTML = '<div>' + html + '</div><button type="button" class="toast-x" aria-label="Close">&times;</button>';
+  const fermer = () => { el.classList.add('out'); setTimeout(() => el.remove(), 250); };
+  el.querySelector('.toast-x').addEventListener('click', fermer);
+  el.querySelectorAll('[data-close-toast]').forEach((a) => a.addEventListener('click', fermer));
+  pile.appendChild(el);
+  if (duree) setTimeout(fermer, duree);
 }
 
 async function boot() {
@@ -130,6 +270,7 @@ async function boot() {
     return;
   }
   AUTH.authDisabled = etat.auth_enabled === false;
+  if (etat.password_min) AUTH.passwordMin = etat.password_min;
   if (etat.user) { startApp(etat.user); return; }
   showAuthGate(etat.setup_required ? 'setup' : 'login');
 }
@@ -139,9 +280,13 @@ async function submitAuth(event) {
   const email = document.getElementById('auth-email').value.trim();
   const password = document.getElementById('auth-password').value;
   const erreur = document.getElementById('auth-error');
-  if (AUTH.mode === 'setup' && password !== document.getElementById('auth-confirm').value) {
-    erreur.innerHTML = '<div class="notice err">The two passwords differ.</div>';
-    return;
+  if (AUTH.mode === 'setup') {
+    const f = forceMdp(password, email);
+    if (!f.ok) { erreur.innerHTML = '<div class="notice err">' + esc(f.label) + '</div>'; return; }
+    if (password !== document.getElementById('auth-confirm').value) {
+      erreur.innerHTML = '<div class="notice err">The two passwords differ.</div>';
+      return;
+    }
   }
   const bouton = document.getElementById('auth-submit');
   bouton.disabled = true;
@@ -151,10 +296,14 @@ async function submitAuth(event) {
     });
     document.getElementById('auth-password').value = '';
     document.getElementById('auth-confirm').value = '';
+    erreur.innerHTML = '';
+    try { sessionStorage.setItem('freeqos-prev-login', JSON.stringify(r.previous_login || false)); } catch (e) { /* rien */ }
     if (AUTH.started) { location.reload(); return; }
     startApp(r.user);
   } catch (err) {
-    erreur.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    const bloque = /too many/i.test(err.message);
+    erreur.innerHTML = '<div class="notice ' + (bloque ? 'warn' : 'err') + '">' + esc(err.message) + '</div>';
+    document.getElementById('auth-password').select();
     // Un compte a ete cree entre-temps (autre navigateur) : on passe en connexion.
     if (AUTH.mode === 'setup' && /already exists/i.test(err.message)) showAuthGate('login', err.message);
   } finally {
@@ -169,17 +318,58 @@ async function logout() {
 
 /* ------------------------------------------------------------- comptes */
 
+const EVENEMENTS_AUTH = {
+  login_ok: ['Login', 'ok'],
+  login_failed: ['Failed login', 'crit'],
+  login_locked: ['Blocked: too many failures', 'crit'],
+  logout: ['Logout', ''],
+  setup: ['First account created', 'file'],
+  password_changed: ['Password changed', 'file'],
+  password_change_failed: ['Wrong current password', 'crit'],
+  session_closed: ['Session closed', ''],
+  sessions_closed: ['Other sessions closed', ''],
+  user_created: ['Account created', 'file'],
+  user_updated: ['Account changed', 'warn'],
+  user_deleted: ['Account deleted', 'warn'],
+};
+
+/** Champ de mot de passe avec son oeil (et sa jauge, pour un NOUVEAU mot de passe). */
+function champMdp(id, placeholder, nouveau) {
+  return '<span class="pwd-field"><input type="password" id="' + id + '" placeholder="' + esc(placeholder) + '"' +
+    ' autocomplete="' + (nouveau ? 'new-password' : 'current-password') + '" required maxlength="256"' +
+    (nouveau ? ' minlength="' + AUTH.passwordMin + '" data-meter="' + id + '-meter"' : '') + '>' +
+    '<button type="button" class="pwd-eye" data-eye="' + id + '" aria-label="Show password" title="Show password">' +
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button></span>' +
+    (nouveau ? '<div class="pwd-meter" id="' + id + '-meter"></div>' : '');
+}
+
+/** Branche les jauges des champs "nouveau mot de passe" d'un bloc. */
+function brancherJauges(hote, email) {
+  hote.querySelectorAll('input[data-meter]').forEach((champ) => {
+    const jauge = document.getElementById(champ.dataset.meter);
+    const maj = () => jaugeMdp(jauge, champ.value, typeof email === 'function' ? email() : email);
+    champ.addEventListener('input', maj);
+    maj();
+  });
+}
+
 /** Les comptes, dans Reglages. Un compte d'edition les gere tous (email, mot
- *  de passe, grade) ; tout compte peut changer son propre mot de passe. */
+ *  de passe, grade) et lit le journal des connexions ; tout compte change son
+ *  propre mot de passe et voit (et ferme) ses propres sessions. */
 async function renderAccounts() {
   const host = document.getElementById('settings-accounts');
   if (!host) return;
   const moi = AUTH.user || {};
   const monMdp =
-    '<form class="acc-form" id="acc-self-form"><b>My password</b>' +
-      '<input type="password" id="acc-self-current" placeholder="Current password" autocomplete="current-password" required>' +
-      '<input type="password" id="acc-self-new" placeholder="New password (8+ characters)" autocomplete="new-password" minlength="8" required>' +
-      '<button class="sm" type="submit">Change</button><span id="acc-self-result"></span></form>';
+    '<div class="acc-block"><h3>My password</h3>' +
+    '<form class="acc-form" id="acc-self-form">' +
+      champMdp('acc-self-current', 'Current password', false) +
+      champMdp('acc-self-new', 'New password (' + AUTH.passwordMin + '+ characters)', true) +
+      '<button class="sm" type="submit">Change</button><span id="acc-self-result"></span></form>' +
+    '<p class="hint acc-hint">Changing it logs out your other browsers. Prefer a short sentence ' +
+      '(&ldquo;the router sleeps at noon&rdquo;) to a short complicated word.</p></div>';
+  const mesSessions = '<div class="acc-block"><h3>My sessions</h3><div id="acc-sessions">' +
+    '<div class="hint">Loading…</div></div></div>';
   if (AUTH.authDisabled) {
     host.innerHTML = '<div class="notice warn">Authentication is off (<code>AUTH_ENABLED=false</code>): ' +
       'anyone who reaches this page has full rights.</div>';
@@ -187,8 +377,9 @@ async function renderAccounts() {
   }
   if (moi.role !== 'edit') {
     host.innerHTML = '<div class="acc-me">Logged in as <b>' + esc(moi.email) + '</b> ' +
-      '<span class="badge">read only</span></div>' + monMdp;
+      '<span class="badge">read only</span></div>' + monMdp + mesSessions;
     brancherMonMdp();
+    chargerSessions();
     return;
   }
   let comptes = [];
@@ -199,15 +390,17 @@ async function renderAccounts() {
     return;
   }
   host.innerHTML =
+    '<div class="acc-block"><h3>Who can log in</h3>' +
     '<div class="table-wrap"><table><thead><tr><th>Email</th><th>Role</th><th>State</th>' +
       '<th>Last login</th><th>Created by</th><th></th></tr></thead><tbody>' +
       comptes.map((u) => '<tr data-user="' + u.id + '">' +
         '<td><b>' + esc(u.email) + '</b>' + (u.id === moi.id ? ' <span class="pct-hint">(you)</span>' : '') + '</td>' +
-        '<td><select data-acc-role>' +
+        '<td><select data-acc-role aria-label="Role">' +
           '<option value="read"' + (u.role === 'read' ? ' selected' : '') + '>Read only</option>' +
           '<option value="edit"' + (u.role === 'edit' ? ' selected' : '') + '>Edit</option></select></td>' +
         '<td>' + (u.disabled ? '<span class="badge warn">disabled</span>' : '<span class="badge ok">active</span>') + '</td>' +
-        '<td>' + esc(u.last_login_at ? depuis(u.last_login_at) : 'never') + '</td>' +
+        '<td title="' + esc(u.last_login_at ? dateLongue(u.last_login_at) : '') + '">' +
+          esc(u.last_login_at ? depuis(u.last_login_at) : 'never') + '</td>' +
         '<td>' + esc(u.created_by || '-') + '</td>' +
         '<td class="nowrap acc-actions">' +
           '<button class="sm" data-acc-pwd>Set password</button>' +
@@ -216,25 +409,34 @@ async function renderAccounts() {
     '</tbody></table></div>' +
     '<form class="acc-form" id="acc-new-form"><b>New account</b>' +
       '<input type="email" id="acc-new-email" placeholder="Email" required maxlength="254" autocomplete="off">' +
-      '<input type="password" id="acc-new-pwd" placeholder="Password (8+ characters)" minlength="8" required autocomplete="new-password">' +
-      '<select id="acc-new-role"><option value="read">Read only</option><option value="edit">Edit</option></select>' +
+      champMdp('acc-new-pwd', 'Password (' + AUTH.passwordMin + '+ characters)', true) +
+      '<select id="acc-new-role" aria-label="Role"><option value="read">Read only</option><option value="edit">Edit</option></select>' +
       '<button class="sm primary" type="submit">Create</button></form>' +
     '<div id="acc-result"></div>' +
     '<div class="exec-legend"><span><b>Read only</b>: sees everything, every change is refused by the server.</span>' +
-      '<span><b>Edit</b>: can change everything, including accounts.</span></div>' +
-    monMdp;
+      '<span><b>Edit</b>: can change everything, including accounts.</span></div></div>' +
+    monMdp + mesSessions +
+    '<div class="acc-block"><h3>Login journal</h3>' +
+      '<div class="toolbar acc-journal-bar">' +
+        '<select id="acc-journal-filter" aria-label="Events shown"><option value="">All events</option>' +
+          '<option value="fail">Failures and blocks</option><option value="admin">Account changes</option></select>' +
+        '<input type="search" id="acc-journal-email" placeholder="Filter by email" maxlength="254">' +
+      '</div><div id="acc-journal"><div class="hint">Loading…</div></div></div>';
 
   const resultat = (html) => { document.getElementById('acc-result').innerHTML = html; };
   const faire = async (fn, ok) => {
-    try { await fn(); resultat('<div class="notice ok">' + esc(ok) + '</div>'); await renderAccounts(); }
+    try { await fn(); await renderAccounts(); resultat('<div class="notice ok">' + esc(ok) + '</div>'); }
     catch (err) { resultat('<div class="notice err">' + esc(err.message) + '</div>'); }
   };
+  brancherJauges(host.querySelector('#acc-new-form'), () => document.getElementById('acc-new-email').value);
   document.getElementById('acc-new-form').addEventListener('submit', (e) => {
     e.preventDefault();
     const email = document.getElementById('acc-new-email').value.trim();
+    const mdp = document.getElementById('acc-new-pwd').value;
+    const f = forceMdp(mdp, email);
+    if (!f.ok) { resultat('<div class="notice err">' + esc(f.label) + '</div>'); return; }
     faire(() => api('/users', { method: 'POST', body: JSON.stringify({
-      email, password: document.getElementById('acc-new-pwd').value,
-      role: document.getElementById('acc-new-role').value,
+      email, password: mdp, role: document.getElementById('acc-new-role').value,
     }) }), 'Account ' + email + ' created.');
   });
   host.querySelectorAll('tr[data-user]').forEach((tr) => {
@@ -244,11 +446,31 @@ async function renderAccounts() {
       faire(() => api('/users/' + id, { method: 'PATCH', body: JSON.stringify({ role: e.target.value }) }),
         'Role of ' + email + ' changed.');
     });
+    // Mot de passe d'un autre compte : une ligne qui s'ouvre sous le compte,
+    // champ masque et jauge -- pas une boite prompt() qui l'affiche en clair.
     tr.querySelector('[data-acc-pwd]').addEventListener('click', () => {
-      const mdp = prompt('New password for ' + email + ' (8+ characters):');
-      if (!mdp) return;
-      faire(() => api('/users/' + id, { method: 'PATCH', body: JSON.stringify({ password: mdp }) }),
-        'Password of ' + email + ' changed; their sessions are closed.');
+      const suivante = tr.nextElementSibling;
+      if (suivante && suivante.classList.contains('acc-pwd-row')) { suivante.remove(); return; }
+      const ligne = document.createElement('tr');
+      ligne.className = 'acc-pwd-row';
+      const champ = 'acc-pwd-' + id;
+      ligne.innerHTML = '<td colspan="6"><form class="acc-form acc-inline">' +
+        '<span class="hint">New password for <b>' + esc(email) + '</b> — their sessions will be closed.</span>' +
+        champMdp(champ, 'New password (' + AUTH.passwordMin + '+ characters)', true) +
+        '<button class="sm primary" type="submit">Save</button>' +
+        '<button class="sm" type="button" data-cancel>Cancel</button></form></td>';
+      tr.after(ligne);
+      brancherJauges(ligne, email);
+      document.getElementById(champ).focus();
+      ligne.querySelector('[data-cancel]').addEventListener('click', () => ligne.remove());
+      ligne.querySelector('form').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const mdp = document.getElementById(champ).value;
+        const f = forceMdp(mdp, email);
+        if (!f.ok) { resultat('<div class="notice err">' + esc(f.label) + '</div>'); return; }
+        faire(() => api('/users/' + id, { method: 'PATCH', body: JSON.stringify({ password: mdp }) }),
+          'Password of ' + email + ' changed; their sessions are closed.');
+      });
     });
     tr.querySelector('[data-acc-toggle]').addEventListener('click', (e) => {
       const couper = e.target.textContent === 'Disable';
@@ -261,21 +483,116 @@ async function renderAccounts() {
     });
   });
   brancherMonMdp();
+  chargerSessions();
+  const relire = () => chargerJournal();
+  document.getElementById('acc-journal-filter').addEventListener('change', relire);
+  let minuterie = null;
+  document.getElementById('acc-journal-email').addEventListener('input', () => {
+    clearTimeout(minuterie);
+    minuterie = setTimeout(relire, 300);
+  });
+  chargerJournal();
+}
+
+/** Mes sessions : chaque navigateur connecte a MON compte, d'ou, et depuis
+ *  quand. Une ligne inconnue se ferme d'un clic. */
+async function chargerSessions() {
+  const hote = document.getElementById('acc-sessions');
+  if (!hote) return;
+  let sessions;
+  try {
+    sessions = await apiBrut('/auth/sessions');
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const autres = sessions.filter((s) => !s.current).length;
+  hote.innerHTML = '<div class="table-wrap"><table><thead><tr><th>Device</th><th>Address</th>' +
+    '<th>Opened</th><th>Last activity</th><th></th></tr></thead><tbody>' +
+    sessions.map((s) => '<tr><td><b>' + esc(appareil(s.user_agent)) + '</b>' +
+        (s.current ? ' <span class="badge ok">this browser</span>' : '') + '</td>' +
+      '<td><code>' + esc(s.address || '-') + '</code></td>' +
+      '<td title="' + esc(dateLongue(s.created_at)) + '">' + esc(depuis(s.created_at)) + '</td>' +
+      '<td title="' + esc(dateLongue(s.last_seen)) + '">' + esc(depuis(s.last_seen)) + '</td>' +
+      '<td class="nowrap">' + (s.current ? '' : '<button class="sm" data-close-session="' + esc(s.id) + '">Log out</button>') +
+      '</td></tr>').join('') +
+    '</tbody></table></div>' +
+    '<div class="acc-sessions-foot"><span class="hint">A session ends after a day without activity, ' +
+      'and after 30 days in any case.</span>' +
+      (autres ? '<button class="sm danger" id="acc-close-others">Log out the ' + autres + ' other session' + (autres > 1 ? 's' : '') + '</button>' : '') +
+    '</div>';
+  hote.querySelectorAll('[data-close-session]').forEach((b) => b.addEventListener('click', async () => {
+    try { await api('/auth/sessions/' + b.dataset.closeSession, { method: 'DELETE' }); }
+    catch (err) { toast(esc(err.message), 6000); }
+    chargerSessions();
+  }));
+  const tout = document.getElementById('acc-close-others');
+  if (tout) tout.addEventListener('click', async () => {
+    if (!confirm('Log out every other browser connected to your account?')) return;
+    try {
+      const r = await api('/auth/sessions/close-others', { method: 'POST' });
+      toast(esc(r.closed + ' session' + (r.closed > 1 ? 's' : '') + ' closed.'), 5000);
+    } catch (err) { toast(esc(err.message), 6000); }
+    chargerSessions();
+  });
+}
+
+/** Journal des connexions (comptes d'edition) : qui s'est connecte, d'ou, qui
+ *  a echoue, qui a change quoi. */
+async function chargerJournal() {
+  const hote = document.getElementById('acc-journal');
+  if (!hote) return;
+  const email = (document.getElementById('acc-journal-email').value || '').trim();
+  const filtre = document.getElementById('acc-journal-filter').value;
+  let lignes;
+  try {
+    lignes = await apiBrut('/auth/events?limit=300' + (email ? '&email=' + encodeURIComponent(email) : ''));
+  } catch (err) {
+    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  const echecs = new Set(['login_failed', 'login_locked', 'password_change_failed']);
+  const admin = new Set(['user_created', 'user_updated', 'user_deleted', 'setup', 'password_changed']);
+  if (filtre === 'fail') lignes = lignes.filter((e) => echecs.has(e.event));
+  if (filtre === 'admin') lignes = lignes.filter((e) => admin.has(e.event));
+  const recents = lignes.filter((e) => echecs.has(e.event) && Date.now() - new Date(e.at).getTime() < 86400e3).length;
+  hote.innerHTML = (recents >= 10
+    ? '<div class="notice warn">' + recents + ' failed attempts in the last 24 h: someone may be guessing a password. ' +
+      'Check the addresses below; a block is applied automatically after 5 failures.</div>' : '') +
+    (lignes.length ? '<div class="table-wrap acc-journal"><table><thead><tr><th>When</th><th>Event</th><th>Account</th>' +
+      '<th>By</th><th>Address</th><th>Device</th><th>Detail</th></tr></thead><tbody>' +
+      lignes.slice(0, 200).map((e) => {
+        const [libelle, ton] = EVENEMENTS_AUTH[e.event] || [e.event, ''];
+        return '<tr><td class="nowrap" title="' + esc(new Date(e.at).toLocaleString('fr-FR')) + '">' + esc(dateLongue(e.at)) + '</td>' +
+          '<td><span class="badge ' + ton + '">' + esc(libelle) + '</span></td>' +
+          '<td>' + esc(e.email || '-') + '</td>' +
+          '<td>' + esc(e.actor && e.actor !== e.email ? e.actor : '') + '</td>' +
+          '<td><code>' + esc(e.address || '-') + '</code></td>' +
+          '<td>' + esc(e.user_agent ? appareil(e.user_agent) : '') + '</td>' +
+          '<td class="acc-detail">' + esc(e.detail || '') + '</td></tr>';
+      }).join('') + '</tbody></table></div>'
+      : '<div class="empty">No event' + (filtre || email ? ' matching this filter' : ' yet') + '.</div>');
 }
 
 function brancherMonMdp() {
   const form = document.getElementById('acc-self-form');
   if (!form) return;
+  brancherJauges(form, () => (AUTH.user || {}).email);
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     const sortie = document.getElementById('acc-self-result');
+    const nouveau = document.getElementById('acc-self-new').value;
+    const f = forceMdp(nouveau, (AUTH.user || {}).email);
+    if (!f.ok) { sortie.innerHTML = '<span class="badge crit">' + esc(f.label) + '</span>'; return; }
     try {
       await api('/auth/password', { method: 'POST', body: JSON.stringify({
         current: document.getElementById('acc-self-current').value,
-        new: document.getElementById('acc-self-new').value,
+        new: nouveau,
       }) });
       form.reset();
-      sortie.innerHTML = '<span class="badge ok">changed</span>';
+      jaugeMdp(document.getElementById('acc-self-new-meter'), '', '');
+      sortie.innerHTML = '<span class="badge ok">changed — your other sessions are closed</span>';
+      chargerSessions();
     } catch (err) {
       sortie.innerHTML = '<span class="badge crit">' + esc(err.message) + '</span>';
     }
@@ -2368,7 +2685,7 @@ function renderQueuePanels() {
             'hand (forced) or by default">no plan</span>') + '</span>' +
         (ratio != null
           ? '<span class="k">Oversubscription</span><span class="v">' +
-            sqCell(ratio.toFixed(1) + '&times;', ratio <= 1 ? 'ok' : ratio <= 3 ? 'warn' : 'crit') + '</span>'
+            sqCell(ratio.toFixed(1) + '×', ratio <= 1 ? 'ok' : ratio <= 3 ? 'warn' : 'crit') + '</span>'
           : '') +
       '</div>' +
       '<div class="actions" style="margin-top:.8rem">' +
@@ -3235,7 +3552,9 @@ function topoCompte(data) {
  *  Arbre reseau. */
 async function fetchTopo() {
   const [data, subs] = await Promise.all([
-    api('/topology'),
+    // L'arbre DECLARE : routeurs ajoutes, leurs sites, leurs clients. Rien de
+    // ce que la decouverte devine (voisins, radios, switches) n'y entre.
+    api('/topology/tree'),
     // Les abonnes, pour les rattacher a leur PoP dans l'arbre.
     api('/subscribers/latest?limit=500&order_by=login').catch(() => []),
   ]);
@@ -3251,7 +3570,9 @@ async function loadNetwork() {
   const compte = document.getElementById('net-count');
   if (compte) {
     const n = topoCompte(data);
-    compte.textContent = n.noeuds + ' device(s), ' + n.liens + ' link(s)';
+    compte.textContent = data.declared
+      ? n.noeuds + ' router(s) and site(s)'
+      : n.noeuds + ' device(s), ' + n.liens + ' link(s)';
   }
   renderDecouverte(data);
   renderTopoCanvas();
@@ -3274,6 +3595,12 @@ function renderDecouverte(data) {
   // Les deux causes restent distinguees -- c'est le renseignement utile --
   // mais sans le mode d'emploi : le bouton qui relance l'analyse est juste
   // au-dessus, et l'onglet Equipements est dans la barre.
+  if (data.declared && !topoCompte(data).noeuds) {
+    hote.innerHTML = '<div class="notice"><strong>No router added yet.</strong> ' +
+      'The tree shows only the routers you add in Devices (or through the API), ' +
+      'the sites attached to them and the clients seen behind them.</div>';
+    return;
+  }
   if (!topoCompte(data).noeuds) {
     hote.innerHTML = '<div class="notice' + (data.discovered_at ? '' : ' err') + '">' +
       (data.discovered_at
@@ -5023,7 +5350,7 @@ function renderServiceTable(services) {
         '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
         '<td style="min-width:140px">' + meter(somme, total || 1, '') + '</td>' +
         '<td>' + (r.service
-          ? '<button class="sm" data-svc-restrict="' + esc(r.service) + '">Restreindre</button>'
+          ? '<button class="sm" data-svc-restrict="' + esc(r.service) + '">Restrict</button>'
           : '') + '</td></tr>';
     }).join('') + '</tbody></table>';
   hote.querySelectorAll('[data-svc-restrict]').forEach((b) => {
@@ -6114,7 +6441,7 @@ const NODE_H = 48;
  *  case selectionnee, et si l'on montre les liens sans debit. */
 const topo = {
   data: null, subs: [], model: null, selected: null, dragging: false,
-  rateOnly: true, linkMode: false, linkSource: null,
+  rateOnly: false, linkMode: false, linkSource: null,
   // Agregats d'abonnes ouverts, par cle. Replie par defaut : un PoP
   // d'operateur porte des centaines d'abonnes.
   abosOuverts: new Set(),
@@ -6765,7 +7092,8 @@ function renderTopoCanvas() {
     // Un client a IP fixe est une DECLARATION : son trait se dessine toujours,
     // comme celui d'un abonne -- sinon sa case flotte sous son VLAN sans rien
     // qui dise de qui elle depend.
-    const declared = n.kind === 'static';
+    const declared = n.kind === 'static' ||
+      !!(n.edge && n.edge.link && n.edge.link.declared);
     // Un lien FORCE (parent pose a la main) ou MANUEL est toujours dessine :
     // sinon un lien qu'on vient de creer disparaitrait sous "debit seulement".
     const linkKey = (n.edge && n.edge.link && n.edge.link.key) || null;
@@ -7600,8 +7928,9 @@ function renderTopologyLinks(allLinks, allNodes) {
             esc(mbps(l.max_down_mbps || 0) + ' / ' + mbps(l.max_up_mbps || 0)) + '</span>'
           : '<span style="color:var(--faint)">auto</span>') + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' +
-          '<button class="sm" data-link-detail="' + esc(l.key) + '">Rate</button>' +
-          '<button class="sm" data-edit-link="' + esc(l.key) + '">Bandwidth</button>' +
+          (l.declared ? '<span class="hint">declared</span>'
+            : '<button class="sm" data-link-detail="' + esc(l.key) + '">Rate</button>' +
+              '<button class="sm" data-edit-link="' + esc(l.key) + '">Bandwidth</button>') +
         '</div></td></tr>';
     }).join('') + '</tbody></table>';
 
@@ -9026,6 +9355,10 @@ async function show(view) {
   const titre = document.getElementById('page-title');
   if (lien && titre) titre.textContent = lien.textContent.trim();
   document.title = (lien ? lien.textContent.trim() + ' · ' : '') + 'freeQoS';
+  document.getElementById('pb-title').textContent = lien ? lien.textContent.trim() : '';
+  DIRECT.ok = null;
+  DIRECT.echec = null;
+  majDirect();
   // La page se charge DES SON OUVERTURE, et le dit : un rond a cote du titre
   // tant que ses donnees arrivent. Une page vide sans signe se lit "il n'y a
   // rien", alors qu'elle veut dire "ca arrive".
@@ -9054,6 +9387,9 @@ function appError(message) {
     'problem followed an update, reload the page (Ctrl+Shift+R).</span></div>';
 }
 
+/** Derniere mise a jour reussie et dernier echec de l'onglet affiche. */
+const DIRECT = { ok: null, echec: null };
+
 let refreshing = false;
 async function refresh() {
   // UN CHARGEMENT EN COURS NE BLOQUE QUE LE MEME ONGLET.
@@ -9068,12 +9404,20 @@ async function refresh() {
   refreshing = vue;
   try {
     await LOADERS[vue]();
-    if (state.view === vue) appError(null);
+    if (state.view === vue) {
+      appError(null);
+      DIRECT.ok = Date.now();
+      DIRECT.echec = null;
+    }
   } catch (err) {
     console.error('Rafraichissement impossible :', err);
-    if (state.view === vue) appError(err && err.message ? err.message : String(err));
+    if (state.view === vue) {
+      appError(err && err.message ? err.message : String(err));
+      DIRECT.echec = Date.now();
+    }
   } finally {
     if (refreshing === vue) refreshing = false;
+    if (state.view === vue) { majDirect(); construireSommaire(); }
   }
 }
 
@@ -9351,6 +9695,11 @@ document.getElementById('sub-search').addEventListener('input', (e) => {
 });
 
 document.getElementById('auth-form').addEventListener('submit', submitAuth);
+['auth-password', 'auth-email'].forEach((id) => document.getElementById(id).addEventListener('input', () => {
+  if (AUTH.mode !== 'setup') return;
+  jaugeMdp(document.getElementById('auth-meter'), document.getElementById('auth-password').value,
+    document.getElementById('auth-email').value);
+}));
 document.getElementById('ins-days').addEventListener('change', loadInsights);
 document.getElementById('global-search').addEventListener('input', (e) => {
   clearTimeout(GS.timer);
@@ -9380,31 +9729,160 @@ boot();
 // Les vues d'edition ne se rafraichissent pas toutes seules : ce serait effacer
 // un formulaire en cours de saisie, ou un plan qu'on est en train de lire.
 const VUES_FIGEES = new Set(['pops', 'settings']);
-setInterval(() => {
-  // Rien ne se rafraichit derriere l'ecran de connexion.
-  if (!AUTH.ready) return;
-  if (VUES_FIGEES.has(state.view)) return;
+/** Pourquoi le direct est suspendu en ce moment, ou null s'il tourne. */
+function pauseDirect() {
   // L'arbre porte le debit des liens : le laisser vivre pour ne pas afficher un
   // debit perime. Mais on ne rafraichit PAS pendant qu'on deplace une case,
   // qu'une case est selectionnee (panneau ouvert), ou qu'un menu est ouvert :
   // ce serait annuler le geste en cours.
   if (state.view === 'network' && (topo.dragging || topo.selected || topo.linkMode ||
-      (document.activeElement && document.activeElement.tagName === 'SELECT'))) return;
+      (document.activeElement && document.activeElement.tagName === 'SELECT'))) {
+    return 'Paused while you edit the tree';
+  }
   // Vue Files live : ne pas ecraser un champ de debit en cours de saisie.
   if (state.view === 'exec' && document.activeElement &&
-      document.activeElement.tagName === 'INPUT') return;
+      document.activeElement.tagName === 'INPUT') return 'Paused while you type';
   // Trafic : ne pas ecraser un FORMULAIRE en cours de saisie (regle, exporteur).
   // Un champ de recherche ou de filtre, lui, n'arrete plus le direct : un clic
   // dans la recherche figeait la page pour toujours.
   if (state.view === 'traffic' && document.activeElement &&
       ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName) &&
-      document.activeElement.closest('form')) return;
+      document.activeElement.closest('form')) return 'Paused while you fill the form';
+  return null;
+}
+
+setInterval(() => {
+  // Rien ne se rafraichit derriere l'ecran de connexion.
+  if (!AUTH.ready) return;
+  if (VUES_FIGEES.has(state.view)) return;
+  if (pauseDirect()) return;
   refresh();
   // Le tiroir d'un lien suit le meme rythme : on regarde un debit justement
   // quand il bouge.
   if (state.link) openLink(state.link.key, state.link.minutes, true);
 }, 10000);
 setInterval(() => { if (AUTH.ready) refreshHealth(); }, 15000);
+
+/* ------------------------------------------------------- barre de page
+ *
+ *  L'ETAT DU DIRECT SE VOIT. Les pages se rafraichissent toutes les 10 s, mais
+ *  rien ne le disait : un chiffre fige (rafraichissement en pause pendant une
+ *  saisie, API en panne) ne se distinguait pas d'un chiffre frais. La barre dit
+ *  "Live · updated 4 s ago", "Paused while you type", ou "Update failed". */
+function depuisCourt(ts) {
+  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (s < 60) return s + ' s ago';
+  const m = Math.round(s / 60);
+  return m < 60 ? m + ' min ago' : Math.round(m / 60) + ' h ago';
+}
+
+function majDirect() {
+  const pastille = document.getElementById('live-state');
+  const texte = document.getElementById('live-text');
+  if (!pastille || !texte) return;
+  let classe = 'live';
+  let libelle;
+  const pause = state.view ? pauseDirect() : null;
+  if (DIRECT.echec && (!DIRECT.ok || DIRECT.echec > DIRECT.ok)) {
+    classe = 'err';
+    libelle = 'Update failed' + (DIRECT.ok ? ' · data from ' + depuisCourt(DIRECT.ok) : '');
+  } else if (!DIRECT.ok) {
+    classe = 'wait';
+    libelle = 'Loading…';
+  } else if (VUES_FIGEES.has(state.view)) {
+    classe = 'still';
+    libelle = 'Loaded ' + depuisCourt(DIRECT.ok) + ' · not auto-refreshed';
+  } else if (pause) {
+    classe = 'pause';
+    libelle = pause;
+  } else {
+    libelle = 'Live · updated ' + depuisCourt(DIRECT.ok);
+  }
+  pastille.className = 'live ' + classe;
+  if (texte.textContent !== libelle) { texte.textContent = libelle; pastille.title = libelle; }
+}
+setInterval(majDirect, 1000);
+document.getElementById('refresh-btn').addEventListener('click', () => { if (AUTH.ready) refresh(); });
+
+/** Le sommaire de la page : une pastille par section visible, pour y sauter.
+ *  Reconstruit apres chaque chargement (une section peut apparaitre avec ses
+ *  donnees) ; rien n'est touche si la liste n'a pas change. */
+function construireSommaire() {
+  const nav = document.getElementById('page-toc');
+  const vue = document.getElementById('view-' + state.view);
+  if (!nav || !vue) return;
+  const titres = [...vue.querySelectorAll('h2')].filter((h) => h.offsetParent !== null &&
+    !h.closest('details:not([open]) > :not(summary)') && libelleAide(h, true));
+  const signature = state.view + '|' + titres.map((h) => libelleAide(h, true)).join('|');
+  if (nav.dataset.sig === signature) return;
+  nav.dataset.sig = signature;
+  if (titres.length < 3) { nav.innerHTML = ''; return; }
+  nav.innerHTML = titres.map((h, i) => {
+    if (!h.id) h.id = 'sec-' + state.view + '-' + i;
+    return '<a href="#" data-toc="' + h.id + '">' + esc(libelleAide(h, true).split(' — ')[0]) + '</a>';
+  }).join('');
+  suivreSommaire();
+}
+
+document.getElementById('page-toc').addEventListener('click', (e) => {
+  const lien = e.target.closest('[data-toc]');
+  if (!lien) return;
+  e.preventDefault();
+  const cible = document.getElementById(lien.dataset.toc);
+  if (cible) cible.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+
+/** La section en cours de lecture est allumee dans le sommaire. */
+function suivreSommaire() {
+  const nav = document.getElementById('page-toc');
+  const liens = nav ? [...nav.querySelectorAll('[data-toc]')] : [];
+  if (!liens.length) return;
+  const barre = document.getElementById('page-bar').getBoundingClientRect().bottom;
+  let actif = liens[0];
+  liens.forEach((a) => {
+    const h = document.getElementById(a.dataset.toc);
+    if (h && h.getBoundingClientRect().top <= barre + 40) actif = a;
+  });
+  // En bas de page, la derniere section est forcement celle qu'on lit.
+  if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) actif = liens[liens.length - 1];
+  liens.forEach((a) => a.classList.toggle('active', a === actif));
+  if (actif && nav.scrollWidth > nav.clientWidth) {
+    const g = actif.offsetLeft - nav.offsetLeft;
+    if (g < nav.scrollLeft || g + actif.offsetWidth > nav.scrollLeft + nav.clientWidth) {
+      nav.scrollTo({ left: g - 24, behavior: 'smooth' });
+    }
+  }
+}
+let sommairePrevu = false;
+window.addEventListener('scroll', () => {
+  if (sommairePrevu) return;
+  sommairePrevu = true;
+  requestAnimationFrame(() => { sommairePrevu = false; suivreSommaire(); });
+}, { passive: true });
+
+/* La barre se "colle" : une sentinelle juste au-dessus d'elle sort de l'ecran,
+ * la barre prend un fond et montre le nom de la page. Sur petit ecran, elle se
+ * colle sous la barre d'onglets, dont la hauteur varie. */
+function hauteurBandeau() {
+  const tete = document.querySelector('header.top');
+  const h = tete && getComputedStyle(tete).position === 'sticky' ? tete.offsetHeight : 0;
+  document.documentElement.style.setProperty('--topbar-h', h + 'px');
+  return h;
+}
+let observateurBarre = null;
+function surveillerBarre() {
+  if (observateurBarre) observateurBarre.disconnect();
+  observateurBarre = new IntersectionObserver(([e]) => {
+    document.getElementById('page-bar').classList.toggle('stuck', !e.isIntersecting);
+  }, { rootMargin: '-' + hauteurBandeau() + 'px 0px 0px 0px' });
+  observateurBarre.observe(document.getElementById('page-bar-sentinel'));
+}
+surveillerBarre();
+// La barre d'onglets change de hauteur (compte affiche apres la connexion,
+// rotation de l'ecran) : la barre de page se recale dessous.
+const recaler = () => { clearTimeout(surveillerBarre.t); surveillerBarre.t = setTimeout(surveillerBarre, 100); };
+window.addEventListener('resize', recaler);
+if (window.ResizeObserver) new ResizeObserver(recaler).observe(document.querySelector('header.top'));
 
 // Boutons "aller a" : un lien #ancre casserait le routage par #/onglet.
 document.addEventListener('click', (e) => {
@@ -9421,145 +9899,473 @@ document.addEventListener('click', (e) => {
  *  indexe par le LIBELLE affiche ; apres chaque rendu, une petite icone (i) est
  *  posee a cote de tout libelle connu (titres, colonnes, tuiles, lignes de
  *  panneau). Un meme mot peut vouloir dire deux choses selon l'endroit : la cle
- *  "contexte|libelle" l'emporte alors sur "libelle". */
+ *  "contexte|libelle" l'emporte alors sur "libelle" (contexte du gabarit, ou
+ *  data-aide-ctx pose sur un bloc entier).
+ *
+ *  Chaque entree repond, quand c'est utile, a quatre questions :
+ *    t  : ce que c'est ;
+ *    m  : comment c'est mesure (d'ou vient le chiffre, a quel rythme) ;
+ *    s  : l'echelle de lecture, en couleurs ([ton, texte]) ;
+ *    r  : comment le lire (pieges, cas particuliers) ;
+ *    a  : quoi faire quand c'est mauvais.
+ *  Une simple chaine reste permise pour une valeur qui se passe d'echelle. */
+const OK = 'ok', WARN = 'warn', CRIT = 'crit', NA = 'none';
+const ECHELLE_LATENCE = [[OK, 'under 30 ms: good — calls, games and browsing feel instant'],
+  [WARN, '30 to 100 ms: noticeable — fine for streaming, sluggish for games'],
+  [CRIT, 'over 100 ms: poor — video calls stutter, pages hesitate']];
+const ECHELLE_SCORE = [[OK, '80 to 100: good'], [WARN, '50 to 79: fair — noticeable at busy times'],
+  [CRIT, 'under 50: poor — the client feels it'], [NA, 'grey / “-”: not measured yet']];
+const ECHELLE_CHARGE = [[OK, 'under 70%: comfortable'], [WARN, '70 to 90%: watch it — peaks start to queue'],
+  [CRIT, 'over 90%: saturated — latency rises for everyone behind it']];
+const ECHELLE_BLOAT = [[OK, 'A+ / A: up to +30 ms — imperceptible'], [WARN, 'B / C: +30 to +100 ms — calls degrade while someone downloads'],
+  [CRIT, 'D / F: over +100 ms — real-time use breaks under load']];
+
 const AIDE = {
   // ---------------------------------------------------------- sections
-  'network throughput': 'Sum of the traffic of all subscribers (PPPoE and static clients), measured every 10 s from their queues. Download above, upload below; solid line = average of each step, dotted = highest moment of the step. Traffic that belongs to no subscriber (tests between routers, management) is not in it.',
-  'routers': 'Each router, live: what it exchanges with the internet on its uplink, what its clients consume, and the gap between the two.',
-  'top consumers': 'Subscribers using the most bandwidth right now, from their last 10-second measurement.',
-  'radio backhauls': 'Radio links declared in the inventory: their capacity (current vs nominal) and how loaded they are.',
-  'saturation risks': 'Each link compared with what it can carry. Internet side = a saturation hits everyone; PoP side = only the clients behind that link. Bar = now, marker = peak of the period.',
-  'latency by client': 'The experience each subscriber gets: usual latency, bad moments, jitter, loss and latency under load, with a verdict and its reason.',
-  'load by node': 'Traffic of each node (site) compared with the sum of its clients’ limits.',
-  'queues by node': 'Each node (PoP or router) with its clients: current traffic vs limit, limits applied, plans sold, worst latency and experience. A VLAN client is listed under the router that carries it.',
-  'selection': 'Details of the node or client selected in the table above.',
-  'health over time': 'Colour per time step: experience score, latency (90th percentile) and load vs limit. For a node, load = its most loaded client against its own limit. Grey = no measurement.',
-  'who consumes': 'Volume per subscriber over the period, from NetFlow at the counting point (each client counted once).',
-  'where the traffic goes': 'The two NetFlow measuring points: internet edge and PoPs. Only one is used for counting, chosen automatically.',
-  'which services the traffic comes from': 'Traffic grouped by recognised service (YouTube, Netflix…) from the addresses reached.',
-  'who talks to whom, client by client': 'Each client and the internet addresses it exchanges with: volume, rate when active and live rate.',
-  'destinations reached': 'Internet addresses reached by your clients, with their owner, location and volume.',
-  'traffic restrictions': 'Rules that block or cap traffic towards services, categories or address ranges, for everyone, some sites or some clients.',
-  'find an ip': 'Look up any IP address or domain: owner, location, service, and which clients reach it.',
-  'every subscriber plan, usage, experience': 'All subscribers with their limit, current usage, latency and whether the router really holds the cap.',
-  'are the caps actually held': 'Compares the limit freeQoS intends with what is really written on the router.',
-  'default plan': 'Applied to every client without its own plan (0 = no limit).',
-  'clients': 'Each client and the plan applied to it, with where that plan comes from (API, set by hand, default) or the limit forced in Subscribers.',
-  'packages pushed by the api': 'Offers received from your billing / CRM through the API.',
-  'at risk of leaving': 'Clients whose experience has been poor for a while: candidates for a support call.',
-  'ready for a bigger plan': 'Clients who often hit their limit with good conditions: candidates for an upgrade.',
-  'router health': 'CPU, memory and uptime of each polled router.',
-  'polled routers': 'Routers freeQoS reads (and writes queues to). Reset queues rebuilds their freeQoS queues from scratch.',
-  'shaping and writing to the routers': 'Whether freeQoS writes queues by itself (reconciliation every 2 min). Off = it only writes when you act (Rate, plan change, Reset queues).',
-  'log of commands sent': 'Every command freeQoS sent to a router, by whom and with what result.',
+  'network throughput': {
+    t: 'Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.',
+    m: 'Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.',
+    r: 'Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Routers — live traffic as “not from clients”. Filter by router or client with the menus.',
+    a: 'A flat line at 0 while clients are online usually means the collection stopped: check the health dot at the top left and Devices › Polled routers.',
+  },
+  'routers': {
+    t: 'Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.',
+    m: 'Uplink port counters and subscriber queues, read every 10 s.',
+    r: 'A large gap (“not from clients”) is traffic of no known client: tests, management, or clients not yet declared.',
+  },
+  'routers — live traffic': {
+    t: 'Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.',
+    m: 'Uplink port counters and subscriber queues, read every 10 s. Router CPU and port load come from the same poll.',
+    s: ECHELLE_CHARGE,
+    r: 'The coloured state line at the top says whether each collection (subscribers, ports, latency) is running. A large “not from clients” share is traffic of no known client.',
+    a: 'Red collection state: open Devices › Polled routers and test the connection of that router.',
+  },
+  'top consumers': {
+    t: 'The subscribers using the most bandwidth right now.',
+    m: 'Last 10-second measurement of each subscriber’s queue, sorted by download.',
+    r: 'A client at the top of this list is not a problem in itself — it is using what it pays for. It matters when its row is red (at its limit) and the node it belongs to is saturated too.',
+  },
+  'radio backhauls': {
+    t: 'The radio links declared in the inventory (UISP / airOS), with what they can carry now and how loaded they are.',
+    m: 'Current capacity is read from the radio (it drops when the signal fades); nominal capacity is what the link is rated for. Load = traffic ÷ current capacity.',
+    s: ECHELLE_CHARGE,
+    a: 'Current capacity far below nominal: alignment, interference or rain fade — check signal and SNR on the antenna page.',
+  },
+  'saturation risks': {
+    t: 'Every link compared with what it can carry, worst first.',
+    m: 'Traffic of the link ÷ its capacity (the lowest of: rate set by hand, measured radio capacity, port speed). Bar = now; marker = the peak of the selected period.',
+    s: ECHELLE_CHARGE,
+    r: 'Internet side (gateway uplink, PoP-to-core): a saturation hits every client. PoP side (towards subscribers, VLANs, relays): only the clients behind that link. A link with “capacity unknown” cannot be judged — set its rate in the Network tree.',
+    a: 'Peak regularly over 90%: upgrade the link or lower the plans sold behind it. Only the peak is high: usually fine, links are meant to be full at the busiest minute.',
+  },
+  'latency by client': {
+    t: 'The experience each subscriber really gets, with a verdict (good / fair / poor) and the reason in plain words.',
+    m: 'The PoP router pings each client 5 times every 30 s (200 ms apart, from its loopback). Median, p95, jitter and loss come from those pings; “under load” compares latency when the client’s line is busy with latency at rest.',
+    s: [[OK, 'good: median under 30 ms, no loss, little bufferbloat'], [WARN, 'fair: 30–100 ms, spikes, some loss, or +30 to +150 ms under load'],
+      [CRIT, 'poor: over 100 ms, 2%+ loss, +150 ms under load, or score under 50'], [NA, 'at plan limit: judged apart (see below)']],
+    r: 'Samples taken while the client uses 85%+ of its plan are left out: a full line makes its own queue — that is not a network fault. “no reply” on every client of a router means the probe itself is failing, not the clients.',
+    a: 'Many poor clients behind the same node: look at that node’s load and backhaul. A single poor client: its CPE, signal or home Wi-Fi.',
+  },
+  'load by node': {
+    t: 'Traffic of each node (site) compared with the sum of its clients’ limits.',
+    m: 'Sum of the clients’ queues every 10 s, divided by the sum of their limits.',
+    r: 'This is a share of what was sold, not of the link: 100% means every client is at its cap at once, which practically never happens.',
+  },
+  'queues by node': {
+    t: 'Each node (PoP or router) with its clients: traffic now vs limit, limits applied, plans sold, worst latency and experience.',
+    m: 'Queue counters every 10 s; latency from the probe every 30 s. A VLAN client is listed under the router that carries it.',
+    r: 'Click a row to open its detail below. The “Rate” field lets you force a client’s limit by hand — it then overrides its plan until you clear it.',
+  },
+  'selection': 'Details of the node or client selected in the table above: link, plans, limits and the clients behind it.',
+  'sec|node': {
+    t: 'Detail of the selected node: its link (capacity and load), the limits and plans of its clients, and how each client is doing.',
+    r: 'Oversubscription = plans sold ÷ link capacity. Some is normal (clients are not all active at once); far above 3× the link will be full at busy hours.',
+  },
+  'sec|client': {
+    t: 'Detail of the selected client: its plan and where it comes from, the limit really applied, its usage and its latency at rest and under load.',
+  },
+  'health over time': {
+    t: 'One colour per time step for three indicators: experience score, latency and load vs limit. Read it left to right to see when things went wrong.',
+    m: 'Steps of the selected period (e.g. 5 min over 24 h). Steps where a client was at its plan limit are left out of latency and score.',
+    s: [[OK, 'green: good'], [WARN, 'orange: fair / watch'], [CRIT, 'red: poor / saturated'], [NA, 'grey: no measurement in that step']],
+    r: 'For a node: the worst client of the step. For the whole network: all clients together. A red band at the same hour every evening is a capacity problem; a red band at random times is more often radio.',
+  },
+  'who consumes': {
+    t: 'Volume per subscriber over the period.',
+    m: 'From NetFlow at the counting point, each client counted once (the best exporter for that client is used, never two).',
+    r: 'This is volume (GB), not speed: a client streaming all evening outweighs one who ran a short speed test.',
+  },
+  'where the traffic goes': {
+    t: 'Map of the destinations your clients reach: each country and city sized by the volume exchanged with it.',
+    m: 'From NetFlow: each remote address is located from its address block (geolocation database). Hover a point for its volume and clients; click it to open the detail of that place.',
+    r: 'A location is that of the server’s block, not of the company: a CDN often answers from a nearby city even for a foreign service.',
+  },
+  'which services the traffic comes from': {
+    t: 'Traffic grouped by recognised service (YouTube, Netflix, Steam, Microsoft updates…).',
+    m: 'The remote address of each flow is matched with a catalogue of published address blocks, then with its reverse name and owner. Content is never inspected — it stays encrypted.',
+    r: '“unknown” is traffic to addresses that match no catalogue entry yet; it shrinks as names are resolved.',
+  },
+  'who talks to whom, client by client': {
+    t: 'Each client and the internet addresses it exchanges with: volume, rate while active and live rate.',
+    m: 'NetFlow records of the period, grouped by client and remote address.',
+    r: '“Rate when active” divides by the time the conversation was really active, so a 10-second download at 100 Mbps shows 100 Mbps — not the 1 Mbps a whole-hour average would give.',
+  },
+  'destinations reached': {
+    t: 'Internet addresses reached by your clients, with their owner, location and volume.',
+    m: 'From NetFlow; names come from the catalogue, reverse DNS and (if enabled) the registry.',
+  },
+  'traffic restrictions': {
+    t: 'Rules that block or cap traffic towards a service, a category or an address range — for everyone, some sites, or some clients.',
+    m: 'Written on the routers as address lists plus firewall (block) or mangle + queue tree (cap). The address list is refreshed automatically from the catalogue and from what NetFlow discovers.',
+    a: 'A rule that seems to have no effect: check “Last applied” and that the router is reachable; new addresses join the list at the next refresh.',
+  },
+  'find an ip': {
+    t: 'Look up any IP address or domain: owner, location, recognised service, and which of your clients reach it.',
+    r: 'Useful when a client complains about one site: see whether others reach it too and how much traffic it carries.',
+  },
+  'every subscriber plan, usage, experience': {
+    t: 'All subscribers with their limit, current usage, latency and whether the router really holds the cap.',
+    r: 'Click a client to see its plan, its queue on the router and its history. The search box accepts a login, an IP, a MAC or a site.',
+  },
+  'are the caps actually held': {
+    t: 'Compares the limit freeQoS intends for each client with what is really written on its router.',
+    r: 'A mismatch means the router was changed by hand, a queue failed to write, or another queue matches first (RouterOS applies the first matching queue).',
+    a: 'Use Devices › Reset queues on that router to rebuild its freeQoS queues from scratch.',
+  },
+  'default plan': {
+    t: 'The limit given to every client that has no plan of its own (none pushed by the API, none set by hand).',
+    r: '0 = no limit. Changing it re-writes the queues of all clients that use it at the next reconciliation.',
+  },
+  'clients': {
+    t: 'Each client and the plan applied to it, with where that plan comes from.',
+    r: 'Source: pushed by the API (billing / CRM), set by hand here, or the default plan. A limit forced in Subscribers (Rate) overrides all three — it is shown here so you know why the plan is not what is applied.',
+  },
+  'packages pushed by the api': 'Offers received from your billing system or CRM through the public API (/model/v1/packages). Clients pushed with a package get its rates automatically.',
+  'at risk of leaving': {
+    t: 'Clients showing the signs that come before a cancellation.',
+    m: 'Any of: experience score under 50 over the period; usage down more than 70% versus the previous period; no traffic at all for 3 days or more (for a client that used to consume).',
+    a: 'Call before they do: a CPE swap, a realignment or a plan change is cheaper than a lost client.',
+  },
+  'ready for a bigger plan': {
+    t: 'Clients that live at their plan ceiling while their experience stays good — the plan limits them, not the network.',
+    m: 'At 90%+ of their plan in 15% or more of the samples of the period, with a score of 50 or more.',
+    r: 'A client at its ceiling with poor latency is not here on purpose: selling it more would not fix what is a network problem.',
+  },
+  'sites and access points room for more subscribers': {
+    t: 'How many more subscribers each site or access point can take at today’s usage.',
+    m: 'Busy-hour peak per subscriber, against a target of 80% of the capacity (above that, queues fill and latency rises before the link is full).',
+    r: 'A site where 20% or more of the clients already have a poor experience shows no room, whatever the margin on paper.',
+  },
+  'router health': {
+    t: 'CPU, memory and uptime of each polled router.',
+    s: [[OK, 'CPU under 70%: fine'], [WARN, '70–90%: busy — queues and NetFlow may lag'], [CRIT, 'over 90%: overloaded — packets and measurements suffer']],
+    a: 'A sustained high CPU on a PoP: too many simple queues for the hardware, or a firewall rule doing heavy work.',
+  },
+  'polled routers': {
+    t: 'The routers freeQoS reads (and writes queues to).',
+    r: 'Reset queues deletes every freeQoS queue of that router and rewrites them cleanly — use it when caps behave strangely. Queues not created by freeQoS are never touched.',
+  },
+  'connect a router': {
+    t: 'Add a MikroTik router: its address, API port and an account with read rights (and write rights if freeQoS should shape).',
+    r: 'The API-SSL port (8729) is preferred. A dedicated account with the “read, write, api, test” policies is enough — “test” is needed for the latency probe.',
+  },
+  'ubiquiti antennas': 'airOS access points and CPEs polled for their radio state: signal, noise, CCQ, capacity. Their capacity feeds the saturation and room-for-more calculations.',
+  'radio health access points and their cpes': {
+    t: 'Each access point and the CPEs connected to it, with the radio quality of each link.',
+    s: [[OK, 'signal above −68 dBm, SNR above 25 dB, CCQ above 90%'], [WARN, 'signal −68 to −75 dBm, SNR 20–25 dB'], [CRIT, 'signal below −75 dBm, SNR under 20 dB or CCQ under 75%']],
+    a: 'Weak signal on one CPE: alignment or obstacle. Weak on all CPEs of an AP: interference — check the noise floor and change channel.',
+  },
+  'add an antenna': 'Declare an airOS device by its address and credentials. Credentials are encrypted at rest with the controller key.',
+  'inventory': 'Every device freeQoS knows, with where it was discovered.',
+  'known sites': 'The PoPs and VLAN sites known to freeQoS. A site pushed by the API takes the place of an automatically discovered one.',
+  'shaping and writing to the routers': {
+    t: 'Whether freeQoS writes queues by itself.',
+    r: 'On: a reconciliation every 2 min writes any missing or wrong queue. Off: it writes only when you act (Rate, plan change, Reset queues). Either way, only queues marked freeqos:managed are ever modified.',
+  },
+  'log of commands sent': 'Every command freeQoS sent to a router: when, by whom (account or automatic loop), what, and the result. The first place to look when a cap changed unexpectedly.',
+  'create a key': {
+    t: 'Create a key for an external system (billing, CRM) to call the public API.',
+    r: 'The key is shown once — copy it then. “read” gives GET; “write” adds PUT and DELETE. Give each system its own key so you can revoke one without breaking the others.',
+  },
+  'endpoints': 'The public API routes, compatible with the Preseem contract: a billing system that talked to Preseem only changes the base URL and the key.',
+  'example': 'A ready-to-run call with curl. The key goes in Basic authentication as the username, with an empty password.',
+  'accounts': 'Who can log in to this interface, your own password and sessions, and (for edit accounts) the journal of logins.',
+  'operational settings': {
+    t: 'Settings stored in the database and applied without restart.',
+    r: '“default” = the value from the environment / built-in default. Apply writes it; the source column then says “database”.',
+  },
+  'sec|services and ip location': {
+    t: 'What NetFlow keeps about the destinations your clients reach, and how addresses are named (catalogue, reverse DNS, registry, geolocation).',
+    r: 'Volumes per client are measured whatever these say; they only decide what is kept per destination and how much naming work (and outbound queries) the controller does.',
+  },
+  'sec|shaping': {
+    t: 'How queues are computed and written: safety factor on measured capacity, floor rate, default plan, adoption of queues freeQoS did not create, and how a queue targets the client.',
+    r: 'A change here is applied at the next reconciliation (or right away with Reset queues in Devices).',
+  },
+  'sec|cake': {
+    t: 'Parameters of the CAKE queues — the queue discipline that keeps latency low while a line is full.',
+    r: 'Keep the defaults unless you know why: overhead and MPU must match the encapsulation (PPPoE, VLAN) for the rate to be exact; rtt sets how fast CAKE reacts.',
+  },
+  'sec|write safeguards': 'Limits that stop an automatic loop from changing too much at once (circuit breaker), and whether a separate write account is required on the routers.',
+  'sec|traffic': 'Where the volume of each client is counted when both the internet edge and the PoPs export NetFlow — so a byte is never counted twice.',
+  'sec|collection cadences': {
+    t: 'How often each collection runs.',
+    r: 'Shorter = fresher figures, but more load on the routers and the database. A 10 s subscriber poll and a 30 s latency probe suit most networks.',
+  },
+  'what stays out of reach of the interface': 'Settings that can only change in the environment (.env) — the database address, the encryption key… — because the interface itself depends on them.',
+  // ---------------------------------------------------------- comptes
+  'who can log in': {
+    t: 'The accounts of this interface.',
+    s: [[NA, 'Read only: sees everything; every change is refused by the server'], [OK, 'Edit: can change everything, including accounts']],
+    r: 'There is always at least one active edit account: the last one cannot be deleted, demoted or disabled. Changing someone’s role or password logs them out everywhere.',
+  },
+  'my password': {
+    t: 'Change your own password. Your other browsers are logged out; this one stays connected.',
+    r: 'At least 12 characters. Passwords from attacker lists (Password2024!, azerty123…), repetitive ones or ones containing your email are refused. A short sentence is both stronger and easier to remember than a short complicated word.',
+  },
+  'my sessions': {
+    t: 'Every browser currently logged in to your account: device, address, when it logged in and when it was last active.',
+    m: 'A session ends after 24 h without activity, and after 30 days in any case. At most 10 per account — the oldest is closed beyond that.',
+    a: 'A device or address you do not recognise: log it out, then change your password.',
+  },
+  'login journal': {
+    t: 'Every login, failed attempt, block, logout and account change, with address and device. Kept 6 months.',
+    s: [[OK, 'Login'], [CRIT, 'Failed login / Blocked: someone typed a wrong password'], [WARN, 'Account changed or deleted']],
+    r: 'After 5 failures the email and the address are blocked 5 min, then 10, 20… up to 1 h if it continues. Many failures from one unknown address = someone guessing.',
+    a: 'Repeated failures on a real account from an unknown address: change that password and, if exposed to the internet, restrict access to the interface.',
+  },
+  'acc|role': 'Read only: sees everything, changes nothing (refused by the server, not just hidden). Edit: can change everything, including accounts.',
+  'acc|state': 'A disabled account can no longer log in, and its open sessions are closed at once.',
+  'acc|last login': 'Last successful login of the account.',
+  'acc|created by': 'The account that created this one (“setup” = the very first account).',
+  'acc|device': 'Browser and system, read from the browser’s User-Agent.',
+  'acc|address': 'IP address the session was opened from (behind a reverse proxy, set FORWARDED_ALLOW_IPS so this is the real client).',
+  'acc|opened': 'When this session logged in.',
+  'acc|last activity': 'Last request made with this session.',
+  'acc|when': 'Date and time of the event (hover for the full date).',
+  'acc|event': 'What happened: login, failed login, block, logout, account change…',
+  'acc|account': 'The account concerned (for a failed login, the email that was typed — it may not exist).',
+  'acc|by': 'Who made the change, when it is not the account itself (e.g. an administrator resetting a password).',
+  'acc|detail': 'Extra information: new role, why it failed, how long the block lasts…',
   // ---------------------------------------------------------- panneaux
   'right now': 'Last 10-second measurement.',
-  'clients on this link': 'The clients of this node, with how much of their limit they use, latency and score.',
-  'link': 'What freeQoS knows about this node’s link: capacity, load and the limits of its clients.',
-  'plan': 'The plan of this client, where it comes from, and the limit really applied.',
-  'plan usage': 'How much of its limit the client uses right now, and its latency at rest and under load.',
+  'clients on this link': {
+    t: 'The clients of this node with how much of their limit they use, their latency and score.',
+    r: 'Several clients red on latency at the same time as the link is loaded = the link is the bottleneck. Only one client red = look at that client.',
+  },
+  'link': {
+    t: 'What freeQoS knows about this node’s link: capacity, load, limits applied and plans sold behind it.',
+    r: 'Capacity unknown: set the rate of the link in the Network tree so load and oversubscription can be judged.',
+  },
+  'plan': {
+    t: 'The plan of this client, where it comes from, and the limit really applied.',
+    r: 'When “limit applied” differs from the plan, the limit was forced by hand (Rate) or a temporary boost is running.',
+  },
+  'plan usage': {
+    t: 'How much of its limit the client uses right now, and its latency at rest and under load.',
+    r: 'At 85%+ of its plan the client is “at plan limit”: its latency then reflects its own full queue and is not held against the network.',
+  },
   'limit usage': 'How much of its forced limit the client uses right now, and its latency at rest and under load.',
-  'who reaches this address': 'Your clients that exchanged traffic with this address over the period.',
+  'who reaches this address': 'Your clients that exchanged traffic with this address over the period, with the volume of each.',
   // ---------------------------------------------------------- tuiles
-  'traffic now': 'Download of all subscribers at the last measurement; upload below. Compared with backhaul capacity, or with the sum of limits when no capacity is declared.',
-  'client experience': 'Share of clients rated good (score 80+). Fair = 50–79, poor = under 50; unmeasured clients are counted apart.',
-  'busiest node': 'The node using the largest share of its limit right now.',
-  'latency': 'Round-trip time from the PoP router to the client (5 pings every 30 s). Median shown; under 30 ms is good, over 100 ms is poor. “no reply” = the whole last series was lost.',
-  'download': 'What clients receive (from the internet to them).',
-  'upload': 'What clients send (from them to the internet).',
-  'subscribers online': 'Subscribers measured in the last 2 minutes.',
-  'sold throughput': 'Sum of the download plans of all subscribers, and how much of it is used right now.',
-  'backhaul capacity': 'Sum of the measured capacity of the radio backhauls.',
-  'downstream': 'Total received by your subscribers over the period, at the counting point.',
-  'upstream': 'Total sent by your subscribers over the period, at the counting point.',
-  'subscribers seen': 'Subscribers with traffic seen by NetFlow at the counting point.',
-  'flows matched': 'Share of NetFlow flows attributed to a known subscriber. The rest is network management or undeclared addresses.',
-  'poor experience': 'Clients with high latency (>100 ms), loss (2%+), strong bufferbloat (+150 ms) or a score under 50.',
-  'fair': 'Noticeable but usable: latency 30–100 ms, spikes, some loss or bufferbloat of +30 to +150 ms.',
-  'good': 'Latency under 30 ms, stable, no loss.',
-  'at plan limit': 'The client used its whole plan the whole period: its latency was that of its own queue, so it is not judged as a network problem.',
+  'traffic now': {
+    t: 'Download of all subscribers at the last measurement; upload below.',
+    m: 'Sum of the subscriber queues, read every 10 s.',
+    r: 'Compared with the backhaul capacity, or with the sum of limits when no capacity is declared.',
+  },
+  'client experience': {
+    t: 'Share of measured clients with a good experience.',
+    s: ECHELLE_SCORE,
+    r: 'Clients at their plan limit and clients not measured are counted apart, so neither makes the network look worse than it is.',
+  },
+  'busiest node': {
+    t: 'The node using the largest share of its limit right now.',
+    s: ECHELLE_CHARGE,
+  },
+  'latency': {
+    t: 'Round-trip time between the PoP router and the client — how long a packet takes to go and come back.',
+    m: 'The router pings the client 5 times every 30 s (200 ms apart, from its loopback). The median of the series is shown, so one slow ping does not colour the client.',
+    s: ECHELLE_LATENCE,
+    r: '“no reply” = the whole last series was lost. If every client of a router shows it at once, the probe is failing (firewall, source address, account without the “test” right) — not the clients.',
+    a: 'High latency on one client only: its radio link or CPE. On every client of a node: the node is saturated or its backhaul is weak.',
+  },
+  'download': {
+    t: 'What your clients receive, from the internet to them.',
+    m: 'Sum of the subscriber queues (tx side of the router), read every 10 s.',
+  },
+  'upload': {
+    t: 'What your clients send, from them to the internet.',
+    m: 'Sum of the subscriber queues (rx side of the router), read every 10 s.',
+  },
+  'subscribers online': 'Subscribers with a measurement in the last 2 minutes (PPPoE session up, or static client with traffic).',
+  'sold throughput': {
+    t: 'Sum of the download plans of all subscribers, and how much of it is used right now.',
+    r: 'A few percent is normal: clients are not all active at the same time. That is what makes oversubscription possible.',
+  },
+  'backhaul capacity': 'Sum of the measured capacity of the radio backhauls declared in the inventory. “-” = no radio backhaul declared.',
+  'downstream': 'Total received by your subscribers over the period, at the counting point (each byte counted once).',
+  'upstream': 'Total sent by your subscribers over the period, at the counting point (each byte counted once).',
+  'subscribers seen': 'Subscribers with traffic seen by NetFlow at the counting point over the period.',
+  'flows matched': {
+    t: 'Share of NetFlow flows attributed to a known subscriber.',
+    r: 'The rest is network management, routers talking to each other, or addresses of clients not declared yet — those appear in the entry-aid list.',
+  },
+  'poor experience': {
+    t: 'Clients the network is failing right now.',
+    m: 'Median over 100 ms, 2%+ loss, +150 ms or more under load, or an experience score under 50.',
+    a: 'Open Latency by client and sort by verdict: the “why” column says which of these it is.',
+  },
+  'fair': 'Noticeable but usable: latency 30–100 ms, spikes, a little loss, or +30 to +150 ms under load.',
+  'good': 'Latency under 30 ms, stable, no loss, little or no bufferbloat.',
+  'at plan limit': {
+    t: 'Clients that used their whole plan the whole period.',
+    r: 'Their latency was that of their own full queue — a client downloading at its cap delays its own pings. That is the plan doing its job, not a network fault, so they are not counted as poor.',
+  },
   'clients measured': 'Clients that answered the latency probe over the period.',
   // ---------------------------------------------------------- colonnes
-  'client': 'The subscriber (PPPoE login or static-client reference).',
-  'subscriber': 'The subscriber (PPPoE login or static-client reference).',
+  'client': 'The subscriber: PPPoE login, or the reference of a static-IP client.',
+  'subscriber': 'The subscriber: PPPoE login, or the reference of a static-IP client.',
   'site': 'PoP or VLAN site the client belongs to.',
   'pop': 'Point of presence the client is attached to.',
   'node': 'A site (PoP or router) and its clients. A VLAN client is counted with the router that carries it.',
-  'address': 'IP address (or block) of the client: the queue targets it.',
-  'limit': 'The cap really applied: forced in Subscribers, otherwise the plan, otherwise the default plan.',
-  'plans': 'Sum of the plans sold. “no plan” = limited by hand or by default.',
+  'address': 'IP address (or block) of the client: its queue targets this address.',
+  'limit': {
+    t: 'The cap really applied to the client.',
+    r: 'In order of priority: the limit forced by hand in Subscribers (Rate), otherwise its plan, otherwise the default plan.',
+  },
+  'plans': 'Sum of the plans sold. “no plan” = the clients are limited by hand or by the default plan.',
   'download now': 'Current download, with its share of the limit.',
   'upload now': 'Current upload, with its share of the limit.',
-  'vs limit': 'Current download as a share of the limit. Red over 90%.',
-  'plan used': 'Current traffic as a share of the client’s limit.',
-  'experience': 'Score 0–100 combining latency at rest and latency under load. 80+ good, 50–79 fair, under 50 poor.',
-  'score': 'Experience 0–100 combining latency at rest and latency under load (bufferbloat).',
-  'p95': 'The bad moments: 95% of the pings were faster than this.',
-  'jitter': 'Variation of latency between the pings of the last series. High jitter makes calls choppy.',
-  'loss': 'Share of pings lost in the last series.',
-  'under load': 'Latency while the client’s line is busy, and how much it adds over rest (bufferbloat).',
-  'why': 'What lowered the verdict, in plain words.',
-  'bufferbloat': 'Grade of the latency increase when the line is loaded (A+ best, F worst).',
-  'source': 'Where the plan comes from: pushed by the API, set by hand, default plan — or forced in Subscribers.',
-  'last change': 'When the plan was last changed.',
+  'vs limit': { t: 'Current download as a share of the limit.', s: ECHELLE_CHARGE },
+  'plan used': { t: 'Current traffic as a share of the client’s limit.', r: 'At 85% and above the client is “at plan limit”: its latency is then left out of its verdict.' },
+  'experience': {
+    t: 'Score from 0 to 100 summing up what the client feels.',
+    m: 'The weaker of two parts: latency at rest (no penalty up to 10 ms, then −0.6 point per ms) and the latency added under load (bufferbloat: +5 ms ≈ 90, +30 ms ≈ 80, +100 ms = 50, +200 ms = 25).',
+    s: ECHELLE_SCORE,
+    r: 'The weakest part decides: low latency does not make up for heavy bufferbloat, and the reverse.',
+  },
+  'score': {
+    t: 'Experience score from 0 to 100: the weaker of latency at rest and latency added under load (bufferbloat).',
+    s: ECHELLE_SCORE,
+  },
+  'p95': {
+    t: 'The bad moments: 95% of the pings were faster than this.',
+    r: 'A p95 far above the median (3× or more, and over 100 ms) means spikes: the line is fine most of the time but stalls now and then — typical of radio interference or a queue filling up.',
+  },
+  'jitter': {
+    t: 'How much latency varies from one ping to the next in the last series.',
+    s: [[OK, 'under 10 ms: smooth'], [WARN, '10 to 30 ms: calls may crackle'], [CRIT, 'over 30 ms: choppy voice and video']],
+  },
+  'loss': {
+    t: 'Share of pings lost in the last series of 5.',
+    s: [[OK, '0%'], [WARN, 'under 2%: occasional'], [CRIT, '2% and more: calls cut, downloads slow down']],
+    r: 'A loss while the client is at its plan limit is not counted against the network: its own traffic filled the queue.',
+  },
+  'under load': {
+    t: 'Latency while the client’s line is busy, and how much the load adds over rest (bufferbloat).',
+    m: 'Pings taken while the client was transferring are compared with pings taken at rest.',
+    s: ECHELLE_BLOAT,
+    a: 'Strong bufferbloat with the client under its plan: the queue upstream (backhaul, radio) is too deep. CAKE queues on the bottleneck fix most of it.',
+  },
+  'why': 'What lowered the verdict, in plain words: high latency, spikes, loss, bufferbloat — or “at plan limit”.',
+  'bufferbloat': { t: 'Grade of the latency added when the line is loaded.', s: ECHELLE_BLOAT },
+  'source': 'Where the plan comes from: pushed by the API, set by hand, or the default plan — or a limit forced in Subscribers, which overrides all three.',
+  'last change': 'When the plan was last changed, and by what (API, an account, the default).',
   'destination': 'Internet address the client exchanged traffic with.',
-  'service': 'Recognised service behind the address (from the catalogue, the domain or the owner).',
+  'service': 'Recognised service behind the address: from the catalogue of published blocks, the domain name or the owner of the address.',
   'category': 'Family of the service: streaming, gaming, voice/video, CDN, cloud, updates…',
-  'port': 'Service port on the remote side (443 = HTTPS…). “-” for ICMP (ping).',
+  'port': 'Service port on the remote side (443 = HTTPS, 53 = DNS…). “-” for ICMP (ping).',
   'proto': 'Transport protocol: tcp, udp, icmp…',
   'received': 'Volume received by the client from this address over the period.',
   'sent': 'Volume sent by the client to this address over the period.',
-  'rate when active': 'Volume divided by the time the conversation was actually active — not by the whole period.',
-  'live': 'Current rate of the conversation, from the real duration of its last NetFlow records.',
+  'rate when active': {
+    t: 'Volume divided by the time the conversation was really active.',
+    r: 'Not divided by the whole period: a 10-second download at 100 Mbps reads 100 Mbps, which is what the client experienced.',
+  },
+  'live': 'Current rate of the conversation, from the real duration of its last NetFlow records. Empty = not active right now.',
   'down': 'Volume received by the clients.',
   'up': 'Volume sent by the clients.',
   'flows': 'Number of NetFlow records counted.',
   'seen': 'Last time it was seen.',
-  'kind': 'PPPoE subscriber or static-IP client.',
+  'kind': 'PPPoE subscriber (discovered from the router sessions) or static-IP client (declared by hand).',
   'router': 'The router concerned.',
-  'port speed': 'Negotiated speed of the port (VLAN and bridge: speed of the physical port carrying them).',
-  'load': 'Busiest direction compared with the port speed.',
-  'towards': 'Equipment on the other side of the port, when known.',
+  'port speed': 'Negotiated speed of the port (for a VLAN or bridge: the speed of the physical port carrying it).',
+  'load': { t: 'Busiest direction compared with the port speed.', s: ECHELLE_CHARGE },
+  'towards': 'Equipment on the other side of the port, when known (from discovery or the network tree).',
   'to clients': 'Traffic going towards the clients on this port.',
   'to internet': 'Traffic going towards the internet on this port.',
-  'capacity': 'What the link can carry: the lowest of the rate set by hand, the measured radio capacity and the port speed.',
-  'headroom': 'Capacity left at the peak of the period.',
-  'vantage': 'Where this exporter measures: internet edge (upstream of the core) or at the PoP. Set automatically for your routers.',
-  'sampling': '“all” = every flow exported; 1:N = one in N, volumes multiplied back.',
-  'datagrams': 'NetFlow packets received from this exporter.',
+  'capacity': {
+    t: 'What the link can carry.',
+    m: 'The lowest of: the rate set by hand on the link, the capacity measured on the radio, and the port speed.',
+    r: '“unknown” = none of the three is known: load and saturation cannot be judged for this link.',
+  },
+  'headroom': { t: 'Capacity left at the peak of the period.', r: 'Under 10% at the peak: the next growth in usage will show as latency.' },
+  'vantage': {
+    t: 'Where this exporter measures: internet edge (above the core) or at a PoP.',
+    r: 'Set automatically for your own routers. Only one vantage is used for counting, so a byte seen at both is counted once.',
+  },
+  'sampling': '“all” = every flow is exported; 1:N = one in N, volumes are multiplied back by N.',
+  'datagrams': 'NetFlow packets received from this exporter. Not increasing = the router stopped exporting, or a firewall drops UDP 2055.',
   'version': 'NetFlow format received: v5, v9 or IPFIX.',
+  'access': 'PoP to its subscribers: median of their medians (p90 when hovering). The part of the latency your access network adds.',
+  'next hop up': 'Router to its default gateway — the next hop up: the core for a PoP, the gateway for the core, the transit provider for the gateway.',
+  'where': 'Which segment adds the delay: access side, towards the core / gateway, or above it (transit, internet).',
+  'oversubscription': {
+    t: 'Plans sold ÷ capacity of the link.',
+    s: [[OK, 'up to 1×: everything sold fits at once'], [WARN, '1 to 3×: usual for residential access'], [CRIT, 'over 3×: the link will be full at busy hours']],
+    r: 'Some oversubscription is normal — clients are not all active at the same time. Watch the evening peak rather than the ratio alone.',
+  },
+  'addresses': 'Number of distinct internet addresses reached.',
+  'country': 'Country of the address, from the geolocation of its block.',
+  'cities': 'Number of distinct cities among the addresses reached.',
+  'location': 'Approximate location of the address (city, country) from its block — an indication, not a proof.',
+  'from': 'Start of the link (the upstream equipment).',
+  'to': 'End of the link (the downstream equipment).',
+  'type': 'How the link was found: discovered on the router, observed in traffic, or set by hand.',
+  'method': 'HTTP method: GET reads, PUT creates or replaces, DELETE removes.',
+  'path': 'Route of the call, after the base URL.',
+  'object': 'The collection concerned: accounts, packages, sites, access points, services.',
   // ---------------------------------------------------------- lignes de panneau
   'throughput': 'Current download and upload.',
   'worst latency': 'Latency of the worst client of the node; “no reply” if one of them lost all its pings.',
-  'worst score': 'Lowest experience score among the clients of the node.',
+  'worst score': { t: 'Lowest experience score among the clients of the node.', s: ECHELLE_SCORE },
   'load now': 'Current traffic of the node.',
   'limits applied': 'Sum of the limits really applied to the clients (forced, plan or default).',
   'sold': 'Sum of the plans sold to these clients. “no plan” = limited by hand or by default.',
-  'limit applied': 'The cap written on the router, when it differs from the plan (forced or boost).',
+  'limit applied': 'The cap written on the router, when it differs from the plan (forced by hand, or a boost).',
   // ---------------------------------------------------------- contextes
   'col|clients': 'Number of clients of this node.',
   'boost': 'Temporary extra rate given to the client; it ends on its own at the time shown.',
-  'session': 'How long the PPPoE session has been up (static clients have none).',
-  'sample': 'Age of the last measurement. \u201cstale\u201d = figures are not current.',
-  'at ceiling': 'Share of the time the client was at its limit over the period.',
+  'session': 'How long the PPPoE session has been up (static clients have none). A session that keeps restarting points to a CPE or radio problem.',
+  'sample': 'Age of the last measurement. “stale” = the figures are not current: the collection of this router is late or stopped.',
+  'at ceiling': { t: 'Share of the time the client was at 90%+ of its limit over the period.', r: '15% or more with a good experience: candidate for a bigger plan.' },
   'avg download': 'Average download over the period.',
-  'avg rate': 'Average rate over the period (volume / period).',
-  'busy-hour peak': 'Highest load reached during the busiest hour.',
-  'ccq': 'Client Connection Quality of the radio link (100% = no retransmission).',
-  'signal': 'Received radio signal, in dBm (closer to 0 is stronger; below -75 dBm is weak).',
-  'noise': 'Radio noise floor, in dBm (lower is better).',
-  'snr': 'Signal-to-noise ratio, in dB: signal minus noise. Above 25 dB is good.',
+  'avg rate': 'Average rate over the period (volume ÷ period).',
+  'busy-hour peak': 'Highest load reached during the busiest hour of the period — what the capacity must hold.',
+  'ccq': {
+    t: 'Client Connection Quality: share of radio frames that went through without retransmission.',
+    s: [[OK, '90 to 100%'], [WARN, '75 to 90%'], [CRIT, 'under 75%: flagged as an issue — retransmissions eat throughput and add latency']],
+  },
+  'signal': {
+    t: 'Strength of the radio signal received, in dBm (closer to 0 is stronger).',
+    s: [[OK, 'above −68 dBm'], [WARN, '−68 to −75 dBm'], [CRIT, 'below −75 dBm: weak — alignment or obstacle']],
+  },
+  'noise': 'Radio noise floor, in dBm (lower is better, e.g. −95 is quieter than −85). A high noise floor means interference on the channel.',
+  'snr': {
+    t: 'Signal-to-noise ratio, in dB: signal minus noise.',
+    s: [[OK, 'above 25 dB: clean'], [WARN, '20 to 25 dB: usable, lower modulation'], [CRIT, 'under 20 dB: flagged as an issue — unstable link']],
+  },
   'distance': 'Radio distance between the access point and the CPE.',
-  'cpu': 'Processor load of the router.',
+  'cpu': { t: 'Processor load of the router.', s: [[OK, 'under 70%'], [WARN, '70 to 90%'], [CRIT, 'over 90%']] },
   'memory': 'Memory used on the router.',
-  'uptime': 'Time since the last restart.',
+  'uptime': 'Time since the last restart. A recent restart nobody planned is worth a look (power, crash).',
   'measured rate': 'Rate measured on the router for this client.',
-  'forced rate': 'Limit set by hand in Subscribers (Rate): it overrides the plan.',
+  'forced rate': 'Limit set by hand in Subscribers (Rate): it overrides the plan until you clear it.',
   'on the router': 'What is really written on the router for this client.',
   'wanted': 'What freeQoS intends to write.',
-  'where the cap comes from': 'Origin of the limit: plan, forced by hand, boost or default.',
-  'why it does not throttle': 'Reason why the cap is not held on the router.',
-  'room for': 'How many more subscribers this site can take at the current usage.',
+  'where the cap comes from': 'Origin of the limit: plan, forced by hand, boost or default plan.',
+  'why it does not throttle': 'Reason why the cap is not held on the router (no queue, another queue matching first, a parent queue blocking…).',
+  'room for': { t: 'How many more subscribers this site can take at the current usage.', m: 'Busy-hour peak per subscriber against 80% of the capacity.' },
   'share': 'Share of the total traffic.',
   'usage': 'Detected application of the conversation.',
   'capacity read': 'Capacity read from the radio.',
@@ -9577,33 +10383,48 @@ const AIDE = {
   'interface': 'Router interface concerned.',
   'queue': 'freeQoS queue on the router for this client.',
   'target': 'Address or block the queue applies to.',
-  'role': 'Role of the router: PoP, core or gateway (internet exit).',
+  'role': 'Role of the router: PoP (serves clients), core, or gateway (internet exit).',
   'origin': 'Where the item comes from.',
   'package': 'Offer pushed by the API.',
-  'col|plan': 'The plan sold to the client (download/upload).',
-  'heat|experience score': 'Experience score of the step (the worst client of the node). Green 80+, orange 50–79, red under 50.',
-  'heat|latency': '90th percentile of the latency of the step: 9 pings out of 10 were faster.',
-  'heat|load vs limit': 'For a node: its most loaded client against its own limit. For the whole network: total traffic against the sum of limits.',
+  'col|plan': 'The plan sold to the client (download / upload).',
+  'heat|experience score': { t: 'Experience score of the step (the worst client of the node).', s: ECHELLE_SCORE },
+  'heat|latency': { t: '90th percentile of the latency of the step: 9 pings out of 10 were faster.', s: ECHELLE_LATENCE },
+  'heat|load vs limit': {
+    t: 'For a node: its most loaded client against its own limit. For the whole network: total traffic against the sum of limits.',
+    s: ECHELLE_CHARGE,
+  },
   'kpi|internet': 'What this router exchanges with the outside on its uplink port, with the port load.',
   'kpi|clients': 'Sum of the traffic of this router’s subscribers (their queues).',
-  'kpi|not from clients': 'Internet minus clients: traffic of no known client — bandwidth tests, device management, undeclared clients.',
-  'vantage|internet edge': 'NetFlow measured at the internet exit (above the core). Counted when it sends flows: each client once, internet traffic only.',
+  'kpi|not from clients': {
+    t: 'Internet minus clients: traffic of no known client.',
+    r: 'Bandwidth tests, device management, routers talking to each other, or clients not declared yet. A large, steady share is worth investigating.',
+  },
+  'vantage|internet edge': 'NetFlow measured at the internet exit (above the core). Used for counting whenever it sends flows: each client once, internet traffic only.',
   'vantage|pops': 'NetFlow measured on each PoP router, next to the clients. Used for counting only when the internet exit sends nothing.',
   'hot|internet side': 'Gateway uplink and PoP-to-core links: a saturation here hits every client.',
   'hot|pop side': 'Links towards subscribers, VLANs and relays: a saturation only hits what hangs below.',
 };
 
+/** Libelles variables (une adresse, un nom) : reconnus par leur forme. */
+const AIDE_MOTIFS = [
+  [/^to \d{1,3}(\.\d{1,3}){3}$/, {
+    t: 'Router to this public address (a well-known resolver, reachable everywhere): latency through your gateway and the transit above it.',
+    r: 'Compare with “Next hop up”: if this is much higher, the delay is outside your network (transit provider, internet), not in it.',
+  }],
+];
+
 /** Le libelle d'un element, sans ses badges, indices ni icones. */
-function libelleAide(el) {
+function libelleAide(el, garderCasse) {
   const copie = el.cloneNode(true);
-  copie.querySelectorAll('.info, .hint, .pct-hint, .badge, .u, .pl-alerts, .sq, button, select, input')
+  copie.querySelectorAll('.info, .hint, .pct-hint, .badge, .u, .pl-alerts, .sq, .sel-name, button, select, input')
     .forEach((x) => x.remove());
-  return copie.textContent.replace(/[↓↑↕]/g, ' ').replace(/\(.*?\)/g, ' ')
-    .replace(/[:?·Σ]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  const texte = copie.textContent.replace(/[↓↑↕]/g, ' ').replace(/\(.*?\)/g, ' ')
+    .replace(/[?·Σ]/g, ' ').replace(/:/g, ' ').replace(/\s+/g, ' ').replace(/\s*\/\s*$/, '').trim();
+  return garderCasse ? texte : texte.toLowerCase();
 }
 
 const CIBLES_AIDE = [
-  ['h2', ''], ['h3', ''], ['th', 'col'], ['.stat > .label', ''], ['.lq-kv > .k', ''],
+  ['h2', 'sec'], ['h3', 'sec'], ['th', 'col'], ['.stat > .label', ''], ['.lq-kv > .k', ''],
   ['.lq-table tbody td:first-child', ''], ['.pl-kpi > span:first-child', 'kpi'],
   ['.hot-title', 'hot'], ['.heat-label', 'heat'], ['.vantage-title', 'vantage'],
 ];
@@ -9611,53 +10432,114 @@ const CIBLES_AIDE = [
 function poserAides(racine) {
   CIBLES_AIDE.forEach(([sel, ctx]) => {
     (racine || document).querySelectorAll(sel).forEach((el) => {
-      if (el.dataset.aide) return;
-      el.dataset.aide = '1';
+      // Le texte a deja ete examine tel quel : rien a refaire. S'il a change
+      // (un titre qui prend le nom du noeud choisi), on recommence.
+      if (el.dataset.aide === el.textContent) return;
+      const ancienne = el.querySelector(':scope > .info');
+      if (ancienne) ancienne.remove();
       const brut = libelleAide(el);
-      if (!brut) return;
+      if (!brut) { el.dataset.aide = el.textContent; return; }
+      // Un bloc entier peut changer le sens des mots (data-aide-ctx) : "Role"
+      // d'un compte n'est pas "Role" d'un routeur.
+      const zone = el.closest('[data-aide-ctx]');
+      const contextes = [zone && zone.dataset.aideCtx, ctx].filter(Boolean);
       // "Health over time — NAS-FRANCOPHONIE" : la partie avant le tiret.
       const essais = [brut, brut.split(' — ')[0], brut.split(' - ')[0]];
-      let texte = null;
+      let entree = null;
       for (const e of essais) {
-        texte = (ctx && AIDE[ctx + '|' + e]) || AIDE[e];
-        if (texte) break;
+        for (const c of contextes) { entree = AIDE[c + '|' + e]; if (entree) break; }
+        entree = entree || AIDE[e];
+        if (entree) break;
       }
-      if (!texte) return;
+      if (!entree) {
+        const motif = AIDE_MOTIFS.find(([re]) => re.test(brut));
+        if (motif) entree = motif[1];
+      }
+      // A defaut d'entree, l'infobulle native d'un en-tete devient une vraie bulle.
+      if (!entree && el.title) { entree = el.title; el.removeAttribute('title'); }
+      if (!entree) { el.dataset.aide = el.textContent; return; }
       const icone = document.createElement('span');
       icone.className = 'info';
       icone.tabIndex = 0;
       icone.setAttribute('role', 'button');
-      icone.setAttribute('aria-label', texte);
-      icone.dataset.tip = texte;
+      icone.setAttribute('aria-label', texteAide(entree));
+      icone.dataset.titre = libelleAide(el, true).split(' — ')[0];
+      bullesAide.set(icone, entree);
       icone.textContent = 'i';
       // Le titre d'une liste depliable reste a lui seul le declencheur.
-      icone.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); });
+      icone.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); montrerAide(icone, true); });
       el.appendChild(icone);
+      el.dataset.aide = el.textContent;
     });
   });
+}
+
+/** L'entree associee a chaque icone (une chaine ou une fiche structuree). */
+const bullesAide = new WeakMap();
+
+function ficheAide(entree) {
+  return typeof entree === 'string' ? { t: entree } : entree;
+}
+
+/** Version texte, pour les lecteurs d'ecran. */
+function texteAide(entree) {
+  const f = ficheAide(entree);
+  return [f.t, f.m && 'Measured: ' + f.m, (f.s || []).map((x) => x[1]).join('; '), f.r, f.a && 'What to do: ' + f.a]
+    .filter(Boolean).join(' ');
+}
+
+/** La bulle : ce que c'est, comment c'est mesure, l'echelle en couleurs,
+ *  comment le lire, quoi faire. */
+function rendreAide(titre, entree) {
+  const f = ficheAide(entree);
+  const bloc = (libelle, texte) => texte
+    ? '<div class="ib-sec"><span class="ib-k">' + libelle + '</span>' + esc(texte) + '</div>' : '';
+  return (titre ? '<div class="ib-title">' + esc(titre) + '</div>' : '') +
+    (f.t ? '<p class="ib-what">' + esc(f.t) + '</p>' : '') +
+    bloc('How it is measured', f.m) +
+    (f.s ? '<ul class="ib-scale">' + f.s.map(([ton, txt]) =>
+      '<li><span class="sq ' + ton + '"></span>' + esc(txt) + '</li>').join('') + '</ul>' : '') +
+    bloc('How to read it', f.r) +
+    bloc('What to do', f.a);
 }
 
 /* La bulle elle-meme : un seul element, pose sur le body, pour ne jamais etre
    coupe par un tableau qui defile. */
 let bulleAide = null;
-function montrerAide(icone) {
+let bulleEpinglee = null;
+function montrerAide(icone, epingler) {
   if (!bulleAide) {
     bulleAide = document.createElement('div');
     bulleAide.className = 'info-bulle';
     bulleAide.setAttribute('role', 'tooltip');
     document.body.appendChild(bulleAide);
   }
-  bulleAide.textContent = icone.dataset.tip;
+  // Un clic epingle la bulle (lecture tranquille, ou ecran tactile) ; un
+  // second clic, Echap ou un clic ailleurs la ferme.
+  if (epingler) {
+    if (bulleEpinglee === icone) { bulleEpinglee = null; cacherAide(true); return; }
+    bulleEpinglee = icone;
+  } else if (bulleEpinglee && bulleEpinglee !== icone) {
+    return;
+  }
+  bulleAide.innerHTML = rendreAide(icone.dataset.titre, bullesAide.get(icone) || '');
+  bulleAide.classList.toggle('pinned', bulleEpinglee === icone);
   bulleAide.style.display = 'block';
   const r = icone.getBoundingClientRect();
   const largeur = bulleAide.offsetWidth;
+  const hauteur = bulleAide.offsetHeight;
   const x = Math.max(8, Math.min(r.left + r.width / 2 - largeur / 2, window.innerWidth - largeur - 8));
   let y = r.bottom + 8;
-  if (y + bulleAide.offsetHeight > window.innerHeight - 8) y = r.top - bulleAide.offsetHeight - 8;
+  if (y + hauteur > window.innerHeight - 8 && r.top - hauteur - 8 >= 8) y = r.top - hauteur - 8;
   bulleAide.style.left = x + 'px';
-  bulleAide.style.top = Math.max(8, y) + 'px';
+  bulleAide.style.top = Math.max(8, Math.min(y, window.innerHeight - hauteur - 8)) + 'px';
 }
-function cacherAide() { if (bulleAide) bulleAide.style.display = 'none'; }
+function cacherAide(forcer) {
+  if (!bulleAide) return;
+  if (bulleEpinglee && forcer !== true) return;
+  if (forcer === true) bulleEpinglee = null;
+  bulleAide.style.display = 'none';
+}
 document.addEventListener('mouseover', (e) => {
   const i = e.target.closest && e.target.closest('.info');
   if (i) montrerAide(i);
@@ -9667,7 +10549,11 @@ document.addEventListener('mouseout', (e) => {
 });
 document.addEventListener('focusin', (e) => { if (e.target.classList && e.target.classList.contains('info')) montrerAide(e.target); });
 document.addEventListener('focusout', (e) => { if (e.target.classList && e.target.classList.contains('info')) cacherAide(); });
-window.addEventListener('scroll', cacherAide, true);
+document.addEventListener('click', (e) => {
+  if (bulleEpinglee && !(e.target.closest && (e.target.closest('.info') || e.target.closest('.info-bulle')))) cacherAide(true);
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cacherAide(true); });
+window.addEventListener('scroll', () => cacherAide(true), true);
 
 // Apres chaque rendu : les ecrans se redessinent sans cesse (rafraichissement
 // toutes les 10 s), l'observateur pose les icones sur ce qui est nouveau.
