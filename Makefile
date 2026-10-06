@@ -1,10 +1,13 @@
-.PHONY: help install dev up down update reset-db logs test lint fmt typecheck hooks lock psql seed
+.PHONY: help install install-docker dev up down update reset-db logs test lint fmt typecheck hooks lock psql seed
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
 
 install: ## Installe l'app + les deps de dev dans le venv courant
 	pip install -e ".[dev]"
+
+install-docker: ## Installation/mise a jour automatique avec Docker (installe Docker si besoin)
+	sudo ./install.sh
 
 up: ## Demarre TimescaleDB + l'app (lab)
 	docker compose up -d --build
