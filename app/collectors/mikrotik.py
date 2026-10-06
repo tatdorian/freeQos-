@@ -806,6 +806,16 @@ def forget_loopbacks() -> None:
     _RECHERCHES_VAINES.clear()
 
 
+def forget_router_facts() -> None:
+    """Oublie TOUT ce qui a ete appris des routeurs : loopbacks, liens montants,
+    adresses et reseaux connectes. Pour les tests : un test ne doit pas heriter
+    des routeurs d'un autre."""
+    forget_loopbacks()
+    _AMONTS.clear()
+    _PROPRIETAIRES.clear()
+    _RESEAUX_CONNECTES.clear()
+
+
 class MikrotikCollector:
     """Lit les sessions PPPoE d'un routeur et les normalise en PppoeSession."""
 

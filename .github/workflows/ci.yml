@@ -56,7 +56,7 @@ jobs:
       - name: Tests d'integration (TimescaleDB reel)
         env:
           TEST_DATABASE_URL: postgresql://qos:qos@localhost:5432/qos_test
-        run: pytest tests/test_db_integration.py -q
+        run: pytest tests/test_db_integration.py tests/test_bout_en_bout_api_externe.py -q
 
       - name: Verifier que les hypertables ont bien ete creees
         env:

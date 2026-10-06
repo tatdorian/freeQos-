@@ -25,11 +25,11 @@ from app.config import BackhaulConfig, RouterConfig, Settings
 def _loopbacks_oublies():
     """Le loopback detecte est retenu par nom de routeur, au niveau du module :
     sans cet oubli, un test en heriterait d'un autre."""
-    from app.collectors.mikrotik import forget_loopbacks
+    from app.collectors.mikrotik import forget_router_facts
 
-    forget_loopbacks()
+    forget_router_facts()
     yield
-    forget_loopbacks()
+    forget_router_facts()
 
 
 class FakeRouterOsClient:
