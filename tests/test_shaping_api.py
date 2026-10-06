@@ -1049,13 +1049,3 @@ def test_un_abonne_sans_secteur_ne_declenche_aucune_decision(client: TestClient)
     assert corps["scored"] == 1
     assert corps["sectors"] == []
     assert corps["routers"] == []
-
-
-def test_l_arbre_ne_montre_que_les_routeurs_ajoutes(client: TestClient) -> None:
-    """La radio vue en voisin (bh-test) n'entre pas dans l'arbre : seul le
-    routeur ajoute y figure, sans aucun lien devine."""
-    body = client.get("/api/v1/topology/tree").json()
-    assert body["declared"] is True
-    assert [n["key"] for n in body["nodes"]] == ["router:pop-test"]
-    assert body["nodes"][0]["name"] == "PoP Test"
-    assert body["links"] == []

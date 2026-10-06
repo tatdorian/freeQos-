@@ -246,6 +246,17 @@ async def put_object(
     return preseem_shape(fiche)
 
 
+@router.put("/{collection}", include_in_schema=False)
+@router.put("/{collection}/", include_in_schema=False)
+@router.delete("/{collection}", include_in_schema=False)
+@router.delete("/{collection}/", include_in_schema=False)
+async def missing_id(collection: CollectionPath, caller: WriteDep) -> None:
+    """Ecriture sans identifiant dans l'URI : 400 "Missing ID in URI", comme
+    Preseem -- et non le 405 de FastAPI, qu'une integration ne sait pas lire."""
+    _collection(collection)
+    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing ID in URI")
+
+
 @router.delete("/{collection}/{object_id}", summary="Remove a record")
 async def delete_object(
     collection: CollectionPath,
