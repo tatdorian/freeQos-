@@ -642,21 +642,33 @@ def ping_stats_from_rows(rows: list[dict[str, Any]], count: int) -> PingStats:
     ou pas de ligne du tout si la commande s'arrete avant. Le nombre envoye est
     donc le plus grand de ``count`` et des numeros de sequence vus : un paquet
     sans reponse reste un paquet perdu, jamais un paquet oublie.
+
+    RouterOS peut rendre PLUSIEURS lignes pour un meme paquet (une d'attente,
+    puis celle qui porte le temps) : on garde le premier temps lisible de
+    chaque sequence, pas la premiere ligne. Et si aucun temps n'est lisible
+    alors que le resume de RouterOS dit ``received > 0``, ce resume fait foi
+    (``avg-rtt``) : une reponse recue n'est jamais affichee « no reply ».
     """
-    echantillons: list[float] = []
-    sequences: set[str] = set()
+    par_sequence: dict[str, float | None] = {}
+    sans_sequence: list[float] = []
+    recus_annonces = 0
+    moyenne: float | None = None
     for row in rows:
+        valeur = parse_routeros_duration_ms(row.get("time"))
         seq = str(row.get("seq") or "")
         if seq:
-            if seq in sequences:
-                continue  # ligne de resume repetee pour un meme paquet
-            sequences.add(seq)
-        if row.get("time") is None:
-            continue
-        valeur = parse_routeros_duration_ms(row.get("time"))
-        if valeur is not None:
-            echantillons.append(valeur)
-    return PingStats(sent=max(count, len(sequences)), samples=tuple(echantillons))
+            if par_sequence.get(seq) is None:
+                par_sequence[seq] = valeur
+        elif valeur is not None:
+            sans_sequence.append(valeur)
+        recus = parse_counter(row.get("received"))
+        if recus:
+            recus_annonces = max(recus_annonces, recus)
+            moyenne = parse_routeros_duration_ms(row.get("avg-rtt")) or moyenne
+    echantillons = [v for v in par_sequence.values() if v is not None] + sans_sequence
+    if not echantillons and recus_annonces and moyenne is not None:
+        echantillons = [moyenne] * min(recus_annonces, max(count, 1))
+    return PingStats(sent=max(count, len(par_sequence)), samples=tuple(echantillons))
 
 
 def _split_pair(value: Any) -> tuple[int | None, int | None] | None:
