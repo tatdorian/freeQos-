@@ -86,6 +86,7 @@ class FakeRouterOsClient:
         # Configuration : c'est elle qui porte la hierarchie reelle.
         self.route_rows: list[dict[str, Any]] = []
         self.ping_tables: list[tuple[str, str] | None] = []
+        self.ping_dscp: list[int | None] = []
         self.bridge_port_rows: list[dict[str, Any]] = []
         self.bonding_rows: list[dict[str, Any]] = []
         self.ospf_neighbor_rows: list[dict[str, Any]] = []
@@ -284,8 +285,10 @@ class FakeRouterOsClient:
         interval: str | None = None,
         routing_table: str | None = None,
         table_param: str = "vrf",
+        dscp: int | None = None,
     ) -> list[dict[str, Any]]:
         self.pings.append((address, count))
+        self.ping_dscp.append(dscp)
         self.ping_tables.append((routing_table, table_param) if routing_table else None)
         self.ping_intervals.append(interval)
         self.ping_sources.append(src_address)

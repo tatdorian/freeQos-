@@ -353,3 +353,31 @@ async def test_une_route_plus_precise_dans_main_l_emporte() -> None:
     collecteur = make_collector(client)
     await collecteur.ping_stats("10.20.0.10", 5, interval_ms=200)
     assert client.ping_tables[-1] is None
+
+
+async def test_la_sonde_passe_en_priorite_ef() -> None:
+    """DEMANDE : mesurer la latence de la LIGNE, pas l'attente derriere le
+    telechargement du client. Les pings partent en EF (46) : une file CAKE
+    les range dans sa classe prioritaire."""
+    client = FakeRouterOsClient()
+    client.route_rows = list(ROUTES_VRF)
+    collecteur = make_collector(client)
+    await collecteur.ping_stats("172.16.35.253", 5, interval_ms=200)
+    assert client.ping_dscp[-1] == 46
+
+
+async def test_un_routeur_qui_refuse_dscp_sonde_sans_marquage() -> None:
+    class SansDscp(FakeRouterOsClient):
+        def ping(self, *args, dscp=None, **kwargs):  # type: ignore[no-untyped-def]
+            if dscp is not None:
+                raise RuntimeError("unknown parameter dscp")
+            return super().ping(*args, **kwargs)
+
+    client = SansDscp()
+    collecteur = make_collector(client)
+    stats = await collecteur.ping_stats("10.0.0.9", 5, interval_ms=200)
+    assert stats.received == 5
+    client.ping_dscp.clear()
+    await collecteur.ping_stats("10.0.0.9", 5, interval_ms=200)
+    # Retenu : plus d'essai avec dscp sur ce routeur.
+    assert client.ping_dscp == [None]
