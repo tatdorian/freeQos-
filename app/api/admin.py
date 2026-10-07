@@ -123,6 +123,18 @@ async def rtt_diagnose(
     }
 
 
+@router.post("/rtt/reset-history", summary="Clear recent latency measurements (and scores derived)")
+async def rtt_reset_history(
+    metrics: RepositoryDep,
+    hours: Annotated[int, Query(ge=1, le=24 * 30)] = 48,
+) -> dict[str, Any]:
+    """Apres une correction de la sonde, repartir de mesures justes tout de
+    suite plutot qu'attendre que la fenetre d'une heure se renouvelle. Seule
+    la latence est effacee : les debits restent."""
+    result: dict[str, Any] = await metrics.reset_latency_history(hours=hours)
+    return result
+
+
 @router.put("/rtt", summary="Turn the latency probe (RTT) on or off")
 async def set_rtt(
     payload: RttToggle, container: ContainerDep, collection: CollectionDep

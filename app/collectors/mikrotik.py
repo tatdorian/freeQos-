@@ -688,7 +688,11 @@ def ping_stats_from_rows(rows: list[dict[str, Any]], count: int) -> PingStats:
     for row in rows:
         envoyes_annonces = max(envoyes_annonces, parse_counter(row.get("sent")) or 0)
         valeur = parse_routeros_duration_ms(row.get("time"))
-        seq = str(row.get("seq") or "")
+        # ``seq`` arrive en ENTIER par l'API : le paquet 0 est faux en Python,
+        # et ``or ""`` le faisait passer pour une ligne sans sequence -- ses
+        # doublons etaient alors comptes deux fois (4 recus pour 3 envoyes).
+        brut_seq = row.get("seq")
+        seq = "" if brut_seq is None else str(brut_seq).strip()
         if seq:
             if par_sequence.get(seq) is None:
                 par_sequence[seq] = valeur
