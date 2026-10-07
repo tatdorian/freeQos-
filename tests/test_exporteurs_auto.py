@@ -87,3 +87,53 @@ async def test_seuls_les_inconnus_sont_declares(reseau: list[Any]) -> None:
     assert ident == 1
     assert champs["vantage"] == "edge" and champs["name"] == "DS-CCR"
     assert champs["pop_name"] is None
+
+
+async def test_un_exporteur_auto_suit_le_role_du_routeur(reseau: list[Any]) -> None:
+    """DS-CCR declare "au PoP" quand sa sortie n'etait pas encore connue : une
+    fois sa route par defaut lue (sortie vers l'exterieur), il passe en bordure
+    tout seul -- sans toucher a ce qu'une personne a choisi."""
+    depot = Depot(
+        [
+            {
+                "id": 1,
+                "address": "11.11.11.1",
+                "vantage": "pop",
+                "pop_name": "DS-CCR",
+                "name": "DS-CCR",
+                "note": "declared automatically: router DS-CCR",
+            },
+            {
+                "id": 2,
+                "address": "11.11.11.75",
+                "vantage": "edge",
+                "pop_name": None,
+                "name": "NAS",
+                "note": "set by hand",
+            },
+        ]
+    )
+    service = NetflowService(exporters_repo=depot)
+    service.identify_exporter = lambda a: identify_exporter(a, reseau)
+    assert await service.auto_declare_exporters() == ["11.11.11.1"]
+    [(ident, champs)] = depot.maj
+    assert (ident, champs["vantage"], champs["pop_name"]) == (1, "edge", None)
+
+
+async def test_un_exporteur_auto_deja_juste_n_est_pas_reecrit(reseau: list[Any]) -> None:
+    depot = Depot(
+        [
+            {
+                "id": 1,
+                "address": "11.11.11.1",
+                "vantage": "edge",
+                "pop_name": None,
+                "name": "DS-CCR",
+                "note": "declared automatically: router DS-CCR",
+            }
+        ]
+    )
+    service = NetflowService(exporters_repo=depot)
+    service.identify_exporter = lambda a: identify_exporter(a, reseau)
+    assert await service.auto_declare_exporters() == []
+    assert depot.maj == []
