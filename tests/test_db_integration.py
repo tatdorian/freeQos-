@@ -930,11 +930,8 @@ async def test_debit_filtre_par_client_ou_par_sites(database: Database, now: dat
     assert await repo.throughput_now(pop_ids=[]) is None
 
 
-async def test_les_mesures_au_plafond_ne_jugent_pas_le_reseau(
-    database: Database, now: datetime
-) -> None:
-    """Un client a 100 % de sa limite : sa latence est celle de sa file. Elle
-    est ecartee de la mediane et de la sante, et comptee a part."""
+async def _client_au_plafond(database: Database, now: datetime) -> MetricsRepository:
+    """Nestle a 100 % de sa limite la moitie du temps : 150 ms au plafond, 8 au repos."""
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
@@ -964,7 +961,20 @@ async def test_les_mesures_au_plafond_ne_jugent_pas_le_reseau(
             )
         )
     await writer.write_subscriber_metrics(lignes)
+    return repo
 
+
+@pytest.mark.parametrize("dscp", [None])
+async def test_les_mesures_au_plafond_ne_jugent_pas_le_reseau(
+    database: Database, now: datetime, monkeypatch: pytest.MonkeyPatch, dscp: int | None
+) -> None:
+    """SONDE NON PRIORITAIRE (RTT_PROBE_DSCP=-1) : au plafond, les pings
+    attendent derriere le trafic du client. Sa latence est celle de sa file :
+    ecartee de la mediane et de la sante, et comptee a part."""
+    from app.collectors import mikrotik
+
+    monkeypatch.setattr(mikrotik, "PROBE_DSCP", dscp)
+    repo = await _client_au_plafond(database, now)
     [lat] = await repo.latency_by_subscriber(minutes=15)
     assert lat["median_ms"] == pytest.approx(8.0)  # le repos seul
     assert lat["capped_samples"] == 3
@@ -974,6 +984,20 @@ async def test_les_mesures_au_plafond_ne_jugent_pas_le_reseau(
     rtt = next(r for r in heat["rows"] if r["key"] == "rtt")
     valeurs = [c["value"] for c in rtt["cells"] if c["value"] is not None]
     assert valeurs and max(valeurs) < 50  # 150 ms au plafond n'y entre pas
+
+
+async def test_sonde_prioritaire_la_latence_au_plafond_compte(
+    database: Database, now: datetime, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEMANDE : les pings passent devant (EF) dans la file CAKE du client.
+    Leur mesure est la ligne, pas son attente : plus rien n'est mis a part."""
+    from app.collectors import mikrotik
+
+    monkeypatch.setattr(mikrotik, "PROBE_DSCP", 46)
+    repo = await _client_au_plafond(database, now)
+    [lat] = await repo.latency_by_subscriber(minutes=15)
+    assert lat["samples"] == 6 and lat["capped_samples"] == 0
+    assert lat["median_ms"] == pytest.approx(79.0)  # (8 + 150) / 2
 
 
 # ---------------------------------------------------------------------------

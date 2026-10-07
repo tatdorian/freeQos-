@@ -36,6 +36,21 @@ AU_PLAFOND_SQL = """coalesce((
  OR (coalesce(pol.max_up_mbps, s.plan_up_mbps) > 0
      AND coalesce(m.rx_bps, 0) >= 0.85 * coalesce(pol.max_up_mbps, s.plan_up_mbps) * 1e6)
 ), false)"""
+
+
+def au_plafond_sql() -> str:
+    """La condition « au plafond », ou ``false`` quand la sonde passe en priorite.
+
+    Mettre de cote la latence d'un client qui remplit son forfait n'avait de
+    sens que tant que les pings attendaient DERRIERE son trafic. Marques EF
+    (RTT_PROBE_DSCP), ils passent devant dans sa file CAKE : la mesure est
+    celle de la ligne, elle compte comme les autres (mediane, note).
+    """
+    from app.collectors import mikrotik
+
+    return "false" if mikrotik.PROBE_DSCP is not None else AU_PLAFOND_SQL
+
+
 JOINTURE_LIMITE_SQL = (
     "LEFT JOIN shaping_policies pol ON pol.scope = 'subscriber' AND pol.target_key = s.login"
 )
@@ -307,7 +322,7 @@ class MetricsRepository:
                 SELECT m.subscriber_id, s.login, s.kind, p.name AS pop_name,
                        m.rtt_ms,
                        COALESCE(m.rx_bps, 0) + COALESCE(m.tx_bps, 0) AS load_bps,
-                       {AU_PLAFOND_SQL} AS at_cap
+                       {au_plafond_sql()} AS at_cap
                   FROM subscriber_metrics m
                   JOIN subscribers s ON s.id = m.subscriber_id
                   LEFT JOIN pops p   ON p.id = s.pop_id
@@ -441,7 +456,7 @@ class MetricsRepository:
                            m.subscriber_id,
                            -- La latence d'un client AU PLAFOND de son forfait
                            -- est celle de sa propre file : ecartee de la sante.
-                           avg(m.rtt_ms) FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS rtt,
+                           avg(m.rtt_ms) FILTER (WHERE NOT {au_plafond_sql()}) AS rtt,
                            avg(COALESCE(m.tx_bps, 0)) AS tx,
                            avg(COALESCE(m.rx_bps, 0) + COALESCE(m.tx_bps, 0)) AS charge
                       FROM subscriber_metrics m
@@ -1233,16 +1248,16 @@ class MetricsRepository:
             rows = await conn.fetch(
                 f"""
                 SELECT s.id AS subscriber_id, s.login, s.kind, p.name AS pop_name,
-                       count(*) FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS samples,
-                       count(*) FILTER (WHERE {AU_PLAFOND_SQL}) AS capped_samples,
+                       count(*) FILTER (WHERE NOT {au_plafond_sql()}) AS samples,
+                       count(*) FILTER (WHERE {au_plafond_sql()}) AS capped_samples,
                        percentile_cont(0.5) WITHIN GROUP (ORDER BY m.rtt_ms)
-                           FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS median_ms,
+                           FILTER (WHERE NOT {au_plafond_sql()}) AS median_ms,
                        percentile_cont(0.95) WITHIN GROUP (ORDER BY m.rtt_ms)
-                           FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS p95_ms,
-                       min(m.rtt_ms) FILTER (WHERE NOT {AU_PLAFOND_SQL}) AS best_ms,
+                           FILTER (WHERE NOT {au_plafond_sql()}) AS p95_ms,
+                       min(m.rtt_ms) FILTER (WHERE NOT {au_plafond_sql()}) AS best_ms,
                        percentile_cont(0.5) WITHIN GROUP (ORDER BY m.rtt_ms)
-                           FILTER (WHERE {AU_PLAFOND_SQL}) AS capped_median_ms,
-                       (array_agg({AU_PLAFOND_SQL} ORDER BY m.ts DESC))[1] AS at_cap_now,
+                           FILTER (WHERE {au_plafond_sql()}) AS capped_median_ms,
+                       (array_agg({au_plafond_sql()} ORDER BY m.ts DESC))[1] AS at_cap_now,
                        max(m.ts) AS last_at
                   FROM subscriber_metrics m
                   JOIN subscribers s ON s.id = m.subscriber_id
