@@ -2933,8 +2933,8 @@ function bestUnitMbps(mbpsValue) {
 const FLOW = { minutes: 60, vantage: '', pop: '', category: '', search: '', open: new Set() };
 
 const VANTAGE_LABEL = {
-  edge: 'upstream of the core',
-  pop: 'at the PoP',
+  edge: 'at the internet exit',
+  pop: 'on the PoP routers',
   unknown: 'undeclared',
 };
 
@@ -3019,7 +3019,7 @@ async function loadTraffic() {
       'it in <button type="button" class="sm" data-open-exporters>Advanced: NetFlow exporters</button></div>'
     : '';
   flowNotice(flowDiagnostic(etat, exportEtat) + avisExport);
-  renderVantages(points, top);
+  renderVantages(points, top, exporteurs);
   renderFlowStats(etat, top);
   renderFlowTop(top);
   renderFlowExporters(exporteurs);
@@ -3033,63 +3033,38 @@ async function loadTraffic() {
   }
 }
 
-/** Les deux points de mesure, cote a cote : la sortie internet et les PoP.
- *
- *  Ils voient le meme trafic a deux endroits. Les montrer ensemble dit tout
- *  de suite si l'un manque, et lequel sert au decompte (on ne compte le meme
- *  octet qu'une fois). */
-const VANTAGE_CARD = {
-  edge: {
-    title: 'Internet edge',
-    sub: 'Upstream of the core, where internet arrives',
-    icon: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/>' +
-      '<path d="M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3z"/>',
-    missing: 'No router exports here yet. Give your internet gateway the ' +
-      '<b>Gateway</b> role in Devices: its export is then set up automatically.',
-  },
-  pop: {
-    title: 'PoPs',
-    sub: 'At each point of presence, next to the subscribers',
-    icon: '<rect x="3" y="5" width="18" height="6" rx="2"/><rect x="3" y="13" width="18" height="6" rx="2"/>' +
-      '<path d="M7 8h.01M7 16h.01"/>',
-    missing: 'No PoP exports yet. The export is set up automatically on each ' +
-      'PoP router once writing is enabled.',
-  },
-};
-
-function renderVantages(data, top) {
+function renderVantages(data, top, exporteurs) {
+  // UNE PHRASE, pas deux cartes : « ou le trafic est mesure ». Le detail des
+  // deux points de mesure (et le choix) vit dans « Advanced » : un client qui
+  // decouvre l'outil n'a pas a comprendre « edge » contre « PoP ».
   const hote = document.getElementById('flow-vantages');
+  const detail = document.getElementById('flow-vantage-detail');
   if (!hote) return;
   if (!data || !data.points) { hote.innerHTML = ''; return; }
   const compte = (top && top.vantage) || data.accounting;
-  hote.innerHTML = data.points.map((p) => {
-    const carte = VANTAGE_CARD[p.vantage];
-    if (!carte) return '';
-    const t = p.totals || {};
-    const compteIci = p.vantage === compte;
-    const etat = p.active
-      ? (compteIci ? '<span class="badge file" title="Chosen automatically: the internet exit when it ' +
-          'sends flows, the PoPs otherwise. Each client is counted once.">Counting · auto</span>'
-        : '<span class="badge ok">Receiving</span>')
-      : (p.exporters ? '<span class="badge warn">Silent</span>'
-        : '<span class="badge">No exporter</span>');
-    return '<div class="vantage' + (compteIci ? ' counting' : '') + '">' +
-      '<div class="vantage-head">' +
-        '<span class="vantage-icon"><svg viewBox="0 0 24 24">' + carte.icon + '</svg></span>' +
-        '<div class="vantage-title">' + carte.title +
-          '<span class="hint">' + carte.sub + '</span></div>' +
-        etat +
-      '</div>' +
-      (p.exporters || p.active
-        ? '<div class="vantage-figures">' +
-            '<div class="d"><span>Down</span><b>' + bytesText(t.down_bytes || 0) + '</b></div>' +
-            '<div class="u"><span>Up</span><b>' + bytesText(t.up_bytes || 0) + '</b></div>' +
-            '<div><span>Subscribers</span><b>' + esc(t.subscribers || 0) + '</b></div>' +
-            '<div><span>Exporters</span><b>' + esc(p.exporters) + '</b></div>' +
-          '</div>'
-        : '<div class="vantage-note">' + carte.missing + '</div>') +
-    '</div>';
-  }).join('');
+  const point = (v) => data.points.find((p) => p.vantage === v) || {};
+  const noms = (v) => (Array.isArray(exporteurs) ? exporteurs : [])
+    .filter((e) => e.vantage === v && e.packets_seen)
+    .map((e) => e.name || e.address);
+  const actif = point(compte).active;
+  const ou = compte === 'edge' ? 'at the internet exit' : 'on the PoP routers';
+  const qui = noms(compte);
+  hote.innerHTML = actif
+    ? '<div class="notice ok"><b>Traffic measured ' + ou +
+      (qui.length ? ' (' + esc(qui.slice(0, 3).join(', ')) + ')' : '') + '.</b> ' +
+      'Each client is counted once, whatever the number of routers its traffic crosses.</div>'
+    : '<div class="notice warn"><b>No router sends traffic flows yet.</b> The export is set up ' +
+      'automatically on the routers added in Devices; it shows here within a few minutes.</div>';
+  if (detail) {
+    const etat = (v, nom) => {
+      const p = point(v);
+      return nom + ': ' + (p.active ? 'receiving'
+        : p.exporters ? p.exporters + ' router(s) declared, no flow received recently'
+          : 'no exporter') + (v === compte ? ' (counted)' : '');
+    };
+    detail.textContent = etat('edge', 'Internet exit') + ' · ' + etat('pop', 'PoP routers') +
+      '. One point is enough: the same traffic crosses both.';
+  }
 }
 
 /** Drapeau d'un pays a partir de son code ISO (FR -> drapeau francais).
@@ -3129,10 +3104,10 @@ function renderFlowStats(etat, top) {
       'over ' + FLOW.minutes + ' min') +
     statCard('up', 'Upstream', bytesText(montant), '',
       'over ' + FLOW.minutes + ' min') +
-    statCard('', 'Subscribers seen', String(totaux.subscribers || 0), '',
-      (top && top.vantage ? 'counted ' + esc(VANTAGE_LABEL[top.vantage] || top.vantage) : '')) +
-    statCard(part < 50 ? 'warn' : '', 'Flows matched', String(part), '%',
-      rattaches + ' of ' + vus + ' since startup');
+    statCard('', 'Clients seen', String(totaux.subscribers || 0), '',
+      'with traffic over ' + FLOW.minutes + ' min') +
+    statCard(part < 50 ? 'warn' : '', 'Traffic identified', String(part), '%',
+      'tied to a known client');
 }
 
 function renderFlowTop(top) {
@@ -3533,7 +3508,7 @@ function choixVantage(e) {
     '" aria-label="Vantage point" title="Automatic: deduced from the router\'s role (core or gateway = ' +
     'internet edge, PoP = at the PoP). A choice made here is kept.">' +
     opt('auto', 'Automatic' + (deduit || (e.vantage === 'unknown' ? ' · not recognised' : ''))) +
-    opt('edge', 'Internet edge (upstream of the core)') +
+    opt('edge', 'Internet exit') +
     opt('pop', 'At the PoP') + '</select>';
 }
 
@@ -10449,9 +10424,11 @@ const AIDE = {
   'backhaul capacity': 'Sum of the measured capacity of the radio backhauls declared in the inventory. “-” = no radio backhaul declared.',
   'downstream': 'Total received by your subscribers over the period, at the counting point (each byte counted once).',
   'upstream': 'Total sent by your subscribers over the period, at the counting point (each byte counted once).',
-  'subscribers seen': 'Subscribers with traffic seen by NetFlow at the counting point over the period.',
-  'flows matched': {
-    t: 'Share of NetFlow flows attributed to a known subscriber.',
+  'clients seen': 'Clients with traffic seen over the period. Each client is counted once, ' +
+    'even if its traffic crosses several routers.',
+  'traffic identified': {
+    t: 'Share of the traffic flows tied to a known client (' +
+      'the figure is since the controller started).',
     r: 'The rest is network management, routers talking to each other, or addresses of clients not declared yet — those appear in the entry-aid list.',
   },
   'poor experience': {
