@@ -26,12 +26,16 @@ def _rows(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
 #: du jugement du reseau (latence, bufferbloat, sante) et comptee a part.
 #: Suppose ``m`` (subscriber_metrics), ``s`` (subscribers) et ``pol``
 #: (shaping_policies de l'abonne, en LEFT JOIN).
-AU_PLAFOND_SQL = """(
+# coalesce(..., false) : SANS limite connue (client sans forfait), la condition
+# vaudrait NULL, et "NOT NULL" est encore NULL -- la mesure n'etait alors comptee
+# NI comme normale NI comme au plafond. La mediane de latence sortait vide ("-")
+# pour tout client sans forfait, alors qu'il etait mesure.
+AU_PLAFOND_SQL = """coalesce((
     (coalesce(pol.max_down_mbps, s.plan_down_mbps) > 0
      AND coalesce(m.tx_bps, 0) >= 0.85 * coalesce(pol.max_down_mbps, s.plan_down_mbps) * 1e6)
  OR (coalesce(pol.max_up_mbps, s.plan_up_mbps) > 0
      AND coalesce(m.rx_bps, 0) >= 0.85 * coalesce(pol.max_up_mbps, s.plan_up_mbps) * 1e6)
-)"""
+), false)"""
 JOINTURE_LIMITE_SQL = (
     "LEFT JOIN shaping_policies pol ON pol.scope = 'subscriber' AND pol.target_key = s.login"
 )
