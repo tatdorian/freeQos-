@@ -3464,6 +3464,20 @@ document.addEventListener('click', (e) => {
   if (bloc) { bloc.open = true; bloc.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 });
 
+/** Menu du point de vue d'un exporteur. "Automatic" montre ce qu'il a deduit. */
+function choixVantage(e) {
+  const auto = e.vantage === 'unknown' || String(e.note || '').startsWith('declared automatically');
+  const deduit = auto && e.vantage !== 'unknown' ? ' · ' + (VANTAGE_LABEL[e.vantage] || e.vantage) : '';
+  const opt = (v, txt) => '<option value="' + v + '"' +
+    ((auto ? 'auto' : e.vantage) === v ? ' selected' : '') + '>' + esc(txt) + '</option>';
+  return '<select class="exp-mode' + (e.vantage === 'unknown' ? ' warn' : '') + '" data-exp-mode="' + esc(e.id) +
+    '" aria-label="Vantage point" title="Automatic: deduced from the router\'s role (core or gateway = ' +
+    'internet edge, PoP = at the PoP). A choice made here is kept.">' +
+    opt('auto', 'Automatic' + (deduit || (e.vantage === 'unknown' ? ' · not recognised' : ''))) +
+    opt('edge', 'Internet edge (upstream of the core)') +
+    opt('pop', 'At the PoP') + '</select>';
+}
+
 function renderFlowExporters(rows) {
   const host = document.getElementById('flow-exporters');
   const resume = document.getElementById('flow-exporters-sum');
@@ -3482,11 +3496,9 @@ function renderFlowExporters(rows) {
     '<th>PoP</th><th class="num">Sampling</th><th class="num">Datagrams</th>' +
     '<th class="num">Flows</th><th>Version</th><th>Seen</th><th></th></tr></thead><tbody>' +
     rows.map((e) => {
-      const inconnu = e.vantage === 'unknown';
       return '<tr><td><code>' + esc(e.address) + '</code></td>' +
         '<td>' + esc(e.name || '-') + '</td>' +
-        '<td><span class="badge ' + (inconnu ? 'warn' : 'ok') + '">' +
-          esc(VANTAGE_LABEL[e.vantage] || e.vantage) + '</span></td>' +
+        '<td>' + choixVantage(e) + '</td>' +
         '<td class="nowrap">' + esc(e.pop_name || '-') + '</td>' +
         '<td class="num">' + (e.sampling_rate > 1 ? '1:' + esc(e.sampling_rate) : 'all') + '</td>' +
         '<td class="num">' + esc(e.packets_seen) + '</td>' +
@@ -3502,6 +3514,18 @@ function renderFlowExporters(rows) {
         '</tr>';
     }).join('') + '</tbody></table>';
 
+  // Le point de vue se change sur place : automatique (suit le role du
+  // routeur), sortie internet, ou PoP. Un choix a la main n'est plus recalcule.
+  host.querySelectorAll('select[data-exp-mode]').forEach((sel) => {
+    sel.addEventListener('change', async () => {
+      try {
+        await api('/netflow/exporters/' + sel.dataset.expMode, { method: 'PATCH',
+          body: JSON.stringify({ vantage: sel.value === 'auto' ? 'unknown' : sel.value }) });
+        toast(esc('Vantage saved' + (sel.value === 'auto' ? ': follows the router\'s role.' : '.')), 4000);
+      } catch (err) { toast(esc(err.message), 6000); }
+      await loadTraffic();
+    });
+  });
   host.querySelectorAll('[data-exp-edit]').forEach((b) => {
     b.addEventListener('click', () => {
       document.getElementById('exp-address').value = b.dataset.expEdit;
@@ -3552,7 +3576,9 @@ async function declareExporter(event) {
  *  serveur, qui n'a rien a faire dans une capture d'ecran ou une doc partagee.
  *  (Le contrat reste compatible : un integrateur qui parlait deja a Preseem
  *  change l'URL de base et la cle, rien d'autre. */
-const BASE_API = 'https://<your-freeqos-server>';
+// Pas de schema ecrit en dur : l'interface ne reference aucune adresse externe
+// (cf. test_interface_sans_dependance_externe).
+const BASE_API = '<your-freeqos-url>';
 
 const API_ENDPOINTS = [
   ['PUT', '/model/v1/accounts/{id}', 'Customer'],
