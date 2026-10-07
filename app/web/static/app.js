@@ -3604,7 +3604,8 @@ async function declareExporter(event) {
 
 /* ----------------------------------------------------------------- API */
 
-/** Les points d'entree que cette application expose, et la cle pour y entrer.
+/** La cle pour entrer ; le detail des points d'entree vit dans le guide
+ *  (/api-guide), une page faite pour un integrateur.
  *
  *  Les exemples montrent une adresse GENERIQUE (BASE_API) : jamais l'IP du
  *  serveur, qui n'a rien a faire dans une capture d'ecran ou une doc partagee.
@@ -3614,56 +3615,8 @@ async function declareExporter(event) {
 // (cf. test_interface_sans_dependance_externe).
 const BASE_API = '<your-freeqos-url>';
 
-const API_ENDPOINTS = [
-  ['PUT', '/model/v1/accounts/{id}', 'Customer'],
-  ['PUT', '/model/v1/packages/{id}', 'Package'],
-  ['PUT', '/model/v1/sites/{id}', 'Site'],
-  ['PUT', '/model/v1/access_points/{id}', 'Radio sector'],
-  ['PUT', '/model/v1/services/{id}', 'Sold line'],
-  ['GET', '/model/v1/{collection}', 'Read a collection'],
-  ['DELETE', '/model/v1/{collection}/{id}', 'Remove a record'],
-  ['GET', '/usage/v1/services', 'Usage, every service'],
-  ['GET', '/usage/v1/services/{id}', 'Usage of one service'],
-  // L'API de PILOTAGE, avec la meme cle : tout ce que fait l'interface.
-  ['POST', '/api/v1/pops/routers', 'Add a router (set up by itself: CAKE, queues, NetFlow)'],
-  ['GET', '/api/v1/pops/routers', 'List the routers'],
-  ['PATCH', '/api/v1/pops/routers/{id}', 'Edit a router'],
-  ['GET', '/api/v1/pops/provisioning/{name}', 'Progress of a new router\'s setup'],
-  ['PUT', '/api/v1/plans/{login}', 'Set the plan of a client (written to the router at once)'],
-  ['DELETE', '/api/v1/plans/{login}', 'Remove the plan: the client is no longer throttled'],
-  ['PUT', '/api/v1/shaping/policies', 'Force a limit (client or link), above its plan'],
-  ['POST', '/api/v1/shaping/boosts', 'Temporary boost'],
-  ['POST', '/api/v1/plans/refresh', 'Re-apply every plan now'],
-];
-
 async function loadApi() {
   document.getElementById('api-base').textContent = 'Base URL: ' + BASE_API;
-  document.getElementById('api-endpoints').innerHTML =
-    '<table><thead><tr><th>Method</th><th>Path</th><th>Object</th></tr></thead><tbody>' +
-    API_ENDPOINTS.map(([verbe, chemin, objet]) =>
-      '<tr><td><b>' + esc(verbe) + '</b></td>' +
-      '<td class="login">' + esc(chemin) + '</td>' +
-      '<td>' + esc(objet) + '</td></tr>').join('') +
-    '</tbody></table>';
-  const B = BASE_API;
-  document.getElementById('api-sample').textContent =
-    '# Replace ' + B + ' with the address of your freeQoS server,\n' +
-    '# and <key> with a key created above.\n\n' +
-    '# Declare a client (static IP), with its rate in kbit/s:\n' +
-    'curl -u <key>: -X PUT ' + B + '/model/v1/services/abo-42 \\\n' +
-    "  -H 'content-type: application/json' \\\n" +
-    '  -d \'{"id":"abo-42","account":"cli-7","package":"fibre-100",' +
-    '"parent_device_id":"sect-n1","down_speed":100000,"up_speed":20000,' +
-    '"attachments":[{"cpe_mac":"00:10:0b:6e:4c:ff","network_prefixes":["10.20.0.10"]}]}\'\n\n' +
-    '# List the clients:\n' +
-    'curl -u <key>: \'' + B + '/model/v1/services?page=1&limit=500\'   # -> {"data": [...]}\n\n' +
-    '# Add a router (set up by itself):\n' +
-    'curl -H \'Authorization: Bearer <key>\' -X POST ' + B + '/api/v1/pops/routers \\\n' +
-    "  -H 'content-type: application/json' \\\n" +
-    '  -d \'{"name":"nas-north","host":"<router-address>","username":"qos","password":"…","role":"pop","pop_name":"North"}\'\n\n' +
-    '# Set the plan of a PPPoE client (Mbit/s):\n' +
-    'curl -H \'Authorization: Bearer <key>\' -X PUT ' + B + '/api/v1/plans/<login> \\\n' +
-    "  -H 'content-type: application/json' -d '{\"down_mbps\":100,\"up_mbps\":20}'";
   await loadApiKeys();
   const lignes = document.querySelectorAll('#keys-table tbody tr').length;
   document.getElementById('api-count').textContent = lignes + ' key(s)';

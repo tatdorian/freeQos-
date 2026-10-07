@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>freeQoS API guide</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+  <script src="/static/theme.js?v={{ theme_version }}"></script>
+  <link rel="stylesheet" href="/static/api-guide.css?v={{ css_version }}">
+</head>
+<body>
+<div class="layout">
+  <nav class="toc" aria-label="Contents">
+    <a class="brand" href="/">freeQoS</a>
+    <div class="toc-title">API guide</div>
+    <a href="#overview">Overview</a>
+    <a href="#auth">Authentication</a>
+    <a href="#conventions">Conventions</a>
+    <a href="#quickstart">Quick start</a>
+    <div class="toc-title">Guides</div>
+    <a href="#routers">Add a router</a>
+    <a href="#plans">Client plans</a>
+    <a href="#limits">Forced limits and boosts</a>
+    <a href="#static">Static-IP clients</a>
+    <a href="#model">Billing integration (Preseem-compatible)</a>
+    <a href="#usage">Consumption (usage)</a>
+    <a href="#read">Reading measurements</a>
+    <a href="#ops">Operations and diagnostics</a>
+    <a href="#errors">Errors</a>
+    <div class="toc-title">Reference</div>
+    <a href="#reference">Every endpoint</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <h1>freeQoS API guide</h1>
+      <p>Everything an integrator needs to drive freeQoS from a billing system, a CRM or a
+        script: add routers, push client plans, force limits, read consumption and quality
+        measurements.</p>
+      <p class="base">In the examples, replace <code>&lt;your-freeqos-url&gt;</code> with the
+        address of your freeQoS server, and <code>&lt;key&gt;</code> with an API key.</p>
+    </header>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="overview">
+      <h2>Overview</h2>
+      <p>freeQoS exposes three APIs. They share the same keys and the same server.</p>
+      <table>
+        <thead><tr><th>API</th><th>Path</th><th>Use it to</th></tr></thead>
+        <tbody>
+          <tr><td><b>Operating API</b></td><td><code>/api/v1</code></td>
+            <td>Everything the interface does: routers, plans, limits, measurements,
+              traffic, diagnostics. Rates in <b>Mbit/s</b>.</td></tr>
+          <tr><td><b>Model API</b></td><td><code>/model/v1</code></td>
+            <td>Push your commercial inventory (customers, packages, sites, sectors, sold
+              lines). Same contract as the Preseem model API: an existing Preseem
+              integration works by changing only the URL and the key. Rates in
+              <b>kbit/s</b>.</td></tr>
+          <tr><td><b>Usage API</b></td><td><code>/usage/v1</code></td>
+            <td>Read the bytes consumed by each sold line, per hour, day or month (for
+              billing or a customer portal).</td></tr>
+        </tbody>
+      </table>
+      <div class="note"><b>How shaping works.</b> When a router is added, freeQoS sets it up
+        by itself (CAKE queue types, NetFlow export) and discovers its clients. A client is
+        <b>throttled only once a plan is pushed for it</b> (by the API or the Plans page);
+        until then it is observed, never capped at a rate nobody sold. The plan is written
+        to the router immediately as a CAKE queue, and kept in place by a reconciliation
+        every two minutes.</div>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="auth">
+      <h2>Authentication</h2>
+      <h3>Create a key</h3>
+      <p>In the interface, open the <b>API</b> tab, give the key a name (for example
+        <i>Billing</i>) and a scope, then <b>Create</b>. The secret is shown <b>once</b>: copy
+        it right away. A key can be disabled or revoked from the same tab.</p>
+      <table>
+        <thead><tr><th>Scope</th><th>Allows</th></tr></thead>
+        <tbody>
+          <tr><td><code>read</code></td><td>Every <code>GET</code>: inventory, plans,
+            measurements, traffic, consumption.</td></tr>
+          <tr><td><code>read</code> + <code>write</code></td><td>Also <code>POST</code>,
+            <code>PUT</code>, <code>PATCH</code>, <code>DELETE</code>: add routers, push
+            plans, force limits, push the model inventory.</td></tr>
+        </tbody>
+      </table>
+      <p>For safety, a key can never manage keys, user accounts or passwords: those stay in
+        the interface, behind a person's login.</p>
+
+      <h3>Send the key</h3>
+      <p>Three equivalent forms are accepted on every API. Use the one your tool supports.</p>
+      <pre><code># 1. Bearer token (recommended)
+curl -H 'Authorization: Bearer &lt;key&gt;' <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/plans
+
+# 2. X-API-Key header
+curl -H 'X-API-Key: &lt;key&gt;' <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/plans
+
+# 3. HTTP Basic, the key as user name and an empty password (Preseem form)
+curl -u '&lt;key&gt;:' <span class="base-url">&lt;your-freeqos-url&gt;</span>/model/v1</code></pre>
+      <p>Check a key in one call: <code>GET /model/v1</code> returns the collections, the key
+        prefix and its scopes.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="conventions">
+      <h2>Conventions</h2>
+      <ul>
+        <li><b>JSON</b> in and out. Send <code>Content-Type: application/json</code> with a
+          body.</li>
+        <li><b>Units.</b> <code>/api/v1</code> takes rates in <b>Mbit/s</b>
+          (<code>down_mbps</code>, <code>up_mbps</code>); some endpoints also accept
+          <code>_kbps</code> and <code>_gbps</code> variants. <code>/model/v1</code> takes
+          <b>kbit/s</b> (<code>down_speed</code>, <code>up_speed</code>), like Preseem.
+          <code>/usage/v1</code> returns <b>bytes</b>. <i>Down</i> is toward the client,
+          <i>up</i> from the client.</li>
+        <li><b>Times</b> are ISO 8601 in UTC (<code>2026-10-07T08:00:00Z</code>).</li>
+        <li><b>Identifiers.</b> A PPPoE client is identified by its <b>login</b>; a
+          static-IP client by the <b>reference</b> you gave it; a model record by the
+          <b>id</b> you choose in the URL.</li>
+        <li><b>Idempotence.</b> <code>PUT</code> creates or replaces: replaying your whole
+          inventory is harmless. The id in the URL is authoritative.</li>
+        <li><b>Immediate effect.</b> Plan and limit changes are written to the router in the
+          same call; the response says what was actually written (see
+          <a href="#plans">enforcement report</a>).</li>
+      </ul>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="quickstart">
+      <h2>Quick start</h2>
+      <p>From nothing to a throttled client in five calls. Replace <code>&lt;key&gt;</code>
+        with a <i>read + write</i> key.</p>
+      <ol class="steps">
+        <li><b>Check the key.</b>
+          <pre><code>curl -H 'Authorization: Bearer &lt;key&gt;' <span class="base-url">&lt;your-freeqos-url&gt;</span>/model/v1</code></pre></li>
+        <li><b>Add a router.</b> freeQoS connects to it and sets it up by itself.
+          <pre><code>curl -X POST <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/pops/routers \
+  -H 'Authorization: Bearer &lt;key&gt;' -H 'Content-Type: application/json' \
+  -d '{"name":"nas-north","host":"10.0.0.2","username":"freeqos",
+       "password":"&lt;router password&gt;","role":"pop","pop_name":"North"}'</code></pre></li>
+        <li><b>Wait for the setup</b> (usually under a minute): <code>finished_at</code> is
+          set when done.
+          <pre><code>curl -H 'Authorization: Bearer &lt;key&gt;' <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/pops/provisioning/nas-north</code></pre></li>
+        <li><b>Find the clients</b> freeQoS discovered on it (PPPoE sessions, VLAN clients):
+          <pre><code>curl -H 'Authorization: Bearer &lt;key&gt;' <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/plans</code></pre></li>
+        <li><b>Push a plan.</b> The queue is written to the router at once.
+          <pre><code>curl -X PUT <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/plans/john.doe \
+  -H 'Authorization: Bearer &lt;key&gt;' -H 'Content-Type: application/json' \
+  -d '{"down_mbps":100,"up_mbps":20}'</code></pre></li>
+      </ol>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="routers">
+      <h2>Add a router</h2>
+      <p class="ep"><span class="m post">POST</span><code>/api/v1/pops/routers</code></p>
+      <p>Saves a MikroTik router (RouterOS API, port 8728, or 8729 with TLS). Right after,
+        freeQoS runs its <b>automatic setup</b>: CAKE queue types, NetFlow export toward
+        freeQoS, discovery of its clients and links. Nothing else has to be configured by
+        hand.</p>
+      <table>
+        <thead><tr><th>Field</th><th>Required</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>name</code></td><td>yes</td><td>Unique name of the router
+            (<code>nas-north</code>). Used in every other call.</td></tr>
+          <tr><td><code>host</code></td><td>yes</td><td>Management IP or host name.</td></tr>
+          <tr><td><code>password</code></td><td>yes</td><td>Password of the RouterOS
+            account. Stored encrypted, never returned.</td></tr>
+          <tr><td><code>username</code></td><td>no</td><td>RouterOS account
+            (default <code>qos-ro</code>). To write queues, its group needs the policies
+            <code>read,write,api,test</code>.</td></tr>
+          <tr><td><code>role</code></td><td>no</td><td><code>pop</code> (default, a router
+            serving clients), <code>core</code> or <code>gateway</code> (internet exit:
+            traffic is measured there).</td></tr>
+          <tr><td><code>pop_name</code></td><td>no</td><td>Site name shown in the interface
+            (default: the router name).</td></tr>
+          <tr><td><code>port</code>, <code>use_ssl</code></td><td>no</td><td>8728 by default;
+            <code>use_ssl: true</code> with port 8729 for API-SSL.</td></tr>
+          <tr><td><code>loopback</code></td><td>no</td><td>Loopback address, detected
+            automatically when omitted.</td></tr>
+          <tr><td><code>enabled</code></td><td>no</td><td><code>false</code> keeps the router
+            in the inventory without polling it.</td></tr>
+        </tbody>
+      </table>
+      <h3>Related calls</h3>
+      <table class="eps">
+        <tbody>
+          <tr><td><span class="m post">POST</span></td><td><code>/api/v1/pops/routers/test</code></td>
+            <td>Test the connection and the account rights <b>without saving</b> (same body).</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/pops/provisioning/{router_name}</code></td>
+            <td>Progress of the automatic setup: <code>state</code>, <code>steps</code>,
+              <code>finished_at</code>.</td></tr>
+          <tr><td><span class="m post">POST</span></td><td><code>/api/v1/pops/provisioning/{router_name}</code></td>
+            <td>Run the setup again (after fixing a password, for example).</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/pops/routers</code></td>
+            <td>The router inventory, with each router's <code>id</code>.</td></tr>
+          <tr><td><span class="m patch">PATCH</span></td><td><code>/api/v1/pops/routers/{router_id}</code></td>
+            <td>Edit a router: send only the fields to change.</td></tr>
+          <tr><td><span class="m delete">DELETE</span></td><td><code>/api/v1/pops/routers/{router_id}</code></td>
+            <td>Remove a router from the inventory.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/pops/health</code></td>
+            <td>CPU, memory, uptime and version of every router.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="plans">
+      <h2>Client plans</h2>
+      <p>The plan is the rate sold to a client. It is the normal way to throttle: freeQoS
+        writes a CAKE queue for the client on the router that carries it.</p>
+
+      <p class="ep"><span class="m get">GET</span><code>/api/v1/plans</code></p>
+      <p>Every known client (detected on a router or declared), its plan and where the plan
+        comes from (<code>api</code>, <code>ui</code>, <code>default</code>). Use it to find
+        the logins to push plans for.</p>
+
+      <p class="ep"><span class="m put">PUT</span><code>/api/v1/plans/{login}</code></p>
+      <pre><code>curl -X PUT <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/plans/john.doe \
+  -H 'Authorization: Bearer &lt;key&gt;' -H 'Content-Type: application/json' \
+  -d '{"down_mbps":100,"up_mbps":20}'</code></pre>
+      <table>
+        <thead><tr><th>Field</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>down_mbps</code>, <code>up_mbps</code></td><td>Rates in Mbit/s. At
+            least one rate, or a package, is required.</td></tr>
+          <tr><td><code>package_id</code></td><td>Instead of rates: the id of a package pushed
+            to <code>/model/v1/packages</code>; its rates are used.</td></tr>
+        </tbody>
+      </table>
+      <ul>
+        <li>The client must be known to freeQoS (seen on a router, or declared): an unknown
+          login returns <code>404</code>. Push it again once the client has connected, or
+          declare it first (<a href="#static">static-IP clients</a>,
+          <a href="#model">model services</a>).</li>
+        <li>Setting a plan <b>lifts a forced limit</b> on that client: the plan becomes the
+          rule.</li>
+      </ul>
+      <p id="report"><b>Enforcement report.</b> The response returns the client record and an
+        <code>enforcement</code> object telling what really happened on the router:</p>
+      <table>
+        <thead><tr><th><code>state</code></th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>file-posee</code></td><td>Queue written (or already correct) on the router.</td></tr>
+          <tr><td><code>file-retiree</code></td><td>Queue removed (plan deleted).</td></tr>
+          <tr><td><code>file-a-poser</code></td><td>Would be written: simulation only.</td></tr>
+          <tr><td><code>ecarte</code></td><td>Not written, and <code>reason</code> says why
+            (client offline, address shared, infrastructure address…).</td></tr>
+          <tr><td><code>conflit</code></td><td>Another queue already targets this client on the
+            router; it must be cleaned by hand.</td></tr>
+          <tr><td><code>sans-routeur</code></td><td>No router carries this client yet.</td></tr>
+          <tr><td><code>erreur</code></td><td>The router refused or could not be reached:
+            <code>reason</code> gives the RouterOS message.</td></tr>
+        </tbody>
+      </table>
+
+      <p class="ep"><span class="m delete">DELETE</span><code>/api/v1/plans/{login}</code></p>
+      <p>Removes the plan: the client's queue is removed and it is <b>no longer
+        throttled</b> (it stays observed).</p>
+
+      <p class="ep"><span class="m post">POST</span><code>/api/v1/plans/refresh</code></p>
+      <p>Re-reads every plan and re-writes the queues right away, instead of waiting for the
+        next cycle.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="limits">
+      <h2>Forced limits and boosts</h2>
+      <h3>Force a limit</h3>
+      <p class="ep"><span class="m put">PUT</span><code>/api/v1/shaping/policies</code></p>
+      <p>A forced limit <b>takes precedence over the plan</b>: suspension for unpaid bills,
+        fair-use cap, or a cap on a link (a radio backhaul, a whole sector).</p>
+      <pre><code>curl -X PUT <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/shaping/policies \
+  -H 'Authorization: Bearer &lt;key&gt;' -H 'Content-Type: application/json' \
+  -d '{"scope":"subscriber","target_key":"john.doe","max_down_mbps":5,"max_up_mbps":1,
+       "note":"unpaid invoice"}'</code></pre>
+      <table>
+        <thead><tr><th>Field</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>scope</code></td><td><code>subscriber</code> (a client) or
+            <code>link</code> (a link of the network tree).</td></tr>
+          <tr><td><code>target_key</code></td><td>Client login (or static-client reference),
+            or link key.</td></tr>
+          <tr><td><code>max_down_mbps</code>, <code>max_up_mbps</code></td><td>The cap, in
+            Mbit/s (<code>_kbps</code> and <code>_gbps</code> variants accepted).</td></tr>
+          <tr><td><code>enabled</code></td><td><code>false</code> disables shaping for this
+            target entirely.</td></tr>
+          <tr><td><code>note</code></td><td>Free text, kept in the history.</td></tr>
+        </tbody>
+      </table>
+      <p>Lift it with <code>DELETE /api/v1/shaping/policies/{scope}/{target_key}</code>; the
+        client goes back to its plan. <code>GET /api/v1/shaping/policies</code> lists the
+        limits in force.</p>
+
+      <h3>Temporary boost</h3>
+      <p class="ep"><span class="m post">POST</span><code>/api/v1/shaping/boosts</code></p>
+      <p>Raises a client's rate for a limited time; it expires by itself.</p>
+      <pre><code>curl -X POST <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/shaping/boosts \
+  -H 'Authorization: Bearer &lt;key&gt;' -H 'Content-Type: application/json' \
+  -d '{"login":"john.doe","duration_minutes":60,"multiplier":2,"reason":"speed test"}'</code></pre>
+      <p>Give either <code>multiplier</code> or absolute rates (<code>down_mbps</code>,
+        <code>up_mbps</code>). <code>GET /api/v1/shaping/boosts</code> lists the running
+        boosts; <code>DELETE /api/v1/shaping/boosts/{login}</code> ends one early.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="static">
+      <h2>Static-IP clients</h2>
+      <p>A client without a PPPoE session (business line, VLAN, fixed IP or subnet) is
+        declared with its address. freeQoS finds the router that serves the address and
+        shapes it like any other client.</p>
+      <p class="ep"><span class="m post">POST</span><code>/api/v1/static-clients</code></p>
+      <pre><code>curl -X POST <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/static-clients \
+  -H 'Authorization: Bearer &lt;key&gt;' -H 'Content-Type: application/json' \
+  -d '{"reference":"acme-hq","pop_name":"North","address":"154.66.223.216/29",
+       "label":"ACME head office","vlan":2060,"plan_down_mbps":50,"plan_up_mbps":50}'</code></pre>
+      <table>
+        <thead><tr><th>Field</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>reference</code></td><td>Your stable identifier for the client; it is
+            its identifier everywhere else (plans, limits).</td></tr>
+          <tr><td><code>pop_name</code></td><td>Site of the router that serves it.</td></tr>
+          <tr><td><code>address</code></td><td>Single IP (<code>10.0.0.5</code>) or subnet
+            (<code>10.0.0.0/29</code>).</td></tr>
+          <tr><td><code>plan_down_mbps</code>, <code>plan_up_mbps</code></td><td>Its plan
+            (optional; can be pushed later with <code>PUT /api/v1/plans/{reference}</code>).</td></tr>
+          <tr><td><code>label</code>, <code>vlan</code>, <code>cpe_mac</code>,
+            <code>note</code></td><td>Optional details.</td></tr>
+        </tbody>
+      </table>
+      <p>Edit with <code>PATCH /api/v1/static-clients/{client_id}</code>, remove with
+        <code>DELETE</code>. <code>GET /api/v1/static-clients/enforcement</code> tells, for
+        each declared client, whether its queue is in place and what is missing.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="model">
+      <h2>Billing integration (Preseem-compatible)</h2>
+      <p>The model API receives your commercial inventory. It follows the Preseem model API:
+        a billing system that already pushes to Preseem (Splynx, UISP/UCRM, Powercode,
+        in-house scripts) only changes the base URL and the key.</p>
+      <table>
+        <thead><tr><th>Call</th><th>Effect</th></tr></thead>
+        <tbody>
+          <tr><td><span class="m get">GET</span> <code>/model/v1/{collection}</code></td>
+            <td>List, as <code>{"data": [...], "paginator": {...}}</code>. Paginate with
+              <code>?page=1&amp;limit=500</code>.</td></tr>
+          <tr><td><span class="m get">GET</span> <code>/model/v1/{collection}/{id}</code></td>
+            <td>One record.</td></tr>
+          <tr><td><span class="m put">PUT</span> <code>/model/v1/{collection}/{id}</code></td>
+            <td>Create or replace (idempotent).</td></tr>
+          <tr><td><span class="m delete">DELETE</span> <code>/model/v1/{collection}/{id}</code></td>
+            <td>Remove. Removing a service removes its queue.</td></tr>
+        </tbody>
+      </table>
+      <table>
+        <thead><tr><th>Collection</th><th>Record</th><th>Main fields</th></tr></thead>
+        <tbody>
+          <tr><td><code>accounts</code></td><td>Customer</td><td><code>name</code></td></tr>
+          <tr><td><code>packages</code></td><td>Commercial plan</td>
+            <td><code>name</code>, <code>down_speed</code>, <code>up_speed</code> (kbit/s)</td></tr>
+          <tr><td><code>sites</code></td><td>Tower or PoP</td><td><code>name</code></td></tr>
+          <tr><td><code>access_points</code></td><td>Radio sector</td>
+            <td><code>name</code>, <code>site</code>, <code>ip_address</code></td></tr>
+          <tr><td><code>services</code></td><td>Sold line (what is shaped)</td>
+            <td><code>account</code>, <code>package</code>, <code>down_speed</code>,
+              <code>up_speed</code>, <code>parent_device_id</code>,
+              <code>attachments</code></td></tr>
+        </tbody>
+      </table>
+      <h3>Push a service</h3>
+      <pre><code>curl -u '&lt;key&gt;:' -X PUT <span class="base-url">&lt;your-freeqos-url&gt;</span>/model/v1/services/svc-42 \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"svc-42","account":"cust-7","package":"fibre-100",
+       "down_speed":100000,"up_speed":20000,
+       "attachments":[{"cpe_mac":"00:10:0b:6e:4c:ff","network_prefixes":["10.20.0.10"]}]}'</code></pre>
+      <ul>
+        <li><b>Rates</b> of the service, in kbit/s, take precedence over those of its
+          package. Without rates, the package's apply.</li>
+        <li><b>Address.</b> <code>network_prefixes</code> places the service on the router
+          that serves that address. A service with only a <code>cpe_mac</code> is accepted
+          and kept aside; it becomes a client as soon as the MAC shows up on a router.</li>
+        <li><b>Rules.</b> A body whose <code>id</code> differs from the URL returns
+          <code>400</code>; a negative speed returns <code>400</code>; a service id already
+          used by a client entered by hand returns <code>409</code> (the API never takes
+          over a human decision). Invalid JSON returns <code>400</code>, as with Preseem.</li>
+      </ul>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="usage">
+      <h2>Consumption (usage)</h2>
+      <p>Bytes consumed by each service, measured from NetFlow (counted once, at a single
+        point of the network). Answers "how much did this line use last month?".</p>
+      <table class="eps">
+        <tbody>
+          <tr><td><span class="m get">GET</span></td><td><code>/usage/v1/services</code></td>
+            <td>Every service over the period.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/usage/v1/services/{service_id}</code></td>
+            <td>One service, split by day by default.</td></tr>
+        </tbody>
+      </table>
+      <table>
+        <thead><tr><th>Parameter</th><th>Description</th></tr></thead>
+        <tbody>
+          <tr><td><code>start</code>, <code>end</code></td><td>Period, ISO 8601 UTC.</td></tr>
+          <tr><td><code>days</code></td><td>Window when <code>start</code> is omitted
+            (default 30).</td></tr>
+          <tr><td><code>bucket</code></td><td><code>total</code>, <code>hour</code>,
+            <code>day</code> or <code>month</code>.</td></tr>
+        </tbody>
+      </table>
+      <pre><code>curl -u '&lt;key&gt;:' '<span class="base-url">&lt;your-freeqos-url&gt;</span>/usage/v1/services/svc-42?bucket=month&amp;days=90'</code></pre>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="read">
+      <h2>Reading measurements</h2>
+      <p>All read calls work with a <code>read</code> key.</p>
+      <table class="eps">
+        <tbody>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/overview</code></td>
+            <td>Headline figures: clients, throughput, sites.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/subscribers/latest</code></td>
+            <td>Each client with its last sample: throughput down/up, latency, plan, limit
+              in force. Filters: <code>pop_id</code>, <code>search</code>, <code>kind</code>
+              (<code>pppoe</code> / <code>static</code>), <code>limit</code>.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/subscribers/{subscriber_id}/metrics</code></td>
+            <td>Throughput series of a client (<code>minutes</code>,
+              <code>bucket_seconds</code>, or <code>start</code>/<code>end</code>).</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/latency/clients</code></td>
+            <td>Latency of every client over the period: median, p95, jitter, loss,
+              latency under load and experience score.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/bufferbloat</code></td>
+            <td>Bufferbloat grade (A+ to F) per client.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/netflow/top</code></td>
+            <td>Who consumes the most over the period.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/netflow/applications</code></td>
+            <td>Traffic by usage (video, social, gaming…), for the network or one client
+              (<code>subscriber_id</code>).</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/network/tree</code></td>
+            <td>The network tree with capacity and load of every node.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/capacity/hotspots</code></td>
+            <td>Saturation points: headroom left on every link.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/search</code></td>
+            <td>Find a client, an IP, a MAC or a device (<code>?q=</code>).</td></tr>
+        </tbody>
+      </table>
+      <p>A client's <code>subscriber_id</code> is returned by
+        <code>/api/v1/subscribers/latest</code> and <code>/api/v1/search</code>.</p>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="ops">
+      <h2>Operations and diagnostics</h2>
+      <table class="eps">
+        <tbody>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/status</code></td>
+            <td>State of the controller and of its cycles.</td></tr>
+          <tr><td><span class="m post">POST</span></td><td><code>/api/v1/jobs/{job_name}/run</code></td>
+            <td>Run a cycle now instead of waiting: <code>collect_subscribers</code>,
+              <code>refresh_plans</code>, <code>reconcile_shaping</code>,
+              <code>probe_rtt</code>, <code>discover_topology</code>,
+              <code>collect_links</code>.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/shaping/enforcement</code></td>
+            <td>Whether freeQoS is allowed to write to the routers.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/shaping/limits</code></td>
+            <td>Are the caps really held on the routers? (FastTrack, masked queues…)</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/shaping/audit</code></td>
+            <td>Log of every command sent to the routers.</td></tr>
+          <tr><td><span class="m get">GET</span></td><td><code>/api/v1/rtt/diagnose</code></td>
+            <td>Run the latency probe by hand and get the cause of a missing latency
+              (<code>?router=&amp;address=</code>, or nothing for the last silent client).</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="errors">
+      <h2>Errors</h2>
+      <p>Errors return a JSON body <code>{"detail": "..."}</code> with a readable message.</p>
+      <table>
+        <thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>400</code></td><td>Invalid request (model and usage APIs: invalid JSON
+            or field).</td></tr>
+          <tr><td><code>401</code></td><td>Missing, unknown, disabled or expired key.</td></tr>
+          <tr><td><code>403</code></td><td>The key lacks the <code>write</code> scope, or the
+            call is reserved to a person (keys, accounts).</td></tr>
+          <tr><td><code>404</code></td><td>Unknown client, router or record.</td></tr>
+          <tr><td><code>409</code></td><td>Conflict: writing is disabled, or the record belongs
+            to an entry made by hand.</td></tr>
+          <tr><td><code>422</code></td><td>Invalid field on the operating API; the
+            <code>detail</code> says which.</td></tr>
+          <tr><td><code>503</code></td><td>The database is not ready yet (server starting).</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ------------------------------------------------------------------ -->
+    <section id="reference">
+      <h2>Every endpoint</h2>
+      <p>Generated live from this server, so it always matches the version installed.
+        Click an endpoint to see its parameters and body.</p>
+      <input type="search" id="ref-search" placeholder="Filter: plans, routers, latency…" autocomplete="off">
+      <div id="ref"><p class="muted">Loading…</p></div>
+    </section>
+  </main>
+</div>
+<script src="/static/api-guide.js?v={{ js_version }}"></script>
+</body>
+</html>
