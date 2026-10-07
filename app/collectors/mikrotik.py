@@ -1431,6 +1431,25 @@ class MikrotikCollector:
                     source,
                 )
                 return sans_source
+        if (
+            not lent
+            and stats.received
+            and stats.median_ms is not None
+            and stats.median_ms > interval_ms
+            and (stats.loss_pct or 0) >= 50
+        ):
+            # Reponses PLUS LENTES que l'ecart entre deux paquets, et la moitie
+            # perdue : RouterOS compte en perte une reponse arrivee apres le
+            # paquet suivant (constate en lab : ~900 ms, 67 % de perte). Les
+            # tours suivants passent au rythme du terminal.
+            self._ping_lent = True
+            logger.warning(
+                "%s : reponses en %.0f ms pour des pings espaces de %s ms -- la sonde "
+                "passe a 1 paquet/s sur ce routeur",
+                self.config.name,
+                stats.median_ms,
+                interval_ms,
+            )
         maintenant = time.monotonic()
         if (
             stats.sent
