@@ -3,7 +3,7 @@
 # freeQoS -- installation automatique (et mise a jour) avec Docker.
 #
 #   Depuis le depot :            sudo ./install.sh
-#   Sur un serveur vierge :      curl -fsSL https://raw.githubusercontent.com/tatdorian/freeQos-/main/install.sh | sudo sh
+#   Sur un serveur vierge :      curl -fsSL https://raw.githubusercontent.com/tatdorian/freeQos-/HEAD/install.sh | sudo sh
 #
 # Ce que fait le script, sans rien demander :
 #   1. installe Docker (et le plugin compose) s'il manque ;
@@ -19,7 +19,7 @@
 # Variables facultatives (a passer devant la commande) :
 #   FREEQOS_DIR=/opt/freeqos        ou installer quand on n'est pas dans le depot
 #   FREEQOS_REPO=<url git>          depot a cloner
-#   FREEQOS_BRANCH=main             branche
+#   FREEQOS_BRANCH=<branche>        branche (defaut : la branche principale du depot)
 #   APP_PORT=8000  NETFLOW_PORT=2055
 #   AIROS_USERNAME=... AIROS_PASSWORD=...
 #       identifiants communs des antennes Ubiquiti : avec eux, chaque radio
@@ -29,7 +29,7 @@ set -eu
 
 FREEQOS_DIR="${FREEQOS_DIR:-/opt/freeqos}"
 FREEQOS_REPO="${FREEQOS_REPO:-https://github.com/tatdorian/freeQos-.git}"
-FREEQOS_BRANCH="${FREEQOS_BRANCH:-main}"
+FREEQOS_BRANCH="${FREEQOS_BRANCH:-}"
 APP_PORT="${APP_PORT:-8000}"
 NETFLOW_PORT="${NETFLOW_PORT:-2055}"
 MIROIR_PYTHON="mirror.gcr.io/library/python:3.11-slim"
@@ -94,7 +94,12 @@ else
     $SUDO git -C "$DIR" pull --ff-only
   else
     info "Telechargement de freeQoS dans $DIR"
-    $SUDO git clone --depth 1 --branch "$FREEQOS_BRANCH" "$FREEQOS_REPO" "$DIR"
+    # Sans branche precisee : la branche principale du depot, quel que soit son nom.
+    if [ -n "$FREEQOS_BRANCH" ]; then
+      $SUDO git clone --depth 1 --branch "$FREEQOS_BRANCH" "$FREEQOS_REPO" "$DIR"
+    else
+      $SUDO git clone --depth 1 "$FREEQOS_REPO" "$DIR"
+    fi
   fi
   cd "$DIR"
 fi
