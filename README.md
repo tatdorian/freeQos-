@@ -118,7 +118,7 @@ CPE n'est reconnu nulle part reste sans secteur : sa file est posée à la racin
 Sur un serveur vierge (Debian, Ubuntu, Rocky…), **tout est automatique** :
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tatdorian/freeQos-/main/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/tatdorian/freeQos-/HEAD/install.sh | sudo sh
 ```
 
 ou, depuis le dépôt déjà récupéré : `sudo ./install.sh` (alias `make install-docker`).
@@ -129,7 +129,7 @@ et démarre la pile, attend qu'elle réponde et affiche l'adresse de l'interface
 met à jour** (code rafraîchi, image reconstruite, données et `.env` conservés).
 
 Options (à placer devant la commande) : `APP_PORT=8000`, `NETFLOW_PORT=2055`,
-`FREEQOS_DIR=/opt/freeqos`, `FREEQOS_BRANCH=main`, et surtout
+`FREEQOS_DIR=/opt/freeqos`, `FREEQOS_BRANCH=<branche>` (défaut : la branche principale), et surtout
 `AIROS_USERNAME=… AIROS_PASSWORD=…` : avec les identifiants communs de vos antennes
 Ubiquiti, **chaque radio découverte est ajoutée et interrogée toute seule**.
 
