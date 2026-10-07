@@ -683,8 +683,10 @@ def ping_stats_from_rows(rows: list[dict[str, Any]], count: int) -> PingStats:
     par_sequence: dict[str, float | None] = {}
     sans_sequence: list[float] = []
     recus_annonces = 0
+    envoyes_annonces = 0
     moyenne: float | None = None
     for row in rows:
+        envoyes_annonces = max(envoyes_annonces, parse_counter(row.get("sent")) or 0)
         valeur = parse_routeros_duration_ms(row.get("time"))
         seq = str(row.get("seq") or "")
         if seq:
@@ -699,7 +701,17 @@ def ping_stats_from_rows(rows: list[dict[str, Any]], count: int) -> PingStats:
     echantillons = [v for v in par_sequence.values() if v is not None] + sans_sequence
     if not echantillons and recus_annonces and moyenne is not None:
         echantillons = [moyenne] * min(recus_annonces, max(count, 1))
-    return PingStats(sent=max(count, len(par_sequence)), samples=tuple(echantillons))
+    # Le compteur ``sent`` de RouterOS fait foi quand il est la : des reponses
+    # EN DOUBLE (vues en lab : chaque paquet revient deux fois) font arreter
+    # la commande avant ``count`` paquets envoyes -- compter ``count`` aurait
+    # transforme ces doublons en 40 % de perte. Sans compteur, un paquet sans
+    # ligne reste un paquet perdu.
+    envoyes = (
+        max(envoyes_annonces, len(par_sequence))
+        if envoyes_annonces
+        else max(count, len(par_sequence))
+    )
+    return PingStats(sent=envoyes, samples=tuple(echantillons))
 
 
 def _split_pair(value: Any) -> tuple[int | None, int | None] | None:
