@@ -128,6 +128,8 @@ class SubscriberTarget:
     boost_up_mbps: float | None = None
     boost_expires_at: datetime | None = None
     enabled: bool = True
+    # Raison de ne pas brider cette adresse (c'est celle d'un de nos routeurs).
+    skip_reason: str | None = None
 
     @property
     def queue_name(self) -> str:
@@ -211,6 +213,9 @@ class LinkTarget:
     # qu'on appliquerait autrement. 1.0 = aucun resserrage, c'est le cas de tous
     # les liens tant que la boucle n'a rien decide.
     trim_factor: float = 1.0
+    # Raison de NE PAS poser de file sur ce lien, decidee en amont (lien
+    # montant du routeur) : il reste visible dans les ecartes, avec son motif.
+    skip_reason: str | None = None
 
     @property
     def queue_name(self) -> str:
@@ -314,6 +319,9 @@ def desired_state(
     cibles_liens: dict[str, str] = {}
     reseaux_parents: list[tuple[Any, str]] = []
     for index, link in enumerate(links):
+        if link.skip_reason:
+            ecartes.append(PlanSkip(link.name, link.skip_reason))
+            continue
         if not link.enabled:
             ecartes.append(PlanSkip(link.name, "shaping disabled for this link"))
             continue
@@ -398,7 +406,7 @@ def desired_state(
     for subscriber in subscribers:
         # Seuls comptent ceux qui produiraient VRAIMENT une file : un abonne
         # sans debit a appliquer ne prend la place de personne.
-        if not subscriber.enabled:
+        if not subscriber.enabled or subscriber.skip_reason:
             continue
         if (
             subscriber.effective_down_at(now) is None
@@ -412,6 +420,9 @@ def desired_state(
     ambigues = {cible: logins for cible, logins in occurrences.items() if len(logins) > 1}
 
     for subscriber in subscribers:
+        if subscriber.skip_reason:
+            ecartes.append(PlanSkip(subscriber.login, subscriber.skip_reason))
+            continue
         if not subscriber.enabled:
             ecartes.append(PlanSkip(subscriber.login, "shaping disabled for this subscriber"))
             continue

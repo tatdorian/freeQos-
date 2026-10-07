@@ -35,6 +35,7 @@ from app.collectors.mikrotik import (
     remember_loopback,
     remember_upstream,
     router_serving,
+    upstream_of,
 )
 from app.collectors.parsing import parse_flag
 from app.collectors.topology import (
@@ -1318,6 +1319,7 @@ class ShapingService:
                         break
             abonnes.append(self._cible_statique(client, surcharge=surcharge, parent=parent))
 
+        protect_infrastructure(router_name, liens, abonnes)
         return liens, abonnes
 
     def _ports_par_vlan(self, router_name: str) -> dict[int, list[str]]:
@@ -3137,6 +3139,82 @@ def _identites_du_bout_distant(lien: dict[str, Any]) -> list[str]:
 def _identites_du_backhaul(backhaul: dict[str, Any]) -> list[str]:
     """Identites physiques d'un backhaul de l'inventaire."""
     return _identites_physiques(device_id=backhaul.get("uisp_device_id"))
+
+
+UPLINK_SKIP = (
+    "uplink of this router (toward its default gateway {gateway}): never shaped -- a queue "
+    "here would throttle ALL the traffic of the PoP, not one client"
+)
+INFRA_SKIP = (
+    "address {address} belongs to the network itself ({owner}): a router or the gateway "
+    "is never shaped as a client"
+)
+
+
+def protect_infrastructure(
+    router_name: str, links: list[LinkTarget], subscribers: list[SubscriberTarget]
+) -> None:
+    """Ce que le controleur ne doit JAMAIS brider, quoi que dise la decouverte.
+
+    CONSTATE EN PRODUCTION : une file posee par freeQoS sur NAS-FRANCOPHONIE
+    freinait le trafic vers DS-CCR, et etait reecrite a chaque cycle quand on la
+    corrigeait a la main. Deux garde-fous :
+
+    - le LIEN MONTANT d'un routeur (celui de sa route par defaut) ne recoit pas
+      de file de lien : tout le trafic du PoP y passe, ce n'est le goulot de
+      personne en particulier, et le plafonner bride tout le monde ;
+    - une cible d'abonne qui couvre une adresse de NOS routeurs (loopback,
+      adresse d'interface) ou la passerelle n'est pas une file de client : c'est
+      de l'infrastructure vue dans l'ARP, pas un client a brider.
+    """
+    passerelle, iface_montante = upstream_of(router_name)
+    # Adresse de routeur -> (porteur, couvrable). Une adresse d'INTERFACE tombe
+    # normalement dans le sous-reseau d'un client a IP fixe (c'est sa
+    # passerelle) : elle ne protege que contre une cible qui EST cette adresse.
+    # Un loopback ou la passerelle amont, eux, n'ont rien a faire dans un
+    # sous-reseau de client.
+    protegees: dict[Any, tuple[str, bool]] = {}
+    for adresse, (porteur, iface) in own_addresses().items():
+        try:
+            ip = ipaddress.ip_address(adresse)
+        except ValueError:
+            continue
+        protegees[ip] = (f"router {porteur}", iface in ("loopback", "lo"))
+    if passerelle:
+        try:
+            protegees[ipaddress.ip_address(passerelle)] = (
+                f"default gateway of {router_name}",
+                True,
+            )
+        except ValueError:
+            pass
+
+    for lien in links:
+        if lien.skip_reason:
+            continue
+        montant = bool(iface_montante) and lien.interface == iface_montante
+        if not montant and passerelle and lien.network:
+            try:
+                montant = ipaddress.ip_address(passerelle) in ipaddress.ip_network(
+                    lien.network, strict=False
+                )
+            except ValueError:
+                montant = False
+        if montant:
+            lien.skip_reason = UPLINK_SKIP.format(gateway=passerelle or iface_montante)
+
+    for abonne in subscribers:
+        if abonne.skip_reason or not abonne.address:
+            continue
+        try:
+            reseau = ipaddress.ip_network(str(abonne.address).strip(), strict=False)
+        except ValueError:
+            continue
+        hote = reseau.num_addresses == 1
+        for ip, (porteur, couvrable) in protegees.items():
+            if ip.version == reseau.version and ip in reseau and (hote or couvrable):
+                abonne.skip_reason = INFRA_SKIP.format(address=ip, owner=porteur)
+                break
 
 
 def _segment_du_lien(lien: dict[str, Any]) -> str | None:
