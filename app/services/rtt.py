@@ -487,6 +487,15 @@ def rtt_verdict(
         stats = (essai or {}).get("stats")
         return int(stats.get("received") or 0) if isinstance(stats, dict) else 0
 
+    rapides = [a for a in attempts if a.get("interval") != "1s (terminal)"]
+    lents = [a for a in attempts if a.get("interval") == "1s (terminal)"]
+    if lents and any(recus(a) for a in lents) and not any(recus(a) for a in rapides):
+        return {
+            "code": "rate_limited",
+            "message": "The client answers one ping per second (like the router's terminal) but "
+            "drops a quick burst: its ICMP rate limit, or a device in between, throws the probe "
+            "away. The probe switches to one packet per second on this router by itself.",
+        }
     if any(recus(a) for a in attempts):
         sans_source = [a for a in attempts if not a.get("source") and recus(a)]
         avec_source = [a for a in attempts if a.get("source") and recus(a)]
