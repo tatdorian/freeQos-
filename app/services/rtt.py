@@ -88,6 +88,8 @@ class RttReading:
     #: Pourquoi le routeur n'a pas pu pinguer (src-address refusee, delai...).
     #: Sans elle, l'interface affichait "-" comme si rien n'avait ete tente.
     error: str | None = None
+    #: L'adresse sondee : c'est elle que le diagnostic rejoue.
+    address: str | None = None
 
 
 class RttProber:
@@ -148,6 +150,26 @@ class RttProber:
         if reading.error:
             base["error"] = reading.error
         return base
+
+    def silent_target(self) -> tuple[str, str] | None:
+        """(routeur, adresse) du client muet le plus recemment sonde.
+
+        C'est ce que le bouton « Diagnose » rejoue quand la sonde est muette :
+        l'exploitant n'a pas a chercher une IP et un nom de routeur.
+        """
+        muets = [
+            r
+            for r in self._readings.values()
+            if r.stats is not None
+            and r.stats.sent
+            and not r.stats.received
+            and r.router_name
+            and r.address
+        ]
+        if not muets:
+            return None
+        dernier = max(muets, key=lambda r: r.measured_at)
+        return str(dernier.router_name), str(dernier.address)
 
     def readings_by_router(self) -> dict[str, list[PingStats]]:
         """Series fraiches, rangees par routeur emetteur (latence d'acces du PoP)."""
@@ -219,7 +241,12 @@ class RttProber:
             # exactement ce qu'on cherche, l'attente dans une file qui se remplit.
             rtt = stats.median_ms if stats is not None else None
             self._readings[subscriber_id] = RttReading(
-                rtt_ms=rtt, measured_at=now, stats=stats, router_name=collector.name, error=erreur
+                rtt_ms=rtt,
+                measured_at=now,
+                stats=stats,
+                router_name=collector.name,
+                error=erreur,
+                address=ip,
             )
             self.probes_sent += 1
             if rtt is not None:
@@ -387,4 +414,132 @@ def summarise(series: list[PingStats]) -> dict[str, object] | None:
         "jitter_ms": round(sum(gigues) / len(gigues), 2) if gigues else None,
         "loss_pct": round(sum(pertes) / len(pertes), 1) if pertes else None,
         "subscribers": len(medianes),
+    }
+
+
+# ------------------------------------------------------------ diagnostic
+def _vrai(valeur: object) -> bool:
+    return str(valeur).lower() in ("true", "yes")
+
+
+def suspicious_firewall_rules(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Regles du pare-feu qui peuvent jeter les pings de la sonde.
+
+    La sonde part du routeur (chaine ``output``) et sa reponse y revient
+    (chaine ``input``). Une regle ``drop``/``reject`` de ces chaines, ICMP ou
+    tous protocoles, placee AVANT le ``accept`` des connexions etablies, jette
+    la reponse : c'est le durcissement classique « on bloque tout ce qui vient
+    des clients » qui rend la sonde muette chez TOUS les clients a la fois.
+    """
+    suspectes: list[dict[str, object]] = []
+    etablies_acceptees: set[str] = set()
+    for position, regle in enumerate(rows):
+        chaine = str(regle.get("chain") or "")
+        if chaine not in ("input", "output") or _vrai(regle.get("disabled")):
+            continue
+        action = str(regle.get("action") or "")
+        etat = str(regle.get("connection-state") or "")
+        protocole = str(regle.get("protocol") or "")
+        # Un accept des connexions etablies, ou de l'ICMP, laisse passer la reponse.
+        if action == "accept" and (
+            ("established" in etat and protocole in ("", "icmp")) or protocole == "icmp"
+        ):
+            etablies_acceptees.add(chaine)
+            continue
+        if action not in ("drop", "reject") or chaine in etablies_acceptees:
+            continue
+        if protocole not in ("", "icmp"):
+            continue
+        suspectes.append(
+            {
+                "position": position,
+                "chain": chaine,
+                "action": action,
+                "protocol": protocole or "any",
+                "in_interface": regle.get("in-interface") or regle.get("in-interface-list"),
+                "src_address": regle.get("src-address") or regle.get("src-address-list"),
+                "comment": regle.get("comment"),
+            }
+        )
+    return suspectes
+
+
+def rtt_verdict(
+    attempts: list[dict[str, object]],
+    control: dict[str, object] | None,
+    suspects: list[dict[str, object]],
+) -> dict[str, str]:
+    """Une cause, en une phrase, a partir des essais du diagnostic.
+
+    ``attempts`` : les pings vers le client (avec puis sans source) ;
+    ``control``  : le meme ping vers la passerelle du routeur -- s'il repond,
+    le routeur SAIT pinguer et le silence vient du cote client.
+    """
+    erreurs = " ".join(str(a.get("error") or "") for a in attempts).lower()
+    if "permission" in erreurs or "not allowed" in erreurs:
+        return {
+            "code": "no_test_policy",
+            "message": "The router account used by freeQoS may not run /ping: give its group "
+            "the 'test' policy (System > Users > Groups).",
+        }
+
+    def recus(essai: dict[str, object] | None) -> int:
+        stats = (essai or {}).get("stats")
+        return int(stats.get("received") or 0) if isinstance(stats, dict) else 0
+
+    if any(recus(a) for a in attempts):
+        sans_source = [a for a in attempts if not a.get("source") and recus(a)]
+        avec_source = [a for a in attempts if a.get("source") and recus(a)]
+        if sans_source and not avec_source and any(a.get("source") for a in attempts):
+            return {
+                "code": "loopback_return_path",
+                "message": "The client answers, but not to the router's loopback: no return "
+                "route to that address. The probe now pings without source on this router.",
+            }
+        return {
+            "code": "ok",
+            "message": "The client answers now. If it was silent before, it was momentary "
+            "(client offline, line saturated).",
+        }
+    lignes: list[object] = []
+    for a in attempts:
+        brut = a.get("raw")
+        if isinstance(brut, list):
+            lignes.extend(brut)
+    statuts = " ".join(
+        str(ligne.get("status") or "") for ligne in lignes if isinstance(ligne, dict)
+    ).lower()
+    if "unreachable" in statuts or "no route" in statuts:
+        return {
+            "code": "no_route",
+            "message": "The router has no route to this client (host unreachable): the address "
+            "is not behind this router.",
+        }
+    if suspects:
+        return {
+            "code": "firewall",
+            "message": f"{len(suspects)} firewall rule(s) on this router drop ICMP in the "
+            "input/output chain before established connections are accepted: the client's "
+            "replies are thrown away. Move an 'accept icmp' (or 'accept established,related') "
+            "rule above them.",
+        }
+    if control is not None and recus(control):
+        return {
+            "code": "client_blocks_icmp",
+            "message": "The router pings its gateway fine, but the client never answers: the "
+            "client's box or firewall blocks ping (common on PPPoE CPEs and business "
+            "firewalls), or a rule elsewhere drops ICMP toward clients. Allow ICMP echo on the "
+            "CPE's WAN side to get latency.",
+        }
+    if control is not None:
+        return {
+            "code": "router_cannot_ping",
+            "message": "The router gets no reply from its own gateway either: pings from this "
+            "router are blocked (firewall output/input, or /ip/settings). Check the router "
+            "itself first.",
+        }
+    return {
+        "code": "client_blocks_icmp",
+        "message": "No reply from the client, with or without source address: the client's box "
+        "or firewall most likely blocks ping.",
     }
