@@ -786,6 +786,33 @@ function sondeMuette() {
 const SANS_REPONSE = 'All pings of the last series were lost: line saturated (the queue drops ' +
   'them) or client unreachable';
 
+/** Une latence ABSENTE dit pourquoi. "-" seul se lisait comme "rien a
+ *  signaler" alors que la sonde pouvait etre coupee, en erreur, ou muette.
+ *  Rend [texte, severite, explication]. */
+function rttVide(detail) {
+  if (detail && detail.error) {
+    return ['ping error', 'warn', 'The router could not run the ping: ' + detail.error +
+      '. Check Settings > latency probe and the router (ping allowed, source address).'];
+  }
+  if (detail && Number(detail.sent) > 0 && !Number(detail.received)) {
+    return sondeMuette()
+      ? ['probe silent', 'warn', 'No client answers the probe at all: the probe is at fault, not ' +
+        'the clients. Check the router can ping its clients (firewall, source address).']
+      : ['no reply', 'crit', SANS_REPONSE];
+  }
+  return ['-', 'none', 'No latency measured in the last 5 minutes: latency probe off ' +
+    '(Executive > RTT probe), or this client not probed yet (about one minute after start).'];
+}
+function rttVideHtml(detail) {
+  const [texte, sev, titre] = rttVide(detail);
+  const couleur = sev === 'crit' ? 'var(--crit)' : sev === 'warn' ? 'var(--warn)' : 'var(--faint)';
+  return '<span style="color:' + couleur + '" title="' + esc(titre) + '">' + esc(texte) + '</span>';
+}
+function rttVideSq(detail) {
+  const [texte, sev, titre] = rttVide(detail);
+  return sqCell(texte, sev, titre);
+}
+
 /** LE CLIENT UTILISE TOUT SON FORFAIT (85 % ou plus, dans un sens ou l'autre).
  *  Sa latence vient alors de SA propre file : ce n'est pas le reseau qui va
  *  mal. Elle s'affiche en neutre, et ne compte ni dans la pire latence d'un
@@ -804,7 +831,7 @@ const AU_PLAFOND = 'The client is using its whole plan right now: this latency c
 function rttClient(s, avecPastille) {
   if (!auPlafond(s)) return avecPastille ? null : rtt(s.rtt_ms, s.rtt_detail);
   const valeur = s.rtt_ms != null ? Math.round(s.rtt_ms) + ' ms'
-    : pingsPerdus(s.rtt_detail) ? 'no reply' : '-';
+    : rttVide(s.rtt_detail)[0];
   return avecPastille
     ? sqCell(valeur + ' · at limit', 'none', AU_PLAFOND)
     : '<span style="color:var(--muted)" title="' + esc(AU_PLAFOND) + '">' + esc(valeur) +
@@ -812,11 +839,7 @@ function rttClient(s, avecPastille) {
 }
 
 function rtt(value, detail) {
-  if (value === null || value === undefined) {
-    return pingsPerdus(detail)
-      ? '<span style="color:var(--crit)" title="' + esc(SANS_REPONSE) + '">no reply</span>'
-      : '<span style="color:var(--faint)">-</span>';
-  }
+  if (value === null || value === undefined) return rttVideHtml(detail);
   const ms = Number(value);
   const color = ms < 30 ? 'var(--ok)' : ms < 100 ? 'var(--warn)' : 'var(--crit)';
   const titre = detail ? ' title="' + esc(rttDetailText(detail)) + '"' : '';
@@ -2454,7 +2477,7 @@ function renderNodeTable(host) {
     return;
   }
   const rttSq = (ms, detail) => (ms === null || ms === undefined)
-    ? (pingsPerdus(detail) ? sqCell('no reply', 'crit', SANS_REPONSE) : sqCell('-', 'none'))
+    ? rttVideSq(detail)
     : sqCell(Math.round(ms) + ' ms', rttSevJs(ms), rttDetailText(detail));
   const naSq = '<span class="na">-</span>';
   // Le debit ET sa part de la limite, dans la meme cellule : c'est la part qui
@@ -2689,7 +2712,7 @@ function renderQueuePanels() {
   // "live" reste en n/d — on ne fabrique pas de zeros.
   const synth = !isClient && !!node.synthetic;
   const rttSq = (ms, detail) => (ms === null || ms === undefined)
-    ? (pingsPerdus(detail) ? sqCell('no reply', 'crit', SANS_REPONSE) : sqCell('-', 'none'))
+    ? rttVideSq(detail)
     : sqCell(Math.round(ms) + 'ms', rttSevJs(ms));
   // Un noeud est "sans reponse" des qu'UN de ses clients l'est : c'est son pire.
   const clientPlafond = isClient && auPlafond(client);
@@ -2733,7 +2756,8 @@ function renderQueuePanels() {
       // Un client SANS REPONSE est le pire de tous : il l'emporte sur la
       // latence des autres (« 12 ms » s'affichait a cote d'un « no reply »).
       (clientPlafond ? rttClient(client, true)
-        : pingsPerdus(perduIci) ? sqCell('no reply', 'crit', SANS_REPONSE) : rttSq(rttMs)) +
+        : pingsPerdus(perduIci) ? sqCell('no reply', 'crit', SANS_REPONSE)
+          : rttSq(rttMs, isClient ? client.rtt_detail : null)) +
       '</td></tr>' +
     '<tr><td>' + (isClient ? 'Score' : 'Worst score') + '</td><td class="num" colspan="2">' +
       qooSq + '</td></tr>' +
