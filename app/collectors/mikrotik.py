@@ -647,16 +647,16 @@ class LibrouterosReadClient:
                 raise
 
 
-def client_tables_from_routes(rows: list[dict[str, Any]]) -> list[tuple[Any, str]]:
-    """Toutes les routes PRECISES (hors route par defaut), et leur table.
+def client_tables_from_routes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Toutes les routes PRECISES (hors route par defaut), avec leur table.
 
-    Le client vit dans la table qui porte la route la plus precise vers lui :
-    route CONNECTEE pour une session PPPoE ou une VLAN, mais aussi route
-    STATIQUE pour un bloc public route vers le routeur d'un client entreprise
-    (constate : 154.66.223.217 de Nestle, route dans la VRF, pas connecte).
-    Les routes par defaut ne disent pas ou vit un client : ignorees.
+    Le client vit dans la table qui porte la meilleure route vers lui : route
+    CONNECTEE pour une session PPPoE ou une VLAN, mais aussi route STATIQUE
+    pour un bloc public route vers le routeur d'un client entreprise
+    (constate : 154.66.223.217 de Nestle). Les routes par defaut ne disent pas
+    ou vit un client : ignorees.
     """
-    sortie: list[tuple[Any, str]] = []
+    sortie: list[dict[str, Any]] = []
     for ligne in rows:
         if ligne.get("active") is not None and not parse_flag(ligne.get("active")):
             continue
@@ -668,9 +668,42 @@ def client_tables_from_routes(rows: list[dict[str, Any]]) -> list[tuple[Any, str
             continue
         if reseau.prefixlen == 0:
             continue
-        table = str(ligne.get("routing-table") or "main").strip() or "main"
-        sortie.append((reseau, table))
+        passerelle = str(ligne.get("gateway") or "").split("%")[0].split("@")[0].strip()
+        sortie.append(
+            {
+                "network": reseau,
+                "table": str(ligne.get("routing-table") or "main").strip() or "main",
+                "connected": bool(parse_flag(ligne.get("connect"))),
+                "gateway": passerelle,
+            }
+        )
     return sortie
+
+
+def best_client_route(
+    routes: list[dict[str, Any]], address: str, upstream_gateway: str | None
+) -> dict[str, Any] | None:
+    """La route par laquelle le client est REELLEMENT joint.
+
+    Ordre : la plus precise ; a egalite, une route connectee (le client est
+    derriere ce routeur) ; puis une route qui ne renvoie PAS vers la passerelle
+    amont (une route de meme longueur dans main qui repart vers le coeur est
+    un detour : c'est ce qui donnait 955 ms et un TTL de 60 pour Nestle) ;
+    puis une VRF plutot que main.
+    """
+    try:
+        ip = ipaddress.ip_address(str(address).split("/")[0])
+    except ValueError:
+        return None
+    candidates = [r for r in routes if r["network"].version == ip.version and ip in r["network"]]
+    if not candidates:
+        return None
+
+    def rang(r: dict[str, Any]) -> tuple[int, bool, bool, bool]:
+        vers_amont = bool(upstream_gateway) and r["gateway"] == upstream_gateway
+        return (r["network"].prefixlen, r["connected"], not vers_amont, r["table"] != "main")
+
+    return max(candidates, key=rang)
 
 
 def ping_stats_from_rows(rows: list[dict[str, Any]], count: int) -> PingStats:
@@ -1492,21 +1525,28 @@ class MikrotikCollector:
             cache = client_tables_from_routes(lignes)
             self._tables_clients = cache
             self._tables_lues_a = maintenant
+        meilleure = best_client_route(cache, address, upstream_of(self.config.name)[0])
+        if meilleure is None or meilleure["table"] == "main":
+            return None
+        return str(meilleure["table"])
+
+    async def client_route_candidates(self, address: str) -> list[dict[str, Any]]:
+        """Les routes qui couvrent cette adresse, pour le diagnostic."""
+        await self.client_routing_table(address)
         try:
             ip = ipaddress.ip_address(str(address).split("/")[0])
         except ValueError:
-            return None
-        trouve = [
-            (reseau.prefixlen, table == "main", table)
-            for reseau, table in cache
-            if reseau.version == ip.version and ip in reseau
+            return []
+        return [
+            {
+                "dst": str(r["network"]),
+                "table": r["table"],
+                "connected": r["connected"],
+                "gateway": r["gateway"],
+            }
+            for r in getattr(self, "_tables_clients", [])
+            if r["network"].version == ip.version and ip in r["network"]
         ]
-        if not trouve:
-            return None
-        # La route la plus precise gagne ; a egalite, la table main (le ping
-        # sans table y va deja) plutot qu'une VRF.
-        _longueur, _main, table = max(trouve)
-        return None if table == "main" else table
 
     async def ping_stats(
         self, address: str, count: int = 5, *, interval_ms: int = 200
