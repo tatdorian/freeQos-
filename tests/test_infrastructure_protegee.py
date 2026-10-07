@@ -63,3 +63,28 @@ def test_un_routeur_vu_comme_client_n_est_pas_bride() -> None:
     assert sorted(f.target for f in files) == ["10.20.0.0/29", "10.20.0.10/32"]
     assert {e.login for e in ecartes} == {"ds-ccr", "passerelle", "bloc"}
     assert all("never shaped" in e.reason for e in ecartes)
+
+
+def test_une_file_tierce_n_est_jamais_debridee() -> None:
+    """Un client sans debit (compteur 0/0) ne doit pas aligner la file que
+    l'exploitant avait posee sur sa cible : ce serait la debrider."""
+    from app.enforcement.planner import build_plan
+
+    client = _client("sans-forfait", "10.20.0.10")
+    client.plan_down_mbps = None
+    client.plan_up_mbps = None
+    types, files, _ = desired_state(links=[], subscribers=[client])
+    tierce = {
+        ".id": "*5A",
+        "name": "client-maison",
+        "target": "10.20.0.10/32",
+        "max-limit": "2M/10M",
+    }
+    plan = build_plan(
+        "NAS",
+        desired_types=types,
+        desired_queues=files,
+        actual_types=[],
+        actual_queues=[tierce],
+    )
+    assert not [a for a in plan.actions if a.path == "/queue/simple"]
