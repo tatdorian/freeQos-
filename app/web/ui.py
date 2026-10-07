@@ -74,3 +74,19 @@ async def index(request: Request) -> HTMLResponse:
             "theme_version": asset_version("theme.js"),
         },
     )
+
+
+@router.get("/api-guide", response_class=HTMLResponse)
+async def api_guide(request: Request) -> HTMLResponse:
+    """Le guide de l'API, pour un integrateur. Public : il ne contient aucune
+    donnee du reseau, seulement la maniere de s'adresser a l'API -- et l'on doit
+    pouvoir l'envoyer a un prestataire qui n'a pas de compte."""
+    return templates.TemplateResponse(
+        request,
+        "api_guide.html",
+        {
+            "js_version": asset_version("api-guide.js"),
+            "css_version": asset_version("api-guide.css"),
+            "theme_version": asset_version("theme.js"),
+        },
+    )

@@ -113,7 +113,8 @@ def test_l_onglet_api_existe_et_porte_la_creation_de_cles() -> None:
     assert 'id="view-api"' in HTML
     assert "api: loadApi" in JS
     assert 'id="key-form"' in HTML
-    assert 'id="api-endpoints"' in HTML
+    # La liste brute des points d'entree a laisse place au guide complet.
+    assert 'href="/api-guide"' in HTML
 
 
 def test_les_cles_ne_sont_plus_dans_les_reglages() -> None:
