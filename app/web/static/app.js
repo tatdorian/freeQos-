@@ -817,8 +817,11 @@ function rttVideSq(detail) {
  *  Sa latence vient alors de SA propre file : ce n'est pas le reseau qui va
  *  mal. Elle s'affiche en neutre, et ne compte ni dans la pire latence d'un
  *  noeud ni dans sa note. */
+/** Pings de la sonde marques EF (prioritaires dans la file CAKE) : la latence
+ *  d'un client au plafond est alors celle de la ligne, elle compte normalement. */
+let sondePrioritaire = false;
 function auPlafond(s) {
-  if (!s) return false;
+  if (!s || sondePrioritaire) return false;
   const bas = (Number(s.effective_down_mbps) || 0) * 1e6;
   const haut = (Number(s.effective_up_mbps) || 0) * 1e6;
   return (bas > 0 && (Number(s.tx_bps) || 0) >= 0.85 * bas) ||
@@ -1638,6 +1641,7 @@ async function loadExec() {
     if (r && r.name) exec.popDuRouteur[r.name] = r.pop_name || r.name;
   });
   const subs = Array.isArray(subsRaw) ? subsRaw : [];
+  sondePrioritaire = !!(rttState && rttState.probe_prioritized);
   renderRttControl(rttState);
   exec.bloatById = {};
   if (bloat) (bloat.subscribers || []).forEach((b) => { exec.bloatById[b.subscriber_id] = b; });
