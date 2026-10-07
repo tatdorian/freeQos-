@@ -690,6 +690,10 @@ def _split_pair(value: Any) -> tuple[int | None, int | None] | None:
 #: adresse source. Range par nom et non sur l'objet : l'inventaire recree ses
 #: collecteurs a chaque rechargement, et le loopback ne doit pas s'y perdre.
 _LOOPBACKS_DETECTES: dict[str, str] = {}
+#: Taille de la serie quand un routeur doit sonder au rythme du terminal (1/s).
+PING_LENT_COUNT = 3
+#: Delai entre deux essais a ce rythme sur un meme routeur qui n'en a pas besoin.
+PING_LENT_REESSAI_S = 600.0
 #: Derniere recherche infructueuse, par routeur (horloge monotone) : un routeur
 #: sans loopback ne doit pas etre relu a chaque sonde.
 _RECHERCHES_VAINES: dict[str, float] = {}
@@ -1372,7 +1376,13 @@ class MikrotikCollector:
         une seconde, assez pour une mediane, une gigue et une perte, sans
         occuper le routeur cinq secondes par abonne.
         """
-        intervalle = f"{max(10, int(interval_ms))}ms"
+        lent = bool(getattr(self, "_ping_lent", False))
+        if lent:
+            # Ce routeur n'obtient de reponse qu'au rythme du terminal (1/s) :
+            # serie plus courte, a l'intervalle par defaut de RouterOS.
+            count = min(count, PING_LENT_COUNT)
+            interval_ms = 1000
+        intervalle: str | None = None if lent else f"{max(10, int(interval_ms))}ms"
         timeout = max(self.config.timeout_s * 2, 4.0) + count * max(interval_ms, 10) / 1000 + 1
         # Une source qui a deja fait perdre toutes les reponses n'est plus
         # employee sur ce routeur (cf. plus bas).
@@ -1421,6 +1431,38 @@ class MikrotikCollector:
                     source,
                 )
                 return sans_source
+        maintenant = time.monotonic()
+        if (
+            stats.sent
+            and not stats.received
+            and not lent
+            and maintenant - getattr(self, "_essai_lent_a", -PING_LENT_REESSAI_S)
+            >= PING_LENT_REESSAI_S
+        ):
+            # Une fois par routeur et par periode : un client qui bloque
+            # vraiment le ping ne doit pas allonger chaque tour de sonde.
+            self._essai_lent_a = maintenant
+            # TOUJOURS RIEN, alors que le meme ping tape dans le terminal du
+            # routeur repond (constate en lab) : la rafale de 5 paquets a 200 ms
+            # est jetee -- limitation ICMP du client ou d'un equipement entre
+            # les deux. On retente au rythme du terminal (1 paquet/s) ; si la,
+            # ca repond, ce routeur sonde desormais a ce rythme.
+            essai = min(count, PING_LENT_COUNT)
+            rows = await asyncio.wait_for(
+                asyncio.to_thread(self._sonde.ping, address, essai, None, None),
+                timeout=max(self.config.timeout_s * 2, 4.0) + essai + 1,
+            )
+            au_rythme = ping_stats_from_rows(rows, essai)
+            if au_rythme.received:
+                self._ping_lent = True
+                self._ping_sans_source = True
+                logger.warning(
+                    "%s : aucune reponse aux pings rapproches (%s), mais des reponses "
+                    "a 1 paquet/s -- la sonde passe a ce rythme sur ce routeur",
+                    self.config.name,
+                    intervalle,
+                )
+                return au_rythme
         return stats
 
     async def health(self) -> dict[str, Any]:

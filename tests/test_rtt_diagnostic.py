@@ -67,3 +67,10 @@ def test_droit_test_manquant() -> None:
 def test_hote_injoignable() -> None:
     v = rtt_verdict([_essai(None, 0, "host unreachable")], _essai(None, 5), [])
     assert v["code"] == "no_route"
+
+
+def test_rafale_jetee_mais_rythme_terminal_repond() -> None:
+    rapide = _essai(None, 0)
+    lent = {**_essai(None, 3), "interval": "1s (terminal)"}
+    v = rtt_verdict([rapide, lent], _essai(None, 5), [])
+    assert v["code"] == "rate_limited"

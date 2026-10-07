@@ -75,19 +75,24 @@ async def rtt_diagnose(
     if collecteur is None:
         raise HTTPException(status_code=404, detail=f"unknown router: {router_name}")
 
-    async def essai(cible: str, src: str | None) -> dict[str, Any]:
+    async def essai(
+        cible: str, src: str | None, intervalle: str | None = "200ms", n: int = 5
+    ) -> dict[str, Any]:
+        base: dict[str, Any] = {"source": src, "interval": intervalle or "1s (terminal)"}
         try:
             lignes = await asyncio.wait_for(
-                asyncio.to_thread(collecteur._sonde.ping, cible, 5, src, "200ms"),  # noqa: SLF001
+                asyncio.to_thread(collecteur._sonde.ping, cible, n, src, intervalle),  # noqa: SLF001
                 timeout=15,
             )
-            stats = ping_stats_from_rows(lignes, 5)
-            return {"source": src, "stats": stats.to_dict(), "raw": [dict(x) for x in lignes][:10]}
+            stats = ping_stats_from_rows(lignes, n)
+            return {**base, "stats": stats.to_dict(), "raw": [dict(x) for x in lignes][:10]}
         except Exception as exc:  # noqa: BLE001 - le diagnostic dit l'erreur
-            return {"source": src, "error": f"{type(exc).__name__}: {exc}"}
+            return {**base, "error": f"{type(exc).__name__}: {exc}"}
 
     source = await collecteur.ensure_loopback()
     essais = [await essai(address, src) for src in ([source] if source else []) + [None]]
+    # Le meme ping que dans le terminal du routeur : 1 paquet/s, sans source.
+    essais.append(await essai(address, None, None, 3))
     passerelle, _interface = upstream_of(router_name)
     controle = await essai(passerelle, None) if passerelle else None
     if controle is not None:
@@ -102,6 +107,7 @@ async def rtt_diagnose(
         "address": address,
         "loopback": source,
         "probe_skips_loopback": bool(getattr(collecteur, "_ping_sans_source", False)),
+        "probe_slow_rate": bool(getattr(collecteur, "_ping_lent", False)),
         "attempts": essais,
         "control": controle,
         "firewall_suspects": suspectes,
