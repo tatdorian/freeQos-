@@ -333,9 +333,12 @@ class NetflowService:
 
         Un routeur qui exporte vers le controleur est deja dans l'inventaire :
         lui demander a l'exploitant de dire "c'est le coeur" ou "c'est le PoP
-        Francophonie" est une saisie qu'on sait faire a sa place. Seuls les
-        exporteurs encore 'unknown' sont touches : une declaration faite a la
-        main n'est JAMAIS ecrasee. Rend les adresses declarees.
+        Francophonie" est une saisie qu'on sait faire a sa place.
+
+        Sont (re)calcules : les exporteurs encore 'unknown', et ceux que cette
+        fonction a deja declares -- si le role du routeur change (PoP devenu
+        coeur), leur point de vue suit, sans geste. Une declaration faite a la
+        main n'est JAMAIS ecrasee. Rend les adresses (re)declarees.
         """
         if self.exporters_repo is None or self.identify_exporter is None:
             return []
@@ -346,7 +349,8 @@ class NetflowService:
             return []
         faits: list[str] = []
         for ligne in lignes:
-            if str(ligne.get("vantage")) != "unknown":
+            automatique = str(ligne.get("note") or "").startswith(NOTE_AUTO)
+            if str(ligne.get("vantage")) != "unknown" and not automatique:
                 continue
             adresse = str(ligne["address"])
             try:
@@ -356,14 +360,21 @@ class NetflowService:
             if trouve is None:
                 continue
             nom, vantage, pop = trouve
+            pop_attendu = pop if vantage == "pop" else None
+            if (
+                automatique
+                and ligne.get("vantage") == vantage
+                and ligne.get("pop_name") == pop_attendu
+            ):
+                continue  # deja a jour
             try:
                 await self.exporters_repo.update(
                     int(ligne["id"]),
                     {
                         "name": ligne.get("name") or nom,
                         "vantage": vantage,
-                        "pop_name": pop if vantage == "pop" else None,
-                        "note": f"declared automatically: router {nom}",
+                        "pop_name": pop_attendu,
+                        "note": f"{NOTE_AUTO}: router {nom}",
                     },
                 )
             except Exception as exc:  # noqa: BLE001
@@ -612,6 +623,13 @@ class NetflowService:
             "infrastructure_networks": len(self.aggregator.infrastructure_networks),
             "last_error": self.last_error,
         }
+
+
+#: Marque des exporteurs declares par le controleur lui-meme : eux seuls sont
+#: recalcules quand le role d'un routeur change.
+NOTE_AUTO = "declared automatically"
+#: Marque d'un choix fait a la main dans l'interface : plus jamais recalcule.
+NOTE_MAIN = "set by hand"
 
 
 def identify_exporter(address: str, collectors: list[Any]) -> tuple[str, str, str | None] | None:
