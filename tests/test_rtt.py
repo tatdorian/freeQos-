@@ -323,3 +323,33 @@ async def test_routeur_qui_refuse_vrf_essaie_routing_table() -> None:
     stats = await collecteur.ping_stats("172.16.35.253", 5, interval_ms=200)
     assert stats.received == 5
     assert client.ping_tables[-1] == ("CUST-INET", "routing-table")
+
+
+async def test_un_bloc_public_route_dans_une_vrf_y_est_pingue() -> None:
+    """Constate : Nestle (154.66.223.217) est route en STATIQUE vers son
+    routeur dans la VRF, pas connecte -- le ping partait par main (TTL 60)."""
+    client = FakeRouterOsClient()
+    client.route_rows = [
+        *ROUTES_VRF,
+        {
+            "dst-address": "154.66.223.216/29",
+            "routing-table": "CUST-INET",
+            "gateway": "10.60.0.2",
+            "static": "true",
+            "active": "true",
+        },
+    ]
+    collecteur = make_collector(client)
+    await collecteur.ping_stats("154.66.223.217", 5, interval_ms=200)
+    assert client.ping_tables[-1] == ("CUST-INET", "vrf")
+
+
+async def test_une_route_plus_precise_dans_main_l_emporte() -> None:
+    client = FakeRouterOsClient()
+    client.route_rows = [
+        {"dst-address": "10.0.0.0/8", "routing-table": "CUST-INET", "gateway": "10.255.255.1"},
+        {"dst-address": "10.20.0.0/24", "routing-table": "main", "connect": "true"},
+    ]
+    collecteur = make_collector(client)
+    await collecteur.ping_stats("10.20.0.10", 5, interval_ms=200)
+    assert client.ping_tables[-1] is None

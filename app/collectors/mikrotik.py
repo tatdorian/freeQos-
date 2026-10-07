@@ -644,24 +644,27 @@ class LibrouterosReadClient:
 
 
 def client_tables_from_routes(rows: list[dict[str, Any]]) -> list[tuple[Any, str]]:
-    """Reseaux CONNECTES hors table main, et la table qui les porte.
+    """Toutes les routes PRECISES (hors route par defaut), et leur table.
 
-    Seules les routes connectees comptent (session PPPoE, VLAN client) : une
-    route par defaut dans une VRF ne dit pas que le client y vit.
+    Le client vit dans la table qui porte la route la plus precise vers lui :
+    route CONNECTEE pour une session PPPoE ou une VLAN, mais aussi route
+    STATIQUE pour un bloc public route vers le routeur d'un client entreprise
+    (constate : 154.66.223.217 de Nestle, route dans la VRF, pas connecte).
+    Les routes par defaut ne disent pas ou vit un client : ignorees.
     """
     sortie: list[tuple[Any, str]] = []
     for ligne in rows:
-        table = str(ligne.get("routing-table") or "main").strip()
-        if table in ("", "main"):
-            continue
-        if not parse_flag(ligne.get("connect")):
-            continue
         if ligne.get("active") is not None and not parse_flag(ligne.get("active")):
+            continue
+        if parse_flag(ligne.get("disabled")):
             continue
         try:
             reseau = ipaddress.ip_network(str(ligne.get("dst-address") or ""), strict=False)
         except ValueError:
             continue
+        if reseau.prefixlen == 0:
+            continue
+        table = str(ligne.get("routing-table") or "main").strip() or "main"
         sortie.append((reseau, table))
     return sortie
 
@@ -1437,7 +1440,7 @@ class MikrotikCollector:
             return lignes
 
     async def client_routing_table(self, address: str) -> str | None:
-        """La table de routage (VRF) qui porte la route CONNECTEE du client.
+        """La table de routage (VRF) qui porte la route la plus precise du client.
 
         CONSTATE EN LAB : les sessions PPPoE vivent dans la VRF ``CUST-INET``.
         Un ``/ping`` sans table part par la table main, qui n'a pas de route
@@ -1459,8 +1462,17 @@ class MikrotikCollector:
             ip = ipaddress.ip_address(str(address).split("/")[0])
         except ValueError:
             return None
-        trouve = [(reseau.prefixlen, table) for reseau, table in cache if ip in reseau]
-        return max(trouve)[1] if trouve else None
+        trouve = [
+            (reseau.prefixlen, table == "main", table)
+            for reseau, table in cache
+            if reseau.version == ip.version and ip in reseau
+        ]
+        if not trouve:
+            return None
+        # La route la plus precise gagne ; a egalite, la table main (le ping
+        # sans table y va deja) plutot qu'une VRF.
+        _longueur, _main, table = max(trouve)
+        return None if table == "main" else table
 
     async def ping_stats(
         self, address: str, count: int = 5, *, interval_ms: int = 200
