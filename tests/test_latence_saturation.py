@@ -378,3 +378,18 @@ def test_le_resume_de_routeros_fait_foi_quand_les_temps_manquent() -> None:
     ]
     stats = ping_stats_from_rows(rows, 2)
     assert stats.received == 2 and stats.median_ms == pytest.approx(3.0)
+
+
+def test_des_reponses_en_double_ne_font_ni_perte_ni_perte_negative() -> None:
+    """Constate en lab (VRF CUST-INET) : chaque paquet revient deux fois,
+    RouterOS s'arrete a 3 envois pour count=5 et affiche packet-loss=-66%."""
+    rows = [
+        {"seq": "0", "time": "1ms467us", "sent": "1", "received": "1"},
+        {"seq": "0", "time": "1ms486us", "sent": "1", "received": "2"},
+        {"seq": "1", "time": "1ms532us", "sent": "2", "received": "3"},
+        {"seq": "1", "time": "1ms554us", "sent": "2", "received": "4"},
+        {"seq": "2", "time": "1ms759us", "sent": "3", "received": "5"},
+    ]
+    stats = ping_stats_from_rows(rows, 5)
+    assert (stats.sent, stats.received, stats.loss_pct) == (3, 3, 0.0)
+    assert stats.median_ms == pytest.approx(1.532)
