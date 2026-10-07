@@ -152,6 +152,14 @@ REGLAGES: tuple[Reglage, ...] = (
         maximum=100_000.0,
     ),
     Reglage(
+        "default_plan_for_detected_clients",
+        "shaping",
+        "bool",
+        "Also apply the default limit to clients only DETECTED on a router (no plan "
+        "pushed). Off: only clients whose plan was pushed by the API or entered are "
+        "throttled; the others are observed, never capped at a rate nobody sold.",
+    ),
+    Reglage(
         "shaping_prune",
         "shaping",
         "bool",

@@ -9,11 +9,12 @@ Le scenario d'un integrateur :
 
 1. une cle d'API ``write`` ajoute un NOUVEAU ROUTEUR ; sa mise en service pose
    les types CAKE et l'export NetFlow tout seule ;
-2. la collecte voit l'abonne PPPoE ; la cle lui pousse un FORFAIT -> sa file
-   porte ce debit sur le routeur ;
+2. la collecte voit l'abonne PPPoE -- detecte seulement, il n'est PAS bride ;
+   la cle lui pousse un FORFAIT -> sa file porte ce debit sur le routeur ;
 3. la cle change le forfait -> la file suit ;
 4. la cle FORCE une limite (prioritaire sur le forfait) -> la file suit ;
-5. la cle remet le client au forfait par defaut -> la file suit ;
+5. la cle retire le forfait -> le client n'est plus bride (il n'est plus
+   qu'observe : aucun debit invente) ;
 6. un service Preseem (``/model/v1``) a IP fixe -> sa file est posee ;
    le supprimer -> sa file disparait ;
 7. les garde-fous : cle lecture refusee en ecriture, cle inconnue refusee,
@@ -207,6 +208,16 @@ def test_une_application_externe_pilote_routeurs_et_limites(app_client, routeur)
     # --- 2. la collecte voit l'abonne ; un forfait pousse par la cle -> file
     r = app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle)
     assert r.status_code == 200, r.text
+    # Detecte, aucun forfait pousse : observe, jamais limite a un debit invente.
+    r = app_client.post("/api/v1/jobs/refresh_plans/run", headers=cle)
+    assert r.status_code == 200, r.text
+    r = app_client.post(
+        "/api/v1/shaping/apply",
+        headers=cle,
+        json={"router": "nas-test", "dry_run": False, "confirm": True},
+    )
+    assert r.status_code == 200, r.text
+    assert _file(routeur, "10.20.0.10") is None, routeur.simple_queue_rows
     r = app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 50, "up_mbps": 10})
     assert r.status_code == 200, r.text
     file = _file(routeur, "10.20.0.10")
@@ -227,10 +238,10 @@ def test_une_application_externe_pilote_routeurs_et_limites(app_client, routeur)
     assert r.status_code == 200, r.text
     assert _file(routeur, "10.20.0.10")["max-limit"] == "1000000/5000000"
 
-    # --- 5. retour au forfait par defaut (la limite forcee est levee avec lui)
+    # --- 5. forfait retire (la limite forcee est levee avec lui) : plus bride
     r = app_client.delete("/api/v1/plans/dupont", headers=cle)
     assert r.status_code == 200, r.text
-    assert _file(routeur, "10.20.0.10")["max-limit"] == "20000000/100000000"
+    assert _file(routeur, "10.20.0.10") is None, routeur.simple_queue_rows
 
     # --- 6. un service Preseem a IP fixe : sa file, puis plus rien
     r = app_client.put(

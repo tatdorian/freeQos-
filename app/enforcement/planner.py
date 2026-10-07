@@ -823,6 +823,12 @@ def _traiter_file_tierce(
     etrangere = etrangeres[0]
     nom = str(etrangere.get("name") or "?")
 
+    if spec.max_up_mbps is None and spec.max_down_mbps is None:
+        # Notre file n'aurait AUCUN debit (compteur seul) : aligner la file en
+        # place sur 0/0 la debriderait. Celle de l'exploitant reste telle quelle.
+        plan.unchanged += 1
+        return
+
     if not adopt:
         plan.conflicts.append(
             PlanConflict(

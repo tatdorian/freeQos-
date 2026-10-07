@@ -510,6 +510,11 @@ class Settings(BaseSettings):
     # 0 = pas de limite par defaut.
     default_plan_down_mbps: float = 100.0
     default_plan_up_mbps: float = 20.0
+    # Appliquer AUSSI cette limite aux clients seulement DETECTES sur un routeur
+    # (session PPPoE vue, aucun forfait pousse). Faux par defaut : ajouter un
+    # routeur ne bride que les clients dont le forfait a ete pousse par l'API
+    # ou saisi -- les autres sont observes, jamais limites a un debit invente.
+    default_plan_for_detected_clients: bool = False
     # Supprimer nos files devenues inutiles. A desactiver pendant une migration.
     shaping_prune: bool = True
     # Aligner le debit d'une file tierce deja posee sur la cible d'un abonne.
