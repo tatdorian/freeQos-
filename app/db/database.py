@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import timedelta
 from pathlib import Path
 
 import asyncpg
@@ -194,6 +195,12 @@ class Database:
 
         Elles vivent ici et non dans schema.sql parce que leurs valeurs viennent
         des variables d'environnement. Une valeur a 0 desactive la politique.
+
+        LES DUREES PARTENT EN ``timedelta``, JAMAIS EN TEXTE. asyncpg encode un
+        parametre ``interval`` a partir d'un ``timedelta`` ; un texte comme
+        '7 days' echouait ('str' object has no attribute 'days'), l'erreur etait
+        avalee par ``_try`` en simple avertissement, et ni compression ni
+        retention n'etaient jamais posees : la base grossissait sans fin.
         """
         if not self.timescale_available:
             logger.info("Politiques Timescale ignorees : extension absente")
@@ -221,7 +228,7 @@ class Database:
                         conn,
                         "SELECT set_chunk_time_interval($1::regclass, $2::interval)",
                         table,
-                        f"{chunk_interval_hours} hours",
+                        timedelta(hours=chunk_interval_hours),
                         label=f"chunk_interval({table})",
                     )
                 if compression_after_days > 0:
@@ -230,7 +237,7 @@ class Database:
                         "SELECT add_compression_policy($1::regclass, $2::interval, "
                         "if_not_exists => TRUE)",
                         table,
-                        f"{compression_after_days} days",
+                        timedelta(days=compression_after_days),
                         label=f"compression_policy({table})",
                     )
                 if retention_days > 0:
@@ -239,7 +246,7 @@ class Database:
                         "SELECT add_retention_policy($1::regclass, $2::interval, "
                         "if_not_exists => TRUE)",
                         table,
-                        f"{retention_days} days",
+                        timedelta(days=retention_days),
                         label=f"retention_policy({table})",
                     )
 

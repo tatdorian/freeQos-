@@ -134,6 +134,31 @@ async def test_le_schema_s_applique_et_est_rejouable(database: Database) -> None
     } <= tables
 
 
+async def test_les_politiques_timescale_sont_vraiment_posees(database: Database) -> None:
+    """REGRESSION : les durees partaient en texte ('7 days'), asyncpg les
+    refusait ('str' object has no attribute 'days'), l'erreur finissait en
+    simple avertissement -- et ni compression ni retention n'etaient posees.
+    On verifie les TACHES dans Timescale, pas l'absence d'exception."""
+    if not database.timescale_available:
+        pytest.skip("TimescaleDB absent : politiques sans objet")
+    await database.apply_policies(compression_after_days=7, retention_days=90)
+    async with database.pool.acquire() as conn:
+        taches = await conn.fetch(
+            "SELECT proc_name, config FROM timescaledb_information.jobs "
+            "WHERE hypertable_name = 'subscriber_metrics'"
+        )
+        intervalle = await conn.fetchval(
+            "SELECT time_interval FROM timescaledb_information.dimensions "
+            "WHERE hypertable_name = 'subscriber_metrics'"
+        )
+    par_type = {t["proc_name"]: str(t["config"]) for t in taches}
+    assert "policy_compression" in par_type, par_type
+    assert "policy_retention" in par_type, par_type
+    assert "7 days" in par_type["policy_compression"]
+    assert "90 days" in par_type["policy_retention"]
+    assert intervalle == timedelta(hours=24)
+
+
 async def test_referentiel_upsert(database: Database) -> None:
     directory = PgDirectory(database.pool)
 
