@@ -221,3 +221,11 @@ async def test_l_erreur_du_ping_est_rendue_au_lieu_d_un_tiret() -> None:
     detail = prober.detail(2)
     assert detail is not None
     assert "connexion perdue" in str(detail["error"])
+
+
+async def test_le_client_muet_est_retrouve_pour_le_diagnostic() -> None:
+    muet = FakeRouterOsClient()
+    muet.ping_reply = None
+    prober = RttProber(batch_size=10, clock=Horloge())
+    await prober.probe([(3, "10.0.0.3", make_collector(muet, name="nas"))])
+    assert prober.silent_target() == ("nas", "10.0.0.3")
