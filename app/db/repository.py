@@ -1197,6 +1197,32 @@ class MetricsRepository:
             )
         return _rows(rows)
 
+    async def reset_latency_history(self, *, hours: int = 48) -> dict[str, int]:
+        """Efface les latences (et les scores qui en decoulent) recentes.
+
+        Pour les mesures prises avec une METHODE FAUSSE : en lab, la sonde
+        pinguait par la table main des clients vivant dans une VRF, et
+        mesurait 900 ms de detour. Sans ce menage, la mediane sur l'heure et
+        les scores garderaient ces valeurs une heure de plus. Les debits, eux,
+        ne sont pas touches : seule la colonne de latence est remise a vide.
+        """
+        async with self._pool.acquire() as conn:
+            maj = await conn.execute(
+                """
+                UPDATE subscriber_metrics SET rtt_ms = NULL
+                 WHERE ts > now() - make_interval(hours => $1) AND rtt_ms IS NOT NULL
+                """,
+                hours,
+            )
+            sup = await conn.execute(
+                "DELETE FROM qoe_scores WHERE ts > now() - make_interval(hours => $1)",
+                hours,
+            )
+        return {
+            "latency_samples_cleared": int(maj.split()[-1]),
+            "scores_deleted": int(sup.split()[-1]),
+        }
+
     async def latency_by_subscriber(self, *, minutes: int = 60) -> list[dict[str, Any]]:
         """Latence mesuree de CHAQUE abonne sur la periode : mediane, p95, meilleure.
 

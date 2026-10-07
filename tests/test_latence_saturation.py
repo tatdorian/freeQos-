@@ -393,3 +393,18 @@ def test_des_reponses_en_double_ne_font_ni_perte_ni_perte_negative() -> None:
     stats = ping_stats_from_rows(rows, 5)
     assert (stats.sent, stats.received, stats.loss_pct) == (3, 3, 0.0)
     assert stats.median_ms == pytest.approx(1.532)
+
+
+def test_le_paquet_zero_en_entier_n_est_compte_qu_une_fois() -> None:
+    """Lignes reelles de l'API (seq ENTIER) : le paquet 0 etait pris pour une
+    ligne sans sequence, et ses doublons comptes deux fois."""
+    rows = [
+        {"seq": 0, "time": "4ms743us", "sent": 1, "received": 1},
+        {"seq": 0, "time": "4ms770us", "sent": 1, "received": 2},
+        {"seq": 1, "time": "1ms511us", "sent": 2, "received": 3},
+        {"seq": 1, "time": "1ms535us", "sent": 2, "received": 4},
+        {"seq": 2, "time": "2ms445us", "sent": 3, "received": 5},
+    ]
+    stats = ping_stats_from_rows(rows, 5)
+    assert (stats.sent, stats.received, stats.loss_pct) == (3, 3, 0.0)
+    assert stats.median_ms == pytest.approx(2.445)
