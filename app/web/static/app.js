@@ -3644,7 +3644,7 @@ const API_ENDPOINTS = [
   ['PATCH', '/api/v1/pops/routers/{id}', 'Edit a router'],
   ['GET', '/api/v1/pops/provisioning/{name}', 'Progress of a new router\'s setup'],
   ['PUT', '/api/v1/plans/{login}', 'Set the plan of a client (written to the router at once)'],
-  ['DELETE', '/api/v1/plans/{login}', 'Back to the default plan'],
+  ['DELETE', '/api/v1/plans/{login}', 'Remove the plan: the client is no longer throttled'],
   ['PUT', '/api/v1/shaping/policies', 'Force a limit (client or link), above its plan'],
   ['POST', '/api/v1/shaping/boosts', 'Temporary boost'],
   ['POST', '/api/v1/plans/refresh', 'Re-apply every plan now'],
@@ -9369,7 +9369,7 @@ function renderPlanClients() {
         '<td class="nowrap"><button class="sm" data-plan-edit="' + esc(c.login) + '">Change</button>' +
           (c.origin !== 'default' || force
             ? ' <button class="sm" data-plan-reset="' + esc(c.login) + '"' +
-              (force ? ' title="Lift the forced limit and go back to the default plan"' : '') +
+              (force ? ' title="Lift the forced limit and remove the plan: the client is observed, not throttled"' : '') +
               '>Default</button>' : '') +
         '</td></tr>';
       if (!edition) return ligne;
@@ -9717,7 +9717,7 @@ document.getElementById('plans-default-form').addEventListener('submit', async (
     }
     const r = await api('/plans/refresh', { method: 'POST' }).catch(() => ({ ok: false }));
     res.innerHTML = r.ok
-      ? '<div class="notice ok">Default plan saved and applied to every client without a plan.</div>'
+      ? '<div class="notice ok">Default plan saved and applied to the clients pushed without a rate.</div>'
       : '<div class="notice warn">Default plan saved. It reaches the routers at the next cycle ' +
         '(a few minutes).</div>';
   } catch (err) {
@@ -10263,8 +10263,8 @@ const AIDE = {
     a: 'Use Devices › Reset queues on that router to rebuild its freeQoS queues from scratch.',
   },
   'default plan': {
-    t: 'The limit given to every client that has no plan of its own (none pushed by the API, none set by hand).',
-    r: '0 = no limit. Changing it re-writes the queues of all clients that use it at the next reconciliation.',
+    t: 'The limit given to a client pushed by the API (or entered) without a rate. A client only DETECTED on a router, with no plan pushed, is observed and never throttled.',
+    r: '0 = no limit. To also cap detected clients, turn on default_plan_for_detected_clients in Settings. Changing it re-writes the queues of the clients that use it.',
   },
   'clients': {
     t: 'Each client and the plan applied to it, with where that plan comes from.',
