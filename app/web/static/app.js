@@ -2002,8 +2002,7 @@ async function ouvrirMilieu(h) {
       '<span><b>Automatic</b> (recommended)<span class="hint">Detected by itself: a link towards a radio ' +
       '(or a radio port) is radio and follows the antenna recognised at its end; the rest is wired.</span></span></label>' +
     '<label class="medium-opt"><input type="radio" name="medium" value="wired"' + (actuel.medium === 'wired' ? ' checked' : '') + '>' +
-      '<span><b>Wired</b> (fibre, copper) <span class="hint">Fixed capacity, nothing to poll — like ' +
-      'Preseem or LibreQoS.</span>' +
+      '<span><b>Wired</b> (fibre, copper) <span class="hint">Fixed capacity, nothing to poll.</span>' +
       '<span class="medium-sub">Capacity <input type="number" name="capacity" min="1" step="any" ' +
         'placeholder="port speed' + (h.port_speed_mbps ? ' (' + esc(mbps(h.port_speed_mbps)) + ')' : '') + '" value="' +
         esc(actuel.capacity_mbps || '') + '"> Mbps</span></span></label>' +
@@ -3549,8 +3548,12 @@ async function declareExporter(event) {
 
 /** Les points d'entree que cette application expose, et la cle pour y entrer.
  *
- *  Le contrat est celui de Preseem : un integrateur qui parlait deja a Preseem
+ *  Les exemples montrent une adresse GENERIQUE (BASE_API) : jamais l'IP du
+ *  serveur, qui n'a rien a faire dans une capture d'ecran ou une doc partagee.
+ *  (Le contrat reste compatible : un integrateur qui parlait deja a Preseem
  *  change l'URL de base et la cle, rien d'autre. */
+const BASE_API = 'https://<your-freeqos-server>';
+
 const API_ENDPOINTS = [
   ['PUT', '/model/v1/accounts/{id}', 'Customer'],
   ['PUT', '/model/v1/packages/{id}', 'Package'],
@@ -3574,7 +3577,7 @@ const API_ENDPOINTS = [
 ];
 
 async function loadApi() {
-  document.getElementById('api-base').textContent = location.origin;
+  document.getElementById('api-base').textContent = 'Base URL: ' + BASE_API;
   document.getElementById('api-endpoints').innerHTML =
     '<table><thead><tr><th>Method</th><th>Path</th><th>Object</th></tr></thead><tbody>' +
     API_ENDPOINTS.map(([verbe, chemin, objet]) =>
@@ -3582,21 +3585,24 @@ async function loadApi() {
       '<td class="login">' + esc(chemin) + '</td>' +
       '<td>' + esc(objet) + '</td></tr>').join('') +
     '</tbody></table>';
-  // MEMES APPELS QUE PRESEEM : seule l'URL de base et la cle changent.
+  const B = BASE_API;
   document.getElementById('api-sample').textContent =
-    '# Preseem-compatible: replace api.preseem.com/model/v1/\n' +
-    '# with ' + location.origin + '/model/v1/ and use a freeQoS key.\n\n' +
-    'curl -u <key>: -X PUT ' + location.origin + '/model/v1/services/abo-42 \\\n' +
+    '# Replace ' + B + ' with the address of your freeQoS server,\n' +
+    '# and <key> with a key created above.\n\n' +
+    '# Declare a client (static IP), with its rate in kbit/s:\n' +
+    'curl -u <key>: -X PUT ' + B + '/model/v1/services/abo-42 \\\n' +
     "  -H 'content-type: application/json' \\\n" +
     '  -d \'{"id":"abo-42","account":"cli-7","package":"fibre-100",' +
     '"parent_device_id":"sect-n1","down_speed":100000,"up_speed":20000,' +
     '"attachments":[{"cpe_mac":"00:10:0b:6e:4c:ff","network_prefixes":["10.20.0.10"]}]}\'\n\n' +
-    'curl -u <key>: \'' + location.origin + '/model/v1/services?page=1&limit=500\'   # -> {"data": [...]}\n\n' +
-    '# Operating API, same key ("Read and write" to change anything):\n' +
-    'curl -H \'Authorization: Bearer <key>\' -X POST ' + location.origin + '/api/v1/pops/routers \\\n' +
+    '# List the clients:\n' +
+    'curl -u <key>: \'' + B + '/model/v1/services?page=1&limit=500\'   # -> {"data": [...]}\n\n' +
+    '# Add a router (set up by itself):\n' +
+    'curl -H \'Authorization: Bearer <key>\' -X POST ' + B + '/api/v1/pops/routers \\\n' +
     "  -H 'content-type: application/json' \\\n" +
-    '  -d \'{"name":"nas-north","host":"10.0.0.2","username":"qos","password":"…","role":"pop","pop_name":"North"}\'\n\n' +
-    'curl -H \'Authorization: Bearer <key>\' -X PUT ' + location.origin + '/api/v1/plans/dupont \\\n' +
+    '  -d \'{"name":"nas-north","host":"<router-address>","username":"qos","password":"…","role":"pop","pop_name":"North"}\'\n\n' +
+    '# Set the plan of a PPPoE client (Mbit/s):\n' +
+    'curl -H \'Authorization: Bearer <key>\' -X PUT ' + B + '/api/v1/plans/<login> \\\n' +
     "  -H 'content-type: application/json' -d '{\"down_mbps\":100,\"up_mbps\":20}'";
   await loadApiKeys();
   const lignes = document.querySelectorAll('#keys-table tbody tr').length;
@@ -3679,7 +3685,7 @@ async function createApiKey(event) {
       'be shown again.</strong>' +
       '<pre style="user-select:all;white-space:pre-wrap;word-break:break-all">' +
       esc(cle.secret) + '</pre>' +
-      '<code>curl -u ' + esc(cle.secret) + ': ' + esc(location.origin) +
+      '<code>curl -u ' + esc(cle.secret) + ': ' + esc(BASE_API) +
       '/model/v1/services</code></div>';
     document.getElementById('key-form').reset();
     await loadApiKeys();
@@ -10237,7 +10243,10 @@ const AIDE = {
     t: 'Create a key for an external system (billing, CRM) to call the public API.',
     r: 'The key is shown once — copy it then. “read” gives GET; “write” adds PUT and DELETE. Give each system its own key so you can revoke one without breaking the others.',
   },
-  'endpoints': 'The public API routes, compatible with the Preseem contract: a billing system that talked to Preseem only changes the base URL and the key.',
+  'endpoints': {
+    t: 'The routes an external application (billing, CRM, provisioning) calls with a key.',
+    r: '/model/v1 and /usage/v1: clients, packages, sites, sectors and usage. /api/v1: everything the interface does — routers, plans, forced limits, boosts.',
+  },
   'example': 'A ready-to-run call with curl. The key goes in Basic authentication as the username, with an empty password.',
   'accounts': 'Who can log in to this interface, your own password and sessions, and (for edit accounts) the journal of logins.',
   'operational settings': {
