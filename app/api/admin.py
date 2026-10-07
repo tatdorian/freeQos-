@@ -33,7 +33,16 @@ async def rtt_state(container: ContainerDep, collection: CollectionDep) -> dict[
         "env_default": container.settings.rtt_enabled,
         "interval_s": container.settings.rtt_interval_s,
         "batch_size": container.settings.rtt_batch_size,
+        # Pings marques EF : prioritaires dans la file CAKE d'un client au
+        # plafond -- sa latence n'est alors plus mise a l'ecart.
+        "probe_prioritized": _probe_prioritized(),
     }
+
+
+def _probe_prioritized() -> bool:
+    from app.collectors import mikrotik
+
+    return mikrotik.PROBE_DSCP is not None
 
 
 @router.get("/rtt/diagnose", summary="Run the latency probe by hand, with and without source")
