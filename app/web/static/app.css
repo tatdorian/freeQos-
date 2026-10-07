@@ -1380,3 +1380,13 @@ button.danger.is-busy::after { border-top-color: var(--crit); }
 /* Point de vue d'un exporteur, modifiable sur place. */
 select.exp-mode { width: auto; min-width: 12rem; padding: .3rem .55rem; font-size: .82rem; }
 select.exp-mode.warn { color: var(--warn); }
+
+/* Onglet API : renvoi vers le guide complet. */
+.api-doc { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+.api-doc p { margin: .3rem 0 0; max-width: 70ch; }
+a.button {
+  display: inline-block; padding: .55rem 1rem; border-radius: 10px; font-weight: 600;
+  text-decoration: none; white-space: nowrap;
+}
+a.button.primary { background: var(--accent); color: #fff; }
+a.button.primary:hover { background: var(--accent-hover); text-decoration: none; }
