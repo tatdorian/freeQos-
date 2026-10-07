@@ -203,6 +203,18 @@ passe) : il a les droits d'**édition**. Ensuite, toute l'interface exige une co
 > docker compose exec timescaledb psql -U qos -d qos -c "TRUNCATE app_users CASCADE"
 > ```
 
+### Sauvegarder (à faire régulièrement)
+
+```bash
+make backup                              # -> backups/<date>/base.dump + secret.key
+make restore DIR=backups/<date>          # remet la base ET la clé
+```
+
+`secret.key` (volume `qosdata`, fichier `/app/data/secret.key`) chiffre les mots de passe
+des routeurs et des antennes : **sans elle, une base restaurée est inutilisable**. Copiez
+chaque sauvegarde hors du serveur. Exemple de tâche quotidienne :
+`0 3 * * * cd /opt/freeqos && make backup >/dev/null`.
+
 ### Mettre à jour, nettoyer, repartir de zéro
 
 Quatre gestes, du plus doux au plus radical. Prenez le premier qui suffit.
@@ -1835,6 +1847,29 @@ Conséquences concrètes :
 - Aucune route ne « promeut » un candidat. Déclarer passe par `POST /api/v1/static-clients`.
 
 ---
+
+## Piloter freeQoS depuis une autre application (clé d'API)
+
+Toute l'API de pilotage (`/api/v1/...`, celle qu'utilise l'interface) accepte une **clé
+d'API** à la place d'une session : `Authorization: Bearer <clé>`, Basic (`-u <clé>:`) ou
+`X-API-Key`. Portée **Read** = lecture seule ; **Read and write** = tout ce qu'un compte
+d'édition fait. La gestion des comptes et des clés reste réservée aux personnes connectées.
+
+| Geste | Appel |
+|---|---|
+| Ajouter un routeur (mis en service seul : CAKE, files, NetFlow) | `POST /api/v1/pops/routers` |
+| Suivre sa mise en service | `GET /api/v1/pops/provisioning/{nom}` |
+| Donner un forfait à un client (écrit sur le routeur aussitôt) | `PUT /api/v1/plans/{login}` `{"down_mbps":100,"up_mbps":20}` |
+| Remettre le forfait par défaut | `DELETE /api/v1/plans/{login}` |
+| Forcer une limite au-dessus du forfait | `PUT /api/v1/shaping/policies` `{"scope":"subscriber","target_key":"<login>","max_down_mbps":5,"max_up_mbps":1}` |
+| Boost temporaire | `POST /api/v1/shaping/boosts` |
+| Client à IP fixe, format Preseem | `PUT /model/v1/services/{id}` |
+
+Ce parcours complet — clé, nouveau routeur, mise en service, forfait, changement, limite
+forcée, retour au défaut, service Preseem posé puis retiré — est rejoué à chaque
+intégration continue contre la vraie application et une vraie base
+(`tests/test_bout_en_bout_api_externe.py`) : chaque assertion porte sur ce qui se trouve
+**sur le routeur** à la fin, pas sur la réponse de l'API.
 
 ## API publique : remplacer Preseem sans réécrire l'intégration
 
