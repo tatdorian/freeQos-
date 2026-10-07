@@ -114,6 +114,7 @@ async def rtt_diagnose(
         "address": address,
         "loopback": source,
         "routing_table": table_client or "main",
+        "route_candidates": await collecteur.client_route_candidates(address),
         "probe_skips_loopback": bool(getattr(collecteur, "_ping_sans_source", False)),
         "probe_slow_rate": bool(getattr(collecteur, "_ping_lent", False)),
         "attempts": essais,
