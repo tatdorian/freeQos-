@@ -266,3 +266,60 @@ async def test_des_reponses_plus_lentes_que_l_intervalle_font_passer_au_rythme_l
     lent.ping_intervals.clear()
     await collecteur.ping_stats("10.0.0.9", 5, interval_ms=200)
     assert lent.ping_intervals == [None]
+
+
+ROUTES_VRF = [
+    {"dst-address": "0.0.0.0/0", "routing-table": "main", "gateway": "100.100.101.113"},
+    {"dst-address": "0.0.0.0/0", "routing-table": "CUST-INET", "gateway": "10.255.255.1"},
+    {
+        "dst-address": "172.16.35.253/32",
+        "routing-table": "CUST-INET",
+        "gateway": "<pppoe-test-fp>@CUST-INET",
+        "connect": "true",
+        "active": "true",
+        "dynamic": "true",
+    },
+]
+
+
+async def test_le_client_d_une_vrf_est_pingue_dans_sa_vrf() -> None:
+    """CONSTATE EN LAB : la session PPPoE vit dans la VRF CUST-INET. Sans la
+    table, le ping partait par main, faisait le tour par le coeur : 900 ms."""
+    client = FakeRouterOsClient()
+    client.route_rows = list(ROUTES_VRF)
+    collecteur = make_collector(client)
+    await collecteur.ping_stats("172.16.35.253", 5, interval_ms=200)
+    assert client.ping_tables[-1] == ("CUST-INET", "vrf")
+    # Le loopback (table main) n'est pas employe dans la VRF.
+    assert client.ping_sources[-1] is None
+
+
+async def test_un_client_de_la_table_main_reste_pingue_sans_table() -> None:
+    client = FakeRouterOsClient()
+    client.route_rows = list(ROUTES_VRF)
+    collecteur = make_collector(client)
+    await collecteur.ping_stats("10.20.0.10", 5, interval_ms=200)
+    assert client.ping_tables[-1] is None
+
+
+async def test_routeur_qui_refuse_vrf_essaie_routing_table() -> None:
+    class SansVrf(FakeRouterOsClient):
+        def ping(
+            self,
+            address,
+            count=1,
+            src_address=None,
+            interval=None,
+            routing_table=None,
+            table_param="vrf",
+        ):  # type: ignore[no-untyped-def]
+            if routing_table and table_param == "vrf":
+                raise RuntimeError("unknown parameter vrf")
+            return super().ping(address, count, src_address, interval, routing_table, table_param)
+
+    client = SansVrf()
+    client.route_rows = list(ROUTES_VRF)
+    collecteur = make_collector(client)
+    stats = await collecteur.ping_stats("172.16.35.253", 5, interval_ms=200)
+    assert stats.received == 5
+    assert client.ping_tables[-1] == ("CUST-INET", "routing-table")
