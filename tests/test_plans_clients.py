@@ -26,8 +26,15 @@ class Depot:
 REGLAGES = SimpleNamespace(default_plan_down_mbps=100.0, default_plan_up_mbps=20.0)
 
 
-async def test_un_nouveau_client_recoit_le_plan_par_defaut() -> None:
+async def test_un_client_seulement_detecte_n_a_pas_de_plan_invente() -> None:
+    """Ajouter un routeur ne bride que les clients dont le forfait a ete pousse."""
     plans = await ClientPlanProvider(Depot({}), REGLAGES).get_plans(["nouveau"])
+    assert "nouveau" not in plans
+
+
+async def test_le_defaut_pour_les_detectes_reste_possible() -> None:
+    reglages = SimpleNamespace(default_plan_for_detected_clients=True, **vars(REGLAGES))
+    plans = await ClientPlanProvider(Depot({}), reglages).get_plans(["nouveau"])
     assert (plans["nouveau"].down_mbps, plans["nouveau"].up_mbps) == (100.0, 20.0)
     assert plans["nouveau"].source == "default"
 

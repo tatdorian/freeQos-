@@ -2265,7 +2265,10 @@ class ShapingService:
             ligne["state"] = self.ETAT_CONFLIT
             ligne["reason"] = conflit.detail
             return ligne
-        if ecarte is not None:
+        a_retirer = any(
+            action.verb == "remove" and action.name == queue_name for action in restreint.actions
+        )
+        if ecarte is not None and not a_retirer:
             # Le motif vient du planificateur lui-meme : "aucun debit a
             # appliquer", "adresse revendiquee aussi par...". C'est la reponse
             # exacte a "pourquoi ce client n'a pas de file", et elle est rendue
@@ -2305,9 +2308,7 @@ class ShapingService:
         # 'set' vers ce debit-la. Annoncer "file retiree" parce qu'on a demande
         # un plan avec purge laisserait croire l'abonne sans plafond alors qu'il
         # vient d'en recevoir un autre.
-        retiree = any(
-            action.verb == "remove" and action.name == queue_name for action in restreint.actions
-        )
+        retiree = a_retirer
         ligne["state"] = self.ETAT_RETIREE if retiree else self.ETAT_POSEE
         ligne["reason"] = (
             "queue removed from the router" if retiree else f"{resultat.applied} command(s) applied"

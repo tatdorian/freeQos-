@@ -227,7 +227,7 @@ async def set_plan(
     }
 
 
-@router.delete("/plans/{login}", summary="Put a client back on the default plan")
+@router.delete("/plans/{login}", summary="Remove a client's plan (observed, not throttled)")
 async def reset_plan(login: str, container: ContainerDep, user: UserDep) -> dict[str, Any]:
     client = await _client(container, login)
     _depot, plans = _repos(container)

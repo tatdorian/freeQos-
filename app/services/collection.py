@@ -976,7 +976,17 @@ class CollectionService:
             logins = await self.directory.list_subscriber_logins(kind=KIND_PPPOE)
             self._known_logins.update(logins)
             if logins:
-                plans = await self.plan_provider.get_plans(list(logins))
+                plans: dict[str, Any] = dict(await self.plan_provider.get_plans(list(logins)))
+                # Avec les forfaits de freeQoS lui-meme (base locale, toujours
+                # joignable), un client SANS forfait est vide de l'ancien : sinon
+                # le debit par defaut d'avant, ou un forfait retire, resterait
+                # applique pour toujours. Un fournisseur EXTERNE (RADIUS) qui ne
+                # rend rien peut etre en panne : on ne vide rien sur son silence.
+                from app.services.plans import SANS_PLAN, ClientPlanProvider
+
+                if isinstance(self.plan_provider, ClientPlanProvider):
+                    for login in logins:
+                        plans.setdefault(login, SANS_PLAN)
                 updated = await self.directory.update_plans(
                     {logins[login]: plan for login, plan in plans.items() if login in logins}
                 )

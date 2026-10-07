@@ -5,8 +5,11 @@ n'a pas de plan, il a une capacite. Trois sources, par ordre :
 
 1. le plan ecrit pour ce client (``client_plans``) -- pousse par l'API
    Preseem ou saisi dans la page Plans ; le dernier ecrit gagne ;
-2. a defaut, le plan par defaut (DEFAULT_PLAN_DOWN/UP_MBPS), le meme pour
-   tout nouveau client detecte.
+2. un client pousse SANS debit prend le plan par defaut
+   (DEFAULT_PLAN_DOWN/UP_MBPS) ;
+3. un client seulement DETECTE (rien n'a ete pousse pour lui) n'a PAS de plan :
+   il est observe, jamais bride a un debit que personne n'a vendu -- sauf si
+   DEFAULT_PLAN_FOR_DETECTED_CLIENTS le demande.
 
 Remplace l'ancien fournisseur de demonstration, qui INVENTAIT un plan par login
 (500/100, 100/20...) -- d'ou des plans affiches que personne n'avait vendus.
@@ -22,6 +25,10 @@ from app.models import Plan
 SOURCE_API = "api"
 SOURCE_UI = "ui"
 SOURCE_DEFAUT = "default"
+#: Plus aucun forfait pour ce client (retire, ou jamais pousse) : sa fiche est
+#: videe, sinon l'ancien debit continuerait d'etre applique pour toujours.
+SOURCE_AUCUN = "none"
+SANS_PLAN = Plan(down_mbps=None, up_mbps=None, source=SOURCE_AUCUN)
 
 
 def default_plan(settings: Any) -> Plan | None:
@@ -57,7 +64,11 @@ class ClientPlanProvider:
 
     async def get_plans(self, logins: Sequence[str]) -> dict[str, Plan]:
         lignes = await self.repository.get_many(list(logins)) if self.repository else {}
-        defaut = default_plan(self.settings)
+        defaut = (
+            default_plan(self.settings)
+            if getattr(self.settings, "default_plan_for_detected_clients", False)
+            else None
+        )
         sortie: dict[str, Plan] = {}
         for login in logins:
             ligne = lignes.get(login)
@@ -74,14 +85,18 @@ async def apply_now(container: Any, login: str, *, author: str) -> dict[str, Any
     """Le nouveau plan d'un client s'applique TOUT DE SUITE : fiche et file."""
     fournisseur = getattr(container, "plan_provider", None)
     directory = getattr(container, "directory", None)
+    retire = False
     if fournisseur is not None and directory is not None:
         plan = await fournisseur.get_plan(login)
         ids = await directory.list_subscriber_logins()
-        if plan is not None and login in ids:
-            await directory.update_plans({ids[login]: plan})
+        if login in ids:
+            await directory.update_plans({ids[login]: plan or SANS_PLAN})
+        # Plus de forfait : sa file part avec lui, tout de suite -- sinon
+        # l'ancien debit resterait pose jusqu'au menage suivant.
+        retire = plan is None
     try:
         rapport: dict[str, Any] = await container.shaping.enforce_subscriber(
-            login=login, author=author
+            login=login, author=author, removing=retire
         )
         return rapport
     except Exception as exc:  # noqa: BLE001 - le plan est enregistre quoi qu'il arrive
