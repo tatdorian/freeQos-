@@ -1376,3 +1376,7 @@ button.danger.is-busy::after { border-top-color: var(--crit); }
 .medium-sub select { width: auto; max-width: 100%; }
 .medium-opt:not(:has(input:checked)) .medium-sub { display: none; }
 .medium-form .actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: .2rem; }
+
+/* Point de vue d'un exporteur, modifiable sur place. */
+select.exp-mode { width: auto; min-width: 12rem; padding: .3rem .55rem; font-size: .82rem; }
+select.exp-mode.warn { color: var(--warn); }

@@ -181,12 +181,26 @@ async def update_exporter(
     payload: ExporterUpdate,
     container: ContainerDep,
 ) -> dict[str, Any]:
+    """Un point de vue choisi a la main n'est plus jamais recalcule ; remettre
+    'unknown' rend l'exporteur a la reconnaissance automatique, aussitot."""
+    from app.services.netflow_service import NOTE_MAIN
+
     champs = payload.model_dump(exclude_unset=True, exclude_none=True)
+    automatique = champs.get("vantage") == "unknown"
+    if "vantage" in champs and "note" not in champs:
+        champs["note"] = "" if automatique else NOTE_MAIN
+    # En bordure (ou rendu a l'automatique), un exporteur n'appartient a aucun PoP.
+    if automatique or champs.get("vantage") == "edge":
+        champs["pop_name"] = None
     try:
         fiche = await _exporters(container).update(exporter_id, champs)
     except ExporterNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    await _service(container).refresh_exporters()
+    service = _service(container)
+    if automatique:
+        await service.auto_declare_exporters()
+        fiche = await _exporters(container).get(exporter_id)
+    await service.refresh_exporters()
     return dict(fiche)
 
 
