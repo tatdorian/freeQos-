@@ -797,7 +797,7 @@ function rttVide(detail) {
   if (detail && Number(detail.sent) > 0 && !Number(detail.received)) {
     return sondeMuette()
       ? ['probe silent', 'warn', 'No client answers the probe at all: the probe is at fault, not ' +
-        'the clients. Check the router can ping its clients (firewall, source address).']
+        'the clients. Executive > « Find the cause » tells why.']
       : ['no reply', 'crit', SANS_REPONSE];
   }
   return ['-', 'none', 'No latency measured in the last 5 minutes: latency probe off ' +
@@ -1789,7 +1789,7 @@ function renderExecSummary(host) {
   if (notes.poor) faits.push(['crit', notes.poor + ' client(s) with a poor experience']);
   if (sondeMuette()) {
     faits.push(['warn', 'The latency probe gets no reply from any client: the probe is at fault, ' +
-      'not the clients (check the routers can ping their clients)']);
+      'not the clients. <button type="button" class="sm" data-rtt-diag>Find the cause</button>']);
   }
   // "Tout va bien" ne peut pas s'afficher quand la majorite des clients notes
   // n'a qu'une experience moyenne : la tuile d'a cote disait "0 % good".
@@ -3486,6 +3486,30 @@ document.addEventListener('click', (e) => {
   if (!(e.target.closest && e.target.closest('[data-open-exporters]'))) return;
   const bloc = document.getElementById('flow-exporters-block');
   if (bloc) { bloc.open = true; bloc.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+});
+
+/** « Probe silent » : le controleur rejoue la sonde sur un client muet, pingue
+ *  la passerelle du routeur en controle, lit son pare-feu, et rend la cause. */
+document.addEventListener('click', async (e) => {
+  const bouton = e.target.closest && e.target.closest('[data-rtt-diag]');
+  if (!bouton) return;
+  bouton.disabled = true;
+  bouton.textContent = 'Testing…';
+  try {
+    const d = await api('/rtt/diagnose');
+    const regles = (d.firewall_suspects || []).map((r) => '#' + r.position + ' ' + r.chain + ' ' +
+      r.action + ' ' + r.protocol + (r.comment ? ' (' + r.comment + ')' : ''));
+    toast('<b>Latency probe: ' + esc(d.router) + ' → ' + esc(d.address) + '</b><br>' +
+      esc(d.verdict.message) +
+      (d.control ? '<br><small>Control ping to gateway ' + esc(d.control.address) + ': ' +
+        (d.control.stats && d.control.stats.received ? 'answers' : 'no reply') + '</small>' : '') +
+      (regles.length ? '<br><small>Rules: ' + esc(regles.join(' · ')) + '</small>' : ''), 60000);
+  } catch (err) {
+    toast('<b>Diagnosis failed.</b> ' + esc(err.message || String(err)), 15000);
+  } finally {
+    bouton.disabled = false;
+    bouton.textContent = 'Find the cause';
+  }
 });
 
 /** Menu du point de vue d'un exporteur. "Automatic" montre ce qu'il a deduit. */
