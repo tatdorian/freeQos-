@@ -381,3 +381,40 @@ async def test_un_routeur_qui_refuse_dscp_sonde_sans_marquage() -> None:
     await collecteur.ping_stats("10.0.0.9", 5, interval_ms=200)
     # Retenu : plus d'essai avec dscp sur ce routeur.
     assert client.ping_dscp == [None]
+
+
+async def test_a_egalite_une_route_main_vers_le_coeur_est_un_detour(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Le bloc public de Nestle a AUSSI une route dans main, meme longueur,
+    vers la passerelle amont (le reste du reseau doit le joindre) : c'est un
+    detour, le client vit dans la VRF."""
+    import app.collectors.mikrotik as mk
+
+    monkeypatch.setattr(mk, "_AMONTS", {"pop": ("100.100.101.113", "ether1")})
+    client = FakeRouterOsClient()
+    client.route_rows = [
+        {"dst-address": "154.66.223.216/29", "routing-table": "main", "gateway": "100.100.101.113"},
+        {"dst-address": "154.66.223.216/29", "routing-table": "CUST-INET", "gateway": "10.60.0.2"},
+    ]
+    collecteur = make_collector(client, name="pop")
+    assert await collecteur.client_routing_table("154.66.223.217") == "CUST-INET"
+    candidats = await collecteur.client_route_candidates("154.66.223.217")
+    assert {c["table"] for c in candidats} == {"main", "CUST-INET"}
+
+
+async def test_a_egalite_la_route_connectee_l_emporte() -> None:
+    client = FakeRouterOsClient()
+    client.route_rows = [
+        {
+            "dst-address": "154.66.223.216/29",
+            "routing-table": "CUST-INET",
+            "gateway": "10.255.255.1",
+        },
+        {
+            "dst-address": "154.66.223.216/29",
+            "routing-table": "CUST-INET-2",
+            "gateway": "vlan2060@CUST-INET-2",
+            "connect": "true",
+        },
+    ]
+    collecteur = make_collector(client)
+    assert await collecteur.client_routing_table("154.66.223.217") == "CUST-INET-2"
