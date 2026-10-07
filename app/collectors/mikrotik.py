@@ -144,6 +144,7 @@ class RouterOsReadClient(Protocol):
         interval: str | None = None,
         routing_table: str | None = None,
         table_param: str = "vrf",
+        dscp: int | None = None,
     ) -> list[dict[str, Any]]: ...
 
     # --- Topologie et etat du shaping (lecture seule) ---
@@ -616,6 +617,7 @@ class LibrouterosReadClient:
         interval: str | None = None,
         routing_table: str | None = None,
         table_param: str = "vrf",
+        dscp: int | None = None,
     ) -> list[dict[str, Any]]:
         """Sonde active depuis le routeur vers l'abonne.
 
@@ -634,6 +636,8 @@ class LibrouterosReadClient:
             # La VRF (ou table) ou vit la route du client : sans elle, le ping
             # part par la table main et fait le tour par l'amont.
             options[table_param] = routing_table
+        if dscp is not None:
+            options["dscp"] = dscp
         with self._lock:
             try:
                 api = self._ensure()
@@ -742,6 +746,11 @@ def _split_pair(value: Any) -> tuple[int | None, int | None] | None:
 _LOOPBACKS_DETECTES: dict[str, str] = {}
 #: Taille de la serie quand un routeur doit sonder au rythme du terminal (1/s).
 PING_LENT_COUNT = 3
+#: DSCP des pings de la sonde : 46 (EF, voix). Une file CAKE (diffserv3/4) les
+#: range dans sa classe prioritaire, devant le telechargement du client : la
+#: mesure donne la latence de la LIGNE, pas l'attente derriere un transfert.
+#: None = pas de marquage (RTT_PROBE_DSCP=-1).
+PROBE_DSCP: int | None = 46
 #: Delai entre deux essais a ce rythme sur un meme routeur qui n'en a pas besoin.
 PING_LENT_REESSAI_S = 600.0
 #: Derniere recherche infructueuse, par routeur (horloge monotone) : un routeur
@@ -1425,19 +1434,44 @@ class MikrotikCollector:
         interval: str | None,
         table: str | None,
     ) -> list[dict[str, Any]]:
-        """``/ping`` dans la table du client. RouterOS 7 nomme le parametre
-        ``vrf`` pour une VRF, ``routing-table`` pour une simple table : on
-        essaie le premier, et on retient celui que ce routeur accepte."""
-        if not table:
-            return self._sonde.ping(address, count, src, interval)
+        """``/ping`` dans la table du client, marque en priorite (DSCP).
+
+        RouterOS 7 nomme le parametre ``vrf`` pour une VRF, ``routing-table``
+        pour une simple table : on essaie le premier et on retient celui que
+        ce routeur accepte. Meme chose pour ``dscp`` : un routeur qui le refuse
+        sonde sans marquage, plutot que de ne plus sonder du tout.
+        """
+        dscp = None if getattr(self, "_ping_sans_dscp", False) else PROBE_DSCP
         param = getattr(self, "_ping_table_param", "vrf")
-        try:
-            return self._sonde.ping(address, count, src, interval, table, param)
-        except Exception:
-            autre = "routing-table" if param == "vrf" else "vrf"
-            lignes = self._sonde.ping(address, count, src, interval, table, autre)
-            self._ping_table_param = autre
+        autre = "routing-table" if param == "vrf" else "vrf"
+        essais: list[tuple[str, int | None]] = [(param, dscp)]
+        if dscp is not None:
+            essais.append((param, None))
+        if table:
+            essais += [(autre, dscp), (autre, None)] if dscp is not None else [(autre, None)]
+        erreur: Exception | None = None
+        for nom_table, marque in essais:
+            try:
+                if table and marque is not None:
+                    lignes = self._sonde.ping(
+                        address, count, src, interval, table, nom_table, dscp=marque
+                    )
+                elif table:
+                    lignes = self._sonde.ping(address, count, src, interval, table, nom_table)
+                elif marque is not None:
+                    lignes = self._sonde.ping(address, count, src, interval, dscp=marque)
+                else:
+                    lignes = self._sonde.ping(address, count, src, interval)
+            except Exception as exc:  # noqa: BLE001 - essai suivant
+                erreur = exc
+                continue
+            if table:
+                self._ping_table_param = nom_table
+            if dscp is not None and marque is None:
+                self._ping_sans_dscp = True
             return lignes
+        assert erreur is not None
+        raise erreur
 
     async def client_routing_table(self, address: str) -> str | None:
         """La table de routage (VRF) qui porte la route la plus precise du client.

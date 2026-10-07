@@ -443,6 +443,9 @@ class Settings(BaseSettings):
     rtt_enabled: bool = True
     rtt_interval_s: float = 30.0
     rtt_batch_size: int = 20
+    # DSCP des pings de la sonde (46 = EF, priorite voix) : une file CAKE les
+    # fait passer devant le trafic du client. -1 = pas de marquage.
+    rtt_probe_dscp: int = 46
     # Cinq paquets par mesure, espaces de 200 ms : assez pour une mediane, une
     # gigue et une perte fiables, sans occuper le routeur plus d'une seconde
     # par abonne. Deux paquets dont on gardait le meilleur ne mesuraient que le
