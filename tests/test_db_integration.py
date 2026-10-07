@@ -4076,3 +4076,42 @@ async def test_nature_des_liens_en_base(database: Database) -> None:
     # La meilleure capacite vue par antenne (reference sans nominale declaree).
     maxima = await MetricsRepository(database.pool).backhaul_capacity_max(hours=24)
     assert isinstance(maxima, dict)
+
+
+async def test_effacer_les_latences_garde_les_debits(database: Database) -> None:
+    """Apres une correction de la sonde : la latence repart de zero, pas le
+    trafic. Mesure en lab : 900 ms de detour hors VRF restaient affiches."""
+    repo = MetricsRepository(database.pool)
+    directory = PgDirectory(database.pool)
+    sid = await directory.ensure_subscriber("reset", plan=None)
+    maintenant = datetime.now(tz=UTC)
+    await PgMetricsWriter(database.pool).write_subscriber_metrics(
+        [
+            (
+                sid,
+                SubscriberSample(
+                    ts=maintenant - timedelta(minutes=i),
+                    login="reset",
+                    router_name="r",
+                    pop_name="p",
+                    address="10.20.0.9",
+                    uptime_s=1,
+                    rx_bytes=0,
+                    tx_bytes=0,
+                    rx_bps=1000.0,
+                    tx_bps=2000.0,
+                    rtt_ms=900.0,
+                ),
+            )
+            for i in range(3)
+        ]
+    )
+    bilan = await repo.reset_latency_history(hours=48)
+    assert bilan["latency_samples_cleared"] == 3
+    assert not [x for x in await repo.latency_by_subscriber(minutes=60) if x["login"] == "reset"]
+    async with database.pool.acquire() as conn:
+        debits = await conn.fetchval(
+            "SELECT count(*) FROM subscriber_metrics WHERE subscriber_id = $1 AND tx_bps = 2000",
+            sid,
+        )
+    assert debits == 3

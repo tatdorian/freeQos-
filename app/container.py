@@ -351,6 +351,7 @@ async def build_container(settings: Settings) -> Container:
     # Amorce le drapeau de la sonde RTT : la base fait foi une fois posee, sinon
     # on l'y ecrit depuis RTT_ENABLED. Ensuite, l'interface le bascule a chaud.
     await _bootstrap_rtt_flag(collection, topology_repo, settings)
+    await _reset_latency_measured_wrong(repository, topology_repo)
 
     async def discover_topology() -> None:
         """Decouverte periodique du graphe.
@@ -707,6 +708,35 @@ async def build_container(settings: Settings) -> Container:
     except Exception:  # noqa: BLE001 - le menage ne bloque jamais le demarrage
         logger.exception("Menage des routeurs retires impossible")
     return conteneur
+
+
+#: Pose une fois les latences mesurees avec l'ancienne methode effacees.
+FLAG_RTT_METHODE = "rtt_method_vrf_v1"
+
+
+async def _reset_latency_measured_wrong(repository: Any, topology_repo: Any) -> None:
+    """UNE SEULE FOIS : efface les latences prises avant la sonde par VRF.
+
+    Avant, un client vivant dans une VRF (CUST-INET) etait pingue par la table
+    main : 900 ms de detour par le coeur, que la mediane sur l'heure et les
+    scores continuaient d'afficher apres la correction. Un drapeau en base
+    garantit que ce menage n'a lieu qu'au premier demarrage de cette version.
+    """
+    if topology_repo is None or repository is None:
+        return
+    try:
+        if await topology_repo.get_flag(FLAG_RTT_METHODE):
+            return
+        bilan = await repository.reset_latency_history()
+        await topology_repo.set_flag(
+            FLAG_RTT_METHODE,
+            True,
+            updated_by="bootstrap",
+            reason="latences mesurees hors VRF effacees",
+        )
+        logger.info("Latences mesurees avec l'ancienne methode effacees : %s", bilan)
+    except Exception:  # noqa: BLE001 - le menage ne bloque jamais le demarrage
+        logger.exception("Effacement des anciennes latences impossible")
 
 
 async def _bootstrap_rtt_flag(collection: Any, topology_repo: Any, settings: Settings) -> None:
