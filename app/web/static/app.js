@@ -2435,6 +2435,13 @@ function nodeUplink(n) {
 
 /** "300 Mbps · radio" / "1 Gbps · wired" : ce que le noeud peut porter. */
 function capaciteNoeud(lien, n) {
+  if ((!lien || !lien.capacity_mbps) && !(n.effDown > 0) && !(n.effUp > 0)) {
+    // Ni capacite connue ni client limite : "0.0 Mbps / 0.0 Mbps" se lisait
+    // comme un noeud coupe. On dit ce qui manque.
+    return '<span class="na" title="Uplink capacity unknown, and no client of this node has a ' +
+      'limit yet. Declare the uplink wired or radio in Saturation risks, or push plans by API.">' +
+      'unknown</span>';
+  }
   if (!lien || !lien.capacity_mbps) {
     return '<span class="na" title="Uplink capacity unknown: declare the uplink wired or radio in ' +
       'Saturation risks. Shown here: the sum of the clients\' limits.">' +

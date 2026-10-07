@@ -3900,10 +3900,13 @@ async def test_service_sans_adresse_accepte_puis_place(database: Database) -> No
     assert [s["id"] for s in await depot.list_services()] == ["svc-mac"]
 
 
-async def test_latence_par_abonne_mediane_et_p95(database: Database) -> None:
+@pytest.mark.parametrize("plan", [Plan(100, 20, "mock"), None])
+async def test_latence_par_abonne_mediane_et_p95(database: Database, plan: Plan | None) -> None:
+    """Avec ou SANS forfait : sans limite connue, la condition « au plafond »
+    valait NULL et la mediane sortait vide pour un client pourtant mesure."""
     repo = MetricsRepository(database.pool)
     directory = PgDirectory(database.pool)
-    sid = await directory.ensure_subscriber("lat", plan=Plan(100, 20, "mock"))
+    sid = await directory.ensure_subscriber("lat", plan=plan)
     maintenant = datetime.now(tz=UTC)
     await PgMetricsWriter(database.pool).write_subscriber_metrics(
         [

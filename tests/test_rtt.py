@@ -250,3 +250,19 @@ async def test_la_sonde_passe_au_rythme_du_terminal_quand_la_rafale_est_jetee() 
     client.ping_intervals.clear()
     stats = await collecteur.ping_stats("10.0.0.9", 5, interval_ms=200)
     assert stats.received == 3 and client.ping_intervals == [None]
+
+
+async def test_des_reponses_plus_lentes_que_l_intervalle_font_passer_au_rythme_lent() -> None:
+    lent = FakeRouterOsClient()
+    lent.ping_reply = "900ms"
+    collecteur = make_collector(lent)
+    # 2 reponses sur 5, a 900 ms pour des pings espaces de 200 ms.
+    lent.ping = lambda a, c=1, s=None, i=None: (  # type: ignore[method-assign]
+        lent.ping_intervals.append(i)
+        or [{"seq": "0", "time": "900ms"}, {"seq": "1", "time": "900ms"}]
+        + [{"seq": str(k), "status": "timeout"} for k in range(2, c)]
+    )
+    await collecteur.ping_stats("10.0.0.9", 5, interval_ms=200)
+    lent.ping_intervals.clear()
+    await collecteur.ping_stats("10.0.0.9", 5, interval_ms=200)
+    assert lent.ping_intervals == [None]
