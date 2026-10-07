@@ -351,6 +351,9 @@ async def build_container(settings: Settings) -> Container:
     # Amorce le drapeau de la sonde RTT : la base fait foi une fois posee, sinon
     # on l'y ecrit depuis RTT_ENABLED. Ensuite, l'interface le bascule a chaud.
     await _bootstrap_rtt_flag(collection, topology_repo, settings)
+    import app.collectors.mikrotik as _mikrotik
+
+    _mikrotik.PROBE_DSCP = settings.rtt_probe_dscp if 0 <= settings.rtt_probe_dscp <= 63 else None
     await _reset_latency_measured_wrong(repository, topology_repo)
 
     async def discover_topology() -> None:
