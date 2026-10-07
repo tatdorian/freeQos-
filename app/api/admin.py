@@ -39,42 +39,73 @@ async def rtt_state(container: ContainerDep, collection: CollectionDep) -> dict[
 @router.get("/rtt/diagnose", summary="Run the latency probe by hand, with and without source")
 async def rtt_diagnose(
     collection: CollectionDep,
-    router_name: Annotated[str, Query(alias="router", description="Router that pings")],
-    address: Annotated[str, Query(description="Client address to ping")],
+    router_name: Annotated[
+        str | None,
+        Query(alias="router", description="Router that pings (default: a silent client's)"),
+    ] = None,
+    address: Annotated[
+        str | None, Query(description="Client address (default: a silent client's)")
+    ] = None,
 ) -> dict[str, Any]:
     """LA MEME SERIE QUE LA SONDE, a la demande, et la reponse BRUTE de RouterOS.
 
-    Deux essais : depuis le loopback (comme la sonde), puis sans source. Quand
-    tous les clients repondent « no reply », c'est ce qui dit pourquoi : chemin
-    retour vers le loopback, pare-feu, ou droit 'test' manquant sur le compte.
+    Sans parametre, rejoue le dernier client muet : c'est ce qu'appelle le
+    bouton « Diagnose » de l'interface. Trois essais vers le client (depuis le
+    loopback, puis sans source), un ping de CONTROLE vers la passerelle du
+    routeur, et la lecture de son pare-feu : de quoi rendre une cause
+    (``verdict``) plutot qu'un « probe silent ».
     """
     import asyncio
 
-    from app.collectors.mikrotik import ping_stats_from_rows
+    from app.collectors.mikrotik import ping_stats_from_rows, upstream_of
+    from app.services.rtt import rtt_verdict, suspicious_firewall_rules
+
+    if not router_name or not address:
+        sonde = getattr(collection, "rtt_prober", None)
+        cible = sonde.silent_target() if sonde is not None else None
+        if cible is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No silent client to diagnose: pass ?router=<name>&address=<client IP>.",
+            )
+        router_name = router_name or cible[0]
+        address = address or cible[1]
 
     collecteur = next((c for c in collection.collectors if c.name == router_name), None)
     if collecteur is None:
         raise HTTPException(status_code=404, detail=f"unknown router: {router_name}")
-    source = await collecteur.ensure_loopback()
-    essais: list[dict[str, Any]] = []
-    for src in ([source] if source else []) + [None]:
+
+    async def essai(cible: str, src: str | None) -> dict[str, Any]:
         try:
             lignes = await asyncio.wait_for(
-                asyncio.to_thread(collecteur._sonde.ping, address, 5, src, "200ms"),  # noqa: SLF001
+                asyncio.to_thread(collecteur._sonde.ping, cible, 5, src, "200ms"),  # noqa: SLF001
                 timeout=15,
             )
             stats = ping_stats_from_rows(lignes, 5)
-            essais.append(
-                {"source": src, "stats": stats.to_dict(), "raw": [dict(x) for x in lignes][:10]}
-            )
+            return {"source": src, "stats": stats.to_dict(), "raw": [dict(x) for x in lignes][:10]}
         except Exception as exc:  # noqa: BLE001 - le diagnostic dit l'erreur
-            essais.append({"source": src, "error": f"{type(exc).__name__}: {exc}"})
+            return {"source": src, "error": f"{type(exc).__name__}: {exc}"}
+
+    source = await collecteur.ensure_loopback()
+    essais = [await essai(address, src) for src in ([source] if source else []) + [None]]
+    passerelle, _interface = upstream_of(router_name)
+    controle = await essai(passerelle, None) if passerelle else None
+    if controle is not None:
+        controle["address"] = passerelle
+    try:
+        regles = await asyncio.to_thread(collecteur._sonde.firewall_filters)  # noqa: SLF001
+        suspectes = suspicious_firewall_rules(regles)
+    except Exception:  # noqa: BLE001 - pare-feu illisible : on s'en passe
+        suspectes = []
     return {
         "router": router_name,
         "address": address,
         "loopback": source,
         "probe_skips_loopback": bool(getattr(collecteur, "_ping_sans_source", False)),
         "attempts": essais,
+        "control": controle,
+        "firewall_suspects": suspectes,
+        "verdict": rtt_verdict(essais, controle, suspectes),
     }
 
 
