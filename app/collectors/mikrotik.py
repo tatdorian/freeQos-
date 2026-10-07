@@ -142,6 +142,8 @@ class RouterOsReadClient(Protocol):
         count: int = 1,
         src_address: str | None = None,
         interval: str | None = None,
+        routing_table: str | None = None,
+        table_param: str = "vrf",
     ) -> list[dict[str, Any]]: ...
 
     # --- Topologie et etat du shaping (lecture seule) ---
@@ -612,6 +614,8 @@ class LibrouterosReadClient:
         count: int = 1,
         src_address: str | None = None,
         interval: str | None = None,
+        routing_table: str | None = None,
+        table_param: str = "vrf",
     ) -> list[dict[str, Any]]:
         """Sonde active depuis le routeur vers l'abonne.
 
@@ -626,6 +630,10 @@ class LibrouterosReadClient:
             options["src-address"] = src_address
         if interval:
             options["interval"] = interval
+        if routing_table:
+            # La VRF (ou table) ou vit la route du client : sans elle, le ping
+            # part par la table main et fait le tour par l'amont.
+            options[table_param] = routing_table
         with self._lock:
             try:
                 api = self._ensure()
@@ -633,6 +641,29 @@ class LibrouterosReadClient:
             except Exception:
                 self._drop()
                 raise
+
+
+def client_tables_from_routes(rows: list[dict[str, Any]]) -> list[tuple[Any, str]]:
+    """Reseaux CONNECTES hors table main, et la table qui les porte.
+
+    Seules les routes connectees comptent (session PPPoE, VLAN client) : une
+    route par defaut dans une VRF ne dit pas que le client y vit.
+    """
+    sortie: list[tuple[Any, str]] = []
+    for ligne in rows:
+        table = str(ligne.get("routing-table") or "main").strip()
+        if table in ("", "main"):
+            continue
+        if not parse_flag(ligne.get("connect")):
+            continue
+        if ligne.get("active") is not None and not parse_flag(ligne.get("active")):
+            continue
+        try:
+            reseau = ipaddress.ip_network(str(ligne.get("dst-address") or ""), strict=False)
+        except ValueError:
+            continue
+        sortie.append((reseau, table))
+    return sortie
 
 
 def ping_stats_from_rows(rows: list[dict[str, Any]], count: int) -> PingStats:
@@ -1367,6 +1398,54 @@ class MikrotikCollector:
         """
         return (await self.ping_stats(address, count)).median_ms
 
+    def ping_in_table(
+        self,
+        address: str,
+        count: int,
+        src: str | None,
+        interval: str | None,
+        table: str | None,
+    ) -> list[dict[str, Any]]:
+        """``/ping`` dans la table du client. RouterOS 7 nomme le parametre
+        ``vrf`` pour une VRF, ``routing-table`` pour une simple table : on
+        essaie le premier, et on retient celui que ce routeur accepte."""
+        if not table:
+            return self._sonde.ping(address, count, src, interval)
+        param = getattr(self, "_ping_table_param", "vrf")
+        try:
+            return self._sonde.ping(address, count, src, interval, table, param)
+        except Exception:
+            autre = "routing-table" if param == "vrf" else "vrf"
+            lignes = self._sonde.ping(address, count, src, interval, table, autre)
+            self._ping_table_param = autre
+            return lignes
+
+    async def client_routing_table(self, address: str) -> str | None:
+        """La table de routage (VRF) qui porte la route CONNECTEE du client.
+
+        CONSTATE EN LAB : les sessions PPPoE vivent dans la VRF ``CUST-INET``.
+        Un ``/ping`` sans table part par la table main, qui n'a pas de route
+        vers le client : il sort par la route par defaut, fait le tour par le
+        coeur et revient -- 900 ms au lieu de quelques ms. None = table main.
+        Les routes sont relues au plus toutes les deux minutes.
+        """
+        maintenant = time.monotonic()
+        cache = getattr(self, "_tables_clients", None)
+        if cache is None or maintenant - getattr(self, "_tables_lues_a", 0.0) > 120:
+            try:
+                lignes = await asyncio.to_thread(self._sonde.routes)
+            except Exception:  # noqa: BLE001 - sans routes, la table main
+                lignes = []
+            cache = client_tables_from_routes(lignes)
+            self._tables_clients = cache
+            self._tables_lues_a = maintenant
+        try:
+            ip = ipaddress.ip_address(str(address).split("/")[0])
+        except ValueError:
+            return None
+        trouve = [(reseau.prefixlen, table) for reseau, table in cache if ip in reseau]
+        return max(trouve)[1] if trouve else None
+
     async def ping_stats(
         self, address: str, count: int = 5, *, interval_ms: int = 200
     ) -> PingStats:
@@ -1386,10 +1465,21 @@ class MikrotikCollector:
         timeout = max(self.config.timeout_s * 2, 4.0) + count * max(interval_ms, 10) / 1000 + 1
         # Une source qui a deja fait perdre toutes les reponses n'est plus
         # employee sur ce routeur (cf. plus bas).
-        source = None if getattr(self, "_ping_sans_source", False) else await self.ensure_loopback()
+        table = await self.client_routing_table(address)
+        # Le loopback vit dans la table main : dans la VRF du client, on laisse
+        # RouterOS choisir l'adresse de sortie.
+        source = (
+            None
+            if table or getattr(self, "_ping_sans_source", False)
+            else await self.ensure_loopback()
+        )
+
+        def ping_brut(n: int, src: str | None, ecart: str | None) -> list[dict[str, Any]]:
+            return self.ping_in_table(address, n, src, ecart, table)
+
         try:
             rows = await asyncio.wait_for(
-                asyncio.to_thread(self._sonde.ping, address, count, source, intervalle),
+                asyncio.to_thread(ping_brut, count, source, intervalle),
                 timeout=timeout,
             )
         except TimeoutError:
@@ -1407,7 +1497,7 @@ class MikrotikCollector:
                 exc,
             )
             rows = await asyncio.wait_for(
-                asyncio.to_thread(self._sonde.ping, address, count, None, intervalle),
+                asyncio.to_thread(ping_brut, count, None, intervalle),
                 timeout=timeout,
             )
         stats = ping_stats_from_rows(rows, count)
@@ -1418,7 +1508,7 @@ class MikrotikCollector:
             # clients a la fois, sur trois routeurs. On retente sans source ;
             # si la, ca repond, ce routeur sonde desormais sans loopback.
             rows = await asyncio.wait_for(
-                asyncio.to_thread(self._sonde.ping, address, count, None, intervalle),
+                asyncio.to_thread(ping_brut, count, None, intervalle),
                 timeout=timeout,
             )
             sans_source = ping_stats_from_rows(rows, count)
@@ -1468,7 +1558,7 @@ class MikrotikCollector:
             # ca repond, ce routeur sonde desormais a ce rythme.
             essai = min(count, PING_LENT_COUNT)
             rows = await asyncio.wait_for(
-                asyncio.to_thread(self._sonde.ping, address, essai, None, None),
+                asyncio.to_thread(ping_brut, essai, None, None),
                 timeout=max(self.config.timeout_s * 2, 4.0) + essai + 1,
             )
             au_rythme = ping_stats_from_rows(rows, essai)

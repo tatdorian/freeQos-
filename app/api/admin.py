@@ -78,10 +78,15 @@ async def rtt_diagnose(
     async def essai(
         cible: str, src: str | None, intervalle: str | None = "200ms", n: int = 5
     ) -> dict[str, Any]:
-        base: dict[str, Any] = {"source": src, "interval": intervalle or "1s (terminal)"}
+        table = await collecteur.client_routing_table(cible)
+        base: dict[str, Any] = {
+            "source": src,
+            "interval": intervalle or "1s (terminal)",
+            "routing_table": table or "main",
+        }
         try:
             lignes = await asyncio.wait_for(
-                asyncio.to_thread(collecteur._sonde.ping, cible, n, src, intervalle),  # noqa: SLF001
+                asyncio.to_thread(collecteur.ping_in_table, cible, n, src, intervalle, table),
                 timeout=15,
             )
             stats = ping_stats_from_rows(lignes, n)
@@ -89,7 +94,9 @@ async def rtt_diagnose(
         except Exception as exc:  # noqa: BLE001 - le diagnostic dit l'erreur
             return {**base, "error": f"{type(exc).__name__}: {exc}"}
 
-    source = await collecteur.ensure_loopback()
+    table_client = await collecteur.client_routing_table(address)
+    # Dans la VRF du client, le loopback (table main) n'a pas de sens.
+    source = None if table_client else await collecteur.ensure_loopback()
     essais = [await essai(address, src) for src in ([source] if source else []) + [None]]
     # Le meme ping que dans le terminal du routeur : 1 paquet/s, sans source.
     essais.append(await essai(address, None, None, 3))
@@ -106,6 +113,7 @@ async def rtt_diagnose(
         "router": router_name,
         "address": address,
         "loopback": source,
+        "routing_table": table_client or "main",
         "probe_skips_loopback": bool(getattr(collecteur, "_ping_sans_source", False)),
         "probe_slow_rate": bool(getattr(collecteur, "_ping_lent", False)),
         "attempts": essais,
