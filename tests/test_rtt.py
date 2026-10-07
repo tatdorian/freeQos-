@@ -229,3 +229,24 @@ async def test_le_client_muet_est_retrouve_pour_le_diagnostic() -> None:
     prober = RttProber(batch_size=10, clock=Horloge())
     await prober.probe([(3, "10.0.0.3", make_collector(muet, name="nas"))])
     assert prober.silent_target() == ("nas", "10.0.0.3")
+
+
+class RepondSeulementAuRythme(FakeRouterOsClient):
+    """Client qui jette les rafales (200 ms) et repond a 1 paquet/s."""
+
+    def ping(self, address, count=1, src_address=None, interval=None):  # type: ignore[no-untyped-def]
+        self.ping_intervals.append(interval)
+        if interval is not None:
+            return [{"seq": str(i), "status": "timeout"} for i in range(count)]
+        return [{"seq": str(i), "time": "7ms"} for i in range(count)]
+
+
+async def test_la_sonde_passe_au_rythme_du_terminal_quand_la_rafale_est_jetee() -> None:
+    client = RepondSeulementAuRythme()
+    collecteur = make_collector(client)
+    stats = await collecteur.ping_stats("10.0.0.9", 5, interval_ms=200)
+    assert stats.received == 3 and stats.median_ms == 7.0
+    # Le tour suivant part directement au bon rythme, sans rafale perdue.
+    client.ping_intervals.clear()
+    stats = await collecteur.ping_stats("10.0.0.9", 5, interval_ms=200)
+    assert stats.received == 3 and client.ping_intervals == [None]

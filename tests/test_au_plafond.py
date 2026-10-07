@@ -142,6 +142,7 @@ def test_le_diagnostic_de_la_sonde_rend_la_reponse_brute(settings) -> None:  # t
         .get("/api/v1/rtt/diagnose", params={"router": "pop-test", "address": "10.0.0.5"})
         .json()
     )
-    dernier = corps["attempts"][-1]
-    assert dernier["source"] is None
+    dernier = next(a for a in corps["attempts"] if a["source"] is None and a["interval"] == "200ms")
     assert dernier["stats"]["received"] == 5 and dernier["raw"]
+    # Et le meme ping que dans le terminal du routeur, pour comparer.
+    assert corps["attempts"][-1]["interval"] == "1s (terminal)"
