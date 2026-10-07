@@ -1,4 +1,4 @@
-.PHONY: help install install-docker dev up down update reset-db logs test lint fmt typecheck hooks lock psql seed
+.PHONY: help install install-docker backup restore dev up down update reset-db logs test lint fmt typecheck hooks lock psql seed
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -60,6 +60,30 @@ lock: ## Regenere le verrou de dependances d'execution depuis pyproject.toml
 	/tmp/freeqos-lock/bin/pip install -q --upgrade pip && \
 	/tmp/freeqos-lock/bin/pip install -q . && \
 	/tmp/freeqos-lock/bin/pip freeze | grep -viE '^freeqos|@ file://|^-e ' | LC_ALL=C sort > requirements.lock
+
+backup: ## Sauvegarde la base ET la cle de chiffrement dans backups/AAAAMMJJ-HHMMSS/
+	@d=backups/$$(date +%Y%m%d-%H%M%S); mkdir -p $$d && \
+	docker compose exec -T timescaledb pg_dump -U $${POSTGRES_USER:-qos} -Fc $${POSTGRES_DB:-qos} > $$d/base.dump && \
+	docker compose exec -T app cat /app/data/secret.key > $$d/secret.key && \
+	chmod 600 $$d/secret.key && \
+	echo "Sauvegarde : $$d (base.dump + secret.key). Copiez-la HORS du serveur." && \
+	echo "Sans secret.key, les mots de passe des routeurs sont illisibles."
+
+restore: ## Restaure une sauvegarde : make restore DIR=backups/AAAAMMJJ-HHMMSS
+	@[ -n "$(DIR)" ] && [ -f "$(DIR)/base.dump" ] && [ -f "$(DIR)/secret.key" ] || \
+		{ echo "Usage : make restore DIR=backups/<date> (base.dump et secret.key requis)"; exit 1; }
+	@printf "La base actuelle sera REMPLACEE. Taper 'oui' pour confirmer : "; read r; [ "$$r" = "oui" ] || \
+		{ echo "Annule."; exit 1; }
+	docker compose stop app
+	@# Procedure TimescaleDB : pre_restore suspend ses taches de fond le temps
+	@# de la restauration, post_restore les relance. Sans elles, les hypertables
+	@# reviennent incoherentes.
+	docker compose exec -T timescaledb psql -U $${POSTGRES_USER:-qos} -d $${POSTGRES_DB:-qos} -c "SELECT timescaledb_pre_restore();"
+	docker compose exec -T timescaledb pg_restore -U $${POSTGRES_USER:-qos} -d $${POSTGRES_DB:-qos} --clean --if-exists --no-owner < $(DIR)/base.dump || true
+	docker compose exec -T timescaledb psql -U $${POSTGRES_USER:-qos} -d $${POSTGRES_DB:-qos} -c "SELECT timescaledb_post_restore();"
+	docker compose run --rm -T --entrypoint sh app -c 'cat > /app/data/secret.key' < $(DIR)/secret.key
+	docker compose start app
+	@echo "Restauration terminee."
 
 psql: ## Ouvre un psql sur la base de lab
 	docker compose exec timescaledb psql -U $${POSTGRES_USER:-qos} -d $${POSTGRES_DB:-qos}

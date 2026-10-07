@@ -203,6 +203,18 @@ passe) : il a les droits d'**édition**. Ensuite, toute l'interface exige une co
 > docker compose exec timescaledb psql -U qos -d qos -c "TRUNCATE app_users CASCADE"
 > ```
 
+### Sauvegarder (à faire régulièrement)
+
+```bash
+make backup                              # -> backups/<date>/base.dump + secret.key
+make restore DIR=backups/<date>          # remet la base ET la clé
+```
+
+`secret.key` (volume `qosdata`, fichier `/app/data/secret.key`) chiffre les mots de passe
+des routeurs et des antennes : **sans elle, une base restaurée est inutilisable**. Copiez
+chaque sauvegarde hors du serveur. Exemple de tâche quotidienne :
+`0 3 * * * cd /opt/freeqos && make backup >/dev/null`.
+
 ### Mettre à jour, nettoyer, repartir de zéro
 
 Quatre gestes, du plus doux au plus radical. Prenez le premier qui suffit.
