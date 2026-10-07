@@ -207,3 +207,17 @@ async def test_le_curseur_d_un_pop_disparu_est_oublie() -> None:
     await prober.probe(restantes)
 
     assert prober.stats()["pops"] == 1
+
+
+async def test_l_erreur_du_ping_est_rendue_au_lieu_d_un_tiret() -> None:
+    """Un ping que le routeur refuse (src-address, droits) disait seulement
+    "-" dans l'interface : on ne savait pas que la sonde etait en panne."""
+    ko = FakeRouterOsClient()
+    ko.ping_error = ConnectionResetError("connexion perdue")
+    prober = RttProber(batch_size=10, clock=Horloge())
+
+    await prober.probe([(2, "10.0.0.2", make_collector(ko))])
+
+    detail = prober.detail(2)
+    assert detail is not None
+    assert "connexion perdue" in str(detail["error"])
