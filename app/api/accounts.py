@@ -184,11 +184,22 @@ def forget_cached_sessions() -> None:
 
 
 async def current_user(request: Request, container: ContainerDep) -> dict[str, Any]:
-    """Le compte de la session, ou 401. Ne juge pas encore du grade."""
+    """Le compte de la session, ou 401. Ne juge pas encore du grade.
+
+    UNE APPLICATION EXTERNE PILOTE LE CONTROLEUR PAR CLE D'API. Une requete
+    sans cookie de session mais avec une cle (Basic, Bearer ou X-API-Key, les
+    memes formes que l'API publique) agit au nom de cette cle : portee
+    ``read`` = lecture seule, ``write`` = tout ce qu'un compte d'edition fait
+    sur ``/api/v1`` (routeurs, forfaits, limites...). La gestion des comptes et
+    des cles reste reservee aux personnes connectees.
+    """
     if not container.settings.auth_enabled:
         return ANONYME
     jeton = request.cookies.get(COOKIE)
     if not jeton:
+        cle = await _compte_par_cle(request, container)
+        if cle is not None:
+            return cle
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required")
     empreinte = token_digest(jeton)
     vu = _SESSIONS_VUES.get(empreinte)
@@ -211,6 +222,45 @@ async def current_user(request: Request, container: ContainerDep) -> dict[str, A
 UserDep = Annotated[dict[str, Any], Depends(current_user)]
 
 
+async def _compte_par_cle(request: Request, container: ContainerDep) -> dict[str, Any] | None:
+    """Le "compte" d'une cle d'API presentee, None s'il n'y en a pas.
+
+    Une cle presentee mais refusee (inconnue, revoquee, expiree) est un 401
+    immediat : on ne retombe pas sur "Login required", qui ferait chercher un
+    probleme de session la ou c'est la cle qui est en cause.
+    """
+    from app.api.auth import extract_secret
+
+    secret = extract_secret(request)
+    if not secret:
+        return None
+    if container.api_keys_repo is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="API keys unavailable"
+        )
+    fiche = await container.api_keys_repo.authenticate(secret)
+    if fiche is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="API key invalid, disabled or expired",
+        )
+    portees = tuple(fiche.get("scopes") or ())
+    return {
+        "id": 0,
+        "email": f"api:{fiche.get('name')}",
+        "role": ROLE_EDIT if "write" in portees else "read",
+        "api_key": str(fiche.get("prefix") or ""),
+    }
+
+
+def _refuser_cle(user: dict[str, Any], quoi: str) -> None:
+    if user.get("api_key"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"{quoi} needs a person logged in: an API key cannot do it",
+        )
+
+
 def _meme_origine(request: Request) -> bool:
     """Une ecriture venue d'une autre page que la notre est refusee.
 
@@ -231,6 +281,10 @@ def _meme_origine(request: Request) -> bool:
 
 async def require_access(request: Request, user: UserDep) -> dict[str, Any]:
     """Dependance posee sur TOUTES les routes d'exploitation."""
+    # Une cle ne fabrique pas d'autres cles : sinon une cle volee se
+    # perpetuerait apres sa revocation.
+    if user.get("api_key") and "/api-keys" in request.url.path:
+        _refuser_cle(user, "Managing API keys")
     if request.method.upper() in SAFE_METHODES:
         return user
     if not _meme_origine(request):
@@ -244,6 +298,7 @@ async def require_access(request: Request, user: UserDep) -> dict[str, Any]:
 
 
 async def require_editor(request: Request, user: UserDep) -> dict[str, Any]:
+    _refuser_cle(user, "Account management")
     if user.get("role") != ROLE_EDIT:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Account management needs edit rights"
@@ -433,6 +488,7 @@ async def change_my_password(
     de passe. Les autres sessions de ce compte sont fermees."""
     if not container.settings.auth_enabled:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Authentication is off")
+    _refuser_cle(user, "Changing a password")
     if not _meme_origine(request):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-origin request")
     store = _store(container)
@@ -513,7 +569,7 @@ def _session_courante(request: Request) -> str | None:
 async def my_sessions(
     request: Request, user: UserDep, container: ContainerDep
 ) -> list[dict[str, Any]]:
-    if not container.settings.auth_enabled:
+    if not container.settings.auth_enabled or user.get("api_key"):
         return []
     courante = _session_courante(request)
     sessions = await _store(container).sessions_of(int(user["id"]))

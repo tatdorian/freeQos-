@@ -3561,6 +3561,16 @@ const API_ENDPOINTS = [
   ['DELETE', '/model/v1/{collection}/{id}', 'Remove a record'],
   ['GET', '/usage/v1/services', 'Usage, every service'],
   ['GET', '/usage/v1/services/{id}', 'Usage of one service'],
+  // L'API de PILOTAGE, avec la meme cle : tout ce que fait l'interface.
+  ['POST', '/api/v1/pops/routers', 'Add a router (set up by itself: CAKE, queues, NetFlow)'],
+  ['GET', '/api/v1/pops/routers', 'List the routers'],
+  ['PATCH', '/api/v1/pops/routers/{id}', 'Edit a router'],
+  ['GET', '/api/v1/pops/provisioning/{name}', 'Progress of a new router\'s setup'],
+  ['PUT', '/api/v1/plans/{login}', 'Set the plan of a client (written to the router at once)'],
+  ['DELETE', '/api/v1/plans/{login}', 'Back to the default plan'],
+  ['PUT', '/api/v1/shaping/policies', 'Force a limit (client or link), above its plan'],
+  ['POST', '/api/v1/shaping/boosts', 'Temporary boost'],
+  ['POST', '/api/v1/plans/refresh', 'Re-apply every plan now'],
 ];
 
 async function loadApi() {
@@ -3581,7 +3591,13 @@ async function loadApi() {
     '  -d \'{"id":"abo-42","account":"cli-7","package":"fibre-100",' +
     '"parent_device_id":"sect-n1","down_speed":100000,"up_speed":20000,' +
     '"attachments":[{"cpe_mac":"00:10:0b:6e:4c:ff","network_prefixes":["10.20.0.10"]}]}\'\n\n' +
-    'curl -u <key>: \'' + location.origin + '/model/v1/services?page=1&limit=500\'   # -> {"data": [...]}';
+    'curl -u <key>: \'' + location.origin + '/model/v1/services?page=1&limit=500\'   # -> {"data": [...]}\n\n' +
+    '# Operating API, same key ("Read and write" to change anything):\n' +
+    'curl -H \'Authorization: Bearer <key>\' -X POST ' + location.origin + '/api/v1/pops/routers \\\n' +
+    "  -H 'content-type: application/json' \\\n" +
+    '  -d \'{"name":"nas-north","host":"10.0.0.2","username":"qos","password":"…","role":"pop","pop_name":"North"}\'\n\n' +
+    'curl -H \'Authorization: Bearer <key>\' -X PUT ' + location.origin + '/api/v1/plans/dupont \\\n' +
+    "  -H 'content-type: application/json' -d '{\"down_mbps\":100,\"up_mbps\":20}'";
   await loadApiKeys();
   const lignes = document.querySelectorAll('#keys-table tbody tr').length;
   document.getElementById('api-count').textContent = lignes + ' key(s)';
