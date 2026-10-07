@@ -85,6 +85,9 @@ class RttReading:
     #: routeur n'a pas pu lancer la sonde (erreur, delai depasse).
     stats: PingStats | None = None
     router_name: str | None = None
+    #: Pourquoi le routeur n'a pas pu pinguer (src-address refusee, delai...).
+    #: Sans elle, l'interface affichait "-" comme si rien n'avait ete tente.
+    error: str | None = None
 
 
 class RttProber:
@@ -116,6 +119,7 @@ class RttProber:
         self._cursors: dict[str, int] = {}
         self.probes_sent = 0
         self.probes_answered = 0
+        self._erreurs_vues: dict[str, str] = {}
 
     def get(self, subscriber_id: int) -> float | None:
         """Derniere mesure, si elle n'est pas perimee."""
@@ -141,6 +145,8 @@ class RttProber:
         }
         if reading.stats is not None:
             base.update(reading.stats.to_dict())
+        if reading.error:
+            base["error"] = reading.error
         return base
 
     def readings_by_router(self) -> dict[str, list[PingStats]]:
@@ -197,16 +203,23 @@ class RttProber:
         answered = 0
         for (subscriber_id, ip, collector), outcome in zip(batch, results, strict=True):
             stats: PingStats | None
+            erreur: str | None = None
             if isinstance(outcome, BaseException):
-                logger.debug("Ping %s via %s impossible : %s", ip, collector.name, outcome)
+                erreur = str(outcome) or type(outcome).__name__
+                # Une fois par routeur et par message : visible dans les
+                # journaux sans les noyer a chaque cycle.
+                if self._erreurs_vues.get(collector.name) != erreur:
+                    self._erreurs_vues[collector.name] = erreur
+                    logger.warning("Ping %s via %s impossible : %s", ip, collector.name, erreur)
                 stats = None
             else:
                 stats = outcome
+                self._erreurs_vues.pop(collector.name, None)
             # La MEDIANE, plus le minimum : le meilleur paquet d'une serie cache
             # exactement ce qu'on cherche, l'attente dans une file qui se remplit.
             rtt = stats.median_ms if stats is not None else None
             self._readings[subscriber_id] = RttReading(
-                rtt_ms=rtt, measured_at=now, stats=stats, router_name=collector.name
+                rtt_ms=rtt, measured_at=now, stats=stats, router_name=collector.name, error=erreur
             )
             self.probes_sent += 1
             if rtt is not None:
