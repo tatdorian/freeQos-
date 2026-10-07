@@ -340,3 +340,41 @@ async def test_un_client_injecte_sert_aux_trois_usages() -> None:
     )
     sessions = await collector.collect()
     assert [s.login for s in sessions] == ["dupont"]
+
+
+@pytest.mark.parametrize(
+    ("brut", "ms"),
+    [
+        ("1ms552us", 1.552),
+        ("552us", 0.552),
+        ("1.5ms", 1.5),
+        ("00:00:00.001552", 1.552),
+        ("00:00.012", 12.0),
+        ("2s100ms", 2100.0),
+    ],
+)
+def test_les_formes_de_temps_de_routeros_se_lisent(brut: str, ms: float) -> None:
+    """Un temps de reponse illisible se comptait comme un paquet perdu : tous
+    les clients passaient en « no reply » alors qu'ils repondaient."""
+    stats = ping_stats_from_rows([{"seq": "0", "time": brut}], 1)
+    assert stats.received == 1
+    assert stats.median_ms == pytest.approx(ms)
+
+
+def test_la_ligne_d_attente_d_un_paquet_ne_masque_pas_sa_reponse() -> None:
+    rows = [
+        {"seq": "0", "status": "timeout"},
+        {"seq": "0", "time": "4ms"},
+        {"seq": "1", "time": "6ms"},
+    ]
+    stats = ping_stats_from_rows(rows, 2)
+    assert stats.sent == 2 and stats.received == 2
+
+
+def test_le_resume_de_routeros_fait_foi_quand_les_temps_manquent() -> None:
+    rows = [
+        {"seq": "0", "sent": "1", "received": "1"},
+        {"seq": "1", "sent": "2", "received": "2", "avg-rtt": "3ms"},
+    ]
+    stats = ping_stats_from_rows(rows, 2)
+    assert stats.received == 2 and stats.median_ms == pytest.approx(3.0)

@@ -127,17 +127,32 @@ def parse_mikrotik_rate_limit(value: str | None) -> tuple[float, float] | None:
 
 
 _DURATION = re.compile(
-    r"(?:(?P<h>\d+)h)?(?:(?P<m>\d+)m(?!s))?(?:(?P<s>\d+)s)?"
-    r"(?:(?P<ms>\d+)ms)?(?:(?P<us>\d+)us)?"
+    r"(?:(?P<w>\d+)w)?(?:(?P<d>\d+)d)?(?:(?P<h>\d+(?:\.\d+)?)h)?"
+    r"(?:(?P<m>\d+(?:\.\d+)?)m(?!s))?(?:(?P<s>\d+(?:\.\d+)?)s)?"
+    r"(?:(?P<ms>\d+(?:\.\d+)?)ms)?(?:(?P<us>\d+(?:\.\d+)?)us)?"
 )
+#: ``00:00:00.001552`` : la forme horloge, que certaines versions de RouterOS
+#: rendent par l'API la ou la console affiche ``1ms552us``.
+_HORLOGE = re.compile(r"(?:(?P<h>\d+):)?(?P<m>\d+):(?P<s>\d+(?:\.\d+)?)")
+_FACTEURS_MS = {
+    "w": 604_800_000.0,
+    "d": 86_400_000.0,
+    "h": 3_600_000.0,
+    "m": 60_000.0,
+    "s": 1_000.0,
+    "ms": 1.0,
+    "us": 0.001,
+}
 
 
 def parse_routeros_duration_ms(value: object) -> float | None:
     """Convertit une duree RouterOS en millisecondes.
 
-    ``/ping`` renvoie des valeurs composees comme ``1ms500us`` ou ``2s100ms``.
-    Attention au piege : ``m`` est une minute et ``ms`` une milliseconde, d'ou
-    le lookahead negatif dans l'expression.
+    ``/ping`` renvoie des valeurs composees comme ``1ms500us`` ou ``2s100ms`` ;
+    selon la version, l'API rend aussi ``00:00:00.0015`` ou ``1.5ms``. Une
+    reponse au ping qu'on ne sait pas lire se comptait comme un paquet PERDU :
+    tous les clients passaient en « no reply ». Attention au piege : ``m`` est
+    une minute et ``ms`` une milliseconde, d'ou le lookahead negatif.
     """
     if value is None:
         return None
@@ -146,17 +161,17 @@ def parse_routeros_duration_ms(value: object) -> float | None:
     text = str(value).strip().lower()
     if not text:
         return None
+    horloge = _HORLOGE.fullmatch(text)
+    if horloge:
+        return (
+            int(horloge["h"] or 0) * 3_600_000.0
+            + int(horloge["m"]) * 60_000.0
+            + float(horloge["s"]) * 1_000.0
+        )
     match = _DURATION.fullmatch(text)
     if not match or not any(match.groupdict().values()):
         return None
-    parts = {k: int(v) if v else 0 for k, v in match.groupdict().items()}
-    return (
-        parts["h"] * 3_600_000
-        + parts["m"] * 60_000
-        + parts["s"] * 1_000
-        + parts["ms"]
-        + parts["us"] / 1000.0
-    )
+    return sum(float(v) * _FACTEURS_MS[k] for k, v in match.groupdict().items() if v)
 
 
 def pppoe_interface_name(pattern: str, login: str) -> str:
