@@ -1158,6 +1158,7 @@ class ShapingService:
                 override_up_mbps=surcharge.get("max_up_mbps"),
                 trim_factor=resserrages.get(str(lien["key"]), 1.0),
             )
+            cible.skip_reason = transit_reason(lien)
             liens.append(cible)
             for identite in _identites_du_bout_distant(lien):
                 liens_par_identite.setdefault(identite, cible)
@@ -3165,6 +3166,43 @@ INFRA_SKIP = (
 )
 
 
+TRANSIT_SKIP = (
+    "transit link toward {peer} ({why}): never shaped -- a queue here caps the traffic of "
+    "every router behind it, not one client"
+)
+INTERFACE_SKIP = (
+    "no client network on {interface}: a queue on the whole interface would cap ALL its "
+    "traffic to one rate -- nothing is written"
+)
+
+
+def transit_reason(lien: dict[str, Any]) -> str | None:
+    """Pourquoi ce lien est un lien de TRANSIT (entre routeurs), ou None.
+
+    CONSTATE EN PRODUCTION : des files CAKE posees sur 100.100.101.112/29 (le
+    segment commun aux NAS et a DS-CCR) et sur 100.100.100.252/30 (l'uplink)
+    ont ajoute 4 a 7 s de latence et coupe l'acces au coeur. Un lien qui porte
+    une adjacence de routage, ou qui mene a un autre routeur, n'est le goulot
+    d'aucun client : il ne recoit jamais de file.
+    """
+    brut = lien.get("attributes")
+    if isinstance(brut, str):
+        try:
+            brut = json.loads(brut)
+        except ValueError:
+            brut = {}
+    attributs = brut if isinstance(brut, dict) else {}
+    pair = str(lien.get("target_name") or lien.get("target_key") or "?")
+    if attributs.get("routing_adjacency"):
+        return TRANSIT_SKIP.format(peer=pair, why="routing adjacency")
+    cle = str(lien.get("target_key") or "")
+    if cle.startswith("router:"):
+        return TRANSIT_SKIP.format(peer=pair, why="managed router")
+    if str(lien.get("target_kind") or "") in ("gateway", "core"):
+        return TRANSIT_SKIP.format(peer=pair, why=str(lien.get("target_kind")))
+    return None
+
+
 def protect_infrastructure(
     router_name: str, links: list[LinkTarget], subscribers: list[SubscriberTarget]
 ) -> None:
@@ -3203,8 +3241,39 @@ def protect_infrastructure(
         except ValueError:
             pass
 
+    # Adresses des AUTRES routeurs geres : un segment qui en contient une est un
+    # segment de transit (le /29 commun aux NAS et au coeur, par exemple).
+    autres_routeurs: dict[Any, str] = {}
+    for adresse, (porteur, _iface) in own_addresses().items():
+        if porteur == router_name:
+            continue
+        try:
+            autres_routeurs[ipaddress.ip_address(adresse)] = porteur
+        except ValueError:
+            continue
+
     for lien in links:
         if lien.skip_reason:
+            continue
+        if not lien.network:
+            lien.skip_reason = INTERFACE_SKIP.format(interface=lien.interface)
+            continue
+        try:
+            segment = ipaddress.ip_network(lien.network, strict=False)
+        except ValueError:
+            segment = None
+        voisin = next(
+            (
+                porteur
+                for ip, porteur in autres_routeurs.items()
+                if segment is not None and ip.version == segment.version and ip in segment
+            ),
+            None,
+        )
+        if voisin is not None:
+            lien.skip_reason = TRANSIT_SKIP.format(
+                peer=voisin, why=f"{lien.network} carries an address of {voisin}"
+            )
             continue
         montant = bool(iface_montante) and lien.interface == iface_montante
         if not montant and passerelle and lien.network:

@@ -272,6 +272,9 @@ def topo() -> FauxDepotTopologie:
             "target_kind": "radio",
             "kind": "ethernet",
             "interface": "ether2",
+            # Le reseau client du lien : c'est lui que vise la file, jamais
+            # l'interface entiere.
+            "attributes": {"local_networks": ["10.30.0.1/24"]},
             "capacity_mbps": 1000.0,
             "discovered_by": "pop-test",
             "max_down_mbps": None,
