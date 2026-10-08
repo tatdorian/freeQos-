@@ -772,6 +772,8 @@ function severity(p) {
  *  ou client hors ligne. L'afficher "-" en gris le cachait. */
 function pingsPerdus(detail) {
   if (!detail || !(Number(detail.sent) > 0) || Number(detail.received)) return false;
+  // JAMAIS REPONDU : sa box bloque le ping (courant). Pas une panne, pas rouge.
+  if (detail.ever_answered === false) return false;
   // Si TOUS les clients mesures sont muets a la fois, c'est la SONDE qui ne
   // recoit rien (source injoignable, pare-feu) : pas une perte de chaque client.
   return !sondeMuette();
@@ -793,6 +795,12 @@ function rttVide(detail) {
   if (detail && detail.error) {
     return ['ping error', 'warn', 'The router could not run the ping: ' + detail.error +
       '. Check Settings > latency probe and the router (ping allowed, source address).'];
+  }
+  if (detail && Number(detail.sent) > 0 && !Number(detail.received) &&
+      detail.ever_answered === false && !sondeMuette()) {
+    return ['no ping reply', 'none', 'This client has never answered ping: its box (CPE) or ' +
+      'firewall blocks it. Common, and not a fault: latency cannot be measured for it, and it ' +
+      'counts neither against the network nor in any automatic action.'];
   }
   if (detail && Number(detail.sent) > 0 && !Number(detail.received)) {
     return sondeMuette()
@@ -1674,6 +1682,7 @@ async function loadExec() {
   renderExecLegend(document.getElementById('exec-legend'));
   document.getElementById('exec-count').textContent =
     exec.nodes.length + ' node(s), ' + subs.length + ' client(s)';
+  exec.instances = await api('/status').catch(() => null);
   renderExecNotice(rttState, firstError, {
     noNodes: exec.nodes.length === 0,
     topoOnly: fromTopo && exec.nodes.length > 0,
@@ -2259,6 +2268,24 @@ function renderExecNotice(rttState, error, st) {
   if (!notice) return;
   const state = st || {};
   let html = '';
+  // DEUX CONTROLEURS SUR LES MEMES ROUTEURS : chacun refuse de toucher a ce
+  // que l'autre a pose, mais l'exploitant doit en arreter un.
+  const autres = (exec.instances && exec.instances.other_instances) || {};
+  const routeursAutres = Object.keys(autres);
+  if (routeursAutres.length) {
+    html += '<div class="notice err"><b>Another freeQoS instance drives the same routers.</b> ' +
+      routeursAutres.map((r) => esc(r) + ' (' + esc(autres[r].join(', ')) + ')').join(', ') +
+      '. This instance (<code>' + esc(exec.instances.instance_id || '?') + '</code>) never touches ' +
+      'what the other one placed, so neither can shape those routers reliably. Stop one of them.</div>';
+  }
+  const gelees = (exec.instances && exec.instances.frozen_lines) || [];
+  if (gelees.length) {
+    html += '<div class="notice err"><b>Writing stopped on ' + gelees.length + ' line(s): it was ' +
+      'going back and forth.</b> ' + gelees.slice(0, 3).map((g) => esc(g.router) + ' · ' +
+      esc(g.line) + ' (' + esc(g.field) + ': ' + esc(g.values.join(' ↔ ')) + ')').join(', ') +
+      '. Usually two controllers on the same router, or an unstable setting. Fix the cause, then ' +
+      'use Devices › Reset queues on that router to resume.</div>';
+  }
   if (error) {
     html += '<div class="notice err"><b>Partly loaded.</b> ' +
       esc(error.message) + '</div>';
@@ -8786,14 +8813,45 @@ async function refreshEnforcement() {
   state.enforcementReason = (etat.last_change && etat.last_change.reason) || null;
 }
 
+/** Le plan de CHAQUE routeur, en texte : ce que l'activation va ecrire. */
+async function resumePlans() {
+  const routeurs = [...document.querySelectorAll('#shaping-router option')]
+    .map((o) => o.value).filter(Boolean);
+  const lignes = [];
+  let total = 0;
+  for (const r of routeurs) {
+    try {
+      const p = await api('/shaping/plan', { method: 'POST', body: JSON.stringify({ router: r }) });
+      const actions = p.actions || [];
+      total += actions.length;
+      const c = p.counts || {};
+      lignes.push(r + ': ' + (c.add || 0) + ' add, ' + (c.set || 0) + ' set, ' + (c.remove || 0) +
+        ' remove' + ((p.conflicts || []).length ? ', ' + p.conflicts.length + ' conflict(s) left alone' : ''));
+      actions.slice(0, 4).forEach((a) => lignes.push('   ' + (a.command || a.summary || '')));
+      if (actions.length > 4) lignes.push('   … and ' + (actions.length - 4) + ' more');
+    } catch (err) {
+      lignes.push(r + ': plan unavailable (' + err.message + ')');
+    }
+  }
+  return { texte: lignes.join('\n'), total };
+}
+
 async function toggleEnforcement(active) {
   const toggle = document.getElementById('enforcement-toggle');
-  if (active && !confirm(
-      'Allow writing to the routers?\n\n' +
-      'From now on, applying a plan will really change their ' +
-      'configuration. Only queues marked freeqos:managed are touched.')) {
-    toggle.checked = false;
-    return;
+  if (active) {
+    // LE PLAN D'ABORD : l'exploitant voit ce qui va etre ecrit, routeur par
+    // routeur, avant d'autoriser quoi que ce soit.
+    toggle.disabled = true;
+    const plans = await resumePlans().catch(() => ({ texte: '(plan unavailable)', total: 0 }));
+    toggle.disabled = false;
+    if (!confirm(
+        'Allow writing to the routers?\n\n' +
+        'This is what will be written now (' + plans.total + ' command(s)):\n\n' +
+        plans.texte + '\n\n' +
+        'Only lines marked freeqos:managed by THIS instance are ever changed or removed.')) {
+      toggle.checked = false;
+      return;
+    }
   }
   const motif = active
     ? (prompt('Reason (recorded in the log, optional):') || null)

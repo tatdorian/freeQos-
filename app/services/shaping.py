@@ -15,6 +15,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -66,12 +67,13 @@ from app.config import Settings
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.capability import WriteCapability, inspect_write_capability
 from app.enforcement.models import (
-    MANAGED_COMMENT,
     PREFIX,
     Plan,
     PlanAction,
     QueueSpec,
+    is_ours,
     network_target,
+    other_instance,
     slugify,
 )
 from app.enforcement.planner import (
@@ -80,6 +82,7 @@ from app.enforcement.planner import (
     build_plan,
     desired_queue_types,
     desired_state,
+    normalise_field,
 )
 from app.enforcement.routeros import (
     ApplyResult,
@@ -97,6 +100,16 @@ from app.services.vlan_sites import VlanSite, routers_for_site
 from app.services.vlan_sites import site_key as _cle_site
 
 logger = logging.getLogger(__name__)
+
+
+def _auteur_automatique(author: str | None) -> bool:
+    """Une boucle ou une integration, pas une personne dans l'interface."""
+    auteur = str(author or "")
+    return auteur.startswith(("api:", "ui:api:", "system:", "sys:"))
+
+
+#: Routeur -> instances de freeQoS AUTRES que la notre dont on a vu des files.
+OTHER_INSTANCES: dict[str, set[str]] = {}
 
 
 FLAG_ENFORCEMENT = "enforcement_enabled"
@@ -123,15 +136,15 @@ class RouterShapingState:
 
     @property
     def managed_queues(self) -> list[dict[str, Any]]:
-        from app.enforcement.models import MANAGED_COMMENT
+        from app.enforcement.models import is_ours
 
-        return [q for q in self.simple_queues if MANAGED_COMMENT in str(q.get("comment") or "")]
+        return [q for q in self.simple_queues if is_ours(q)]
 
     @property
     def foreign_queues(self) -> list[dict[str, Any]]:
-        from app.enforcement.models import MANAGED_COMMENT
+        from app.enforcement.models import is_ours
 
-        return [q for q in self.simple_queues if MANAGED_COMMENT not in str(q.get("comment") or "")]
+        return [q for q in self.simple_queues if not is_ours(q)]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -246,6 +259,9 @@ class ShapingService:
         # ici il n'y a pas de pool qui reattribue, il y a un contrat.
         self.static_clients = static_clients
         self._write_clients: dict[str, RouterOsWriteClient] = {}
+        # Garde-fou contre l'oscillation (cf. ``_filtrer_oscillations``).
+        self._ecrits: dict[tuple[str, str, str, str], list[tuple[float, str]]] = {}
+        self.frozen: dict[tuple[str, str], dict[str, Any]] = {}
         self._write_client_factory = write_client_factory or LibrouterosWriteClient
         self.last_snapshot: TopologySnapshot | None = None
         # Quand la derniere decouverte a tourne. Distingue "aucun equipement"
@@ -289,7 +305,16 @@ class ShapingService:
 
     @property
     def enforcement_locked(self) -> bool:
-        return self.settings.enforcement_locked
+        return self.settings.enforcement_locked or self.enforcement_forced_off
+
+    @property
+    def enforcement_forced_off(self) -> bool:
+        """ENFORCEMENT_ENABLED=false POSE DANS L'ENVIRONNEMENT (et non la valeur
+        par defaut) : l'ecriture est coupee et ne se rallume pas depuis
+        l'interface. Lu dans l'environnement du processus, la ou Docker
+        (env_file) et Kubernetes le posent."""
+        brut = os.environ.get("ENFORCEMENT_ENABLED")
+        return brut is not None and brut.strip().lower() in {"0", "false", "no", "off"}
 
     async def load_flags(self) -> None:
         """Amorce le drapeau depuis la base, ou l'y ecrit au premier demarrage."""
@@ -299,6 +324,21 @@ class ShapingService:
             stocke = await self.repository.get_flag(FLAG_ENFORCEMENT)
         except Exception:  # noqa: BLE001 - table pas encore creee
             return
+        if self.enforcement_forced_off:
+            # ENFORCEMENT_ENABLED=false POSE DANS L'ENVIRONNEMENT : arret force,
+            # quelle que soit la valeur en base. CONSTATE : la valeur stockee
+            # l'emportait, et une variable posee apres coup pour arreter
+            # l'ecriture ne servait a rien.
+            if stocke is not False:
+                await self.repository.set_flag(
+                    FLAG_ENFORCEMENT,
+                    False,
+                    updated_by="bootstrap",
+                    reason="ENFORCEMENT_ENABLED=false in the environment forces read-only",
+                )
+            self._enforcement_enabled = False
+            logger.warning("Ecriture COUPEE : ENFORCEMENT_ENABLED=false dans l'environnement")
+            return
         if stocke is None:
             await self.repository.set_flag(
                 FLAG_ENFORCEMENT,
@@ -307,19 +347,6 @@ class ShapingService:
                 reason="initial value from ENFORCEMENT_ENABLED",
             )
             return
-        if stocke is False and self.settings.enforcement_enabled:
-            # DEMANDE EXPLICITE : l'ecriture est TOUJOURS active par defaut.
-            # L'interrupteur de l'interface reste un arret d'urgence, valable
-            # jusqu'au prochain demarrage : une coupure oubliee ne laisse plus
-            # le controleur en lecture seule pour des semaines. Pour un
-            # controleur durablement en lecture seule : ENFORCEMENT_ENABLED=false.
-            await self.repository.set_flag(
-                FLAG_ENFORCEMENT,
-                True,
-                updated_by="bootstrap",
-                reason="ENFORCEMENT_ENABLED=true: writing is on at every startup",
-            )
-            stocke = True
         self._enforcement_enabled = stocke
         if stocke != self.settings.enforcement_enabled:
             logger.warning(
@@ -337,6 +364,11 @@ class ShapingService:
         Refusee si ENFORCEMENT_LOCKED est vrai : un exploitant qui tient a la
         friction du redemarrage doit pouvoir la garder.
         """
+        if self.enforcement_forced_off and enabled:
+            raise EnforcementLockedError(
+                "ENFORCEMENT_ENABLED=false is set in the environment: writing stays off. "
+                "Remove it (or set it to true) and restart to allow writing."
+            )
         if self.settings.enforcement_locked:
             raise EnforcementLockedError(
                 "ENFORCEMENT_LOCKED=true: switching from the interface is "
@@ -1077,7 +1109,16 @@ class ShapingService:
                 queue_trees=client.queue_trees(),
             )
 
-        return await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
+        etat = await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
+        # Une AUTRE instance de freeQoS a pose des files sur ce routeur : on le
+        # retient pour l'afficher -- deux controleurs ne doivent pas piloter le
+        # meme routeur, et c'est a l'exploitant d'arreter l'un des deux.
+        autres = {i for q in etat.simple_queues if (i := other_instance(q))}
+        if autres:
+            OTHER_INSTANCES[collector.name] = autres
+        else:
+            OTHER_INSTANCES.pop(collector.name, None)
+        return etat
 
     # ------------------------------------------------------- etat desire
     async def build_targets(
@@ -1145,6 +1186,7 @@ class ShapingService:
                 override_up_mbps=surcharge.get("max_up_mbps"),
                 trim_factor=resserrages.get(str(lien["key"]), 1.0),
             )
+            cible.skip_reason = transit_reason(lien)
             liens.append(cible)
             for identite in _identites_du_bout_distant(lien):
                 liens_par_identite.setdefault(identite, cible)
@@ -2289,6 +2331,15 @@ class ShapingService:
 
         try:
             resultat = await self.apply(restreint, dry_run=False, author=author, explicit=True)
+        except EnforcementDisabledError:
+            # Mode simulation : la file est calculee, rien n'est envoye. Ce n'est
+            # pas une erreur, et l'exploitant doit le lire comme tel.
+            ligne["state"] = self.ETAT_A_POSER
+            ligne["reason"] = (
+                "simulation: writing to the routers is off -- the queue is computed, not "
+                "sent (Settings > Shaping and writing)"
+            )
+            return ligne
         except Exception as exc:  # noqa: BLE001 - la fiche est deja enregistree
             logger.exception("Ecriture impossible sur %s pour '%s'", router_name, reference)
             ligne["state"] = self.ETAT_ERREUR
@@ -2462,18 +2513,21 @@ class ShapingService:
         RouterOS s'arrete a la premiere file qui correspond. Tout effacer puis
         reposer le plan courant ne laisse que ce qui doit y etre.
 
-        Seules NOS files partent (commentaire ``freeqos:managed`` ou nom
-        ``freeqos-``) : jamais une file posee a la main ou par RADIUS. Les types
+        Seules NOS files partent (commentaire ``freeqos:managed`` de CETTE
+        instance) : jamais une file posee a la main, par RADIUS ou par une autre
+        instance de freeQoS. Les types
         CAKE restent, le plan les reutilise. Geste humain : ecrit meme
         interrupteur coupe, comme toute demande explicite.
         """
         etat = await self._inspect_one(self._collector(router_name))
-        nos_files = [
-            q
-            for q in etat.simple_queues
-            if MANAGED_COMMENT in str(q.get("comment") or "")
-            or str(q.get("name") or "").startswith(PREFIX)
-        ]
+        # Geste explicite de l'exploitant : les lignes gelees pour oscillation
+        # sont liberees, l'etat repart de zero.
+        self.unfreeze(router_name)
+        # SEULEMENT CE QUI PORTE NOTRE MARQUE (et pas celle d'une autre
+        # instance). Le prefixe de nom ne suffit pas : constate, des files sans
+        # commentaire freeqos:managed ont ete retirees parce que leur nom
+        # commencait par « freeqos- ».
+        nos_files = [q for q in etat.simple_queues if is_ours(q)]
         nos_files = [q for q in nos_files if q.get(".id")]
         # Les enfants AVANT leurs parents : un parent retire en premier
         # laisserait ses enfants orphelins le temps de la boucle.
@@ -2972,7 +3026,15 @@ class ShapingService:
         ecrit quoi qu'il arrive ; l'interrupteur ne retient que les boucles
         automatiques.
         """
-        if not dry_run and not self._enforcement_enabled and not explicit:
+        if (
+            not dry_run
+            and not self._enforcement_enabled
+            and (not explicit or self.enforcement_forced_off or _auteur_automatique(author))
+        ):
+            # SIMULATION : les boucles automatiques et les integrations (cle
+            # d'API, API model) n'ecrivent pas. Seul un geste humain dans
+            # l'interface passe -- et rien du tout si l'environnement force
+            # l'arret (ENFORCEMENT_ENABLED=false).
             raise EnforcementDisabledError(
                 "The controller is read-only. Turn enforcement on in "
                 "Settings > Shaping and writing, or set ENFORCEMENT_ENABLED to true."
@@ -2980,6 +3042,7 @@ class ShapingService:
 
         client: RouterOsWriteClient | None = None
         if not dry_run:
+            plan = self._filtrer_oscillations(plan)
             client = self._write_client(plan.router_name)
 
         resultat = await apply_plan(
@@ -2989,6 +3052,8 @@ class ShapingService:
             max_actions=self.settings.enforcement_max_actions,
         )
 
+        if not dry_run:
+            self._retenir_ecritures(resultat)
         if not dry_run and resultat.applied:
             # Ce qu'on vient d'ecrire a change l'etat des routeurs : un audit
             # calcule avant ne decrit plus rien. Sans cet oubli, l'interface
@@ -3004,6 +3069,105 @@ class ShapingService:
                 author=author,
             )
         return resultat
+
+    # ------------------------------------------------- garde-fou oscillation
+    #: Champs de STRUCTURE surveilles. Un debit qui va et vient est normal (un
+    #: boost qui expire) ; une CIBLE qui va et vient ne l'est jamais.
+    CHAMPS_SURVEILLES = ("target", "parent", "queue")
+    FENETRE_OSCILLATION_S = 3600.0
+
+    @staticmethod
+    def _cle_ligne(action: PlanAction) -> str:
+        return str(action.target_id or action.name or "")
+
+    def _filtrer_oscillations(self, plan: Plan) -> Plan:
+        """Retire du plan toute ecriture qui ferait osciller une ligne.
+
+        CONSTATE EN PRODUCTION : toutes les deux minutes, la cible d'une meme
+        file etait reecrite en alternance (``ether3,lan-bridge`` puis
+        ``ether6,lan-bridge`` puis ``100.100.105.240/30``...), plus de 76 fois
+        en quelques heures. Une ligne dont un champ de structure revient a sa
+        valeur d'AVANT-DERNIERE ecriture (A -> B -> A) est GELEE : plus aucune
+        ecriture, une erreur journalisee, une alerte dans l'interface. Seul un
+        nettoyage explicite du routeur la libere.
+        """
+        maintenant = time.monotonic()
+        gardees: list[PlanAction] = []
+        for action in plan.actions:
+            ligne = self._cle_ligne(action)
+            cle_ligne = (plan.router_name, ligne)
+            if action.verb != "set" or not ligne:
+                gardees.append(action)
+                continue
+            if cle_ligne in self.frozen:
+                continue
+            oscille = None
+            for champ in self.CHAMPS_SURVEILLES:
+                if champ not in action.fields:
+                    continue
+                voulu = normalise_field(str(action.fields[champ])) or ""
+                histo = [
+                    v
+                    for t, v in self._ecrits.get((plan.router_name, action.path, ligne, champ), [])
+                    if maintenant - t <= self.FENETRE_OSCILLATION_S
+                ]
+                if len(histo) >= 2 and voulu == histo[-2] and voulu != histo[-1]:
+                    oscille = (champ, histo[-2], histo[-1])
+                    break
+            if oscille is None:
+                gardees.append(action)
+                continue
+            champ, a, b = oscille
+            self.frozen[cle_ligne] = {
+                "router": plan.router_name,
+                "line": action.name or ligne,
+                "id": action.target_id,
+                "field": champ,
+                "values": [a, b],
+                "since": datetime.now(tz=UTC),
+            }
+            logger.error(
+                "OSCILLATION sur %s, %s : %s alterne entre %r et %r -- ligne GELEE, plus "
+                "aucune ecriture (deux controleurs, ou un etat desire instable)",
+                plan.router_name,
+                action.name or ligne,
+                champ,
+                a,
+                b,
+            )
+        if len(gardees) == len(plan.actions):
+            return plan
+        return Plan(
+            router_name=plan.router_name,
+            actions=gardees,
+            conflicts=plan.conflicts,
+            skipped=plan.skipped,
+            unchanged=plan.unchanged,
+        )
+
+    def _retenir_ecritures(self, resultat: ApplyResult) -> None:
+        maintenant = time.monotonic()
+        for issue in resultat.outcomes:
+            action = issue.action
+            if not issue.ok or action.verb not in ("set", "add"):
+                continue
+            ligne = self._cle_ligne(action)
+            for champ in self.CHAMPS_SURVEILLES:
+                if champ not in action.fields or not ligne:
+                    continue
+                cle = (resultat.router_name, action.path, ligne, champ)
+                histo = self._ecrits.setdefault(cle, [])
+                histo.append((maintenant, normalise_field(str(action.fields[champ])) or ""))
+                del histo[:-3]
+
+    def unfreeze(self, router_name: str) -> int:
+        """Libere les lignes gelees d'un routeur (geste explicite)."""
+        cles = [c for c in self.frozen if c[0] == router_name]
+        for cle in cles:
+            del self.frozen[cle]
+        for ecrit in [c for c in self._ecrits if c[0] == router_name]:
+            del self._ecrits[ecrit]
+        return len(cles)
 
     # ------------------------------------------------------------ interne
     def _collector(self, router_name: str) -> MikrotikCollector:
@@ -3152,6 +3316,43 @@ INFRA_SKIP = (
 )
 
 
+TRANSIT_SKIP = (
+    "transit link toward {peer} ({why}): never shaped -- a queue here caps the traffic of "
+    "every router behind it, not one client"
+)
+INTERFACE_SKIP = (
+    "no client network on {interface}: a queue on the whole interface would cap ALL its "
+    "traffic to one rate -- nothing is written"
+)
+
+
+def transit_reason(lien: dict[str, Any]) -> str | None:
+    """Pourquoi ce lien est un lien de TRANSIT (entre routeurs), ou None.
+
+    CONSTATE EN PRODUCTION : des files CAKE posees sur 100.100.101.112/29 (le
+    segment commun aux NAS et a DS-CCR) et sur 100.100.100.252/30 (l'uplink)
+    ont ajoute 4 a 7 s de latence et coupe l'acces au coeur. Un lien qui porte
+    une adjacence de routage, ou qui mene a un autre routeur, n'est le goulot
+    d'aucun client : il ne recoit jamais de file.
+    """
+    brut = lien.get("attributes")
+    if isinstance(brut, str):
+        try:
+            brut = json.loads(brut)
+        except ValueError:
+            brut = {}
+    attributs = brut if isinstance(brut, dict) else {}
+    pair = str(lien.get("target_name") or lien.get("target_key") or "?")
+    if attributs.get("routing_adjacency"):
+        return TRANSIT_SKIP.format(peer=pair, why="routing adjacency")
+    cle = str(lien.get("target_key") or "")
+    if cle.startswith("router:"):
+        return TRANSIT_SKIP.format(peer=pair, why="managed router")
+    if str(lien.get("target_kind") or "") in ("gateway", "core"):
+        return TRANSIT_SKIP.format(peer=pair, why=str(lien.get("target_kind")))
+    return None
+
+
 def protect_infrastructure(
     router_name: str, links: list[LinkTarget], subscribers: list[SubscriberTarget]
 ) -> None:
@@ -3190,8 +3391,39 @@ def protect_infrastructure(
         except ValueError:
             pass
 
+    # Adresses des AUTRES routeurs geres : un segment qui en contient une est un
+    # segment de transit (le /29 commun aux NAS et au coeur, par exemple).
+    autres_routeurs: dict[Any, str] = {}
+    for adresse, (porteur, _iface) in own_addresses().items():
+        if porteur == router_name:
+            continue
+        try:
+            autres_routeurs[ipaddress.ip_address(adresse)] = porteur
+        except ValueError:
+            continue
+
     for lien in links:
         if lien.skip_reason:
+            continue
+        if not lien.network:
+            lien.skip_reason = INTERFACE_SKIP.format(interface=lien.interface)
+            continue
+        try:
+            segment = ipaddress.ip_network(lien.network, strict=False)
+        except ValueError:
+            segment = None
+        voisin = next(
+            (
+                porteur
+                for ip, porteur in autres_routeurs.items()
+                if segment is not None and ip.version == segment.version and ip in segment
+            ),
+            None,
+        )
+        if voisin is not None:
+            lien.skip_reason = TRANSIT_SKIP.format(
+                peer=voisin, why=f"{lien.network} carries an address of {voisin}"
+            )
             continue
         montant = bool(iface_montante) and lien.interface == iface_montante
         if not montant and passerelle and lien.network:

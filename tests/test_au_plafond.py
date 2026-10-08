@@ -146,3 +146,18 @@ def test_le_diagnostic_de_la_sonde_rend_la_reponse_brute(settings) -> None:  # t
     assert dernier["stats"]["received"] == 5 and dernier["raw"]
     # Et le meme ping que dans le terminal du routeur, pour comparer.
     assert corps["attempts"][-1]["interval"] == "1s (terminal)"
+
+
+def test_une_box_qui_ne_repond_jamais_au_ping_n_est_pas_une_degradation() -> None:
+    """« client never answers » : courant pour beaucoup de CPE. Ni perte, ni
+    experience mauvaise, ni motif d'action."""
+    from app.services.latency_clients import build_rows
+
+    [ligne] = build_rows(
+        [{"subscriber_id": 7, "login": "cpe-muette", "median_ms": 4.0, "p95_ms": 6.0}],
+        {},
+        {7: {"sent": 5, "received": 0, "loss_pct": 100.0, "router": "nas", "ever_answered": False}},
+    )
+    assert ligne["loss_pct"] is None
+    assert ligne["experience"] != "poor"
+    assert any("does not answer ping" in m for m in ligne["reasons"])

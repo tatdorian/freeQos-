@@ -26,10 +26,17 @@ def _loopbacks_oublies():
     """Le loopback detecte est retenu par nom de routeur, au niveau du module :
     sans cet oubli, un test en heriterait d'un autre."""
     from app.collectors.mikrotik import forget_router_facts
+    from app.enforcement import models
+    from app.services import shaping
 
     forget_router_facts()
+    # Pas d'identifiant d'instance herite d'un autre test.
+    models.INSTANCE_ID = None
+    shaping.OTHER_INSTANCES.clear()
     yield
     forget_router_facts()
+    models.INSTANCE_ID = None
+    shaping.OTHER_INSTANCES.clear()
 
 
 class FakeRouterOsClient:

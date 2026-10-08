@@ -32,7 +32,10 @@ from app.enforcement.models import (
     QueueSpec,
     QueueTypeSpec,
     address_target,
+    is_ours,
+    needs_claim,
     network_target,
+    other_instance,
     slugify,
 )
 from app.models import KIND_PPPOE, KIND_STATIC
@@ -318,7 +321,47 @@ def desired_state(
     # sont eux qui donneront leur parent aux abonnes dont on ignore le secteur.
     cibles_liens: dict[str, str] = {}
     reseaux_parents: list[tuple[Any, str]] = []
+    # DEUX LIENS SUR LA MEME CIBLE : c'est le signe d'un segment partage (le
+    # /29 commun a plusieurs routeurs), pas d'un goulot. CONSTATE : le premier
+    # lien posait sa file, le second etait ecarte, et la file posee bridait
+    # tout le transit. Desormais AUCUN des deux n'est ecrit : erreur de
+    # planification, signalee.
+    par_cible: dict[str, list[str]] = {}
+    for link in links:
+        if link.enabled and not link.skip_reason:
+            par_cible.setdefault(link.queue_target, []).append(link.name)
+    doublons = {c: noms for c, noms in par_cible.items() if len(noms) > 1}
+    for cible_double, noms in doublons.items():
+        logger.error(
+            "Erreur de planification : %d liens visent la meme cible %s (%s) -- aucune file",
+            len(noms),
+            cible_double,
+            ", ".join(noms),
+        )
     for index, link in enumerate(links):
+        if link.enabled and not link.skip_reason and not link.network:
+            # JAMAIS UNE INTERFACE ENTIERE. CONSTATE : une file ciblant
+            # « ether3,lan-bridge » limitait tout le trafic de l'interface au
+            # debit d'un seul client.
+            ecartes.append(
+                PlanSkip(
+                    link.name,
+                    f"no client network on {link.interface}: a queue on the whole "
+                    "interface would cap ALL its traffic to one rate -- nothing is written",
+                )
+            )
+            continue
+        if link.enabled and not link.skip_reason and link.queue_target in doublons:
+            autres = [n for n in doublons[link.queue_target] if n != link.name]
+            ecartes.append(
+                PlanSkip(
+                    link.name,
+                    f"planning error: target {link.queue_target} is also that of "
+                    f"{', '.join(autres)} -- a shared segment is not a bottleneck, "
+                    "no queue is written for any of them",
+                )
+            )
+            continue
         if link.skip_reason:
             ecartes.append(PlanSkip(link.name, link.skip_reason))
             continue
@@ -521,7 +564,8 @@ def _contenu_dans(cible: str, reseau: Any) -> bool:
 
 
 def _is_managed(row: dict[str, Any]) -> bool:
-    return MANAGED_COMMENT in str(row.get("comment") or "")
+    """A NOUS : marquee freeQoS, et pas par une autre instance (cf. ``is_ours``)."""
+    return is_ours(row)
 
 
 def _index_by_name(rows: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -732,12 +776,17 @@ def build_plan(
             continue
 
         if not _is_managed(existante):
+            autre = other_instance(existante)
             plan.conflicts.append(
                 PlanConflict(
                     name=file_spec.name,
                     path="/queue/simple",
                     detail=(
-                        "a queue by that name already exists without the "
+                        f"this queue is managed by ANOTHER freeQoS instance ({autre}): "
+                        "it is never modified from here. Two controllers must not drive "
+                        "the same router -- stop one of them."
+                        if autre
+                        else "a queue by that name already exists without the "
                         f"'{MANAGED_COMMENT}' marker: it does not belong to the "
                         "controller and will not be modified"
                     ),
@@ -746,6 +795,10 @@ def build_plan(
             continue
 
         changements = _diff_fields(existante, champs, ignore={"name", "comment"})
+        if needs_claim(existante):
+            # Posee avant l'identifiant d'instance : on la marque comme NOTRE,
+            # une seule fois (cf. ``is_ours``).
+            changements["comment"] = (str(existante.get("comment") or ""), champs["comment"])
         if changements:
             plan.actions.append(
                 PlanAction(
@@ -815,6 +868,21 @@ def _traiter_file_tierce(
                     f"target {spec.target} is aimed at by several third-party queues "
                     f"({noms}): no way to tell which one really shapes, "
                     "none is modified"
+                ),
+            )
+        )
+        return
+
+    autres = sorted({i for e in etrangeres if (i := other_instance(e))})
+    if autres:
+        plan.conflicts.append(
+            PlanConflict(
+                name=spec.name,
+                path="/queue/simple",
+                detail=(
+                    f"target {spec.target} is already shaped by ANOTHER freeQoS instance "
+                    f"({', '.join(autres)}): nothing is written. Two controllers must not "
+                    "drive the same router -- stop one of them."
                 ),
             )
         )
@@ -914,6 +982,14 @@ def normalise_field(value: str | None) -> str | None:
         membres = [_normalise(m) or "" for m in texte.split(",")]
         membres = [m for m in membres if m]
         return ",".join(sorted(membres))
+    # ADRESSES : « 10.20.0.10 » et « 10.20.0.10/32 » designent la meme cible, et
+    # RouterOS range « 10.0.0.1/24 » en « 10.0.0.0/24 ». Comparees en texte,
+    # elles produisaient un ``set`` a chaque cycle, pour toujours.
+    if any(c.isdigit() for c in texte) and ("." in texte or ":" in texte):
+        try:
+            return str(ipaddress.ip_network(texte, strict=False))
+        except ValueError:
+            pass
     # Debits composes : on compare les entiers, pas leur ecriture.
     if "/" in texte:
         morceaux = [_normalise_rate(m) for m in texte.split("/")]

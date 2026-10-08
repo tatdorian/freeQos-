@@ -33,7 +33,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.enforcement.models import MANAGED_COMMENT, QueueSpec
+from app.enforcement.models import QueueSpec, is_ours
 from app.enforcement.planner import masked_queues, normalise_field
 
 __all__ = [
@@ -280,7 +280,7 @@ def limit_state(
         return etat
 
     etat.seen = str(ligne.get("max-limit") or "")
-    etat.managed = MANAGED_COMMENT in str(ligne.get("comment") or "")
+    etat.managed = is_ours(ligne)
 
     if fasttrack:
         etat.verdict = VERDICT_CONTOURNE
