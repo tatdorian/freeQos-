@@ -6,7 +6,7 @@ sera envoye a un routeur, sans qu'aucune connexion soit ouverte.
 
 from __future__ import annotations
 
-from app.enforcement.models import MANAGED_COMMENT, format_rate, slugify
+from app.enforcement.models import MANAGED_COMMENT, QueueSpec, format_rate, slugify
 from app.enforcement.planner import (
     QUEUE_TYPE_DOWN,
     QUEUE_TYPE_UP,
@@ -28,6 +28,10 @@ def abonne(login="dupont", down=100.0, up=20.0, **kwargs) -> SubscriberTarget:
 
 def lien(name="bh-altair", capacity=500.0, **kwargs) -> LinkTarget:
     kwargs.setdefault("interface", "ether1")
+    # Un lien de PoP vise le RESEAU CLIENT qu'il dessert (jamais une interface
+    # entiere) : un /24 propre a chaque nom de lien.
+    graine = sum(map(ord, name))
+    kwargs.setdefault("subnet", f"10.{graine % 200 + 30}.{graine // 200 % 250}.1/24")
     return LinkTarget(name=name, measured_capacity_mbps=capacity, **kwargs)
 
 
@@ -98,7 +102,11 @@ def test_le_resserrage_atteint_la_file_du_lien() -> None:
     _, files, _ = desired_state(
         links=[
             LinkTarget(
-                name="bh-altair", interface="ether2", measured_capacity_mbps=200, trim_factor=0.9
+                name="bh-altair",
+                interface="ether2",
+                subnet="10.40.0.1/24",
+                measured_capacity_mbps=200,
+                trim_factor=0.9,
             )
         ],
         subscribers=[],
@@ -163,11 +171,13 @@ def test_la_file_d_un_lien_vise_son_segment_l3() -> None:
     assert enfant.parent == "freeqos-parent-bh-altair"
 
 
-def test_lien_sans_adresse_retombe_sur_l_interface() -> None:
-    """Un lien purement L2 n'a pas de segment : mieux vaut un plafond de port
-    qu'aucun plafond."""
-    _, files, _ = desired_state(links=[lien()], subscribers=[])
-    assert files[0].target == "ether1"
+def test_lien_sans_reseau_n_a_jamais_de_file_d_interface() -> None:
+    """CONSTATE EN PRODUCTION : une file ciblant « ether3,lan-bridge » limitait
+    TOUT le trafic de l'interface au debit d'un seul client. Un lien sans
+    reseau client n'a pas de file du tout."""
+    _, files, ecartes = desired_state(links=[lien(subnet=None)], subscribers=[])
+    assert files == []
+    assert "whole interface" in ecartes[0].reason
 
 
 def test_le_parent_le_plus_specifique_l_emporte() -> None:
@@ -184,18 +194,22 @@ def test_le_parent_le_plus_specifique_l_emporte() -> None:
     assert files[-1].parent == "freeqos-parent-secteur"
 
 
-def test_deux_liens_sur_la_meme_cible_ne_font_qu_une_file() -> None:
-    """Deux files de meme cible se masqueraient : RouterOS n'applique que la
-    premiere."""
-    _, files, _ = desired_state(
+def test_deux_liens_sur_la_meme_cible_ne_font_aucune_file() -> None:
+    """CONSTATE : DS-CCR et NAS-TAILLADJE visaient tous deux 100.100.101.112/29,
+    le segment de transit commun. Le premier posait sa file (4 a 7 s de latence
+    pour tout le monde), le second etait ecarte. Un segment partage n'est le
+    goulot de personne : aucune file, et une erreur de planification."""
+    _, files, ecartes = desired_state(
         links=[
-            lien(name="voisin-a", subnet="172.16.38.1/23"),
-            lien(name="voisin-b", subnet="172.16.38.1/23", interface="ether2"),
+            lien(name="voisin-a", subnet="100.100.101.113/29"),
+            lien(name="voisin-b", subnet="100.100.101.113/29", interface="ether2"),
         ],
         subscribers=[],
     )
 
-    assert [f.name for f in files] == ["freeqos-parent-voisin-a"]
+    assert files == []
+    assert {e.login for e in ecartes} == {"voisin-a", "voisin-b"}
+    assert all("planning error" in e.reason for e in ecartes)
 
 
 def test_parent_inconnu_est_ignore() -> None:
@@ -567,17 +581,25 @@ def _capture_queue_simple_print(target: str) -> dict:
     }
 
 
+def _file_liste() -> QueueSpec:
+    return QueueSpec(
+        name="freeqos-parent-bh-altair",
+        target="ether3,lan-bridge",
+        max_up_mbps=None,
+        max_down_mbps=None,
+        queue_up=QUEUE_TYPE_UP,
+        queue_down=QUEUE_TYPE_DOWN,
+    )
+
+
 def test_cible_liste_reordonnee_ne_produit_aucune_action() -> None:
     """Regression P0-4 : ``target`` est une liste RouterOS. Des qu'elle a
     plusieurs membres, RouterOS la relit dans SON ordre / espacement / casse.
     Comparer les chaines brutes produisait un ``set`` a chaque cycle, pour
     toujours. On compare l'ENSEMBLE : ordre et forme ne comptent pas."""
-    # L'etat desire vise deux interfaces (lien L2 sans segment L3).
-    _, files, _ = desired_state(
-        links=[lien(name="bh-altair", capacity=None, subnet=None, interface="ether3,lan-bridge")],
-        subscribers=[],
-    )
-    assert files[0].target == "ether3,lan-bridge"
+    # Une file deja posee dont la cible est une liste (heritage d'une version
+    # anterieure) : la comparaison doit rester stable.
+    files = [_file_liste()]
 
     # RouterOS renvoie la meme liste, dans un autre ordre et un autre espacement.
     actual = _capture_queue_simple_print(target="lan-bridge, ether3")
@@ -606,10 +628,7 @@ def test_cible_liste_reordonnee_ne_produit_aucune_action() -> None:
 
 def test_cible_liste_casse_et_espaces_ignores() -> None:
     """Casse et espaces autour des virgules ne sont pas des changements."""
-    _, files, _ = desired_state(
-        links=[lien(name="bh-altair", capacity=None, subnet=None, interface="ether3,lan-bridge")],
-        subscribers=[],
-    )
+    files = [_file_liste()]
     actual = _capture_queue_simple_print(target="LAN-BRIDGE ,   Ether3")
     plan = build_plan(
         "pop-altair",
@@ -624,10 +643,7 @@ def test_cible_liste_casse_et_espaces_ignores() -> None:
 def test_cible_liste_reellement_differente_produit_un_set() -> None:
     """La normalisation ne doit PAS masquer un vrai changement de membres :
     retirer un membre reste un ecart, donc un set."""
-    _, files, _ = desired_state(
-        links=[lien(name="bh-altair", capacity=None, subnet=None, interface="ether3,lan-bridge")],
-        subscribers=[],
-    )
+    files = [_file_liste()]
     actual = _capture_queue_simple_print(target="ether3")  # un membre en moins
     plan = build_plan(
         "pop-altair",
@@ -668,13 +684,14 @@ def test_un_lien_sur_interface_ne_porte_pas_les_abonnes() -> None:
     s'il correspond aussi au parent ; une file d'interface ne voit que le
     descendant. L'upload du client ne traversait donc jamais sa file : ni
     plafonne (896 kbps pour 100 vendus), ni compte (0 bps affiche)."""
-    vlan = lien("2060-Nestle-Siege", interface="vlan2060-nestle-siege")
+    vlan = lien("2060-Nestle-Siege", interface="vlan2060-nestle-siege", subnet=None)
     client = abonne("nestle", down=0.1, up=0.1, parent=vlan.queue_name, address="11.11.11.2")
 
     _, files, _ = desired_state(links=[vlan], subscribers=[client])
 
     par_nom = {f.name: f for f in files}
-    assert par_nom[vlan.queue_name].target == "vlan2060-nestle-siege"  # la file du lien reste
+    # Pas de file d'interface du tout ; le client garde la sienne, sans parent.
+    assert vlan.queue_name not in par_nom
     assert par_nom[client.queue_name].parent is None
 
 

@@ -200,7 +200,45 @@ class Container:
     started_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
 
 
+def resolve_instance_id(settings: Settings) -> str:
+    """L'identifiant de cette instance : reglage, sinon fichier, sinon genere.
+
+    Garde dans ``instance.id`` a cote de la cle (le meme volume persistant) :
+    un redemarrage ou une mise a jour garde la meme identite, et retrouve donc
+    ses propres files sur les routeurs.
+    """
+    import re
+    import secrets
+
+    from app.enforcement import models
+
+    voulu = (settings.freeqos_instance_id or "").strip()
+    if voulu:
+        ident = re.sub(r"[^A-Za-z0-9_.-]+", "-", voulu)[:32]
+    else:
+        fichier = (
+            settings.app_secret_key_file.parent / "instance.id"
+            if settings.app_secret_key_file is not None
+            else None
+        )
+        ident = ""
+        if fichier is not None and fichier.exists():
+            ident = fichier.read_text(encoding="utf-8").strip()
+        if not ident:
+            ident = "fq-" + secrets.token_hex(4)
+            if fichier is not None:
+                try:
+                    fichier.parent.mkdir(parents=True, exist_ok=True)
+                    fichier.write_text(ident + "\n", encoding="utf-8")
+                except OSError as exc:
+                    logger.warning("Identifiant d'instance non sauvegarde (%s) : %s", fichier, exc)
+    models.INSTANCE_ID = ident
+    logger.info("Instance freeQoS : %s", ident)
+    return ident
+
+
 async def build_container(settings: Settings) -> Container:
+    resolve_instance_id(settings)
     if settings.enforcement_enabled:
         # L'enforcement existe (phase 2), mais il reste une capacite d'ecriture
         # sur des equipements de production : on le dit fort au demarrage.

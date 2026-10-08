@@ -500,6 +500,11 @@ class Settings(BaseSettings):
     # aux redemarrages : une cle regeneree rendrait illisibles tous les mots de
     # passe deja stockes.
     app_secret_key_file: Path | None = Path("data/secret.key")
+    # Identifiant de CETTE instance, ecrit dans le commentaire de tout ce que
+    # freeQoS pose sur un routeur. Vide : genere une fois et garde dans
+    # ``instance.id``, a cote de la cle. Deux instances qui pilotent les memes
+    # routeurs ne touchent ainsi jamais a ce que l'autre a pose.
+    freeqos_instance_id: str | None = None
     app_secret_key_autogenerate: bool = True
 
     # --- Shaping (phase 2) ---
@@ -527,7 +532,9 @@ class Settings(BaseSettings):
     # simple '/queue/simple/set <id> max-limit=...' sur la file en place. Elle
     # n'est ni renommee, ni reparentee, ni marquee, ni supprimable par le
     # controleur : seul son debit change.
-    shaping_adopt_foreign_queues: bool = True
+    # DESACTIVE PAR DEFAUT : freeQoS ne modifie jamais une file qu'il n'a pas
+    # posee, sauf demande explicite de l'exploitant (ce reglage).
+    shaping_adopt_foreign_queues: bool = False
     # Poser une file des la DECOUVERTE d'un lien, avant toute mesure.
     #
     # Elle vise le segment L3 du lien (172.16.38.0/23) et nait ILLIMITEE
@@ -632,10 +639,12 @@ class Settings(BaseSettings):
     qoe_recovery_cycles: int = 3
 
     # --- Garde-fous ---
-    # Ecriture sur les routeurs ACTIVE par defaut : files, restrictions, export
-    # NetFlow se posent tout seuls. Seules les lignes marquees freeqos:managed
-    # sont touchees. ENFORCEMENT_ENABLED=false pour un controleur en lecture seule.
-    enforcement_enabled: bool = True
+    # SIMULATION PAR DEFAUT : au premier demarrage, rien n'est ecrit sur les
+    # routeurs ; les plans sont calcules et affiches. L'ecriture s'active dans
+    # l'interface (Settings > Shaping and writing), apres affichage du plan.
+    # ENFORCEMENT_ENABLED=false pose dans l'environnement FORCE l'arret, quelle
+    # que soit la valeur enregistree en base. =true n'est qu'une valeur initiale.
+    enforcement_enabled: bool = False
     max_plausible_bps: float = 100_000_000_000.0
     # En dessous de ce delta on ne calcule pas de debit (bruit de division).
     min_rate_interval_s: float = 1.0

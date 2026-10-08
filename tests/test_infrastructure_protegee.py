@@ -88,3 +88,55 @@ def test_une_file_tierce_n_est_jamais_debridee() -> None:
         actual_queues=[tierce],
     )
     assert not [a for a in plan.actions if a.path == "/queue/simple"]
+
+
+def test_le_segment_de_transit_commun_au_coeur_n_a_pas_de_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CONSTATE EN PRODUCTION : files CAKE sur 100.100.101.112/29 (segment
+    commun aux NAS et a DS-CCR) et sur 100.100.100.252/30 (uplink) : 4 a 7 s de
+    latence et l'acces au coeur coupe."""
+    monkeypatch.setattr(mikrotik, "_AMONTS", {"DS-CCR": ("100.100.100.254", "ether1")})
+    monkeypatch.setattr(
+        mikrotik,
+        "_PROPRIETAIRES",
+        {
+            "100.100.101.113": ("DS-CCR", "ether2"),
+            "100.100.101.114": ("NAS-TAILLADJE", "ether1"),
+            "100.100.101.115": ("NAS-BASSORA", "ether1"),
+        },
+    )
+    transit = LinkTarget(name="NAS-TAILLADJE", interface="ether2", subnet="100.100.101.113/29")
+    uplink = LinkTarget(name="MAIN-GATEWAY", interface="ether1", subnet="100.100.100.253/30")
+    clients = LinkTarget(name="clients", interface="ether3", subnet="172.16.38.1/23")
+    liens = [transit, uplink, clients]
+    protect_infrastructure("DS-CCR", liens, [])
+    _types, files, ecartes = desired_state(links=liens, subscribers=[])
+    assert [f.target for f in files] == ["172.16.38.0/23"]
+    raisons = {e.login: e.reason for e in ecartes}
+    assert "transit link" in raisons["NAS-TAILLADJE"]
+    assert "uplink" in raisons["MAIN-GATEWAY"]
+
+
+@pytest.mark.parametrize(
+    ("ligne", "attendu"),
+    [
+        ({"target_key": "router:NAS-BASSORA", "target_name": "NAS-BASSORA"}, "managed router"),
+        ({"target_key": "mac:aa", "attributes": {"routing_adjacency": True}}, "routing adjacency"),
+        (
+            {"target_key": "mac:bb", "attributes": '{"routing_adjacency": true}'},
+            "routing adjacency",
+        ),
+        ({"target_key": "mac:cc", "target_kind": "gateway"}, "gateway"),
+    ],
+)
+def test_un_lien_vers_un_routeur_est_un_lien_de_transit(ligne: dict, attendu: str) -> None:
+    from app.services.shaping import transit_reason
+
+    assert attendu in str(transit_reason(ligne))
+
+
+def test_un_lien_vers_une_antenne_n_est_pas_du_transit() -> None:
+    from app.services.shaping import transit_reason
+
+    assert transit_reason({"target_key": "mac:dd", "target_kind": "radio"}) is None

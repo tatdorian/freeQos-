@@ -8,7 +8,10 @@ posee a la main ou par RADIUS.
 
 from __future__ import annotations
 
+import pytest
+
 from app.config import Settings
+from app.enforcement import models
 from app.enforcement.models import MANAGED_COMMENT
 from tests.conftest import FakeRouterOsClient
 from tests.test_enforcement import FauxClientEcriture
@@ -16,9 +19,10 @@ from tests.test_shaping_service import make_service
 
 
 async def test_seules_nos_files_partent_les_enfants_avant_les_parents(
-    settings: Settings,
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings.enforcement_enabled = False  # geste humain : ecrit quand meme
+    monkeypatch.setattr(models, "INSTANCE_ID", "cette-instance")
     routeur = FakeRouterOsClient()
     routeur.simple_queue_rows = [
         {".id": "*1", "name": "freeqos-parent-bh", "comment": MANAGED_COMMENT, "parent": "none"},
@@ -28,8 +32,16 @@ async def test_seules_nos_files_partent_les_enfants_avant_les_parents(
             "comment": MANAGED_COMMENT,
             "parent": "freeqos-parent-bh",
         },
-        # Ancienne file sans commentaire, mais avec notre prefixe : elle part.
+        # CONSTATE EN PRODUCTION : sans commentaire freeqos:managed, une file
+        # NE PART PAS, meme si son nom commence par « freeqos- ».
         {".id": "*3", "name": "freeqos-vieille", "comment": "", "parent": "none"},
+        # Posee par une AUTRE instance de freeQoS : jamais touchee non plus.
+        {
+            ".id": "*5",
+            "name": "freeqos-autre",
+            "comment": "freeqos:managed instance=autre-instance",
+            "parent": "none",
+        },
         # File de l'exploitant : intouchable.
         {".id": "*4", "name": "client-vip", "comment": "pose a la main", "parent": "none"},
     ]
@@ -42,11 +54,11 @@ async def test_seules_nos_files_partent_les_enfants_avant_les_parents(
     retraits = [a for a in ecriture.executed if a.verb == "remove"]
     ids = [a.target_id for a in retraits]
     assert "*4" not in ids
-    assert set(ids) == {"*1", "*2", "*3"}
+    assert set(ids) == {"*1", "*2"}
     # L'enfant part avant son parent.
     assert ids.index("*2") < ids.index("*1")
-    assert rapport["removed"] == 3
-    assert rapport["kept_foreign"] == 1
+    assert rapport["removed"] == 2
+    assert rapport["kept_foreign"] == 3
     assert rapport["errors"] == []
 
 
