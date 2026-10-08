@@ -57,6 +57,8 @@ from app.enforcement.models import (
     PlanConflict,
     PlanSkip,
     format_rate,
+    managed_comment,
+    other_instance,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,7 +112,7 @@ def queue_name(rule_id: int, *, descendant: bool) -> str:
 
 def tag(rule_id: int, role: str) -> str:
     """Commentaire pose sur chaque ligne : la marque, puis de quoi la retrouver."""
-    return f"{MANAGED_COMMENT} restriction={rule_slug(rule_id)} role={role}"
+    return managed_comment(f"restriction={rule_slug(rule_id)} role={role}")
 
 
 def parse_tag(comment: Any) -> tuple[str, str] | None:
@@ -120,7 +122,8 @@ def parse_tag(comment: Any) -> tuple[str, str] | None:
     appartient a quelqu'un d'autre et n'est meme pas analyse.
     """
     texte = str(comment or "")
-    if MANAGED_COMMENT not in texte:
+    if MANAGED_COMMENT not in texte or other_instance({"comment": texte}):
+        # Pas a nous -- ou a une AUTRE instance de freeQoS : jamais touche.
         return None
     slug = ""
     role = ""
