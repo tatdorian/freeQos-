@@ -69,10 +69,21 @@ FIELDS: dict[int, str] = {
     151: "end_s",  # flowEndSeconds
     152: "start_ms",  # flowStartMilliseconds
     153: "end_ms",  # flowEndMilliseconds
+    # ADRESSES APRES TRADUCTION (NAT). Une sortie internet qui masque ses
+    # clients voit le RETOUR arriver sur son adresse publique : sans ces
+    # champs, le descendant n'avait plus de client a qui etre rattache, et
+    # l'on ne mesurait que la moitie du trafic (le montant). RouterOS les
+    # exporte en IPFIX (nat-src-address, nat-dst-address, ...).
+    225: "post_src",  # postNATSourceIPv4Address
+    226: "post_dst",  # postNATDestinationIPv4Address
+    227: "post_src_port",  # postNAPTSourceTransportPort
+    228: "post_dst_port",  # postNAPTDestinationTransportPort
+    281: "post_src",  # postNATSourceIPv6Address
+    282: "post_dst",  # postNATDestinationIPv6Address
 }
 
 #: Champs dont la valeur est une adresse et non un entier.
-ADDRESS_FIELDS = frozenset({"src", "dst"})
+ADDRESS_FIELDS = frozenset({"src", "dst", "post_src", "post_dst"})
 
 VARIABLE_LENGTH = 0xFFFF
 
@@ -106,6 +117,13 @@ class Flow:
     #: C'est elle qui transforme un volume en DEBIT : un enregistrement peut
     #: porter jusqu'a une minute de trafic (expiration active).
     duration_ms: int | None = None
+    #: Adresses et ports APRES traduction, quand l'exporteur les donne. Ils
+    #: rattachent au client le trafic qu'une sortie internet voit sur son
+    #: adresse publique (cf. ``FlowAggregator``).
+    post_src: str | None = None
+    post_dst: str | None = None
+    post_src_port: int = 0
+    post_dst_port: int = 0
 
 
 @dataclass(frozen=True)
@@ -431,6 +449,10 @@ def _to_flow(valeurs: dict[str, object]) -> Flow | None:
         input_snmp=_opt_int(valeurs.get("input_snmp")),
         output_snmp=_opt_int(valeurs.get("output_snmp")),
         duration_ms=_duree_enregistrement(valeurs),
+        post_src=_opt_str(valeurs.get("post_src")),
+        post_dst=_opt_str(valeurs.get("post_dst")),
+        post_src_port=_int(valeurs.get("post_src_port")),
+        post_dst_port=_int(valeurs.get("post_dst_port")),
     )
 
 
@@ -461,6 +483,13 @@ def _int(value: object) -> int:
 
 def _opt_int(value: object) -> int | None:
     return int(value) if isinstance(value, int) and value else None
+
+
+def _opt_str(value: object) -> str | None:
+    """Une adresse traduite nulle (0.0.0.0, ::) veut dire "pas de NAT"."""
+    if not isinstance(value, str) or value in ("0.0.0.0", "::"):  # noqa: S104
+        return None
+    return value
 
 
 def _epoch(seconds: int) -> datetime | None:

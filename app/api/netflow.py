@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["traffic (netflow)"])
 
 Vantage = Literal["edge", "pop", "unknown"]
+#: Point de LECTURE : un point de mesure, ou "auto" (chaque sens au mieux).
+ReadVantage = Literal["auto", "edge", "pop", "unknown"]
 
 #: Un nom de domaine plausible : des etiquettes separees par des points. Tout le
 #: reste est refuse AVANT d'atteindre le resolveur.
@@ -222,7 +224,7 @@ async def top_talkers(
     container: ContainerDep,
     minutes: Annotated[int, Query(ge=1, le=60 * 24 * 31)] = 60,
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
-    vantage: Annotated[Vantage | None, Query()] = None,
+    vantage: Annotated[ReadVantage | None, Query()] = None,
 ) -> dict[str, Any]:
     service = _service(container)
     point = vantage or service.effective_vantage
@@ -288,7 +290,7 @@ async def subscriber_series(
     subscriber_id: Annotated[int, Path(ge=1)],
     container: ContainerDep,
     window: TimeRangeDep,
-    vantage: Annotated[Vantage | None, Query()] = None,
+    vantage: Annotated[ReadVantage | None, Query()] = None,
 ) -> list[dict[str, Any]]:
     point = vantage or _service(container).effective_vantage
     return await _flows(container).subscriber_series(

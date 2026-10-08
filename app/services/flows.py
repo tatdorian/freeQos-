@@ -35,6 +35,7 @@ QUATRE DECISIONS STRUCTURANTES
 from __future__ import annotations
 
 import ipaddress
+import itertools
 import logging
 import time
 from collections.abc import Iterable, Sequence
@@ -191,6 +192,17 @@ def service_port(flow: Flow) -> int:
     return ports[0] if ports else 0
 
 
+def _retenir(table: dict[Any, Any], cle: Any, valeur: Any, limite: int) -> None:
+    """Range ``cle`` en DERNIER (la plus recemment vue), et evince les plus
+    anciennes au-dela de ``limite`` -- un dixieme d'un coup, pour ne pas payer
+    l'eviction a chaque insertion."""
+    table.pop(cle, None)
+    table[cle] = valeur
+    if len(table) > limite:
+        for vieille in list(itertools.islice(table, len(table) - limite + limite // 10)):
+            del table[vieille]
+
+
 @dataclass
 class PrefixIndex:
     """Rattache une adresse au bloc declare qui la contient, le plus precis.
@@ -258,6 +270,10 @@ class SubscriberCounters:
     down_packets: int = 0
     up_packets: int = 0
     flows: int = 0
+
+    @property
+    def total_bytes(self) -> int:
+        return self.down_bytes + self.up_bytes
 
 
 @dataclass
@@ -382,15 +398,59 @@ class FlowAggregator:
     #: (point de vue, exporteur) retenu pour chaque conversation : UNE seule
     #: source par conversation, sinon deux exporteurs du meme point de vue la
     #: comptaient deux fois (volume au double, debit gonfle).
-    _pair_vantage: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
+    _pair_vantage: dict[tuple[str, str, bool], tuple[str, str]] = field(default_factory=dict)
     #: Ce qui decrit une conversation en cours (abonne, port, protocole, usage),
     #: garde tant qu'elle est vivante : la fenetre, elle, se vide a chaque flush.
     _live_meta: dict[tuple[str, str], tuple[int | None, int, int, str]] = field(
         default_factory=dict
     )
     _vantage_courant: str = ""
+    #: APPARIEMENT NAT. Une sortie internet qui masque ses clients voit le
+    #: retour arriver sur SON adresse publique : rien dans ce flux ne nomme le
+    #: client. Le montant, lui, le nomme. On retient donc, pour chaque
+    #: conversation montante, (adresse distante, port distant, protocole, port
+    #: client) -> (abonne, adresse du client, vu a) ; le flux descendant qui
+    #: revient de ce meme bout, vers ce meme port, est le sien.
+    _nat_exact: dict[tuple[str, int, int, int], tuple[int, str, float]] = field(
+        default_factory=dict
+    )
+    #: Meme chose sans le port client, quand le routeur l'a traduit et ne
+    #: l'exporte pas. N'est retenu que si UN SEUL abonne parle a ce bout :
+    #: deux clients sur le meme serveur, et l'on ne devine pas.
+    _nat_large: dict[tuple[str, int, int], dict[int, tuple[str, float]]] = field(
+        default_factory=dict
+    )
+    #: Adresses PUBLIQUES de NAT reconnues (-> vu a) : celles qu'un flux
+    #: montant annonce comme adresse traduite, ou qu'un retour apparie
+    #: exactement a vise. L'appariement sans port client n'est tente que vers
+    #: elles : une machine publique non declaree qui parle au meme serveur ne
+    #: doit pas voir son trafic credite a un abonne.
+    _nat_publiques: dict[str, float] = field(default_factory=dict)
+    #: Flux descendants arrives AVANT leur montant (meme fenetre) : rejoues au
+    #: flush, une fois tous les montants de la fenetre connus.
+    _nat_attente: list[tuple[Flow, int, int, str, str]] = field(default_factory=list)
+    #: Plafonds : une sortie internet porte des centaines de milliers de
+    #: conversations ; la table ne doit pas devenir la memoire du collecteur.
+    #: Au-dela, les correspondances les plus anciennement vues partent les
+    #: premieres : une table pleine qui n'apprendrait plus rien serait pire.
+    nat_table_limit: int = 100_000
+    nat_pending_limit: int = 50_000
+    #: Duree de vie d'une correspondance sans nouveau montant. Un flux vivant
+    #: reemet son montant a chaque expiration active (1 min, posee par
+    #: freeQoS) ; avec le defaut RouterOS (30 min), montant et retour arrivent
+    #: ensemble, dans la meme fenetre.
+    nat_ttl_s: float = 600.0
     flows_seen: int = 0
     flows_matched: int = 0
+    #: Flux descendants rattaches par l'adresse traduite (champ NAT exporte).
+    nat_translated: int = 0
+    #: Flux descendants rattaches par appariement avec leur montant.
+    nat_matched: int = 0
+    #: Flux qui ressemblaient a un retour NAT, sans montant pour les nommer.
+    nat_unmatched: int = 0
+    #: Octets RATTACHES par point de vue et par sens, depuis le demarrage.
+    #: C'est ce qui dit, sans lire la base, qu'un point ne voit qu'un sens.
+    direction_bytes: dict[str, list[int]] = field(default_factory=dict)
     #: Destinations ecartees faute de place dans la fenetre. Un compteur qui
     #: monte dit que destination_limit est trop bas -- sinon on croirait que ces
     #: abonnes n'atteignent rien.
@@ -431,8 +491,13 @@ class FlowAggregator:
         self._vantage_courant = vantage
         self._exporteur_courant = exporter or ""
 
-        source = self.index.lookup(flow.src)
-        destination = self.index.lookup(flow.dst)
+        # L'adresse telle qu'exportee d'abord, l'adresse TRADUITE a defaut :
+        # derriere un NAT, le retour vise l'adresse publique et seul le champ
+        # NAT nomme le client.
+        source, client_src = self._rattacher(flow.src, flow.post_src)
+        destination, client_dst = self._rattacher(flow.dst, flow.post_dst)
+        if destination is not None and client_dst != flow.dst:
+            self.nat_translated += 1
 
         if destination is not None:
             self._credit(destination, vantage, down_bytes=octets, down_packets=paquets)
@@ -440,10 +505,19 @@ class FlowAggregator:
         if source is not None:
             self._credit(source, vantage, up_bytes=octets, up_packets=paquets)
             self._credit_app(source, classify(flow), vantage, up_bytes=octets)
+            if destination is None:
+                self._apprendre_nat(flow, source, client_src)
 
         rattache = source is not None or destination is not None
         if rattache:
             self.flows_matched += 1
+        elif self._retour_nat_possible(flow):
+            if not self._rejouer(flow, octets, paquets):
+                if len(self._nat_attente) < self.nat_pending_limit:
+                    self._nat_attente.append((flow, octets, paquets, vantage, exporter or ""))
+                else:
+                    self.nat_unmatched += 1
+            return
 
         if self.track_destinations:
             # LE SENS EST CELUI DU CLIENT. Un flux qui ARRIVE chez lui vient de
@@ -459,15 +533,110 @@ class FlowAggregator:
             # et le ping qu'on vient de lancer pour verifier que ca marche.
             if destination is not None or (not rattache and self._is_customer(flow.dst)):
                 self._note_destination(
-                    flow.dst, flow.src, flow, octets, descendant=True, subscriber_id=destination
+                    client_dst, flow.src, flow, octets, descendant=True, subscriber_id=destination
                 )
             if source is not None or (not rattache and self._is_customer(flow.src)):
                 self._note_destination(
-                    flow.src, flow.dst, flow, octets, descendant=False, subscriber_id=source
+                    client_src, flow.dst, flow, octets, descendant=False, subscriber_id=source
                 )
 
         if not rattache and self.track_hosts:
             self._note_host(flow, octets, exporter=exporter, pop_name=pop_name)
+
+    def _rattacher(self, adresse: str, traduite: str | None) -> tuple[int | None, str]:
+        """L'abonne d'une adresse, et l'adresse qui l'a nomme."""
+        trouve = self.index.lookup(adresse)
+        if trouve is None and traduite and traduite != adresse:
+            trouve = self.index.lookup(traduite)
+            if trouve is not None:
+                return trouve, traduite
+        return trouve, adresse
+
+    # ---------------------------------------------------------------- NAT
+    def _apprendre_nat(self, flow: Flow, subscriber_id: int, client: str) -> None:
+        """Un montant vers internet : retenir de quoi reconnaitre son retour."""
+        if self._is_customer(flow.dst) or not ipfinder.is_routable(flow.dst):
+            return
+        maintenant = self.clock()
+        if flow.post_src and flow.post_src != flow.src:
+            self._noter_publique(flow.post_src, maintenant)
+        valeur = (subscriber_id, client, maintenant)
+        for port_client in {flow.src_port, flow.post_src_port} - {0}:
+            _retenir(
+                self._nat_exact,
+                (flow.dst, flow.dst_port, flow.protocol, port_client),
+                valeur,
+                self.nat_table_limit,
+            )
+        large = (flow.dst, flow.dst_port, flow.protocol)
+        abonnes = self._nat_large.pop(large, {})
+        abonnes[subscriber_id] = (client, maintenant)
+        _retenir(self._nat_large, large, abonnes, self.nat_table_limit)
+
+    def _retour_nat_possible(self, flow: Flow) -> bool:
+        """Un flux d'internet vers une adresse qui n'est pas un client.
+
+        C'est la forme exacte d'un retour vers l'adresse publique d'un NAT. Un
+        flux entre deux machines du reseau, ou vers un client non declare, n'en
+        est pas un : il garde son chemin habituel (hotes vus).
+        """
+        return (
+            ipfinder.is_routable(flow.src)
+            and not self._is_customer(flow.src)
+            and not self._is_customer(flow.dst)
+        )
+
+    def _noter_publique(self, adresse: str, vu: float) -> None:
+        if adresse in self._nat_publiques or len(self._nat_publiques) < 4_096:
+            self._nat_publiques[adresse] = vu
+
+    def _apparier(self, flow: Flow) -> tuple[int, str] | None:
+        exact = self._nat_exact.get((flow.src, flow.src_port, flow.protocol, flow.dst_port))
+        if exact is not None:
+            self._noter_publique(flow.dst, self.clock())
+            return exact[0], exact[1]
+        if flow.dst not in self._nat_publiques:
+            return None
+        abonnes = self._nat_large.get((flow.src, flow.src_port, flow.protocol))
+        if abonnes is not None and len(abonnes) == 1:
+            ((sid, (client, _vu)),) = abonnes.items()
+            return sid, client
+        return None
+
+    def _rejouer(self, flow: Flow, octets: int, paquets: int) -> bool:
+        """Rattache un retour NAT a son abonne, s'il est reconnu. Vrai si oui."""
+        trouve = self._apparier(flow)
+        if trouve is None:
+            return False
+        sid, client = trouve
+        vantage = self._vantage_courant
+        self._credit(sid, vantage, down_bytes=octets, down_packets=paquets)
+        self._credit_app(sid, classify(flow), vantage, down_bytes=octets)
+        self.flows_matched += 1
+        self.nat_matched += 1
+        if self.track_destinations:
+            self._note_destination(
+                client, flow.src, flow, octets, descendant=True, subscriber_id=sid
+            )
+        return True
+
+    def _vider_attente_nat(self) -> None:
+        """Rejoue les retours arrives avant leur montant, puis oublie le vieux."""
+        attente, self._nat_attente = self._nat_attente, []
+        for flow, octets, paquets, vantage, exporteur in attente:
+            self._vantage_courant = vantage
+            self._exporteur_courant = exporteur
+            if not self._rejouer(flow, octets, paquets):
+                self.nat_unmatched += 1
+        limite = self.clock() - self.nat_ttl_s
+        self._nat_exact = {k: v for k, v in self._nat_exact.items() if v[2] >= limite}
+        self._nat_publiques = {k: v for k, v in self._nat_publiques.items() if v >= limite}
+        for cle in list(self._nat_large):
+            vivants = {s: v for s, v in self._nat_large[cle].items() if v[1] >= limite}
+            if vivants:
+                self._nat_large[cle] = vivants
+            else:
+                del self._nat_large[cle]
 
     def _credit(
         self,
@@ -489,6 +658,9 @@ class FlowAggregator:
         compteurs.down_packets += down_packets
         compteurs.up_packets += up_packets
         compteurs.flows += 1
+        sens = self.direction_bytes.setdefault(vantage, [0, 0])
+        sens[0] += down_bytes
+        sens[1] += up_bytes
 
     def _credit_app(
         self,
@@ -549,7 +721,7 @@ class FlowAggregator:
             self.destinations_infra += 1
             return
         cle = (client, remote)
-        if not self._vantage_retenu(cle, self._vantage_courant):
+        if not self._vantage_retenu((client, remote, descendant), self._vantage_courant):
             return
         compteurs = self._dests.get(cle)
         if compteurs is None:
@@ -605,9 +777,16 @@ class FlowAggregator:
 
     _RANG_VANTAGE: ClassVar[dict[str, int]] = {"pop": 0, "unknown": 2, "": 2}
 
-    def _vantage_retenu(self, cle: tuple[str, str], vantage: str) -> bool:
-        """Une seule SOURCE par conversation : le point de vue le plus proche du
-        client, et dans ce point de vue un seul exporteur (le premier vu)."""
+    def _vantage_retenu(self, cle: tuple[str, str, bool], vantage: str) -> bool:
+        """Une seule SOURCE par conversation ET PAR SENS : le point de vue le
+        plus proche du client, et dans ce point de vue un seul exporteur (le
+        premier vu).
+
+        PAR SENS, parce que les deux sens ne passent pas forcement par le meme
+        routeur : routage asymetrique, deux sorties internet, un PoP qui
+        n'exporte que l'entree de ses interfaces. Une source unique pour la
+        conversation entiere jetait le sens que l'autre routeur etait seul a
+        voir."""
         source = (vantage, self._exporteur_courant)
         actuel = self._pair_vantage.get(cle)
         if actuel is None or actuel == source:
@@ -633,7 +812,8 @@ class FlowAggregator:
             flux = {k: v for k, v in self._live[cle].items() if v[0] >= limite}
             if not flux:
                 del self._live[cle]
-                self._pair_vantage.pop(cle, None)
+                self._pair_vantage.pop((*cle, True), None)
+                self._pair_vantage.pop((*cle, False), None)
                 self._live_meta.pop(cle, None)
                 continue
             self._live[cle] = flux
@@ -731,36 +911,69 @@ class FlowAggregator:
         return any(adresse in reseau for reseau in self.customer_networks)
 
     def flush(self, ts: datetime, *, vantage: str | None = None) -> FlushBatch:
-        """Vide la fenetre. UN CLIENT EST COMPTE A UN SEUL ENDROIT.
+        """Vide la fenetre. UN CLIENT EST COMPTE A UN SEUL ENDROIT PAR SENS.
 
-        Par point de vue, seul l'exporteur qui voit le plus de trafic de ce
-        client est retenu : un flux qui traverse plusieurs PoP n'est plus
-        additionne autant de fois. Les applications suivent : celles du point
-        de vue ``vantage`` (celui qui compte) et de ce meme exporteur -- elles
-        additionnaient jusqu'ici la bordure ET les PoP.
+        Par point de vue, on retient l'exporteur qui voit le mieux CHAQUE SENS :
+        le descendant de celui qui en voit le plus, le montant de celui qui en
+        voit le plus -- souvent le meme, pas toujours. Choisir un seul exporteur
+        sur le total jetait le sens qu'un autre routeur etait seul a porter
+        (routage asymetrique, deux sorties internet). Rien n'est additionne : un
+        flux qui traverse plusieurs PoP ne compte qu'une fois.
+
+        Les applications suivent le meme choix, sens par sens, au point de vue
+        ``vantage`` (celui qui compte). En ``auto``, chaque sens est lu la ou il
+        est le mieux vu -- la meme regle que la lecture en base.
         """
-        meilleurs: dict[tuple[int, str], SubscriberCounters] = {}
-        retenu: dict[tuple[int, str], str] = {}
+        self._vider_attente_nat()
+        par_point: dict[tuple[int, str], dict[str, SubscriberCounters]] = {}
         for (sid, point, exporteur), c in self._subs.items():
-            cle = (sid, point)
-            actuel = meilleurs.get(cle)
-            if actuel is None or c.down_bytes + c.up_bytes > actuel.down_bytes + actuel.up_bytes:
-                meilleurs[cle] = c
-                retenu[cle] = exporteur
-        # Les applications : du point de vue qui compte (s'il a vu ce client),
-        # sinon du meilleur disponible, et toujours d'un seul exporteur.
-        points_par_client: dict[int, set[str]] = {}
-        for sid, point in meilleurs:
-            points_par_client.setdefault(sid, set()).add(point)
+            par_point.setdefault((sid, point), {})[exporteur] = c
+        meilleurs: dict[tuple[int, str], SubscriberCounters] = {}
+        #: (exporteur du descendant, exporteur du montant) retenus.
+        retenu: dict[tuple[int, str], tuple[str, str]] = {}
+        for (sid, point), vus in par_point.items():
+            bas = max(vus, key=lambda e: (vus[e].down_bytes, vus[e].total_bytes))
+            haut = max(vus, key=lambda e: (vus[e].up_bytes, vus[e].total_bytes))
+            cb, ch = vus[bas], vus[haut]
+            meilleurs[(sid, point)] = SubscriberCounters(
+                subscriber_id=sid,
+                vantage=point,
+                down_bytes=cb.down_bytes,
+                up_bytes=ch.up_bytes,
+                down_packets=cb.down_packets,
+                up_packets=ch.up_packets,
+                flows=cb.flows if bas == haut else max(cb.flows, ch.flows),
+            )
+            retenu[(sid, point)] = (bas, haut)
+        points_par_client: dict[int, dict[str, SubscriberCounters]] = {}
+        for (sid, point), c in meilleurs.items():
+            points_par_client.setdefault(sid, {})[point] = c
+
+        def point_lu(sid: int, descendant: bool) -> str | None:
+            vus = points_par_client.get(sid, {})
+            if not vus:
+                return None
+            if vantage in vus:
+                return vantage
+            if vantage == "auto":
+                return max(
+                    sorted(vus),
+                    key=lambda p: vus[p].down_bytes if descendant else vus[p].up_bytes,
+                )
+            return sorted(vus)[0]
+
         apps: dict[tuple[int, str], AppCounters] = {}
         for (sid, point, exporteur, app), a in self._apps.items():
-            vus = points_par_client.get(sid, set())
-            choisi = vantage if vantage in vus else (sorted(vus)[0] if vus else point)
-            if point != choisi or retenu.get((sid, point)) != exporteur:
+            bas, haut = retenu.get((sid, point), ("", ""))
+            prend_bas = bool(a.down_bytes) and point == point_lu(sid, True) and exporteur == bas
+            prend_haut = bool(a.up_bytes) and point == point_lu(sid, False) and exporteur == haut
+            if not (prend_bas or prend_haut):
                 continue
             cumul = apps.setdefault((sid, app), AppCounters(subscriber_id=sid, app=app))
-            cumul.down_bytes += a.down_bytes
-            cumul.up_bytes += a.up_bytes
+            if prend_bas:
+                cumul.down_bytes += a.down_bytes
+            if prend_haut:
+                cumul.up_bytes += a.up_bytes
         lot = FlushBatch(
             ts=ts,
             subscribers=list(meilleurs.values()),

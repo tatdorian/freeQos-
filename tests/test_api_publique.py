@@ -634,7 +634,8 @@ def test_la_consommation_dit_d_ou_elle_vient(consommation) -> None:
     client, secret, _ = consommation
     corps = client.get("/usage/v1/services", headers=basic(secret)).json()
     assert corps["source"] == "netflow"
-    assert corps["vantage"] in ("edge", "pop")
+    # Par defaut, chaque sens est lu la ou il est le mieux vu.
+    assert corps["vantage"] in ("auto", "edge", "pop")
 
 
 def test_un_seul_point_de_mesure_est_lu(consommation) -> None:

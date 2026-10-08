@@ -3421,6 +3421,57 @@ async def test_la_consommation_se_lit_par_periode(database: Database, now: datet
     assert await depot.usage(start=debut, end=fin, vantage="pop") == []
 
 
+async def test_auto_lit_chaque_sens_la_ou_il_est_le_mieux_vu(
+    database: Database, now: datetime
+) -> None:
+    """La sortie internet masque ses clients : elle voit tout le montant, mais
+    le descendant arrive sur son adresse publique et lui echappe. Le PoP voit
+    les deux sens. 'auto' prend, par sens, le plus grand des deux -- jamais la
+    somme, puisque c'est le meme octet vu deux fois."""
+    from app.db.flows_repo import FlowsRepository
+    from app.services.flows import FlushBatch, SubscriberCounters
+
+    async with database.pool.acquire() as conn:
+        abonne = await conn.fetchval(
+            "INSERT INTO subscribers (login, kind) VALUES ('nat-1', 'static') RETURNING id"
+        )
+    depot = FlowsRepository(database.pool)
+    await depot.write_batch(
+        FlushBatch(
+            ts=now,
+            subscribers=[
+                SubscriberCounters(abonne, "edge", down_bytes=0, up_bytes=300, flows=2),
+                SubscriberCounters(abonne, "pop", down_bytes=5000, up_bytes=280, flows=4),
+            ],
+            apps=[],
+            hosts=[],
+        )
+    )
+
+    auto = await depot.totals(minutes=60, vantage="auto")
+    assert (auto["down_bytes"], auto["up_bytes"]) == (5000, 300)
+    assert auto["subscribers"] == 1
+    bordure = await depot.totals(minutes=60, vantage="edge")
+    assert (bordure["down_bytes"], bordure["up_bytes"]) == (0, 300)
+
+    top = await depot.top_subscribers(minutes=60, vantage="auto", limit=5)
+    assert (top[0]["down_bytes"], top[0]["up_bytes"]) == (5000, 300)
+
+    serie = await depot.subscriber_series(
+        subscriber_id=abonne,
+        start=now - timedelta(minutes=5),
+        end=now + timedelta(minutes=5),
+        bucket_seconds=60,
+        vantage="auto",
+    )
+    assert sum(int(p["down_bytes"]) for p in serie) == 5000
+    assert sum(int(p["up_bytes"]) for p in serie) == 300
+
+    debut, fin = now - timedelta(hours=1), now + timedelta(minutes=1)
+    usage = await depot.usage(start=debut, end=fin, vantage="auto")
+    assert (usage[0]["down_bytes"], usage[0]["up_bytes"]) == (5000, 300)
+
+
 async def test_le_point_d_acces_du_facturier_n_usurpe_pas_un_secteur(
     database: Database,
 ) -> None:
