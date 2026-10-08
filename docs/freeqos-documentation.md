@@ -172,14 +172,34 @@ The NetFlow figure is a ceiling: it assumes traffic every minute, day and night,
 
 #### Recommended sizing
 
-| Network | vCPU | RAM | SSD disk |
+The same figures apply to a physical machine and to a virtual machine.
+
+| Network | CPU (cores or vCPU) | RAM | SSD disk |
 | --- | --- | --- | --- |
-| Lab, demonstration (≤ 100 subscribers) | 2 | 4 GB | 40 GB |
+| **Absolute minimum** (trial, < 50 subscribers) | 2 | 2 GB | 30 GB |
+| Small network (≤ 100 subscribers) | 2 | 4 GB | 40 GB |
 | ≤ 500 subscribers | 4 | 8 GB | 80 GB |
 | ≤ 1,000 subscribers | 4 | 8 GB | 150 GB |
 | ≤ 5,000 subscribers | 8 | 16 GB | 600 GB |
 
 These values keep a 50% disk margin over the measured worst case (≈ 90 MB per subscriber over 90 days), plus the images and the journal. They assume the NetFlow volume stays under 5,000 flows/s; otherwise, see above. An SSD is required: the database writes continuously.
+
+**2 GB and 2 CPU run, but with no headroom.** The system and Docker take about 400 MB, the application 100 to 200 MB, the database about 700 MB with its cache. That is enough to try freeQoS, not for production: a NetFlow peak takes memory that is not given back. **For production, start at 2 CPU and 4 GB.**
+
+**Analysing both directions behind NAT** keeps a pairing table (see *Both directions*, section 6). Full (100,000 conversations), it takes about 76 MB, plus up to about 15 MB for downloads waiting for their upload: under 100 MB at worst, already covered by the sizes above.
+
+#### Physical machine or virtual machine
+
+Both work, with the same sizes. What changes:
+
+| | Physical machine | Virtual machine |
+| --- | --- | --- |
+| CPU | A fast core matters more than many cores (the NetFlow collector uses one) | **Reserved** vCPUs, without over-allocation on the host: a slowed-down shared core loses NetFlow datagrams, so bytes go missing from the measurements |
+| RAM | Nothing special | **Reserved** RAM, ballooning off: the database sizes its cache at start-up on the memory it sees |
+| Disk | Local SSD | Virtual disk (virtio) on SSD storage of the host; avoid slow shared storage |
+| Network | Nothing special | virtio NIC; UDP port 2055 reachable from the routers (bridged, or an explicit `2055/udp` forward if the host NATs the VM) |
+
+To know where you stand, read `flows_seen` in `GET /api/v1/netflow/status` twice, one minute apart, at peak time: the difference divided by 60 is your flows per second. Under 5,000, the sizes above are enough.
 
 **On the routers**, freeQoS adds:
 
