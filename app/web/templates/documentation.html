@@ -1,0 +1,2828 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="freeqos-docs-source" content="352ba5b54218ad02">
+  <title>freeQoS technical documentation</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+  <script src="/static/theme.js?v={{ theme_version }}"></script>
+  <link rel="stylesheet" href="/static/api-guide.css?v={{ guide_css_version }}">
+  <link rel="stylesheet" href="/static/docs.css?v={{ css_version }}">
+</head>
+<body>
+<!-- GENERE par scripts/build_docs.py depuis docs/ : ne pas modifier a la main. -->
+<div class="layout">
+  <nav class="toc" aria-label="Contents">
+    <a class="brand" href="/">freeQoS</a>
+    <div class="toc-title">Documentation</div>
+    <a href="#1-overview">1. Overview</a>
+    <a class="sub" href="#design-principles">Design principles</a>
+    <a class="sub" href="#compared-with-preseem-and-libreqos">Compared with Preseem and LibreQoS</a>
+    <a class="sub" href="#key-notions">Key notions</a>
+    <a href="#2-architecture">2. Architecture</a>
+    <a class="sub" href="#components">Components</a>
+    <a class="sub" href="#a-measurement-from-the-router-to-the-screen">A measurement, from the router to the screen</a>
+    <a class="sub" href="#a-write-from-the-plan-to-the-queue">A write, from the plan to the queue</a>
+    <a class="sub" href="#instance-identity">Instance identity</a>
+    <a href="#3-installation-and-updates">3. Installation and updates</a>
+    <a class="sub" href="#required-resources">Required resources</a>
+    <a class="sub" href="#prerequisites">Prerequisites</a>
+    <a class="sub" href="#network-flows">Network flows</a>
+    <a class="sub" href="#step-by-step-installation">Step-by-step installation</a>
+    <a class="sub" href="#what-must-be-kept">What must be kept</a>
+    <a class="sub" href="#kubernetes">Kubernetes</a>
+    <a class="sub" href="#routeros-prerequisites">RouterOS prerequisites</a>
+    <a class="sub" href="#updating">Updating</a>
+    <a href="#4-routers-and-inventory">4. Routers and inventory</a>
+    <a class="sub" href="#how-freeqos-talks-to-a-router">How freeQoS talks to a router</a>
+    <a class="sub" href="#declaring-a-router">Declaring a router</a>
+    <a class="sub" href="#automatic-commissioning">Automatic commissioning</a>
+    <a class="sub" href="#who-is-a-subscriber-on-this-pop">Who is a subscriber on this PoP?</a>
+    <a class="sub" href="#topology">Topology</a>
+    <a class="sub" href="#static-ip-subscribers">Static-IP subscribers</a>
+    <a href="#5-measurements-throughput-latency-qoe">5. Measurements: throughput, latency, QoE</a>
+    <a class="sub" href="#throughput">Throughput</a>
+    <a class="sub" href="#latency-the-probe">Latency: the probe</a>
+    <a class="sub" href="#when-latency-stays-empty">When latency stays empty</a>
+    <a class="sub" href="#bufferbloat">Bufferbloat</a>
+    <a class="sub" href="#qoe-score-0-to-100">QoE score (0 to 100)</a>
+    <a class="sub" href="#at-plan-limit">"At plan limit"</a>
+    <a href="#6-netflow-traffic">6. NetFlow traffic</a>
+    <a class="sub" href="#how-netflow-works">How NetFlow works</a>
+    <a class="sub" href="#collector">Collector</a>
+    <a class="sub" href="#export-set-up-automatically">Export set up automatically</a>
+    <a class="sub" href="#naming-addresses">Naming addresses</a>
+    <a class="sub" href="#traffic-restrictions">Traffic restrictions</a>
+    <a href="#7-plans-and-shaping">7. Plans and shaping</a>
+    <a class="sub" href="#how-shaping-works">How shaping works</a>
+    <a class="sub" href="#what-cake-does">What CAKE does</a>
+    <a class="sub" href="#how-queues-nest">How queues nest</a>
+    <a class="sub" href="#where-a-subscribers-plan-comes-from">Where a subscriber's plan comes from</a>
+    <a class="sub" href="#what-is-installed-on-the-router">What is installed on the router</a>
+    <a class="sub" href="#reconciliation">Reconciliation</a>
+    <a class="sub" href="#safeguards">Safeguards</a>
+    <a class="sub" href="#manual-adjustments">Manual adjustments</a>
+    <a class="sub" href="#closed-qoe-loop">Closed QoE loop</a>
+    <a href="#8-interface">8. Interface</a>
+    <a class="sub" href="#read-the-settings-page-before-enabling-writes">Read the Settings page before enabling writes</a>
+    <a class="sub" href="#empty-latency">Empty latency</a>
+    <a href="#9-api">9. API</a>
+    <a class="sub" href="#three-apis-one-server-the-same-keys">Three APIs, one server, the same keys</a>
+    <a class="sub" href="#how-the-commercial-model-reaches-the-network">How the commercial model reaches the network</a>
+    <a class="sub" href="#authentication">Authentication</a>
+    <a class="sub" href="#conventions">Conventions</a>
+    <a class="sub" href="#the-enforcement-report">The enforcement report</a>
+    <a class="sub" href="#the-calls-that-matter">The calls that matter</a>
+    <a class="sub" href="#reference">Reference</a>
+    <a href="#10-security">10. Security</a>
+    <a class="sub" href="#interface-accounts">Interface accounts</a>
+    <a class="sub" href="#http-headers">HTTP headers</a>
+    <a class="sub" href="#api-keys">API keys</a>
+    <a class="sub" href="#router-credentials">Router credentials</a>
+    <a class="sub" href="#writing-to-the-network">Writing to the network</a>
+    <a class="sub" href="#network-exposure">Network exposure</a>
+    <a href="#11-operations">11. Operations</a>
+    <a class="sub" href="#monitoring-freeqos">Monitoring freeQoS</a>
+    <a class="sub" href="#the-cycles">The cycles</a>
+    <a class="sub" href="#live-settings">Live settings</a>
+    <a class="sub" href="#data-and-retention">Data and retention</a>
+    <a class="sub" href="#backup-and-restore">Backup and restore</a>
+    <a class="sub" href="#common-actions">Common actions</a>
+    <a class="sub" href="#several-instances">Several instances</a>
+    <a href="#12-troubleshooting">12. Troubleshooting</a>
+    <a class="sub" href="#700-to-900-ms-latency-on-nearby-subscribers">700 to 900 ms latency on nearby subscribers</a>
+    <a class="sub" href="#empty-latency-no-reply-probe-silent">Empty latency ("no reply", "probe silent")</a>
+    <a class="sub" href="#high-latency-on-a-saturated-subscriber">High latency on a saturated subscriber</a>
+    <a class="sub" href="#a-queue-is-rewritten-every-2-minutes">A queue is rewritten every 2 minutes</a>
+    <a class="sub" href="#a-parent-queue-appears-on-a-transit-link">A parent queue appears on a transit link</a>
+    <a class="sub" href="#nothing-is-written-to-the-routers">Nothing is written to the routers</a>
+    <a class="sub" href="#no-netflow-traffic">No NetFlow traffic</a>
+    <a class="sub" href="#scores-stay-old">Scores stay old</a>
+    <a class="sub" href="#the-router-refuses-the-connection">The router refuses the connection</a>
+    <a href="#13-settings-reference">13. Settings reference</a>
+    <a class="sub" href="#application-and-database">Application and database</a>
+    <a class="sub" href="#inventory-and-sources">Inventory and sources</a>
+    <a class="sub" href="#cycles">Cycles</a>
+    <a class="sub" href="#latency">Latency</a>
+    <a class="sub" href="#plans-and-shaping">Plans and shaping</a>
+    <a class="sub" href="#qoe-loop">QoE loop</a>
+    <a class="sub" href="#netflow-and-traffic">NetFlow and traffic</a>
+  </nav>
+
+  <main>
+    <header class="hero">
+      <h1>freeQoS technical documentation</h1>
+      <p>How freeQoS works, from the router to the screen: architecture, installation and sizing, network flows, measurements, NetFlow, shaping, API, security, operations and troubleshooting.</p>
+      <p class="doc-actions">
+        <a class="doc-button" href="/documentation.pdf">Download the PDF</a>
+        <a href="/api-guide">API guide</a>
+      </p>
+    </header>
+{% raw %}
+<h2 id="1-overview">1. Overview</h2>
+<p>freeQoS is an <strong>out-of-band</strong> QoS/QoE controller for internet service providers running MikroTik routers. It reads the routers through their API, measures what each subscriber experiences, and installs CAKE queues to enforce the plans that were sold. It never sits in the traffic path.</p>
+<p>It covers three jobs of an ISP:</p>
+<ul>
+<li><strong>See</strong>: each subscriber's throughput, latency and bufferbloat, the load on every link and node, traffic by destination and by application (NetFlow).</li>
+<li><strong>Shape</strong>: one CAKE queue per subscriber at the plan rate, under one parent queue per link, created and maintained automatically.</li>
+<li><strong>Integrate</strong>: an operating API (<code>/api/v1</code>), a Preseem-compatible inventory API (<code>/model/v1</code>) and a consumption API (<code>/usage/v1</code>).</li>
+</ul>
+<h3 id="design-principles">Design principles</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Principle</th>
+<th>What it means in practice</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Out-of-band</td>
+<td>No box in the path: freeQoS reads and writes the RouterOS configuration; a freeQoS outage cuts no subscriber.</td>
+</tr>
+<tr>
+<td>Simulation by default</td>
+<td>On first start nothing is written to the routers; writing is enabled in the interface, after reading the plan.</td>
+</tr>
+<tr>
+<td>Strict ownership</td>
+<td>freeQoS never modifies or deletes a RouterOS entry that does not carry <code>freeqos:managed</code> <strong>and</strong> the identifier of its instance.</td>
+</tr>
+<tr>
+<td>Plan first</td>
+<td>A subscriber is only throttled once a plan is pushed for it (API or Plans page); a subscriber that is only detected is observed.</td>
+</tr>
+<tr>
+<td>Never make things up</td>
+<td>A missing measurement is shown as missing ("-", "no ping reply"), never as a zero or a reassuring value.</td>
+</tr>
+<tr>
+<td>Everything automatic</td>
+<td>Adding a router is enough: CAKE queues, NetFlow export, discovery of subscribers and links happen by themselves.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="compared-with-preseem-and-libreqos">Compared with Preseem and LibreQoS</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>freeQoS</th>
+<th>Preseem</th>
+<th>LibreQoS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Place in the network</td>
+<td>Out-of-band (RouterOS API)</td>
+<td>Inline (bridge)</td>
+<td>Inline (Linux server)</td>
+</tr>
+<tr>
+<td>Where shaping happens</td>
+<td>On the MikroTik routers (CAKE simple queues)</td>
+<td>On the appliance</td>
+<td>On the server (CAKE/HTB)</td>
+</tr>
+<tr>
+<td>Latency measurement</td>
+<td>Active probe (ping from the NAS, in the subscriber's VRF)</td>
+<td>Passive (TCP)</td>
+<td>Passive (TCP, eBPF)</td>
+</tr>
+<tr>
+<td>Inventory API</td>
+<td>Preseem-compatible <code>/model/v1</code></td>
+<td>Native</td>
+<td>Files / integrations</td>
+</tr>
+</tbody>
+</table></div>
+<p>A direct consequence of being out-of-band: latency is measured by a ping from the router, which requires the subscriber's box to answer pings (see section 5).</p>
+<h3 id="key-notions">Key notions</h3>
+<p>The rest of this documentation relies on these words. Each one is covered in detail in its own section.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Notion</th>
+<th>What it is</th>
+<th>Why freeQoS cares</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>PoP</strong> (point of presence)</td>
+<td>The router the subscribers of an area connect to</td>
+<td>This is where freeQoS measures and limits each subscriber</td>
+</tr>
+<tr>
+<td><strong>Core, gateway</strong></td>
+<td>The routers between the PoPs and the internet</td>
+<td>freeQoS reads them but never puts a limit there</td>
+</tr>
+<tr>
+<td><strong>PPPoE</strong></td>
+<td>A connection where the subscriber logs in with a username. During the session, RouterOS creates a <code>&lt;pppoe-login&gt;</code> interface for that subscriber alone.</td>
+<td>That interface carries the subscriber's byte counters</td>
+</tr>
+<tr>
+<td><strong>CPE</strong></td>
+<td>The equipment at the subscriber's premises (antenna, box)</td>
+<td>Its MAC address links the subscriber to its radio sector</td>
+</tr>
+<tr>
+<td><strong>Backhaul, sector</strong></td>
+<td>A radio link carrying the traffic of a site; a sector is an antenna serving several subscribers</td>
+<td>Their capacity varies (weather, interference): they are often the real bottleneck</td>
+</tr>
+<tr>
+<td><strong>Rate / volume</strong></td>
+<td>A rate is a speed (Mbit/s), a volume a quantity (bytes)</td>
+<td>Rates drive shaping, volumes drive billing</td>
+</tr>
+<tr>
+<td><strong>Latency, RTT</strong></td>
+<td>The round-trip time of a packet, in milliseconds</td>
+<td>It is what makes a video call or a game good or bad</td>
+</tr>
+<tr>
+<td><strong>Queue</strong></td>
+<td>Where packets wait when a link is full</td>
+<td>The longer the queue, the higher the latency</td>
+</tr>
+<tr>
+<td><strong>Shaping</strong></td>
+<td>Deliberately limiting a rate by holding packets in a queue we control</td>
+<td>So that the queue forms where it is well managed</td>
+</tr>
+<tr>
+<td><strong>CAKE</strong></td>
+<td>A modern queueing algorithm built into RouterOS 7</td>
+<td>It limits the rate without letting latency explode</td>
+</tr>
+<tr>
+<td><strong>Bufferbloat</strong></td>
+<td>The latency added by oversized queues when a link saturates</td>
+<td>The first cause of a bad experience on a loaded network</td>
+</tr>
+<tr>
+<td><strong>QoS / QoE</strong></td>
+<td>QoS: the network mechanisms. QoE: what the subscriber feels.</td>
+<td>freeQoS tunes QoS to improve QoE, and scores QoE</td>
+</tr>
+<tr>
+<td><strong>VRF</strong></td>
+<td>A separate routing table on the same router</td>
+<td>The ping must leave in the right table, or it takes a detour</td>
+</tr>
+<tr>
+<td><strong>DSCP</strong></td>
+<td>A priority label in the header of every IP packet (46 = voice)</td>
+<td>The measurement ping carries it to jump the queue</td>
+</tr>
+<tr>
+<td><strong>NetFlow</strong></td>
+<td>A summary of conversations that the router sends to a collector</td>
+<td>It tells what, where to, and how much, without copying the traffic</td>
+</tr>
+<tr>
+<td><strong>RouterOS API</strong></td>
+<td>The programming interface of MikroTik routers</td>
+<td>The only way freeQoS reads and writes</td>
+</tr>
+<tr>
+<td><strong>TimescaleDB</strong></td>
+<td>A PostgreSQL extension for time series</td>
+<td>It stores millions of measurements and purges old ones</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="2-architecture">2. Architecture</h2>
+<p>freeQoS is <strong>out-of-band</strong>: it is never in the traffic path. It reads the routers and the antennas, stores what it measures, and installs CAKE queues <strong>on the routers</strong>. The routers are the ones limiting traffic. If freeQoS stops, the queues stay in place and traffic flows normally; only measurement, timed boosts and adjustments pause.</p>
+<figure class="fig" id="fig-architecture">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 664" role="img" aria-label="Everything is read continuously; a single path writes to the routers">
+  <defs>
+    <marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-mark" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="arch-write" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-mark-accent" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+  <text class="d-title" x="24" y="34">Everything is read continuously; a single path writes to the routers</text>
+  <rect class="d-zone" x="64" y="176" width="672" height="376" rx="8"/>
+  <text class="d-name" x="80" y="200">freeQoS</text>
+  <g class="d-conn">
+    <path d="M224 136V224" marker-end="url(#arch-arrow)"/>
+    <path d="M344 136V160H520V224" marker-end="url(#arch-arrow)"/>
+    <path d="M640 136V224" marker-end="url(#arch-arrow)"/>
+    <path d="M232 296V344" marker-end="url(#arch-arrow)"/>
+    <path d="M568 296V344" marker-end="url(#arch-arrow)"/>
+    <path d="M232 416V448" marker-end="url(#arch-arrow)"/>
+    <path d="M568 416V448" marker-start="url(#arch-arrow)" marker-end="url(#arch-arrow)"/>
+    <path d="M568 536V584" marker-start="url(#arch-arrow)" marker-end="url(#arch-arrow)"/>
+  </g>
+  <text class="d-line" x="432" y="153" text-anchor="middle">read through the API</text>
+  <text class="d-line" x="232" y="214">NetFlow flows</text>
+  <text class="d-line" x="632" y="214" text-anchor="end">radio capacity</text>
+  <rect class="d-box" x="64" y="64" width="320" height="72" rx="8"/>
+  <text class="d-name" x="80" y="88">MikroTik routers</text>
+  <text class="d-line" x="80" y="104">RouterOS API, port 8728 or 8729</text>
+  <text class="d-line" x="80" y="120">sessions, queues, ping, NetFlow export</text>
+  <rect class="d-box" x="416" y="64" width="320" height="72" rx="8"/>
+  <text class="d-name" x="432" y="88">Ubiquiti antennas</text>
+  <text class="d-line" x="432" y="104">UISP or airOS, read-only</text>
+  <text class="d-line" x="432" y="120">real capacity of the radio links</text>
+  <rect class="d-box" x="80" y="224" width="304" height="72" rx="8"/>
+  <text class="d-name" x="96" y="248">NetFlow collector</text>
+  <text class="d-line" x="96" y="264">UDP 2055, v5, v9 and IPFIX</text>
+  <text class="d-line" x="96" y="280">aggregated per subscriber, written every 60 s</text>
+  <rect class="d-box" x="416" y="224" width="304" height="72" rx="8"/>
+  <text class="d-name" x="432" y="248">Collectors</text>
+  <text class="d-line" x="432" y="264">sessions and rates every 10 s</text>
+  <text class="d-line" x="432" y="280">latency 30 s, topology 15 min</text>
+  <rect class="d-box" x="80" y="344" width="640" height="72" rx="8"/>
+  <text class="d-name" x="96" y="368">TimescaleDB</text>
+  <text class="d-line" x="96" y="384">measurements, inventory, plans, topology, command log</text>
+  <text class="d-line" x="96" y="400">compressed after 7 days, purged after 90 days</text>
+  <rect class="d-accent" x="80" y="448" width="304" height="88" rx="8"/>
+  <text class="d-name" x="96" y="472">Planner</text>
+  <text class="d-line-strong" x="96" y="488">plans and capacities → CAKE queues</text>
+  <text class="d-line-strong" x="96" y="504">every 2 min, only the difference</text>
+  <text class="d-line-strong" x="96" y="520">safeguards: ownership, transit, oscillation</text>
+  <rect class="d-box" x="416" y="448" width="304" height="88" rx="8"/>
+  <text class="d-name" x="432" y="472">Interface and API</text>
+  <text class="d-line" x="432" y="488">/api/v1, /model/v1, /usage/v1</text>
+  <text class="d-line" x="432" y="504">accounts, API keys, live settings</text>
+  <text class="d-line" x="432" y="520">write switch, command log</text>
+  <rect class="d-box" x="416" y="584" width="304" height="56" rx="8"/>
+  <text class="d-name" x="432" y="608">Operators and billing</text>
+  <text class="d-line" x="432" y="624">browser, or API key</text>
+  <path class="d-write" d="M80 492H44V100H64" marker-end="url(#arch-write)"/>
+  <text class="d-line-strong" x="34" y="296" transform="rotate(-90 34 296)" text-anchor="middle">CAKE queues, only when writing is enabled</text>
+</svg>
+<figcaption>Architecture: sources, cycles, database, and the single write path</figcaption>
+</figure>
+<p>Every grey arrow is a read. The coloured arrow is the only write path: it starts at the planner and goes through the safeguards of section 7.</p>
+<h3 id="components">Components</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Technology</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Application</td>
+<td>Python, FastAPI, a single process</td>
+<td>API, interface, scheduler, collectors</td>
+</tr>
+<tr>
+<td>Scheduler</td>
+<td>Internal asynchronous loop</td>
+<td>Runs each cycle at its period; a slow cycle does not block the others</td>
+</tr>
+<tr>
+<td>RouterOS client</td>
+<td><code>librouteros</code>, API 8728 / 8729</td>
+<td>Reads and writes; one connection per router, with a timeout</td>
+</tr>
+<tr>
+<td>NetFlow collector</td>
+<td>UDP listener in the same process</td>
+<td>Decodes v5, v9 and IPFIX, aggregates in memory</td>
+</tr>
+<tr>
+<td>Database</td>
+<td>PostgreSQL with TimescaleDB</td>
+<td>Time series (hypertables) and reference data</td>
+</tr>
+<tr>
+<td>Interface</td>
+<td>Framework-free HTML and JavaScript, served by the application</td>
+<td>Operating pages</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="a-measurement-from-the-router-to-the-screen">A measurement, from the router to the screen</h3>
+<ol>
+<li>The <code>collect_subscribers</code> cycle reads <code>/ppp/active</code> and the interface counters of each PoP, every 10 s.</li>
+<li>The difference between two reads gives a rate. Impossible values are discarded (a counter going backwards, a rate above 100 Gbit/s).</li>
+<li>The rate is written to a hypertable, together with the last RTT measured by <code>probe_rtt</code>.</li>
+<li>Bufferbloat and the QoE score are computed when read, over the requested window. No score is stored in advance: a change of scale applies to the whole history.</li>
+</ol>
+<h3 id="a-write-from-the-plan-to-the-queue">A write, from the plan to the queue</h3>
+<ol>
+<li>A plan arrives (API, <em>Plans</em> page) or a capacity changes (radio, QoE loop).</li>
+<li>The planner computes the desired state of each router: queue types, parent queues, subscriber queues.</li>
+<li>It reads the actual state and produces a <strong>plan</strong>: the list of commands that would move from one to the other.</li>
+<li>The safeguards filter the plan: ownership, transit, duplicates, oscillation, circuit breaker.</li>
+<li>If writing is enabled, the plan is sent command by command, parents first, and each command is logged. Otherwise it is only displayed.</li>
+</ol>
+<p>An API call that changes a plan runs these five steps <strong>immediately</strong> for that subscriber. The 2-minute reconciliation catches up with everything else (PPPoE reconnection, new address, queue edited by hand).</p>
+<h3 id="instance-identity">Instance identity</h3>
+<p>Each installation has an identifier (<code>data/instance.id</code>, or <code>FREEQOS_INSTANCE_ID</code>). It is written into the comment of everything it creates: <code>freeqos:managed instance=&lt;id&gt;</code>. This is what lets two installations, or freeQoS and an operator, never overwrite each other's work.</p>
+<h2 id="3-installation-and-updates">3. Installation and updates</h2>
+<p>One command installs everything: <code>install.sh</code> sets up Docker if needed, writes a <code>.env</code> with random secrets, builds and starts the stack, then waits for the application to answer. Running the same script again updates while keeping the data.</p>
+<h3 id="required-resources">Required resources</h3>
+<p>The figures below were <strong>measured</strong> on 8 October 2026 on a virtual machine with 4 vCPU and 16 GB of RAM: the real freeQoS application, the <code>timescale/timescaledb:latest-pg16</code> image, synthetic data. They give orders of magnitude; your network will refine them.</p>
+<h4 id="what-consumes-resources">What consumes resources</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Component</th>
+<th>Idle</th>
+<th>Under load</th>
+<th>Note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Application (RAM)</td>
+<td>75 MB</td>
+<td>190 MB at 5,000 NetFlow flows/s; 575 MB after 15,000 flows/s</td>
+<td>Memory taken at peak is not given back: size for the peak</td>
+</tr>
+<tr>
+<td>Database (RAM)</td>
+<td>190 MB</td>
+<td>Grows with use</td>
+<td>The TimescaleDB image sets its own cache to 25% of the machine's RAM (4 GB out of 16 GB)</td>
+</tr>
+<tr>
+<td>Database journal (WAL)</td>
+<td>512 MB</td>
+<td>—</td>
+<td>Fixed disk space</td>
+</tr>
+<tr>
+<td>Docker images</td>
+<td>2.8 GB</td>
+<td>—</td>
+<td>TimescaleDB 2.5 GB, application 0.3 GB</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>The NetFlow collector uses a single core.</strong> This is the real sizing limit:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>NetFlow flows received per second</th>
+<th>CPU (one core)</th>
+<th>Loss</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1,000</td>
+<td>6%</td>
+<td>0%</td>
+</tr>
+<tr>
+<td>5,000</td>
+<td>45%</td>
+<td>0%</td>
+</tr>
+<tr>
+<td>10,000</td>
+<td>77%</td>
+<td>3%</td>
+</tr>
+<tr>
+<td>15,000</td>
+<td>98%</td>
+<td>17%</td>
+</tr>
+</tbody>
+</table></div>
+<p>Beyond about 5,000 flows per second, datagrams are lost. Adding cores changes nothing; a faster core helps a little. To reduce the volume: export only from the internet edge (one vantage point instead of two), or enable sampling on the routers.</p>
+<p>The number of flows per second depends on usage and cannot be guessed. To measure it, read <code>flows_seen</code> in <code>GET /api/v1/netflow/status</code> one minute apart, at peak time.</p>
+<h4 id="disk">Disk</h4>
+<p>Measured per subscriber connected around the clock:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Per day, raw</th>
+<th>After compression (7 days)</th>
+<th>Over 90 days</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Subscriber measurements (<code>subscriber_metrics</code>, every 10 s)</td>
+<td>1.2 MB</td>
+<td>0.08 MB (6.5% of raw)</td>
+<td>≈ 15 MB</td>
+</tr>
+<tr>
+<td>NetFlow (<code>flow_metrics</code> + <code>flow_app_metrics</code>, per minute)</td>
+<td>up to 0.83 MB</td>
+<td><strong>no compression</strong></td>
+<td>up to 75 MB</td>
+</tr>
+</tbody>
+</table></div>
+<p>The NetFlow figure is a ceiling: it assumes traffic every minute, day and night, across three usage families. A real subscriber produces less. The two NetFlow tables are not compressed today, only purged after 90 days: they are the largest disk item.</p>
+<blockquote>
+<p><strong>How TimescaleDB stores measurements.</strong> A <em>hypertable</em> is split into one-day chunks. After 7 days, each chunk is rewritten as compressed columns: neighbouring values of a column look alike and compress very well. After 90 days, the whole chunk is dropped at once, without scanning the table.</p>
+</blockquote>
+<h4 id="recommended-sizing">Recommended sizing</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Network</th>
+<th>vCPU</th>
+<th>RAM</th>
+<th>SSD disk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Lab, demonstration (≤ 100 subscribers)</td>
+<td>2</td>
+<td>4 GB</td>
+<td>40 GB</td>
+</tr>
+<tr>
+<td>≤ 500 subscribers</td>
+<td>4</td>
+<td>8 GB</td>
+<td>80 GB</td>
+</tr>
+<tr>
+<td>≤ 1,000 subscribers</td>
+<td>4</td>
+<td>8 GB</td>
+<td>150 GB</td>
+</tr>
+<tr>
+<td>≤ 5,000 subscribers</td>
+<td>8</td>
+<td>16 GB</td>
+<td>600 GB</td>
+</tr>
+</tbody>
+</table></div>
+<p>These values keep a 50% disk margin over the measured worst case (≈ 90 MB per subscriber over 90 days), plus the images and the journal. They assume the NetFlow volume stays under 5,000 flows/s; otherwise, see above. An SSD is required: the database writes continuously.</p>
+<p><strong>On the routers</strong>, freeQoS adds:</p>
+<ul>
+<li>an API read every 10 s (sessions and counters);</li>
+<li>20 subscribers × 5 pings every 30 s per PoP;</li>
+<li>the NetFlow export, which uses router CPU.</li>
+</ul>
+<p>Watch the routers' CPU load in <em>Devices</em> after commissioning.</p>
+<h3 id="prerequisites">Prerequisites</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Requirement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>System</td>
+<td>64-bit Linux. The script installs Docker and <code>git</code> itself on Debian, Ubuntu, RHEL, Rocky or Alma (<code>apt</code> or <code>dnf</code>).</td>
+</tr>
+<tr>
+<td>Rights</td>
+<td><code>root</code> or <code>sudo</code></td>
+</tr>
+<tr>
+<td>Address</td>
+<td>A fixed IP, reachable from the routers (for NetFlow) and able to reach them (for the API)</td>
+</tr>
+<tr>
+<td>Internet access during installation</td>
+<td><code>github.com</code>, <code>get.docker.com</code>, Docker Hub or <code>mirror.gcr.io</code>, <code>pypi.org</code></td>
+</tr>
+<tr>
+<td>Routers</td>
+<td>RouterOS 7, a dedicated account (step 3 below)</td>
+</tr>
+<tr>
+<td>Optional</td>
+<td>A DNS name and an HTTPS proxy in front of the interface</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="network-flows">Network flows</h3>
+<figure class="fig" id="fig-network-flows">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 440" role="img" aria-label="Only one connection arrives without a reply: the routers' NetFlow">
+  <defs>
+    <marker id="fx-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-mark" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="fx-accent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-mark-accent" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+  <text class="d-title" x="24" y="30">Only one connection arrives without a reply: the routers' NetFlow</text>
+  <text class="d-line" x="24" y="52">The arrow starts from whoever opens the connection; the reply comes back over the same connection.</text>
+  <g class="d-conn">
+    <path d="M194 124H290" marker-end="url(#fx-arrow)"/>
+    <path d="M194 220H290" marker-end="url(#fx-arrow)"/>
+    <path d="M490 112H586" marker-end="url(#fx-arrow)"/>
+    <path d="M490 176H586" marker-end="url(#fx-arrow)"/>
+    <path d="M490 240H586" marker-end="url(#fx-arrow)"/>
+    <path d="M350 264V352" marker-end="url(#fx-arrow)"/>
+    <path d="M490 388H586" marker-end="url(#fx-arrow)"/>
+  </g>
+  <path class="d-write" d="M430 352V264" marker-end="url(#fx-accent)"/>
+  <text class="d-name-sm" x="440" y="302">UDP 2055</text>
+  <text class="d-line-strong" x="440" y="318">no reply</text>
+  <text class="d-line" x="242" y="116" text-anchor="middle">TCP 8000 / 443</text>
+  <text class="d-line" x="242" y="212" text-anchor="middle">TCP 8000 / 443</text>
+  <text class="d-line" x="538" y="104" text-anchor="middle">HTTPS 443</text>
+  <text class="d-line" x="538" y="168" text-anchor="middle">UDP/TCP 53</text>
+  <text class="d-line" x="538" y="232" text-anchor="middle">HTTPS 443</text>
+  <text class="d-name-sm" x="342" y="302" text-anchor="end">TCP 8728 / 8729</text>
+  <text class="d-line" x="342" y="318" text-anchor="end">reads, writes, ping orders</text>
+  <text class="d-line" x="538" y="380" text-anchor="middle">ICMP echo</text>
+  <rect class="d-box" x="24" y="96" width="170" height="56" rx="8"/>
+  <text class="d-name" x="40" y="120">Operators</text>
+  <text class="d-line" x="40" y="138">web browser</text>
+  <rect class="d-box" x="24" y="192" width="170" height="56" rx="8"/>
+  <text class="d-name" x="40" y="216">Billing, CRM</text>
+  <text class="d-line" x="40" y="234">API calls, with a key</text>
+  <rect class="d-accent" x="290" y="80" width="200" height="184" rx="8"/>
+  <text class="d-name" x="306" y="104">freeQoS server</text>
+  <text class="d-line-strong" x="306" y="124">application</text>
+  <text class="d-line-strong" x="306" y="140">listens on TCP 8000, UDP 2055</text>
+  <text class="d-line-strong" x="306" y="164">TimescaleDB database</text>
+  <text class="d-line-strong" x="306" y="180">TCP 5432, internal Docker</text>
+  <text class="d-line-strong" x="306" y="196">network, never published</text>
+  <rect class="d-box" x="586" y="88" width="150" height="48" rx="8"/>
+  <text class="d-name" x="600" y="108">UISP, airOS</text>
+  <text class="d-line" x="600" y="126">radio capacity</text>
+  <rect class="d-box" x="586" y="152" width="150" height="48" rx="8"/>
+  <text class="d-name" x="600" y="172">DNS resolver</text>
+  <text class="d-line" x="600" y="190">reverse names</text>
+  <rect class="d-box" x="586" y="216" width="150" height="48" rx="8"/>
+  <text class="d-name" x="600" y="236">RDAP, geoloc</text>
+  <text class="d-line" x="600" y="254">can be disabled</text>
+  <rect class="d-box" x="290" y="352" width="200" height="64" rx="8"/>
+  <text class="d-name" x="306" y="378">MikroTik routers</text>
+  <text class="d-line" x="306" y="398">PoP, core, gateway</text>
+  <rect class="d-box" x="586" y="360" width="150" height="56" rx="8"/>
+  <text class="d-name" x="600" y="384">Subscribers (CPE)</text>
+  <text class="d-line" x="600" y="402">answer the ping</text>
+</svg>
+<figcaption>Network flows: who opens which connection, on which port</figcaption>
+</figure>
+<p>A stateful firewall only needs a rule in the direction the connection is opened: the reply is accepted as part of the connection. The only exception is NetFlow: a one-way UDP send, from the router to freeQoS, with no reply.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>From → to</th>
+<th>Protocol, port</th>
+<th>Content</th>
+<th>Needed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Browser → freeQoS</td>
+<td>TCP 8000 (or 443 behind a proxy)</td>
+<td>Interface</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Billing, CRM → freeQoS</td>
+<td>TCP 8000 or 443</td>
+<td>API, with a key</td>
+<td>If integrated</td>
+</tr>
+<tr>
+<td>3</td>
+<td>freeQoS → routers</td>
+<td>TCP 8728 (clear) or 8729 (TLS)</td>
+<td>Reads, queue writes, ping orders</td>
+<td>Yes</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Routers → freeQoS</td>
+<td>UDP 2055, no reply</td>
+<td>NetFlow</td>
+<td>For traffic and <code>/usage/v1</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td>Router → subscribers</td>
+<td>ICMP <em>echo request</em>, then the subscriber's <em>echo reply</em></td>
+<td>Latency probe; does not go through freeQoS</td>
+<td>For latency</td>
+</tr>
+<tr>
+<td>6</td>
+<td>freeQoS → UISP controller</td>
+<td>HTTPS 443</td>
+<td>Capacity of the radio links</td>
+<td>If <code>BACKHAUL_PROVIDER=uisp</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td>freeQoS → Ubiquiti antennas</td>
+<td>HTTPS 443 (<code>/status.cgi</code>)</td>
+<td>Radio capacity, read on each antenna</td>
+<td>If <code>BACKHAUL_PROVIDER=airos</code></td>
+</tr>
+<tr>
+<td>8</td>
+<td>freeQoS → DNS resolver</td>
+<td>UDP and TCP 53</td>
+<td>Reverse names of the addresses seen</td>
+<td>Recommended</td>
+</tr>
+<tr>
+<td>9</td>
+<td>freeQoS → <code>rdap.org</code></td>
+<td>HTTPS 443</td>
+<td>Owner of the addresses</td>
+<td>Enabled by default, can be disabled</td>
+</tr>
+<tr>
+<td>10</td>
+<td>freeQoS → <code>ipapi.co</code>, <code>ipwho.is</code>, <code>freeipapi.com</code> (HTTPS 443), <code>ip-api.com</code> (HTTP 80)</td>
+<td></td>
+<td>Geolocation</td>
+<td>Enabled by default, can be disabled</td>
+</tr>
+<tr>
+<td>11</td>
+<td>Application → database</td>
+<td>TCP 5432, internal Docker network</td>
+<td>Reads and writes of measurements</td>
+<td>Never published outside the server</td>
+</tr>
+<tr>
+<td>12</td>
+<td>freeQoS → FreeRADIUS database</td>
+<td>Port of the SQL database</td>
+<td>Plans read from RADIUS</td>
+<td>If <code>PLAN_PROVIDER=freeradius_sql</code></td>
+</tr>
+<tr>
+<td>13</td>
+<td>Server → internet</td>
+<td>HTTPS 443</td>
+<td>Installation and updates</td>
+<td>During installation</td>
+</tr>
+</tbody>
+</table></div>
+<p>On the router, the firewall's <code>input</code> chain must accept TCP 8728 or 8729 from the freeQoS address. The NetFlow export leaves through the <code>output</code> chain, which is usually open.</p>
+<h3 id="step-by-step-installation">Step-by-step installation</h3>
+<p><strong>1. Prepare the server.</strong> A virtual machine sized according to the table above, with a fixed IP and an SSD.</p>
+<p><strong>2. Open flows</strong> 1, 3, 4 and 13 of the table, plus 2 if a billing system calls the API.</p>
+<p><strong>3. Create the freeQoS account on each router.</strong> In the RouterOS terminal:</p>
+<pre><code>/user/group add name=freeqos policy=read,write,api,test
+/user add name=freeqos group=freeqos password=&lt;strong-password&gt; address=&lt;freeQoS-IP&gt;/32
+/ip/service set api address=&lt;freeQoS-IP&gt;/32
+</code></pre>
+<p><code>address=</code> restricts the account and the API service to the freeQoS address. For the encrypted API, enable <code>api-ssl</code> (port 8729) with a certificate, and tick <em>SSL</em> when adding the router. To start read-only, remove <code>write</code> from the group: freeQoS will measure without writing anything.</p>
+<p><strong>4. Install freeQoS</strong> on the server:</p>
+<pre><code>curl -fsSL https://raw.githubusercontent.com/tatdorian/freeQos-/HEAD/install.sh | sudo sh
+</code></pre>
+<p>If the repository is private, this link does not answer without authentication. Clone the repository with an access token instead, then run <code>sudo ./install.sh</code> from its folder.</p>
+<p>Without asking anything, the script:</p>
+<ol>
+<li>installs Docker, the <code>docker compose</code> plugin and <code>git</code> if they are missing;</li>
+<li>fetches the code into <code>/opt/freeqos</code> (main branch, or <code>FREEQOS_BRANCH</code>);</li>
+<li>writes <code>.env</code>: random PostgreSQL password, <code>APP_PORT=8000</code>, <code>NETFLOW_PORT=2055</code>;</li>
+<li>switches to <code>mirror.gcr.io</code> if Docker Hub is unreachable;</li>
+<li>builds, starts, waits for <code>/health</code> (3 minutes at most) and prints the address.</li>
+</ol>
+<p><strong>5. Check.</strong></p>
+<pre><code>cd /opt/freeqos &amp;&amp; sudo docker compose ps
+curl -s http://127.0.0.1:8000/health/ready
+</code></pre>
+<p>Both containers <code>freeqos-app</code> and <code>freeqos-db</code> must be <code>running</code>, and <code>/health/ready</code> must answer <code>"status":"ready"</code>.</p>
+<p><strong>6. Create the first account.</strong> Open <code>http://&lt;freeQoS-IP&gt;:8000</code>. The first visit offers to create the administrator account (12 characters minimum).</p>
+<p><strong>7. Put the interface behind HTTPS</strong> (recommended): a reverse proxy in front of port 8000. With Caddy, a few lines are enough, and the certificate is obtained automatically:</p>
+<pre><code>&lt;freeqos-dns-name&gt; {
+    reverse_proxy 127.0.0.1:8000
+}
+</code></pre>
+<p>Then close port 8000 to the outside on the firewall.</p>
+<p><strong>8. Add the routers.</strong> <em>Devices</em> → <em>Connect a router</em>: name, IP, the account from step 3, role (<code>pop</code>, <code>core</code> or <code>gateway</code>). <em>Test</em> checks the connection without saving anything. After adding, the automatic commissioning described in section 4 runs; follow its report.</p>
+<p><strong>9. Let it run in simulation</strong>, for at least one full cycle. Check the write plan in <em>Settings</em>: planned queues, skipped links and their reason. Then enable writing.</p>
+<p><strong>10. Schedule the backup.</strong> For example, once a night:</p>
+<pre><code>0 3 * * * cd /opt/freeqos &amp;&amp; make backup
+</code></pre>
+<p>Copy the <code>backups/</code> folder off the server regularly. <code>make backup</code> does not include the instance identifier: save it once with <code>sudo docker compose exec -T app cat /app/data/instance.id &gt; instance.id</code>, or set it with <code>FREEQOS_INSTANCE_ID</code> in <code>.env</code>.</p>
+<h3 id="what-must-be-kept">What must be kept</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Content</th>
+<th>If lost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>.env</code></td>
+<td>Database password, ports</td>
+<td>The database becomes unreachable.</td>
+</tr>
+<tr>
+<td><code>data/secret.key</code></td>
+<td>Encryption key for router passwords</td>
+<td>Router passwords stored in the database become unreadable; they must be entered again.</td>
+</tr>
+<tr>
+<td><code>data/instance.id</code></td>
+<td>Identifier of this instance</td>
+<td>Queues created earlier become those of "another instance" and are no longer touched.</td>
+</tr>
+<tr>
+<td><code>pgdata</code> volume</td>
+<td>All measurements, the inventory, the plans</td>
+<td>History lost.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Backup and restore: <code>make backup</code> and <code>make restore</code> (with the <code>timescaledb_pre_restore</code> / <code>post_restore</code> steps).</p>
+<h3 id="kubernetes">Kubernetes</h3>
+<p>freeQoS recognises a pod (<code>KUBERNETES_SERVICE_HOST</code>, <code>/var/run/secrets/kubernetes.io</code>). Three things to set:</p>
+<ul>
+<li><strong><code>NETFLOW_COLLECTOR_ADDRESS</code></strong>: the address the routers must send to (UDP Service, LoadBalancer or node). Without it, freeQoS sets no NetFlow target rather than announcing the pod IP.</li>
+<li><strong>A persistent volume</strong> for <code>data/</code> (key and instance identifier).</li>
+<li><strong><code>FREEQOS_INSTANCE_ID</code></strong> for a readable, stable identifier.</li>
+</ul>
+<h3 id="routeros-prerequisites">RouterOS prerequisites</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>API service</td>
+<td><code>api</code> (8728) or <code>api-ssl</code> (8729) reachable from freeQoS</td>
+</tr>
+<tr>
+<td>Account</td>
+<td>A group with the policies <code>read,write,api,test</code> (<code>test</code> is used by the ping probe)</td>
+</tr>
+<tr>
+<td>NetFlow export</td>
+<td>Set up by freeQoS itself; UDP port 2055 must be reachable from the routers</td>
+</tr>
+<tr>
+<td>Version</td>
+<td>RouterOS 7 recommended (VRF, <code>ping vrf=</code>, CAKE)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="updating">Updating</h3>
+<ol>
+<li>If two instances drive the same routers, stop one <strong>before</strong> updating.</li>
+<li>Run <code>install.sh</code> again (or <code>git pull</code> then <code>docker compose up -d --build</code>).</li>
+<li>On the first start of a new version, database migrations apply by themselves; the database keeps its data.</li>
+</ol>
+<h2 id="4-routers-and-inventory">4. Routers and inventory</h2>
+<p>freeQoS only knows the routers it is given. Everything else (subscribers, links, tree, antennas) is discovered from them.</p>
+<h3 id="how-freeqos-talks-to-a-router">How freeQoS talks to a router</h3>
+<p>freeQoS uses a single channel: the <strong>RouterOS API</strong>. No SSH, no SNMP, no script installed on the router.</p>
+<p><strong>The protocol.</strong> The API is a TCP connection on port 8728 (clear) or 8729 (TLS-encrypted, <code>api-ssl</code> service). It carries the same commands as the router's terminal, as words: <code>/ppp/active/print</code>, <code>/queue/simple/add</code>, <code>/ping</code>. The router answers with lines of <code>key=value</code> fields, one per object. freeQoS therefore reads exactly what a technician would see in the terminal.</p>
+<p><strong>The rights.</strong> The RouterOS account belongs to a group, and the group grants <em>policies</em>:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Policy</th>
+<th>What it allows</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>api</code></td>
+<td>Connecting through the API</td>
+<td>Everything</td>
+</tr>
+<tr>
+<td><code>read</code></td>
+<td>Reading configuration and state</td>
+<td>Sessions, counters, routes, neighbours</td>
+</tr>
+<tr>
+<td><code>write</code></td>
+<td>Changing the configuration</td>
+<td>Queues, queue types, NetFlow export, restrictions</td>
+</tr>
+<tr>
+<td><code>test</code></td>
+<td>Running <code>/ping</code> and <code>/tool/traceroute</code></td>
+<td>The latency probe</td>
+</tr>
+</tbody>
+</table></div>
+<p>Without <code>write</code>, freeQoS runs read-only: measurement, latency and NetFlow (if the export was set up by hand) work, shaping does not.</p>
+<p><strong>Failures.</strong> Each request has a timeout (<code>timeout_s</code>, 5 s by default). Routers are queried in parallel: a router that does not answer misses its read and reports it, the others are read normally.</p>
+<h3 id="declaring-a-router">Declaring a router</h3>
+<p>Two sources add up:</p>
+<ul>
+<li><strong>The database</strong>, through the interface or <code>POST /api/v1/pops/routers</code>. This is the normal case; the password is encrypted with <code>data/secret.key</code> and never comes out of any response.</li>
+<li><strong>A file</strong> (<code>ROUTERS_FILE</code>, YAML or JSON) or the <code>ROUTERS='[{…}]'</code> variable. Useful for declarative deployment; a router from the file can be hidden from the interface without touching the file.</li>
+</ul>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>name</code></td>
+<td>—</td>
+<td>Unique identifier of the PoP</td>
+</tr>
+<tr>
+<td><code>host</code></td>
+<td>—</td>
+<td>Management IP or name</td>
+</tr>
+<tr>
+<td><code>port</code></td>
+<td>8728</td>
+<td>8729 for <code>api-ssl</code></td>
+</tr>
+<tr>
+<td><code>username</code> / <code>password</code></td>
+<td><code>qos-ro</code></td>
+<td>RouterOS account</td>
+</tr>
+<tr>
+<td><code>role</code></td>
+<td><code>pop</code></td>
+<td><code>pop</code>, <code>core</code> or <code>gateway</code>; a core or gateway is never treated as a subscriber</td>
+</tr>
+<tr>
+<td><code>use_ssl</code>, <code>tls_verify</code></td>
+<td><code>false</code>, <code>strict</code></td>
+<td><code>strict</code>, <code>fingerprint</code> (with a SHA-256 <code>tls_fingerprint</code>) or <code>insecure</code></td>
+</tr>
+<tr>
+<td><code>loopback</code></td>
+<td>inferred</td>
+<td>Identity of the router in the tree (a /32 on a <code>lo*</code> interface, or the router-id)</td>
+</tr>
+<tr>
+<td><code>timeout_s</code></td>
+<td>5</td>
+<td>Between 0.5 and 60 s</td>
+</tr>
+<tr>
+<td><code>pppoe_interface_pattern</code></td>
+<td><code>&lt;pppoe-{login}&gt;</code></td>
+<td>Name of a subscriber's dynamic interface</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>POST /api/v1/pops/routers/test</code> tries a connection without saving anything; on failure, the response gives a hint (port closed, wrong credentials, missing <code>api</code> policy, certificate).</p>
+<h3 id="automatic-commissioning">Automatic commissioning</h3>
+<p>As soon as a router is added, freeQoS immediately runs, in order, the cycles that would otherwise run at their own pace. Each step has 90 s at most.</p>
+<ol>
+<li>Check the account's actual write rights.</li>
+<li>Read the PPPoE sessions.</li>
+<li>Load the plans.</li>
+<li>Read the ports.</li>
+<li>Discover the topology (tree, uplink, loopback).</li>
+<li>Create the CAKE queue types and the subscriber queues.</li>
+<li>Set up the NetFlow export.</li>
+<li>Apply the traffic restrictions.</li>
+<li>Read the DNS cache.</li>
+<li>Measure latency.</li>
+</ol>
+<p>The report (<code>GET /api/v1/pops/provisioning/{router}</code>) then reads the router back and says what is <strong>actually</strong> in place. If writing is disabled or the account lacks <code>write</code>, the state becomes <code>blocked</code>, with the action that unblocks it.</p>
+<h3 id="who-is-a-subscriber-on-this-pop">Who is a subscriber on this PoP?</h3>
+<p>RouterOS has no "subscribers" table. The census therefore starts from the subnets the router serves (<code>/ip/address</code>). Each subnet is classified: point-to-point, routing transit, PPPoE server or <strong>subscriber</strong>.</p>
+<p>Seven sources are then cross-checked; none can erase what another one saw.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>What it reveals</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/ppp/active</code></td>
+<td>PPPoE subscribers</td>
+</tr>
+<tr>
+<td>ARP</td>
+<td>Static-IP subscribers (the entry disappears after a few minutes of silence)</td>
+</tr>
+<tr>
+<td>DHCP leases</td>
+<td>DHCP subscribers, even silent ones</td>
+</tr>
+<tr>
+<td>Bridge host table</td>
+<td>Layer-2 presence behind a VLAN-filtering bridge</td>
+</tr>
+<tr>
+<td>Static routes</td>
+<td>Routed blocks (/29…) that never appear in ARP</td>
+</tr>
+<tr>
+<td>Existing queues</td>
+<td>Subscribers already managed</td>
+</tr>
+<tr>
+<td>MNDP / LLDP</td>
+<td>Neighbouring equipment</td>
+</tr>
+</tbody>
+</table></div>
+<p>The result also states what it does not know: unreadable source, empty subscriber subnet, address outside any known subnet.</p>
+<h3 id="topology">Topology</h3>
+<p>The tree is built from neighbours, shared subnets, tunnels, MAC addresses and, if configured, UISP. It is refreshed every 15 minutes. Everything can be corrected by hand and the correction survives rediscovery: move a box, change a parent, merge two boxes that are the same device, create or delete a link, correct a role.</p>
+<h4 id="how-the-tree-is-discovered">How the tree is discovered</h4>
+<p>No single source is enough. freeQoS cross-checks seven:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>What it teaches</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/ip/neighbor</code> (MNDP, LLDP, CDP)</td>
+<td>For each port, the device on the other side: name, model, MAC, IP. This is physical adjacency. MikroTik equipment and most radios announce themselves this way to their direct neighbours.</td>
+</tr>
+<tr>
+<td><code>/interface/ethernet</code></td>
+<td>The negotiated speed of each port: the physical ceiling of the link</td>
+</tr>
+<tr>
+<td><code>/ip/address</code></td>
+<td>The IP network of each interface, hence who shares a segment with whom</td>
+</tr>
+<tr>
+<td>UISP</td>
+<td>The radio links and their current real capacity</td>
+</tr>
+<tr>
+<td><code>/ppp/active</code>, <code>caller-id</code> field</td>
+<td>The MAC of each PPPoE subscriber's CPE</td>
+</tr>
+<tr>
+<td><code>/ip/arp</code></td>
+<td>Addresses present on routed VLANs without PPPoE (candidates, never subscribers)</td>
+</tr>
+<tr>
+<td>The configuration (<code>/ip/route</code>, OSPF, BGP, VLAN, bridges)</td>
+<td>What the routers <strong>do</strong> with traffic: this is what gives the hierarchy</td>
+</tr>
+</tbody>
+</table></div>
+<p>Three rules make the tree reliable:</p>
+<ol>
+<li><strong>A router is identified by its loopback</strong>, not by its name or an interface address. Two sites configured from the same template often have the same /30 link; only the loopback is unique.</li>
+<li><strong>The hierarchy comes from the declared role</strong> (gateway, core, PoP), not from a guess based on the hardware model.</li>
+<li><strong>A subscriber's sector comes from a join</strong>: the MAC read in <code>caller-id</code> is matched against the stations known to UISP. It is the only way to know which antenna a subscriber goes through, hence its real chain of bottlenecks. Without UISP, only the PoP is known.</li>
+</ol>
+<h3 id="static-ip-subscribers">Static-IP subscribers</h3>
+<p>A subscriber without PPPoE (fixed IP, routed block, VLAN) is declared in <em>Static clients</em>: a name, one or more addresses or networks, a PoP. It is then measured, limited and scored like a PPPoE subscriber.</p>
+<h2 id="5-measurements-throughput-latency-qoe">5. Measurements: throughput, latency, QoE</h2>
+<h3 id="throughput">Throughput</h3>
+<p>Byte counters are read through the RouterOS API, then turned into rates by the difference between two reads.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Object</th>
+<th>Source</th>
+<th>Period</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PPPoE subscriber</td>
+<td>Dynamic interface <code>&lt;pppoe-login&gt;</code></td>
+<td>10 s</td>
+</tr>
+<tr>
+<td>Static-IP subscriber</td>
+<td>Its own queue</td>
+<td>10 s</td>
+</tr>
+<tr>
+<td>Port, link</td>
+<td><code>/interface</code></td>
+<td>10 s</td>
+</tr>
+<tr>
+<td>Radio backhaul</td>
+<td>UISP or airOS (announced capacity)</td>
+<td>30 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Two safeguards reject absurd values. A counter going backwards (restarted session) does not produce a spike. A rate above <code>MAX_PLAUSIBLE_BPS</code> (100 Gbit/s) is discarded.</p>
+<h4 id="how-a-rate-is-computed">How a rate is computed</h4>
+<p>A router never gives a rate. It keeps <strong>counters</strong>: the total number of bytes received (<code>rx-byte</code>) and sent (<code>tx-byte</code>) by each interface since it was created. freeQoS reads these counters at regular intervals and divides the difference by the elapsed time.</p>
+<blockquote>
+<p>Example: at 10:00:00 the counter reads 5,000,000,000 bytes; at 10:00:10, 5,012,500,000. Difference: 12,500,000 bytes, i.e. 100,000,000 bits, in 10 s → <strong>10 Mbit/s</strong>.</p>
+</blockquote>
+<p>Three details matter:</p>
+<ul>
+<li><strong>Where a PPPoE subscriber's counters are.</strong> <code>/ppp/active</code> gives the login, the address and the session uptime, but not the bytes. Those are on the dynamic interface <code>&lt;pppoe-login&gt;</code>. freeQoS makes two reads and links them by name.</li>
+<li><strong>Direction.</strong> The router counts from its own point of view: what it <strong>receives</strong> from the subscriber (<code>rx</code>) is the subscriber's <strong>upload</strong>, what it <strong>sends</strong> to it (<code>tx</code>) is the subscriber's <strong>download</strong>. freeQoS swaps the two.</li>
+<li><strong>Reconnection.</strong> When a PPPoE session restarts, the interface is recreated and its counters start from zero. If the session uptime goes backwards or a counter decreases, freeQoS writes <strong>no</strong> rate for that cycle. A gap in the curve is visible; a fake spike would distort averages and scores.</li>
+</ul>
+<p>A static-IP subscriber has no interface of its own: its traffic mixes with that of a VLAN or a port. Its bytes are read from the counters of <strong>its queue</strong> (<code>/queue/simple</code>, <code>bytes</code> field). Consequence: a static-IP subscriber is only measured once a queue targets it.</p>
+<h3 id="latency-the-probe">Latency: the probe</h3>
+<p>A subscriber's latency is the round-trip time measured <strong>from its PoP</strong> to its address. It goes neither through the core nor through freeQoS: the router does the pinging.</p>
+<h4 id="how-a-ping-measures-latency">How a ping measures latency</h4>
+<p>The router sends a small ICMP <em>echo request</em> packet to the subscriber's address. The subscriber's CPE answers with an <em>echo reply</em>. The time between sending and the reply is the <strong>RTT</strong> (round-trip time).</p>
+<p>A single ping means nothing: one packet may wait behind a download, another may go straight through. freeQoS therefore sends 5, 200 ms apart, and keeps:</p>
+<ul>
+<li>the <strong>median</strong> (the value displayed): it ignores a single very slow ping;</li>
+<li>the minimum and the maximum;</li>
+<li>the <strong>jitter</strong>: the variation from one ping to the next, which hurts voice;</li>
+<li>the <strong>loss</strong>: the share of pings left unanswered.</li>
+</ul>
+<p><strong>Why from the PoP.</strong> The ping leaves from the router serving the subscriber, not from the freeQoS server. It therefore measures the last segment, the one the operator controls and that decides the experience: radio, CPE, queue. A ping from freeQoS would add the core and the management network, unrelated to what the subscriber experiences.</p>
+<p><strong>Why a round-robin.</strong> Pinging 2,000 subscribers every 30 s would load the routers. Each cycle takes 20 subscribers per PoP, and the next one resumes where the previous one stopped. PoPs are probed in parallel.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+<th>Setting</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cycle</td>
+<td>30 s, all PoPs in parallel</td>
+<td><code>RTT_INTERVAL_S</code></td>
+</tr>
+<tr>
+<td>Batch</td>
+<td>20 subscribers per cycle and per PoP, round-robin</td>
+<td><code>RTT_BATCH_SIZE</code></td>
+</tr>
+<tr>
+<td>Pings</td>
+<td>5, 200 ms apart</td>
+<td><code>RTT_COUNT</code>, <code>RTT_PING_INTERVAL_MS</code></td>
+</tr>
+<tr>
+<td>Priority</td>
+<td>DSCP 46 (EF)</td>
+<td><code>RTT_PROBE_DSCP</code> (0 = disabled)</td>
+</tr>
+<tr>
+<td>Freshness</td>
+<td>A measurement older than 5 min is no longer displayed</td>
+<td><code>RTT_MAX_AGE_S</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Three choices make the measurement faithful.</p>
+<blockquote>
+<p><strong>VRF, in two sentences.</strong> A VRF is a separate routing table on the same router: subscriber routes can live in <code>CUST-INET</code> while the <code>main</code> table serves management. A packet only sees the routes of the table it leaves in.</p>
+<p><strong>DSCP, in two sentences.</strong> Every IP packet carries in its header a 6-bit label stating its class of service. The value 46 (<em>Expedited Forwarding</em>) means "voice, send first", and queues that honour it serve it before the rest.</p>
+</blockquote>
+<p><strong>1. Ping in the subscriber's VRF.</strong> If subscriber routes live in a VRF (for example <code>CUST-INET</code>), a ping without a table leaves through the <code>main</code> table, goes up to the core and comes back: 700 to 900 ms instead of 2 ms. freeQoS therefore picks the table from the most specific route to the subscriber:</p>
+<ol>
+<li>a connected route first;</li>
+<li>otherwise a route that does not point to the upstream gateway;</li>
+<li>a VRF is preferred over <code>main</code>.</li>
+</ol>
+<p>The parameter sent is <code>vrf=</code>, falling back to <code>routing-table=</code> for versions that do not know it.</p>
+<p><strong>2. Priority ping.</strong> The probe's packets carry DSCP 46 (EF). CAKE puts them in the <em>Voice</em> tin, with its default setting (<code>diffserv3</code>) as with <code>diffserv4</code>. They do not queue behind the subscriber's traffic: the latency measured is that of the path, not that of a subscriber saturating its plan. Only <code>CAKE_DIFFSERV=besteffort</code> cancels this effect. If the router refuses the DSCP parameter, the ping is sent again without it.</p>
+<p><strong>3. Slow fallback.</strong> If the median exceeds the interval between pings with at least 50% loss, the subscriber is re-tested with 3 pings 1 s apart for 10 minutes. This avoids counting merely late pings as lost.</p>
+<h3 id="when-latency-stays-empty">When latency stays empty</h3>
+<p>A subscriber that has never answered is not a degraded subscriber: its CPE often filters ICMP. It is flagged <code>ever_answered=false</code>, excluded from the score and from the QoE loop, and the interface explains why. The <strong>Find the cause</strong> button (<code>GET /api/v1/rtt/diagnose</code>) replays the probe by hand and returns a verdict:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ok</code></td>
+<td>The subscriber answers now</td>
+<td>The earlier silence was temporary</td>
+</tr>
+<tr>
+<td><code>no_test_policy</code></td>
+<td>The account is not allowed to run <code>/ping</code></td>
+<td>Add the <code>test</code> policy to the group</td>
+</tr>
+<tr>
+<td><code>rate_limited</code></td>
+<td>The subscriber answers one ping per second but drops a burst</td>
+<td>None: the probe switches to the slow pace on this router by itself</td>
+</tr>
+<tr>
+<td><code>loopback_return_path</code></td>
+<td>The subscriber answers, but not to the router's loopback address</td>
+<td>None: the probe now pings without a source</td>
+</tr>
+<tr>
+<td><code>no_route</code></td>
+<td>The router has no route to this subscriber</td>
+<td>Check that the subscriber is really behind this PoP</td>
+</tr>
+<tr>
+<td><code>firewall</code></td>
+<td>Router rules drop ICMP before accepting established connections (rules listed)</td>
+<td>Move an <code>accept icmp</code> rule up</td>
+</tr>
+<tr>
+<td><code>client_blocks_icmp</code></td>
+<td>The gateway answers, the subscriber never does</td>
+<td>Allow ICMP echo on the CPE's WAN side</td>
+</tr>
+<tr>
+<td><code>router_cannot_ping</code></td>
+<td>The router gets no reply from its own gateway either</td>
+<td>Check the router's output/input firewall</td>
+</tr>
+</tbody>
+</table></div>
+<p>The response also contains <code>routing_table</code>, the <code>route_candidates</code> and a control ping to the gateway.</p>
+<h3 id="bufferbloat">Bufferbloat</h3>
+<p>Bufferbloat is the latency that load <strong>adds</strong>. freeQoS computes it by crossing the RTT and the rate of the same sample: latency when the link is loaded, minus latency when it is not. No dedicated test is run.</p>
+<h4 id="why-bufferbloat-exists">Why bufferbloat exists</h4>
+<p>Every device (CPE, radio, router) has a buffer to absorb bursts. When the link is full, packets pile up in it and wait their turn. Manufacturers size these buffers for throughput, not for latency.</p>
+<blockquote>
+<p>Example: a 1 MB buffer on a 10 Mbit/s link. When full, it holds 8 Mbit, i.e. <strong>0.8 s</strong> of waiting for the last packet in. A video call whose packets sit behind a download takes those 800 ms.</p>
+</blockquote>
+<p>An idle latency test does not see it: the buffer is only full under load.</p>
+<h4 id="how-freeqos-computes-it">How freeQoS computes it</h4>
+<p>Each collection cycle writes one sample per subscriber: its rate and its last RTT. Over the requested window:</p>
+<ol>
+<li><strong>Idle latency</strong> = the 20th percentile of <strong>all</strong> RTTs. This is the observed floor, without being fooled by a single low value.</li>
+<li><strong>Loaded slice</strong> = the samples whose rate is at least the 60th percentile of the subscriber's rates. If the subscriber's rate is constant, the cut is at the median.</li>
+<li><strong>Loaded latency</strong> = the 90th percentile of the RTTs in the loaded slice.</li>
+<li><strong>Bufferbloat</strong> = loaded latency − idle latency, never negative.</li>
+</ol>
+<p>At least 4 samples are needed, including 2 in the loaded slice. Otherwise freeQoS gives <strong>no</strong> grade: showing A+ for a subscriber who never downloaded anything would be a false good result.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Grade</th>
+<th>Added latency</th>
+<th>Colour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A+</td>
+<td>≤ 5 ms</td>
+<td>green</td>
+</tr>
+<tr>
+<td>A</td>
+<td>≤ 30 ms</td>
+<td>green</td>
+</tr>
+<tr>
+<td>B</td>
+<td>≤ 60 ms</td>
+<td>amber</td>
+</tr>
+<tr>
+<td>C</td>
+<td>≤ 100 ms</td>
+<td>amber</td>
+</tr>
+<tr>
+<td>D</td>
+<td>≤ 200 ms</td>
+<td>red</td>
+</tr>
+<tr>
+<td>F</td>
+<td>&gt; 200 ms</td>
+<td>red</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="qoe-score-0-to-100">QoE score (0 to 100)</h3>
+<p>The score is the <strong>minimum</strong> of two components:</p>
+<ul>
+<li><strong>Idle latency:</strong> <code>100 − 0.6 × (RTT − 10 ms)</code>. Below 10 ms, no penalty.</li>
+<li><strong>Bufferbloat:</strong> interpolation between the points 0 ms → 100, 5 → 90, 30 → 80, 60 → 65, 100 → 50, 200 → 25 and 400 → 0.</li>
+</ul>
+<p>The weakest link sets the score. A satellite link at 600 ms stays bad even without bufferbloat; a link at 8 ms that climbs to 400 ms under load is not excellent.</p>
+<p>Each score states its basis (<code>basis</code>):</p>
+<ul>
+<li><code>composite</code>: both components;</li>
+<li><code>load</code>: bufferbloat only;</li>
+<li><code>latency</code>: RTT only, a mere substitute when no load can be correlated.</li>
+</ul>
+<p>Display thresholds: ≥ 80 green, ≥ 50 amber, below that red.</p>
+<h3 id="at-plan-limit">"At plan limit"</h3>
+<p>A subscriber filling its plan has high latency by construction. When the probe is not prioritised, its samples at the limit are set aside and the <em>At plan limit</em> badge explains it. When the probe is prioritised (DSCP 46 and CAKE), the measurement stays accurate even at the limit: nothing is set aside.</p>
+<h2 id="6-netflow-traffic">6. NetFlow traffic</h2>
+<p>Counters say <strong>how much</strong> a subscriber consumes. NetFlow says <strong>what</strong> and <strong>where to</strong>.</p>
+<h3 id="how-netflow-works">How NetFlow works</h3>
+<p><strong>The problem.</strong> There are two ways to know what traffic is made of. The first is to copy every packet to a probe (<em>port mirroring</em>): on a 10 Gbit/s internet edge, that is 10 Gbit/s more to carry. The second is to ask the router to <strong>summarise</strong> what it sees. That is NetFlow: a few tens of kbit/s to describe thousands of conversations.</p>
+<p><strong>A flow.</strong> For NetFlow, a conversation is a <em>flow</em>: all packets with the same source address, the same destination address, the same ports and the same protocol. A video call gives a few flows; a web page, a few dozen.</p>
+<p><strong>The cache.</strong> The router keeps one line per ongoing flow in memory. For each packet, it adds its bytes to the flow's line. It sends nothing until the flow has <em>expired</em>:</p>
+<ul>
+<li><strong>inactive timeout</strong>: no packet for 15 s, the flow is considered finished and exported;</li>
+<li><strong>active timeout</strong>: a flow still in progress is exported anyway every minute, then its count starts again from zero.</li>
+</ul>
+<p>RouterOS's default active timeout is <strong>30 minutes</strong>: an hour of streaming would show up as two records, half an hour late. freeQoS therefore sets <code>active-flow-timeout=1m</code> and <code>inactive-flow-timeout=15s</code> on each router.</p>
+<p><strong>The export.</strong> Expired flows leave in UDP datagrams towards the collector. UDP resends nothing: a datagram that does not arrive is lost for good. This is why the collector listens permanently and does no slow processing while receiving.</p>
+<p><strong>The formats.</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Version</th>
+<th>Principle</th>
+<th>Particularity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v5</td>
+<td>Fixed format, IPv4 only</td>
+<td>Readable immediately</td>
+</tr>
+<tr>
+<td>v9 (default set by freeQoS)</td>
+<td>The router first sends <strong>templates</strong> describing the fields, then data referring to them</td>
+<td>IPv4 and IPv6; without the template, the data is unreadable</td>
+</tr>
+<tr>
+<td>IPFIX (v10)</td>
+<td>Standardised version of v9</td>
+<td>Works the same way</td>
+</tr>
+</tbody>
+</table></div>
+<p>In practice: after a freeQoS restart, v9 data is ignored until the router resends its templates, which it does regularly. A few minutes of traffic may be missing; this is normal and counted.</p>
+<p><strong>Sampling.</strong> A very busy router may only examine one packet in N. It announces it, and freeQoS multiplies volumes by N.</p>
+<figure class="fig" id="fig-netflow-pipeline">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 780" role="img" aria-label="A flow goes from the router's cache to a subscriber's account in six steps">
+  <defs>
+    <marker id="nf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-mark" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+  <text class="d-title" x="24" y="34">A flow goes from the router's cache to a subscriber's account in six steps</text>
+  <rect class="d-zone" x="24" y="56" width="712" height="228" rx="8"/>
+  <text class="d-name" x="40" y="78">On the router</text>
+  <rect class="d-zone" x="24" y="316" width="712" height="440" rx="8"/>
+  <text class="d-name" x="40" y="338">Inside freeQoS</text>
+  <g class="d-conn">
+    <path d="M380 164V196" marker-end="url(#nf-arrow)"/>
+    <path d="M380 268V356" marker-end="url(#nf-arrow)"/>
+    <path d="M380 428V460" marker-end="url(#nf-arrow)"/>
+    <path d="M380 532V564" marker-end="url(#nf-arrow)"/>
+    <path d="M380 636V668" marker-end="url(#nf-arrow)"/>
+  </g>
+  <text class="d-line" x="388" y="304">UDP datagrams to port 2055</text>
+  <rect class="d-box d-fill" x="40" y="92" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="116">1. The router keeps a cache of conversations</text>
+  <text class="d-line" x="56" y="132">A flow = same source, same destination, same ports, same protocol.</text>
+  <text class="d-line" x="56" y="148">For each one, it counts bytes and packets, and notes the time of the first and last packet.</text>
+  <rect class="d-box d-fill" x="40" y="196" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="220">2. It exports expired flows</text>
+  <text class="d-line" x="56" y="236">No packet for 15 s, or active for 1 min: the flow leaves in a UDP datagram.</text>
+  <text class="d-line" x="56" y="252">A datagram summarises dozens of flows, in NetFlow v9 format (templates and data).</text>
+  <rect class="d-box d-fill" x="40" y="356" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="380">3. The collector decodes</text>
+  <text class="d-line" x="56" y="396">It remembers v9 / IPFIX templates: without a template, an exporter's data is unreadable.</text>
+  <text class="d-line" x="56" y="412">If the router samples (1 packet in N), volumes are multiplied by N.</text>
+  <rect class="d-accent" x="40" y="460" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="484">4. Each flow is attributed to a subscriber</text>
+  <text class="d-line-strong" x="56" y="500">Look up the most specific subscriber block containing the source or the destination.</text>
+  <text class="d-line-strong" x="56" y="516">Destination at the subscriber: download. Source at the subscriber: upload. Usage family from the port.</text>
+  <rect class="d-box d-fill" x="40" y="564" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="588">5. Aggregation, then a write every 60 s</text>
+  <text class="d-line" x="56" y="604">One row per subscriber, vantage point and window: volumes, packets, usage families.</text>
+  <text class="d-line" x="56" y="620">The remote address of each conversation is kept if it is on the internet.</text>
+  <rect class="d-box d-fill" x="40" y="668" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="692">6. Remote addresses are named</text>
+  <text class="d-line" x="56" y="708">Catalogue, router DNS cache, reverse name, RDAP, geolocation: 40 addresses every 30 s.</text>
+  <text class="d-line" x="56" y="724">The name feeds the Traffic page and the traffic restrictions.</text>
+</svg>
+<figcaption>NetFlow: from the router&#x27;s cache to a subscriber&#x27;s account</figcaption>
+</figure>
+<p>Step 4 is the heart of the collector: it turns "45 MB between two addresses" into "45 MB downloaded by this subscriber".</p>
+<h3 id="collector">Collector</h3>
+<p>freeQoS listens on UDP port 2055 (<code>NETFLOW_PORT</code>) and decodes NetFlow v5, v9 and IPFIX. Flows are aggregated in memory then written every 60 s (<code>NETFLOW_FLUSH_INTERVAL_S</code>).</p>
+<p>Four counting rules:</p>
+<ol>
+<li><strong>Direction comes from the subscriber, not the interface.</strong> A flow whose destination falls in a subscriber's block is download for it; one whose source falls in it, upload. Rewiring therefore distorts nothing.</li>
+<li><strong>The vantage point is part of the key.</strong> The same byte crosses the PoP then the internet edge, and both export it. Counters are kept per vantage point, never added up.</li>
+<li><strong>An unknown address is not a subscriber.</strong> It goes into the list of "hosts seen", used only to help declare subscribers.</li>
+<li><strong>The other end is kept.</strong> The remote address of each flow is recorded to answer "who watches which service".</li>
+</ol>
+<h4 id="attribution-in-detail">Attribution, in detail</h4>
+<p>freeQoS builds an <strong>index of subscriber blocks</strong>: each PPPoE subscriber's address (/32) and the networks of static-IP subscribers (/29, /30…). For each flow, it looks up the <strong>most specific</strong> block containing the source, then the destination. Blocks are sorted by prefix length: a lookup costs a few comparisons, whatever the number of subscribers. An internet edge sends tens of thousands of flows per minute; a slow lookup would lose datagrams.</p>
+<h4 id="vantage-points">Vantage points</h4>
+<p>The same byte crosses several routers, and each can export it. freeQoS distinguishes two vantage points:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Vantage point</th>
+<th>Where</th>
+<th>What it sees</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>edge</code></td>
+<td>The internet edge, upstream of the core</td>
+<td>Everything going to or coming from the internet, once</td>
+</tr>
+<tr>
+<td><code>pop</code></td>
+<td>The subscriber's PoP</td>
+<td>The same traffic, plus local traffic, where VLAN and sector are known</td>
+</tr>
+</tbody>
+</table></div>
+<p>Counters are kept per vantage point and are <strong>never added up</strong>. Consumption (Traffic page, <code>/usage/v1</code> API) is read from a single one: <code>NETFLOW_ACCOUNTING_VANTAGE</code>, <code>edge</code> by default. For the list of conversations, freeQoS keeps a single source per conversation: the one closest to the subscriber.</p>
+<h4 id="rate-of-a-flow">Rate of a flow</h4>
+<p>A record carries a volume and a duration (first → last packet). The rate is the volume divided by the <strong>actual</strong> duration. With RouterOS's 30-minute timeout, dividing by an assumed minute showed a rate thirty times too high; this is why the duration is always read from the record.</p>
+<h4 id="usage-families">Usage families</h4>
+<p>Traffic is classified into broad families by <strong>service port</strong>: the smaller of the two ports, because the client picks its port at random above 32,768 and the server listens below.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Port</th>
+<th>Family</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>80, 443, 8080, 8443</td>
+<td>web</td>
+</tr>
+<tr>
+<td>53</td>
+<td>dns</td>
+</tr>
+<tr>
+<td>25, 110, 143, 465, 587, 993, 995</td>
+<td>email</td>
+</tr>
+<tr>
+<td>3478, 5004, 5060, 5061</td>
+<td>voice / video</td>
+</tr>
+<tr>
+<td>3074, 27015</td>
+<td>gaming</td>
+</tr>
+<tr>
+<td>500, 1194, 1723, 4500, 51820, ESP/AH protocols</td>
+<td>vpn</td>
+</tr>
+<tr>
+<td>6881 to 6999</td>
+<td>p2p</td>
+</tr>
+<tr>
+<td>ICMP</td>
+<td>diagnostics</td>
+</tr>
+</tbody>
+</table></div>
+<p>Encryption sends Netflix, YouTube and the rest of the web through port 443: the port cannot tell them apart, and the family is honestly called "web". What distinguishes Netflix from YouTube is the <strong>name</strong> of the remote address (below).</p>
+<h4 id="what-is-left-out-of-the-list-of-conversations">What is left out of the list of conversations</h4>
+<ul>
+<li><strong>Management traffic</strong> (SNMP, BGP, BFD, RADIUS, syslog, NetFlow, Winbox, RouterOS API): the network administering itself, not a subscriber.</li>
+<li><strong>DNS queries</strong> (ports 53, 853, 5353): asking 8.8.8.8 for a site's address is not "going to 8.8.8.8". Their volume is still counted.</li>
+<li><strong>Private addresses</strong>: two subscribers talking to each other are not an internet destination for either of them.</li>
+</ul>
+<p>At most 2,000 destinations are kept per 60-second window, so that a subscriber running p2p does not trigger a burst of writes. A destination not seen for 7 days is forgotten; its name is kept.</p>
+<h3 id="export-set-up-automatically">Export set up automatically</h3>
+<p>freeQoS configures the export on each router itself, every 10 minutes if needed (<code>NETFLOW_EXPORT_AUTO</code>, <code>NETFLOW_EXPORT_INTERVAL_S</code>):</p>
+<pre><code>/ip/traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m inactive-flow-timeout=15s
+/ip/traffic-flow/target add dst-address=&lt;collector&gt; port=2055 version=9
+</code></pre>
+<p>The collector address is not guessed. It is the local address the system would use to reach <strong>this</strong> router (a UDP socket opened towards it, without sending a packet). It is therefore correct even on a server with several interfaces.</p>
+<p>Special cases:</p>
+<ul>
+<li><strong>Container (Docker, Podman, Kubernetes):</strong> the local address would be the container's, unreachable from the routers. Without <code>NETFLOW_COLLECTOR_ADDRESS</code>, freeQoS sets no target and says so.</li>
+<li><strong>Target towards another collector:</strong> never touched. A third-party tool already receiving the flows keeps receiving them.</li>
+<li><strong>Stale target:</strong> a target carrying the mark of <strong>this</strong> instance and pointing to an old address is removed.</li>
+</ul>
+<p>Writing goes through the same path as queues: simulation by default, circuit breaker, audit.</p>
+<h3 id="naming-addresses">Naming addresses</h3>
+<p>NetFlow only carries addresses. When a subscriber reaches an address never seen before, it is recorded "to be named". A separate loop then names it, in batches of 40 every 30 s, most recent first. Naming may need a network request, hence a wait: doing it while receiving would block the collector. An address reached ten seconds ago is named on the next pass.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Source, by order of confidence</th>
+<th>What it gives</th>
+<th>What it costs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Catalogue</strong></td>
+<td>Address blocks published by the large services (Netflix, YouTube, Meta…)</td>
+<td>Nothing: works without internet, immediate answer</td>
+</tr>
+<tr>
+<td><strong>Router DNS cache</strong></td>
+<td>The name the subscriber <strong>asked for</strong> (<code>netflix.com</code>), following CNAMEs</td>
+<td>Nothing. Only if subscribers resolve through the router; a subscriber querying 8.8.8.8 directly bypasses it.</td>
+</tr>
+<tr>
+<td><strong>Reverse name (PTR)</strong></td>
+<td>E.g. <code>ipv4-c001-par001.1.oca.nflxvideo.net</code>: follows a service that changes blocks</td>
+<td>One DNS query per new address</td>
+</tr>
+<tr>
+<td><strong>RDAP</strong> (registry)</td>
+<td>Organisation, AS number, country, announced block</td>
+<td>One HTTP call to <code>rdap.org</code> per address</td>
+</tr>
+<tr>
+<td><strong>Geolocation</strong></td>
+<td>Country, region, city</td>
+<td>One HTTP call to <code>ipapi.co</code> (then fallback services), or nothing with a local MaxMind database</td>
+</tr>
+</tbody>
+</table></div>
+<p>An address without a reverse name is asked again 3 times at most. A name read from the DNS cache is no longer attributed after 24 h: the address may have changed owner.</p>
+<p><strong>A CDN is not streaming.</strong> Cloudflare, Akamai or Fastly serve a recipe site, a video or a software update alike. They are classified <code>cdn</code>, never <code>streaming</code>, so that a restriction placed on them is a conscious choice. The interface shows the source of each name (catalogue, reverse name, registry).</p>
+<p><strong>Privacy.</strong> RDAP and web-service geolocation are <strong>enabled by default</strong>. They send to third parties the addresses your subscribers visit. To avoid it:</p>
+<ul>
+<li><code>IPFINDER_GEOIP_DB</code> points to a local MaxMind database (<code>.mmdb</code>): same result, no outgoing call;</li>
+<li><code>IPFINDER_GEOIP_ENABLED=false</code> and <code>IPFINDER_RDAP_ENABLED=false</code> turn these two sources off (changeable live);</li>
+<li>the catalogue, the DNS cache and reverse names are enough to recognise the large services.</li>
+</ul>
+<h3 id="traffic-restrictions">Traffic restrictions</h3>
+<p>A restriction targets a catalogue service for one or more subscribers. Two actions:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Action</th>
+<th>What is installed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>block</code></td>
+<td>An <code>address-list</code> for the service and two <code>filter action=drop</code> rules (one per direction)</td>
+</tr>
+<tr>
+<td><code>limit</code></td>
+<td>An <code>address-list</code>, two <code>mangle</code> marks and two capped queues</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every 5 minutes (<code>RESTRICTIONS_INTERVAL_S</code>), the address list of each rule is recomputed and only the difference is pushed. A new Netflix address seen by NetFlow therefore joins the list by itself.</p>
+<p>No rule is ever created automatically: throttling a service is a business decision. <code>GET /api/v1/traffic-rules/{id}/preview</code> shows what a rule targets today. IPv6 is not installed yet.</p>
+<h2 id="7-plans-and-shaping">7. Plans and shaping</h2>
+<p>This is the only part of freeQoS that writes to the routers. It always follows the same path: <strong>compute a plan, show it, apply it</strong>, with several safeguards in between.</p>
+<h3 id="how-shaping-works">How shaping works</h3>
+<p><strong>The queue always forms at the bottleneck.</strong> When a device receives faster than it can transmit, it stores the excess in a queue. That queue appears at the slowest point of the path: often a sector's radio or the subscriber's CPE. Their buffers are large and sort nothing: a video call waits there behind a download. This is the bufferbloat of section 5.</p>
+<p><strong>The idea of shaping.</strong> Traffic is deliberately limited <strong>slightly below</strong> the bottleneck capacity, at a place we control: the PoP router. The PoP then becomes the slowest point. The queue forms there, in a CAKE queue that keeps it short and shares it fairly. The radio's buffer stays empty. About 10% of throughput is given up (<code>SHAPING_SAFETY_FACTOR=0.90</code>), and latency stays low even when the sector is full.</p>
+<figure class="fig" id="fig-shaping">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 500" role="img" aria-label="Limiting slightly below capacity moves the queue to where it is well managed">
+  <defs>
+    <marker id="sh-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-mark" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+  <text class="d-title" x="24" y="34">Limiting slightly below capacity moves the queue to where it is well managed</text>
+  <text class="d-name" x="40" y="72">Without freeQoS</text>
+  <text class="d-name" x="412" y="72">With freeQoS</text>
+  <g class="d-conn">
+    <path d="M194 164V196" marker-end="url(#sh-arrow)"/>
+    <path d="M194 268V300" marker-end="url(#sh-arrow)"/>
+    <path d="M194 372V404" marker-end="url(#sh-arrow)"/>
+    <path d="M566 164V196" marker-end="url(#sh-arrow)"/>
+    <path d="M566 268V300" marker-end="url(#sh-arrow)"/>
+    <path d="M566 372V404" marker-end="url(#sh-arrow)"/>
+  </g>
+  <rect class="d-box" x="40" y="92" width="308" height="72" rx="8"/>
+  <text class="d-name" x="56" y="116">Internet</text>
+  <text class="d-line" x="56" y="132">traffic arrives faster</text>
+  <text class="d-line" x="56" y="148">than the radio can transmit it</text>
+  <rect class="d-box" x="40" y="196" width="308" height="72" rx="8"/>
+  <text class="d-name" x="56" y="220">PoP router</text>
+  <text class="d-line" x="56" y="236">no limit:</text>
+  <text class="d-line" x="56" y="252">everything goes on to the radio</text>
+  <rect class="d-bad" x="40" y="300" width="308" height="72" rx="8"/>
+  <text class="d-name" x="56" y="324">Sector radio</text>
+  <text class="d-line-strong" x="56" y="340">buffer full: the queue forms here</text>
+  <text class="d-line-strong" x="56" y="356">latency rises for the whole sector</text>
+  <rect class="d-box" x="40" y="404" width="308" height="72" rx="8"/>
+  <text class="d-name" x="56" y="428">Subscribers</text>
+  <text class="d-line" x="56" y="444">the video call waits behind</text>
+  <text class="d-line" x="56" y="460">the neighbours' downloads</text>
+  <rect class="d-box" x="412" y="92" width="308" height="72" rx="8"/>
+  <text class="d-name" x="428" y="116">Internet</text>
+  <text class="d-line" x="428" y="132">the same traffic,</text>
+  <text class="d-line" x="428" y="148">at the same speed</text>
+  <rect class="d-accent" x="412" y="196" width="308" height="72" rx="8"/>
+  <text class="d-name" x="428" y="220">PoP router and CAKE queue</text>
+  <text class="d-line-strong" x="428" y="236">limit at 90% of the radio capacity</text>
+  <text class="d-line-strong" x="428" y="252">the queue forms here, short and shared</text>
+  <rect class="d-box" x="412" y="300" width="308" height="72" rx="8"/>
+  <text class="d-name" x="428" y="324">Sector radio</text>
+  <text class="d-line" x="428" y="340">never saturated:</text>
+  <text class="d-line" x="428" y="356">its buffer stays empty</text>
+  <rect class="d-box" x="412" y="404" width="308" height="72" rx="8"/>
+  <text class="d-name" x="428" y="428">Subscribers</text>
+  <text class="d-line" x="428" y="444">each flow gets its share: a download</text>
+  <text class="d-line" x="428" y="460">no longer delays the neighbour's call</text>
+</svg>
+<figcaption>Shaping: where the queue forms, without and with freeQoS</figcaption>
+</figure>
+<p><strong>How a limit acts on TCP.</strong> Most traffic (web, video, downloads) uses TCP, which speeds up as long as nothing is lost. When the subscriber exceeds its limit, the extra packets wait in the queue. If the wait lasts, CAKE drops one (or marks it, with ECN). The TCP sender understands it is going too fast and slows down. The rate thus settles on the limit, without a growing queue.</p>
+<h3 id="what-cake-does">What CAKE does</h3>
+<p>CAKE (<em>Common Applications Kept Enhanced</em>) is the queueing algorithm freeQoS uses. It combines several mechanisms:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Mechanism</th>
+<th>What it does</th>
+<th>Effect for the subscriber</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Flow isolation</strong></td>
+<td>Each conversation has its own small queue, served in turn</td>
+<td>A download does not block a call</td>
+</tr>
+<tr>
+<td><strong>Triple isolation</strong> (<code>triple-isolate</code>)</td>
+<td>Sharing happens first between hosts, then between the flows of a host</td>
+<td>A host opening 100 connections does not get 100 shares</td>
+</tr>
+<tr>
+<td><strong>Active queue management</strong> (COBALT)</td>
+<td>Measures the time each packet spends in the queue; if it stays too long, drops or marks a packet to slow the sender</td>
+<td>The queue stays short: a few milliseconds instead of hundreds</td>
+</tr>
+<tr>
+<td><strong>Priority classes</strong> (<em>tins</em>, <code>diffserv</code>)</td>
+<td>Reads the DSCP label and serves voice before the rest</td>
+<td>Packets marked EF go first, including the latency probe</td>
+</tr>
+<tr>
+<td><strong>Overhead compensation</strong> (<code>overhead</code>)</td>
+<td>Counts encapsulation bytes (PPPoE, VLAN) on top of each packet</td>
+<td>The limit matches the real rate on the wire</td>
+</tr>
+<tr>
+<td><strong>NAT mode</strong> (<code>nat</code>)</td>
+<td>Looks at addresses before translation</td>
+<td>Fairness between hosts works behind CGNAT</td>
+</tr>
+<tr>
+<td><strong>Reference RTT</strong> (<code>rtt</code>)</td>
+<td>Sets how fast queue management reacts</td>
+<td>50 ms suits an access network</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="how-queues-nest">How queues nest</h3>
+<p>RouterOS queues form a tree:</p>
+<ul>
+<li>A sector's <strong>parent queue</strong> caps the <strong>sum</strong> of its subscribers' traffic at 90% of the link's measured capacity.</li>
+<li><strong>Each subscriber queue</strong>, attached to that parent, caps its subscriber at its plan. It has two limits, <code>max-limit=upload/download</code>, and two CAKE queue types, one per direction.</li>
+</ul>
+<p>A subscriber alone on a quiet sector gets its full plan. When everyone pulls at once, the parent queue shares the available capacity. If radio capacity drops (rain, interference), the parent queue drops on the next cycle, and the queue stays at the PoP.</p>
+<h3 id="where-a-subscribers-plan-comes-from">Where a subscriber's plan comes from</h3>
+<p>The plan belongs to the subscriber, not to the PoP: a PoP has a capacity, not a plan. It is resolved in this order:</p>
+<ol>
+<li><strong>The plan written for this subscriber</strong>, pushed through the API (billing, Preseem integration) or entered on the <em>Plans</em> page. The last write wins.</li>
+<li><strong>A subscriber pushed without a rate</strong> gets the default plan (<code>DEFAULT_PLAN_DOWN_MBPS</code> / <code>DEFAULT_PLAN_UP_MBPS</code>, 100/20).</li>
+<li><strong>A subscriber that is only detected</strong> has no plan: it is observed, never throttled to a rate nobody sold, unless <code>DEFAULT_PLAN_FOR_DETECTED_CLIENTS=true</code>.</li>
+</ol>
+<p>Deleting a subscriber's plan removes its queue on the next cycle.</p>
+<h3 id="what-is-installed-on-the-router">What is installed on the router</h3>
+<p><strong>Two queue types</strong>: <code>freeqos-cake-up</code> and <code>freeqos-cake-down</code>. Their CAKE options come from the settings:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Default</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CAKE_OVERHEAD</code></td>
+<td>22</td>
+<td>Encapsulation bytes counted per packet</td>
+</tr>
+<tr>
+<td><code>CAKE_RTT_MS</code></td>
+<td>50</td>
+<td>Reference RTT for queue management</td>
+</tr>
+<tr>
+<td><code>CAKE_DIFFSERV</code></td>
+<td>RouterOS default</td>
+<td><code>besteffort</code>, <code>diffserv3</code>, <code>diffserv4</code>, <code>diffserv8</code>, <code>precedence</code></td>
+</tr>
+<tr>
+<td><code>CAKE_FLOWMODE</code></td>
+<td>RouterOS default</td>
+<td>Flow isolation (<code>triple-isolate</code> recommended)</td>
+</tr>
+<tr>
+<td><code>CAKE_NAT</code></td>
+<td>RouterOS default</td>
+<td>Essential behind CGNAT</td>
+</tr>
+<tr>
+<td><code>CAKE_ACK_FILTER</code></td>
+<td>RouterOS default</td>
+<td>Thins ACKs on a very asymmetric link</td>
+</tr>
+<tr>
+<td><code>CAKE_WASH</code>, <code>CAKE_MPU</code></td>
+<td>RouterOS default</td>
+<td>Clearing DSCP on egress, minimum billed packet size</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>One parent queue per link</strong> (<code>freeqos-parent-&lt;link&gt;</code>): radio backhaul or sector. Its rate is <code>max(5 Mbit/s, measured capacity × 0.90)</code> (<code>SHAPING_SAFETY_FACTOR</code>, <code>SHAPING_FLOOR_MBPS</code>). The queue thus forms in CAKE, where it is controlled, rather than in the radio's buffer.</p>
+<p><strong>One queue per subscriber</strong>:</p>
+<ul>
+<li><strong>Target:</strong> the subscriber's address (<code>target=10.20.0.10/32</code>), never the <code>&lt;pppoe-…&gt;</code> interface. The interface is recreated at each reconnection, and RouterOS reverses the direction of <code>max-limit</code> on it.</li>
+<li><strong>Parent:</strong> the link whose network contains the subscriber's address; the most specific wins.</li>
+<li><strong>Write order:</strong> parents first. RouterOS refuses a child whose parent does not exist.</li>
+</ul>
+<p>Every object carries the comment <code>freeqos:managed instance=&lt;id&gt;</code>.</p>
+<h3 id="reconciliation">Reconciliation</h3>
+<p>Every 2 minutes (<code>SHAPING_RECONCILE_INTERVAL_S</code>), freeQoS reads the queues in place, computes the desired state and sends <strong>only the difference</strong>. A queue that is already right gets no command. Only the field that changes is rewritten: a plan change only touches <code>max-limit</code>.</p>
+<h3 id="safeguards">Safeguards</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Safeguard</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Simulation by default</strong></td>
+<td><code>ENFORCEMENT_ENABLED=false</code> at startup. Plans are computed and displayed, nothing is written. Writing is enabled in the interface, after reading the plan. If the variable is <code>false</code> in the environment, enabling is locked.</td>
+</tr>
+<tr>
+<td><strong>Ownership</strong></td>
+<td>Only objects marked by <strong>this</strong> instance are modified or deleted. A queue from another instance or created by hand is never touched, nor set to 0/0.</td>
+</tr>
+<tr>
+<td><strong>Transit links</strong></td>
+<td>No parent queue on a routing link, towards a managed router, towards the gateway or the core, or on the uplink. The reason is shown (<code>skip_reason</code>).</td>
+</tr>
+<tr>
+<td><strong>Duplicate targets</strong></td>
+<td>Two queues that would target the same address: neither is written and a planning error is reported.</td>
+</tr>
+<tr>
+<td><strong>Anti-oscillation</strong></td>
+<td>If a line's target, parent or rate returns to a previous value (A→B→A) within 1 h, the line is frozen and reported (<code>frozen_lines</code>). <em>Reset queues</em> unfreezes it.</td>
+</tr>
+<tr>
+<td><strong>Circuit breaker</strong></td>
+<td>A plan of more than 500 actions on one router (<code>ENFORCEMENT_MAX_ACTIONS</code>) is refused as a whole: it almost always betrays a badly computed desired state (empty inventory, lost capacity). Only <em>Reset queues</em>, explicitly requested, is sent in batches.</td>
+</tr>
+<tr>
+<td><strong>Audit</strong></td>
+<td>Every command sent is logged with its author (<code>GET /api/v1/shaping/audit</code>).</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="manual-adjustments">Manual adjustments</h3>
+<ul>
+<li><strong>Rate override</strong> (<code>PUT /api/v1/shaping/policies</code>): sets the rate of a link or a subscriber, above the computed one.</li>
+<li><strong>Boost</strong> (<code>POST /api/v1/shaping/boosts</code>): a higher rate for a duration; it is removed when it expires (checked every 30 s).</li>
+<li><strong>Dry run</strong> (<code>POST /api/v1/shaping/plan</code>): the commands that would be sent, without sending anything.</li>
+</ul>
+<h3 id="closed-qoe-loop">Closed QoE loop</h3>
+<p>Every 5 minutes, freeQoS looks at the QoE of each sector over the last 15 minutes.</p>
+<ul>
+<li><strong>Tighten:</strong> if at least 2 subscribers of the sector fall below 55, the link's queue is tightened by 10%. The queue then forms again in CAKE rather than in the radio.</li>
+<li><strong>Floor:</strong> it never goes below 50% of the computed rate.</li>
+<li><strong>Relax:</strong> one step is given back after 3 healthy cycles in a row. Tighten fast, relax slowly, to avoid oscillation.</li>
+<li><strong>What never moves:</strong> a subscriber's purchased plan. Only the sector's shared envelope changes.</li>
+<li><strong>What does not count:</strong> a subscriber that has never answered the ping.</li>
+</ul>
+<p>A single degraded subscriber points at its last mile (CPE, home Wi-Fi), not at the sector. This is why at least two are needed.</p>
+<h2 id="8-interface">8. Interface</h2>
+<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Question it answers</th>
+<th>Sections</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dashboard</strong></td>
+<td>What is happening now?</td>
+<td>Total throughput, traffic per router, top consumers, radio backhauls</td>
+</tr>
+<tr>
+<td><strong>Executive</strong></td>
+<td>Where is the risk?</td>
+<td>Saturation risks, latency per subscriber, load and queues per node, health over time (QoE heatmap)</td>
+</tr>
+<tr>
+<td><strong>Traffic</strong></td>
+<td>Who consumes what, where to?</td>
+<td>Consumers, services, countries, who talks to whom, destinations, IP lookup, restrictions</td>
+</tr>
+<tr>
+<td><strong>Network tree</strong></td>
+<td>How is the network wired?</td>
+<td>Discovered tree, editable with the mouse (move, re-parent, merge, hide)</td>
+</tr>
+<tr>
+<td><strong>Subscribers</strong></td>
+<td>Who are the non-PPPoE subscribers?</td>
+<td>Static-IP subscribers, subscribers per VLAN</td>
+</tr>
+<tr>
+<td><strong>Plans</strong></td>
+<td>Which rate for whom?</td>
+<td>Default plan, each subscriber's plan and its source, packages pushed by the API</td>
+</tr>
+<tr>
+<td><strong>Insights</strong></td>
+<td>What to do commercially?</td>
+<td>Subscribers at risk of leaving, ready for a bigger plan, sites with room to grow</td>
+</tr>
+<tr>
+<td><strong>Devices</strong></td>
+<td>Which equipment?</td>
+<td>Router health, adding a router, Ubiquiti antennas, radio health, inventory</td>
+</tr>
+<tr>
+<td><strong>API</strong></td>
+<td>How to integrate?</td>
+<td>API keys, links to the API guide and to this documentation</td>
+</tr>
+<tr>
+<td><strong>Settings</strong></td>
+<td>How does the tool behave?</td>
+<td>Accounts, settings, writing to the routers, caps held or not, command log</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="read-the-settings-page-before-enabling-writes">Read the Settings page before enabling writes</h3>
+<p>The <em>Shaping and writing to the routers</em> section shows, before enabling, what freeQoS would do on each router: queues created, modified, deleted, and links skipped with their reason.</p>
+<p>Two banners can appear at the top of the interface:</p>
+<ul>
+<li><strong>Other instance detected:</strong> another freeQoS installation creates queues on the same routers. Its objects are not touched; one of them must be stopped.</li>
+<li><strong>Frozen lines:</strong> anti-oscillation has frozen one or more queues. The banner says which and why.</li>
+</ul>
+<h3 id="empty-latency">Empty latency</h3>
+<p>When a subscriber has no latency, the cell does not stay silent: it says whether the subscriber has never answered, whether the measurement is too old, or whether the probe has not run yet. <em>Find the cause</em> runs the diagnostic described in section 5.</p>
+<h2 id="9-api">9. API</h2>
+<p>Everything the interface does goes through the API. The full guide, with <code>curl</code> examples and the reference generated by the server, is at <code>&lt;your-freeqos-url&gt;/api-guide</code>. This section gives its structure and rules.</p>
+<h3 id="three-apis-one-server-the-same-keys">Three APIs, one server, the same keys</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>API</th>
+<th>Path</th>
+<th>Use</th>
+<th>Units</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Operating</td>
+<td><code>/api/v1</code></td>
+<td>Everything the interface does: routers, plans, limits, measurements, traffic, diagnostics</td>
+<td>Mbit/s</td>
+</tr>
+<tr>
+<td>Model</td>
+<td><code>/model/v1</code></td>
+<td>Commercial inventory: <code>accounts</code>, <code>packages</code>, <code>sites</code>, <code>access_points</code>, <code>services</code>. Same contract as the Preseem model API: an existing integration works by changing the URL and the key.</td>
+<td>kbit/s</td>
+</tr>
+<tr>
+<td>Usage</td>
+<td><code>/usage/v1</code></td>
+<td>Bytes consumed per sold line, per hour, day or month</td>
+<td>bytes</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="how-the-commercial-model-reaches-the-network">How the commercial model reaches the network</h3>
+<p>A billing system (Splynx, UISP CRM, Powercode…) knows its customers and what it sold them, but not the routers. The <code>/model/v1</code> API makes the link. It takes the exact shape of the Preseem model API: an existing integration only has to change URL and key.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Collection</th>
+<th>What it describes</th>
+<th>Fields that matter</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>accounts</code></td>
+<td>A customer (person or company)</td>
+<td><code>id</code>, <code>name</code></td>
+</tr>
+<tr>
+<td><code>packages</code></td>
+<td>A plan from the catalogue</td>
+<td><code>down_speed</code>, <code>up_speed</code> in <strong>kbit/s</strong></td>
+</tr>
+<tr>
+<td><code>sites</code></td>
+<td>A tower, a location</td>
+<td><code>name</code>: it becomes the <strong>PoP name</strong> in freeQoS</td>
+</tr>
+<tr>
+<td><code>access_points</code></td>
+<td>A radio sector of a site</td>
+<td><code>site</code>, <code>ip_address</code></td>
+</tr>
+<tr>
+<td><code>services</code></td>
+<td>A sold line: a customer, a plan, an address</td>
+<td><code>account</code>, <code>package</code>, <code>attachments</code> (networks and CPE MAC), <code>parent_device_id</code> (the sector)</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>What happens when a service is pushed</strong> (<code>PUT /model/v1/services/{id}</code>):</p>
+<ol>
+<li><strong>The rate</strong> is the service's own if it has one, otherwise its package's. A commercial exception on one line does not require creating a package for it.</li>
+<li><strong>The PoP</strong> is found by walking service → access point → site → site name. freeQoS finds the router to configure through that name.</li>
+<li><strong>With an address</strong> (<code>network_prefixes</code>), the service becomes a static-IP subscriber: it is placed on its router, measured and limited.</li>
+<li><strong>With only a MAC</strong>, it is set aside. As soon as that MAC appears in a router's ARP or DHCP table, freeQoS deduces the address and places the service.</li>
+<li><strong>An identifier already used by a record entered by hand</strong> is refused (<code>409</code>): the API never takes over a human action.</li>
+</ol>
+<p><code>PUT</code> creates or replaces: billing can replay its whole inventory every night without risk. The identifier in the URL is authoritative; a body carrying another one is refused (<code>400</code>).</p>
+<p><strong>For a PPPoE subscriber</strong>, the simplest is still <code>PUT /api/v1/plans/{login}</code>: the login is enough to find it on its router.</p>
+<p><strong>Consumption</strong> (<code>/usage/v1</code>) comes from NetFlow, not from queue counters: those restart from zero at each reconnection and do not exist for a subscriber without a queue. With no router exporting, this API returns zeros and says so in its <code>source</code> field.</p>
+<h3 id="authentication">Authentication</h3>
+<p>A key is created in the <em>API</em> tab. The secret is shown only once. Two scopes:</p>
+<ul>
+<li><strong>read</strong>: every <code>GET</code>;</li>
+<li><strong>read + write</strong>: also <code>POST</code>, <code>PUT</code>, <code>PATCH</code>, <code>DELETE</code>.</li>
+</ul>
+<p>A key can never manage keys, accounts or passwords: that stays behind a person's login.</p>
+<p>Three equivalent forms are accepted everywhere:</p>
+<pre><code>Authorization: Bearer &lt;key&gt;
+X-API-Key: &lt;key&gt;
+Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
+</code></pre>
+<p><code>GET /model/v1</code> checks a key in one call: it returns the collections, the key prefix and its scopes.</p>
+<h3 id="conventions">Conventions</h3>
+<ul>
+<li>JSON in and out. <em>Down</em> = towards the subscriber, <em>up</em> = from the subscriber.</li>
+<li>ISO 8601 timestamps in UTC.</li>
+<li>A PPPoE subscriber is identified by its login, a static-IP subscriber by its reference, a model object by the <code>id</code> chosen in the URL.</li>
+<li><code>PUT</code> creates or replaces: replaying the whole inventory is harmless.</li>
+<li>A plan or limit change is written to the router <strong>in the same call</strong>.</li>
+</ul>
+<h3 id="the-enforcement-report">The enforcement report</h3>
+<p>Every response that touches a queue contains an <code>enforcement</code> object telling what actually happened:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th><code>state</code></th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>file-posee</code></td>
+<td>Queue written (or already correct)</td>
+</tr>
+<tr>
+<td><code>file-retiree</code></td>
+<td>Queue removed (plan deleted)</td>
+</tr>
+<tr>
+<td><code>file-a-poser</code></td>
+<td>Would be written: simulation</td>
+</tr>
+<tr>
+<td><code>ecarte</code></td>
+<td>Not written; <code>reason</code> says why (subscriber offline, shared address, infrastructure address…)</td>
+</tr>
+<tr>
+<td><code>conflit</code></td>
+<td>Another queue already targets this subscriber; to be cleaned by hand</td>
+</tr>
+<tr>
+<td><code>sans-routeur</code></td>
+<td>No router carries this subscriber yet</td>
+</tr>
+<tr>
+<td><code>erreur</code></td>
+<td>The router refused or is unreachable; <code>reason</code> gives the RouterOS message</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="the-calls-that-matter">The calls that matter</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Need</th>
+<th>Call</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Add a router</td>
+<td><code>POST /api/v1/pops/routers</code> then <code>GET /api/v1/pops/provisioning/{name}</code></td>
+</tr>
+<tr>
+<td>List subscribers and their plan</td>
+<td><code>GET /api/v1/plans</code></td>
+</tr>
+<tr>
+<td>Give a plan</td>
+<td><code>PUT /api/v1/plans/{login}</code> with <code>down_mbps</code>, <code>up_mbps</code> or <code>package_id</code></td>
+</tr>
+<tr>
+<td>Remove a plan</td>
+<td><code>DELETE /api/v1/plans/{login}</code></td>
+</tr>
+<tr>
+<td>Force a limit (unpaid bill, fair use)</td>
+<td><code>PUT /api/v1/shaping/policies</code></td>
+</tr>
+<tr>
+<td>Temporary boost</td>
+<td><code>POST /api/v1/shaping/boosts</code></td>
+</tr>
+<tr>
+<td>Declare a static-IP subscriber</td>
+<td><code>POST /api/v1/static-clients</code></td>
+</tr>
+<tr>
+<td>Push the commercial inventory</td>
+<td><code>PUT /model/v1/{collection}/{id}</code></td>
+</tr>
+<tr>
+<td>Read consumption</td>
+<td><code>GET /usage/v1/services</code></td>
+</tr>
+<tr>
+<td>A subscriber's latency, diagnostic</td>
+<td><code>GET /api/v1/rtt/diagnose</code></td>
+</tr>
+<tr>
+<td>Overall state</td>
+<td><code>GET /api/v1/status</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>A few usage rules:</p>
+<ul>
+<li>A plan for an unknown login returns <code>404</code>: the subscriber must first be seen on a router or declared.</li>
+<li>Giving a plan lifts a forced limit on that subscriber: the plan becomes the rule again.</li>
+<li>The report of an API call is authoritative. In simulation, automatic writing is blocked even for a <code>write</code> key: <code>state</code> is then <code>file-a-poser</code>.</li>
+</ul>
+<h3 id="reference">Reference</h3>
+<p><code>/openapi.json</code> describes every route, generated by the installed server: it cannot drift from the code. The <code>/api-guide</code> page makes it readable, with search.</p>
+<h2 id="10-security">10. Security</h2>
+<p>freeQoS holds router credentials that can write across the whole network. Security follows a simple principle: <strong>what writes is rare, explicit and logged</strong>.</p>
+<h3 id="interface-accounts">Interface accounts</h3>
+<ul>
+<li><strong>First account:</strong> on the first visit, the interface offers to create one. It has the <code>edit</code> role.</li>
+<li><strong>Two roles:</strong> <code>read</code> and <code>edit</code>. A <code>read</code> account gets a <code>403</code> from the <strong>server</strong> on any write, whatever the route. Only an <code>edit</code> account manages accounts.</li>
+<li><strong>Passwords:</strong> 12 characters minimum, too-common words are refused. They are hashed with scrypt (N=2^14, r=8, p=1, salted, compared in constant time).</li>
+<li><strong>Anti-guessing:</strong> 5 failures in 5 minutes lock the email <strong>and</strong> the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.</li>
+<li><strong>Session:</strong> an <code>HttpOnly</code>, <code>SameSite=Strict</code> cookie, valid 24 h, 30 days at most (<code>SESSION_TTL_HOURS</code>, <code>SESSION_MAX_HOURS</code>). Writes also check <code>Origin</code> and <code>Sec-Fetch-Site</code>.</li>
+<li><strong>Log:</strong> every login (successful, refused, locked), logout and account change is recorded with the address and browser. At login, everyone sees the date and origin of their previous login.</li>
+</ul>
+<h3 id="http-headers">HTTP headers</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Header</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Content-Security-Policy</code></td>
+<td>Only scripts served by freeQoS run</td>
+</tr>
+<tr>
+<td><code>X-Frame-Options: DENY</code>, <code>frame-ancestors 'none'</code></td>
+<td>The page cannot be embedded elsewhere</td>
+</tr>
+<tr>
+<td><code>Referrer-Policy: same-origin</code></td>
+<td>Internal addresses do not leak to external links</td>
+</tr>
+<tr>
+<td><code>Strict-Transport-Security</code></td>
+<td>HTTPS only: no going back to plain HTTP</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="api-keys">API keys</h3>
+<p><code>read</code> or <code>read + write</code> scope. A key never manages keys, accounts or passwords. It can be disabled and revoked. Every write made with a key is logged as <code>api:&lt;name&gt; (&lt;prefix&gt;)</code>.</p>
+<h3 id="router-credentials">Router credentials</h3>
+<ul>
+<li>Passwords are encrypted in the database with <code>data/secret.key</code> and never come out of any response, not even encrypted.</li>
+<li><strong>Least privilege:</strong> a dedicated RouterOS account (<code>read,write,api,test</code>), without <code>ssh</code>, <code>ftp</code>, <code>winbox</code> or <code>policy</code>.</li>
+<li><strong>Separate accounts:</strong> <code>REQUIRE_SEPARATE_WRITE_ACCOUNT=true</code> requires a distinct account for writing.</li>
+<li><strong>Encryption:</strong> <code>api-ssl</code> (8729) with <code>tls_verify=strict</code> or a fingerprint, rather than the clear API, when freeQoS and the routers do not share an isolated management network.</li>
+</ul>
+<h3 id="writing-to-the-network">Writing to the network</h3>
+<ul>
+<li>Simulation by default; explicit enabling, after reading the plan.</li>
+<li><code>ENFORCEMENT_ENABLED=false</code> in the environment locks writing: the interface cannot turn it back on.</li>
+<li>Only objects of <strong>this</strong> instance are touched; the others are read, never modified.</li>
+<li>The circuit breaker refuses an abnormally large plan.</li>
+<li>The command log (<code>/api/v1/shaping/audit</code>) gives the author, target and result of each write.</li>
+</ul>
+<h3 id="network-exposure">Network exposure</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Port</th>
+<th>Use</th>
+<th>Who needs access</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8000/TCP (or 443 behind a TLS proxy)</td>
+<td>Interface and API</td>
+<td>Operators, billing system</td>
+</tr>
+<tr>
+<td>2055/UDP</td>
+<td>NetFlow</td>
+<td>The routers only</td>
+</tr>
+<tr>
+<td>8728 or 8729/TCP <strong>outgoing</strong></td>
+<td>RouterOS API</td>
+<td>freeQoS towards the routers</td>
+</tr>
+</tbody>
+</table></div>
+<p>It is recommended to put the interface behind HTTPS and to restrict 2055/UDP to the routers' addresses.</p>
+<h2 id="11-operations">11. Operations</h2>
+<h3 id="monitoring-freeqos">Monitoring freeQoS</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Answers</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /health</code></td>
+<td>Does the process answer? Touches neither the database nor the routers.</td>
+<td>Liveness (container restart)</td>
+</tr>
+<tr>
+<td><code>GET /health/ready</code></td>
+<td>Does the database answer, is data arriving? <code>503</code> if a cycle keeps failing.</td>
+<td>Readiness, monitoring</td>
+</tr>
+<tr>
+<td><code>GET /api/v1/status</code></td>
+<td>State of each cycle, instance identifier, other instances seen, frozen lines</td>
+<td>Diagnostics</td>
+</tr>
+<tr>
+<td><code>GET /api/v1/status/runs</code></td>
+<td>History of cycle runs</td>
+<td>Diagnostics</td>
+</tr>
+</tbody>
+</table></div>
+<p>Monitor <code>/health/ready</code>, not <code>/health</code>: a collector can fail for an hour while the process still answers.</p>
+<h3 id="the-cycles">The cycles</h3>
+<p>Each cycle can be run immediately with <code>POST /api/v1/jobs/{name}/run</code>.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Cycle</th>
+<th>Period</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>collect_subscribers</code></td>
+<td>10 s</td>
+<td>Subscriber sessions and rates</td>
+</tr>
+<tr>
+<td><code>collect_links</code></td>
+<td>10 s</td>
+<td>Port rates</td>
+</tr>
+<tr>
+<td><code>collect_backhauls</code></td>
+<td>30 s</td>
+<td>Radio capacity (UISP, airOS)</td>
+</tr>
+<tr>
+<td><code>probe_rtt</code></td>
+<td>30 s</td>
+<td>Latency probe</td>
+</tr>
+<tr>
+<td><code>expire_boosts</code></td>
+<td>30 s</td>
+<td>End of boosts</td>
+</tr>
+<tr>
+<td><code>ip_intel</code></td>
+<td>30 s</td>
+<td>Naming addresses</td>
+</tr>
+<tr>
+<td><code>netflow_flush</code></td>
+<td>60 s</td>
+<td>Writing aggregated flows</td>
+</tr>
+<tr>
+<td><code>reload_inventory</code></td>
+<td>60 s</td>
+<td>Re-reading the router list</td>
+</tr>
+<tr>
+<td><code>reconcile_shaping</code></td>
+<td>2 min</td>
+<td>Queues: desired versus actual state</td>
+</tr>
+<tr>
+<td><code>refresh_plans</code></td>
+<td>5 min</td>
+<td>Re-reading plans</td>
+</tr>
+<tr>
+<td><code>qoe_closed_loop</code></td>
+<td>5 min</td>
+<td>QoE loop per sector</td>
+</tr>
+<tr>
+<td><code>traffic_restrictions</code></td>
+<td>5 min</td>
+<td>Address lists of restrictions</td>
+</tr>
+<tr>
+<td><code>netflow_export</code></td>
+<td>10 min</td>
+<td>NetFlow export on the routers</td>
+</tr>
+<tr>
+<td><code>discover_topology</code></td>
+<td>15 min</td>
+<td>Network tree</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="live-settings">Live settings</h3>
+<p>Most operating settings can be changed in <em>Settings</em> without a restart (<code>PUT /api/v1/settings/{name}</code>). They are stored in the database with their history (<code>GET /api/v1/settings/history</code>: who, what, when). <code>DELETE /api/v1/settings/{name}</code> goes back to the value from <code>.env</code>.</p>
+<p>Deliberately out of the interface's reach: database access, secrets, and <code>ENFORCEMENT_ENABLED=false</code> when it is set in the environment.</p>
+<h3 id="data-and-retention">Data and retention</h3>
+<p>Measurements live in TimescaleDB hypertables:</p>
+<ul>
+<li>split by day (<code>CHUNK_INTERVAL_HOURS=24</code>);</li>
+<li>compressed after 7 days (<code>COMPRESSION_AFTER_DAYS</code>);</li>
+<li>deleted after 90 days (<code>RETENTION_DAYS</code>).</li>
+</ul>
+<p>Without TimescaleDB, freeQoS runs on plain PostgreSQL, without compression or automatic retention.</p>
+<h3 id="backup-and-restore">Backup and restore</h3>
+<pre><code>make backup                                   # backups/YYYYMMDD-HHMMSS/: base.dump + secret.key
+make restore DIR=backups/20261008-0300        # replaces the database, asks for confirmation
+</code></pre>
+<p><code>make restore</code> stops the application, wraps <code>pg_restore</code> in <code>timescaledb_pre_restore()</code> / <code>post_restore()</code>, puts <code>secret.key</code> back, then restarts. Copy backups off the server.</p>
+<p><code>make backup</code> does not copy <code>data/instance.id</code>. On a new server, copy it back or set <code>FREEQOS_INSTANCE_ID</code>; otherwise queues already in place will be seen as another instance's and left alone.</p>
+<h3 id="common-actions">Common actions</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Start again from scratch on a router (inconsistent queues, old version)</td>
+<td><em>Reset queues</em> in <em>Settings</em>: removes all queues of <strong>this</strong> instance, unfreezes lines, then reconciliation reinstalls the desired state</td>
+</tr>
+<tr>
+<td>Wrong latencies after a change of method</td>
+<td><code>POST /api/v1/rtt/reset-history</code> (clears 48 h of measurements and the scores derived from them)</td>
+</tr>
+<tr>
+<td>A router's password changed</td>
+<td><code>PATCH /api/v1/pops/routers/{id}</code> then <code>POST /api/v1/pops/provisioning/{name}</code></td>
+</tr>
+<tr>
+<td>Vanished boxes in the tree</td>
+<td><code>POST /api/v1/topology/forget-stale</code></td>
+</tr>
+<tr>
+<td>Stop writing urgently</td>
+<td>Switch in <em>Settings</em>, or <code>ENFORCEMENT_ENABLED=false</code> then restart</td>
+</tr>
+<tr>
+<td>Stop the latency probe</td>
+<td><code>PUT /api/v1/rtt</code></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="several-instances">Several instances</h3>
+<p>Two installations must not drive the same routers. If it happens, each only touches its own objects (<code>instance=&lt;id&gt;</code> comment), but they fight over subscribers. The <em>Other instance</em> banner reports it. For an update or a migration, stop the old one <strong>before</strong> starting the new one.</p>
+<h2 id="12-troubleshooting">12. Troubleshooting</h2>
+<p>All these cases come from the lab or the first deployment. For each: the symptom, the check that settles it, then the action.</p>
+<h3 id="700-to-900-ms-latency-on-nearby-subscribers">700 to 900 ms latency on nearby subscribers</h3>
+<ul>
+<li><strong>Cause:</strong> the ping leaves through the <code>main</code> table while subscriber routes are in a VRF. It goes up to the core and back.</li>
+<li><strong>Check:</strong> <em>Find the cause</em> → <code>routing_table</code> must name the VRF (<code>CUST-INET</code>), not <code>main</code>. On the router, <code>/ping &lt;subscriber&gt; vrf=CUST-INET count=5</code> must give a few ms.</li>
+<li><strong>Action:</strong> up to date, freeQoS picks the VRF by itself. If <code>routing_table</code> stays <code>main</code>, look at <code>route_candidates</code>: the route to the subscriber may be a default route towards upstream. After fixing, <code>POST /api/v1/rtt/reset-history</code> clears the wrong measurements.</li>
+</ul>
+<h3 id="empty-latency-no-reply-probe-silent">Empty latency ("no reply", "probe silent")</h3>
+<p>Run <em>Find the cause</em> and read the <code>code</code> (table in section 5). The two most frequent cases:</p>
+<ul>
+<li><code>client_blocks_icmp</code>: the subscriber's CPE filters ping. This is not a degradation; the subscriber is excluded from QoE.</li>
+<li><code>no_test_policy</code>: the RouterOS account's group lacks the <code>test</code> policy.</li>
+</ul>
+<h3 id="high-latency-on-a-saturated-subscriber">High latency on a saturated subscriber</h3>
+<ul>
+<li><strong>Symptom:</strong> a single subscriber at 300 or 500 ms, filling its plan.</li>
+<li><strong>Cause:</strong> real bufferbloat. Without a CAKE queue, the queue forms in a buffer along the path (CPE, radio, test link).</li>
+<li><strong>Action:</strong> give it a plan slightly <strong>below</strong> the real capacity of its line, so the queue forms in CAKE. Example: 800 kbit/s on a line that holds 1 Mbit/s. If latency stays high, the real capacity is lower than expected: lower the plan further.</li>
+</ul>
+<h3 id="a-queue-is-rewritten-every-2-minutes">A queue is rewritten every 2 minutes</h3>
+<p>Two writers are fighting over the queue: two freeQoS instances, a script, or another queue targeting the same address.</p>
+<ul>
+<li><strong>Check:</strong> <code>GET /api/v1/status</code>. Read <code>other_instances</code> (another installation is writing) and <code>frozen_lines</code> (anti-oscillation froze the line).</li>
+<li><strong>Action:</strong> stop the extra instance, then <em>Reset queues</em>. If a queue created by hand targets the same subscriber, remove it by hand: freeQoS will not touch it.</li>
+</ul>
+<h3 id="a-parent-queue-appears-on-a-transit-link">A parent queue appears on a transit link</h3>
+<p>Recent versions skip routing links, the uplink, the gateway and links towards other managed routers.</p>
+<ul>
+<li><strong>Check:</strong> the <em>Settings</em> page lists skipped links with their <code>skip_reason</code>.</li>
+<li><strong>Action:</strong> a queue created by an old version stays until <em>Reset queues</em>. If the link is not recognised as transit, correct its role in the tree (<code>PATCH /api/v1/topology/nodes/{key}</code>).</li>
+</ul>
+<h3 id="nothing-is-written-to-the-routers">Nothing is written to the routers</h3>
+<p>In order:</p>
+<ol>
+<li>Is writing enabled? <code>GET /api/v1/shaping/enforcement</code>.</li>
+<li>Is it locked by the environment? <code>ENFORCEMENT_ENABLED=false</code> in <code>.env</code>.</li>
+<li>Does the account have <code>write</code>? <code>GET /api/v1/shaping/capability</code>.</li>
+<li>Did the plan trip the circuit breaker? The log says so.</li>
+<li>Does the subscriber have a plan? A subscriber that is only detected is observed, not limited.</li>
+</ol>
+<h3 id="no-netflow-traffic">No NetFlow traffic</h3>
+<ol>
+<li><code>GET /api/v1/netflow/status</code>: are datagrams arriving?</li>
+<li><code>GET /api/v1/netflow/export</code>: is the target set, and to which address?</li>
+<li>In a container, is <code>NETFLOW_COLLECTOR_ADDRESS</code> set?</li>
+<li>Is UDP port 2055 open between the routers and freeQoS?</li>
+</ol>
+<h3 id="scores-stay-old">Scores stay old</h3>
+<p>Scores are computed over a sliding 15-minute window. After a measurement fix, old samples still weigh in. <code>POST /api/v1/rtt/reset-history</code> starts again from clean measurements.</p>
+<h3 id="the-router-refuses-the-connection">The router refuses the connection</h3>
+<p><code>POST /api/v1/pops/routers/test</code> gives a hint:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Hint</th>
+<th>Check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Port closed</td>
+<td><code>api</code> or <code>api-ssl</code> service enabled, and allowed from the freeQoS address</td>
+</tr>
+<tr>
+<td>Credentials refused</td>
+<td>Account name and password</td>
+</tr>
+<tr>
+<td><code>api</code> policy missing</td>
+<td>Group of the RouterOS account</td>
+</tr>
+<tr>
+<td>Certificate refused</td>
+<td><code>api-ssl</code> certificate, or <code>tls_verify=fingerprint</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="13-settings-reference">13. Settings reference</h2>
+<p>All settings are read from the environment or from <code>.env</code>. The variable name is the one in the table, in capitals. Those marked ✱ can also be changed live in <em>Settings</em>.</p>
+<h3 id="application-and-database">Application and database</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>APP_ENV</code></td>
+<td><code>lab</code></td>
+<td>Environment label</td>
+</tr>
+<tr>
+<td><code>LOG_LEVEL</code></td>
+<td><code>INFO</code></td>
+<td>Log verbosity</td>
+</tr>
+<tr>
+<td><code>AUTH_ENABLED</code></td>
+<td><code>true</code></td>
+<td>Login required; only disable on an isolated lab</td>
+</tr>
+<tr>
+<td><code>SESSION_TTL_HOURS</code> / <code>SESSION_MAX_HOURS</code></td>
+<td>24 / 720</td>
+<td>Idle session / maximum duration</td>
+</tr>
+<tr>
+<td><code>DATABASE_URL</code></td>
+<td><code>postgresql://qos:…@localhost:5432/qos</code></td>
+<td>PostgreSQL / TimescaleDB database</td>
+</tr>
+<tr>
+<td><code>DB_POOL_MIN</code> / <code>DB_POOL_MAX</code></td>
+<td>1 / 8</td>
+<td>Connections</td>
+</tr>
+<tr>
+<td><code>DB_AUTO_MIGRATE</code></td>
+<td><code>true</code></td>
+<td>Migrations at startup</td>
+</tr>
+<tr>
+<td><code>CHUNK_INTERVAL_HOURS</code></td>
+<td>24</td>
+<td>Hypertable chunking</td>
+</tr>
+<tr>
+<td><code>COMPRESSION_AFTER_DAYS</code></td>
+<td>7</td>
+<td>Compression</td>
+</tr>
+<tr>
+<td><code>RETENTION_DAYS</code></td>
+<td>90</td>
+<td>Purge</td>
+</tr>
+<tr>
+<td><code>APP_SECRET_KEY_FILE</code></td>
+<td><code>data/secret.key</code></td>
+<td>Encryption key (generated if missing)</td>
+</tr>
+<tr>
+<td><code>FREEQOS_INSTANCE_ID</code></td>
+<td><code>data/instance.id</code></td>
+<td>Instance identifier in comments</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="inventory-and-sources">Inventory and sources</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ROUTERS_FILE</code> / <code>ROUTERS</code></td>
+<td>empty</td>
+<td>Routers declared by file or as JSON</td>
+</tr>
+<tr>
+<td><code>BACKHAUL_PROVIDER</code></td>
+<td><code>mock</code></td>
+<td><code>uisp</code>, <code>airos</code> or <code>mock</code> (lab simulator). In production, choose <code>uisp</code> or <code>airos</code>.</td>
+</tr>
+<tr>
+<td><code>UISP_BASE_URL</code>, <code>UISP_TOKEN</code></td>
+<td>—</td>
+<td>UISP controller (read-only)</td>
+</tr>
+<tr>
+<td><code>AIROS_USERNAME</code>, <code>AIROS_PASSWORD</code></td>
+<td>—</td>
+<td>Direct access to the antennas</td>
+</tr>
+<tr>
+<td><code>PLAN_PROVIDER</code></td>
+<td><code>clients</code></td>
+<td><code>clients</code> (API and <em>Plans</em> page) or <code>freeradius_sql</code></td>
+</tr>
+<tr>
+<td><code>RADIUS_DSN</code>, <code>RADIUS_RATE_ATTRIBUTE</code></td>
+<td>—, <code>Mikrotik-Rate-Limit</code></td>
+<td>Plans read from FreeRADIUS</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="cycles">Cycles</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SUBSCRIBER_INTERVAL_S</code> / <code>LINK_INTERVAL_S</code></td>
+<td>10</td>
+</tr>
+<tr>
+<td><code>BACKHAUL_INTERVAL_S</code></td>
+<td>30</td>
+</tr>
+<tr>
+<td><code>INVENTORY_REFRESH_INTERVAL_S</code></td>
+<td>60</td>
+</tr>
+<tr>
+<td><code>SHAPING_RECONCILE_INTERVAL_S</code></td>
+<td>120</td>
+</tr>
+<tr>
+<td><code>PLAN_REFRESH_INTERVAL_S</code></td>
+<td>300</td>
+</tr>
+<tr>
+<td><code>TOPOLOGY_REFRESH_INTERVAL_S</code></td>
+<td>900</td>
+</tr>
+<tr>
+<td><code>SCHEDULER_ENABLED</code></td>
+<td><code>true</code></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="latency">Latency</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RTT_ENABLED</code></td>
+<td><code>true</code></td>
+<td>Probe on (switchable live with <code>PUT /api/v1/rtt</code>)</td>
+</tr>
+<tr>
+<td><code>RTT_INTERVAL_S</code></td>
+<td>30</td>
+<td>Cycle</td>
+</tr>
+<tr>
+<td><code>RTT_BATCH_SIZE</code></td>
+<td>20</td>
+<td>Subscribers per cycle and per PoP</td>
+</tr>
+<tr>
+<td><code>RTT_COUNT</code> / <code>RTT_PING_INTERVAL_MS</code></td>
+<td>5 / 200</td>
+<td>Pings per subscriber</td>
+</tr>
+<tr>
+<td><code>RTT_PROBE_DSCP</code></td>
+<td>46</td>
+<td>Probe priority (0 = none)</td>
+</tr>
+<tr>
+<td><code>RTT_MAX_AGE_S</code></td>
+<td>300</td>
+<td>Maximum age of a displayed measurement</td>
+</tr>
+<tr>
+<td><code>LATENCY_INTERNET_TARGETS</code></td>
+<td><code>1.1.1.1</code>, <code>8.8.8.8</code></td>
+<td>Targets of the internet segment</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="plans-and-shaping">Plans and shaping</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ENFORCEMENT_ENABLED</code></td>
+<td><code>false</code></td>
+<td>Writing to the routers; an explicit <code>false</code> = lock</td>
+</tr>
+<tr>
+<td><code>ENFORCEMENT_MAX_ACTIONS</code> ✱</td>
+<td>500</td>
+<td>Circuit breaker per plan</td>
+</tr>
+<tr>
+<td><code>REQUIRE_SEPARATE_WRITE_ACCOUNT</code> ✱</td>
+<td><code>false</code></td>
+<td>Distinct write account required</td>
+</tr>
+<tr>
+<td><code>DEFAULT_PLAN_DOWN_MBPS</code> / <code>UP</code> ✱</td>
+<td>100 / 20</td>
+<td>Default plan</td>
+</tr>
+<tr>
+<td><code>DEFAULT_PLAN_FOR_DETECTED_CLIENTS</code> ✱</td>
+<td><code>false</code></td>
+<td>Also limit subscribers that are only detected</td>
+</tr>
+<tr>
+<td><code>SHAPING_SAFETY_FACTOR</code> ✱</td>
+<td>0.90</td>
+<td>Share of measured capacity given to the parent queue</td>
+</tr>
+<tr>
+<td><code>SHAPING_FLOOR_MBPS</code> ✱</td>
+<td>5</td>
+<td>Minimum rate of a parent queue</td>
+</tr>
+<tr>
+<td><code>SHAPING_PRUNE</code> ✱</td>
+<td><code>true</code></td>
+<td>Remove queues that became useless</td>
+</tr>
+<tr>
+<td><code>SHAPING_ADOPT_FOREIGN_QUEUES</code> ✱</td>
+<td><code>false</code></td>
+<td>Never take over other people's queues</td>
+</tr>
+<tr>
+<td><code>SHAPING_QUEUE_FOR_DETECTED_LINKS</code> ✱</td>
+<td><code>true</code></td>
+<td>Parent queues on discovered links</td>
+</tr>
+<tr>
+<td><code>CAKE_OVERHEAD</code> / <code>CAKE_RTT_MS</code> ✱</td>
+<td>22 / 50</td>
+<td>CAKE options</td>
+</tr>
+<tr>
+<td><code>CAKE_DIFFSERV</code>, <code>CAKE_FLOWMODE</code>, <code>CAKE_NAT</code>, <code>CAKE_ACK_FILTER</code>, <code>CAKE_WASH</code>, <code>CAKE_MPU</code> ✱</td>
+<td>RouterOS</td>
+<td>Advanced CAKE options</td>
+</tr>
+<tr>
+<td><code>BOOST_CHECK_INTERVAL_S</code></td>
+<td>30</td>
+<td>Boost expiry</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="qoe-loop">QoE loop</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>QOE_LOOP_INTERVAL_S</code></td>
+<td>300</td>
+<td>Cycle</td>
+</tr>
+<tr>
+<td><code>QOE_WINDOW_MINUTES</code></td>
+<td>15</td>
+<td>Analysis window</td>
+</tr>
+<tr>
+<td><code>QOE_SCORE_THRESHOLD</code></td>
+<td>55</td>
+<td>Score below which a subscriber is degraded</td>
+</tr>
+<tr>
+<td><code>QOE_MIN_DEGRADED_SUBSCRIBERS</code></td>
+<td>2</td>
+<td>Degraded subscribers needed to act on a sector</td>
+</tr>
+<tr>
+<td><code>QOE_TRIM_STEP</code> / <code>QOE_TRIM_FLOOR</code></td>
+<td>0.10 / 0.50</td>
+<td>Tightening step / floor</td>
+</tr>
+<tr>
+<td><code>QOE_RECOVERY_CYCLES</code></td>
+<td>3</td>
+<td>Healthy cycles before relaxing</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="netflow-and-traffic">NetFlow and traffic</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Default</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NETFLOW_ENABLED</code> / <code>NETFLOW_PORT</code></td>
+<td><code>true</code> / 2055</td>
+<td>Collector</td>
+</tr>
+<tr>
+<td><code>NETFLOW_FLUSH_INTERVAL_S</code></td>
+<td>60</td>
+<td>Writing aggregates</td>
+</tr>
+<tr>
+<td><code>NETFLOW_EXPORT_AUTO</code> ✱</td>
+<td><code>true</code></td>
+<td>Export set up by freeQoS</td>
+</tr>
+<tr>
+<td><code>NETFLOW_EXPORT_INTERVAL_S</code></td>
+<td>600</td>
+<td>How often the export is checked</td>
+</tr>
+<tr>
+<td><code>NETFLOW_COLLECTOR_ADDRESS</code></td>
+<td>auto</td>
+<td>Address announced to the routers (required in a container)</td>
+</tr>
+<tr>
+<td><code>NETFLOW_TRACK_DESTINATIONS</code> / <code>NETFLOW_DESTINATION_LIMIT</code> ✱</td>
+<td><code>true</code> / 2,000</td>
+<td>Destinations kept (7 days)</td>
+</tr>
+<tr>
+<td><code>NETFLOW_TRACK_HOSTS</code> / <code>NETFLOW_HOST_LIMIT</code></td>
+<td><code>false</code> / 500</td>
+<td>Unknown hosts seen</td>
+</tr>
+<tr>
+<td><code>IPFINDER_ENABLED</code> ✱</td>
+<td><code>true</code></td>
+<td>Naming addresses (rDNS, RDAP, GeoIP, each can be disabled live)</td>
+</tr>
+<tr>
+<td><code>IPFINDER_INTERVAL_S</code> / <code>IPFINDER_BATCH_SIZE</code> ✱</td>
+<td>30 / 40</td>
+<td>Naming pace (only the batch size is live)</td>
+</tr>
+<tr>
+<td><code>RESTRICTIONS_INTERVAL_S</code></td>
+<td>300</td>
+<td>Restriction updates</td>
+</tr>
+<tr>
+<td><code>RESTRICTION_ADDRESS_LIMIT</code> ✱</td>
+<td>5,000</td>
+<td>Maximum addresses per list</td>
+</tr>
+</tbody>
+</table></div>
+{% endraw %}
+  </main>
+</div>
+<script src="/static/docs.js?v={{ js_version }}"></script>
+</body>
+</html>

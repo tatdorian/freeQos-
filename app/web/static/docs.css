@@ -1,0 +1,88 @@
+/* Documentation technique (/documentation) : complete api-guide.css, dont elle
+   reprend la mise en page. Ici : les schemas, le sommaire a deux niveaux et
+   l'impression (le PDF est genere depuis la meme feuille). */
+:root {
+  --diagram-edge: #b9b9b0;
+  --bad: #d93a2b;
+  --bad-dim: rgba(217, 58, 43, .1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --diagram-edge: #6b6b70; --bad: #ff6a5c; --bad-dim: rgba(255, 106, 92, .14);
+  }
+}
+:root[data-theme="dark"] { --diagram-edge: #6b6b70; --bad: #ff6a5c; --bad-dim: rgba(255, 106, 92, .14); }
+
+.toc a.sub { padding-left: 1.4rem; font-size: .84rem; color: var(--muted); }
+.toc a.sub.active { color: var(--accent); }
+
+.doc-actions { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; }
+.doc-button {
+  display: inline-block; background: var(--accent); color: #fff; font-weight: 600; font-size: .9rem;
+  padding: .45rem .9rem; border-radius: 9px;
+}
+.doc-button:hover { text-decoration: none; filter: brightness(1.08); }
+
+main h2 { scroll-margin-top: 1rem; }
+main h3, main h4 { scroll-margin-top: 1rem; }
+h4 { font-size: .98rem; margin: 1.1rem 0 .3rem; }
+blockquote {
+  margin: 1rem 0; padding: .7rem 1rem; border-left: 3px solid var(--accent);
+  background: var(--accent-dim); border-radius: 8px; max-width: 78ch;
+}
+blockquote p { margin: .3rem 0; }
+.table-wrap { overflow-x: auto; max-width: 100%; }
+.table-wrap table { margin: .6rem 0 1rem; }
+/* Couper un mot seulement s'il ne tient pas : un numero ou un nom de reglage
+   ne se coupe plus au milieu quand la colonne est etroite. */
+.table-wrap th, .table-wrap td { overflow-wrap: break-word; }
+
+/* ------------------------------------------------------------- schemas */
+.fig { margin: 1.4rem 0 1.6rem; max-width: 820px; }
+.fig svg { display: block; width: 100%; height: auto; font-family: var(--font); }
+.fig figcaption { color: var(--muted); font-size: .84rem; margin-top: .5rem; }
+.d-title { font-size: 15px; font-weight: 600; fill: var(--text); }
+.d-name { font-size: 13px; font-weight: 600; fill: var(--text); }
+.d-name-sm { font-size: 11.5px; font-weight: 600; fill: var(--text); }
+.d-line { font-size: 11.5px; fill: var(--muted); }
+.d-line-strong { font-size: 11.5px; fill: var(--text); }
+.d-box { fill: none; stroke: var(--diagram-edge); stroke-width: 1.25; }
+.d-box.d-fill { fill: var(--surface); }
+.d-zone { fill: var(--surface-2); stroke: var(--diagram-edge); stroke-width: 1; }
+.d-accent { fill: var(--accent-dim); stroke: var(--accent); stroke-width: 2; }
+.d-bad { fill: var(--bad-dim); stroke: var(--bad); stroke-width: 2; }
+.d-conn { fill: none; stroke: var(--diagram-edge); stroke-width: 1.25; }
+.d-write { fill: none; stroke: var(--accent); stroke-width: 2; }
+.d-mark { fill: var(--diagram-edge); }
+.d-mark-accent { fill: var(--accent); }
+
+.print-toc { display: none; }
+
+/* Sur un telephone, un schema reduit a 390 px devient illisible : il garde une
+   largeur lisible et defile dans son cadre. */
+@media screen and (max-width: 860px) {
+  .fig { overflow-x: auto; }
+  .fig svg { min-width: 680px; }
+}
+
+/* ----------------------------------------------------------- impression */
+@media print {
+  :root { --bg: #fff; --surface: #fff; --surface-2: #f4f4f6; --text: #1d1d1f; --muted: #5f5f64; }
+  body { background: #fff; font-size: 10.5pt; line-height: 1.45; }
+  .layout { display: block; max-width: none; }
+  .toc, .copy, .doc-actions { display: none !important; }
+  main { padding: 0; }
+  .hero.cover { padding: 30mm 0 10mm; }
+  .hero.cover h1 { font-size: 26pt; }
+  .print-toc { display: block; break-after: page; }
+  .print-toc ul { list-style: none; padding: 0; font-size: 11pt; line-height: 1.9; }
+  h2 { break-before: page; border-top: 0; padding-top: 0; margin-top: 0; }
+  h2, h3, h4 { break-after: avoid; }
+  .fig, pre, blockquote, tr { break-inside: avoid; }
+  table { font-size: 8.8pt; }
+  .table-wrap { overflow: visible; }
+  pre { white-space: pre-wrap; }
+  pre code { white-space: pre-wrap; font-size: 8.5pt; }
+  a { color: var(--text); }
+  p, li { max-width: none; }
+}

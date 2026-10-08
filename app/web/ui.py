@@ -27,7 +27,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.templating import Jinja2Templates
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -89,4 +89,31 @@ async def api_guide(request: Request) -> HTMLResponse:
             "css_version": asset_version("api-guide.css"),
             "theme_version": asset_version("theme.js"),
         },
+    )
+
+
+@router.get("/documentation", response_class=HTMLResponse)
+async def documentation(request: Request) -> HTMLResponse:
+    """La documentation technique complete. Publique comme le guide de l'API :
+    elle ne contient aucune donnee du reseau et doit pouvoir etre transmise a
+    un client ou a un prestataire. Generee depuis docs/ par scripts/build_docs.py."""
+    return templates.TemplateResponse(
+        request,
+        "documentation.html",
+        {
+            "js_version": asset_version("docs.js"),
+            "css_version": asset_version("docs.css"),
+            "guide_css_version": asset_version("api-guide.css"),
+            "theme_version": asset_version("theme.js"),
+        },
+    )
+
+
+@router.get("/documentation.pdf")
+async def documentation_pdf() -> FileResponse:
+    """La meme documentation en PDF, pour l'envoyer ou l'imprimer."""
+    return FileResponse(
+        STATIC_DIR / "freeqos-documentation.pdf",
+        media_type="application/pdf",
+        filename="freeqos-documentation.pdf",
     )
