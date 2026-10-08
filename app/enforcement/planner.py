@@ -32,7 +32,10 @@ from app.enforcement.models import (
     QueueSpec,
     QueueTypeSpec,
     address_target,
+    is_ours,
+    needs_claim,
     network_target,
+    other_instance,
     slugify,
 )
 from app.models import KIND_PPPOE, KIND_STATIC
@@ -521,7 +524,8 @@ def _contenu_dans(cible: str, reseau: Any) -> bool:
 
 
 def _is_managed(row: dict[str, Any]) -> bool:
-    return MANAGED_COMMENT in str(row.get("comment") or "")
+    """A NOUS : marquee freeQoS, et pas par une autre instance (cf. ``is_ours``)."""
+    return is_ours(row)
 
 
 def _index_by_name(rows: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -732,12 +736,17 @@ def build_plan(
             continue
 
         if not _is_managed(existante):
+            autre = other_instance(existante)
             plan.conflicts.append(
                 PlanConflict(
                     name=file_spec.name,
                     path="/queue/simple",
                     detail=(
-                        "a queue by that name already exists without the "
+                        f"this queue is managed by ANOTHER freeQoS instance ({autre}): "
+                        "it is never modified from here. Two controllers must not drive "
+                        "the same router -- stop one of them."
+                        if autre
+                        else "a queue by that name already exists without the "
                         f"'{MANAGED_COMMENT}' marker: it does not belong to the "
                         "controller and will not be modified"
                     ),
@@ -746,6 +755,10 @@ def build_plan(
             continue
 
         changements = _diff_fields(existante, champs, ignore={"name", "comment"})
+        if needs_claim(existante):
+            # Posee avant l'identifiant d'instance : on la marque comme NOTRE,
+            # une seule fois (cf. ``is_ours``).
+            changements["comment"] = (str(existante.get("comment") or ""), champs["comment"])
         if changements:
             plan.actions.append(
                 PlanAction(
@@ -815,6 +828,21 @@ def _traiter_file_tierce(
                     f"target {spec.target} is aimed at by several third-party queues "
                     f"({noms}): no way to tell which one really shapes, "
                     "none is modified"
+                ),
+            )
+        )
+        return
+
+    autres = sorted({i for e in etrangeres if (i := other_instance(e))})
+    if autres:
+        plan.conflicts.append(
+            PlanConflict(
+                name=spec.name,
+                path="/queue/simple",
+                detail=(
+                    f"target {spec.target} is already shaped by ANOTHER freeQoS instance "
+                    f"({', '.join(autres)}): nothing is written. Two controllers must not "
+                    "drive the same router -- stop one of them."
                 ),
             )
         )

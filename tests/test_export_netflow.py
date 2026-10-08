@@ -26,6 +26,7 @@ import pytest
 from app.collectors.mikrotik import MikrotikCollector
 from app.config import RouterConfig, RouterRole
 from app.services.netflow_export import (
+    COMMENTAIRE_CIBLE,
     PATH_FLOW,
     PATH_TARGET,
     NetflowExportService,
@@ -156,7 +157,13 @@ async def test_un_routeur_deja_configure_ne_recoit_rien(client: FakeRouterOsClie
     meme chose sur tout le parc, indefiniment."""
     client.traffic_flow_row = configure()
     client.traffic_flow_target_rows = [
-        {".id": "*1", "dst-address": COLLECTEUR, "port": "2055", "version": "9"}
+        {
+            ".id": "*1",
+            "dst-address": COLLECTEUR,
+            "port": "2055",
+            "version": "9",
+            "comment": COMMENTAIRE_CIBLE,
+        }
     ]
     export, collector = service(client)
     etat = await export.state_of(collector)
@@ -204,7 +211,13 @@ async def test_un_export_coupe_a_la_main_est_rallume(client: FakeRouterOsClient)
     l'interface le montrerait pourtant comme declare."""
     client.traffic_flow_row = configure(enabled="false")
     client.traffic_flow_target_rows = [
-        {".id": "*1", "dst-address": COLLECTEUR, "port": "2055", "version": "9"}
+        {
+            ".id": "*1",
+            "dst-address": COLLECTEUR,
+            "port": "2055",
+            "version": "9",
+            "comment": COMMENTAIRE_CIBLE,
+        }
     ]
     export, collector = service(client)
     etat = await export.state_of(collector)
@@ -358,7 +371,13 @@ async def test_un_export_trop_lent_est_corrige(client: FakeRouterOsClient) -> No
     """
     client.traffic_flow_row = configure(**{"active-flow-timeout": "30m"})
     client.traffic_flow_target_rows = [
-        {".id": "*1", "dst-address": COLLECTEUR, "port": "2055", "version": "9"}
+        {
+            ".id": "*1",
+            "dst-address": COLLECTEUR,
+            "port": "2055",
+            "version": "9",
+            "comment": COMMENTAIRE_CIBLE,
+        }
     ]
     export, collector = service(client)
     etat = await export.state_of(collector)
@@ -380,7 +399,13 @@ async def test_une_duree_relue_sous_une_autre_forme_ne_declenche_rien(
         **{"active-flow-timeout": "00:01:00", "inactive-flow-timeout": "00:00:15"}
     )
     client.traffic_flow_target_rows = [
-        {".id": "*1", "dst-address": COLLECTEUR, "port": "2055", "version": "9"}
+        {
+            ".id": "*1",
+            "dst-address": COLLECTEUR,
+            "port": "2055",
+            "version": "9",
+            "comment": COMMENTAIRE_CIBLE,
+        }
     ]
     export, collector = service(client)
     etat = await export.state_of(collector)
@@ -451,3 +476,91 @@ async def test_le_loopback_se_trouve_dans_la_configuration_en_dernier_recours(
     client.export_text = "/routing ospf instance\nset [ find default=yes ] router-id=10.255.0.9\n"
     _, collector = service(client)
     assert await collector.ensure_loopback() == "10.255.0.9"
+
+
+async def test_les_cibles_de_freeqos_vers_une_ancienne_adresse_sont_retirees(
+    client: FakeRouterOsClient,
+) -> None:
+    """CONSTATE : l'adresse du collecteur change avec le deploiement (conteneur,
+    pod, VM), et chaque changement AJOUTAIT une cible -- cinq sur un meme
+    routeur. Celles de freeQoS qui ne visent plus son adresse partent, APRES la
+    pose de la bonne ; celle d'un autre outil reste."""
+    client.traffic_flow_row = configure()
+    client.traffic_flow_target_rows = [
+        # Marquee freeQoS, ancienne adresse (conteneur Docker).
+        {
+            ".id": "*A",
+            "dst-address": "172.18.0.3",
+            "port": "2055",
+            "version": "9",
+            "comment": COMMENTAIRE_CIBLE,
+        },
+        # Posee par une ancienne version, sans marque : signature de freeQoS
+        # (son port, sa version, la source qu'il impose = le loopback).
+        {
+            ".id": "*B",
+            "dst-address": "10.42.3.231",
+            "port": "2055",
+            "version": "9",
+            "src-address": "11.11.11.75",
+        },
+        # Un autre outil, pose par l'exploitant : jamais touche.
+        {".id": "*C", "dst-address": "198.51.100.7", "port": "2055", "version": "5"},
+    ]
+    export, collector = service(client)
+    collector.config.loopback = "11.11.11.75"
+    etat = await export.state_of(collector)
+    plan = export.plan_for(collector, etat)
+
+    cibles = [a for a in plan.actions if a.path == PATH_TARGET]
+    assert [a.verb for a in cibles] == ["add", "remove", "remove"]
+    assert cibles[0].fields["comment"] == COMMENTAIRE_CIBLE
+    assert {a.target_id for a in cibles[1:]} == {"*A", "*B"}
+    assert {t["dst_address"] for t in etat.targets if t["stale"]} == {"172.18.0.3", "10.42.3.231"}
+
+
+async def test_une_cible_juste_posee_avant_le_marquage_est_marquee(
+    client: FakeRouterOsClient,
+) -> None:
+    client.traffic_flow_row = configure()
+    client.traffic_flow_target_rows = [
+        {".id": "*1", "dst-address": COLLECTEUR, "port": "2055", "version": "9"}
+    ]
+    export, collector = service(client)
+    plan = export.plan_for(collector, await export.state_of(collector))
+    [marque] = plan.actions
+    assert (marque.verb, marque.target_id, marque.fields) == (
+        "set",
+        "*1",
+        {"comment": COMMENTAIRE_CIBLE},
+    )
+
+
+async def test_un_routeur_qui_refuse_le_commentaire_exporte_quand_meme(
+    client: FakeRouterOsClient,
+) -> None:
+    """Si RouterOS refuse « comment » sur une cible traffic-flow, la cible est
+    posee sans marque : mieux vaut un export non marque que pas d'export."""
+    from app.enforcement.routeros import ActionOutcome, ApplyResult
+
+    client.traffic_flow_row = configure()
+    envoyes: list[dict[str, str]] = []
+
+    async def appliquer(plan, *, dry_run, author):  # type: ignore[no-untyped-def]
+        resultat = ApplyResult(router_name=plan.router_name, dry_run=dry_run)
+        for action in plan.actions:
+            ok = "comment" not in action.fields
+            if ok:
+                envoyes.append(dict(action.fields))
+            resultat.outcomes.append(
+                ActionOutcome(action=action, ok=ok, detail="" if ok else "unknown parameter")
+            )
+        return resultat
+
+    export, collector = service(client)
+    export.shaping.apply = appliquer  # type: ignore[attr-defined]
+    ligne = await export._apply_one(collector, "test", dry_run=False)  # noqa: SLF001
+
+    assert ligne["state"] == "pose"
+    assert collector.name in export.sans_commentaire
+    assert any(e.get("dst-address") == COLLECTEUR and "comment" not in e for e in envoyes)

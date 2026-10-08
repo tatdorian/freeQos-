@@ -261,7 +261,13 @@ async def status_view(
     collection: CollectionDep,
 ) -> dict[str, Any]:
     settings = container.settings
+    from app.enforcement import models
+    from app.services.shaping import OTHER_INSTANCES
+
     return {
+        "instance_id": models.INSTANCE_ID,
+        # Une autre instance de freeQoS pilote aussi ces routeurs.
+        "other_instances": {r: sorted(ids) for r, ids in sorted(OTHER_INSTANCES.items())},
         "mode": "out-of-band (lecture seule)",
         "phase": 1,
         "enforcement_enabled": settings.enforcement_enabled,

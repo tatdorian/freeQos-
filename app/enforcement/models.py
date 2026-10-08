@@ -18,6 +18,63 @@ MANAGED_COMMENT = "freeqos:managed"
 
 PREFIX = "freeqos-"
 
+#: Identifiant de CETTE instance de freeQoS, fixe au demarrage (fichier
+#: ``instance.id`` a cote de la cle, ou FREEQOS_INSTANCE_ID). Il est ecrit dans
+#: le commentaire de tout ce que freeQoS pose sur un routeur.
+#:
+#: CONSTATE : une instance Docker et une instance Kubernetes ont pilote les
+#: memes routeurs, chacune reecrivant ce que l'autre venait de poser -- toutes
+#: les deux minutes, pendant des heures. Avec l'identifiant, une instance ne
+#: touche JAMAIS a ce qu'une autre a pose, et le dit. None = non defini (tests).
+INSTANCE_ID: str | None = None
+
+
+def managed_comment(extra: str = "") -> str:
+    """Le commentaire pose sur une ligne de freeQoS : marque, detail, instance."""
+    morceaux = [MANAGED_COMMENT]
+    if extra:
+        morceaux.append(extra)
+    if INSTANCE_ID:
+        morceaux.append(f"instance={INSTANCE_ID}")
+    return " ".join(morceaux)
+
+
+def comment_instance(comment: Any) -> str | None:
+    """L'instance ecrite dans un commentaire freeQoS, None si absente."""
+    for morceau in str(comment or "").split():
+        if morceau.startswith("instance="):
+            return morceau.split("=", 1)[1] or None
+    return None
+
+
+def is_managed(row: dict[str, Any]) -> bool:
+    """La ligne a ete posee par UNE instance de freeQoS (la notre ou une autre)."""
+    return MANAGED_COMMENT in str(row.get("comment") or "")
+
+
+def other_instance(row: dict[str, Any]) -> str | None:
+    """L'instance de freeQoS AUTRE que la notre qui a pose cette ligne, ou None."""
+    if not is_managed(row) or not INSTANCE_ID:
+        return None
+    autre = comment_instance(row.get("comment"))
+    return autre if autre and autre != INSTANCE_ID else None
+
+
+def is_ours(row: dict[str, Any]) -> bool:
+    """La ligne est a NOUS : marquee freeQoS, et pas par une autre instance.
+
+    Une marque sans instance (posee avant l'identifiant) est la notre : elle est
+    reclamee au passage suivant, et l'autre instance, s'il y en a une, la verra
+    ensuite comme etrangere -- la premiere qui reclame gagne, sans va-et-vient.
+    """
+    return is_managed(row) and other_instance(row) is None
+
+
+def needs_claim(row: dict[str, Any]) -> bool:
+    """Ligne a nous, mais sans notre identifiant : a marquer."""
+    return bool(INSTANCE_ID) and is_ours(row) and comment_instance(row.get("comment")) is None
+
+
 ActionVerb = Literal["add", "set", "remove"]
 
 
@@ -154,7 +211,7 @@ class QueueSpec:
     parent: str | None = None
     queue_up: str | None = None
     queue_down: str | None = None
-    comment: str = MANAGED_COMMENT
+    comment: str = field(default_factory=managed_comment)
     disabled: bool = False
     # Ordre d'evaluation : les parents doivent preceder leurs enfants.
     order: int = 0

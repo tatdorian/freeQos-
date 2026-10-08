@@ -66,12 +66,13 @@ from app.config import Settings
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.capability import WriteCapability, inspect_write_capability
 from app.enforcement.models import (
-    MANAGED_COMMENT,
     PREFIX,
     Plan,
     PlanAction,
     QueueSpec,
+    is_ours,
     network_target,
+    other_instance,
     slugify,
 )
 from app.enforcement.planner import (
@@ -98,6 +99,9 @@ from app.services.vlan_sites import site_key as _cle_site
 
 logger = logging.getLogger(__name__)
 
+#: Routeur -> instances de freeQoS AUTRES que la notre dont on a vu des files.
+OTHER_INSTANCES: dict[str, set[str]] = {}
+
 
 FLAG_ENFORCEMENT = "enforcement_enabled"
 
@@ -123,15 +127,15 @@ class RouterShapingState:
 
     @property
     def managed_queues(self) -> list[dict[str, Any]]:
-        from app.enforcement.models import MANAGED_COMMENT
+        from app.enforcement.models import is_ours
 
-        return [q for q in self.simple_queues if MANAGED_COMMENT in str(q.get("comment") or "")]
+        return [q for q in self.simple_queues if is_ours(q)]
 
     @property
     def foreign_queues(self) -> list[dict[str, Any]]:
-        from app.enforcement.models import MANAGED_COMMENT
+        from app.enforcement.models import is_ours
 
-        return [q for q in self.simple_queues if MANAGED_COMMENT not in str(q.get("comment") or "")]
+        return [q for q in self.simple_queues if not is_ours(q)]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -1077,7 +1081,16 @@ class ShapingService:
                 queue_trees=client.queue_trees(),
             )
 
-        return await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
+        etat = await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
+        # Une AUTRE instance de freeQoS a pose des files sur ce routeur : on le
+        # retient pour l'afficher -- deux controleurs ne doivent pas piloter le
+        # meme routeur, et c'est a l'exploitant d'arreter l'un des deux.
+        autres = {i for q in etat.simple_queues if (i := other_instance(q))}
+        if autres:
+            OTHER_INSTANCES[collector.name] = autres
+        else:
+            OTHER_INSTANCES.pop(collector.name, None)
+        return etat
 
     # ------------------------------------------------------- etat desire
     async def build_targets(
@@ -2462,18 +2475,18 @@ class ShapingService:
         RouterOS s'arrete a la premiere file qui correspond. Tout effacer puis
         reposer le plan courant ne laisse que ce qui doit y etre.
 
-        Seules NOS files partent (commentaire ``freeqos:managed`` ou nom
-        ``freeqos-``) : jamais une file posee a la main ou par RADIUS. Les types
+        Seules NOS files partent (commentaire ``freeqos:managed`` de CETTE
+        instance) : jamais une file posee a la main, par RADIUS ou par une autre
+        instance de freeQoS. Les types
         CAKE restent, le plan les reutilise. Geste humain : ecrit meme
         interrupteur coupe, comme toute demande explicite.
         """
         etat = await self._inspect_one(self._collector(router_name))
-        nos_files = [
-            q
-            for q in etat.simple_queues
-            if MANAGED_COMMENT in str(q.get("comment") or "")
-            or str(q.get("name") or "").startswith(PREFIX)
-        ]
+        # SEULEMENT CE QUI PORTE NOTRE MARQUE (et pas celle d'une autre
+        # instance). Le prefixe de nom ne suffit pas : constate, des files sans
+        # commentaire freeqos:managed ont ete retirees parce que leur nom
+        # commencait par « freeqos- ».
+        nos_files = [q for q in etat.simple_queues if is_ours(q)]
         nos_files = [q for q in nos_files if q.get(".id")]
         # Les enfants AVANT leurs parents : un parent retire en premier
         # laisserait ses enfants orphelins le temps de la boucle.

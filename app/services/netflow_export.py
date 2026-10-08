@@ -43,7 +43,14 @@ from typing import Any
 from app.collectors.mikrotik import MikrotikCollector
 from app.config import RouterRole
 from app.db.flows_repo import NetflowExportersRepository
-from app.enforcement.models import Plan, PlanAction
+from app.enforcement.models import (
+    MANAGED_COMMENT,
+    Plan,
+    PlanAction,
+    is_ours,
+    managed_comment,
+    needs_claim,
+)
 from app.services.registry import RouterRegistry
 from app.services.shaping import ShapingService
 
@@ -53,6 +60,17 @@ JOB_NETFLOW_EXPORT = "netflow_export"
 
 PATH_FLOW = "/ip/traffic-flow"
 PATH_TARGET = "/ip/traffic-flow/target"
+
+
+#: Commentaire pose sur les cibles traffic-flow ecrites par freeQoS. C'est lui
+#: qui permet de retirer une cible devenue perimee sans toucher a celle qu'un
+#: exploitant a posee vers un autre outil.
+def commentaire_cible() -> str:
+    """Commentaire de nos cibles, avec l'identifiant de cette instance."""
+    return managed_comment("netflow")
+
+
+COMMENTAIRE_CIBLE = f"{MANAGED_COMMENT} netflow"
 
 ETAT_POSE = "pose"
 ETAT_A_POSER = "a poser"
@@ -172,6 +190,8 @@ class RouterExportState:
     inactive_timeout: str = ""
     targets: list[dict[str, Any]] = field(default_factory=list)
     ours: dict[str, Any] | None = None
+    #: Cibles de freeQoS qui visent une adresse qui n'est plus la sienne.
+    stale: list[dict[str, Any]] = field(default_factory=list)
     state: str = ETAT_A_POSER
     reason: str = ""
 
@@ -214,6 +234,9 @@ class NetflowExportService:
     collector_address: str | None = None
     enabled: bool = True
     last_run: dict[str, Any] = field(default_factory=dict)
+    #: Routeurs qui refusent le commentaire sur une cible traffic-flow : on y
+    #: pose la cible sans marque plutot que de ne plus exporter du tout.
+    sans_commentaire: set[str] = field(default_factory=set)
 
     # ---------------------------------------------------------------- lecture
     def collector_for(self, collector: MikrotikCollector) -> str | None:
@@ -277,6 +300,26 @@ class NetflowExportService:
 
         return await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
 
+    def is_ours(self, collector: MikrotikCollector, cible: dict[str, Any]) -> bool:
+        """Cette cible a-t-elle ete posee par freeQoS ?
+
+        Oui si elle porte notre commentaire. Les cibles posees AVANT ce marquage
+        sont reconnues a leur signature exacte : notre port, notre version, et
+        l'adresse source que freeQoS impose (le loopback du routeur). Une cible
+        vers un autre outil, posee par l'exploitant, n'a pas cette signature et
+        n'est jamais touchee.
+        """
+        if MANAGED_COMMENT in str(cible.get("comment") or ""):
+            # Posee par une AUTRE instance de freeQoS : pas la notre.
+            return is_ours(cible)
+        source = source_for(collector)
+        return bool(
+            source
+            and str(cible.get("src-address") or "") == source
+            and str(cible.get("port") or "") == str(self.port)
+            and str(cible.get("version") or "") == str(self.version)
+        )
+
     async def state_of(self, collector: MikrotikCollector) -> RouterExportState:
         etat = RouterExportState(router=collector.name, host=collector.config.host)
         etat.collector = await self.resolve_collector(collector)
@@ -302,6 +345,7 @@ class NetflowExportService:
                 "port": str(c.get("port") or ""),
                 "version": str(c.get("version") or ""),
                 "src_address": str(c.get("src-address") or ""),
+                "freeqos": self.is_ours(collector, c),
             }
             for c in cibles
         ]
@@ -322,6 +366,14 @@ class NetflowExportService:
             ),
             None,
         )
+        # CONSTATE : l'adresse du collecteur change avec le deploiement (IP du
+        # conteneur, du pod, de la VM) et chaque changement AJOUTAIT une cible
+        # -- 172.18.0.3, 100.100.101.114, 10.42.3.231, 10.42.3.232,
+        # 192.168.188.23 sur un meme routeur. Les cibles de freeQoS qui ne
+        # visent plus son adresse actuelle sont retirees.
+        etat.stale = [c for c in cibles if c is not etat.ours and self.is_ours(collector, c)]
+        for ligne, brute in zip(etat.targets, cibles, strict=True):
+            ligne["stale"] = any(brute is c for c in etat.stale)
         lent = not _meme_duree(etat.active_timeout, self.active_flow_timeout)
         if etat.enabled and etat.ours is not None and not lent:
             etat.state = ETAT_POSE
@@ -408,6 +460,8 @@ class NetflowExportService:
             source = source_for(collector)
             if source:
                 champs["src-address"] = source
+            if collector.name not in self.sans_commentaire:
+                champs["comment"] = commentaire_cible()
             plan.actions.append(
                 PlanAction(
                     verb="add",
@@ -445,8 +499,43 @@ class NetflowExportService:
                     changes={"version": (str(etat.ours.get("version") or ""), str(self.version))},
                 )
             )
+        elif collector.name not in self.sans_commentaire and (
+            MANAGED_COMMENT not in str(etat.ours.get("comment") or "") or needs_claim(etat.ours)
+        ):
+            # Cible deja juste, posee avant le marquage : on la marque, pour
+            # qu'elle soit reconnue comme la notre le jour ou l'adresse changera.
+            plan.actions.append(
+                PlanAction(
+                    verb="set",
+                    path=PATH_TARGET,
+                    target_id=str(etat.ours.get(".id") or ""),
+                    fields={"comment": commentaire_cible()},
+                    name=f"{collector.name} : cible {etat.collector}:{self.port}",
+                    reason="target marked as placed by freeQoS",
+                    changes={"comment": (str(etat.ours.get("comment") or ""), commentaire_cible())},
+                )
+            )
         else:
             plan.unchanged += 1
+
+        # Les cibles perimees partent APRES la pose de la bonne : le routeur
+        # n'est jamais laisse sans export, meme si une commande echoue.
+        for perimee in etat.stale:
+            ident = str(perimee.get(".id") or "")
+            if not ident:
+                continue
+            plan.actions.append(
+                PlanAction(
+                    verb="remove",
+                    path=PATH_TARGET,
+                    target_id=ident,
+                    name=(
+                        f"{collector.name} : ancienne cible "
+                        f"{perimee.get('dst-address')}:{perimee.get('port')}"
+                    ),
+                    reason="placed by freeQoS toward an address that is no longer its own",
+                )
+            )
         return plan
 
     # --------------------------------------------------------------- ecriture
@@ -509,8 +598,22 @@ class NetflowExportService:
             ligne["state"] = ETAT_ERREUR
             ligne["reason"] = f"{type(exc).__name__}: {exc}"
             return ligne
-        ligne["applied"] = resultat.applied
         rates = [o for o in resultat.outcomes if not o.ok]
+        if (
+            rates
+            and collector.name not in self.sans_commentaire
+            and any("comment" in o.action.fields for o in rates)
+        ):
+            # Ce routeur refuse le commentaire sur une cible : on pose sans
+            # marque plutot que de le laisser sans export.
+            logger.warning(
+                "%s : commentaire refuse sur la cible NetFlow (%s), cible posee sans marque",
+                collector.name,
+                "; ".join(str(o.detail) for o in rates if o.detail),
+            )
+            self.sans_commentaire.add(collector.name)
+            return await self._apply_one(collector, author, dry_run)
+        ligne["applied"] = resultat.applied
         if rates:
             ligne["state"] = ETAT_ERREUR
             ligne["reason"] = "; ".join(str(o.detail) for o in rates if o.detail)

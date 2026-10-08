@@ -1674,6 +1674,7 @@ async function loadExec() {
   renderExecLegend(document.getElementById('exec-legend'));
   document.getElementById('exec-count').textContent =
     exec.nodes.length + ' node(s), ' + subs.length + ' client(s)';
+  exec.instances = await api('/status').catch(() => null);
   renderExecNotice(rttState, firstError, {
     noNodes: exec.nodes.length === 0,
     topoOnly: fromTopo && exec.nodes.length > 0,
@@ -2259,6 +2260,16 @@ function renderExecNotice(rttState, error, st) {
   if (!notice) return;
   const state = st || {};
   let html = '';
+  // DEUX CONTROLEURS SUR LES MEMES ROUTEURS : chacun refuse de toucher a ce
+  // que l'autre a pose, mais l'exploitant doit en arreter un.
+  const autres = (exec.instances && exec.instances.other_instances) || {};
+  const routeursAutres = Object.keys(autres);
+  if (routeursAutres.length) {
+    html += '<div class="notice err"><b>Another freeQoS instance drives the same routers.</b> ' +
+      routeursAutres.map((r) => esc(r) + ' (' + esc(autres[r].join(', ')) + ')').join(', ') +
+      '. This instance (<code>' + esc(exec.instances.instance_id || '?') + '</code>) never touches ' +
+      'what the other one placed, so neither can shape those routers reliably. Stop one of them.</div>';
+  }
   if (error) {
     html += '<div class="notice err"><b>Partly loaded.</b> ' +
       esc(error.message) + '</div>';
