@@ -57,3 +57,37 @@ async def test_dans_docker_l_adresse_netflow_vient_du_routeur(
     # Une adresse forcee reste prioritaire.
     service.collector_address = "10.0.0.9"
     assert await service.resolve_collector(collecteur) == "10.0.0.9"
+
+
+def test_kubernetes_est_reconnu_comme_un_conteneur(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONSTATE : sous containerd/Kubernetes, /.dockerenv n'existe pas ;
+    freeQoS annoncait l'IP du pod (10.42.3.231, puis .232)."""
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.43.0.1")
+    assert netflow_export.dans_kubernetes()
+    assert netflow_export.dans_un_conteneur()
+
+
+async def test_dans_un_pod_sans_adresse_vue_aucune_cible_n_est_devinee(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Le routeur ne dit pas d'ou vient notre session : on ne pose PAS l'IP du
+    pod (morte au redeploiement). L'etat demande NETFLOW_COLLECTOR_ADDRESS."""
+    client = FakeRouterOsClient()
+    client.active_user_rows = []  # type: ignore[attr-defined]
+    client.traffic_flow_row = {"enabled": "true", "interfaces": "all"}
+    collecteur = MikrotikCollector(
+        RouterConfig(name="nas-a", host="192.0.2.11", username="qos-ro", password="x"),
+        client=client,
+    )
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.43.0.1")
+    monkeypatch.setattr(netflow_export, "local_address_for", lambda *a, **k: "10.42.3.231")
+    service = NetflowExportService.__new__(NetflowExportService)
+    service.collector_address = None
+    service.port = 2055
+    service.version = 9
+    service.active_flow_timeout = "1m"
+
+    assert await service.resolve_collector(collecteur) is None
+    etat = await service.state_of(collecteur)
+    assert etat.state == "erreur"
+    assert "Kubernetes" in etat.reason and "NETFLOW_COLLECTOR_ADDRESS" in etat.reason

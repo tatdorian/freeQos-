@@ -34,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import os
 import socket
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -77,9 +78,22 @@ ETAT_A_POSER = "a poser"
 ETAT_ERREUR = "erreur"
 
 
+def dans_kubernetes() -> bool:
+    """Vrai sous Kubernetes (containerd, CRI-O...), ou ``/.dockerenv`` n'existe pas."""
+    return (
+        bool(os.environ.get("KUBERNETES_SERVICE_HOST"))
+        or Path("/var/run/secrets/kubernetes.io").exists()
+    )
+
+
 def dans_un_conteneur() -> bool:
-    """Vrai quand l'application tourne dans un conteneur Docker."""
-    return Path("/.dockerenv").exists()
+    """Vrai dans un conteneur : Docker, Podman, ou un pod Kubernetes.
+
+    CONSTATE : sous Kubernetes, seul ``/.dockerenv`` etait teste ; freeQoS se
+    croyait sur l'hote et annoncait l'IP du POD (10.42.3.231, puis .232 au
+    redeploiement), injoignable depuis les routeurs.
+    """
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists() or dans_kubernetes()
 
 
 def local_address_for(host: str, port: int = 8728) -> str | None:
@@ -260,6 +274,11 @@ class NetflowExportService:
             vue = await self._adresse_vue_par(collector)
             if vue:
                 return vue
+            # DANS UN CONTENEUR, l'adresse locale est celle du conteneur ou du
+            # pod : le routeur ne peut pas l'atteindre, et elle change a chaque
+            # redeploiement. Mieux vaut ne rien poser et le dire que poser une
+            # cible morte (cf. ``state_of`` : NETFLOW_COLLECTOR_ADDRESS).
+            return None
         return locale
 
     async def _adresse_vue_par(self, collector: MikrotikCollector) -> str | None:
@@ -352,8 +371,13 @@ class NetflowExportService:
         if etat.collector is None:
             etat.state = ETAT_ERREUR
             etat.reason = (
-                "adresse du collecteur indeterminable depuis ce controleur : "
-                "renseignez NETFLOW_COLLECTOR_ADDRESS"
+                "collector address unknown: freeQoS runs in a container "
+                f"({'Kubernetes' if dans_kubernetes() else 'Docker'}) and the router does not "
+                "show where our API session comes from. Set NETFLOW_COLLECTOR_ADDRESS to the "
+                "address the routers must send their flows to (the host, the Kubernetes "
+                "Service/LoadBalancer, or the node with the published UDP port)."
+                if dans_un_conteneur()
+                else "collector address unknown from this controller: set NETFLOW_COLLECTOR_ADDRESS"
             )
             return etat
 
