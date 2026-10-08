@@ -212,7 +212,14 @@ async def test_plan_complet_depuis_un_routeur_vierge(
 
     plan = await service.plan(
         "pop-test",
-        links=[LinkTarget(name="bh-altair", interface="ether2", measured_capacity_mbps=500)],
+        links=[
+            LinkTarget(
+                name="bh-altair",
+                interface="ether2",
+                subnet="10.20.0.1/24",
+                measured_capacity_mbps=500,
+            )
+        ],
         subscribers=[
             SubscriberTarget(
                 login="dupont",

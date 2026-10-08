@@ -321,7 +321,47 @@ def desired_state(
     # sont eux qui donneront leur parent aux abonnes dont on ignore le secteur.
     cibles_liens: dict[str, str] = {}
     reseaux_parents: list[tuple[Any, str]] = []
+    # DEUX LIENS SUR LA MEME CIBLE : c'est le signe d'un segment partage (le
+    # /29 commun a plusieurs routeurs), pas d'un goulot. CONSTATE : le premier
+    # lien posait sa file, le second etait ecarte, et la file posee bridait
+    # tout le transit. Desormais AUCUN des deux n'est ecrit : erreur de
+    # planification, signalee.
+    par_cible: dict[str, list[str]] = {}
+    for link in links:
+        if link.enabled and not link.skip_reason:
+            par_cible.setdefault(link.queue_target, []).append(link.name)
+    doublons = {c: noms for c, noms in par_cible.items() if len(noms) > 1}
+    for cible_double, noms in doublons.items():
+        logger.error(
+            "Erreur de planification : %d liens visent la meme cible %s (%s) -- aucune file",
+            len(noms),
+            cible_double,
+            ", ".join(noms),
+        )
     for index, link in enumerate(links):
+        if link.enabled and not link.skip_reason and not link.network:
+            # JAMAIS UNE INTERFACE ENTIERE. CONSTATE : une file ciblant
+            # « ether3,lan-bridge » limitait tout le trafic de l'interface au
+            # debit d'un seul client.
+            ecartes.append(
+                PlanSkip(
+                    link.name,
+                    f"no client network on {link.interface}: a queue on the whole "
+                    "interface would cap ALL its traffic to one rate -- nothing is written",
+                )
+            )
+            continue
+        if link.enabled and not link.skip_reason and link.queue_target in doublons:
+            autres = [n for n in doublons[link.queue_target] if n != link.name]
+            ecartes.append(
+                PlanSkip(
+                    link.name,
+                    f"planning error: target {link.queue_target} is also that of "
+                    f"{', '.join(autres)} -- a shared segment is not a bottleneck, "
+                    "no queue is written for any of them",
+                )
+            )
+            continue
         if link.skip_reason:
             ecartes.append(PlanSkip(link.name, link.skip_reason))
             continue
