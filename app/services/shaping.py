@@ -81,6 +81,7 @@ from app.enforcement.planner import (
     build_plan,
     desired_queue_types,
     desired_state,
+    normalise_field,
 )
 from app.enforcement.routeros import (
     ApplyResult,
@@ -250,6 +251,9 @@ class ShapingService:
         # ici il n'y a pas de pool qui reattribue, il y a un contrat.
         self.static_clients = static_clients
         self._write_clients: dict[str, RouterOsWriteClient] = {}
+        # Garde-fou contre l'oscillation (cf. ``_filtrer_oscillations``).
+        self._ecrits: dict[tuple[str, str, str, str], list[tuple[float, str]]] = {}
+        self.frozen: dict[tuple[str, str], dict[str, Any]] = {}
         self._write_client_factory = write_client_factory or LibrouterosWriteClient
         self.last_snapshot: TopologySnapshot | None = None
         # Quand la derniere decouverte a tourne. Distingue "aucun equipement"
@@ -2483,6 +2487,9 @@ class ShapingService:
         interrupteur coupe, comme toute demande explicite.
         """
         etat = await self._inspect_one(self._collector(router_name))
+        # Geste explicite de l'exploitant : les lignes gelees pour oscillation
+        # sont liberees, l'etat repart de zero.
+        self.unfreeze(router_name)
         # SEULEMENT CE QUI PORTE NOTRE MARQUE (et pas celle d'une autre
         # instance). Le prefixe de nom ne suffit pas : constate, des files sans
         # commentaire freeqos:managed ont ete retirees parce que leur nom
@@ -2994,6 +3001,7 @@ class ShapingService:
 
         client: RouterOsWriteClient | None = None
         if not dry_run:
+            plan = self._filtrer_oscillations(plan)
             client = self._write_client(plan.router_name)
 
         resultat = await apply_plan(
@@ -3003,6 +3011,8 @@ class ShapingService:
             max_actions=self.settings.enforcement_max_actions,
         )
 
+        if not dry_run:
+            self._retenir_ecritures(resultat)
         if not dry_run and resultat.applied:
             # Ce qu'on vient d'ecrire a change l'etat des routeurs : un audit
             # calcule avant ne decrit plus rien. Sans cet oubli, l'interface
@@ -3018,6 +3028,105 @@ class ShapingService:
                 author=author,
             )
         return resultat
+
+    # ------------------------------------------------- garde-fou oscillation
+    #: Champs de STRUCTURE surveilles. Un debit qui va et vient est normal (un
+    #: boost qui expire) ; une CIBLE qui va et vient ne l'est jamais.
+    CHAMPS_SURVEILLES = ("target", "parent", "queue")
+    FENETRE_OSCILLATION_S = 3600.0
+
+    @staticmethod
+    def _cle_ligne(action: PlanAction) -> str:
+        return str(action.target_id or action.name or "")
+
+    def _filtrer_oscillations(self, plan: Plan) -> Plan:
+        """Retire du plan toute ecriture qui ferait osciller une ligne.
+
+        CONSTATE EN PRODUCTION : toutes les deux minutes, la cible d'une meme
+        file etait reecrite en alternance (``ether3,lan-bridge`` puis
+        ``ether6,lan-bridge`` puis ``100.100.105.240/30``...), plus de 76 fois
+        en quelques heures. Une ligne dont un champ de structure revient a sa
+        valeur d'AVANT-DERNIERE ecriture (A -> B -> A) est GELEE : plus aucune
+        ecriture, une erreur journalisee, une alerte dans l'interface. Seul un
+        nettoyage explicite du routeur la libere.
+        """
+        maintenant = time.monotonic()
+        gardees: list[PlanAction] = []
+        for action in plan.actions:
+            ligne = self._cle_ligne(action)
+            cle_ligne = (plan.router_name, ligne)
+            if action.verb != "set" or not ligne:
+                gardees.append(action)
+                continue
+            if cle_ligne in self.frozen:
+                continue
+            oscille = None
+            for champ in self.CHAMPS_SURVEILLES:
+                if champ not in action.fields:
+                    continue
+                voulu = normalise_field(str(action.fields[champ])) or ""
+                histo = [
+                    v
+                    for t, v in self._ecrits.get((plan.router_name, action.path, ligne, champ), [])
+                    if maintenant - t <= self.FENETRE_OSCILLATION_S
+                ]
+                if len(histo) >= 2 and voulu == histo[-2] and voulu != histo[-1]:
+                    oscille = (champ, histo[-2], histo[-1])
+                    break
+            if oscille is None:
+                gardees.append(action)
+                continue
+            champ, a, b = oscille
+            self.frozen[cle_ligne] = {
+                "router": plan.router_name,
+                "line": action.name or ligne,
+                "id": action.target_id,
+                "field": champ,
+                "values": [a, b],
+                "since": datetime.now(tz=UTC),
+            }
+            logger.error(
+                "OSCILLATION sur %s, %s : %s alterne entre %r et %r -- ligne GELEE, plus "
+                "aucune ecriture (deux controleurs, ou un etat desire instable)",
+                plan.router_name,
+                action.name or ligne,
+                champ,
+                a,
+                b,
+            )
+        if len(gardees) == len(plan.actions):
+            return plan
+        return Plan(
+            router_name=plan.router_name,
+            actions=gardees,
+            conflicts=plan.conflicts,
+            skipped=plan.skipped,
+            unchanged=plan.unchanged,
+        )
+
+    def _retenir_ecritures(self, resultat: ApplyResult) -> None:
+        maintenant = time.monotonic()
+        for issue in resultat.outcomes:
+            action = issue.action
+            if not issue.ok or action.verb not in ("set", "add"):
+                continue
+            ligne = self._cle_ligne(action)
+            for champ in self.CHAMPS_SURVEILLES:
+                if champ not in action.fields or not ligne:
+                    continue
+                cle = (resultat.router_name, action.path, ligne, champ)
+                histo = self._ecrits.setdefault(cle, [])
+                histo.append((maintenant, normalise_field(str(action.fields[champ])) or ""))
+                del histo[:-3]
+
+    def unfreeze(self, router_name: str) -> int:
+        """Libere les lignes gelees d'un routeur (geste explicite)."""
+        cles = [c for c in self.frozen if c[0] == router_name]
+        for cle in cles:
+            del self.frozen[cle]
+        for cle in [c for c in self._ecrits if c[0] == router_name]:
+            del self._ecrits[cle]
+        return len(cles)
 
     # ------------------------------------------------------------ interne
     def _collector(self, router_name: str) -> MikrotikCollector:

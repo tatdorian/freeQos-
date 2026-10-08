@@ -982,6 +982,14 @@ def normalise_field(value: str | None) -> str | None:
         membres = [_normalise(m) or "" for m in texte.split(",")]
         membres = [m for m in membres if m]
         return ",".join(sorted(membres))
+    # ADRESSES : « 10.20.0.10 » et « 10.20.0.10/32 » designent la meme cible, et
+    # RouterOS range « 10.0.0.1/24 » en « 10.0.0.0/24 ». Comparees en texte,
+    # elles produisaient un ``set`` a chaque cycle, pour toujours.
+    if any(c.isdigit() for c in texte) and ("." in texte or ":" in texte):
+        try:
+            return str(ipaddress.ip_network(texte, strict=False))
+        except ValueError:
+            pass
     # Debits composes : on compare les entiers, pas leur ecriture.
     if "/" in texte:
         morceaux = [_normalise_rate(m) for m in texte.split("/")]

@@ -2270,6 +2270,14 @@ function renderExecNotice(rttState, error, st) {
       '. This instance (<code>' + esc(exec.instances.instance_id || '?') + '</code>) never touches ' +
       'what the other one placed, so neither can shape those routers reliably. Stop one of them.</div>';
   }
+  const gelees = (exec.instances && exec.instances.frozen_lines) || [];
+  if (gelees.length) {
+    html += '<div class="notice err"><b>Writing stopped on ' + gelees.length + ' line(s): it was ' +
+      'going back and forth.</b> ' + gelees.slice(0, 3).map((g) => esc(g.router) + ' · ' +
+      esc(g.line) + ' (' + esc(g.field) + ': ' + esc(g.values.join(' ↔ ')) + ')').join(', ') +
+      '. Usually two controllers on the same router, or an unstable setting. Fix the cause, then ' +
+      'use Devices › Reset queues on that router to resume.</div>';
+  }
   if (error) {
     html += '<div class="notice err"><b>Partly loaded.</b> ' +
       esc(error.message) + '</div>';
