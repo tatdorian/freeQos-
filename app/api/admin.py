@@ -268,6 +268,10 @@ async def status_view(
         "instance_id": models.INSTANCE_ID,
         # Une autre instance de freeQoS pilote aussi ces routeurs.
         "other_instances": {r: sorted(ids) for r, ids in sorted(OTHER_INSTANCES.items())},
+        # Lignes gelees : un champ de structure y allait et venait (A -> B -> A).
+        "frozen_lines": list(getattr(container.shaping, "frozen", {}).values())
+        if getattr(container, "shaping", None) is not None
+        else [],
         "mode": "out-of-band (lecture seule)",
         "phase": 1,
         "enforcement_enabled": settings.enforcement_enabled,
