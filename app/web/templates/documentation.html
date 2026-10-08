@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="e9bced006bbfc07f">
+  <meta name="freeqos-docs-source" content="75398f7191ba865c">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -672,18 +672,25 @@
 <p><strong>How TimescaleDB stores measurements.</strong> A <em>hypertable</em> is split into one-day chunks. After 7 days, each chunk is rewritten as compressed columns: neighbouring values of a column look alike and compress very well. After 90 days, the whole chunk is dropped at once, without scanning the table.</p>
 </blockquote>
 <h4 id="recommended-sizing">Recommended sizing</h4>
+<p>The same figures apply to a physical machine and to a virtual machine.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
 <th>Network</th>
-<th>vCPU</th>
+<th>CPU (cores or vCPU)</th>
 <th>RAM</th>
 <th>SSD disk</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td>Lab, demonstration (≤ 100 subscribers)</td>
+<td><strong>Absolute minimum</strong> (trial, &lt; 50 subscribers)</td>
+<td>2</td>
+<td>2 GB</td>
+<td>30 GB</td>
+</tr>
+<tr>
+<td>Small network (≤ 100 subscribers)</td>
 <td>2</td>
 <td>4 GB</td>
 <td>40 GB</td>
@@ -709,6 +716,42 @@
 </tbody>
 </table></div>
 <p>These values keep a 50% disk margin over the measured worst case (≈ 90 MB per subscriber over 90 days), plus the images and the journal. They assume the NetFlow volume stays under 5,000 flows/s; otherwise, see above. An SSD is required: the database writes continuously.</p>
+<p><strong>2 GB and 2 CPU run, but with no headroom.</strong> The system and Docker take about 400 MB, the application 100 to 200 MB, the database about 700 MB with its cache. That is enough to try freeQoS, not for production: a NetFlow peak takes memory that is not given back. <strong>For production, start at 2 CPU and 4 GB.</strong></p>
+<p><strong>Analysing both directions behind NAT</strong> keeps a pairing table (see <em>Both directions</em>, section 6). Full (100,000 conversations), it takes about 76 MB, plus up to about 15 MB for downloads waiting for their upload: under 100 MB at worst, already covered by the sizes above.</p>
+<h4 id="physical-machine-or-virtual-machine">Physical machine or virtual machine</h4>
+<p>Both work, with the same sizes. What changes:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>Physical machine</th>
+<th>Virtual machine</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CPU</td>
+<td>A fast core matters more than many cores (the NetFlow collector uses one)</td>
+<td><strong>Reserved</strong> vCPUs, without over-allocation on the host: a slowed-down shared core loses NetFlow datagrams, so bytes go missing from the measurements</td>
+</tr>
+<tr>
+<td>RAM</td>
+<td>Nothing special</td>
+<td><strong>Reserved</strong> RAM, ballooning off: the database sizes its cache at start-up on the memory it sees</td>
+</tr>
+<tr>
+<td>Disk</td>
+<td>Local SSD</td>
+<td>Virtual disk (virtio) on SSD storage of the host; avoid slow shared storage</td>
+</tr>
+<tr>
+<td>Network</td>
+<td>Nothing special</td>
+<td>virtio NIC; UDP port 2055 reachable from the routers (bridged, or an explicit <code>2055/udp</code> forward if the host NATs the VM)</td>
+</tr>
+</tbody>
+</table></div>
+<p>To know where you stand, read <code>flows_seen</code> in <code>GET /api/v1/netflow/status</code> twice, one minute apart, at peak time: the difference divided by 60 is your flows per second. Under 5,000, the sizes above are enough.</p>
 <p><strong>On the routers</strong>, freeQoS adds:</p>
 <ul>
 <li>an API read every 10 s (sessions and counters);</li>
