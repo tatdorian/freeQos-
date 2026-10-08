@@ -122,6 +122,11 @@ class RttProber:
         self.probes_sent = 0
         self.probes_answered = 0
         self._erreurs_vues: dict[str, str] = {}
+        # Abonnes qui ont DEJA repondu au moins une fois. Un client qui n'a
+        # jamais repondu n'est pas « en panne » : sa box (CPE) ou son pare-feu
+        # bloque le ping, ce qui est courant. Son silence n'est ni une
+        # degradation QoE, ni un motif d'action.
+        self._ont_repondu: set[int] = set()
 
     def get(self, subscriber_id: int) -> float | None:
         """Derniere mesure, si elle n'est pas perimee."""
@@ -149,6 +154,7 @@ class RttProber:
             base.update(reading.stats.to_dict())
         if reading.error:
             base["error"] = reading.error
+        base["ever_answered"] = subscriber_id in self._ont_repondu
         return base
 
     def silent_target(self) -> tuple[str, str] | None:
@@ -251,6 +257,7 @@ class RttProber:
             self.probes_sent += 1
             if rtt is not None:
                 answered += 1
+                self._ont_repondu.add(subscriber_id)
         self.probes_answered += answered
         return answered
 

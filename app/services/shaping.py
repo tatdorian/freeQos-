@@ -3165,8 +3165,8 @@ class ShapingService:
         cles = [c for c in self.frozen if c[0] == router_name]
         for cle in cles:
             del self.frozen[cle]
-        for cle in [c for c in self._ecrits if c[0] == router_name]:
-            del self._ecrits[cle]
+        for ecrit in [c for c in self._ecrits if c[0] == router_name]:
+            del self._ecrits[ecrit]
         return len(cles)
 
     # ------------------------------------------------------------ interne

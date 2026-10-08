@@ -772,6 +772,8 @@ function severity(p) {
  *  ou client hors ligne. L'afficher "-" en gris le cachait. */
 function pingsPerdus(detail) {
   if (!detail || !(Number(detail.sent) > 0) || Number(detail.received)) return false;
+  // JAMAIS REPONDU : sa box bloque le ping (courant). Pas une panne, pas rouge.
+  if (detail.ever_answered === false) return false;
   // Si TOUS les clients mesures sont muets a la fois, c'est la SONDE qui ne
   // recoit rien (source injoignable, pare-feu) : pas une perte de chaque client.
   return !sondeMuette();
@@ -793,6 +795,12 @@ function rttVide(detail) {
   if (detail && detail.error) {
     return ['ping error', 'warn', 'The router could not run the ping: ' + detail.error +
       '. Check Settings > latency probe and the router (ping allowed, source address).'];
+  }
+  if (detail && Number(detail.sent) > 0 && !Number(detail.received) &&
+      detail.ever_answered === false && !sondeMuette()) {
+    return ['no ping reply', 'none', 'This client has never answered ping: its box (CPE) or ' +
+      'firewall blocks it. Common, and not a fault: latency cannot be measured for it, and it ' +
+      'counts neither against the network nor in any automatic action.'];
   }
   if (detail && Number(detail.sent) > 0 && !Number(detail.received)) {
     return sondeMuette()

@@ -120,6 +120,10 @@ def build_rows(
         p95 = _f(lat.get("p95_ms"))
         perte = _f(serie.get("loss_pct"))
         sonde_en_cause = str(serie.get("router") or "") in muettes
+        jamais_repondu = serie.get("ever_answered") is False
+        if jamais_repondu:
+            # La box du client ne repond pas au ping (courant) : pas une perte.
+            perte = None
         if sonde_en_cause:
             # Pas une perte du client : la sonde n'a eu aucune reponse sur tout
             # le routeur. Elle n'entre pas dans son verdict.
@@ -139,6 +143,10 @@ def build_rows(
         )
         if plafonnes and etat not in (AU_PLAFOND, None):
             motifs.append(f"{plafonnes} measure(s) at its plan limit set aside")
+        if jamais_repondu:
+            motifs.append(
+                "its box does not answer ping (common, not a fault): latency not measurable"
+            )
         if sonde_en_cause:
             motifs.append(
                 f"probe got no reply from any client of {serie.get('router')}: "
