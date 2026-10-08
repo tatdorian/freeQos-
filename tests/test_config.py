@@ -110,10 +110,11 @@ def test_dsn_asyncpg_normalise_le_schema_sqlalchemy() -> None:
     assert settings.asyncpg_dsn == "postgresql://u:p@db:5432/qos"
 
 
-def test_enforcement_active_par_defaut() -> None:
-    """DEMANDE EXPLICITE : tout est automatique, donc l'ecriture est active
-    par defaut. ENFORCEMENT_ENABLED=false remet le controleur en lecture seule."""
-    assert Settings(_env_file=None).enforcement_enabled is True
+def test_simulation_par_defaut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CONSTATE EN PRODUCTION : l'ecriture commencait des l'ajout d'un routeur.
+    Desormais, simulation par defaut : l'ecriture s'active dans l'interface."""
+    monkeypatch.delenv("ENFORCEMENT_ENABLED", raising=False)
+    assert Settings(_env_file=None).enforcement_enabled is False
 
 
 # ------------------------------------- boucle fermee QoE (phase 4)

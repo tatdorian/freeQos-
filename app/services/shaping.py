@@ -15,6 +15,7 @@ import asyncio
 import ipaddress
 import json
 import logging
+import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -99,6 +100,13 @@ from app.services.vlan_sites import VlanSite, routers_for_site
 from app.services.vlan_sites import site_key as _cle_site
 
 logger = logging.getLogger(__name__)
+
+
+def _auteur_automatique(author: str | None) -> bool:
+    """Une boucle ou une integration, pas une personne dans l'interface."""
+    auteur = str(author or "")
+    return auteur.startswith(("api:", "ui:api:", "system:", "sys:"))
+
 
 #: Routeur -> instances de freeQoS AUTRES que la notre dont on a vu des files.
 OTHER_INSTANCES: dict[str, set[str]] = {}
@@ -297,7 +305,16 @@ class ShapingService:
 
     @property
     def enforcement_locked(self) -> bool:
-        return self.settings.enforcement_locked
+        return self.settings.enforcement_locked or self.enforcement_forced_off
+
+    @property
+    def enforcement_forced_off(self) -> bool:
+        """ENFORCEMENT_ENABLED=false POSE DANS L'ENVIRONNEMENT (et non la valeur
+        par defaut) : l'ecriture est coupee et ne se rallume pas depuis
+        l'interface. Lu dans l'environnement du processus, la ou Docker
+        (env_file) et Kubernetes le posent."""
+        brut = os.environ.get("ENFORCEMENT_ENABLED")
+        return brut is not None and brut.strip().lower() in {"0", "false", "no", "off"}
 
     async def load_flags(self) -> None:
         """Amorce le drapeau depuis la base, ou l'y ecrit au premier demarrage."""
@@ -307,6 +324,21 @@ class ShapingService:
             stocke = await self.repository.get_flag(FLAG_ENFORCEMENT)
         except Exception:  # noqa: BLE001 - table pas encore creee
             return
+        if self.enforcement_forced_off:
+            # ENFORCEMENT_ENABLED=false POSE DANS L'ENVIRONNEMENT : arret force,
+            # quelle que soit la valeur en base. CONSTATE : la valeur stockee
+            # l'emportait, et une variable posee apres coup pour arreter
+            # l'ecriture ne servait a rien.
+            if stocke is not False:
+                await self.repository.set_flag(
+                    FLAG_ENFORCEMENT,
+                    False,
+                    updated_by="bootstrap",
+                    reason="ENFORCEMENT_ENABLED=false in the environment forces read-only",
+                )
+            self._enforcement_enabled = False
+            logger.warning("Ecriture COUPEE : ENFORCEMENT_ENABLED=false dans l'environnement")
+            return
         if stocke is None:
             await self.repository.set_flag(
                 FLAG_ENFORCEMENT,
@@ -315,19 +347,6 @@ class ShapingService:
                 reason="initial value from ENFORCEMENT_ENABLED",
             )
             return
-        if stocke is False and self.settings.enforcement_enabled:
-            # DEMANDE EXPLICITE : l'ecriture est TOUJOURS active par defaut.
-            # L'interrupteur de l'interface reste un arret d'urgence, valable
-            # jusqu'au prochain demarrage : une coupure oubliee ne laisse plus
-            # le controleur en lecture seule pour des semaines. Pour un
-            # controleur durablement en lecture seule : ENFORCEMENT_ENABLED=false.
-            await self.repository.set_flag(
-                FLAG_ENFORCEMENT,
-                True,
-                updated_by="bootstrap",
-                reason="ENFORCEMENT_ENABLED=true: writing is on at every startup",
-            )
-            stocke = True
         self._enforcement_enabled = stocke
         if stocke != self.settings.enforcement_enabled:
             logger.warning(
@@ -345,6 +364,11 @@ class ShapingService:
         Refusee si ENFORCEMENT_LOCKED est vrai : un exploitant qui tient a la
         friction du redemarrage doit pouvoir la garder.
         """
+        if self.enforcement_forced_off and enabled:
+            raise EnforcementLockedError(
+                "ENFORCEMENT_ENABLED=false is set in the environment: writing stays off. "
+                "Remove it (or set it to true) and restart to allow writing."
+            )
         if self.settings.enforcement_locked:
             raise EnforcementLockedError(
                 "ENFORCEMENT_LOCKED=true: switching from the interface is "
@@ -2307,6 +2331,15 @@ class ShapingService:
 
         try:
             resultat = await self.apply(restreint, dry_run=False, author=author, explicit=True)
+        except EnforcementDisabledError:
+            # Mode simulation : la file est calculee, rien n'est envoye. Ce n'est
+            # pas une erreur, et l'exploitant doit le lire comme tel.
+            ligne["state"] = self.ETAT_A_POSER
+            ligne["reason"] = (
+                "simulation: writing to the routers is off -- the queue is computed, not "
+                "sent (Settings > Shaping and writing)"
+            )
+            return ligne
         except Exception as exc:  # noqa: BLE001 - la fiche est deja enregistree
             logger.exception("Ecriture impossible sur %s pour '%s'", router_name, reference)
             ligne["state"] = self.ETAT_ERREUR
@@ -2993,7 +3026,15 @@ class ShapingService:
         ecrit quoi qu'il arrive ; l'interrupteur ne retient que les boucles
         automatiques.
         """
-        if not dry_run and not self._enforcement_enabled and not explicit:
+        if (
+            not dry_run
+            and not self._enforcement_enabled
+            and (not explicit or self.enforcement_forced_off or _auteur_automatique(author))
+        ):
+            # SIMULATION : les boucles automatiques et les integrations (cle
+            # d'API, API model) n'ecrivent pas. Seul un geste humain dans
+            # l'interface passe -- et rien du tout si l'environnement force
+            # l'arret (ENFORCEMENT_ENABLED=false).
             raise EnforcementDisabledError(
                 "The controller is read-only. Turn enforcement on in "
                 "Settings > Shaping and writing, or set ENFORCEMENT_ENABLED to true."
