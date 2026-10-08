@@ -3073,25 +3073,51 @@ function renderVantages(data, top, exporteurs) {
   const noms = (v) => (Array.isArray(exporteurs) ? exporteurs : [])
     .filter((e) => e.vantage === v && e.packets_seen)
     .map((e) => e.name || e.address);
-  const actif = point(compte).active;
-  const ou = compte === 'edge' ? 'at the internet exit' : 'on the PoP routers';
-  const qui = noms(compte);
-  hote.innerHTML = actif
+  // 'auto' : chaque sens est lu la ou il est le mieux vu (le plus grand des
+  // deux points, jamais la somme). Il est actif des qu'un des deux recoit.
+  const lus = compte === 'auto' ? ['edge', 'pop'].filter((v) => point(v).active) : [compte];
+  const actif = lus.some((v) => point(v).active);
+  const lieux = { edge: 'at the internet exit', pop: 'on the PoP routers' };
+  const ou = compte === 'auto'
+    ? (lus.length > 1 ? 'in both directions, each where it is seen best (internet exit and PoP routers)'
+      : (lieux[lus[0]] || lieux.edge) + ', in both directions')
+    : (lieux[compte] || lieux.pop);
+  const qui = lus.flatMap(noms);
+  hote.innerHTML = (actif
     ? '<div class="notice ok"><b>Traffic measured ' + ou +
       (qui.length ? ' (' + esc(qui.slice(0, 3).join(', ')) + ')' : '') + '.</b> ' +
-      'Each client is counted once, whatever the number of routers its traffic crosses.</div>'
+      'Each client is counted once per direction, whatever the number of routers its traffic crosses.</div>'
     : '<div class="notice warn"><b>No router sends traffic flows yet.</b> The export is set up ' +
-      'automatically on the routers added in Devices; it shows here within a few minutes.</div>';
+      'automatically on the routers added in Devices; it shows here within a few minutes.</div>') +
+    sensManquant(point('edge'), compte);
   if (detail) {
     const etat = (v, nom) => {
       const p = point(v);
       return nom + ': ' + (p.active ? 'receiving'
         : p.exporters ? p.exporters + ' router(s) declared, no flow received recently'
-          : 'no exporter') + (v === compte ? ' (counted)' : '');
+          : 'no exporter') + (v === compte ? ' (counted)'
+        : compte === 'auto' && p.active ? ' (counted where it sees best)' : '');
     };
     detail.textContent = etat('edge', 'Internet exit') + ' · ' + etat('pop', 'PoP routers') +
-      '. One point is enough: the same traffic crosses both.';
+      '. Automatic reads each direction where it is seen best: the same traffic crosses both, ' +
+      'it is never added up.';
   }
+}
+
+/** Une sortie internet qui voit partir le trafic mais presque rien revenir :
+ *  elle masque ses clients (NAT) et le retour vise son adresse publique. */
+function sensManquant(bordure, compte) {
+  const t = (bordure && bordure.totals) || {};
+  const bas = Number(t.down_bytes) || 0;
+  const haut = Number(t.up_bytes) || 0;
+  if (!bordure || !bordure.active || haut < 1e6 || bas >= haut * 0.2) return '';
+  return '<div class="notice warn"><b>The internet exit sees uploads but almost no downloads.</b> ' +
+    'It translates your clients\' addresses (NAT): downloads reach its public address. freeQoS ' +
+    'ties them back with the translated addresses (NAT fields, enabled on your routers ' +
+    'automatically) or by matching each download with its upload. ' +
+    (compte === 'auto' ? 'Downloads seen by the PoP routers are counted meanwhile.'
+      : 'Choose <b>Automatic</b> under Advanced to count downloads where the PoP routers see them.') +
+    '</div>';
 }
 
 /** Drapeau d'un pays a partir de son code ISO (FR -> drapeau francais).
@@ -10219,7 +10245,7 @@ const AIDE = {
   },
   'who consumes': {
     t: 'Volume per subscriber over the period.',
-    m: 'From NetFlow at the counting point, each client counted once (the best exporter for that client is used, never two).',
+    m: 'From NetFlow, each client counted once per direction: downloads where they are seen best, uploads likewise (the best exporter for each direction, never two added up).',
     r: 'This is volume (GB), not speed: a client streaming all evening outweighs one who ran a short speed test.',
   },
   'where the traffic goes': {
@@ -10534,7 +10560,7 @@ const AIDE = {
   'headroom': { t: 'Capacity left at the peak of the period.', r: 'Under 10% at the peak: the next growth in usage will show as latency.' },
   'vantage': {
     t: 'Where this exporter measures: internet edge (above the core) or at a PoP.',
-    r: 'Set automatically for your own routers. Only one vantage is used for counting, so a byte seen at both is counted once.',
+    r: 'Set automatically for your own routers. Each direction is read from one vantage only (the one that sees it best), so a byte seen at both is counted once.',
   },
   'sampling': '“all” = every flow is exported; 1:N = one in N, volumes are multiplied back by N.',
   'datagrams': 'NetFlow packets received from this exporter. Not increasing = the router stopped exporting, or a firewall drops UDP 2055.',
@@ -10645,8 +10671,8 @@ const AIDE = {
     t: 'Internet minus clients: traffic of no known client.',
     r: 'Bandwidth tests, device management, routers talking to each other, or clients not declared yet. A large, steady share is worth investigating.',
   },
-  'vantage|internet edge': 'NetFlow measured at the internet exit (above the core). Used for counting whenever it sends flows: each client once, internet traffic only.',
-  'vantage|pops': 'NetFlow measured on each PoP router, next to the clients. Used for counting only when the internet exit sends nothing.',
+  'vantage|internet edge': 'NetFlow measured at the internet exit (above the core). In Automatic mode, counted for each direction it sees best: each client once, internet traffic only. Behind NAT, downloads are tied back to the client by the translated address or by matching them with their upload.',
+  'vantage|pops': 'NetFlow measured on each PoP router, next to the clients, before any NAT. In Automatic mode, counted for each direction it sees better than the internet exit.',
   'hot|internet side': 'Gateway uplink and PoP-to-core links: a saturation here hits every client.',
   'hot|pop side': 'Links towards subscribers, VLANs and relays: a saturation only hits what hangs below.',
 };
