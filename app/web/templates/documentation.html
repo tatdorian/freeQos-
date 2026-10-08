@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="14c57bf5fa66ee13">
+  <meta name="freeqos-docs-source" content="e9bced006bbfc07f">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -1862,7 +1862,38 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 </tbody>
 </table></div>
-<p>Counters are kept per vantage point and are <strong>never added up</strong>. Consumption (Traffic page, <code>/usage/v1</code> API) is read from a single one: <code>NETFLOW_ACCOUNTING_VANTAGE</code>, <code>edge</code> by default. For the list of conversations, freeQoS keeps a single source per conversation: the one closest to the subscriber.</p>
+<p>Counters are kept per vantage point and are <strong>never added up</strong>. Consumption (Traffic page, <code>/usage/v1</code> API) is read <strong>direction by direction</strong>: <code>NETFLOW_ACCOUNTING_VANTAGE=auto</code> (the default) takes, for each subscriber and each window, the larger of the two vantage points for download and, separately, the larger for upload. It is the same byte seen twice, so the larger is the right figure and the sum would be wrong. <code>edge</code> or <code>pop</code> force a single vantage point for both directions. For the list of conversations, freeQoS keeps a single source per conversation <strong>and per direction</strong>: the one closest to the subscriber.</p>
+<h4 id="both-directions">Both directions</h4>
+<p>Each direction is measured on its own, from end to end. Three situations used to lose one of them:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>What was lost</th>
+<th>What freeQoS does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>NAT at the internet edge.</strong> The edge masquerades its clients: downloads reach its <strong>public</strong> address</td>
+<td>Download at the edge: no subscriber block contains the public address</td>
+<td>Reads the <strong>translated</strong> address exported by the router (IPFIX fields 225–228, 281–282), or pairs the download with its upload (below). With <code>auto</code>, downloads seen by the PoP routers count meanwhile</td>
+</tr>
+<tr>
+<td><strong>Asymmetric routing.</strong> Upload leaves through one router, download comes back through another, both at the same vantage point</td>
+<td>The direction carried by the router that saw less traffic overall</td>
+<td>The best exporter is chosen <strong>per direction</strong>: download from the router that sees the most download, upload likewise. Nothing is added up</td>
+</tr>
+<tr>
+<td><strong>One source per conversation.</strong> The PoP exports only upload, the edge sees the download</td>
+<td>The direction the first source did not see</td>
+<td>The source of each conversation is chosen per direction</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Translated addresses.</strong> RouterOS puts the post-NAT addresses and ports in its v9 and IPFIX records when the <code>nat-src-address</code>, <code>nat-dst-address</code>, <code>nat-src-port</code> and <code>nat-dst-port</code> fields of <code>/ip/traffic-flow/ipfix</code> are on. freeQoS turns them on itself when they are off (one <code>set</code>, under the same write switch as the rest of the export). A download addressed to the public address is then tied to the client named by its translated destination.</p>
+<p><strong>Pairing without NAT fields.</strong> For each upload towards the internet, freeQoS remembers <em>(remote address, remote port, protocol, client port)</em> → subscriber, kept 10 minutes after its last upload (the oldest go first when 100,000 are held). A download coming back from that remote address and port, towards that client port, belongs to that subscriber. When the router changed the client port, pairing without the port is tried only towards an address already recognised as the NAT's public address, and only when <strong>a single</strong> subscriber talks to that remote end: two subscribers on the same server, and freeQoS does not guess. A download that arrives before its upload in the same window is replayed when the window closes. <code>GET /api/v1/netflow/status</code> counts <code>nat_translated</code> (tied by the NAT field), <code>nat_matched</code> (tied by pairing) and <code>nat_unmatched</code> (looked like a NAT return, no upload to name it), and gives <code>directions</code>: the bytes tied to a subscriber per vantage point and per direction since start-up.</p>
+<p><strong>The warning on the Traffic page.</strong> When the internet exit sees more than 1 MB of upload and less than a fifth of that in download, the page says that it translates your clients' addresses, and what is counted meanwhile.</p>
 <h4 id="rate-of-a-flow">Rate of a flow</h4>
 <p>A record carries a volume and a duration (first → last packet). The rate is the volume divided by the <strong>actual</strong> duration. With RouterOS's 30-minute timeout, dividing by an assumed minute showed a rate thirty times too high; this is why the duration is always read from the record.</p>
 <h4 id="usage-families">Usage families</h4>
@@ -1921,7 +1952,9 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>freeQoS configures the export on each router itself, every 10 minutes if needed (<code>NETFLOW_EXPORT_AUTO</code>, <code>NETFLOW_EXPORT_INTERVAL_S</code>):</p>
 <pre><code>/ip/traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m inactive-flow-timeout=15s
 /ip/traffic-flow/target add dst-address=&lt;collector&gt; port=2055 version=9
+/ip/traffic-flow/ipfix set nat-src-address=yes nat-dst-address=yes nat-src-port=yes nat-dst-port=yes
 </code></pre>
+<p>The last line is only sent when one of those fields is read as off: without them, downloads behind NAT cannot be tied to a client (see <em>Both directions</em>). A router whose RouterOS has no <code>/ip/traffic-flow/ipfix</code> menu is left as it is.</p>
 <p>The collector address is not guessed. It is the local address the system would use to reach <strong>this</strong> router (a UDP socket opened towards it, without sending a packet). It is therefore correct even on a server with several interfaces.</p>
 <p>Special cases:</p>
 <ul>
@@ -2678,7 +2711,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 </tbody>
 </table></div>
-<p><strong>Usage API parameters</strong> (<code>GET /usage/v1/services</code> and <code>/usage/v1/services/{id}</code>): <code>start</code> and <code>end</code> (ISO 8601, UTC), or <code>days</code> (default 30, up to 366) when <code>start</code> is absent; <code>bucket</code> = <code>total</code>, <code>hour</code>, <code>day</code> or <code>month</code>; <code>vantage</code> = <code>edge</code> or <code>pop</code> to override the accounting vantage point.</p>
+<p><strong>Usage API parameters</strong> (<code>GET /usage/v1/services</code> and <code>/usage/v1/services/{id}</code>): <code>start</code> and <code>end</code> (ISO 8601, UTC), or <code>days</code> (default 30, up to 366) when <code>start</code> is absent; <code>bucket</code> = <code>total</code>, <code>hour</code>, <code>day</code> or <code>month</code>; <code>vantage</code> = <code>auto</code>, <code>edge</code> or <code>pop</code> to override the accounting vantage point.</p>
 <p><strong>For a PPPoE subscriber</strong>, the simplest is still <code>PUT /api/v1/plans/{login}</code>: the login is enough to find it on its router.</p>
 <p><strong>Consumption</strong> (<code>/usage/v1</code>) comes from NetFlow, not from queue counters: those restart from zero at each reconnection and do not exist for a subscriber without a queue. With no router exporting, this API returns zeros and says so in its <code>source</code> field.</p>
 <h3 id="authentication">Authentication</h3>
@@ -3534,6 +3567,11 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td>Writing aggregates</td>
 </tr>
 <tr>
+<td><code>NETFLOW_ACCOUNTING_VANTAGE</code> ✱</td>
+<td><code>auto</code></td>
+<td>Where usage is read: <code>auto</code> (each direction where it is seen best), <code>edge</code> or <code>pop</code></td>
+</tr>
+<tr>
 <td><code>NETFLOW_EXPORT_AUTO</code> ✱</td>
 <td><code>true</code></td>
 <td>Export set up by freeQoS</td>
@@ -3835,7 +3873,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p>Who consumes what, where the traffic goes, and the traffic restrictions.</p>
 <h4 id="who-consumes">Who consumes</h4>
 <p><strong>What it shows.</strong> Volume per subscriber over the period.</p>
-<p><strong>How it is measured.</strong> From NetFlow at the counting point, each client counted once (the best exporter for that client is used, never two).</p>
+<p><strong>How it is measured.</strong> From NetFlow, each client counted once per direction: downloads where they are seen best, uploads likewise (the best exporter for each direction, never two added up).</p>
 <p><strong>How to read it.</strong> This is volume (GB), not speed: a client streaming all evening outweighs one who ran a short speed test.</p>
 <h4 id="which-services-the-traffic-comes-from">Which services the traffic comes from</h4>
 <p><strong>What it shows.</strong> Traffic grouped by recognised service (YouTube, Netflix, Steam, Microsoft updates…).</p>
@@ -4287,7 +4325,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <tr>
 <td>Internet edge</td>
 <td>Traffic</td>
-<td>NetFlow measured at the internet exit (above the core). Used for counting whenever it sends flows: each client once, internet traffic only.</td>
+<td>NetFlow measured at the internet exit (above the core). In Automatic mode, counted for each direction it sees best: each client once, internet traffic only. Behind NAT, downloads are tied back to the client by the translated address or by matching them with their upload.</td>
 </tr>
 <tr>
 <td>Internet side</td>
@@ -4487,7 +4525,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <tr>
 <td>PoPs</td>
 <td>Traffic</td>
-<td>NetFlow measured on each PoP router, next to the clients. Used for counting only when the internet exit sends nothing.</td>
+<td>NetFlow measured on each PoP router, next to the clients, before any NAT. In Automatic mode, counted for each direction it sees better than the internet exit.</td>
 </tr>
 <tr>
 <td>Port</td>
@@ -4762,7 +4800,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <tr>
 <td>Vantage</td>
 <td></td>
-<td>Where this exporter measures: internet edge (above the core) or at a PoP. Set automatically for your own routers. Only one vantage is used for counting, so a byte seen at both is counted once.</td>
+<td>Where this exporter measures: internet edge (above the core) or at a PoP. Set automatically for your own routers. Each direction is read from one vantage only (the one that sees it best), so a byte seen at both is counted once.</td>
 </tr>
 <tr>
 <td>Version</td>

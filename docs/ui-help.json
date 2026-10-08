@@ -141,7 +141,7 @@
  },
  "who consumes": {
   "t": "Volume per subscriber over the period.",
-  "m": "From NetFlow at the counting point, each client counted once (the best exporter for that client is used, never two).",
+  "m": "From NetFlow, each client counted once per direction: downloads where they are seen best, uploads likewise (the best exporter for each direction, never two added up).",
   "r": "This is volume (GB), not speed: a client streaming all evening outweighs one who ran a short speed test."
  },
  "where the traffic goes": {
@@ -668,7 +668,7 @@
  },
  "vantage": {
   "t": "Where this exporter measures: internet edge (above the core) or at a PoP.",
-  "r": "Set automatically for your own routers. Only one vantage is used for counting, so a byte seen at both is counted once."
+  "r": "Set automatically for your own routers. Each direction is read from one vantage only (the one that sees it best), so a byte seen at both is counted once."
  },
  "sampling": "“all” = every flow is exported; 1:N = one in N, volumes are multiplied back by N.",
  "datagrams": "NetFlow packets received from this exporter. Not increasing = the router stopped exporting, or a firewall drops UDP 2055.",
@@ -946,8 +946,8 @@
   "t": "Internet minus clients: traffic of no known client.",
   "r": "Bandwidth tests, device management, routers talking to each other, or clients not declared yet. A large, steady share is worth investigating."
  },
- "vantage|internet edge": "NetFlow measured at the internet exit (above the core). Used for counting whenever it sends flows: each client once, internet traffic only.",
- "vantage|pops": "NetFlow measured on each PoP router, next to the clients. Used for counting only when the internet exit sends nothing.",
+ "vantage|internet edge": "NetFlow measured at the internet exit (above the core). In Automatic mode, counted for each direction it sees best: each client once, internet traffic only. Behind NAT, downloads are tied back to the client by the translated address or by matching them with their upload.",
+ "vantage|pops": "NetFlow measured on each PoP router, next to the clients, before any NAT. In Automatic mode, counted for each direction it sees better than the internet exit.",
  "hot|internet side": "Gateway uplink and PoP-to-core links: a saturation here hits every client.",
  "hot|pop side": "Links towards subscribers, VLANs and relays: a saturation only hits what hangs below."
 }

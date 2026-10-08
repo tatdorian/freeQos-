@@ -430,13 +430,13 @@
       <details id="flow-exporters-block" style="margin-top:1.5rem">
         <summary>Advanced: NetFlow exporters <span class="pct-hint" id="flow-exporters-sum"></span></summary>
         <div class="hint" style="margin:.4rem 0 .8rem">Your routers are recognised and declared
-          automatically: the internet exit is counted, each client only once. Declare by hand only
+          automatically: each client is counted once per direction, where that direction is seen best. Declare by hand only
           an exporter that is not one of your routers.</div>
         <div class="field" style="margin:.2rem 0 .9rem">
           <label>Where traffic is counted</label>
           <div class="segmented" id="flow-vantage-seg" role="group" aria-label="Where traffic is counted">
             <button type="button" data-vantage="" class="active"
-              title="The internet exit when it sends flows, the PoP routers otherwise">Automatic</button>
+              title="Each direction where it is seen best: the larger of the internet exit and the PoP routers, never their sum">Automatic</button>
             <button type="button" data-vantage="edge">Internet exit only</button>
             <button type="button" data-vantage="pop">PoP routers only</button>
           </div>

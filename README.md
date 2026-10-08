@@ -68,8 +68,9 @@ conversations.
 **Corollaire assumé : le même octet est vu deux fois.** Un flux qui traverse le PoP puis
 la sortie internet est exporté par les deux. Les additionner donnerait le double du trafic
 réel. Le **point de mesure** est donc enregistré *avec* la mesure — il fait partie de la
-clé primaire de `flow_metrics` — et la consommation se lit depuis **un seul**
-(`NETFLOW_ACCOUNTING_VANTAGE`, `edge` par défaut).
+clé primaire de `flow_metrics` — et la consommation se lit **sens par sens** au point qui
+le voit le mieux, le plus grand des deux et jamais leur somme
+(`NETFLOW_ACCOUNTING_VANTAGE`, `auto` par défaut ; `edge` ou `pop` pour imposer un point).
 
 ---
 
