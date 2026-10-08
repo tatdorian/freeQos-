@@ -418,3 +418,20 @@ async def test_a_egalite_la_route_connectee_l_emporte() -> None:
     ]
     collecteur = make_collector(client)
     assert await collecteur.client_routing_table("154.66.223.217") == "CUST-INET-2"
+
+
+async def test_un_client_qui_n_a_jamais_repondu_est_signale_comme_tel() -> None:
+    """Beaucoup de CPE ne repondent pas au ping : ce n'est pas une panne. La
+    mesure le dit (ever_answered), pour qu'il ne compte nulle part."""
+    muet = FakeRouterOsClient()
+    muet.ping_reply = None
+    prober = RttProber(batch_size=10, clock=Horloge())
+    await prober.probe([(4, "10.0.0.4", make_collector(muet))])
+    assert prober.detail(4)["ever_answered"] is False
+
+    muet.ping_reply = "3ms"
+    await prober.probe([(4, "10.0.0.4", make_collector(muet))])
+    muet.ping_reply = None
+    await prober.probe([(4, "10.0.0.4", make_collector(muet))])
+    # Il a deja repondu : son silence redevient un vrai signal.
+    assert prober.detail(4)["ever_answered"] is True
