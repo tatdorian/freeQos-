@@ -784,7 +784,23 @@ The same byte crosses several routers, and each can export it. freeQoS distingui
 | `edge` | The internet edge, upstream of the core | Everything going to or coming from the internet, once |
 | `pop` | The subscriber's PoP | The same traffic, plus local traffic, where VLAN and sector are known |
 
-Counters are kept per vantage point and are **never added up**. Consumption (Traffic page, `/usage/v1` API) is read from a single one: `NETFLOW_ACCOUNTING_VANTAGE`, `edge` by default. For the list of conversations, freeQoS keeps a single source per conversation: the one closest to the subscriber.
+Counters are kept per vantage point and are **never added up**. Consumption (Traffic page, `/usage/v1` API) is read **direction by direction**: `NETFLOW_ACCOUNTING_VANTAGE=auto` (the default) takes, for each subscriber and each window, the larger of the two vantage points for download and, separately, the larger for upload. It is the same byte seen twice, so the larger is the right figure and the sum would be wrong. `edge` or `pop` force a single vantage point for both directions. For the list of conversations, freeQoS keeps a single source per conversation **and per direction**: the one closest to the subscriber.
+
+#### Both directions
+
+Each direction is measured on its own, from end to end. Three situations used to lose one of them:
+
+| Situation | What was lost | What freeQoS does |
+| --- | --- | --- |
+| **NAT at the internet edge.** The edge masquerades its clients: downloads reach its **public** address | Download at the edge: no subscriber block contains the public address | Reads the **translated** address exported by the router (IPFIX fields 225–228, 281–282), or pairs the download with its upload (below). With `auto`, downloads seen by the PoP routers count meanwhile |
+| **Asymmetric routing.** Upload leaves through one router, download comes back through another, both at the same vantage point | The direction carried by the router that saw less traffic overall | The best exporter is chosen **per direction**: download from the router that sees the most download, upload likewise. Nothing is added up |
+| **One source per conversation.** The PoP exports only upload, the edge sees the download | The direction the first source did not see | The source of each conversation is chosen per direction |
+
+**Translated addresses.** RouterOS puts the post-NAT addresses and ports in its v9 and IPFIX records when the `nat-src-address`, `nat-dst-address`, `nat-src-port` and `nat-dst-port` fields of `/ip/traffic-flow/ipfix` are on. freeQoS turns them on itself when they are off (one `set`, under the same write switch as the rest of the export). A download addressed to the public address is then tied to the client named by its translated destination.
+
+**Pairing without NAT fields.** For each upload towards the internet, freeQoS remembers *(remote address, remote port, protocol, client port)* → subscriber, kept 10 minutes after its last upload (the oldest go first when 100,000 are held). A download coming back from that remote address and port, towards that client port, belongs to that subscriber. When the router changed the client port, pairing without the port is tried only towards an address already recognised as the NAT's public address, and only when **a single** subscriber talks to that remote end: two subscribers on the same server, and freeQoS does not guess. A download that arrives before its upload in the same window is replayed when the window closes. `GET /api/v1/netflow/status` counts `nat_translated` (tied by the NAT field), `nat_matched` (tied by pairing) and `nat_unmatched` (looked like a NAT return, no upload to name it), and gives `directions`: the bytes tied to a subscriber per vantage point and per direction since start-up.
+
+**The warning on the Traffic page.** When the internet exit sees more than 1 MB of upload and less than a fifth of that in download, the page says that it translates your clients' addresses, and what is counted meanwhile.
 
 #### Rate of a flow
 
@@ -822,7 +838,10 @@ freeQoS configures the export on each router itself, every 10 minutes if needed 
 ```
 /ip/traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m inactive-flow-timeout=15s
 /ip/traffic-flow/target add dst-address=<collector> port=2055 version=9
+/ip/traffic-flow/ipfix set nat-src-address=yes nat-dst-address=yes nat-src-port=yes nat-dst-port=yes
 ```
+
+The last line is only sent when one of those fields is read as off: without them, downloads behind NAT cannot be tied to a client (see *Both directions*). A router whose RouterOS has no `/ip/traffic-flow/ipfix` menu is left as it is.
 
 The collector address is not guessed. It is the local address the system would use to reach **this** router (a UDP socket opened towards it, without sending a packet). It is therefore correct even on a server with several interfaces.
 
@@ -1205,7 +1224,7 @@ A billing system (Splynx, UISP CRM, Powercode…) knows its customers and what i
 | Enforcement report | For a service, what was written on the router is in the `X-FreeQoS-Enforcement` response header, outside the body |
 | Several prefixes | The first prefix is the queue's target; all of them count in the traffic measurement |
 
-**Usage API parameters** (`GET /usage/v1/services` and `/usage/v1/services/{id}`): `start` and `end` (ISO 8601, UTC), or `days` (default 30, up to 366) when `start` is absent; `bucket` = `total`, `hour`, `day` or `month`; `vantage` = `edge` or `pop` to override the accounting vantage point.
+**Usage API parameters** (`GET /usage/v1/services` and `/usage/v1/services/{id}`): `start` and `end` (ISO 8601, UTC), or `days` (default 30, up to 366) when `start` is absent; `bucket` = `total`, `hour`, `day` or `month`; `vantage` = `auto`, `edge` or `pop` to override the accounting vantage point.
 
 **For a PPPoE subscriber**, the simplest is still `PUT /api/v1/plans/{login}`: the login is enough to find it on its router.
 
@@ -1592,6 +1611,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 | --- | --- | --- |
 | `NETFLOW_ENABLED` / `NETFLOW_PORT` | `true` / 2055 | Collector |
 | `NETFLOW_FLUSH_INTERVAL_S` | 60 | Writing aggregates |
+| `NETFLOW_ACCOUNTING_VANTAGE` ✱ | `auto` | Where usage is read: `auto` (each direction where it is seen best), `edge` or `pop` |
 | `NETFLOW_EXPORT_AUTO` ✱ | `true` | Export set up by freeQoS |
 | `NETFLOW_EXPORT_INTERVAL_S` | 600 | How often the export is checked |
 | `NETFLOW_COLLECTOR_ADDRESS` | auto | Address announced to the routers (required in a container) |

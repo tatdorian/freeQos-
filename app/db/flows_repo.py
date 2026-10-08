@@ -434,10 +434,18 @@ class FlowsRepository:
                        sum(f.up_bytes)::bigint   AS up_bytes,
                        sum(f.flows)::bigint      AS flows,
                        max(f.ts)                 AS last_ts
-                FROM flow_metrics f
+                FROM (
+                    SELECT ts, subscriber_id,
+                           max(down_bytes) AS down_bytes,
+                           max(up_bytes)   AS up_bytes,
+                           max(flows)      AS flows
+                    FROM flow_metrics
+                    WHERE ($1::text = 'auto' OR vantage = $1::text)
+                      AND ts >= now() - make_interval(mins => $2)
+                    GROUP BY ts, subscriber_id
+                ) f
                 JOIN subscribers s ON s.id = f.subscriber_id
                 LEFT JOIN pops p   ON p.id = s.pop_id
-                WHERE f.vantage = $1 AND f.ts >= now() - make_interval(mins => $2)
                 GROUP BY f.subscriber_id, s.login, s.kind, p.name,
                          s.plan_down_mbps, s.plan_up_mbps
                 ORDER BY (sum(f.down_bytes) + sum(f.up_bytes)) DESC
@@ -458,8 +466,16 @@ class FlowsRepository:
                        coalesce(sum(flows), 0)::bigint      AS flows,
                        count(DISTINCT subscriber_id)        AS subscribers,
                        max(ts)                              AS last_ts
-                FROM flow_metrics
-                WHERE vantage = $1 AND ts >= now() - make_interval(mins => $2)
+                FROM (
+                    SELECT ts, subscriber_id,
+                           max(down_bytes) AS down_bytes,
+                           max(up_bytes)   AS up_bytes,
+                           max(flows)      AS flows
+                    FROM flow_metrics
+                    WHERE ($1::text = 'auto' OR vantage = $1::text)
+                      AND ts >= now() - make_interval(mins => $2)
+                    GROUP BY ts, subscriber_id
+                ) f
                 """,
                 vantage,
                 minutes,
@@ -503,9 +519,15 @@ class FlowsRepository:
                 SELECT date_bin(make_interval(secs => $4), ts, $2) AS bucket,
                        sum(down_bytes)::bigint AS down_bytes,
                        sum(up_bytes)::bigint   AS up_bytes
-                FROM flow_metrics
-                WHERE subscriber_id = $1 AND vantage = $5
-                  AND ts >= $2 AND ts < $3
+                FROM (
+                    SELECT ts,
+                           max(down_bytes) AS down_bytes,
+                           max(up_bytes)   AS up_bytes
+                    FROM flow_metrics
+                    WHERE subscriber_id = $1 AND ($5::text = 'auto' OR vantage = $5::text)
+                      AND ts >= $2 AND ts < $3
+                    GROUP BY ts
+                ) f
                 GROUP BY bucket
                 ORDER BY bucket
                 """,
@@ -550,11 +572,17 @@ class FlowsRepository:
                        {colonne} AS period_start,
                        sum(f.down_bytes)::bigint AS down_bytes,
                        sum(f.up_bytes)::bigint   AS up_bytes
-                FROM flow_metrics f
+                FROM (
+                    SELECT ts, subscriber_id,
+                           max(down_bytes) AS down_bytes,
+                           max(up_bytes)   AS up_bytes
+                    FROM flow_metrics
+                    WHERE ($3::text = 'auto' OR vantage = $3::text) AND ts >= $1 AND ts < $2
+                    GROUP BY ts, subscriber_id
+                ) f
                 JOIN subscribers s ON s.id = f.subscriber_id
                 LEFT JOIN static_clients c ON c.reference = s.login
-                WHERE f.vantage = $3 AND f.ts >= $1 AND f.ts < $2
-                  AND ($4::text IS NULL OR s.login = $4)
+                WHERE ($4::text IS NULL OR s.login = $4)
                 GROUP BY s.login, c.account_ref, c.package_ref, period_start
                 ORDER BY s.login, period_start
                 """,  # noqa: S608 - 'colonne' vient d'une table blanche fermee

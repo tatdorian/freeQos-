@@ -61,6 +61,13 @@ JOB_NETFLOW_EXPORT = "netflow_export"
 
 PATH_FLOW = "/ip/traffic-flow"
 PATH_TARGET = "/ip/traffic-flow/target"
+PATH_IPFIX = "/ip/traffic-flow/ipfix"
+
+#: Champs d'export qui portent l'adresse et le port APRES traduction. Sans eux,
+#: une sortie internet qui masque ses clients exporte le trafic DESCENDANT vers
+#: son adresse publique : il n'est rattache a personne, et seul le montant est
+#: mesure. RouterOS les range dans /ip/traffic-flow/ipfix (v9 et IPFIX).
+CHAMPS_NAT: tuple[str, ...] = ("nat-src-address", "nat-dst-address", "nat-src-port", "nat-dst-port")
 
 
 #: Commentaire pose sur les cibles traffic-flow ecrites par freeQoS. C'est lui
@@ -206,6 +213,9 @@ class RouterExportState:
     ours: dict[str, Any] | None = None
     #: Cibles de freeQoS qui visent une adresse qui n'est plus la sienne.
     stale: list[dict[str, Any]] = field(default_factory=list)
+    #: Champs NAT que le routeur n'exporte pas (lus a "no"). Vide quand ils y
+    #: sont, ou quand le routeur ne sait pas les regler (lecture refusee).
+    nat_fields_missing: list[str] = field(default_factory=list)
     state: str = ETAT_A_POSER
     reason: str = ""
 
@@ -219,6 +229,7 @@ class RouterExportState:
             "active_timeout": self.active_timeout,
             "inactive_timeout": self.inactive_timeout,
             "targets": self.targets,
+            "nat_fields_missing": self.nat_fields_missing,
             "configured": self.ours is not None and self.enabled,
             "state": self.state,
             "reason": self.reason,
@@ -319,6 +330,25 @@ class NetflowExportService:
 
         return await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
 
+    async def _nat_fields_missing(self, collector: MikrotikCollector) -> list[str]:
+        """Les champs NAT que ce routeur laisse hors de ses enregistrements.
+
+        Lecture FACULTATIVE : un RouterOS trop ancien n'a pas ce menu, et ce
+        n'est pas une raison de ne plus poser l'export. On ne reclame que ce qui
+        est lu explicitement a "no" -- un champ absent n'est pas un champ coupe.
+        """
+        client = collector._client  # noqa: SLF001
+        lire = getattr(client, "traffic_flow_ipfix", None)
+        if lire is None:
+            return []
+        timeout = max(collector.config.timeout_s * 3, 8.0)
+        try:
+            reglage = await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - champ facultatif
+            logger.debug("%s : /ip/traffic-flow/ipfix illisible (%s)", collector.name, exc)
+            return []
+        return [c for c in CHAMPS_NAT if c in reglage and not _vrai(reglage.get(c))]
+
     def is_ours(self, collector: MikrotikCollector, cible: dict[str, Any]) -> bool:
         """Cette cible a-t-elle ete posee par freeQoS ?
 
@@ -398,8 +428,9 @@ class NetflowExportService:
         etat.stale = [c for c in cibles if c is not etat.ours and self.is_ours(collector, c)]
         for ligne, brute in zip(etat.targets, cibles, strict=True):
             ligne["stale"] = any(brute is c for c in etat.stale)
+        etat.nat_fields_missing = await self._nat_fields_missing(collector)
         lent = not _meme_duree(etat.active_timeout, self.active_flow_timeout)
-        if etat.enabled and etat.ours is not None and not lent:
+        if etat.enabled and etat.ours is not None and not lent and not etat.nat_fields_missing:
             etat.state = ETAT_POSE
             etat.reason = f"exports to {etat.collector}:{self.port}"
         else:
@@ -408,6 +439,11 @@ class NetflowExportService:
                 etat.reason = "the export is off on this router"
             elif etat.ours is None:
                 etat.reason = "no target points at this collector"
+            elif not lent:
+                etat.reason = (
+                    "NAT addresses left out of the export: traffic coming back to a "
+                    "masqueraded client cannot be tied to it"
+                )
             else:
                 # LE PIEGE LE PLUS COUTEUX DE TRAFFIC-FLOW. Avec le defaut de
                 # RouterOS, un flux encore actif n'est exporte qu'au bout de
@@ -467,6 +503,21 @@ class NetflowExportService:
                     name=f"{collector.name} : export NetFlow",
                     reason="flow export must be on, and must export without waiting",
                     changes=ecarts,
+                )
+            )
+
+        if etat.nat_fields_missing:
+            plan.actions.append(
+                PlanAction(
+                    verb="set",
+                    path=PATH_IPFIX,
+                    fields=dict.fromkeys(etat.nat_fields_missing, "yes"),
+                    name=f"{collector.name} : champs NAT exportes",
+                    reason=(
+                        "downloads behind NAT reach the public address: only the "
+                        "translated address ties them to the client"
+                    ),
+                    changes=dict.fromkeys(etat.nat_fields_missing, ("no", "yes")),
                 )
             )
 

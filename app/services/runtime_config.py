@@ -346,10 +346,11 @@ REGLAGES: tuple[Reglage, ...] = (
         "netflow_accounting_vantage",
         "trafic",
         "choix",
-        "Where usage is read from: 'edge' (upstream of the core, at the internet "
+        "Where usage is read from: 'auto' (each direction where it is seen best: "
+        "the larger of the two points, never their sum), 'edge' (the internet "
         "egress) or 'pop'. The same byte is exported by both: adding them up "
         "would double every subscriber usage.",
-        choices=("edge", "pop"),
+        choices=("auto", "edge", "pop"),
     ),
     # --- Services atteints (ipfinder) ---
     Reglage(

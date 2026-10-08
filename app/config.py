@@ -313,8 +313,10 @@ class Settings(BaseSettings):
     netflow_flush_interval_s: float = 60.0
     # LE MEME OCTET EST VU DEUX FOIS (au PoP puis a la sortie internet). Les
     # additionner doublerait la consommation de chacun : la lecture ne retient
-    # qu'un point de mesure, et c'est celui-ci.
-    netflow_accounting_vantage: Literal["edge", "pop"] = "edge"
+    # qu'un point de mesure par sens. 'auto' prend, pour chaque sens, le point
+    # qui le voit le mieux (le plus grand, jamais la somme) : une sortie
+    # internet qui masque ses clients ne fait plus perdre le descendant.
+    netflow_accounting_vantage: Literal["auto", "edge", "pop"] = "auto"
     # Espace d'adressage ou vivent les clients. Sert a decider si une adresse non
     # rattachee merite d'etre proposee a la saisie : sans ce filtre, chaque
     # serveur contacte sur internet apparaitrait comme un candidat.

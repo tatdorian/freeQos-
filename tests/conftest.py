@@ -83,6 +83,7 @@ class FakeRouterOsClient:
             "inactive-flow-timeout": "15s",
         }
         self.traffic_flow_target_rows: list[dict[str, Any]] = []
+        self.traffic_flow_ipfix_row: dict[str, Any] = {}
         self.raise_on_traffic_flow: Exception | None = None
         self.queue_type_rows: list[dict[str, Any]] = []
         self.queue_tree_rows: list[dict[str, Any]] = []
@@ -262,6 +263,11 @@ class FakeRouterOsClient:
         if self.raise_on_traffic_flow is not None:
             raise self.raise_on_traffic_flow
         return [dict(row) for row in self.traffic_flow_target_rows]
+
+    def traffic_flow_ipfix(self) -> dict[str, Any]:
+        if self.raise_on_traffic_flow is not None:
+            raise self.raise_on_traffic_flow
+        return dict(self.traffic_flow_ipfix_row)
 
     def queue_trees(self) -> list[dict[str, Any]]:
         if self.raise_on_queues is not None:

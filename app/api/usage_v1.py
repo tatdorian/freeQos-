@@ -67,7 +67,7 @@ def _window(start: datetime | None, end: datetime | None, days: int) -> tuple[da
 def _vantage(container: ContainerDep, demande: str | None) -> str:
     if demande:
         return demande
-    return container.netflow.effective_vantage if container.netflow else "edge"
+    return container.netflow.effective_vantage if container.netflow else "auto"
 
 
 def _render(lignes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -105,7 +105,7 @@ async def usage_all(
     end: Annotated[datetime | None, Query(description="End (ISO 8601, UTC)")] = None,
     days: Annotated[int, Query(ge=1, le=366, description="Window when 'start' is absent")] = 30,
     bucket: Annotated[Bucket, Query(description="Bucketing of the period")] = "total",
-    vantage: Annotated[str | None, Query(description="edge | pop")] = None,
+    vantage: Annotated[str | None, Query(description="auto | edge | pop")] = None,
 ) -> dict[str, Any]:
     debut, fin = _window(start, end, days)
     point = _vantage(container, vantage)

@@ -199,6 +199,8 @@ class RouterOsReadClient(Protocol):
 
     def traffic_flow_targets(self) -> list[dict[str, Any]]: ...
 
+    def traffic_flow_ipfix(self) -> dict[str, Any]: ...
+
     def queue_types(self) -> list[dict[str, Any]]: ...
 
     def queue_trees(self) -> list[dict[str, Any]]: ...
@@ -594,6 +596,14 @@ class LibrouterosReadClient:
     def traffic_flow_targets(self) -> list[dict[str, Any]]:
         """Collecteurs vers lesquels ce routeur exporte deja ses flux."""
         return self._query("/ip/traffic-flow/target")
+
+    def traffic_flow_ipfix(self) -> dict[str, Any]:
+        """Champs que le routeur met dans ses enregistrements (v9 et IPFIX).
+
+        Un reglage global, comme /ip/traffic-flow : une seule ligne.
+        """
+        rows = self._query("/ip/traffic-flow/ipfix")
+        return dict(rows[0]) if rows else {}
 
     def queue_types(self) -> list[dict[str, Any]]:
         return self._query("/queue/type")

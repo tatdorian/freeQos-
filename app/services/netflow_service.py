@@ -97,7 +97,7 @@ class NetflowService:
     bind: str = "0.0.0.0"  # noqa: S104 - un collecteur ecoute sur tous les liens
     port: int = 2055
     enabled: bool = False
-    accounting_vantage: str = "edge"
+    accounting_vantage: str = "auto"
     customer_networks: tuple[str, ...] = ()
     host_limit: int = 500
     track_hosts: bool = True
@@ -579,6 +579,13 @@ class NetflowService:
         repli, un reseau dont aucun routeur n'est declare passerelle affichait
         zero consommation alors que ses PoP exportaient tres bien.
         """
+        if self.accounting_vantage == "auto":
+            # CHAQUE SENS LA OU IL EST LE MIEUX VU. Une sortie internet qui
+            # masque ses clients voit tout le montant mais peut perdre le
+            # descendant ; le PoP voit les deux. La lecture prend, par client et
+            # par fenetre, le plus grand des points pour chaque sens : jamais
+            # leur somme, puisque c'est le meme octet vu deux fois.
+            return "auto"
         actifs = self.active_vantages()
         if not actifs or self.accounting_vantage in actifs:
             return self.accounting_vantage
@@ -620,6 +627,13 @@ class NetflowService:
             "destinations_window": self.aggregator.destinations_in_window,
             "destinations_dropped": self.aggregator.destinations_dropped,
             "destinations_infra": self.aggregator.destinations_infra,
+            "nat_translated": self.aggregator.nat_translated,
+            "nat_matched": self.aggregator.nat_matched,
+            "nat_unmatched": self.aggregator.nat_unmatched,
+            "directions": {
+                point: {"down_bytes": bas, "up_bytes": haut}
+                for point, (bas, haut) in sorted(self.aggregator.direction_bytes.items())
+            },
             "infrastructure_networks": len(self.aggregator.infrastructure_networks),
             "last_error": self.last_error,
         }
