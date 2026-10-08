@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 664" role="img" aria-label="Everything is read continuously; a single path writes to the routers">
+  <defs>
+    <marker id="arch-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-mark" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="arch-write" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-mark-accent" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+  <text class="d-title" x="24" y="34">Everything is read continuously; a single path writes to the routers</text>
+  <rect class="d-zone" x="64" y="176" width="672" height="376" rx="8"/>
+  <text class="d-name" x="80" y="200">freeQoS</text>
+  <g class="d-conn">
+    <path d="M224 136V224" marker-end="url(#arch-arrow)"/>
+    <path d="M344 136V160H520V224" marker-end="url(#arch-arrow)"/>
+    <path d="M640 136V224" marker-end="url(#arch-arrow)"/>
+    <path d="M232 296V344" marker-end="url(#arch-arrow)"/>
+    <path d="M568 296V344" marker-end="url(#arch-arrow)"/>
+    <path d="M232 416V448" marker-end="url(#arch-arrow)"/>
+    <path d="M568 416V448" marker-start="url(#arch-arrow)" marker-end="url(#arch-arrow)"/>
+    <path d="M568 536V584" marker-start="url(#arch-arrow)" marker-end="url(#arch-arrow)"/>
+  </g>
+  <text class="d-line" x="432" y="153" text-anchor="middle">read through the API</text>
+  <text class="d-line" x="232" y="214">NetFlow flows</text>
+  <text class="d-line" x="632" y="214" text-anchor="end">radio capacity</text>
+  <rect class="d-box" x="64" y="64" width="320" height="72" rx="8"/>
+  <text class="d-name" x="80" y="88">MikroTik routers</text>
+  <text class="d-line" x="80" y="104">RouterOS API, port 8728 or 8729</text>
+  <text class="d-line" x="80" y="120">sessions, queues, ping, NetFlow export</text>
+  <rect class="d-box" x="416" y="64" width="320" height="72" rx="8"/>
+  <text class="d-name" x="432" y="88">Ubiquiti antennas</text>
+  <text class="d-line" x="432" y="104">UISP or airOS, read-only</text>
+  <text class="d-line" x="432" y="120">real capacity of the radio links</text>
+  <rect class="d-box" x="80" y="224" width="304" height="72" rx="8"/>
+  <text class="d-name" x="96" y="248">NetFlow collector</text>
+  <text class="d-line" x="96" y="264">UDP 2055, v5, v9 and IPFIX</text>
+  <text class="d-line" x="96" y="280">aggregated per subscriber, written every 60 s</text>
+  <rect class="d-box" x="416" y="224" width="304" height="72" rx="8"/>
+  <text class="d-name" x="432" y="248">Collectors</text>
+  <text class="d-line" x="432" y="264">sessions and rates every 10 s</text>
+  <text class="d-line" x="432" y="280">latency 30 s, topology 15 min</text>
+  <rect class="d-box" x="80" y="344" width="640" height="72" rx="8"/>
+  <text class="d-name" x="96" y="368">TimescaleDB</text>
+  <text class="d-line" x="96" y="384">measurements, inventory, plans, topology, command log</text>
+  <text class="d-line" x="96" y="400">compressed after 7 days, purged after 90 days</text>
+  <rect class="d-accent" x="80" y="448" width="304" height="88" rx="8"/>
+  <text class="d-name" x="96" y="472">Planner</text>
+  <text class="d-line-strong" x="96" y="488">plans and capacities → CAKE queues</text>
+  <text class="d-line-strong" x="96" y="504">every 2 min, only the difference</text>
+  <text class="d-line-strong" x="96" y="520">safeguards: ownership, transit, oscillation</text>
+  <rect class="d-box" x="416" y="448" width="304" height="88" rx="8"/>
+  <text class="d-name" x="432" y="472">Interface and API</text>
+  <text class="d-line" x="432" y="488">/api/v1, /model/v1, /usage/v1</text>
+  <text class="d-line" x="432" y="504">accounts, API keys, live settings</text>
+  <text class="d-line" x="432" y="520">write switch, command log</text>
+  <rect class="d-box" x="416" y="584" width="304" height="56" rx="8"/>
+  <text class="d-name" x="432" y="608">Operators and billing</text>
+  <text class="d-line" x="432" y="624">browser, or API key</text>
+  <path class="d-write" d="M80 492H44V100H64" marker-end="url(#arch-write)"/>
+  <text class="d-line-strong" x="34" y="296" transform="rotate(-90 34 296)" text-anchor="middle">CAKE queues, only when writing is enabled</text>
+</svg>
