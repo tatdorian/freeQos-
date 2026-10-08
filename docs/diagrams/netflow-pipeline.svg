@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 780" role="img" aria-label="A flow goes from the router's cache to a subscriber's account in six steps">
+  <defs>
+    <marker id="nf-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="d-mark" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+  <text class="d-title" x="24" y="34">A flow goes from the router's cache to a subscriber's account in six steps</text>
+  <rect class="d-zone" x="24" y="56" width="712" height="228" rx="8"/>
+  <text class="d-name" x="40" y="78">On the router</text>
+  <rect class="d-zone" x="24" y="316" width="712" height="440" rx="8"/>
+  <text class="d-name" x="40" y="338">Inside freeQoS</text>
+  <g class="d-conn">
+    <path d="M380 164V196" marker-end="url(#nf-arrow)"/>
+    <path d="M380 268V356" marker-end="url(#nf-arrow)"/>
+    <path d="M380 428V460" marker-end="url(#nf-arrow)"/>
+    <path d="M380 532V564" marker-end="url(#nf-arrow)"/>
+    <path d="M380 636V668" marker-end="url(#nf-arrow)"/>
+  </g>
+  <text class="d-line" x="388" y="304">UDP datagrams to port 2055</text>
+  <rect class="d-box d-fill" x="40" y="92" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="116">1. The router keeps a cache of conversations</text>
+  <text class="d-line" x="56" y="132">A flow = same source, same destination, same ports, same protocol.</text>
+  <text class="d-line" x="56" y="148">For each one, it counts bytes and packets, and notes the time of the first and last packet.</text>
+  <rect class="d-box d-fill" x="40" y="196" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="220">2. It exports expired flows</text>
+  <text class="d-line" x="56" y="236">No packet for 15 s, or active for 1 min: the flow leaves in a UDP datagram.</text>
+  <text class="d-line" x="56" y="252">A datagram summarises dozens of flows, in NetFlow v9 format (templates and data).</text>
+  <rect class="d-box d-fill" x="40" y="356" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="380">3. The collector decodes</text>
+  <text class="d-line" x="56" y="396">It remembers v9 / IPFIX templates: without a template, an exporter's data is unreadable.</text>
+  <text class="d-line" x="56" y="412">If the router samples (1 packet in N), volumes are multiplied by N.</text>
+  <rect class="d-accent" x="40" y="460" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="484">4. Each flow is attributed to a subscriber</text>
+  <text class="d-line-strong" x="56" y="500">Look up the most specific subscriber block containing the source or the destination.</text>
+  <text class="d-line-strong" x="56" y="516">Destination at the subscriber: download. Source at the subscriber: upload. Usage family from the port.</text>
+  <rect class="d-box d-fill" x="40" y="564" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="588">5. Aggregation, then a write every 60 s</text>
+  <text class="d-line" x="56" y="604">One row per subscriber, vantage point and window: volumes, packets, usage families.</text>
+  <text class="d-line" x="56" y="620">The remote address of each conversation is kept if it is on the internet.</text>
+  <rect class="d-box d-fill" x="40" y="668" width="680" height="72" rx="8"/>
+  <text class="d-name" x="56" y="692">6. Remote addresses are named</text>
+  <text class="d-line" x="56" y="708">Catalogue, router DNS cache, reverse name, RDAP, geolocation: 40 addresses every 30 s.</text>
+  <text class="d-line" x="56" y="724">The name feeds the Traffic page and the traffic restrictions.</text>
+</svg>

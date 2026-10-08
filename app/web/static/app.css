@@ -189,6 +189,8 @@ nav.tabs a.active svg { stroke: #fff; }
   padding: .6rem .55rem 0; border-top: 1px solid var(--border);
   font-size: .75rem; color: var(--faint);
 }
+.sidebar-foot .docs-link { color: var(--muted); text-decoration: none; }
+.sidebar-foot .docs-link:hover { color: var(--accent); }
 .theme-toggle {
   display: inline-flex; align-items: center; gap: .35rem;
   background: var(--fill); border: 0; color: var(--muted);
@@ -1384,6 +1386,8 @@ select.exp-mode.warn { color: var(--warn); }
 /* Onglet API : renvoi vers le guide complet. */
 .api-doc { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
 .api-doc p { margin: .3rem 0 0; max-width: 70ch; }
+.api-doc + .api-doc { margin-top: .8rem; }
+.api-doc .doc-links { display: inline-flex; gap: .5rem; flex-wrap: wrap; }
 a.button {
   display: inline-block; padding: .55rem 1rem; border-radius: 10px; font-weight: 600;
   text-decoration: none; white-space: nowrap;
