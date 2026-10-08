@@ -116,6 +116,21 @@ CPE n'est reconnu nulle part reste sans secteur : sa file est posée à la racin
 
 ## Déploiement : une seule commande
 
+**Ressources nécessaires** — identiques sur une machine physique ou une VM :
+
+| Réseau | CPU | RAM | Disque SSD |
+| --- | --- | --- | --- |
+| Minimum absolu (essai, < 50 abonnés) | 2 | 2 Go | 30 Go |
+| Petit réseau (≤ 100 abonnés) | 2 | 4 Go | 40 Go |
+| ≤ 500 abonnés | 4 | 8 Go | 80 Go |
+| ≤ 1 000 abonnés | 4 | 8 Go | 150 Go |
+| ≤ 5 000 abonnés | 8 | 16 Go | 600 Go |
+
+2 Go / 2 CPU tournent, sans marge : pour la production, partir de 2 CPU et 4 Go. Un SSD est
+obligatoire (la base écrit en continu). Sur une VM, réserver les vCPU et la RAM : le collecteur
+NetFlow n'utilise qu'un cœur, et un cœur partagé ralenti perd des flux. Détails et mesures :
+documentation intégrée, section 3.
+
 Sur un serveur vierge (Debian, Ubuntu, Rocky…), **tout est automatique** :
 
 ```bash
