@@ -32,6 +32,37 @@ It covers three jobs of an ISP:
 
 A direct consequence of being out-of-band: latency is measured by a ping from the router, which requires the subscriber's box to answer pings (see section 5).
 
+### Two control loops
+
+| | Slow central loop | Fast local loop |
+| --- | --- | --- |
+| Where | freeQoS, on a management server | On the PoP router itself |
+| Period | 10 s and more | Below one second |
+| Role | Collects, keeps the reference data, scores QoE, **sets the rate baselines** (plans, parent queues) | Would react to radio fades and latency **within** those baselines |
+| Status | Implemented | **Out of scope**, deliberately not implemented |
+
+freeQoS is the slow loop. The closed QoE loop of section 7 does not change that: it works at the scale of minutes, over windows of several minutes.
+
+### The three bottlenecks to shape
+
+1. **The last mile of each subscriber**, on the PoP: one CAKE queue per subscriber.
+2. **The radio backhaul or sector**: one parent queue per link, at the radio's real capacity.
+3. **The internet egress**: optional, on the gateway. freeQoS reads it but installs no queue there.
+
+### What an out-of-band controller can and cannot see
+
+| Signal | Inline shaper (LibreQoS, Preseem) | freeQoS (out-of-band) |
+| --- | --- | --- |
+| Throughput per subscriber | Shaper counters | `/interface` of the PPPoE session or the subscriber's queue — **equivalent** |
+| Throughput per site or backhaul | Shaper tree | PoP aggregation and radio capacity — **equivalent** |
+| Throughput against plan | Yes | Yes — **equivalent** |
+| Hierarchical shaping | HTB + CAKE on the shaper | RouterOS simple queues + CAKE, tree built from the topology — **equivalent** |
+| RTT per subscriber | **Passive**, from the timestamps of every TCP flow | **Active** ping from the PoP, in batches |
+| TCP retransmissions | Passive (eBPF) | **Impossible**: it requires seeing the packets |
+| Latency under load (bufferbloat) | Measured continuously on real traffic | **Derived** by correlating the probe's RTT with the throughput of the same sample |
+
+Everything that can be read from counters is at parity. Everything that requires inspecting packets is not, and never will be from a management server: it is the price of being out-of-band, not a gap in the implementation. The interface marks such columns "n/a" rather than showing an empty value that could be read as zero.
+
 ### Key notions
 
 The rest of this documentation relies on these words. Each one is covered in detail in its own section.
@@ -395,9 +426,136 @@ Three rules make the tree reliable:
 2. **The hierarchy comes from the declared role** (gateway, core, PoP), not from a guess based on the hardware model.
 3. **A subscriber's sector comes from a join**: the MAC read in `caller-id` is matched against the stations known to UISP. It is the only way to know which antenna a subscriber goes through, hence its real chain of bottlenecks. Without UISP, only the PoP is known.
 
+MAC addresses are normalised before the join: RouterOS writes `AA:BB:CC:DD:EE:FF`, UISP sometimes `aa-bb-cc-dd-ee-ff`; without normalisation, the join would fail silently. When the sector of a subscriber is unknown, its queue is created **without a parent** rather than under a guessed one: the last mile is shaped correctly, the backhaul contention is not. Attaching a subscriber to the wrong backhaul would be worse than doing nothing.
+
+#### Where the hierarchy comes from
+
+`/ip/neighbor` answers a weak question — *who sees whom* — which is also true of two devices plugged into the same switch. The configuration answers the strong ones, because it is what makes the network:
+
+| Read | What it establishes |
+| --- | --- |
+| `/ip/route` | **Who is above**: the default route says where the router sends what it cannot route |
+| `/routing/ospf/neighbor`, `/routing/bgp/session` | A **proven** adjacency: two routers exchanging routes, not two that merely see each other |
+| `/interface/vlan`, `/interface/bridge/port`, `/interface/bonding` | Through which **physical port** a given traffic leaves, hence which link a client hangs from |
+
+A box gets its parent from, in order of strength:
+
+1. the parent **set by hand** in the tree editor — the operator always has the last word;
+2. the parent **proven by the routing table**;
+3. the **shortest path** in the graph, used only where the configuration says nothing (unmanaged devices, discovered neighbours).
+
+Each box is marked "manual", "route" or "inferred", so you know what is established and what is assumed. A **multi-homed** router (two equal default routes) has no single parent: freeQoS refuses to pick one, says so, and falls back on the shortest path. A ring (two PoPs linked to the core *and* to each other) is where guessing goes wrong — both paths have the same length — and where the routing table settles it.
+
+On a shared segment (a switch, a management VLAN where MNDP shows everyone), a box without a proven parent gets its **most likely** link, drawn **dashed** and marked *uncertain*, never a mesh. The panel offers to confirm it or correct it in one click.
+
+#### One device, one box
+
+The same router can be seen several times: as a managed router *and* as a neighbour of the core, under several management addresses, in IPv4 and IPv6. freeQoS reconciles these views into one box using what cannot change:
+
+- the **serial number** (`/system/routerboard`, or the `system-id` of `/system/license` for a CHR);
+- the **RouterOS identity**;
+- **every interface MAC** — a neighbour only reveals the MAC of the interface facing it.
+
+Three rules prevent wrong merges. **Two declared routers never merge** with each other. A **MAC claimed by several** routers stops identifying them (virtual machines cloned from the same image share interface MACs). The **name merges nothing**: it is unique only by convention. When identity cannot be proven, the operator decides: *Same device as…* folds one box into another, *Split* undoes it. Probable duplicates (same words in a different order, "CCR DS" / "DS-CCR") are flagged with a *Merge* button, never merged automatically. A box that groups several observations lists them.
+
+#### How the loopback is found
+
+When the loopback is not declared, it is looked for in the configuration, in this order:
+
+| Source | What is read |
+| --- | --- |
+| Loopback interface | A host address on `lo`, `lo0`, `loopback*`, `dummy0`, `bridge-loopback`, `lo-bridge`… |
+| `router-id` | `/routing/id`, OSPF and BGP instances (structured API first, then the `/export` text) |
+| Address comment | A /32 on any bridge, commented "loopback" or "router-id" |
+| Isolated /32 | As a last resort, and the tree says so |
+
+Uniqueness is checked, not assumed: the database refuses two routers with the same loopback, and if discovery finds two anyway, the address is left out of the index with a warning.
+
+#### A subscriber's CPE is not one more device
+
+A subscriber's box arrives by two paths: a `/ppp/active` session (the subscriber, with its login and queues) and a `/ip/neighbor` entry at the end of the PoP's port (a discovered device). freeQoS joins them by **equality**, never by resemblance: for PPPoE, the session's `caller-id` equals the MAC announced by the neighbour (rebuilt from an `fe80::` link-local address when that is all the neighbour announces); for a routed VLAN, the client's declared address equals the neighbour's address. The subscriber is then counted once. A router of the inventory is never reclassified as a CPE, even if it opens a PPPoE session itself.
+
+#### The tree follows the inventory
+
+Adding, removing, disabling a router or changing its role **starts a new discovery within the minute**, whatever path changed the inventory (interface, API, file). A removed router leaves the tree; if the device still exists and a neighbour still sees it, it comes back as an **unmanaged** device, which is what it has become. An empty inventory erases nothing: that would be a database read failure, not a deletion. The graph never forgets on its own, so that a device briefly invisible (radio fade, reboot) does not disappear; *Forget vanished devices* removes what you choose.
+
+#### A known router is never silently absent
+
+| Situation | What *Devices* shows |
+| --- | --- |
+| Secret that cannot be decrypted (key changed) | **Skipped** badge, with the reason |
+| Invalid record (unknown role, badly typed loopback) | Same, and the other routers carry on |
+| Unreadable database inventory | A global warning |
+| Hidden by hand | Listed under "removed from the inventory", with **Restore** |
+| Present but not collected, whatever the cause | **Not collected** badge |
+
+The router also keeps its box in the tree, marked "skipped": a skipped PoP is a situation to fix, and it must not look like a PoP that never existed.
+
+#### A VLAN that carries clients is a site
+
+For a radio operator, a VLAN usually carries a village, a relay or a zone; the router is only its head. freeQoS therefore turns **every VLAN carrying at least one declared or seen client** into a site of its own. A management, transit or supervision VLAN carries no subscriber and does not become a site. The name comes from the interface, i.e. from what you wrote on the router:
+
+| Interface | Site |
+| --- | --- |
+| `vlan-francophonie` | Francophonie |
+| `vlan-zone-altair` | Zone Altair |
+| `vlan101`, `ether1.101` | VLAN 101 |
+
+Each site records the **router that serves it**: this is how shaping still finds the subscribers of a VLAN site on their router.
+
 ### Static-IP subscribers
 
 A subscriber without PPPoE (fixed IP, routed block, VLAN) is declared in *Static clients*: a name, one or more addresses or networks, a PoP. It is then measured, limited and scored like a PPPoE subscriber.
+
+A static-IP client announces nothing: no session, no RADIUS plan. **The declaration is the only possible source**, and freeQoS treats it as the truth, like the router inventory. PPPoE and static subscribers live in the same table, distinguished by their `kind`, and follow exactly the same path for plans, overrides, boosts and audit.
+
+| Rule | Why |
+| --- | --- |
+| **The reference must not encode the address** (`town-hall`, not `static:120:10.0.0.5`) | The queue name derives from it; an address change must not destroy and recreate the queue, losing overrides and history |
+| **A subnet stays a subnet** | A client sold a /29 has its whole block capped. A PPPoE session is always a /32 |
+| **Declaring writes the queue immediately** | The reply says *Queue set*, *Queue to set* (simulation), *No queue* (with the reason, usually no plan), *PoP without a router* (with the routers that exist), or *Conflict* |
+| **Only this client's queue is written** | The full plan is computed (parents, CAKE types), then restricted to this queue: declaring one client never rewrites the others |
+| **A declaration never fails because a router is silent** | The record is saved, the report says what could not be written, reconciliation catches up |
+| **The PoP name is matched tolerantly** | Case, accents, punctuation and the word "PoP" are ignored: `PoP Francophonie`, `pop-francophonie` and `francophonie` are the same site. Two really distinct sites that would look alike are never merged: the match is "ambiguous" and nothing is written |
+| **The sector is declared** | No `caller-id` exists; the *Sector* field attaches the client to its link so that it counts in that link's sharing |
+| **Measured only once a queue exists** | Its bytes are read on its queue; until then it shows its plan and state, without a rate |
+
+**Census and candidates.** The census of a PoP (`GET /api/v1/pops/census`, see above) confirms declared clients — an address inside a declared block is "seen active" — and lists the addresses that match nothing. `GET /api/v1/static-clients/candidates` returns those candidates and `GET /api/v1/static-clients/candidates/diagnostic` the reason each ARP line was set aside. A candidate is never turned into a subscriber automatically: a printer, a camera or another operator's device leaves exactly the same trace, and nobody can guess the sold rate. Declaring always goes through `POST /api/v1/static-clients` (or the *Add a client* form) with a reference and a plan.
+
+### Ubiquiti antennas and radio capacity
+
+The capacity of a radio link changes with rain, interference and alignment. freeQoS only knows it by **asking the antenna**, in one of two ways:
+
+- **airOS** (`BACKHAUL_PROVIDER=airos`): each antenna is polled on its local API (`https://<antenna>/status.cgi`), with no UISP needed. Antennas are added in *Devices › Add an antenna*, or **automatically**: when common airOS credentials are given (`AIROS_USERNAME`, `AIROS_PASSWORD`, set by the installer), every Ubiquiti radio discovered as a neighbour, with an address, is added and attached to the PoP of the router that sees it. Nothing is ever removed or changed automatically, and a radio already known (same address, MAC or name) is not duplicated.
+- **UISP** (`BACKHAUL_PROVIDER=uisp`): the UISP controller's API, read-only, which also gives the station → access point attachments used for the sector join.
+
+A declared backhaul is matched to the link that carries it by the **physical identity** of the radio: its UISP device id or its MAC (`uisp_device_id`, compared without case or separators). Without it, the match falls back on equal names, and failing that the parent queue keeps the port's negotiated speed — the ceiling of the ethernet cable, not of the radio. `BACKHAUL_PROVIDER=mock` is a deterministic lab simulator.
+
+**Radio health** (*Devices › Radio health*) flags, per access point and per CPE:
+
+| Signal | Threshold |
+| --- | --- |
+| SNR | below 20 dB |
+| Signal | below −75 dBm |
+| CCQ | below 75% |
+| Airtime | above 70% (saturated) |
+| Capacity | below 70% of nominal: degraded (rain, interference, misalignment) |
+| Freshness | no reading for 5 minutes: silent, capacity unknown |
+
+### Wired or radio: the capacity of each link
+
+The capacity used for a link's parent queue and for load percentages depends on its medium:
+
+- **Wired**: the declared capacity, or the port's negotiated speed.
+- **Radio**: the capacity its antenna announces live (airOS / UISP).
+- **Auto** (default): the lowest known value.
+
+*Saturation risks › wired / radio…* (or `PUT /api/v1/capacity/media`) declares each uplink; `DELETE /api/v1/capacity/media/{router}/{interface}` goes back to automatic. A radio link must name its antenna.
+
+### Empty sites and services waiting for an address
+
+- **Empty sites** are removed every 10 minutes when they have neither subscriber nor backhaul and their name is declared nowhere. A site declared but still empty (router added, no session yet) is kept.
+- **Services pushed without an address** (MAC only, Preseem style) or before their router is known are looked for every 2 minutes in the routers' ARP and DHCP tables; once found, they become full subscribers — placed, shaped, visible.
 
 ## 5. Measurements: throughput, latency, QoE
 
@@ -427,6 +585,14 @@ Three details matter:
 - **Reconnection.** When a PPPoE session restarts, the interface is recreated and its counters start from zero. If the session uptime goes backwards or a counter decreases, freeQoS writes **no** rate for that cycle. A gap in the curve is visible; a fake spike would distort averages and scores.
 
 A static-IP subscriber has no interface of its own: its traffic mixes with that of a VLAN or a port. Its bytes are read from the counters of **its queue** (`/queue/simple`, `bytes` field). Consequence: a static-IP subscriber is only measured once a queue targets it.
+
+#### The throughput of a link
+
+A link's throughput comes from the counters of the **port** that carries it, with the same safeguards as subscribers. **RouterOS counts per interface, not per adjacency**: when a switch sits between the router and several devices, `/ip/neighbor` sees several neighbours on the same port, and giving the counter to each would multiply the total. Measurements are therefore stored per *(router, interface)*; a link inherits its port's throughput, and the interface shows a *shared* badge when several adjacencies share the port. A link declared by UISP, without a local port, has no counter and says so.
+
+**Direction.** `rx` and `tx` stay those of the router: what it sends to the device opposite, and what it receives from it. Depending on whether the neighbour is upstream (gateway) or downstream (sector), the same `tx` is upload or download. The link table shows both directions without guessing; the network tree orients them towards the child (↓ = download).
+
+**Two time scales.** History comes from collection (every 10 s). For "how much is going through *now*", the live measure calls `/interface/monitor-traffic` on the router, a read-only command; if it fails (version, rights, virtual port), the last collected value is returned with the reason.
 
 ### Latency: the probe
 
@@ -489,6 +655,22 @@ A subscriber that has never answered is not a degraded subscriber: its CPE often
 | `router_cannot_ping` | The router gets no reply from its own gateway either | Check the router's output/input firewall |
 
 The response also contains `routing_table`, the `route_candidates` and a control ping to the gateway.
+
+### Latency by segment
+
+*Executive › Where the delay comes from* splits latency into three segments, measured from the **same** router with the **same** method (a series of pings, median kept with min, max, jitter and loss):
+
+| Segment | From → to | What it isolates |
+| --- | --- | --- |
+| `access` | PoP → its subscribers | The last mile: radio, CPE, queues |
+| `gateway` (next hop up) | PoP → its default gateway | The link towards the core |
+| `internet` | PoP → public targets (`LATENCY_INTERNET_TARGETS`, by default `1.1.1.1` and `8.8.8.8`) | The transit and the internet beyond |
+
+If the internet segment is much higher than the next hop, the delay is outside your network. `GET /api/v1/latency` returns the three segments per router; `GET /api/v1/latency/clients` returns the latency each subscriber lives.
+
+### Live check of one subscriber
+
+On a subscriber's panel, *Measure on the router now* reads its PPPoE interface and its queue live for two seconds, adds the NetFlow rate and the last recorded sample, and returns a verdict that says **where** throughput is lost, if it is (`GET /api/v1/subscribers/{id}/live`). It is the quickest way to compare what the interface shows with what the router sees.
 
 ### Bufferbloat
 
@@ -652,6 +834,33 @@ Special cases:
 
 Writing goes through the same path as queues: simulation by default, circuit breaker, audit.
 
+#### Exporters and vantage points
+
+A router whose export was set up by freeQoS is declared as an **exporter** at the same time, with its vantage point deduced from its role (`gateway` → `edge`, otherwise `pop`). An exporter that sends without being declared still appears, marked `unknown`: a badly configured PoP must **show up**, not disappear. *Traffic › Advanced: NetFlow exporters* declares by hand an exporter that is not one of your routers, with its vantage point and its **sampling** rate. Declaring sampling matters: a router sampling 1 in 1,000 reports a thousandth of the real traffic, and nothing else would show it.
+
+#### "No datagram received": the causes
+
+The *Traffic* page names the cause and the action:
+
+| Message | What is missing | Action |
+| --- | --- | --- |
+| *The collector is not listening* | The UDP socket could not open (port in use, rights) | Read the error shown; check `NETFLOW_PORT` |
+| *No router is declared* | Nothing can export | *Devices* › add a router |
+| *N router(s) declared, none exports yet* | The export is not set up yet | It is set up automatically at the next pass (requires writing to be enabled) |
+| *Export configured on N router(s), but no datagram reaches …* | The **network path**, not the configuration | Is UDP 2055 published (`2055:2055/udp` in Docker)? A firewall between the PoP and freeQoS? Is the announced address reachable from the PoP? |
+| *Flows received, none matched to a subscriber* | No subscriber block contains the addresses | Subscribers not collected yet, or clients with public addresses not in `NETFLOW_CUSTOMER_NETWORKS` |
+
+The most misleading one is the path: without the `/udp` suffix, Docker publishes TCP, the router exports, the collector listens, and nothing meets, without an error anywhere. The repository's `docker-compose.yml` publishes `2055/udp`, and a test locks it.
+
+#### Orphan records
+
+`orphan_records` in `GET /api/v1/netflow/status` counts v9/IPFIX data that arrived before its template. A counter that rises then stabilises is normal (after a restart, the templates come back within minutes). A counter that **keeps** rising means the exporter never sends its templates.
+
+#### Which addresses are subscribers, which are infrastructure
+
+- `NETFLOW_CUSTOMER_NETWORKS` (default `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` (CGNAT), `fd00::/8`): where subscribers live. If your subscribers have public addresses, add their blocks, otherwise their conversations are taken for transit.
+- Infrastructure addresses are learnt automatically (the freeQoS server, the declared routers and their addresses, the exporters); `NETFLOW_INFRASTRUCTURE_NETWORKS` adds what the inventory does not know (a transit link, a monitoring network). A client pinging one of your routers is shown as reaching **your network**, not an unidentified internet address.
+
 ### Naming addresses
 
 NetFlow only carries addresses. When a subscriber reaches an address never seen before, it is recorded "to be named". A separate loop then names it, in batches of 40 every 30 s, most recent first. Naming may need a network request, hence a wait: doing it while receiving would block the collector. An address reached ten seconds ago is named on the next pass.
@@ -674,6 +883,25 @@ An address without a reverse name is asked again 3 times at most. A name read fr
 - `IPFINDER_GEOIP_ENABLED=false` and `IPFINDER_RDAP_ENABLED=false` turn these two sources off (changeable live);
 - the catalogue, the DNS cache and reverse names are enough to recognise the large services.
 
+**Each source is isolated**: a resolver that breaks, a registry that rate-limits or a geolocation service that fails never costs the verdict the others gave. **The reverse name beats the block**: an Open Connect cache hosted at your premises is in no published block, yet it carries the most traffic. An address with no reverse name is still marked resolved — "this address has no name" is an answer, and most of the internet is in that case.
+
+### What the Traffic page shows
+
+| Block | Question it answers | Where it comes from |
+| --- | --- | --- |
+| **Who consumes** | Volume per subscriber over the period | The database |
+| **Which services the traffic comes from** | "Who is streaming on this sector?" | The database, over the chosen period |
+| **Where the traffic goes** | A world map (one circle per place, area = volume; scroll to zoom, click for details) and the volume per country, **including the unlocated share** | The database. The map background (Natural Earth 1:110m, public domain) is served by freeQoS: no tile is downloaded |
+| **Who talks to whom, client by client** | One line per conversation *client ↔ destination*: service, port, volume, average rate, and the **live** rate for conversations happening now | The database, plus the collector's in-memory window for the live column |
+| **Destinations reached** | The record of an address: reverse name, service **and on what grounds**, organisation, AS, country, city, and the named list of subscribers reaching it | The database and the catalogue |
+| **Find an IP** | "This address or this domain name: who and where?" — any address, seen on the network or not | An on-demand analysis with the authorised sources only; nothing is written |
+
+**Searching conversations.** Four filters combine — free search (client address, login, remote address, reverse name, organisation, service), PoP, category, usage family — and every value in the table is clickable to filter on it. The lists only offer values that exist in the data shown. The **unidentified** share is shown like the others: a page that only showed what it can name would hide the largest unknown.
+
+**A machine without a subscriber record counts too.** "This address reached that one" is the observation; attaching it to a subscriber is an interpretation, which may be missing (monitoring station, camera, router). Such lines appear under the client address, marked *not declared*.
+
+**Volume over time per subscriber**: `GET /api/v1/netflow/subscribers/{id}/series`. **Live connections** (`GET /api/v1/netflow/connections`) read the collector's in-memory window, the only truly live view: it empties at each write and fills up again — that is not a failure.
+
 ### Traffic restrictions
 
 A restriction targets a catalogue service for one or more subscribers. Two actions:
@@ -681,11 +909,17 @@ A restriction targets a catalogue service for one or more subscribers. Two actio
 | Action | What is installed |
 | --- | --- |
 | `block` | An `address-list` for the service and two `filter action=drop` rules (one per direction) |
-| `limit` | An `address-list`, two `mangle` marks and two capped queues |
+| `limit` | An `address-list`, two `mangle` marks and two `/queue/tree` queues attached to `global`, one per direction |
 
 Every 5 minutes (`RESTRICTIONS_INTERVAL_S`), the address list of each rule is recomputed and only the difference is pushed. A new Netflix address seen by NetFlow therefore joins the list by itself.
 
-No rule is ever created automatically: throttling a service is a business decision. `GET /api/v1/traffic-rules/{id}/preview` shows what a rule targets today. IPv6 is not installed yet.
+No rule is ever created automatically: throttling a service is a business decision. `GET /api/v1/traffic-rules/{id}/preview` shows what a rule targets today. IPv6 is not installed yet: IPv6 prefixes of a rule are set aside and the plan says so.
+
+**What a rule contains.** A name; an effect (`block`, or `limit` with download and upload caps in kbps, Mbps or Gbps); its targets — catalogue **services**, **categories** (`streaming`, `social networks`, `gaming`, `voice / video`, `cdn`, `cloud`, `updates`, `dns`, `messaging`) and hand-entered **prefixes**; optionally a protocol (`tcp`, `udp`, `icmp`) and service ports (`443`, `6881-6999`); and **for whom**: every client, some sites (PoP or VLAN site), or some clients.
+
+**A rule is a criterion, not a snapshot.** Its address set is recomputed at each pass from two sources: the **published blocks** cover servers no client has reached yet, the **discovered addresses** cover what lies outside them (a cache hosted at your premises, a server rented elsewhere). An address already inside a kept block is not added: it would change nothing and lengthen a list the router walks through **for every packet** (`RESTRICTION_ADDRESS_LIMIT`).
+
+**Writing.** Saving an enabled rule, editing it or re-enabling it installs it on the routers **immediately** (still subject to the write switch, the circuit breaker and the audit). **Suspending a rule lifts it** at once; **deleting** it lifts it too. A rule without any criterion (no service, category or prefix) is refused: it would target the whole internet, and on an internet edge would cut the network. The *Last applied* column is what distinguishes a rule **saved** from a rule **installed**. `POST /api/v1/traffic-rules/apply` reinstalls everything (dry run by default).
 
 ## 7. Plans and shaping
 
@@ -780,6 +1014,59 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 - **Boost** (`POST /api/v1/shaping/boosts`): a higher rate for a duration; it is removed when it expires (checked every 30 s).
 - **Dry run** (`POST /api/v1/shaping/plan`): the commands that would be sent, without sending anything.
 
+**Units.** Every rate field has a **kbps / Mbps / Gbps** selector: a subscriber capped at 512 kbps is typed as such, not as `0.512 Mbps`, and displayed as "512 kbps". Internally everything is converted once, at the input, to Mbit/s. The API accepts `max_down_mbps`, `max_down_kbps` or `max_down_gbps` (same for upload, and `down_*` / `up_*` for a boost); two units for the same direction are refused as ambiguous.
+
+**Which rate wins.** From strongest to weakest: a running **boost**, a permanent **override**, the subscriber's **plan**. A boost goes over the override then disappears; it does not erase it.
+
+**Boosts.** A duration (1 minute to 7 days), then either a multiplier of the plan (the interface offers ×2, ×3 and ×5; the API accepts more than 1, up to 50) or explicit rates, and a reason. It is written immediately if writing is allowed and **expires by itself**: a job checks expiries every 30 s and brings the queue back to its normal rate — RouterOS knows nothing about the duration. A boost without an expiry is refused: it would be an override in disguise that never goes away.
+
+**A rate set by hand is written at once.** Setting a subscriber's or a link's rate writes the corresponding queue immediately (the full plan of the router, restricted to that queue), and the reply says what was written, on which router, or what prevented it (`apply_now=false` only records the intention).
+
+### The shaping map
+
+*Settings › Shaping and writing to the routers* shows the **map**, not the commands: where the network is capped, at how much, and where that cap comes from (measured capacity, override, plan, boost, QoE tightening). `GET /api/v1/shaping/points` returns it, read-only.
+
+| State of a point | Meaning |
+| --- | --- |
+| Queue set | The queue is on the router, as planned |
+| To set | It will be written on the next pass (or once writing is enabled) |
+| No queue | The planner skipped it, with its reason: no rate to apply, address claimed twice, link disabled by hand… |
+| Conflict | A third-party queue already targets this address; RouterOS would only apply the first |
+| Manual queue | A queue set by the operator, without `freeqos:managed`: shown because it caps, **never** modified |
+
+Points without a queue are listed like the others: a map that only showed what works would leave the rest to be found nowhere. The raw details stay available under the map: analysis of what exists (`GET /api/v1/shaping/state`), the plan computed on demand, and the command log.
+
+### Where a subscriber queue points, and when it is skipped
+
+The subscriber's address is **read on the router when the plan is computed**, never taken from the database: a stored address may be one cycle late, and if the subscriber reconnected in between, the pool may have given its IP to a neighbour. It is written in canonical form with its prefix (`10.20.0.12/32`): RouterOS always rewrites a bare address that way, and sending it bare would produce a difference at every cycle.
+
+| Situation | What happens |
+| --- | --- |
+| Subscriber **offline** | No queue. Writing on its last known address would cap whoever got it next |
+| Subscriber **reconnected** on another IP | `set target=…` on the existing queue: the queue name does not depend on the address |
+| **Two subscribers** on the same address | Neither queue. One of the two is stale, nobody knows which, and RouterOS would only apply the first |
+
+Each skipped subscriber is listed with its reason. **Automatic writes never delete**: boost expiry and the immediate write of a cap add queues, they never remove any. Without this rule, a momentary `/ppp/active` failure would make everyone look offline and erase the queues of a whole PoP. Only a plan read in the interface (or *Reset queues*) can delete. `SUBSCRIBER_QUEUE_TARGET=interface` restores the old behaviour (queue on the `<pppoe-…>` interface) for a network that depends on it; it is not recommended.
+
+### Are the caps actually held?
+
+Three different questions are often confused: what freeQoS **wants** to install (the plan), what it **wrote** (the log), and what the network **applies**. Only the third is felt by the subscriber, and on RouterOS a queue can exist, carry the right rate, read without error — and cap nothing:
+
+| Cause | What you see | What happens |
+| --- | --- | --- |
+| **FastTrack** | A normal queue whose counter does not move | `action=fasttrack-connection` lets established connections skip the rest of the path, **simple queues included**. Enabled by default in RouterOS's factory firewall |
+| **Hidden queue** | Two queues, each with its rate | RouterOS only applies the **first** queue matching a target; the next ones are decoration |
+| **Disabled queue** | A perfectly readable rate | `disabled=yes` caps nothing |
+| **Rate mismatch** | Interface and router disagree | Cap changed in the database, never pushed |
+
+A background job checks these four causes **on the routers**, queue by queue, every 3 minutes (`GET /api/v1/shaping/limits` reads the result without waiting for the routers). It feeds *Settings › Are the caps actually held?* and the *Limit* column of the subscribers, where a cap the network does not hold shows **NOT HELD** with its cause. freeQoS **does not touch the firewall**: FastTrack is a performance decision that is not its own. It names it and gives the line to paste (`/ip firewall filter disable [find action=fasttrack-connection]`). It does fix what belongs to it: a queue disabled by hand is **re-enabled** by reconciliation, and a queue hidden by another is reported as a conflict.
+
+### The write switch and the account's rights
+
+The switch in *Settings › Shaping and writing to the routers* turns writing on or off **without a restart**; the database keeps its state. Turning it on asks for a confirmation and a reason, recorded in the log; turning it off is immediate. `ENFORCEMENT_LOCKED=true`, or `ENFORCEMENT_ENABLED=false` in the environment, forbids turning it on from the interface.
+
+Writing needs the `write` and `api` policies. freeQoS reads the **real rights** of the account on the router (`/user` and `/user/group`) and gives one of three verdicts: can write, cannot (with the missing policy), or undetermined. When `/user` cannot be read (an account authenticated by RADIUS, for example), freeQoS **does not block**: it tries the command and reports what RouterOS answers, translating `not enough permissions` into the fix to make. A separate write account can be declared per router (`rw_username`); `REQUIRE_SEPARATE_WRITE_ACCOUNT=true` makes it mandatory.
+
 ### Closed QoE loop
 
 Every 5 minutes, freeQoS looks at the QoE of each sector over the last 15 minutes.
@@ -792,7 +1079,51 @@ Every 5 minutes, freeQoS looks at the QoE of each sector over the last 15 minute
 
 A single degraded subscriber points at its last mile (CPE, home Wi-Fi), not at the sector. This is why at least two are needed.
 
-## 8. Interface
+## 8. Capacity and business insights
+
+The measurements answer operating questions ("is it working?"). The same data, read over days, answers capacity and commercial ones: how much was sold behind each link, when links saturate, who is about to leave, who is ready for a bigger plan, and how many more subscribers each site can take.
+
+### Sold against real capacity
+
+For each PoP, freeQoS divides the **sum of the plans sold** by the **measured capacity** of the site (`GET /api/v1/capacity`):
+
+| Oversubscription | Verdict |
+| --- | --- |
+| up to 5:1 | comfortable |
+| 5:1 to 20:1 | to watch |
+| above 20:1 | tight |
+| nothing sold / capacity not measured | said as such, never shown as 0 |
+
+A PoP at 12:1 is not broken: it becomes so the day its subscribers use it at the same time. That is why the **busy-hour peak** actually observed is shown next to the ratio.
+
+### When a link saturates
+
+For each link, the **occupancy** is the busy-hour peak divided by its capacity: below 80% *free*, from 80% *loaded*, from 95% *saturated*. It can exceed 100%: the capacity of a port is its negotiated speed, that of a radio a measurement of the moment, and an occupancy above 100% means the capacity retained is underestimated — exactly what needs to be seen.
+
+A link is flagged **to reinforce** when its **average** occupancy over the period is above 80%, with at least 10 samples. A peak at 100% proves nothing — it is what a well-sized link does on a match night; an average above 80% means the next growth will be paid in latency for everyone.
+
+**Saturation risks** (*Executive*, `GET /api/v1/capacity/hotspots`) apply the gauges' thresholds — from 70% a link is to watch, from 90% it no longer holds one more peak — and split links into two sides: the **internet side** (the gateway's uplink and the PoP-to-core links, where a saturation hits every client) and the **PoP side** (links towards subscribers, VLANs and relays, where it only hits what hangs below). A radio link that only carries 70% of its nominal capacity is flagged as degraded.
+
+### Who is about to leave, who is ready for more
+
+*Insights* (`GET /api/v1/insights/subscribers?days=7`) compares the chosen period (7, 14 or 30 days) with the one before it, so it needs **twice the period** of history; the page says how many days it has.
+
+| List | Rule |
+| --- | --- |
+| **At risk of leaving** | A poor experience (QoE score below 50); **or** usage collapsing (current average below 30% of the previous one, which was above 10 kbps); **or** a line that used to be used and has been silent for 3 days or more |
+| **Ready for a bigger plan** | At 90% of its plan or more during at least 15% of the period, **with a good experience** (score 50 or more, or not measured) |
+
+A subscriber who saturates its plan **and** whose latency rises is not in the second list: that is a network problem first, and selling it a bigger plan would fix nothing. Subscribers spending more than 20% of their samples above 90% of their plan are also listed in the capacity view as living *at their ceiling*.
+
+### How many more subscribers a site can take
+
+For each site and access point (`GET /api/v1/insights/capacity`), freeQoS takes the measured busy-hour peak, divides it by the number of subscribers to get what each one adds at peak, and divides the room left **under 80% of the capacity** by that contribution. This is the site's own measurement, not a theoretical oversubscription ratio. A site where 20% or more of the subscribers already have a poor experience has **no room**, whatever the apparent margin. Without a known capacity or a busy-hour measurement, the answer is "unknown", with the reason.
+
+### Volumes
+
+The capacity view also ranks subscribers by **volume** over the period. The top of instantaneous rates names whoever is downloading right now; the volume over a week names whoever weighs on the network. They are almost never the same subscribers.
+
+## 9. Interface
 
 Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation.
 
@@ -822,7 +1153,17 @@ Two banners can appear at the top of the interface:
 
 When a subscriber has no latency, the cell does not stay silent: it says whether the subscriber has never answered, whether the measurement is too old, or whether the probe has not run yet. *Find the cause* runs the diagnostic described in section 5.
 
-## 9. API
+### Search, units and empty values
+
+- **Search** (top of every page, `GET /api/v1/search`): one field finds a subscriber, an IP, a MAC, a device or a site — type what you have in front of you.
+- **Units**: rate fields accept kbps, Mbps or Gbps, and values are displayed in the most readable unit.
+- **Empty is not zero**: a value that was not measured shows "-" or a reason, never 0. A subscriber that is declared but never measured is listed with gaps, not zeros.
+- **Errors are shown**: a tab that cannot load says which error, rather than staying blank.
+- **No external dependency**: no framework, CDN or downloaded map tile; the interface works on a management server cut off from the internet. After an update, the browser cannot serve the old scripts: their address carries a fingerprint of their content.
+
+Every section and every figure of the interface carries an (i) with its explanation. Appendix A reproduces all of them, page by page.
+
+## 10. API
 
 Everything the interface does goes through the API. The full guide, with `curl` examples and the reference generated by the server, is at `<your-freeqos-url>/api-guide`. This section gives its structure and rules.
 
@@ -856,6 +1197,16 @@ A billing system (Splynx, UISP CRM, Powercode…) knows its customers and what i
 
 `PUT` creates or replaces: billing can replay its whole inventory every night without risk. The identifier in the URL is authoritative; a body carrying another one is refused (`400`).
 
+| Model API detail | Behaviour |
+| --- | --- |
+| Lists | `GET /model/v1/<collection>?page=1&limit=500` returns `{"data": [...], "paginator": {...}}`; without `limit`, everything is returned |
+| Codes | `200` for every success (including `DELETE`), `400` for malformed JSON or a contradictory identifier, `401` for a missing or refused key **and for a key lacking the scope** (as Preseem does), `404` for an absent object, `409` for an identifier owned by a hand-entered record |
+| Responses | The record as Preseem returns it: an unset field (a rate, for example) is **omitted**, never `null`; the CPE MAC is lower case |
+| Enforcement report | For a service, what was written on the router is in the `X-FreeQoS-Enforcement` response header, outside the body |
+| Several prefixes | The first prefix is the queue's target; all of them count in the traffic measurement |
+
+**Usage API parameters** (`GET /usage/v1/services` and `/usage/v1/services/{id}`): `start` and `end` (ISO 8601, UTC), or `days` (default 30, up to 366) when `start` is absent; `bucket` = `total`, `hour`, `day` or `month`; `vantage` = `edge` or `pop` to override the accounting vantage point.
+
 **For a PPPoE subscriber**, the simplest is still `PUT /api/v1/plans/{login}`: the login is enough to find it on its router.
 
 **Consumption** (`/usage/v1`) comes from NetFlow, not from queue counters: those restart from zero at each reconnection and do not exist for a subscriber without a queue. With no router exporting, this API returns zeros and says so in its `source` field.
@@ -878,6 +1229,8 @@ Authorization: Basic base64(<key>:)      # Preseem form
 ```
 
 `GET /model/v1` checks a key in one call: it returns the collections, the key prefix and its scopes.
+
+The secret is drawn once, shown once, and the database only keeps its SHA-256 fingerprint. A lost key is revoked and replaced. A refusal never says *why* (unknown, disabled, expired): distinguishing the cases would give an oracle to whoever tries keys at random; the server log does say it.
 
 ### Conventions
 
@@ -927,7 +1280,7 @@ A few usage rules:
 
 `/openapi.json` describes every route, generated by the installed server: it cannot drift from the code. The `/api-guide` page makes it readable, with search.
 
-## 10. Security
+## 11. Security
 
 freeQoS holds router credentials that can write across the whole network. Security follows a simple principle: **what writes is rare, explicit and logged**.
 
@@ -939,6 +1292,17 @@ freeQoS holds router credentials that can write across the whole network. Securi
 - **Anti-guessing:** 5 failures in 5 minutes lock the email **and** the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.
 - **Session:** an `HttpOnly`, `SameSite=Strict` cookie, valid 24 h, 30 days at most (`SESSION_TTL_HOURS`, `SESSION_MAX_HOURS`). Writes also check `Origin` and `Sec-Fetch-Site`.
 - **Log:** every login (successful, refused, locked), logout and account change is recorded with the address and browser. At login, everyone sees the date and origin of their previous login.
+- **Last editor:** at least one active account with edit rights always remains; the last one can be neither deleted, downgraded nor disabled.
+- **Sessions:** at most 10 open sessions per account; everyone sees their own sessions (browser, address, last activity) and can close them remotely. Changing a password or a role closes the other sessions.
+- **Journal retention:** login events are kept 180 days (*Settings › Accounts › Login journal*) and are also written to the container log (`auth login_failed …`), usable by fail2ban.
+
+**Behind an HTTPS reverse proxy**, set `FORWARDED_ALLOW_IPS=<proxy address>` so that the application trusts the proxy's `X-Forwarded-Proto`: the session cookie is then sent `Secure`, HSTS is set, and the address recorded for each login is the client's, not the proxy's.
+
+**Locked out of every edit account?** Emptying the accounts table reopens the first-account screen; measurements and inventory are untouched:
+
+```
+sudo docker compose exec timescaledb psql -U qos -d qos -c "TRUNCATE app_users CASCADE"
+```
 
 ### HTTP headers
 
@@ -978,7 +1342,7 @@ freeQoS holds router credentials that can write across the whole network. Securi
 
 It is recommended to put the interface behind HTTPS and to restrict 2055/UDP to the routers' addresses.
 
-## 11. Operations
+## 12. Operations
 
 ### Monitoring freeQoS
 
@@ -1011,10 +1375,16 @@ Each cycle can be run immediately with `POST /api/v1/jobs/{name}/run`.
 | `traffic_restrictions` | 5 min | Address lists of restrictions |
 | `netflow_export` | 10 min | NetFlow export on the routers |
 | `discover_topology` | 15 min | Network tree |
+| `verify_caps` | 3 min | Are the caps actually held (section 7) |
+| `dns_names` | 2 min | Reading the routers' DNS cache |
+| `place_unplaced_services` | 2 min | Placing services pushed without an address |
+| `purge_empty_pops` | 10 min | Removing empty sites |
+
+The scheduler runs each cycle once immediately at startup, then at its period. A cycle never overlaps itself: it runs, then sleeps for the rest of its period; an overrun is counted, not stacked.
 
 ### Live settings
 
-Most operating settings can be changed in *Settings* without a restart (`PUT /api/v1/settings/{name}`). They are stored in the database with their history (`GET /api/v1/settings/history`: who, what, when). `DELETE /api/v1/settings/{name}` goes back to the value from `.env`.
+Most operating settings can be changed in *Settings* without a restart (`PUT /api/v1/settings/{name}`): shaping and CAKE options apply at the next plan, cadences at the next turn of the scheduler. They are stored in the database with their history (`GET /api/v1/settings/history`: who, what, when, why). **The database wins**: the environment only seeds a value on the very first start, so once a setting has been changed in the interface, editing `.env` no longer affects it. `GET /api/v1/settings` shows each setting's value, default and origin; `DELETE /api/v1/settings/{name}` brings it back to its default.
 
 Deliberately out of the interface's reach: database access, secrets, and `ENFORCEMENT_ENABLED=false` when it is set in the environment.
 
@@ -1041,6 +1411,14 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 
 ### Common actions
 
+| Command | Effect |
+| --- | --- |
+| `make update` | Fetches the code and restarts the application; no data lost |
+| `make backup` / `make restore DIR=…` | Backup and restore (see above) |
+| `make logs` | Follows the application log |
+| `make reset-db` | **Erases** the database (measurements, routers, antennas, topology, settings, static clients) after confirmation, and regenerates the encryption key: routers must be declared again |
+
+
 | Situation | Action |
 | --- | --- |
 | Start again from scratch on a router (inconsistent queues, old version) | *Reset queues* in *Settings*: removes all queues of **this** instance, unfreezes lines, then reconciliation reinstalls the desired state |
@@ -1054,7 +1432,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 
 Two installations must not drive the same routers. If it happens, each only touches its own objects (`instance=<id>` comment), but they fight over subscribers. The *Other instance* banner reports it. For an update or a migration, stop the old one **before** starting the new one.
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 All these cases come from the lab or the first deployment. For each: the symptom, the check that settles it, then the action.
 
@@ -1123,7 +1501,7 @@ Scores are computed over a sliding 15-minute window. After a measurement fix, ol
 | `api` policy missing | Group of the RouterOS account |
 | Certificate refused | `api-ssl` certificate, or `tls_verify=fingerprint` |
 
-## 13. Settings reference
+## 14. Settings reference
 
 All settings are read from the environment or from `.env`. The variable name is the one in the table, in capitals. Those marked ✱ can also be changed live in *Settings*.
 
@@ -1223,3 +1601,93 @@ All settings are read from the environment or from `.env`. The variable name is 
 | `IPFINDER_INTERVAL_S` / `IPFINDER_BATCH_SIZE` ✱ | 30 / 40 | Naming pace (only the batch size is live) |
 | `RESTRICTIONS_INTERVAL_S` | 300 | Restriction updates |
 | `RESTRICTION_ADDRESS_LIMIT` ✱ | 5,000 | Maximum addresses per list |
+
+## 15. Data model
+
+### Reference data
+
+| Table | Content |
+| --- | --- |
+| `pops` | Sites: PoPs and VLAN sites, with the router serving each |
+| `subscribers` | Every subscriber, PPPoE or static (`kind`), unique `login`, plan, PoP, last address, last seen |
+| `static_clients` | Declared static-IP clients and services pushed through `/model/v1` (`source`) |
+| `client_plans` | The plan written for each client, and its source (`api`, `ui`) |
+| `routers`, `hidden_file_routers` | Routers added from the interface (encrypted password, unique loopback, last connection diagnostic); routers of the file hidden by hand |
+| `backhauls`, `airos_antennas` | Radio links and the antennas polled for their capacity |
+| `link_media` | Links declared wired (with a capacity) or radio (with their antenna) |
+| `topology_nodes`, `topology_links`, `topology_aliases`, `topology_layout` | Discovered graph, manual merges, box positions and hand-made choices |
+| `subscriber_attachments` | Subscriber → radio sector |
+| `vlan_sightings` | Presence observed by the PoP census |
+| `shaping_policies`, `qoe_link_states` | Rates set by hand and boosts; tightening decided by the QoE loop (kept apart so that one never overwrites the other) |
+| `enforcement_audit` | Every command sent, with its author and result |
+| `runtime_flags`, `runtime_settings` | Live switches (write, probe) and settings changed from the interface, with their history |
+| `traffic_rules` | Restrictions as entered: a criterion, never a frozen address list |
+| `app_users`, `app_sessions`, `auth_events`, `api_keys` | Accounts, sessions, login journal, API keys (fingerprints only) |
+| `model_accounts`, `model_packages`, `model_sites`, `model_access_points`, `model_services_unplaced` | The Preseem-compatible commercial model |
+| `netflow_exporters` | Exporters and their vantage point and sampling |
+| `collector_runs` | History of cycle runs |
+
+### Time series (hypertables)
+
+| Table | Content |
+| --- | --- |
+| `subscriber_metrics` | Per subscriber, every 10 s: rates, byte counters, RTT, session uptime |
+| `interface_metrics` | Per router port: rates, counters, state, negotiated speed — the source of link throughput |
+| `backhaul_metrics` | Per radio: capacity (total, down, up), signal, airtime, MCS, online |
+| `qoe_scores` | Reserved for stored scores (scores are currently computed when read) |
+| `flow_metrics`, `flow_app_metrics` | NetFlow volume per subscriber and per usage family, **with the vantage point in the key** |
+
+### What subscribers reach
+
+| Table | Content | Lifetime |
+| --- | --- | --- |
+| `flow_destinations`, `flow_destination_buckets` | The pair (subscriber address, remote address): volumes, last port and protocol, first and last seen. The subscriber may be unknown | Measurement: purged after 7 days without traffic |
+| `flow_hosts` | Addresses seen in flows and attached to no record (only if `NETFLOW_TRACK_HOSTS=true`) | 24 h |
+| `ip_intel` | What is known about an address: reverse name, service, family, organisation, AS, country, and on what grounds | Knowledge: kept |
+
+A row is created in `ip_intel` with no resolution date **as soon as a subscriber reaches the address**: that is the naming queue, and what makes discovery dynamic. Three views give the last point of each series: `subscriber_latest`, `interface_latest`, `backhaul_latest`. Aggregations use `date_bin` rather than `time_bucket`: the same queries work on plain PostgreSQL.
+
+## 16. Known limitations and FAQ
+
+### Limitations, by design
+
+- **No code in the packet path.** Consequence: no TCP retransmissions, and latency comes from an active probe that requires the subscriber's box to answer ping.
+- **Radios are never driven.** Their capacity is read; writing only concerns RouterOS queues, address lists, firewall restrictions and the NetFlow export.
+- **No RADIUS writes** (no CoA): plans can be read from FreeRADIUS, never written back.
+- **No fast local loop** on the PoP: freeQoS sets baselines, it does not react below the second.
+- **Restrictions are IPv4 only**: IPv6 prefixes are set aside and the plan says so.
+- **A static-IP client is only measured once a queue targets it.**
+- **The NetFlow collector uses a single core**: beyond about 5,000 flows per second, datagrams are lost (section 3).
+- **The two NetFlow tables are not compressed**: they are the largest disk item (section 3).
+- **RDAP and web geolocation are on by default** and send the addresses your subscribers visit to third parties (section 6).
+
+### FAQ
+
+**Does freeQoS cut subscribers if it stops?** No. The queues stay on the routers and traffic flows; only measurement, timed boosts and adjustments pause. A boost that should have expired keeps running until freeQoS comes back.
+
+**Can I try it without touching my routers?** Yes: it starts in simulation. Give the account only `read,api,test` to make writing impossible, or keep the switch off and read the plan.
+
+**Will it touch the queues I created myself?** Never. Only objects carrying `freeqos:managed instance=<this instance>` are modified or deleted; your queues are shown on the map as manual queues.
+
+**Why does a subscriber show no latency?** Most often its CPE does not answer ping (`client_blocks_icmp`). *Find the cause* says which of the eight causes applies (section 5).
+
+**Why is a subscriber not capped?** Is writing on? Does it have a plan? Is it online? Then look at *Are the caps actually held?*: FastTrack is the first cause of a cap that does not cap (section 7).
+
+**Why is the Traffic page empty?** The page names the cause: no router, export not set up yet, writing off, or a network path problem — most often UDP 2055 not published or filtered (section 6).
+
+**Can two freeQoS run on the same routers?** They will not overwrite each other's objects, but they will fight over subscribers. Run one per network; stop the old one before starting a new one.
+
+**How do I move freeQoS to another server?** `make backup`, copy the backup **and the instance identifier** to the new server, `make restore`, set the same `FREEQOS_INSTANCE_ID` or copy `data/instance.id` into the volume, then update the routers' NetFlow target if the address changes (freeQoS does it by itself at the next export pass).
+
+**Where are the logs?** `make logs` (or `sudo docker compose logs -f app`). Every command written to a router is also in *Settings › Log of commands sent*.
+
+## Appendix A. Interface reference
+
+The explanations below are exactly those the interface shows behind each (i), extracted from the application at build time: they cannot differ from what operators read on screen.
+
+<!-- generated: interface-reference -->
+
+## Appendix B. API endpoint index
+
+<!-- generated: api-endpoints -->
+
