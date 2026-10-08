@@ -639,10 +639,12 @@ class Settings(BaseSettings):
     qoe_recovery_cycles: int = 3
 
     # --- Garde-fous ---
-    # Ecriture sur les routeurs ACTIVE par defaut : files, restrictions, export
-    # NetFlow se posent tout seuls. Seules les lignes marquees freeqos:managed
-    # sont touchees. ENFORCEMENT_ENABLED=false pour un controleur en lecture seule.
-    enforcement_enabled: bool = True
+    # SIMULATION PAR DEFAUT : au premier demarrage, rien n'est ecrit sur les
+    # routeurs ; les plans sont calcules et affiches. L'ecriture s'active dans
+    # l'interface (Settings > Shaping and writing), apres affichage du plan.
+    # ENFORCEMENT_ENABLED=false pose dans l'environnement FORCE l'arret, quelle
+    # que soit la valeur enregistree en base. =true n'est qu'une valeur initiale.
+    enforcement_enabled: bool = False
     max_plausible_bps: float = 100_000_000_000.0
     # En dessous de ce delta on ne calcule pas de debit (bruit de division).
     min_rate_interval_s: float = 1.0

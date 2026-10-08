@@ -8805,14 +8805,45 @@ async function refreshEnforcement() {
   state.enforcementReason = (etat.last_change && etat.last_change.reason) || null;
 }
 
+/** Le plan de CHAQUE routeur, en texte : ce que l'activation va ecrire. */
+async function resumePlans() {
+  const routeurs = [...document.querySelectorAll('#shaping-router option')]
+    .map((o) => o.value).filter(Boolean);
+  const lignes = [];
+  let total = 0;
+  for (const r of routeurs) {
+    try {
+      const p = await api('/shaping/plan', { method: 'POST', body: JSON.stringify({ router: r }) });
+      const actions = p.actions || [];
+      total += actions.length;
+      const c = p.counts || {};
+      lignes.push(r + ': ' + (c.add || 0) + ' add, ' + (c.set || 0) + ' set, ' + (c.remove || 0) +
+        ' remove' + ((p.conflicts || []).length ? ', ' + p.conflicts.length + ' conflict(s) left alone' : ''));
+      actions.slice(0, 4).forEach((a) => lignes.push('   ' + (a.command || a.summary || '')));
+      if (actions.length > 4) lignes.push('   … and ' + (actions.length - 4) + ' more');
+    } catch (err) {
+      lignes.push(r + ': plan unavailable (' + err.message + ')');
+    }
+  }
+  return { texte: lignes.join('\n'), total };
+}
+
 async function toggleEnforcement(active) {
   const toggle = document.getElementById('enforcement-toggle');
-  if (active && !confirm(
-      'Allow writing to the routers?\n\n' +
-      'From now on, applying a plan will really change their ' +
-      'configuration. Only queues marked freeqos:managed are touched.')) {
-    toggle.checked = false;
-    return;
+  if (active) {
+    // LE PLAN D'ABORD : l'exploitant voit ce qui va etre ecrit, routeur par
+    // routeur, avant d'autoriser quoi que ce soit.
+    toggle.disabled = true;
+    const plans = await resumePlans().catch(() => ({ texte: '(plan unavailable)', total: 0 }));
+    toggle.disabled = false;
+    if (!confirm(
+        'Allow writing to the routers?\n\n' +
+        'This is what will be written now (' + plans.total + ' command(s)):\n\n' +
+        plans.texte + '\n\n' +
+        'Only lines marked freeqos:managed by THIS instance are ever changed or removed.')) {
+      toggle.checked = false;
+      return;
+    }
   }
   const motif = active
     ? (prompt('Reason (recorded in the log, optional):') || null)

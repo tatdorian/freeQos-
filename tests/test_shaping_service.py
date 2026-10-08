@@ -525,20 +525,44 @@ async def test_la_base_fait_foi_apres_amorcage(
     assert service.enforcement_enabled is True
 
 
-async def test_l_ecriture_revient_toujours_au_demarrage(
-    settings: Settings, routeur: FakeRouterOsClient
+async def test_l_environnement_false_interdit_de_rallumer(
+    settings: Settings, routeur: FakeRouterOsClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """DEMANDE EXPLICITE : enforcement toujours actif par defaut. Une coupure
-    depuis l'interface, meme humaine, ne dure que jusqu'au redemarrage."""
-    settings.enforcement_enabled = True
+    """ENFORCEMENT_ENABLED=false dans l'environnement : arret force, et
+    l'interface ne peut pas rallumer l'ecriture."""
+    from app.services.shaping import EnforcementLockedError
+
+    monkeypatch.setenv("ENFORCEMENT_ENABLED", "false")
     depot = DepotBoosts()
-    depot.flags["enforcement_enabled"] = False
+    depot.flags["enforcement_enabled"] = True
     service = make_service(settings, routeur, repository=depot)
 
     await service.load_flags()
 
-    assert service.enforcement_enabled is True
-    assert depot.flags["enforcement_enabled"] is True
+    assert service.enforcement_enabled is False
+    assert depot.flags["enforcement_enabled"] is False
+    with pytest.raises(EnforcementLockedError, match="ENFORCEMENT_ENABLED=false"):
+        await service.set_enforcement(True)
+
+
+async def test_en_simulation_une_integration_n_ecrit_pas(
+    settings: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """Simulation : une cle d'API ou l'API model n'ecrit rien sur le routeur,
+    meme pour un geste « explicite » (pousser un forfait)."""
+    from app.enforcement.models import Plan, PlanAction
+    from app.services.shaping import EnforcementDisabledError
+
+    settings.enforcement_enabled = False
+    service = make_service(settings, routeur)
+    await service.registry.reload()
+    plan = Plan(
+        router_name="pop-test",
+        actions=[PlanAction(verb="add", path="/queue/simple", fields={"name": "x"}, name="x")],
+    )
+    for auteur in ("api:model", "ui:api:facturation", "system:reconcile"):
+        with pytest.raises(EnforcementDisabledError):
+            await service.apply(plan, dry_run=False, author=auteur, explicit=True)
 
 
 async def test_bascule_refusee_si_verrouille(

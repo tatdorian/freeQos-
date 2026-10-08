@@ -40,25 +40,24 @@ async def _charger(settings: Settings, depot: DrapeauxMemoire) -> bool:
     return service.enforcement_enabled
 
 
-async def test_une_lecture_seule_posee_au_demarrage_passe_au_nouveau_defaut() -> None:
-    """Une installation amorcee quand le defaut etait la lecture seule garde
-    'false' en base, sans que personne l'ait choisi : le nouveau defaut s'applique."""
-    depot = DrapeauxMemoire(False, "bootstrap")
-    assert await _charger(Settings(_env_file=None), depot) is True
-    assert depot.valeur is True
-
-
-async def test_une_coupure_depuis_l_interface_ne_survit_pas_au_redemarrage() -> None:
-    """DEMANDE EXPLICITE : enforcement toujours actif par defaut. L'interrupteur
-    reste un arret d'urgence, jusqu'au prochain demarrage."""
+async def test_le_choix_de_l_interface_survit_au_redemarrage() -> None:
+    """L'ecriture coupee (ou activee) depuis l'interface reste ce que
+    l'exploitant a choisi : plus de reactivation forcee au demarrage."""
     depot = DrapeauxMemoire(False, "ui:admin")
+    assert await _charger(Settings(_env_file=None, enforcement_enabled=True), depot) is False
+    depot = DrapeauxMemoire(True, "ui:admin")
     assert await _charger(Settings(_env_file=None), depot) is True
-    assert depot.valeur is True
 
 
-async def test_la_lecture_seule_durable_passe_par_l_environnement() -> None:
-    depot = DrapeauxMemoire(False, "ui:admin")
-    assert await _charger(Settings(_env_file=None, enforcement_enabled=False), depot) is False
+async def test_enforcement_false_dans_l_environnement_force_l_arret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CONSTATE : ENFORCEMENT_ENABLED=false pose apres coup ne servait a rien,
+    la valeur en base l'emportait. Desormais elle force l'arret."""
+    monkeypatch.setenv("ENFORCEMENT_ENABLED", "false")
+    depot = DrapeauxMemoire(True, "ui:admin")
+    assert await _charger(Settings(_env_file=None), depot) is False
+    assert depot.valeur is False
 
 
 def test_choix_du_fournisseur_de_plans(settings: Settings) -> None:
