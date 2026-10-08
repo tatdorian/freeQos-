@@ -538,8 +538,9 @@
       <p class="hint" style="display:block">The plan belongs to each <b>client</b>. A site (PoP)
         is only a connection point: it has a capacity, not a plan. A client's plan is pushed by
         your billing through the API (<code>PUT /model/v1/services</code>, as often as
-        needed), or set here. The last one written wins. A client with
-        no plan, including a new one just detected, gets the default plan.</p>
+        needed), or set here. The last one written wins. A client pushed without a
+        rate gets the default plan; a client only detected on a router is observed, not
+        capped, unless Settings applies the default plan to detected clients too.</p>
       <div class="grid stats" id="plans-stats"></div>
 
       <h2>Default plan</h2>

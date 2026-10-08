@@ -30,12 +30,17 @@ CHAPITRES = (
     "5. Measurements: throughput, latency, QoE",
     "6. NetFlow traffic",
     "7. Plans and shaping",
-    "8. Interface",
-    "9. API",
-    "10. Security",
-    "11. Operations",
-    "12. Troubleshooting",
-    "13. Settings reference",
+    "8. Capacity and business insights",
+    "9. Interface",
+    "10. API",
+    "11. Security",
+    "12. Operations",
+    "13. Troubleshooting",
+    "14. Settings reference",
+    "15. Data model",
+    "16. Known limitations and FAQ",
+    "Appendix A. Interface reference",
+    "Appendix B. API endpoint index",
 )
 
 
@@ -86,7 +91,7 @@ def _motif(chemin: str) -> re.Pattern[str]:
 def test_chaque_route_citee_existe(client: TestClient) -> None:
     page = client.get("/documentation").text
     cites = {
-        c.rstrip(".,:;)`") for c in re.findall(r"/(?:api|model|usage)/v1[A-Za-z0-9_\-./{}]*", page)
+        c.rstrip(".,:;)`/") for c in re.findall(r"/(?:api|model|usage)/v1[A-Za-z0-9_\-./{}]*", page)
     }
     cites -= {"/api/v1", "/model/v1", "/usage/v1"}
     assert len(cites) > 20
@@ -119,3 +124,41 @@ def test_l_interface_renvoie_a_la_documentation(client: TestClient) -> None:
     assert 'href="/documentation"' in accueil
     assert 'href="/documentation.pdf"' in accueil
     assert 'href="/documentation"' in client.get("/api-guide").text
+
+
+def test_le_guide_de_l_interface_reprend_les_aides_de_l_ecran() -> None:
+    """docs/ui-help.json est exactement le dictionnaire d'aide d'app.js.
+
+    Si ce test echoue : ``python scripts/build_docs.py --ui-help --pdf``.
+    """
+    import json
+    import shutil
+
+    if shutil.which("node") is None:
+        pytest.skip("Node.js absent : extraction impossible")
+    pytest.importorskip("markdown")
+    sys.path.insert(0, str(RACINE / "scripts"))
+    try:
+        import build_docs
+    finally:
+        sys.path.pop(0)
+    sur_disque = json.loads((RACINE / "docs" / "ui-help.json").read_text(encoding="utf-8"))
+    assert sur_disque == build_docs.extraire_aide()
+
+
+def test_chaque_aide_de_l_ecran_est_dans_la_documentation(client: TestClient) -> None:
+    """Aucune explication de l'interface ne manque au guide (annexe A)."""
+    import json
+
+    aide = json.loads((RACINE / "docs" / "ui-help.json").read_text(encoding="utf-8"))
+    page = client.get("/documentation").text
+    absentes = [
+        cle
+        for cle, e in aide.items()
+        if (e if isinstance(e, str) else e.get("t", ""))[:40]
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        not in page
+    ]
+    assert not absentes, absentes

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="352ba5b54218ad02">
+  <meta name="freeqos-docs-source" content="14c57bf5fa66ee13">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -19,6 +19,9 @@
     <a href="#1-overview">1. Overview</a>
     <a class="sub" href="#design-principles">Design principles</a>
     <a class="sub" href="#compared-with-preseem-and-libreqos">Compared with Preseem and LibreQoS</a>
+    <a class="sub" href="#two-control-loops">Two control loops</a>
+    <a class="sub" href="#the-three-bottlenecks-to-shape">The three bottlenecks to shape</a>
+    <a class="sub" href="#what-an-out-of-band-controller-can-and-cannot-see">What an out-of-band controller can and cannot see</a>
     <a class="sub" href="#key-notions">Key notions</a>
     <a href="#2-architecture">2. Architecture</a>
     <a class="sub" href="#components">Components</a>
@@ -41,10 +44,15 @@
     <a class="sub" href="#who-is-a-subscriber-on-this-pop">Who is a subscriber on this PoP?</a>
     <a class="sub" href="#topology">Topology</a>
     <a class="sub" href="#static-ip-subscribers">Static-IP subscribers</a>
+    <a class="sub" href="#ubiquiti-antennas-and-radio-capacity">Ubiquiti antennas and radio capacity</a>
+    <a class="sub" href="#wired-or-radio-the-capacity-of-each-link">Wired or radio: the capacity of each link</a>
+    <a class="sub" href="#empty-sites-and-services-waiting-for-an-address">Empty sites and services waiting for an address</a>
     <a href="#5-measurements-throughput-latency-qoe">5. Measurements: throughput, latency, QoE</a>
     <a class="sub" href="#throughput">Throughput</a>
     <a class="sub" href="#latency-the-probe">Latency: the probe</a>
     <a class="sub" href="#when-latency-stays-empty">When latency stays empty</a>
+    <a class="sub" href="#latency-by-segment">Latency by segment</a>
+    <a class="sub" href="#live-check-of-one-subscriber">Live check of one subscriber</a>
     <a class="sub" href="#bufferbloat">Bufferbloat</a>
     <a class="sub" href="#qoe-score-0-to-100">QoE score (0 to 100)</a>
     <a class="sub" href="#at-plan-limit">"At plan limit"</a>
@@ -53,6 +61,7 @@
     <a class="sub" href="#collector">Collector</a>
     <a class="sub" href="#export-set-up-automatically">Export set up automatically</a>
     <a class="sub" href="#naming-addresses">Naming addresses</a>
+    <a class="sub" href="#what-the-traffic-page-shows">What the Traffic page shows</a>
     <a class="sub" href="#traffic-restrictions">Traffic restrictions</a>
     <a href="#7-plans-and-shaping">7. Plans and shaping</a>
     <a class="sub" href="#how-shaping-works">How shaping works</a>
@@ -63,11 +72,22 @@
     <a class="sub" href="#reconciliation">Reconciliation</a>
     <a class="sub" href="#safeguards">Safeguards</a>
     <a class="sub" href="#manual-adjustments">Manual adjustments</a>
+    <a class="sub" href="#the-shaping-map">The shaping map</a>
+    <a class="sub" href="#where-a-subscriber-queue-points-and-when-it-is-skipped">Where a subscriber queue points, and when it is skipped</a>
+    <a class="sub" href="#are-the-caps-actually-held">Are the caps actually held?</a>
+    <a class="sub" href="#the-write-switch-and-the-accounts-rights">The write switch and the account's rights</a>
     <a class="sub" href="#closed-qoe-loop">Closed QoE loop</a>
-    <a href="#8-interface">8. Interface</a>
+    <a href="#8-capacity-and-business-insights">8. Capacity and business insights</a>
+    <a class="sub" href="#sold-against-real-capacity">Sold against real capacity</a>
+    <a class="sub" href="#when-a-link-saturates">When a link saturates</a>
+    <a class="sub" href="#who-is-about-to-leave-who-is-ready-for-more">Who is about to leave, who is ready for more</a>
+    <a class="sub" href="#how-many-more-subscribers-a-site-can-take">How many more subscribers a site can take</a>
+    <a class="sub" href="#volumes">Volumes</a>
+    <a href="#9-interface">9. Interface</a>
     <a class="sub" href="#read-the-settings-page-before-enabling-writes">Read the Settings page before enabling writes</a>
     <a class="sub" href="#empty-latency">Empty latency</a>
-    <a href="#9-api">9. API</a>
+    <a class="sub" href="#search-units-and-empty-values">Search, units and empty values</a>
+    <a href="#10-api">10. API</a>
     <a class="sub" href="#three-apis-one-server-the-same-keys">Three APIs, one server, the same keys</a>
     <a class="sub" href="#how-the-commercial-model-reaches-the-network">How the commercial model reaches the network</a>
     <a class="sub" href="#authentication">Authentication</a>
@@ -75,14 +95,14 @@
     <a class="sub" href="#the-enforcement-report">The enforcement report</a>
     <a class="sub" href="#the-calls-that-matter">The calls that matter</a>
     <a class="sub" href="#reference">Reference</a>
-    <a href="#10-security">10. Security</a>
+    <a href="#11-security">11. Security</a>
     <a class="sub" href="#interface-accounts">Interface accounts</a>
     <a class="sub" href="#http-headers">HTTP headers</a>
     <a class="sub" href="#api-keys">API keys</a>
     <a class="sub" href="#router-credentials">Router credentials</a>
     <a class="sub" href="#writing-to-the-network">Writing to the network</a>
     <a class="sub" href="#network-exposure">Network exposure</a>
-    <a href="#11-operations">11. Operations</a>
+    <a href="#12-operations">12. Operations</a>
     <a class="sub" href="#monitoring-freeqos">Monitoring freeQoS</a>
     <a class="sub" href="#the-cycles">The cycles</a>
     <a class="sub" href="#live-settings">Live settings</a>
@@ -90,7 +110,7 @@
     <a class="sub" href="#backup-and-restore">Backup and restore</a>
     <a class="sub" href="#common-actions">Common actions</a>
     <a class="sub" href="#several-instances">Several instances</a>
-    <a href="#12-troubleshooting">12. Troubleshooting</a>
+    <a href="#13-troubleshooting">13. Troubleshooting</a>
     <a class="sub" href="#700-to-900-ms-latency-on-nearby-subscribers">700 to 900 ms latency on nearby subscribers</a>
     <a class="sub" href="#empty-latency-no-reply-probe-silent">Empty latency ("no reply", "probe silent")</a>
     <a class="sub" href="#high-latency-on-a-saturated-subscriber">High latency on a saturated subscriber</a>
@@ -100,7 +120,7 @@
     <a class="sub" href="#no-netflow-traffic">No NetFlow traffic</a>
     <a class="sub" href="#scores-stay-old">Scores stay old</a>
     <a class="sub" href="#the-router-refuses-the-connection">The router refuses the connection</a>
-    <a href="#13-settings-reference">13. Settings reference</a>
+    <a href="#14-settings-reference">14. Settings reference</a>
     <a class="sub" href="#application-and-database">Application and database</a>
     <a class="sub" href="#inventory-and-sources">Inventory and sources</a>
     <a class="sub" href="#cycles">Cycles</a>
@@ -108,12 +128,49 @@
     <a class="sub" href="#plans-and-shaping">Plans and shaping</a>
     <a class="sub" href="#qoe-loop">QoE loop</a>
     <a class="sub" href="#netflow-and-traffic">NetFlow and traffic</a>
+    <a href="#15-data-model">15. Data model</a>
+    <a class="sub" href="#reference-data">Reference data</a>
+    <a class="sub" href="#time-series-hypertables">Time series (hypertables)</a>
+    <a class="sub" href="#what-subscribers-reach">What subscribers reach</a>
+    <a href="#16-known-limitations-and-faq">16. Known limitations and FAQ</a>
+    <a class="sub" href="#limitations-by-design">Limitations, by design</a>
+    <a class="sub" href="#faq">FAQ</a>
+    <a href="#appendix-a-interface-reference">Appendix A. Interface reference</a>
+    <a class="sub" href="#dashboard">Dashboard</a>
+    <a class="sub" href="#executive">Executive</a>
+    <a class="sub" href="#traffic">Traffic</a>
+    <a class="sub" href="#network-tree">Network tree</a>
+    <a class="sub" href="#subscribers">Subscribers</a>
+    <a class="sub" href="#plans">Plans</a>
+    <a class="sub" href="#insights">Insights</a>
+    <a class="sub" href="#devices">Devices</a>
+    <a class="sub" href="#api">API</a>
+    <a class="sub" href="#settings">Settings</a>
+    <a class="sub" href="#detail-panels">Detail panels</a>
+    <a class="sub" href="#columns-and-figures">Columns and figures</a>
+    <a href="#appendix-b-api-endpoint-index">Appendix B. API endpoint index</a>
+    <a class="sub" href="#public-api-model">Public API (model)</a>
+    <a class="sub" href="#public-api-usage">Public API (usage)</a>
+    <a class="sub" href="#pops">PoPs</a>
+    <a class="sub" href="#plans_1">Plans</a>
+    <a class="sub" href="#shaping_1">Shaping</a>
+    <a class="sub" href="#static-clients">Static clients</a>
+    <a class="sub" href="#metrics">Metrics</a>
+    <a class="sub" href="#capacity">Capacity</a>
+    <a class="sub" href="#traffic-netflow">Traffic (netflow)</a>
+    <a class="sub" href="#traffic-restrictions_2">Traffic restrictions</a>
+    <a class="sub" href="#antennas">Antennas</a>
+    <a class="sub" href="#operations">Operations</a>
+    <a class="sub" href="#settings_1">Settings</a>
+    <a class="sub" href="#health">Health</a>
+    <a class="sub" href="#accounts_1">Accounts</a>
+    <a class="sub" href="#api-keys_1">API keys</a>
   </nav>
 
   <main>
     <header class="hero">
       <h1>freeQoS technical documentation</h1>
-      <p>How freeQoS works, from the router to the screen: architecture, installation and sizing, network flows, measurements, NetFlow, shaping, API, security, operations and troubleshooting.</p>
+      <p>How freeQoS works, from the router to the screen: architecture, installation and sizing, network flows, measurements, NetFlow, shaping, capacity and insights, API, security, operations, troubleshooting, and a reference of every screen and endpoint.</p>
       <p class="doc-actions">
         <a class="doc-button" href="/documentation.pdf">Download the PDF</a>
         <a href="/api-guide">API guide</a>
@@ -201,6 +258,93 @@
 </tbody>
 </table></div>
 <p>A direct consequence of being out-of-band: latency is measured by a ping from the router, which requires the subscriber's box to answer pings (see section 5).</p>
+<h3 id="two-control-loops">Two control loops</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>Slow central loop</th>
+<th>Fast local loop</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Where</td>
+<td>freeQoS, on a management server</td>
+<td>On the PoP router itself</td>
+</tr>
+<tr>
+<td>Period</td>
+<td>10 s and more</td>
+<td>Below one second</td>
+</tr>
+<tr>
+<td>Role</td>
+<td>Collects, keeps the reference data, scores QoE, <strong>sets the rate baselines</strong> (plans, parent queues)</td>
+<td>Would react to radio fades and latency <strong>within</strong> those baselines</td>
+</tr>
+<tr>
+<td>Status</td>
+<td>Implemented</td>
+<td><strong>Out of scope</strong>, deliberately not implemented</td>
+</tr>
+</tbody>
+</table></div>
+<p>freeQoS is the slow loop. The closed QoE loop of section 7 does not change that: it works at the scale of minutes, over windows of several minutes.</p>
+<h3 id="the-three-bottlenecks-to-shape">The three bottlenecks to shape</h3>
+<ol>
+<li><strong>The last mile of each subscriber</strong>, on the PoP: one CAKE queue per subscriber.</li>
+<li><strong>The radio backhaul or sector</strong>: one parent queue per link, at the radio's real capacity.</li>
+<li><strong>The internet egress</strong>: optional, on the gateway. freeQoS reads it but installs no queue there.</li>
+</ol>
+<h3 id="what-an-out-of-band-controller-can-and-cannot-see">What an out-of-band controller can and cannot see</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Inline shaper (LibreQoS, Preseem)</th>
+<th>freeQoS (out-of-band)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Throughput per subscriber</td>
+<td>Shaper counters</td>
+<td><code>/interface</code> of the PPPoE session or the subscriber's queue — <strong>equivalent</strong></td>
+</tr>
+<tr>
+<td>Throughput per site or backhaul</td>
+<td>Shaper tree</td>
+<td>PoP aggregation and radio capacity — <strong>equivalent</strong></td>
+</tr>
+<tr>
+<td>Throughput against plan</td>
+<td>Yes</td>
+<td>Yes — <strong>equivalent</strong></td>
+</tr>
+<tr>
+<td>Hierarchical shaping</td>
+<td>HTB + CAKE on the shaper</td>
+<td>RouterOS simple queues + CAKE, tree built from the topology — <strong>equivalent</strong></td>
+</tr>
+<tr>
+<td>RTT per subscriber</td>
+<td><strong>Passive</strong>, from the timestamps of every TCP flow</td>
+<td><strong>Active</strong> ping from the PoP, in batches</td>
+</tr>
+<tr>
+<td>TCP retransmissions</td>
+<td>Passive (eBPF)</td>
+<td><strong>Impossible</strong>: it requires seeing the packets</td>
+</tr>
+<tr>
+<td>Latency under load (bufferbloat)</td>
+<td>Measured continuously on real traffic</td>
+<td><strong>Derived</strong> by correlating the probe's RTT with the throughput of the same sample</td>
+</tr>
+</tbody>
+</table></div>
+<p>Everything that can be read from counters is at parity. Everything that requires inspecting packets is not, and never will be from a management server: it is the price of being out-of-band, not a gap in the implementation. The interface marks such columns "n/a" rather than showing an empty value that could be read as zero.</p>
 <h3 id="key-notions">Key notions</h3>
 <p>The rest of this documentation relies on these words. Each one is covered in detail in its own section.</p>
 <div class="table-wrap"><table>
@@ -1092,8 +1236,238 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>The hierarchy comes from the declared role</strong> (gateway, core, PoP), not from a guess based on the hardware model.</li>
 <li><strong>A subscriber's sector comes from a join</strong>: the MAC read in <code>caller-id</code> is matched against the stations known to UISP. It is the only way to know which antenna a subscriber goes through, hence its real chain of bottlenecks. Without UISP, only the PoP is known.</li>
 </ol>
+<p>MAC addresses are normalised before the join: RouterOS writes <code>AA:BB:CC:DD:EE:FF</code>, UISP sometimes <code>aa-bb-cc-dd-ee-ff</code>; without normalisation, the join would fail silently. When the sector of a subscriber is unknown, its queue is created <strong>without a parent</strong> rather than under a guessed one: the last mile is shaped correctly, the backhaul contention is not. Attaching a subscriber to the wrong backhaul would be worse than doing nothing.</p>
+<h4 id="where-the-hierarchy-comes-from">Where the hierarchy comes from</h4>
+<p><code>/ip/neighbor</code> answers a weak question — <em>who sees whom</em> — which is also true of two devices plugged into the same switch. The configuration answers the strong ones, because it is what makes the network:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Read</th>
+<th>What it establishes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/ip/route</code></td>
+<td><strong>Who is above</strong>: the default route says where the router sends what it cannot route</td>
+</tr>
+<tr>
+<td><code>/routing/ospf/neighbor</code>, <code>/routing/bgp/session</code></td>
+<td>A <strong>proven</strong> adjacency: two routers exchanging routes, not two that merely see each other</td>
+</tr>
+<tr>
+<td><code>/interface/vlan</code>, <code>/interface/bridge/port</code>, <code>/interface/bonding</code></td>
+<td>Through which <strong>physical port</strong> a given traffic leaves, hence which link a client hangs from</td>
+</tr>
+</tbody>
+</table></div>
+<p>A box gets its parent from, in order of strength:</p>
+<ol>
+<li>the parent <strong>set by hand</strong> in the tree editor — the operator always has the last word;</li>
+<li>the parent <strong>proven by the routing table</strong>;</li>
+<li>the <strong>shortest path</strong> in the graph, used only where the configuration says nothing (unmanaged devices, discovered neighbours).</li>
+</ol>
+<p>Each box is marked "manual", "route" or "inferred", so you know what is established and what is assumed. A <strong>multi-homed</strong> router (two equal default routes) has no single parent: freeQoS refuses to pick one, says so, and falls back on the shortest path. A ring (two PoPs linked to the core <em>and</em> to each other) is where guessing goes wrong — both paths have the same length — and where the routing table settles it.</p>
+<p>On a shared segment (a switch, a management VLAN where MNDP shows everyone), a box without a proven parent gets its <strong>most likely</strong> link, drawn <strong>dashed</strong> and marked <em>uncertain</em>, never a mesh. The panel offers to confirm it or correct it in one click.</p>
+<h4 id="one-device-one-box">One device, one box</h4>
+<p>The same router can be seen several times: as a managed router <em>and</em> as a neighbour of the core, under several management addresses, in IPv4 and IPv6. freeQoS reconciles these views into one box using what cannot change:</p>
+<ul>
+<li>the <strong>serial number</strong> (<code>/system/routerboard</code>, or the <code>system-id</code> of <code>/system/license</code> for a CHR);</li>
+<li>the <strong>RouterOS identity</strong>;</li>
+<li><strong>every interface MAC</strong> — a neighbour only reveals the MAC of the interface facing it.</li>
+</ul>
+<p>Three rules prevent wrong merges. <strong>Two declared routers never merge</strong> with each other. A <strong>MAC claimed by several</strong> routers stops identifying them (virtual machines cloned from the same image share interface MACs). The <strong>name merges nothing</strong>: it is unique only by convention. When identity cannot be proven, the operator decides: <em>Same device as…</em> folds one box into another, <em>Split</em> undoes it. Probable duplicates (same words in a different order, "CCR DS" / "DS-CCR") are flagged with a <em>Merge</em> button, never merged automatically. A box that groups several observations lists them.</p>
+<h4 id="how-the-loopback-is-found">How the loopback is found</h4>
+<p>When the loopback is not declared, it is looked for in the configuration, in this order:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>What is read</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Loopback interface</td>
+<td>A host address on <code>lo</code>, <code>lo0</code>, <code>loopback*</code>, <code>dummy0</code>, <code>bridge-loopback</code>, <code>lo-bridge</code>…</td>
+</tr>
+<tr>
+<td><code>router-id</code></td>
+<td><code>/routing/id</code>, OSPF and BGP instances (structured API first, then the <code>/export</code> text)</td>
+</tr>
+<tr>
+<td>Address comment</td>
+<td>A /32 on any bridge, commented "loopback" or "router-id"</td>
+</tr>
+<tr>
+<td>Isolated /32</td>
+<td>As a last resort, and the tree says so</td>
+</tr>
+</tbody>
+</table></div>
+<p>Uniqueness is checked, not assumed: the database refuses two routers with the same loopback, and if discovery finds two anyway, the address is left out of the index with a warning.</p>
+<h4 id="a-subscribers-cpe-is-not-one-more-device">A subscriber's CPE is not one more device</h4>
+<p>A subscriber's box arrives by two paths: a <code>/ppp/active</code> session (the subscriber, with its login and queues) and a <code>/ip/neighbor</code> entry at the end of the PoP's port (a discovered device). freeQoS joins them by <strong>equality</strong>, never by resemblance: for PPPoE, the session's <code>caller-id</code> equals the MAC announced by the neighbour (rebuilt from an <code>fe80::</code> link-local address when that is all the neighbour announces); for a routed VLAN, the client's declared address equals the neighbour's address. The subscriber is then counted once. A router of the inventory is never reclassified as a CPE, even if it opens a PPPoE session itself.</p>
+<h4 id="the-tree-follows-the-inventory">The tree follows the inventory</h4>
+<p>Adding, removing, disabling a router or changing its role <strong>starts a new discovery within the minute</strong>, whatever path changed the inventory (interface, API, file). A removed router leaves the tree; if the device still exists and a neighbour still sees it, it comes back as an <strong>unmanaged</strong> device, which is what it has become. An empty inventory erases nothing: that would be a database read failure, not a deletion. The graph never forgets on its own, so that a device briefly invisible (radio fade, reboot) does not disappear; <em>Forget vanished devices</em> removes what you choose.</p>
+<h4 id="a-known-router-is-never-silently-absent">A known router is never silently absent</h4>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>What <em>Devices</em> shows</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Secret that cannot be decrypted (key changed)</td>
+<td><strong>Skipped</strong> badge, with the reason</td>
+</tr>
+<tr>
+<td>Invalid record (unknown role, badly typed loopback)</td>
+<td>Same, and the other routers carry on</td>
+</tr>
+<tr>
+<td>Unreadable database inventory</td>
+<td>A global warning</td>
+</tr>
+<tr>
+<td>Hidden by hand</td>
+<td>Listed under "removed from the inventory", with <strong>Restore</strong></td>
+</tr>
+<tr>
+<td>Present but not collected, whatever the cause</td>
+<td><strong>Not collected</strong> badge</td>
+</tr>
+</tbody>
+</table></div>
+<p>The router also keeps its box in the tree, marked "skipped": a skipped PoP is a situation to fix, and it must not look like a PoP that never existed.</p>
+<h4 id="a-vlan-that-carries-clients-is-a-site">A VLAN that carries clients is a site</h4>
+<p>For a radio operator, a VLAN usually carries a village, a relay or a zone; the router is only its head. freeQoS therefore turns <strong>every VLAN carrying at least one declared or seen client</strong> into a site of its own. A management, transit or supervision VLAN carries no subscriber and does not become a site. The name comes from the interface, i.e. from what you wrote on the router:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Interface</th>
+<th>Site</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>vlan-francophonie</code></td>
+<td>Francophonie</td>
+</tr>
+<tr>
+<td><code>vlan-zone-altair</code></td>
+<td>Zone Altair</td>
+</tr>
+<tr>
+<td><code>vlan101</code>, <code>ether1.101</code></td>
+<td>VLAN 101</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each site records the <strong>router that serves it</strong>: this is how shaping still finds the subscribers of a VLAN site on their router.</p>
 <h3 id="static-ip-subscribers">Static-IP subscribers</h3>
 <p>A subscriber without PPPoE (fixed IP, routed block, VLAN) is declared in <em>Static clients</em>: a name, one or more addresses or networks, a PoP. It is then measured, limited and scored like a PPPoE subscriber.</p>
+<p>A static-IP client announces nothing: no session, no RADIUS plan. <strong>The declaration is the only possible source</strong>, and freeQoS treats it as the truth, like the router inventory. PPPoE and static subscribers live in the same table, distinguished by their <code>kind</code>, and follow exactly the same path for plans, overrides, boosts and audit.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>The reference must not encode the address</strong> (<code>town-hall</code>, not <code>static:120:10.0.0.5</code>)</td>
+<td>The queue name derives from it; an address change must not destroy and recreate the queue, losing overrides and history</td>
+</tr>
+<tr>
+<td><strong>A subnet stays a subnet</strong></td>
+<td>A client sold a /29 has its whole block capped. A PPPoE session is always a /32</td>
+</tr>
+<tr>
+<td><strong>Declaring writes the queue immediately</strong></td>
+<td>The reply says <em>Queue set</em>, <em>Queue to set</em> (simulation), <em>No queue</em> (with the reason, usually no plan), <em>PoP without a router</em> (with the routers that exist), or <em>Conflict</em></td>
+</tr>
+<tr>
+<td><strong>Only this client's queue is written</strong></td>
+<td>The full plan is computed (parents, CAKE types), then restricted to this queue: declaring one client never rewrites the others</td>
+</tr>
+<tr>
+<td><strong>A declaration never fails because a router is silent</strong></td>
+<td>The record is saved, the report says what could not be written, reconciliation catches up</td>
+</tr>
+<tr>
+<td><strong>The PoP name is matched tolerantly</strong></td>
+<td>Case, accents, punctuation and the word "PoP" are ignored: <code>PoP Francophonie</code>, <code>pop-francophonie</code> and <code>francophonie</code> are the same site. Two really distinct sites that would look alike are never merged: the match is "ambiguous" and nothing is written</td>
+</tr>
+<tr>
+<td><strong>The sector is declared</strong></td>
+<td>No <code>caller-id</code> exists; the <em>Sector</em> field attaches the client to its link so that it counts in that link's sharing</td>
+</tr>
+<tr>
+<td><strong>Measured only once a queue exists</strong></td>
+<td>Its bytes are read on its queue; until then it shows its plan and state, without a rate</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Census and candidates.</strong> The census of a PoP (<code>GET /api/v1/pops/census</code>, see above) confirms declared clients — an address inside a declared block is "seen active" — and lists the addresses that match nothing. <code>GET /api/v1/static-clients/candidates</code> returns those candidates and <code>GET /api/v1/static-clients/candidates/diagnostic</code> the reason each ARP line was set aside. A candidate is never turned into a subscriber automatically: a printer, a camera or another operator's device leaves exactly the same trace, and nobody can guess the sold rate. Declaring always goes through <code>POST /api/v1/static-clients</code> (or the <em>Add a client</em> form) with a reference and a plan.</p>
+<h3 id="ubiquiti-antennas-and-radio-capacity">Ubiquiti antennas and radio capacity</h3>
+<p>The capacity of a radio link changes with rain, interference and alignment. freeQoS only knows it by <strong>asking the antenna</strong>, in one of two ways:</p>
+<ul>
+<li><strong>airOS</strong> (<code>BACKHAUL_PROVIDER=airos</code>): each antenna is polled on its local API (<code>https://&lt;antenna&gt;/status.cgi</code>), with no UISP needed. Antennas are added in <em>Devices › Add an antenna</em>, or <strong>automatically</strong>: when common airOS credentials are given (<code>AIROS_USERNAME</code>, <code>AIROS_PASSWORD</code>, set by the installer), every Ubiquiti radio discovered as a neighbour, with an address, is added and attached to the PoP of the router that sees it. Nothing is ever removed or changed automatically, and a radio already known (same address, MAC or name) is not duplicated.</li>
+<li><strong>UISP</strong> (<code>BACKHAUL_PROVIDER=uisp</code>): the UISP controller's API, read-only, which also gives the station → access point attachments used for the sector join.</li>
+</ul>
+<p>A declared backhaul is matched to the link that carries it by the <strong>physical identity</strong> of the radio: its UISP device id or its MAC (<code>uisp_device_id</code>, compared without case or separators). Without it, the match falls back on equal names, and failing that the parent queue keeps the port's negotiated speed — the ceiling of the ethernet cable, not of the radio. <code>BACKHAUL_PROVIDER=mock</code> is a deterministic lab simulator.</p>
+<p><strong>Radio health</strong> (<em>Devices › Radio health</em>) flags, per access point and per CPE:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Threshold</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SNR</td>
+<td>below 20 dB</td>
+</tr>
+<tr>
+<td>Signal</td>
+<td>below −75 dBm</td>
+</tr>
+<tr>
+<td>CCQ</td>
+<td>below 75%</td>
+</tr>
+<tr>
+<td>Airtime</td>
+<td>above 70% (saturated)</td>
+</tr>
+<tr>
+<td>Capacity</td>
+<td>below 70% of nominal: degraded (rain, interference, misalignment)</td>
+</tr>
+<tr>
+<td>Freshness</td>
+<td>no reading for 5 minutes: silent, capacity unknown</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="wired-or-radio-the-capacity-of-each-link">Wired or radio: the capacity of each link</h3>
+<p>The capacity used for a link's parent queue and for load percentages depends on its medium:</p>
+<ul>
+<li><strong>Wired</strong>: the declared capacity, or the port's negotiated speed.</li>
+<li><strong>Radio</strong>: the capacity its antenna announces live (airOS / UISP).</li>
+<li><strong>Auto</strong> (default): the lowest known value.</li>
+</ul>
+<p><em>Saturation risks › wired / radio…</em> (or <code>PUT /api/v1/capacity/media</code>) declares each uplink; <code>DELETE /api/v1/capacity/media/{router}/{interface}</code> goes back to automatic. A radio link must name its antenna.</p>
+<h3 id="empty-sites-and-services-waiting-for-an-address">Empty sites and services waiting for an address</h3>
+<ul>
+<li><strong>Empty sites</strong> are removed every 10 minutes when they have neither subscriber nor backhaul and their name is declared nowhere. A site declared but still empty (router added, no session yet) is kept.</li>
+<li><strong>Services pushed without an address</strong> (MAC only, Preseem style) or before their router is known are looked for every 2 minutes in the routers' ARP and DHCP tables; once found, they become full subscribers — placed, shaped, visible.</li>
+</ul>
 <h2 id="5-measurements-throughput-latency-qoe">5. Measurements: throughput, latency, QoE</h2>
 <h3 id="throughput">Throughput</h3>
 <p>Byte counters are read through the RouterOS API, then turned into rates by the difference between two reads.</p>
@@ -1141,6 +1515,10 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Reconnection.</strong> When a PPPoE session restarts, the interface is recreated and its counters start from zero. If the session uptime goes backwards or a counter decreases, freeQoS writes <strong>no</strong> rate for that cycle. A gap in the curve is visible; a fake spike would distort averages and scores.</li>
 </ul>
 <p>A static-IP subscriber has no interface of its own: its traffic mixes with that of a VLAN or a port. Its bytes are read from the counters of <strong>its queue</strong> (<code>/queue/simple</code>, <code>bytes</code> field). Consequence: a static-IP subscriber is only measured once a queue targets it.</p>
+<h4 id="the-throughput-of-a-link">The throughput of a link</h4>
+<p>A link's throughput comes from the counters of the <strong>port</strong> that carries it, with the same safeguards as subscribers. <strong>RouterOS counts per interface, not per adjacency</strong>: when a switch sits between the router and several devices, <code>/ip/neighbor</code> sees several neighbours on the same port, and giving the counter to each would multiply the total. Measurements are therefore stored per <em>(router, interface)</em>; a link inherits its port's throughput, and the interface shows a <em>shared</em> badge when several adjacencies share the port. A link declared by UISP, without a local port, has no counter and says so.</p>
+<p><strong>Direction.</strong> <code>rx</code> and <code>tx</code> stay those of the router: what it sends to the device opposite, and what it receives from it. Depending on whether the neighbour is upstream (gateway) or downstream (sector), the same <code>tx</code> is upload or download. The link table shows both directions without guessing; the network tree orients them towards the child (↓ = download).</p>
+<p><strong>Two time scales.</strong> History comes from collection (every 10 s). For "how much is going through <em>now</em>", the live measure calls <code>/interface/monitor-traffic</code> on the router, a read-only command; if it fails (version, rights, virtual port), the last collected value is returned with the reason.</p>
 <h3 id="latency-the-probe">Latency: the probe</h3>
 <p>A subscriber's latency is the round-trip time measured <strong>from its PoP</strong> to its address. It goes neither through the core nor through freeQoS: the router does the pinging.</p>
 <h4 id="how-a-ping-measures-latency">How a ping measures latency</h4>
@@ -1258,6 +1636,37 @@ curl -s http://127.0.0.1:8000/health/ready
 </tbody>
 </table></div>
 <p>The response also contains <code>routing_table</code>, the <code>route_candidates</code> and a control ping to the gateway.</p>
+<h3 id="latency-by-segment">Latency by segment</h3>
+<p><em>Executive › Where the delay comes from</em> splits latency into three segments, measured from the <strong>same</strong> router with the <strong>same</strong> method (a series of pings, median kept with min, max, jitter and loss):</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Segment</th>
+<th>From → to</th>
+<th>What it isolates</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>access</code></td>
+<td>PoP → its subscribers</td>
+<td>The last mile: radio, CPE, queues</td>
+</tr>
+<tr>
+<td><code>gateway</code> (next hop up)</td>
+<td>PoP → its default gateway</td>
+<td>The link towards the core</td>
+</tr>
+<tr>
+<td><code>internet</code></td>
+<td>PoP → public targets (<code>LATENCY_INTERNET_TARGETS</code>, by default <code>1.1.1.1</code> and <code>8.8.8.8</code>)</td>
+<td>The transit and the internet beyond</td>
+</tr>
+</tbody>
+</table></div>
+<p>If the internet segment is much higher than the next hop, the delay is outside your network. <code>GET /api/v1/latency</code> returns the three segments per router; <code>GET /api/v1/latency/clients</code> returns the latency each subscriber lives.</p>
+<h3 id="live-check-of-one-subscriber">Live check of one subscriber</h3>
+<p>On a subscriber's panel, <em>Measure on the router now</em> reads its PPPoE interface and its queue live for two seconds, adds the NetFlow rate and the last recorded sample, and returns a verdict that says <strong>where</strong> throughput is lost, if it is (<code>GET /api/v1/subscribers/{id}/live</code>). It is the quickest way to compare what the interface shows with what the router sees.</p>
 <h3 id="bufferbloat">Bufferbloat</h3>
 <p>Bufferbloat is the latency that load <strong>adds</strong>. freeQoS computes it by crossing the RTT and the rate of the same sample: latency when the link is loaded, minus latency when it is not. No dedicated test is run.</p>
 <h4 id="why-bufferbloat-exists">Why bufferbloat exists</h4>
@@ -1521,6 +1930,54 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Stale target:</strong> a target carrying the mark of <strong>this</strong> instance and pointing to an old address is removed.</li>
 </ul>
 <p>Writing goes through the same path as queues: simulation by default, circuit breaker, audit.</p>
+<h4 id="exporters-and-vantage-points">Exporters and vantage points</h4>
+<p>A router whose export was set up by freeQoS is declared as an <strong>exporter</strong> at the same time, with its vantage point deduced from its role (<code>gateway</code> → <code>edge</code>, otherwise <code>pop</code>). An exporter that sends without being declared still appears, marked <code>unknown</code>: a badly configured PoP must <strong>show up</strong>, not disappear. <em>Traffic › Advanced: NetFlow exporters</em> declares by hand an exporter that is not one of your routers, with its vantage point and its <strong>sampling</strong> rate. Declaring sampling matters: a router sampling 1 in 1,000 reports a thousandth of the real traffic, and nothing else would show it.</p>
+<h4 id="no-datagram-received-the-causes">"No datagram received": the causes</h4>
+<p>The <em>Traffic</em> page names the cause and the action:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Message</th>
+<th>What is missing</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>The collector is not listening</em></td>
+<td>The UDP socket could not open (port in use, rights)</td>
+<td>Read the error shown; check <code>NETFLOW_PORT</code></td>
+</tr>
+<tr>
+<td><em>No router is declared</em></td>
+<td>Nothing can export</td>
+<td><em>Devices</em> › add a router</td>
+</tr>
+<tr>
+<td><em>N router(s) declared, none exports yet</em></td>
+<td>The export is not set up yet</td>
+<td>It is set up automatically at the next pass (requires writing to be enabled)</td>
+</tr>
+<tr>
+<td><em>Export configured on N router(s), but no datagram reaches …</em></td>
+<td>The <strong>network path</strong>, not the configuration</td>
+<td>Is UDP 2055 published (<code>2055:2055/udp</code> in Docker)? A firewall between the PoP and freeQoS? Is the announced address reachable from the PoP?</td>
+</tr>
+<tr>
+<td><em>Flows received, none matched to a subscriber</em></td>
+<td>No subscriber block contains the addresses</td>
+<td>Subscribers not collected yet, or clients with public addresses not in <code>NETFLOW_CUSTOMER_NETWORKS</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The most misleading one is the path: without the <code>/udp</code> suffix, Docker publishes TCP, the router exports, the collector listens, and nothing meets, without an error anywhere. The repository's <code>docker-compose.yml</code> publishes <code>2055/udp</code>, and a test locks it.</p>
+<h4 id="orphan-records">Orphan records</h4>
+<p><code>orphan_records</code> in <code>GET /api/v1/netflow/status</code> counts v9/IPFIX data that arrived before its template. A counter that rises then stabilises is normal (after a restart, the templates come back within minutes). A counter that <strong>keeps</strong> rising means the exporter never sends its templates.</p>
+<h4 id="which-addresses-are-subscribers-which-are-infrastructure">Which addresses are subscribers, which are infrastructure</h4>
+<ul>
+<li><code>NETFLOW_CUSTOMER_NETWORKS</code> (default <code>10.0.0.0/8</code>, <code>172.16.0.0/12</code>, <code>192.168.0.0/16</code>, <code>100.64.0.0/10</code> (CGNAT), <code>fd00::/8</code>): where subscribers live. If your subscribers have public addresses, add their blocks, otherwise their conversations are taken for transit.</li>
+<li>Infrastructure addresses are learnt automatically (the freeQoS server, the declared routers and their addresses, the exporters); <code>NETFLOW_INFRASTRUCTURE_NETWORKS</code> adds what the inventory does not know (a transit link, a monitoring network). A client pinging one of your routers is shown as reaching <strong>your network</strong>, not an unidentified internet address.</li>
+</ul>
 <h3 id="naming-addresses">Naming addresses</h3>
 <p>NetFlow only carries addresses. When a subscriber reaches an address never seen before, it is recorded "to be named". A separate loop then names it, in batches of 40 every 30 s, most recent first. Naming may need a network request, hence a wait: doing it while receiving would block the collector. An address reached ten seconds ago is named on the next pass.</p>
 <div class="table-wrap"><table>
@@ -1567,6 +2024,52 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><code>IPFINDER_GEOIP_ENABLED=false</code> and <code>IPFINDER_RDAP_ENABLED=false</code> turn these two sources off (changeable live);</li>
 <li>the catalogue, the DNS cache and reverse names are enough to recognise the large services.</li>
 </ul>
+<p><strong>Each source is isolated</strong>: a resolver that breaks, a registry that rate-limits or a geolocation service that fails never costs the verdict the others gave. <strong>The reverse name beats the block</strong>: an Open Connect cache hosted at your premises is in no published block, yet it carries the most traffic. An address with no reverse name is still marked resolved — "this address has no name" is an answer, and most of the internet is in that case.</p>
+<h3 id="what-the-traffic-page-shows">What the Traffic page shows</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Block</th>
+<th>Question it answers</th>
+<th>Where it comes from</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Who consumes</strong></td>
+<td>Volume per subscriber over the period</td>
+<td>The database</td>
+</tr>
+<tr>
+<td><strong>Which services the traffic comes from</strong></td>
+<td>"Who is streaming on this sector?"</td>
+<td>The database, over the chosen period</td>
+</tr>
+<tr>
+<td><strong>Where the traffic goes</strong></td>
+<td>A world map (one circle per place, area = volume; scroll to zoom, click for details) and the volume per country, <strong>including the unlocated share</strong></td>
+<td>The database. The map background (Natural Earth 1:110m, public domain) is served by freeQoS: no tile is downloaded</td>
+</tr>
+<tr>
+<td><strong>Who talks to whom, client by client</strong></td>
+<td>One line per conversation <em>client ↔ destination</em>: service, port, volume, average rate, and the <strong>live</strong> rate for conversations happening now</td>
+<td>The database, plus the collector's in-memory window for the live column</td>
+</tr>
+<tr>
+<td><strong>Destinations reached</strong></td>
+<td>The record of an address: reverse name, service <strong>and on what grounds</strong>, organisation, AS, country, city, and the named list of subscribers reaching it</td>
+<td>The database and the catalogue</td>
+</tr>
+<tr>
+<td><strong>Find an IP</strong></td>
+<td>"This address or this domain name: who and where?" — any address, seen on the network or not</td>
+<td>An on-demand analysis with the authorised sources only; nothing is written</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Searching conversations.</strong> Four filters combine — free search (client address, login, remote address, reverse name, organisation, service), PoP, category, usage family — and every value in the table is clickable to filter on it. The lists only offer values that exist in the data shown. The <strong>unidentified</strong> share is shown like the others: a page that only showed what it can name would hide the largest unknown.</p>
+<p><strong>A machine without a subscriber record counts too.</strong> "This address reached that one" is the observation; attaching it to a subscriber is an interpretation, which may be missing (monitoring station, camera, router). Such lines appear under the client address, marked <em>not declared</em>.</p>
+<p><strong>Volume over time per subscriber</strong>: <code>GET /api/v1/netflow/subscribers/{id}/series</code>. <strong>Live connections</strong> (<code>GET /api/v1/netflow/connections</code>) read the collector's in-memory window, the only truly live view: it empties at each write and fills up again — that is not a failure.</p>
 <h3 id="traffic-restrictions">Traffic restrictions</h3>
 <p>A restriction targets a catalogue service for one or more subscribers. Two actions:</p>
 <div class="table-wrap"><table>
@@ -1583,12 +2086,15 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 <tr>
 <td><code>limit</code></td>
-<td>An <code>address-list</code>, two <code>mangle</code> marks and two capped queues</td>
+<td>An <code>address-list</code>, two <code>mangle</code> marks and two <code>/queue/tree</code> queues attached to <code>global</code>, one per direction</td>
 </tr>
 </tbody>
 </table></div>
 <p>Every 5 minutes (<code>RESTRICTIONS_INTERVAL_S</code>), the address list of each rule is recomputed and only the difference is pushed. A new Netflix address seen by NetFlow therefore joins the list by itself.</p>
-<p>No rule is ever created automatically: throttling a service is a business decision. <code>GET /api/v1/traffic-rules/{id}/preview</code> shows what a rule targets today. IPv6 is not installed yet.</p>
+<p>No rule is ever created automatically: throttling a service is a business decision. <code>GET /api/v1/traffic-rules/{id}/preview</code> shows what a rule targets today. IPv6 is not installed yet: IPv6 prefixes of a rule are set aside and the plan says so.</p>
+<p><strong>What a rule contains.</strong> A name; an effect (<code>block</code>, or <code>limit</code> with download and upload caps in kbps, Mbps or Gbps); its targets — catalogue <strong>services</strong>, <strong>categories</strong> (<code>streaming</code>, <code>social networks</code>, <code>gaming</code>, <code>voice / video</code>, <code>cdn</code>, <code>cloud</code>, <code>updates</code>, <code>dns</code>, <code>messaging</code>) and hand-entered <strong>prefixes</strong>; optionally a protocol (<code>tcp</code>, <code>udp</code>, <code>icmp</code>) and service ports (<code>443</code>, <code>6881-6999</code>); and <strong>for whom</strong>: every client, some sites (PoP or VLAN site), or some clients.</p>
+<p><strong>A rule is a criterion, not a snapshot.</strong> Its address set is recomputed at each pass from two sources: the <strong>published blocks</strong> cover servers no client has reached yet, the <strong>discovered addresses</strong> cover what lies outside them (a cache hosted at your premises, a server rented elsewhere). An address already inside a kept block is not added: it would change nothing and lengthen a list the router walks through <strong>for every packet</strong> (<code>RESTRICTION_ADDRESS_LIMIT</code>).</p>
+<p><strong>Writing.</strong> Saving an enabled rule, editing it or re-enabling it installs it on the routers <strong>immediately</strong> (still subject to the write switch, the circuit breaker and the audit). <strong>Suspending a rule lifts it</strong> at once; <strong>deleting</strong> it lifts it too. A rule without any criterion (no service, category or prefix) is refused: it would target the whole internet, and on an internet edge would cut the network. The <em>Last applied</em> column is what distinguishes a rule <strong>saved</strong> from a rule <strong>installed</strong>. <code>POST /api/v1/traffic-rules/apply</code> reinstalls everything (dry run by default).</p>
 <h2 id="7-plans-and-shaping">7. Plans and shaping</h2>
 <p>This is the only part of freeQoS that writes to the routers. It always follows the same path: <strong>compute a plan, show it, apply it</strong>, with several safeguards in between.</p>
 <h3 id="how-shaping-works">How shaping works</h3>
@@ -1812,6 +2318,105 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Boost</strong> (<code>POST /api/v1/shaping/boosts</code>): a higher rate for a duration; it is removed when it expires (checked every 30 s).</li>
 <li><strong>Dry run</strong> (<code>POST /api/v1/shaping/plan</code>): the commands that would be sent, without sending anything.</li>
 </ul>
+<p><strong>Units.</strong> Every rate field has a <strong>kbps / Mbps / Gbps</strong> selector: a subscriber capped at 512 kbps is typed as such, not as <code>0.512 Mbps</code>, and displayed as "512 kbps". Internally everything is converted once, at the input, to Mbit/s. The API accepts <code>max_down_mbps</code>, <code>max_down_kbps</code> or <code>max_down_gbps</code> (same for upload, and <code>down_*</code> / <code>up_*</code> for a boost); two units for the same direction are refused as ambiguous.</p>
+<p><strong>Which rate wins.</strong> From strongest to weakest: a running <strong>boost</strong>, a permanent <strong>override</strong>, the subscriber's <strong>plan</strong>. A boost goes over the override then disappears; it does not erase it.</p>
+<p><strong>Boosts.</strong> A duration (1 minute to 7 days), then either a multiplier of the plan (the interface offers ×2, ×3 and ×5; the API accepts more than 1, up to 50) or explicit rates, and a reason. It is written immediately if writing is allowed and <strong>expires by itself</strong>: a job checks expiries every 30 s and brings the queue back to its normal rate — RouterOS knows nothing about the duration. A boost without an expiry is refused: it would be an override in disguise that never goes away.</p>
+<p><strong>A rate set by hand is written at once.</strong> Setting a subscriber's or a link's rate writes the corresponding queue immediately (the full plan of the router, restricted to that queue), and the reply says what was written, on which router, or what prevented it (<code>apply_now=false</code> only records the intention).</p>
+<h3 id="the-shaping-map">The shaping map</h3>
+<p><em>Settings › Shaping and writing to the routers</em> shows the <strong>map</strong>, not the commands: where the network is capped, at how much, and where that cap comes from (measured capacity, override, plan, boost, QoE tightening). <code>GET /api/v1/shaping/points</code> returns it, read-only.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>State of a point</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Queue set</td>
+<td>The queue is on the router, as planned</td>
+</tr>
+<tr>
+<td>To set</td>
+<td>It will be written on the next pass (or once writing is enabled)</td>
+</tr>
+<tr>
+<td>No queue</td>
+<td>The planner skipped it, with its reason: no rate to apply, address claimed twice, link disabled by hand…</td>
+</tr>
+<tr>
+<td>Conflict</td>
+<td>A third-party queue already targets this address; RouterOS would only apply the first</td>
+</tr>
+<tr>
+<td>Manual queue</td>
+<td>A queue set by the operator, without <code>freeqos:managed</code>: shown because it caps, <strong>never</strong> modified</td>
+</tr>
+</tbody>
+</table></div>
+<p>Points without a queue are listed like the others: a map that only showed what works would leave the rest to be found nowhere. The raw details stay available under the map: analysis of what exists (<code>GET /api/v1/shaping/state</code>), the plan computed on demand, and the command log.</p>
+<h3 id="where-a-subscriber-queue-points-and-when-it-is-skipped">Where a subscriber queue points, and when it is skipped</h3>
+<p>The subscriber's address is <strong>read on the router when the plan is computed</strong>, never taken from the database: a stored address may be one cycle late, and if the subscriber reconnected in between, the pool may have given its IP to a neighbour. It is written in canonical form with its prefix (<code>10.20.0.12/32</code>): RouterOS always rewrites a bare address that way, and sending it bare would produce a difference at every cycle.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Situation</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Subscriber <strong>offline</strong></td>
+<td>No queue. Writing on its last known address would cap whoever got it next</td>
+</tr>
+<tr>
+<td>Subscriber <strong>reconnected</strong> on another IP</td>
+<td><code>set target=…</code> on the existing queue: the queue name does not depend on the address</td>
+</tr>
+<tr>
+<td><strong>Two subscribers</strong> on the same address</td>
+<td>Neither queue. One of the two is stale, nobody knows which, and RouterOS would only apply the first</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each skipped subscriber is listed with its reason. <strong>Automatic writes never delete</strong>: boost expiry and the immediate write of a cap add queues, they never remove any. Without this rule, a momentary <code>/ppp/active</code> failure would make everyone look offline and erase the queues of a whole PoP. Only a plan read in the interface (or <em>Reset queues</em>) can delete. <code>SUBSCRIBER_QUEUE_TARGET=interface</code> restores the old behaviour (queue on the <code>&lt;pppoe-…&gt;</code> interface) for a network that depends on it; it is not recommended.</p>
+<h3 id="are-the-caps-actually-held">Are the caps actually held?</h3>
+<p>Three different questions are often confused: what freeQoS <strong>wants</strong> to install (the plan), what it <strong>wrote</strong> (the log), and what the network <strong>applies</strong>. Only the third is felt by the subscriber, and on RouterOS a queue can exist, carry the right rate, read without error — and cap nothing:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Cause</th>
+<th>What you see</th>
+<th>What happens</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>FastTrack</strong></td>
+<td>A normal queue whose counter does not move</td>
+<td><code>action=fasttrack-connection</code> lets established connections skip the rest of the path, <strong>simple queues included</strong>. Enabled by default in RouterOS's factory firewall</td>
+</tr>
+<tr>
+<td><strong>Hidden queue</strong></td>
+<td>Two queues, each with its rate</td>
+<td>RouterOS only applies the <strong>first</strong> queue matching a target; the next ones are decoration</td>
+</tr>
+<tr>
+<td><strong>Disabled queue</strong></td>
+<td>A perfectly readable rate</td>
+<td><code>disabled=yes</code> caps nothing</td>
+</tr>
+<tr>
+<td><strong>Rate mismatch</strong></td>
+<td>Interface and router disagree</td>
+<td>Cap changed in the database, never pushed</td>
+</tr>
+</tbody>
+</table></div>
+<p>A background job checks these four causes <strong>on the routers</strong>, queue by queue, every 3 minutes (<code>GET /api/v1/shaping/limits</code> reads the result without waiting for the routers). It feeds <em>Settings › Are the caps actually held?</em> and the <em>Limit</em> column of the subscribers, where a cap the network does not hold shows <strong>NOT HELD</strong> with its cause. freeQoS <strong>does not touch the firewall</strong>: FastTrack is a performance decision that is not its own. It names it and gives the line to paste (<code>/ip firewall filter disable [find action=fasttrack-connection]</code>). It does fix what belongs to it: a queue disabled by hand is <strong>re-enabled</strong> by reconciliation, and a queue hidden by another is reported as a conflict.</p>
+<h3 id="the-write-switch-and-the-accounts-rights">The write switch and the account's rights</h3>
+<p>The switch in <em>Settings › Shaping and writing to the routers</em> turns writing on or off <strong>without a restart</strong>; the database keeps its state. Turning it on asks for a confirmation and a reason, recorded in the log; turning it off is immediate. <code>ENFORCEMENT_LOCKED=true</code>, or <code>ENFORCEMENT_ENABLED=false</code> in the environment, forbids turning it on from the interface.</p>
+<p>Writing needs the <code>write</code> and <code>api</code> policies. freeQoS reads the <strong>real rights</strong> of the account on the router (<code>/user</code> and <code>/user/group</code>) and gives one of three verdicts: can write, cannot (with the missing policy), or undetermined. When <code>/user</code> cannot be read (an account authenticated by RADIUS, for example), freeQoS <strong>does not block</strong>: it tries the command and reports what RouterOS answers, translating <code>not enough permissions</code> into the fix to make. A separate write account can be declared per router (<code>rw_username</code>); <code>REQUIRE_SEPARATE_WRITE_ACCOUNT=true</code> makes it mandatory.</p>
 <h3 id="closed-qoe-loop">Closed QoE loop</h3>
 <p>Every 5 minutes, freeQoS looks at the QoE of each sector over the last 15 minutes.</p>
 <ul>
@@ -1822,7 +2427,67 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>What does not count:</strong> a subscriber that has never answered the ping.</li>
 </ul>
 <p>A single degraded subscriber points at its last mile (CPE, home Wi-Fi), not at the sector. This is why at least two are needed.</p>
-<h2 id="8-interface">8. Interface</h2>
+<h2 id="8-capacity-and-business-insights">8. Capacity and business insights</h2>
+<p>The measurements answer operating questions ("is it working?"). The same data, read over days, answers capacity and commercial ones: how much was sold behind each link, when links saturate, who is about to leave, who is ready for a bigger plan, and how many more subscribers each site can take.</p>
+<h3 id="sold-against-real-capacity">Sold against real capacity</h3>
+<p>For each PoP, freeQoS divides the <strong>sum of the plans sold</strong> by the <strong>measured capacity</strong> of the site (<code>GET /api/v1/capacity</code>):</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Oversubscription</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>up to 5:1</td>
+<td>comfortable</td>
+</tr>
+<tr>
+<td>5:1 to 20:1</td>
+<td>to watch</td>
+</tr>
+<tr>
+<td>above 20:1</td>
+<td>tight</td>
+</tr>
+<tr>
+<td>nothing sold / capacity not measured</td>
+<td>said as such, never shown as 0</td>
+</tr>
+</tbody>
+</table></div>
+<p>A PoP at 12:1 is not broken: it becomes so the day its subscribers use it at the same time. That is why the <strong>busy-hour peak</strong> actually observed is shown next to the ratio.</p>
+<h3 id="when-a-link-saturates">When a link saturates</h3>
+<p>For each link, the <strong>occupancy</strong> is the busy-hour peak divided by its capacity: below 80% <em>free</em>, from 80% <em>loaded</em>, from 95% <em>saturated</em>. It can exceed 100%: the capacity of a port is its negotiated speed, that of a radio a measurement of the moment, and an occupancy above 100% means the capacity retained is underestimated — exactly what needs to be seen.</p>
+<p>A link is flagged <strong>to reinforce</strong> when its <strong>average</strong> occupancy over the period is above 80%, with at least 10 samples. A peak at 100% proves nothing — it is what a well-sized link does on a match night; an average above 80% means the next growth will be paid in latency for everyone.</p>
+<p><strong>Saturation risks</strong> (<em>Executive</em>, <code>GET /api/v1/capacity/hotspots</code>) apply the gauges' thresholds — from 70% a link is to watch, from 90% it no longer holds one more peak — and split links into two sides: the <strong>internet side</strong> (the gateway's uplink and the PoP-to-core links, where a saturation hits every client) and the <strong>PoP side</strong> (links towards subscribers, VLANs and relays, where it only hits what hangs below). A radio link that only carries 70% of its nominal capacity is flagged as degraded.</p>
+<h3 id="who-is-about-to-leave-who-is-ready-for-more">Who is about to leave, who is ready for more</h3>
+<p><em>Insights</em> (<code>GET /api/v1/insights/subscribers?days=7</code>) compares the chosen period (7, 14 or 30 days) with the one before it, so it needs <strong>twice the period</strong> of history; the page says how many days it has.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>List</th>
+<th>Rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>At risk of leaving</strong></td>
+<td>A poor experience (QoE score below 50); <strong>or</strong> usage collapsing (current average below 30% of the previous one, which was above 10 kbps); <strong>or</strong> a line that used to be used and has been silent for 3 days or more</td>
+</tr>
+<tr>
+<td><strong>Ready for a bigger plan</strong></td>
+<td>At 90% of its plan or more during at least 15% of the period, <strong>with a good experience</strong> (score 50 or more, or not measured)</td>
+</tr>
+</tbody>
+</table></div>
+<p>A subscriber who saturates its plan <strong>and</strong> whose latency rises is not in the second list: that is a network problem first, and selling it a bigger plan would fix nothing. Subscribers spending more than 20% of their samples above 90% of their plan are also listed in the capacity view as living <em>at their ceiling</em>.</p>
+<h3 id="how-many-more-subscribers-a-site-can-take">How many more subscribers a site can take</h3>
+<p>For each site and access point (<code>GET /api/v1/insights/capacity</code>), freeQoS takes the measured busy-hour peak, divides it by the number of subscribers to get what each one adds at peak, and divides the room left <strong>under 80% of the capacity</strong> by that contribution. This is the site's own measurement, not a theoretical oversubscription ratio. A site where 20% or more of the subscribers already have a poor experience has <strong>no room</strong>, whatever the apparent margin. Without a known capacity or a busy-hour measurement, the answer is "unknown", with the reason.</p>
+<h3 id="volumes">Volumes</h3>
+<p>The capacity view also ranks subscribers by <strong>volume</strong> over the period. The top of instantaneous rates names whoever is downloading right now; the volume over a week names whoever weighs on the network. They are almost never the same subscribers.</p>
+<h2 id="9-interface">9. Interface</h2>
 <p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation.</p>
 <div class="table-wrap"><table>
 <thead>
@@ -1894,7 +2559,16 @@ curl -s http://127.0.0.1:8000/health/ready
 </ul>
 <h3 id="empty-latency">Empty latency</h3>
 <p>When a subscriber has no latency, the cell does not stay silent: it says whether the subscriber has never answered, whether the measurement is too old, or whether the probe has not run yet. <em>Find the cause</em> runs the diagnostic described in section 5.</p>
-<h2 id="9-api">9. API</h2>
+<h3 id="search-units-and-empty-values">Search, units and empty values</h3>
+<ul>
+<li><strong>Search</strong> (top of every page, <code>GET /api/v1/search</code>): one field finds a subscriber, an IP, a MAC, a device or a site — type what you have in front of you.</li>
+<li><strong>Units</strong>: rate fields accept kbps, Mbps or Gbps, and values are displayed in the most readable unit.</li>
+<li><strong>Empty is not zero</strong>: a value that was not measured shows "-" or a reason, never 0. A subscriber that is declared but never measured is listed with gaps, not zeros.</li>
+<li><strong>Errors are shown</strong>: a tab that cannot load says which error, rather than staying blank.</li>
+<li><strong>No external dependency</strong>: no framework, CDN or downloaded map tile; the interface works on a management server cut off from the internet. After an update, the browser cannot serve the old scripts: their address carries a fingerprint of their content.</li>
+</ul>
+<p>Every section and every figure of the interface carries an (i) with its explanation. Appendix A reproduces all of them, page by page.</p>
+<h2 id="10-api">10. API</h2>
 <p>Everything the interface does goes through the API. The full guide, with <code>curl</code> examples and the reference generated by the server, is at <code>&lt;your-freeqos-url&gt;/api-guide</code>. This section gives its structure and rules.</p>
 <h3 id="three-apis-one-server-the-same-keys">Three APIs, one server, the same keys</h3>
 <div class="table-wrap"><table>
@@ -1974,6 +2648,37 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>An identifier already used by a record entered by hand</strong> is refused (<code>409</code>): the API never takes over a human action.</li>
 </ol>
 <p><code>PUT</code> creates or replaces: billing can replay its whole inventory every night without risk. The identifier in the URL is authoritative; a body carrying another one is refused (<code>400</code>).</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Model API detail</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Lists</td>
+<td><code>GET /model/v1/&lt;collection&gt;?page=1&amp;limit=500</code> returns <code>{"data": [...], "paginator": {...}}</code>; without <code>limit</code>, everything is returned</td>
+</tr>
+<tr>
+<td>Codes</td>
+<td><code>200</code> for every success (including <code>DELETE</code>), <code>400</code> for malformed JSON or a contradictory identifier, <code>401</code> for a missing or refused key <strong>and for a key lacking the scope</strong> (as Preseem does), <code>404</code> for an absent object, <code>409</code> for an identifier owned by a hand-entered record</td>
+</tr>
+<tr>
+<td>Responses</td>
+<td>The record as Preseem returns it: an unset field (a rate, for example) is <strong>omitted</strong>, never <code>null</code>; the CPE MAC is lower case</td>
+</tr>
+<tr>
+<td>Enforcement report</td>
+<td>For a service, what was written on the router is in the <code>X-FreeQoS-Enforcement</code> response header, outside the body</td>
+</tr>
+<tr>
+<td>Several prefixes</td>
+<td>The first prefix is the queue's target; all of them count in the traffic measurement</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Usage API parameters</strong> (<code>GET /usage/v1/services</code> and <code>/usage/v1/services/{id}</code>): <code>start</code> and <code>end</code> (ISO 8601, UTC), or <code>days</code> (default 30, up to 366) when <code>start</code> is absent; <code>bucket</code> = <code>total</code>, <code>hour</code>, <code>day</code> or <code>month</code>; <code>vantage</code> = <code>edge</code> or <code>pop</code> to override the accounting vantage point.</p>
 <p><strong>For a PPPoE subscriber</strong>, the simplest is still <code>PUT /api/v1/plans/{login}</code>: the login is enough to find it on its router.</p>
 <p><strong>Consumption</strong> (<code>/usage/v1</code>) comes from NetFlow, not from queue counters: those restart from zero at each reconnection and do not exist for a subscriber without a queue. With no router exporting, this API returns zeros and says so in its <code>source</code> field.</p>
 <h3 id="authentication">Authentication</h3>
@@ -1989,6 +2694,7 @@ X-API-Key: &lt;key&gt;
 Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 </code></pre>
 <p><code>GET /model/v1</code> checks a key in one call: it returns the collections, the key prefix and its scopes.</p>
+<p>The secret is drawn once, shown once, and the database only keeps its SHA-256 fingerprint. A lost key is revoked and replaced. A refusal never says <em>why</em> (unknown, disabled, expired): distinguishing the cases would give an oracle to whoever tries keys at random; the server log does say it.</p>
 <h3 id="conventions">Conventions</h3>
 <ul>
 <li>JSON in and out. <em>Down</em> = towards the subscriber, <em>up</em> = from the subscriber.</li>
@@ -2100,7 +2806,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 </ul>
 <h3 id="reference">Reference</h3>
 <p><code>/openapi.json</code> describes every route, generated by the installed server: it cannot drift from the code. The <code>/api-guide</code> page makes it readable, with search.</p>
-<h2 id="10-security">10. Security</h2>
+<h2 id="11-security">11. Security</h2>
 <p>freeQoS holds router credentials that can write across the whole network. Security follows a simple principle: <strong>what writes is rare, explicit and logged</strong>.</p>
 <h3 id="interface-accounts">Interface accounts</h3>
 <ul>
@@ -2110,7 +2816,14 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <li><strong>Anti-guessing:</strong> 5 failures in 5 minutes lock the email <strong>and</strong> the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.</li>
 <li><strong>Session:</strong> an <code>HttpOnly</code>, <code>SameSite=Strict</code> cookie, valid 24 h, 30 days at most (<code>SESSION_TTL_HOURS</code>, <code>SESSION_MAX_HOURS</code>). Writes also check <code>Origin</code> and <code>Sec-Fetch-Site</code>.</li>
 <li><strong>Log:</strong> every login (successful, refused, locked), logout and account change is recorded with the address and browser. At login, everyone sees the date and origin of their previous login.</li>
+<li><strong>Last editor:</strong> at least one active account with edit rights always remains; the last one can be neither deleted, downgraded nor disabled.</li>
+<li><strong>Sessions:</strong> at most 10 open sessions per account; everyone sees their own sessions (browser, address, last activity) and can close them remotely. Changing a password or a role closes the other sessions.</li>
+<li><strong>Journal retention:</strong> login events are kept 180 days (<em>Settings › Accounts › Login journal</em>) and are also written to the container log (<code>auth login_failed …</code>), usable by fail2ban.</li>
 </ul>
+<p><strong>Behind an HTTPS reverse proxy</strong>, set <code>FORWARDED_ALLOW_IPS=&lt;proxy address&gt;</code> so that the application trusts the proxy's <code>X-Forwarded-Proto</code>: the session cookie is then sent <code>Secure</code>, HSTS is set, and the address recorded for each login is the client's, not the proxy's.</p>
+<p><strong>Locked out of every edit account?</strong> Emptying the accounts table reopens the first-account screen; measurements and inventory are untouched:</p>
+<pre><code>sudo docker compose exec timescaledb psql -U qos -d qos -c &quot;TRUNCATE app_users CASCADE&quot;
+</code></pre>
 <h3 id="http-headers">HTTP headers</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -2183,7 +2896,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 </tbody>
 </table></div>
 <p>It is recommended to put the interface behind HTTPS and to restrict 2055/UDP to the routers' addresses.</p>
-<h2 id="11-operations">11. Operations</h2>
+<h2 id="12-operations">12. Operations</h2>
 <h3 id="monitoring-freeqos">Monitoring freeQoS</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -2298,10 +3011,31 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <td>15 min</td>
 <td>Network tree</td>
 </tr>
+<tr>
+<td><code>verify_caps</code></td>
+<td>3 min</td>
+<td>Are the caps actually held (section 7)</td>
+</tr>
+<tr>
+<td><code>dns_names</code></td>
+<td>2 min</td>
+<td>Reading the routers' DNS cache</td>
+</tr>
+<tr>
+<td><code>place_unplaced_services</code></td>
+<td>2 min</td>
+<td>Placing services pushed without an address</td>
+</tr>
+<tr>
+<td><code>purge_empty_pops</code></td>
+<td>10 min</td>
+<td>Removing empty sites</td>
+</tr>
 </tbody>
 </table></div>
+<p>The scheduler runs each cycle once immediately at startup, then at its period. A cycle never overlaps itself: it runs, then sleeps for the rest of its period; an overrun is counted, not stacked.</p>
 <h3 id="live-settings">Live settings</h3>
-<p>Most operating settings can be changed in <em>Settings</em> without a restart (<code>PUT /api/v1/settings/{name}</code>). They are stored in the database with their history (<code>GET /api/v1/settings/history</code>: who, what, when). <code>DELETE /api/v1/settings/{name}</code> goes back to the value from <code>.env</code>.</p>
+<p>Most operating settings can be changed in <em>Settings</em> without a restart (<code>PUT /api/v1/settings/{name}</code>): shaping and CAKE options apply at the next plan, cadences at the next turn of the scheduler. They are stored in the database with their history (<code>GET /api/v1/settings/history</code>: who, what, when, why). <strong>The database wins</strong>: the environment only seeds a value on the very first start, so once a setting has been changed in the interface, editing <code>.env</code> no longer affects it. <code>GET /api/v1/settings</code> shows each setting's value, default and origin; <code>DELETE /api/v1/settings/{name}</code> brings it back to its default.</p>
 <p>Deliberately out of the interface's reach: database access, secrets, and <code>ENFORCEMENT_ENABLED=false</code> when it is set in the environment.</p>
 <h3 id="data-and-retention">Data and retention</h3>
 <p>Measurements live in TimescaleDB hypertables:</p>
@@ -2318,6 +3052,32 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><code>make restore</code> stops the application, wraps <code>pg_restore</code> in <code>timescaledb_pre_restore()</code> / <code>post_restore()</code>, puts <code>secret.key</code> back, then restarts. Copy backups off the server.</p>
 <p><code>make backup</code> does not copy <code>data/instance.id</code>. On a new server, copy it back or set <code>FREEQOS_INSTANCE_ID</code>; otherwise queues already in place will be seen as another instance's and left alone.</p>
 <h3 id="common-actions">Common actions</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>make update</code></td>
+<td>Fetches the code and restarts the application; no data lost</td>
+</tr>
+<tr>
+<td><code>make backup</code> / <code>make restore DIR=…</code></td>
+<td>Backup and restore (see above)</td>
+</tr>
+<tr>
+<td><code>make logs</code></td>
+<td>Follows the application log</td>
+</tr>
+<tr>
+<td><code>make reset-db</code></td>
+<td><strong>Erases</strong> the database (measurements, routers, antennas, topology, settings, static clients) after confirmation, and regenerates the encryption key: routers must be declared again</td>
+</tr>
+</tbody>
+</table></div>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -2354,7 +3114,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </table></div>
 <h3 id="several-instances">Several instances</h3>
 <p>Two installations must not drive the same routers. If it happens, each only touches its own objects (<code>instance=&lt;id&gt;</code> comment), but they fight over subscribers. The <em>Other instance</em> banner reports it. For an update or a migration, stop the old one <strong>before</strong> starting the new one.</p>
-<h2 id="12-troubleshooting">12. Troubleshooting</h2>
+<h2 id="13-troubleshooting">13. Troubleshooting</h2>
 <p>All these cases come from the lab or the first deployment. For each: the symptom, the check that settles it, then the action.</p>
 <h3 id="700-to-900-ms-latency-on-nearby-subscribers">700 to 900 ms latency on nearby subscribers</h3>
 <ul>
@@ -2432,7 +3192,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tr>
 </tbody>
 </table></div>
-<h2 id="13-settings-reference">13. Settings reference</h2>
+<h2 id="14-settings-reference">14. Settings reference</h2>
 <p>All settings are read from the environment or from <code>.env</code>. The variable name is the one in the table, in capitals. Those marked ✱ can also be changed live in <em>Settings</em>.</p>
 <h3 id="application-and-database">Application and database</h3>
 <div class="table-wrap"><table>
@@ -2817,6 +3577,2236 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>RESTRICTION_ADDRESS_LIMIT</code> ✱</td>
 <td>5,000</td>
 <td>Maximum addresses per list</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="15-data-model">15. Data model</h2>
+<h3 id="reference-data">Reference data</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pops</code></td>
+<td>Sites: PoPs and VLAN sites, with the router serving each</td>
+</tr>
+<tr>
+<td><code>subscribers</code></td>
+<td>Every subscriber, PPPoE or static (<code>kind</code>), unique <code>login</code>, plan, PoP, last address, last seen</td>
+</tr>
+<tr>
+<td><code>static_clients</code></td>
+<td>Declared static-IP clients and services pushed through <code>/model/v1</code> (<code>source</code>)</td>
+</tr>
+<tr>
+<td><code>client_plans</code></td>
+<td>The plan written for each client, and its source (<code>api</code>, <code>ui</code>)</td>
+</tr>
+<tr>
+<td><code>routers</code>, <code>hidden_file_routers</code></td>
+<td>Routers added from the interface (encrypted password, unique loopback, last connection diagnostic); routers of the file hidden by hand</td>
+</tr>
+<tr>
+<td><code>backhauls</code>, <code>airos_antennas</code></td>
+<td>Radio links and the antennas polled for their capacity</td>
+</tr>
+<tr>
+<td><code>link_media</code></td>
+<td>Links declared wired (with a capacity) or radio (with their antenna)</td>
+</tr>
+<tr>
+<td><code>topology_nodes</code>, <code>topology_links</code>, <code>topology_aliases</code>, <code>topology_layout</code></td>
+<td>Discovered graph, manual merges, box positions and hand-made choices</td>
+</tr>
+<tr>
+<td><code>subscriber_attachments</code></td>
+<td>Subscriber → radio sector</td>
+</tr>
+<tr>
+<td><code>vlan_sightings</code></td>
+<td>Presence observed by the PoP census</td>
+</tr>
+<tr>
+<td><code>shaping_policies</code>, <code>qoe_link_states</code></td>
+<td>Rates set by hand and boosts; tightening decided by the QoE loop (kept apart so that one never overwrites the other)</td>
+</tr>
+<tr>
+<td><code>enforcement_audit</code></td>
+<td>Every command sent, with its author and result</td>
+</tr>
+<tr>
+<td><code>runtime_flags</code>, <code>runtime_settings</code></td>
+<td>Live switches (write, probe) and settings changed from the interface, with their history</td>
+</tr>
+<tr>
+<td><code>traffic_rules</code></td>
+<td>Restrictions as entered: a criterion, never a frozen address list</td>
+</tr>
+<tr>
+<td><code>app_users</code>, <code>app_sessions</code>, <code>auth_events</code>, <code>api_keys</code></td>
+<td>Accounts, sessions, login journal, API keys (fingerprints only)</td>
+</tr>
+<tr>
+<td><code>model_accounts</code>, <code>model_packages</code>, <code>model_sites</code>, <code>model_access_points</code>, <code>model_services_unplaced</code></td>
+<td>The Preseem-compatible commercial model</td>
+</tr>
+<tr>
+<td><code>netflow_exporters</code></td>
+<td>Exporters and their vantage point and sampling</td>
+</tr>
+<tr>
+<td><code>collector_runs</code></td>
+<td>History of cycle runs</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="time-series-hypertables">Time series (hypertables)</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>subscriber_metrics</code></td>
+<td>Per subscriber, every 10 s: rates, byte counters, RTT, session uptime</td>
+</tr>
+<tr>
+<td><code>interface_metrics</code></td>
+<td>Per router port: rates, counters, state, negotiated speed — the source of link throughput</td>
+</tr>
+<tr>
+<td><code>backhaul_metrics</code></td>
+<td>Per radio: capacity (total, down, up), signal, airtime, MCS, online</td>
+</tr>
+<tr>
+<td><code>qoe_scores</code></td>
+<td>Reserved for stored scores (scores are currently computed when read)</td>
+</tr>
+<tr>
+<td><code>flow_metrics</code>, <code>flow_app_metrics</code></td>
+<td>NetFlow volume per subscriber and per usage family, <strong>with the vantage point in the key</strong></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="what-subscribers-reach">What subscribers reach</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Content</th>
+<th>Lifetime</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>flow_destinations</code>, <code>flow_destination_buckets</code></td>
+<td>The pair (subscriber address, remote address): volumes, last port and protocol, first and last seen. The subscriber may be unknown</td>
+<td>Measurement: purged after 7 days without traffic</td>
+</tr>
+<tr>
+<td><code>flow_hosts</code></td>
+<td>Addresses seen in flows and attached to no record (only if <code>NETFLOW_TRACK_HOSTS=true</code>)</td>
+<td>24 h</td>
+</tr>
+<tr>
+<td><code>ip_intel</code></td>
+<td>What is known about an address: reverse name, service, family, organisation, AS, country, and on what grounds</td>
+<td>Knowledge: kept</td>
+</tr>
+</tbody>
+</table></div>
+<p>A row is created in <code>ip_intel</code> with no resolution date <strong>as soon as a subscriber reaches the address</strong>: that is the naming queue, and what makes discovery dynamic. Three views give the last point of each series: <code>subscriber_latest</code>, <code>interface_latest</code>, <code>backhaul_latest</code>. Aggregations use <code>date_bin</code> rather than <code>time_bucket</code>: the same queries work on plain PostgreSQL.</p>
+<h2 id="16-known-limitations-and-faq">16. Known limitations and FAQ</h2>
+<h3 id="limitations-by-design">Limitations, by design</h3>
+<ul>
+<li><strong>No code in the packet path.</strong> Consequence: no TCP retransmissions, and latency comes from an active probe that requires the subscriber's box to answer ping.</li>
+<li><strong>Radios are never driven.</strong> Their capacity is read; writing only concerns RouterOS queues, address lists, firewall restrictions and the NetFlow export.</li>
+<li><strong>No RADIUS writes</strong> (no CoA): plans can be read from FreeRADIUS, never written back.</li>
+<li><strong>No fast local loop</strong> on the PoP: freeQoS sets baselines, it does not react below the second.</li>
+<li><strong>Restrictions are IPv4 only</strong>: IPv6 prefixes are set aside and the plan says so.</li>
+<li><strong>A static-IP client is only measured once a queue targets it.</strong></li>
+<li><strong>The NetFlow collector uses a single core</strong>: beyond about 5,000 flows per second, datagrams are lost (section 3).</li>
+<li><strong>The two NetFlow tables are not compressed</strong>: they are the largest disk item (section 3).</li>
+<li><strong>RDAP and web geolocation are on by default</strong> and send the addresses your subscribers visit to third parties (section 6).</li>
+</ul>
+<h3 id="faq">FAQ</h3>
+<p><strong>Does freeQoS cut subscribers if it stops?</strong> No. The queues stay on the routers and traffic flows; only measurement, timed boosts and adjustments pause. A boost that should have expired keeps running until freeQoS comes back.</p>
+<p><strong>Can I try it without touching my routers?</strong> Yes: it starts in simulation. Give the account only <code>read,api,test</code> to make writing impossible, or keep the switch off and read the plan.</p>
+<p><strong>Will it touch the queues I created myself?</strong> Never. Only objects carrying <code>freeqos:managed instance=&lt;this instance&gt;</code> are modified or deleted; your queues are shown on the map as manual queues.</p>
+<p><strong>Why does a subscriber show no latency?</strong> Most often its CPE does not answer ping (<code>client_blocks_icmp</code>). <em>Find the cause</em> says which of the eight causes applies (section 5).</p>
+<p><strong>Why is a subscriber not capped?</strong> Is writing on? Does it have a plan? Is it online? Then look at <em>Are the caps actually held?</em>: FastTrack is the first cause of a cap that does not cap (section 7).</p>
+<p><strong>Why is the Traffic page empty?</strong> The page names the cause: no router, export not set up yet, writing off, or a network path problem — most often UDP 2055 not published or filtered (section 6).</p>
+<p><strong>Can two freeQoS run on the same routers?</strong> They will not overwrite each other's objects, but they will fight over subscribers. Run one per network; stop the old one before starting a new one.</p>
+<p><strong>How do I move freeQoS to another server?</strong> <code>make backup</code>, copy the backup <strong>and the instance identifier</strong> to the new server, <code>make restore</code>, set the same <code>FREEQOS_INSTANCE_ID</code> or copy <code>data/instance.id</code> into the volume, then update the routers' NetFlow target if the address changes (freeQoS does it by itself at the next export pass).</p>
+<p><strong>Where are the logs?</strong> <code>make logs</code> (or <code>sudo docker compose logs -f app</code>). Every command written to a router is also in <em>Settings › Log of commands sent</em>.</p>
+<h2 id="appendix-a-interface-reference">Appendix A. Interface reference</h2>
+<p>The explanations below are exactly those the interface shows behind each (i), extracted from the application at build time: they cannot differ from what operators read on screen.</p>
+<h3 id="dashboard">Dashboard</h3>
+<p>What is happening on the network right now.</p>
+<h4 id="network-throughput">Network throughput</h4>
+<p><strong>What it shows.</strong> Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.</p>
+<p><strong>How it is measured.</strong> Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.</p>
+<p><strong>How to read it.</strong> Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Routers — live traffic as “not from clients”. Filter by router or client with the menus.</p>
+<p><strong>What to do.</strong> A flat line at 0 while clients are online usually means the collection stopped: check the health dot at the top left and Devices › Polled routers.</p>
+<h4 id="routers-live-traffic">Routers — live traffic</h4>
+<p><strong>What it shows.</strong> Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.</p>
+<p><strong>How it is measured.</strong> Uplink port counters and subscriber queues, read every 10 s. Router CPU and port load come from the same poll.</p>
+<p><strong>Scale.</strong></p>
+<ul>
+<li>Green: under 70%: comfortable</li>
+<li>Amber: 70 to 90%: watch it — peaks start to queue</li>
+<li>Red: over 90%: saturated — latency rises for everyone behind it</li>
+</ul>
+<p><strong>How to read it.</strong> The coloured state line at the top says whether each collection (subscribers, ports, latency) is running. A large “not from clients” share is traffic of no known client.</p>
+<p><strong>What to do.</strong> Red collection state: open Devices › Polled routers and test the connection of that router.</p>
+<h4 id="top-consumers">Top consumers</h4>
+<p><strong>What it shows.</strong> The subscribers using the most bandwidth right now.</p>
+<p><strong>How it is measured.</strong> Last 10-second measurement of each subscriber’s queue, sorted by download.</p>
+<p><strong>How to read it.</strong> A client at the top of this list is not a problem in itself — it is using what it pays for. It matters when its row is red (at its limit) and the node it belongs to is saturated too.</p>
+<h4 id="radio-backhauls">Radio backhauls</h4>
+<p><strong>What it shows.</strong> The radio links declared in the inventory (UISP / airOS), with what they can carry now and how loaded they are.</p>
+<p><strong>How it is measured.</strong> Current capacity is read from the radio (it drops when the signal fades); nominal capacity is what the link is rated for. Load = traffic ÷ current capacity.</p>
+<p><strong>Scale.</strong></p>
+<ul>
+<li>Green: under 70%: comfortable</li>
+<li>Amber: 70 to 90%: watch it — peaks start to queue</li>
+<li>Red: over 90%: saturated — latency rises for everyone behind it</li>
+</ul>
+<p><strong>What to do.</strong> Current capacity far below nominal: alignment, interference or rain fade — check signal and SNR on the antenna page.</p>
+<h3 id="executive">Executive</h3>
+<p>Where the risk is: saturation, experience, load and queues per node, health over time. Clicking a node or a client opens the Selection panel.</p>
+<h4 id="saturation-risks">Saturation risks</h4>
+<p><strong>What it shows.</strong> Every link compared with what it can carry, worst first.</p>
+<p><strong>How it is measured.</strong> Traffic of the link ÷ its capacity (the lowest of: rate set by hand, measured radio capacity, port speed). Bar = now; marker = the peak of the selected period.</p>
+<p><strong>Scale.</strong></p>
+<ul>
+<li>Green: under 70%: comfortable</li>
+<li>Amber: 70 to 90%: watch it — peaks start to queue</li>
+<li>Red: over 90%: saturated — latency rises for everyone behind it</li>
+</ul>
+<p><strong>How to read it.</strong> Internet side (gateway uplink, PoP-to-core): a saturation hits every client. PoP side (towards subscribers, VLANs, relays): only the clients behind that link. A link with “capacity unknown” cannot be judged — set its rate in the Network tree.</p>
+<p><strong>What to do.</strong> Peak regularly over 90%: upgrade the link or lower the plans sold behind it. Only the peak is high: usually fine, links are meant to be full at the busiest minute.</p>
+<h4 id="latency-by-client">Latency by client</h4>
+<p><strong>What it shows.</strong> The experience each subscriber really gets, with a verdict (good / fair / poor) and the reason in plain words.</p>
+<p><strong>How it is measured.</strong> The PoP router pings each client 5 times every 30 s (200 ms apart, from its loopback). Median, p95, jitter and loss come from those pings; “under load” compares latency when the client’s line is busy with latency at rest.</p>
+<p><strong>Scale.</strong></p>
+<ul>
+<li>Green: good: median under 30 ms, no loss, little bufferbloat</li>
+<li>Amber: fair: 30–100 ms, spikes, some loss, or +30 to +150 ms under load</li>
+<li>Red: poor: over 100 ms, 2%+ loss, +150 ms under load, or score under 50</li>
+<li>Grey: at plan limit: judged apart (see below)</li>
+</ul>
+<p><strong>How to read it.</strong> Samples taken while the client uses 85%+ of its plan are left out: a full line makes its own queue — that is not a network fault. “no reply” on every client of a router means the probe itself is failing, not the clients.</p>
+<p><strong>What to do.</strong> Many poor clients behind the same node: look at that node’s load and backhaul. A single poor client: its CPE, signal or home Wi-Fi.</p>
+<h4 id="load-by-node">Load by node</h4>
+<p><strong>What it shows.</strong> Traffic of each node (site) compared with the sum of its clients’ limits.</p>
+<p><strong>How it is measured.</strong> Sum of the clients’ queues every 10 s, divided by the sum of their limits.</p>
+<p><strong>How to read it.</strong> This is a share of what was sold, not of the link: 100% means every client is at its cap at once, which practically never happens.</p>
+<h4 id="queues-by-node">Queues by node</h4>
+<p><strong>What it shows.</strong> Each node (PoP or router) with its clients: traffic now vs limit, limits applied, plans sold, worst latency and experience.</p>
+<p><strong>How it is measured.</strong> Queue counters every 10 s; latency from the probe every 30 s. A VLAN client is listed under the router that carries it.</p>
+<p><strong>How to read it.</strong> Click a row to open its detail below. The “Rate” field lets you force a client’s limit by hand — it then overrides its plan until you clear it.</p>
+<h4 id="selection">Selection</h4>
+<p>Details of the node or client selected in the table above: link, plans, limits and the clients behind it.</p>
+<h4 id="node">Node</h4>
+<p><strong>What it shows.</strong> Detail of the selected node: its link (capacity and load), the limits and plans of its clients, and how each client is doing.</p>
+<p><strong>How to read it.</strong> Oversubscription = plans sold ÷ link capacity. Some is normal (clients are not all active at once); far above 3× the link will be full at busy hours.</p>
+<h4 id="client">Client</h4>
+<p><strong>What it shows.</strong> Detail of the selected client: its plan and where it comes from, the limit really applied, its usage and its latency at rest and under load.</p>
+<h4 id="health-over-time">Health over time</h4>
+<p><strong>What it shows.</strong> One colour per time step for three indicators: experience score, latency and load vs limit. Read it left to right to see when things went wrong.</p>
+<p><strong>How it is measured.</strong> Steps of the selected period (e.g. 5 min over 24 h). Steps where a client was at its plan limit are left out of latency and score.</p>
+<p><strong>Scale.</strong></p>
+<ul>
+<li>Green: green: good</li>
+<li>Amber: orange: fair / watch</li>
+<li>Red: red: poor / saturated</li>
+<li>Grey: grey: no measurement in that step</li>
+</ul>
+<p><strong>How to read it.</strong> For a node: the worst client of the step. For the whole network: all clients together. A red band at the same hour every evening is a capacity problem; a red band at random times is more often radio.</p>
+<h3 id="traffic">Traffic</h3>
+<p>Who consumes what, where the traffic goes, and the traffic restrictions.</p>
+<h4 id="who-consumes">Who consumes</h4>
+<p><strong>What it shows.</strong> Volume per subscriber over the period.</p>
+<p><strong>How it is measured.</strong> From NetFlow at the counting point, each client counted once (the best exporter for that client is used, never two).</p>
+<p><strong>How to read it.</strong> This is volume (GB), not speed: a client streaming all evening outweighs one who ran a short speed test.</p>
+<h4 id="which-services-the-traffic-comes-from">Which services the traffic comes from</h4>
+<p><strong>What it shows.</strong> Traffic grouped by recognised service (YouTube, Netflix, Steam, Microsoft updates…).</p>
+<p><strong>How it is measured.</strong> The remote address of each flow is matched with a catalogue of published address blocks, then with its reverse name and owner. Content is never inspected — it stays encrypted.</p>
+<p><strong>How to read it.</strong> “unknown” is traffic to addresses that match no catalogue entry yet; it shrinks as names are resolved.</p>
+<h4 id="where-the-traffic-goes">Where the traffic goes</h4>
+<p><strong>What it shows.</strong> Map of the destinations your clients reach: each country and city sized by the volume exchanged with it.</p>
+<p><strong>How it is measured.</strong> From NetFlow: each remote address is located from its address block (geolocation database). Hover a point for its volume and clients; click it to open the detail of that place.</p>
+<p><strong>How to read it.</strong> A location is that of the server’s block, not of the company: a CDN often answers from a nearby city even for a foreign service.</p>
+<h4 id="who-talks-to-whom-client-by-client">Who talks to whom, client by client</h4>
+<p><strong>What it shows.</strong> Each client and the internet addresses it exchanges with: volume, rate while active and live rate.</p>
+<p><strong>How it is measured.</strong> NetFlow records of the period, grouped by client and remote address.</p>
+<p><strong>How to read it.</strong> “Rate when active” divides by the time the conversation was really active, so a 10-second download at 100 Mbps shows 100 Mbps — not the 1 Mbps a whole-hour average would give.</p>
+<h4 id="destinations-reached">Destinations reached</h4>
+<p><strong>What it shows.</strong> Internet addresses reached by your clients, with their owner, location and volume.</p>
+<p><strong>How it is measured.</strong> From NetFlow; names come from the catalogue, reverse DNS and (if enabled) the registry.</p>
+<h4 id="find-an-ip">Find an IP</h4>
+<p><strong>What it shows.</strong> Look up any IP address or domain: owner, location, recognised service, and which of your clients reach it.</p>
+<p><strong>How to read it.</strong> Useful when a client complains about one site: see whether others reach it too and how much traffic it carries.</p>
+<h4 id="traffic-restrictions_1">Traffic restrictions</h4>
+<p><strong>What it shows.</strong> Rules that block or cap traffic towards a service, a category or an address range — for everyone, some sites, or some clients.</p>
+<p><strong>How it is measured.</strong> Written on the routers as address lists plus firewall (block) or mangle + queue tree (cap). The address list is refreshed automatically from the catalogue and from what NetFlow discovers.</p>
+<p><strong>What to do.</strong> A rule that seems to have no effect: check “Last applied” and that the router is reachable; new addresses join the list at the next refresh.</p>
+<h3 id="network-tree">Network tree</h3>
+<p>The discovered tree, editable with the mouse: drag a box onto another to re-parent it, correct a role, create or remove a link, merge two boxes that are the same device, hide a box. Each link carries its measured throughput. <em>Forget vanished devices</em> removes boxes not seen for a chosen time; declared routers and hand-made links are never removed.</p>
+<h3 id="subscribers">Subscribers</h3>
+<p>Every subscriber of every PoP, PPPoE and static-IP, filterable by PoP, kind and login: rate against plan, latency, bufferbloat grade, running boost. The <em>Add a client</em> form declares a static-IP client; <em>Declared static-IP clients</em> and <em>Clients by VLAN</em> list the inventory.</p>
+<h3 id="plans">Plans</h3>
+<p>Which rate for whom: the default plan, every client's plan and its source, and the packages pushed through the API.</p>
+<h4 id="default-plan">Default plan</h4>
+<p><strong>What it shows.</strong> The limit given to a client pushed by the API (or entered) without a rate. A client only DETECTED on a router, with no plan pushed, is observed and never throttled.</p>
+<p><strong>How to read it.</strong> 0 = no limit. To also cap detected clients, turn on default_plan_for_detected_clients in Settings. Changing it re-writes the queues of the clients that use it.</p>
+<h4 id="clients">Clients</h4>
+<p><strong>What it shows.</strong> Each client and the plan applied to it, with where that plan comes from.</p>
+<p><strong>How to read it.</strong> Source: pushed by the API (billing / CRM), set by hand here, or the default plan. A limit forced in Subscribers (Rate) overrides all three — it is shown here so you know why the plan is not what is applied.</p>
+<h4 id="packages-pushed-by-the-api">Packages pushed by the API</h4>
+<p>Offers received from your billing system or CRM through the public API (/model/v1/packages). Clients pushed with a package get its rates automatically.</p>
+<h3 id="insights">Insights</h3>
+<p>The commercial reading of the measurements, comparing the chosen period with the one before.</p>
+<h4 id="at-risk-of-leaving">At risk of leaving</h4>
+<p><strong>What it shows.</strong> Clients showing the signs that come before a cancellation.</p>
+<p><strong>How it is measured.</strong> Any of: experience score under 50 over the period; usage down more than 70% versus the previous period; no traffic at all for 3 days or more (for a client that used to consume).</p>
+<p><strong>What to do.</strong> Call before they do: a CPE swap, a realignment or a plan change is cheaper than a lost client.</p>
+<h4 id="ready-for-a-bigger-plan">Ready for a bigger plan</h4>
+<p><strong>What it shows.</strong> Clients that live at their plan ceiling while their experience stays good — the plan limits them, not the network.</p>
+<p><strong>How it is measured.</strong> At 90%+ of their plan in 15% or more of the samples of the period, with a score of 50 or more.</p>
+<p><strong>How to read it.</strong> A client at its ceiling with poor latency is not here on purpose: selling it more would not fix what is a network problem.</p>
+<h4 id="sites-and-access-points-room-for-more-subscribers">Sites and access points room for more subscribers</h4>
+<p><strong>What it shows.</strong> How many more subscribers each site or access point can take at today’s usage.</p>
+<p><strong>How it is measured.</strong> Busy-hour peak per subscriber, against a target of 80% of the capacity (above that, queues fill and latency rises before the link is full).</p>
+<p><strong>How to read it.</strong> A site where 20% or more of the clients already have a poor experience shows no room, whatever the margin on paper.</p>
+<h4 id="every-subscriber-plan-usage-experience">Every subscriber plan, usage, experience</h4>
+<p><strong>What it shows.</strong> All subscribers with their limit, current usage, latency and whether the router really holds the cap.</p>
+<p><strong>How to read it.</strong> Click a client to see its plan, its queue on the router and its history. The search box accepts a login, an IP, a MAC or a site.</p>
+<h3 id="devices">Devices</h3>
+<p>Routers and antennas: their health, adding them, and the inventory.</p>
+<h4 id="router-health">Router health</h4>
+<p><strong>What it shows.</strong> CPU, memory and uptime of each polled router.</p>
+<p><strong>Scale.</strong></p>
+<ul>
+<li>Green: CPU under 70%: fine</li>
+<li>Amber: 70–90%: busy — queues and NetFlow may lag</li>
+<li>Red: over 90%: overloaded — packets and measurements suffer</li>
+</ul>
+<p><strong>What to do.</strong> A sustained high CPU on a PoP: too many simple queues for the hardware, or a firewall rule doing heavy work.</p>
+<h4 id="polled-routers">Polled routers</h4>
+<p><strong>What it shows.</strong> The routers freeQoS reads (and writes queues to).</p>
+<p><strong>How to read it.</strong> Reset queues deletes every freeQoS queue of that router and rewrites them cleanly — use it when caps behave strangely. Queues not created by freeQoS are never touched.</p>
+<h4 id="connect-a-router">Connect a router</h4>
+<p><strong>What it shows.</strong> Add a MikroTik router: its address, API port and an account with read rights (and write rights if freeQoS should shape).</p>
+<p><strong>How to read it.</strong> The API-SSL port (8729) is preferred. A dedicated account with the “read, write, api, test” policies is enough — “test” is needed for the latency probe.</p>
+<h4 id="ubiquiti-antennas">Ubiquiti antennas</h4>
+<p>airOS access points and CPEs polled for their radio state: signal, noise, CCQ, capacity. Their capacity feeds the saturation and room-for-more calculations.</p>
+<h4 id="radio-health-access-points-and-their-cpes">Radio health access points and their CPEs</h4>
+<p><strong>What it shows.</strong> Each access point and the CPEs connected to it, with the radio quality of each link.</p>
+<p><strong>Scale.</strong></p>
+<ul>
+<li>Green: signal above −68 dBm, SNR above 25 dB, CCQ above 90%</li>
+<li>Amber: signal −68 to −75 dBm, SNR 20–25 dB</li>
+<li>Red: signal below −75 dBm, SNR under 20 dB or CCQ under 75%</li>
+</ul>
+<p><strong>What to do.</strong> Weak signal on one CPE: alignment or obstacle. Weak on all CPEs of an AP: interference — check the noise floor and change channel.</p>
+<h4 id="add-an-antenna">Add an antenna</h4>
+<p>Declare an airOS device by its address and credentials. Credentials are encrypted at rest with the controller key.</p>
+<h4 id="inventory">Inventory</h4>
+<p>Every device freeQoS knows, with where it was discovered.</p>
+<h4 id="known-sites">Known sites</h4>
+<p>The PoPs and VLAN sites known to freeQoS. A site pushed by the API takes the place of an automatically discovered one.</p>
+<h3 id="api">API</h3>
+<p>API keys, and the way to the API guide.</p>
+<h4 id="create-a-key">Create a key</h4>
+<p><strong>What it shows.</strong> Create a key for an external system (billing, CRM) to call the public API.</p>
+<p><strong>How to read it.</strong> The key is shown once — copy it then. “read” gives GET; “write” adds PUT and DELETE. Give each system its own key so you can revoke one without breaking the others.</p>
+<h4 id="endpoints">Endpoints</h4>
+<p><strong>What it shows.</strong> The routes an external application (billing, CRM, provisioning) calls with a key.</p>
+<p><strong>How to read it.</strong> /model/v1 and /usage/v1: clients, packages, sites, sectors and usage. /api/v1: everything the interface does — routers, plans, forced limits, boosts.</p>
+<h4 id="example">Example</h4>
+<p>A ready-to-run call with curl. The key goes in Basic authentication as the username, with an empty password.</p>
+<h3 id="settings">Settings</h3>
+<p>Accounts, operating settings, and everything about writing to the routers.</p>
+<h4 id="accounts">Accounts</h4>
+<p>Who can log in to this interface, your own password and sessions, and (for edit accounts) the journal of logins.</p>
+<h4 id="who-can-log-in">Who can log in</h4>
+<p><strong>What it shows.</strong> The accounts of this interface.</p>
+<p><strong>Scale.</strong></p>
+<ul>
+<li>Grey: Read only: sees everything; every change is refused by the server</li>
+<li>Green: Edit: can change everything, including accounts</li>
+</ul>
+<p><strong>How to read it.</strong> There is always at least one active edit account: the last one cannot be deleted, demoted or disabled. Changing someone’s role or password logs them out everywhere.</p>
+<h4 id="my-password">My password</h4>
+<p><strong>What it shows.</strong> Change your own password. Your other browsers are logged out; this one stays connected.</p>
+<p><strong>How to read it.</strong> At least 12 characters. Passwords from attacker lists (Password2024!, azerty123…), repetitive ones or ones containing your email are refused. A short sentence is both stronger and easier to remember than a short complicated word.</p>
+<h4 id="my-sessions">My sessions</h4>
+<p><strong>What it shows.</strong> Every browser currently logged in to your account: device, address, when it logged in and when it was last active.</p>
+<p><strong>How it is measured.</strong> A session ends after 24 h without activity, and after 30 days in any case. At most 10 per account — the oldest is closed beyond that.</p>
+<p><strong>What to do.</strong> A device or address you do not recognise: log it out, then change your password.</p>
+<h4 id="login-journal">Login journal</h4>
+<p><strong>What it shows.</strong> Every login, failed attempt, block, logout and account change, with address and device. Kept 6 months.</p>
+<p><strong>Scale.</strong></p>
+<ul>
+<li>Green: Login</li>
+<li>Red: Failed login / Blocked: someone typed a wrong password</li>
+<li>Amber: Account changed or deleted</li>
+</ul>
+<p><strong>How to read it.</strong> After 5 failures the email and the address are blocked 5 min, then 10, 20… up to 1 h if it continues. Many failures from one unknown address = someone guessing.</p>
+<p><strong>What to do.</strong> Repeated failures on a real account from an unknown address: change that password and, if exposed to the internet, restrict access to the interface.</p>
+<h4 id="operational-settings">Operational settings</h4>
+<p><strong>What it shows.</strong> Settings stored in the database and applied without restart.</p>
+<p><strong>How to read it.</strong> “default” = the value from the environment / built-in default. Apply writes it; the source column then says “database”.</p>
+<h4 id="services-and-ip-location">Services and IP location</h4>
+<p><strong>What it shows.</strong> What NetFlow keeps about the destinations your clients reach, and how addresses are named (catalogue, reverse DNS, registry, geolocation).</p>
+<p><strong>How to read it.</strong> Volumes per client are measured whatever these say; they only decide what is kept per destination and how much naming work (and outbound queries) the controller does.</p>
+<h4 id="shaping">Shaping</h4>
+<p><strong>What it shows.</strong> How queues are computed and written: safety factor on measured capacity, floor rate, default plan, adoption of queues freeQoS did not create, and how a queue targets the client.</p>
+<p><strong>How to read it.</strong> A change here is applied at the next reconciliation (or right away with Reset queues in Devices).</p>
+<h4 id="cake">CAKE</h4>
+<p><strong>What it shows.</strong> Parameters of the CAKE queues — the queue discipline that keeps latency low while a line is full.</p>
+<p><strong>How to read it.</strong> Keep the defaults unless you know why: overhead and MPU must match the encapsulation (PPPoE, VLAN) for the rate to be exact; rtt sets how fast CAKE reacts.</p>
+<h4 id="write-safeguards">Write safeguards</h4>
+<p>Limits that stop an automatic loop from changing too much at once (circuit breaker), and whether a separate write account is required on the routers.</p>
+<h4 id="traffic_1">Traffic</h4>
+<p>Where the volume of each client is counted when both the internet edge and the PoPs export NetFlow — so a byte is never counted twice.</p>
+<h4 id="collection-cadences">Collection cadences</h4>
+<p><strong>What it shows.</strong> How often each collection runs.</p>
+<p><strong>How to read it.</strong> Shorter = fresher figures, but more load on the routers and the database. A 10 s subscriber poll and a 30 s latency probe suit most networks.</p>
+<h4 id="what-stays-out-of-reach-of-the-interface">What stays out of reach of the interface</h4>
+<p>Settings that can only change in the environment (.env) — the database address, the encryption key… — because the interface itself depends on them.</p>
+<h4 id="shaping-and-writing-to-the-routers">Shaping and writing to the routers</h4>
+<p><strong>What it shows.</strong> Whether freeQoS writes queues by itself.</p>
+<p><strong>How to read it.</strong> On: a reconciliation every 2 min writes any missing or wrong queue. Off: it writes only when you act (Rate, plan change, Reset queues). Either way, only queues marked freeqos:managed are ever modified.</p>
+<h4 id="are-the-caps-actually-held_1">Are the caps actually held</h4>
+<p><strong>What it shows.</strong> Compares the limit freeQoS intends for each client with what is really written on its router.</p>
+<p><strong>How to read it.</strong> A mismatch means the router was changed by hand, a queue failed to write, or another queue matches first (RouterOS applies the first matching queue).</p>
+<p><strong>What to do.</strong> Use Devices › Reset queues on that router to rebuild its freeQoS queues from scratch.</p>
+<h4 id="log-of-commands-sent">Log of commands sent</h4>
+<p>Every command freeQoS sent to a router: when, by whom (account or automatic loop), what, and the result. The first place to look when a cap changed unexpectedly.</p>
+<h3 id="detail-panels">Detail panels</h3>
+<p>What opens when you click a link, a node, a client or an address.</p>
+<h4 id="right-now">Right now</h4>
+<p>Last 10-second measurement.</p>
+<h4 id="clients-on-this-link">Clients on this link</h4>
+<p><strong>What it shows.</strong> The clients of this node with how much of their limit they use, their latency and score.</p>
+<p><strong>How to read it.</strong> Several clients red on latency at the same time as the link is loaded = the link is the bottleneck. Only one client red = look at that client.</p>
+<h4 id="link">Link</h4>
+<p><strong>What it shows.</strong> What freeQoS knows about this node’s link: capacity, load, limits applied and plans sold behind it.</p>
+<p><strong>How to read it.</strong> Capacity unknown: set the rate of the link in the Network tree so load and oversubscription can be judged.</p>
+<h4 id="plan">Plan</h4>
+<p><strong>What it shows.</strong> The plan of this client, where it comes from, and the limit really applied.</p>
+<p><strong>How to read it.</strong> When “limit applied” differs from the plan, the limit was forced by hand (Rate) or a temporary boost is running.</p>
+<h4 id="plan-usage">Plan usage</h4>
+<p><strong>What it shows.</strong> How much of its limit the client uses right now, and its latency at rest and under load.</p>
+<p><strong>How to read it.</strong> At 85%+ of its plan the client is “at plan limit”: its latency then reflects its own full queue and is not held against the network.</p>
+<h4 id="limit-usage">Limit usage</h4>
+<p>How much of its forced limit the client uses right now, and its latency at rest and under load.</p>
+<h4 id="who-reaches-this-address">Who reaches this address</h4>
+<p>Your clients that exchanged traffic with this address over the period, with the volume of each.</p>
+<h3 id="columns-and-figures">Columns and figures</h3>
+<p>Every other label that carries an (i) in the interface, in alphabetical order. <em>Where</em> names the place when the same word means something else elsewhere.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Label</th>
+<th>Where</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Access</td>
+<td></td>
+<td>PoP to its subscribers: median of their medians (p90 when hovering). The part of the latency your access network adds.</td>
+</tr>
+<tr>
+<td>Account</td>
+<td>Accounts</td>
+<td>The account concerned (for a failed login, the email that was typed — it may not exist).</td>
+</tr>
+<tr>
+<td>Address</td>
+<td>Accounts</td>
+<td>IP address the session was opened from (behind a reverse proxy, set FORWARDED_ALLOW_IPS so this is the real client).</td>
+</tr>
+<tr>
+<td>Address</td>
+<td></td>
+<td>IP address (or block) of the client: its queue targets this address.</td>
+</tr>
+<tr>
+<td>Addresses</td>
+<td></td>
+<td>Number of distinct internet addresses reached.</td>
+</tr>
+<tr>
+<td>At ceiling</td>
+<td></td>
+<td>Share of the time the client was at 90%+ of its limit over the period. 15% or more with a good experience: candidate for a bigger plan.</td>
+</tr>
+<tr>
+<td>At plan limit</td>
+<td></td>
+<td>Clients that used their whole plan the whole period. Their latency was that of their own full queue — a client downloading at its cap delays its own pings. That is the plan doing its job, not a network fault, so they are not counted as poor.</td>
+</tr>
+<tr>
+<td>Avg download</td>
+<td></td>
+<td>Average download over the period.</td>
+</tr>
+<tr>
+<td>Avg rate</td>
+<td></td>
+<td>Average rate over the period (volume ÷ period).</td>
+</tr>
+<tr>
+<td>Backhaul capacity</td>
+<td></td>
+<td>Sum of the measured capacity of the radio backhauls declared in the inventory. “-” = no radio backhaul declared.</td>
+</tr>
+<tr>
+<td>Boost</td>
+<td></td>
+<td>Temporary extra rate given to the client; it ends on its own at the time shown.</td>
+</tr>
+<tr>
+<td>Bufferbloat</td>
+<td></td>
+<td>Grade of the latency added when the line is loaded. Scale: Green, A+ / A: up to +30 ms — imperceptible; Amber, B / C: +30 to +100 ms — calls degrade while someone downloads; Red, D / F: over +100 ms — real-time use breaks under load.</td>
+</tr>
+<tr>
+<td>Busiest node</td>
+<td></td>
+<td>The node using the largest share of its limit right now. Scale: Green, under 70%: comfortable; Amber, 70 to 90%: watch it — peaks start to queue; Red, over 90%: saturated — latency rises for everyone behind it.</td>
+</tr>
+<tr>
+<td>Busy-hour peak</td>
+<td></td>
+<td>Highest load reached during the busiest hour of the period — what the capacity must hold.</td>
+</tr>
+<tr>
+<td>By</td>
+<td>Accounts</td>
+<td>Who made the change, when it is not the account itself (e.g. an administrator resetting a password).</td>
+</tr>
+<tr>
+<td>Capacity</td>
+<td></td>
+<td>What the link can carry. The lowest of: the rate set by hand on the link, the capacity measured on the radio, and the port speed. “unknown” = none of the three is known: load and saturation cannot be judged for this link.</td>
+</tr>
+<tr>
+<td>Capacity / limit</td>
+<td>Table column</td>
+<td>On a node row: what its uplink (towards the core or the transit) can carry. On a client row: the cap applied to the client. Wired link: the capacity declared, or the port speed. Radio link: the capacity its antenna announces live (airOS / UISP). Auto: the lowest known. A node has no plan — its clients do. Its download / upload % is taken against this capacity. Grey “limits” = uplink capacity unknown: the sum of the clients’ limits is shown instead.</td>
+</tr>
+<tr>
+<td>Capacity read</td>
+<td></td>
+<td>Capacity read from the radio.</td>
+</tr>
+<tr>
+<td>Category</td>
+<td></td>
+<td>Family of the service: streaming, gaming, voice/video, CDN, cloud, updates…</td>
+</tr>
+<tr>
+<td>CCQ</td>
+<td></td>
+<td>Client Connection Quality: share of radio frames that went through without retransmission. Scale: Green, 90 to 100%; Amber, 75 to 90%; Red, under 75%: flagged as an issue — retransmissions eat throughput and add latency.</td>
+</tr>
+<tr>
+<td>Cities</td>
+<td></td>
+<td>Number of distinct cities among the addresses reached.</td>
+</tr>
+<tr>
+<td>Client</td>
+<td></td>
+<td>The subscriber: PPPoE login, or the reference of a static-IP client.</td>
+</tr>
+<tr>
+<td>Client experience</td>
+<td></td>
+<td>Share of measured clients with a good experience. Clients at their plan limit and clients not measured are counted apart, so neither makes the network look worse than it is. Scale: Green, 80 to 100: good; Amber, 50 to 79: fair — noticeable at busy times; Red, under 50: poor — the client feels it; Grey, grey / “-”: not measured yet.</td>
+</tr>
+<tr>
+<td>Clients</td>
+<td>Table column</td>
+<td>Number of clients of this node.</td>
+</tr>
+<tr>
+<td>Clients</td>
+<td>Routers — live traffic</td>
+<td>Sum of the traffic of this router’s subscribers (their queues).</td>
+</tr>
+<tr>
+<td>Clients measured</td>
+<td></td>
+<td>Clients that answered the latency probe over the period.</td>
+</tr>
+<tr>
+<td>Clients seen</td>
+<td></td>
+<td>Clients with traffic seen over the period. Each client is counted once, even if its traffic crosses several routers.</td>
+</tr>
+<tr>
+<td>Country</td>
+<td></td>
+<td>Country of the address, from the geolocation of its block.</td>
+</tr>
+<tr>
+<td>CPU</td>
+<td></td>
+<td>Processor load of the router. Scale: Green, under 70%; Amber, 70 to 90%; Red, over 90%.</td>
+</tr>
+<tr>
+<td>Created by</td>
+<td>Accounts</td>
+<td>The account that created this one (“setup” = the very first account).</td>
+</tr>
+<tr>
+<td>Datagrams</td>
+<td></td>
+<td>NetFlow packets received from this exporter. Not increasing = the router stopped exporting, or a firewall drops UDP 2055.</td>
+</tr>
+<tr>
+<td>Destination</td>
+<td></td>
+<td>Internet address the client exchanged traffic with.</td>
+</tr>
+<tr>
+<td>Detail</td>
+<td>Accounts</td>
+<td>Extra information: new role, why it failed, how long the block lasts…</td>
+</tr>
+<tr>
+<td>Device</td>
+<td>Accounts</td>
+<td>Browser and system, read from the browser’s User-Agent.</td>
+</tr>
+<tr>
+<td>Distance</td>
+<td></td>
+<td>Radio distance between the access point and the CPE.</td>
+</tr>
+<tr>
+<td>Down</td>
+<td></td>
+<td>Volume received by the clients.</td>
+</tr>
+<tr>
+<td>Download</td>
+<td></td>
+<td>What your clients receive, from the internet to them. Sum of the subscriber queues (tx side of the router), read every 10 s.</td>
+</tr>
+<tr>
+<td>Download now</td>
+<td></td>
+<td>Current download, with its share of the limit.</td>
+</tr>
+<tr>
+<td>Downstream</td>
+<td></td>
+<td>Total received by your subscribers over the period, at the counting point (each byte counted once).</td>
+</tr>
+<tr>
+<td>Effect</td>
+<td></td>
+<td>Block the traffic, or cap it at a rate.</td>
+</tr>
+<tr>
+<td>Event</td>
+<td>Accounts</td>
+<td>What happened: login, failed login, block, logout, account change…</td>
+</tr>
+<tr>
+<td>Experience</td>
+<td></td>
+<td>Score from 0 to 100 summing up what the client feels. The weaker of two parts: latency at rest (no penalty up to 10 ms, then −0.6 point per ms) and the latency added under load (bufferbloat: +5 ms ≈ 90, +30 ms ≈ 80, +100 ms = 50, +200 ms = 25). The weakest part decides: low latency does not make up for heavy bufferbloat, and the reverse. Scale: Green, 80 to 100: good; Amber, 50 to 79: fair — noticeable at busy times; Red, under 50: poor — the client feels it; Grey, grey / “-”: not measured yet.</td>
+</tr>
+<tr>
+<td>Experience score</td>
+<td>Health over time</td>
+<td>Experience score of the step (the worst client of the node). Scale: Green, 80 to 100: good; Amber, 50 to 79: fair — noticeable at busy times; Red, under 50: poor — the client feels it; Grey, grey / “-”: not measured yet.</td>
+</tr>
+<tr>
+<td>Fair</td>
+<td></td>
+<td>Noticeable but usable: latency 30–100 ms, spikes, a little loss, or +30 to +150 ms under load.</td>
+</tr>
+<tr>
+<td>Flows</td>
+<td></td>
+<td>Number of NetFlow records counted.</td>
+</tr>
+<tr>
+<td>For whom</td>
+<td></td>
+<td>Every client, some sites, or some clients.</td>
+</tr>
+<tr>
+<td>Forced rate</td>
+<td></td>
+<td>Limit set by hand in Subscribers (Rate): it overrides the plan until you clear it.</td>
+</tr>
+<tr>
+<td>From</td>
+<td></td>
+<td>Start of the link (the upstream equipment).</td>
+</tr>
+<tr>
+<td>Good</td>
+<td></td>
+<td>Latency under 30 ms, stable, no loss, little or no bufferbloat.</td>
+</tr>
+<tr>
+<td>Headroom</td>
+<td></td>
+<td>Capacity left at the peak of the period. Under 10% at the peak: the next growth in usage will show as latency.</td>
+</tr>
+<tr>
+<td>Interface</td>
+<td></td>
+<td>Router interface concerned.</td>
+</tr>
+<tr>
+<td>Internet</td>
+<td>Routers — live traffic</td>
+<td>What this router exchanges with the outside on its uplink port, with the port load.</td>
+</tr>
+<tr>
+<td>Internet edge</td>
+<td>Traffic</td>
+<td>NetFlow measured at the internet exit (above the core). Used for counting whenever it sends flows: each client once, internet traffic only.</td>
+</tr>
+<tr>
+<td>Internet side</td>
+<td>Saturation risks</td>
+<td>Gateway uplink and PoP-to-core links: a saturation here hits every client.</td>
+</tr>
+<tr>
+<td>Jitter</td>
+<td></td>
+<td>How much latency varies from one ping to the next in the last series. Scale: Green, under 10 ms: smooth; Amber, 10 to 30 ms: calls may crackle; Red, over 30 ms: choppy voice and video.</td>
+</tr>
+<tr>
+<td>Kind</td>
+<td></td>
+<td>PPPoE subscriber (discovered from the router sessions) or static-IP client (declared by hand).</td>
+</tr>
+<tr>
+<td>Last activity</td>
+<td>Accounts</td>
+<td>Last request made with this session.</td>
+</tr>
+<tr>
+<td>Last applied</td>
+<td></td>
+<td>When the rule was last written on the routers.</td>
+</tr>
+<tr>
+<td>Last change</td>
+<td></td>
+<td>When the plan was last changed, and by what (API, an account, the default).</td>
+</tr>
+<tr>
+<td>Last login</td>
+<td>Accounts</td>
+<td>Last successful login of the account.</td>
+</tr>
+<tr>
+<td>Latency</td>
+<td>Health over time</td>
+<td>90th percentile of the latency of the step: 9 pings out of 10 were faster. Scale: Green, under 30 ms: good — calls, games and browsing feel instant; Amber, 30 to 100 ms: noticeable — fine for streaming, sluggish for games; Red, over 100 ms: poor — video calls stutter, pages hesitate.</td>
+</tr>
+<tr>
+<td>Latency</td>
+<td></td>
+<td>Round-trip time between the PoP router and the client — how long a packet takes to go and come back. The router pings the client 5 times every 30 s (200 ms apart, from its loopback). The median of the series is shown, so one slow ping does not colour the client. “no reply” = the whole last series was lost. If every client of a router shows it at once, the probe is failing (firewall, source address, account without the “test” right) — not the clients. Scale: Green, under 30 ms: good — calls, games and browsing feel instant; Amber, 30 to 100 ms: noticeable — fine for streaming, sluggish for games; Red, over 100 ms: poor — video calls stutter, pages hesitate.</td>
+</tr>
+<tr>
+<td>Limit</td>
+<td></td>
+<td>The cap really applied to the client. In order of priority: the limit forced by hand in Subscribers (Rate), otherwise its plan, otherwise the default plan.</td>
+</tr>
+<tr>
+<td>Limit applied</td>
+<td></td>
+<td>The cap written on the router, when it differs from the plan (forced by hand, or a boost).</td>
+</tr>
+<tr>
+<td>Limits applied</td>
+<td></td>
+<td>Sum of the limits really applied to the clients (forced, plan or default).</td>
+</tr>
+<tr>
+<td>Live</td>
+<td></td>
+<td>Current rate of the conversation, from the real duration of its last NetFlow records. Empty = not active right now.</td>
+</tr>
+<tr>
+<td>Load</td>
+<td></td>
+<td>Busiest direction compared with the port speed. Scale: Green, under 70%: comfortable; Amber, 70 to 90%: watch it — peaks start to queue; Red, over 90%: saturated — latency rises for everyone behind it.</td>
+</tr>
+<tr>
+<td>Load now</td>
+<td></td>
+<td>Current traffic of the node.</td>
+</tr>
+<tr>
+<td>Load vs limit</td>
+<td>Health over time</td>
+<td>For a node: its most loaded client against its own limit. For the whole network: total traffic against the sum of limits. Scale: Green, under 70%: comfortable; Amber, 70 to 90%: watch it — peaks start to queue; Red, over 90%: saturated — latency rises for everyone behind it.</td>
+</tr>
+<tr>
+<td>Location</td>
+<td></td>
+<td>Approximate location of the address (city, country) from its block — an indication, not a proof.</td>
+</tr>
+<tr>
+<td>Loss</td>
+<td></td>
+<td>Share of pings lost in the last series of 5. A loss while the client is at its plan limit is not counted against the network: its own traffic filled the queue. Scale: Green, 0%; Amber, under 2%: occasional; Red, 2% and more: calls cut, downloads slow down.</td>
+</tr>
+<tr>
+<td>Measured rate</td>
+<td></td>
+<td>Rate measured on the router for this client.</td>
+</tr>
+<tr>
+<td>Memory</td>
+<td></td>
+<td>Memory used on the router.</td>
+</tr>
+<tr>
+<td>Method</td>
+<td></td>
+<td>HTTP method: GET reads, PUT creates or replaces, DELETE removes.</td>
+</tr>
+<tr>
+<td>Next hop up</td>
+<td></td>
+<td>Router to its default gateway — the next hop up: the core for a PoP, the gateway for the core, the transit provider for the gateway.</td>
+</tr>
+<tr>
+<td>Node</td>
+<td></td>
+<td>A site (PoP or router) and its clients. A VLAN client is counted with the router that carries it.</td>
+</tr>
+<tr>
+<td>Noise</td>
+<td></td>
+<td>Radio noise floor, in dBm (lower is better, e.g. −95 is quieter than −85). A high noise floor means interference on the channel.</td>
+</tr>
+<tr>
+<td>Not from clients</td>
+<td>Routers — live traffic</td>
+<td>Internet minus clients: traffic of no known client. Bandwidth tests, device management, routers talking to each other, or clients not declared yet. A large, steady share is worth investigating.</td>
+</tr>
+<tr>
+<td>Object</td>
+<td></td>
+<td>The collection concerned: accounts, packages, sites, access points, services.</td>
+</tr>
+<tr>
+<td>On the router</td>
+<td></td>
+<td>What is really written on the router for this client.</td>
+</tr>
+<tr>
+<td>Opened</td>
+<td>Accounts</td>
+<td>When this session logged in.</td>
+</tr>
+<tr>
+<td>Origin</td>
+<td></td>
+<td>Where the item comes from.</td>
+</tr>
+<tr>
+<td>Oversubscription</td>
+<td></td>
+<td>Plans sold ÷ capacity of the link. Some oversubscription is normal — clients are not all active at the same time. Watch the evening peak rather than the ratio alone. Scale: Green, up to 1×: everything sold fits at once; Amber, 1 to 3×: usual for residential access; Red, over 3×: the link will be full at busy hours.</td>
+</tr>
+<tr>
+<td>P95</td>
+<td></td>
+<td>The bad moments: 95% of the pings were faster than this. A p95 far above the median (3× or more, and over 100 ms) means spikes: the line is fine most of the time but stalls now and then — typical of radio interference or a queue filling up.</td>
+</tr>
+<tr>
+<td>Package</td>
+<td></td>
+<td>Offer pushed by the API.</td>
+</tr>
+<tr>
+<td>Path</td>
+<td></td>
+<td>Route of the call, after the base URL.</td>
+</tr>
+<tr>
+<td>Plan</td>
+<td>Table column</td>
+<td>The plan sold to the client (download / upload).</td>
+</tr>
+<tr>
+<td>Plan used</td>
+<td></td>
+<td>Current traffic as a share of the client’s limit. At 85% and above the client is “at plan limit”: its latency is then left out of its verdict.</td>
+</tr>
+<tr>
+<td>Plans</td>
+<td></td>
+<td>Sum of the plans sold. “no plan” = the clients are limited by hand or by the default plan.</td>
+</tr>
+<tr>
+<td>Poor experience</td>
+<td></td>
+<td>Clients the network is failing right now. Median over 100 ms, 2%+ loss, +150 ms or more under load, or an experience score under 50.</td>
+</tr>
+<tr>
+<td>PoP</td>
+<td></td>
+<td>Point of presence the client is attached to.</td>
+</tr>
+<tr>
+<td>PoP side</td>
+<td>Saturation risks</td>
+<td>Links towards subscribers, VLANs and relays: a saturation only hits what hangs below.</td>
+</tr>
+<tr>
+<td>PoPs</td>
+<td>Traffic</td>
+<td>NetFlow measured on each PoP router, next to the clients. Used for counting only when the internet exit sends nothing.</td>
+</tr>
+<tr>
+<td>Port</td>
+<td></td>
+<td>Service port on the remote side (443 = HTTPS, 53 = DNS…). “-” for ICMP (ping).</td>
+</tr>
+<tr>
+<td>Port speed</td>
+<td></td>
+<td>Negotiated speed of the port (for a VLAN or bridge: the speed of the physical port carrying it).</td>
+</tr>
+<tr>
+<td>Prefix</td>
+<td></td>
+<td>Address block.</td>
+</tr>
+<tr>
+<td>Proto</td>
+<td></td>
+<td>Transport protocol: tcp, udp, icmp…</td>
+</tr>
+<tr>
+<td>Published prefixes</td>
+<td></td>
+<td>Address blocks announced by this owner on the internet.</td>
+</tr>
+<tr>
+<td>Queue</td>
+<td></td>
+<td>freeQoS queue on the router for this client.</td>
+</tr>
+<tr>
+<td>Radio</td>
+<td></td>
+<td>Radio link: its capacity is read live on its antenna and follows rain fade, interference and alignment. Scale: Green, live: at or near its nominal capacity; Amber, under 70% of nominal: degraded; Red, silent: no recent reading — capacity unknown.</td>
+</tr>
+<tr>
+<td>Rate TX/RX</td>
+<td></td>
+<td>Radio link rates (transmit / receive).</td>
+</tr>
+<tr>
+<td>Rate when active</td>
+<td></td>
+<td>Volume divided by the time the conversation was really active. Not divided by the whole period: a 10-second download at 100 Mbps reads 100 Mbps, which is what the client experienced.</td>
+</tr>
+<tr>
+<td>Received</td>
+<td></td>
+<td>Volume received by the client from this address over the period.</td>
+</tr>
+<tr>
+<td>Reverse name</td>
+<td></td>
+<td>Name returned by reverse DNS for this address.</td>
+</tr>
+<tr>
+<td>Role</td>
+<td>Accounts</td>
+<td>Read only: sees everything, changes nothing (refused by the server, not just hidden). Edit: can change everything, including accounts.</td>
+</tr>
+<tr>
+<td>Role</td>
+<td></td>
+<td>Role of the router: PoP (serves clients), core, or gateway (internet exit).</td>
+</tr>
+<tr>
+<td>Room for</td>
+<td></td>
+<td>How many more subscribers this site can take at the current usage. Busy-hour peak per subscriber against 80% of the capacity.</td>
+</tr>
+<tr>
+<td>Router</td>
+<td></td>
+<td>The router concerned.</td>
+</tr>
+<tr>
+<td>Routers</td>
+<td></td>
+<td>Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two. Uplink port counters and subscriber queues, read every 10 s. A large gap (“not from clients”) is traffic of no known client: tests, management, or clients not yet declared.</td>
+</tr>
+<tr>
+<td>Sample</td>
+<td></td>
+<td>Age of the last measurement. “stale” = the figures are not current: the collection of this router is late or stopped.</td>
+</tr>
+<tr>
+<td>Sampling</td>
+<td></td>
+<td>“all” = every flow is exported; 1:N = one in N, volumes are multiplied back by N.</td>
+</tr>
+<tr>
+<td>Score</td>
+<td></td>
+<td>Experience score from 0 to 100: the weaker of latency at rest and latency added under load (bufferbloat). Scale: Green, 80 to 100: good; Amber, 50 to 79: fair — noticeable at busy times; Red, under 50: poor — the client feels it; Grey, grey / “-”: not measured yet.</td>
+</tr>
+<tr>
+<td>Seen</td>
+<td></td>
+<td>Last time it was seen.</td>
+</tr>
+<tr>
+<td>Sent</td>
+<td></td>
+<td>Volume sent by the client to this address over the period.</td>
+</tr>
+<tr>
+<td>Service</td>
+<td></td>
+<td>Recognised service behind the address: from the catalogue of published blocks, the domain name or the owner of the address.</td>
+</tr>
+<tr>
+<td>Session</td>
+<td></td>
+<td>How long the PPPoE session has been up (static clients have none). A session that keeps restarting points to a CPE or radio problem.</td>
+</tr>
+<tr>
+<td>Share</td>
+<td></td>
+<td>Share of the total traffic.</td>
+</tr>
+<tr>
+<td>Signal</td>
+<td></td>
+<td>Strength of the radio signal received, in dBm (closer to 0 is stronger). Scale: Green, above −68 dBm; Amber, −68 to −75 dBm; Red, below −75 dBm: weak — alignment or obstacle.</td>
+</tr>
+<tr>
+<td>Site</td>
+<td></td>
+<td>PoP or VLAN site the client belongs to.</td>
+</tr>
+<tr>
+<td>SNR</td>
+<td></td>
+<td>Signal-to-noise ratio, in dB: signal minus noise. Scale: Green, above 25 dB: clean; Amber, 20 to 25 dB: usable, lower modulation; Red, under 20 dB: flagged as an issue — unstable link.</td>
+</tr>
+<tr>
+<td>Sold</td>
+<td></td>
+<td>Sum of the plans sold to these clients. “no plan” = limited by hand or by default.</td>
+</tr>
+<tr>
+<td>Sold (down)</td>
+<td></td>
+<td>Sum of the download plans sold on this site.</td>
+</tr>
+<tr>
+<td>Sold (up)</td>
+<td></td>
+<td>Sum of the upload plans sold on this site.</td>
+</tr>
+<tr>
+<td>Sold / plan</td>
+<td>Table column</td>
+<td>On a node row: the plans sold behind it divided by its uplink capacity. On a client row: its plan. Scale: Green, up to 1×: everything sold fits at once; Amber, 1 to 3×: usual for residential access; Red, over 3×: the uplink will be full at busy hours.</td>
+</tr>
+<tr>
+<td>Sold throughput</td>
+<td></td>
+<td>Sum of the download plans of all subscribers, and how much of it is used right now. A few percent is normal: clients are not all active at the same time. That is what makes oversubscription possible.</td>
+</tr>
+<tr>
+<td>Source</td>
+<td></td>
+<td>Where the plan comes from: pushed by the API, set by hand, or the default plan — or a limit forced in Subscribers, which overrides all three.</td>
+</tr>
+<tr>
+<td>State</td>
+<td>Accounts</td>
+<td>A disabled account can no longer log in, and its open sessions are closed at once.</td>
+</tr>
+<tr>
+<td>State</td>
+<td></td>
+<td>Current state.</td>
+</tr>
+<tr>
+<td>Subscriber</td>
+<td></td>
+<td>The subscriber: PPPoE login, or the reference of a static-IP client.</td>
+</tr>
+<tr>
+<td>Subscribers</td>
+<td></td>
+<td>Number of subscribers.</td>
+</tr>
+<tr>
+<td>Subscribers online</td>
+<td></td>
+<td>Subscribers with a measurement in the last 2 minutes (PPPoE session up, or static client with traffic).</td>
+</tr>
+<tr>
+<td>Target</td>
+<td></td>
+<td>Address or block the queue applies to.</td>
+</tr>
+<tr>
+<td>Throughput</td>
+<td></td>
+<td>Current download and upload.</td>
+</tr>
+<tr>
+<td>To</td>
+<td></td>
+<td>End of the link (the downstream equipment).</td>
+</tr>
+<tr>
+<td>To clients</td>
+<td></td>
+<td>Traffic going towards the clients on this port.</td>
+</tr>
+<tr>
+<td>To internet</td>
+<td></td>
+<td>Traffic going towards the internet on this port.</td>
+</tr>
+<tr>
+<td>Towards</td>
+<td></td>
+<td>Equipment on the other side of the port, when known (from discovery or the network tree).</td>
+</tr>
+<tr>
+<td>Traffic identified</td>
+<td></td>
+<td>Share of the traffic flows tied to a known client (the figure is since the controller started). The rest is network management, routers talking to each other, or addresses of clients not declared yet — those appear in the entry-aid list.</td>
+</tr>
+<tr>
+<td>Traffic now</td>
+<td></td>
+<td>Download of all subscribers at the last measurement; upload below. Sum of the subscriber queues, read every 10 s. Compared with the backhaul capacity, or with the sum of limits when no capacity is declared.</td>
+</tr>
+<tr>
+<td>Type</td>
+<td></td>
+<td>How the link was found: discovered on the router, observed in traffic, or set by hand.</td>
+</tr>
+<tr>
+<td>Under load</td>
+<td></td>
+<td>Latency while the client’s line is busy, and how much the load adds over rest (bufferbloat). Pings taken while the client was transferring are compared with pings taken at rest. Scale: Green, A+ / A: up to +30 ms — imperceptible; Amber, B / C: +30 to +100 ms — calls degrade while someone downloads; Red, D / F: over +100 ms — real-time use breaks under load.</td>
+</tr>
+<tr>
+<td>Up</td>
+<td></td>
+<td>Volume sent by the clients.</td>
+</tr>
+<tr>
+<td>Upload</td>
+<td></td>
+<td>What your clients send, from them to the internet. Sum of the subscriber queues (rx side of the router), read every 10 s.</td>
+</tr>
+<tr>
+<td>Upload now</td>
+<td></td>
+<td>Current upload, with its share of the limit.</td>
+</tr>
+<tr>
+<td>Upstream</td>
+<td></td>
+<td>Total sent by your subscribers over the period, at the counting point (each byte counted once).</td>
+</tr>
+<tr>
+<td>Uptime</td>
+<td></td>
+<td>Time since the last restart. A recent restart nobody planned is worth a look (power, crash).</td>
+</tr>
+<tr>
+<td>Usage</td>
+<td></td>
+<td>Detected application of the conversation.</td>
+</tr>
+<tr>
+<td>Vantage</td>
+<td></td>
+<td>Where this exporter measures: internet edge (above the core) or at a PoP. Set automatically for your own routers. Only one vantage is used for counting, so a byte seen at both is counted once.</td>
+</tr>
+<tr>
+<td>Version</td>
+<td></td>
+<td>NetFlow format received: v5, v9 or IPFIX.</td>
+</tr>
+<tr>
+<td>Vs limit</td>
+<td></td>
+<td>Current download as a share of the limit. Scale: Green, under 70%: comfortable; Amber, 70 to 90%: watch it — peaks start to queue; Red, over 90%: saturated — latency rises for everyone behind it.</td>
+</tr>
+<tr>
+<td>Wanted</td>
+<td></td>
+<td>What freeQoS intends to write.</td>
+</tr>
+<tr>
+<td>When</td>
+<td>Accounts</td>
+<td>Date and time of the event (hover for the full date).</td>
+</tr>
+<tr>
+<td>Where</td>
+<td></td>
+<td>Which segment adds the delay: access side, towards the core / gateway, or above it (transit, internet).</td>
+</tr>
+<tr>
+<td>Where the cap comes from</td>
+<td></td>
+<td>Origin of the limit: plan, forced by hand, boost or default plan.</td>
+</tr>
+<tr>
+<td>Why</td>
+<td></td>
+<td>What lowered the verdict, in plain words: high latency, spikes, loss, bufferbloat — or “at plan limit”.</td>
+</tr>
+<tr>
+<td>Why it does not throttle</td>
+<td></td>
+<td>Reason why the cap is not held on the router (no queue, another queue matching first, a parent queue blocking…).</td>
+</tr>
+<tr>
+<td>Worst latency</td>
+<td></td>
+<td>Latency of the worst client of the node; “no reply” if one of them lost all its pings.</td>
+</tr>
+<tr>
+<td>Worst score</td>
+<td></td>
+<td>Lowest experience score among the clients of the node. Scale: Green, 80 to 100: good; Amber, 50 to 79: fair — noticeable at busy times; Red, under 50: poor — the client feels it; Grey, grey / “-”: not measured yet.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
+<p>The server exposes 160 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<h3 id="public-api-model">Public API (model)</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/model/v1</code></td>
+<td>Available collections</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/model/v1/{collection}</code></td>
+<td>List a collection</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/model/v1/{collection}/{object_id}</code></td>
+<td>Read a record</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/model/v1/{collection}/{object_id}</code></td>
+<td>Create or replace a record</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/model/v1/{collection}/{object_id}</code></td>
+<td>Remove a record</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="public-api-usage">Public API (usage)</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/usage/v1</code></td>
+<td>What this API returns</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/usage/v1/services</code></td>
+<td>Usage of every service</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/usage/v1/services/{service_id}</code></td>
+<td>Usage of one service</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="pops">PoPs</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/pops/health</code></td>
+<td>Health of the collected routers (CPU, memory, uptime)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/pops/provisioning/{router_name}</code></td>
+<td>Progress of the automatic setup</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/provisioning/{router_name}</code></td>
+<td>Run the automatic setup again</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/pops/routers</code></td>
+<td>Router inventory (file + database)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/routers</code></td>
+<td>Save a router</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/pops/routers/file/{name}</code></td>
+<td>Remove a router from the file inventory</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/routers/file/{name}/restore</code></td>
+<td>Show a previously removed file router again</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/routers/test</code></td>
+<td>Test a connection without saving it</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/pops/routers/{router_id}</code></td>
+<td>Edit a router</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/pops/routers/{router_id}</code></td>
+<td>Remove a router from the inventory</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/routers/{router_id}/probe</code></td>
+<td>Test a saved router</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="plans_1">Plans</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/plans</code></td>
+<td>The plan of every client, and where it comes from</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/plans/refresh</code></td>
+<td>Apply the plans now (after a default-plan change)</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/plans/{login}</code></td>
+<td>Set the plan of a client</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/plans/{login}</code></td>
+<td>Remove a client's plan (observed, not throttled)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="shaping_1">Shaping</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/shaping/apply</code></td>
+<td>Apply a plan (writes to the router)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/audit</code></td>
+<td>Log of the commands sent</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/boosts</code></td>
+<td>Running boosts</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/shaping/boosts</code></td>
+<td>Give a temporary rate boost</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/shaping/boosts/{login}</code></td>
+<td>Remove a boost before it expires</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/capability</code></td>
+<td>Real rights of the account on a router</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/enforcement</code></td>
+<td>State of the write flag</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/shaping/enforcement</code></td>
+<td>Allow or stop writing to the routers</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/limits</code></td>
+<td>Are the applied caps actually held?</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/shaping/plan</code></td>
+<td>Compute the commands, without sending anything</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/points</code></td>
+<td>Where shaping applies on the network</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/policies</code></td>
+<td>Rate overrides set by hand</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/shaping/policies</code></td>
+<td>Set the rate of a link or a subscriber</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/shaping/policies/{scope}/{target_key}</code></td>
+<td>Remove an override</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/qoe</code></td>
+<td>What the closed QoE loop decided, per sector</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/shaping/qoe/run</code></td>
+<td>Trigger one pass of the closed QoE loop</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/shaping/routers/{router_name}/clean-queues</code></td>
+<td>Delete every freeQoS queue of a router, then lay them down again</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/state</code></td>
+<td>What is already configured on the routers</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/topology</code></td>
+<td>Network graph as the controller understands it</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/topology/discover</code></td>
+<td>Run topology discovery again</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/topology/forget-stale</code></td>
+<td>Forget the vanished devices of the tree</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/topology/links</code></td>
+<td>Create a link by hand between two nodes</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/topology/links/{key}</code></td>
+<td>Remove a link from the tree</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/topology/links/{key}/live</code></td>
+<td>Measure this link now</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/topology/links/{key}/throughput</code></td>
+<td>Measured throughput of a link</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/topology/merge</code></td>
+<td>Declare that two boxes are the same device</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/topology/merge/{alias_key}</code></td>
+<td>Undo a manual merge</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/topology/nodes/{key}</code></td>
+<td>Correct the role of a device</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/topology/nodes/{key}/layout</code></td>
+<td>Move a box of the tree</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/topology/nodes/{key}/parent</code></td>
+<td>Re-parent a box (drag a link)</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/topology/nodes/{key}/visibility</code></td>
+<td>Hide or show a box again</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/topology/routers/{router_name}/export</code></td>
+<td>Full config of a PoP</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="static-clients">Static clients</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/pops/census</code></td>
+<td>Census of the clients of a PoP, every kind</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/static-clients</code></td>
+<td>Inventory of static-IP clients</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/static-clients</code></td>
+<td>Declare a static-IP client</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/static-clients/candidates</code></td>
+<td>Addresses detected on a routed VLAN, undeclared</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/static-clients/candidates/diagnostic</code></td>
+<td>Why a client on a VLAN is seen, or is not</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/static-clients/enforcement</code></td>
+<td>Queue state of every declared client, and what is missing</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/static-clients/vlans</code></td>
+<td>Declared clients, grouped by VLAN</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/static-clients/{client_id}</code></td>
+<td>Edit a static-IP client</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/static-clients/{client_id}</code></td>
+<td>Remove a client from the inventory</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="metrics">Metrics</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/backhauls</code></td>
+<td>List of radio backhauls</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/backhauls/latest</code></td>
+<td>Last known capacity per backhaul</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/backhauls/{backhaul_id}/metrics</code></td>
+<td>Capacity series of a backhaul</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/bufferbloat</code></td>
+<td>Bufferbloat grade (latency under load) per subscriber</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/collection/cycles</code></td>
+<td>State of the measurement cycles</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/heatmap</code></td>
+<td>Executive heatmap: QoE / RTT / utilisation over time</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/insights/capacity</code></td>
+<td>How many more subscribers each site can take</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/insights/subscribers</code></td>
+<td>Churn risk and upgrade candidates</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/network/tree</code></td>
+<td>PoP tree -&gt; backhauls, capacity and load</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/overview</code></td>
+<td>Headline figures of the dashboard</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/pops</code></td>
+<td>List of PoPs</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/orphans/delete</code></td>
+<td>Delete every site no device declares</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/pops/{pop_id}</code></td>
+<td>Remove a PoP and its data</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/ports/live</code></td>
+<td>Every router port with its current throughput</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/search</code></td>
+<td>Instant lookup: subscriber, IP, MAC, device, site</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/subscribers</code></td>
+<td>List of subscribers</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/subscribers/latest</code></td>
+<td>The subscribers of a PoP and their last sample</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/subscribers/{subscriber_id}</code></td>
+<td>Record of one subscriber</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/subscribers/{subscriber_id}</code></td>
+<td>Delete a subscriber and its history</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/subscribers/{subscriber_id}/live</code></td>
+<td>Live check of one subscriber</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/subscribers/{subscriber_id}/metrics</code></td>
+<td>Throughput series of a subscriber</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/throughput</code></td>
+<td>Aggregate network throughput over time</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="capacity">Capacity</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/capacity</code></td>
+<td>Sold capacity, link occupancy, real usage</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/capacity/hotspots</code></td>
+<td>Saturation points: headroom left on every link</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/capacity/media</code></td>
+<td>Wired or radio, link by link, and the antennas to pick</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/capacity/media</code></td>
+<td>Declare a link wired (fixed capacity) or radio (live)</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/capacity/media/{router_name}/{interface}</code></td>
+<td>Back to automatic (smallest known capacity)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="traffic-netflow">Traffic (netflow)</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/applications</code></td>
+<td>Traffic breakdown by usage</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/catalogue</code></td>
+<td>Services the controller can recognise</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/connections</code></td>
+<td>Live client connections</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/destinations</code></td>
+<td>Destinations reached by the clients</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/destinations/{address}</code></td>
+<td>Detailed record of a destination reached</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/netflow/destinations/{address}/resolve</code></td>
+<td>Analyse an address again</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/export</code></td>
+<td>NetFlow export configured on the routers</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/netflow/export/apply</code></td>
+<td>Configure the NetFlow export on the routers</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/exporters</code></td>
+<td>Devices that export flows</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/netflow/exporters</code></td>
+<td>Declare an exporter (or fix its declaration)</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/netflow/exporters/{exporter_id}</code></td>
+<td>Edit an exporter</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/netflow/exporters/{exporter_id}</code></td>
+<td>Remove an exporter from the list</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/netflow/flush</code></td>
+<td>Write the current window right away</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/hosts</code></td>
+<td>Addresses seen in the flows and matched to no record</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/intel</code></td>
+<td>State of address enrichment</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/netflow/intel/run</code></td>
+<td>Name the pending addresses right away</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/locations</code></td>
+<td>Where the traffic goes: volume by place and country</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/lookup/{query}</code></td>
+<td>Find an IP: who holds it and where it is</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/pairs</code></td>
+<td>Who talks to whom: client and destination reached</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/status</code></td>
+<td>State of the NetFlow collector</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/subscribers/{subscriber_id}/series</code></td>
+<td>Volume over time for a subscriber</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/top</code></td>
+<td>Who consumes, and how much</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/netflow/vantages</code></td>
+<td>Traffic seen at each vantage point</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="traffic-restrictions_2">Traffic restrictions</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/traffic-rules</code></td>
+<td>The saved restrictions</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/traffic-rules</code></td>
+<td>Save a restriction (installed on the routers at once when enabled)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/traffic-rules/apply</code></td>
+<td>Apply the restrictions on the routers</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/traffic-rules/{rule_id}</code></td>
+<td>Edit a restriction</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/traffic-rules/{rule_id}</code></td>
+<td>Delete a restriction and lift it</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/traffic-rules/{rule_id}/preview</code></td>
+<td>What this rule targets today</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="antennas">Antennas</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/pops/antennas</code></td>
+<td>Ubiquiti antennas polled live</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/antennas</code></td>
+<td>Save an antenna</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/antennas/test</code></td>
+<td>Test an antenna without saving it</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/pops/antennas/{antenna_id}</code></td>
+<td>Edit an antenna</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/pops/antennas/{antenna_id}</code></td>
+<td>Remove an antenna</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/antennas/{antenna_id}/probe</code></td>
+<td>Test a saved antenna</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/radios</code></td>
+<td>Radio health of every AP and its CPEs</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="operations">Operations</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/jobs/{job_name}/run</code></td>
+<td>Replay a collection cycle immediately</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/latency</code></td>
+<td>Latency by segment: access, upstream, internet</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/latency/clients</code></td>
+<td>Latency by client: the experience each one lives</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/rtt</code></td>
+<td>State of the latency probe (RTT)</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/rtt</code></td>
+<td>Turn the latency probe (RTT) on or off</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/rtt/diagnose</code></td>
+<td>Run the latency probe by hand, with and without source</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/rtt/reset-history</code></td>
+<td>Clear recent latency measurements (and scores derived)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/status</code></td>
+<td>State of the controller and its cycles</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/status/counters</code></td>
+<td>Global counters of the reference data</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/status/runs</code></td>
+<td>History of the collection cycles</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="settings_1">Settings</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/settings</code></td>
+<td>Operational settings in force</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/settings/history</code></td>
+<td>Who changed which setting, and when</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/settings/{name}</code></td>
+<td>Set a setting (stored in the database)</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/settings/{name}</code></td>
+<td>Reset a setting to its default</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="health">Health</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/health</code></td>
+<td>Liveness (the process answers)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/health/ready</code></td>
+<td>Readiness (database + data freshness)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="accounts_1">Accounts</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/auth/events</code></td>
+<td>Login and account journal (edit rights)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/auth/login</code></td>
+<td>Log in with email and password</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/auth/logout</code></td>
+<td>Close the current session</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/auth/password</code></td>
+<td>Change my own password</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/auth/sessions</code></td>
+<td>My open sessions (every browser logged in)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/auth/sessions/close-others</code></td>
+<td>Log out every other browser</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/auth/sessions/{session_id}</code></td>
+<td>Close one of my sessions</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/auth/setup</code></td>
+<td>Create the FIRST account (edit rights)</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/auth/status</code></td>
+<td>Who am I, and is a first account needed?</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/users</code></td>
+<td>List the accounts (edit rights)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/users</code></td>
+<td>Create an account (edit rights)</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/users/{user_id}</code></td>
+<td>Change role, password or state (edit rights)</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/users/{user_id}</code></td>
+<td>Delete an account (edit rights)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="api-keys_1">API keys</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/api-keys</code></td>
+<td>Registered API keys (never the secrets)</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/api-keys</code></td>
+<td>Create a key (the secret is returned here only)</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/api-keys/{key_id}</code></td>
+<td>Enable or disable a key</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/api-keys/{key_id}</code></td>
+<td>Revoke a key for good</td>
 </tr>
 </tbody>
 </table></div>
