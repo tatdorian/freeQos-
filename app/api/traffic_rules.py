@@ -165,7 +165,7 @@ async def list_rules(container: ContainerDep) -> dict[str, Any]:
 @router.post(
     "/traffic-rules",
     status_code=status.HTTP_201_CREATED,
-    summary="Save a restriction (without writing anything to the routers)",
+    summary="Save a restriction (installed on the routers at once when enabled)",
 )
 async def create_rule(payload: RuleInput, container: ContainerDep) -> dict[str, Any]:
     donnees = payload.model_dump()
