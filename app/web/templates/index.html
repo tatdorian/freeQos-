@@ -555,6 +555,63 @@
         <div id="plans-default-result"></div>
       </div>
 
+      <!-- PROFILS HORAIRES : des debits qui changent avec l'heure (jour,
+           soiree, nuit), tout seuls. Hierarchie : boost > limite forcee >
+           profil horaire > forfait. Un seul profil gouverne un client : le
+           plus precis (clients nommes, forfaits, sites, tous), puis le plus
+           recent. -->
+      <h2>Bandwidth schedules</h2>
+      <p class="hint" style="display:block">Rates that change with the time of day (day, evening,
+        night), automatically. Each time slot sets a <b>percentage of the plan</b> (200 % = twice
+        the plan at night) or a <b>fixed rate</b>. Outside every slot, the normal plan applies.
+        A forced limit or a boost still takes precedence. When several schedules target the same
+        client, the most precise one governs it alone (named clients, then plans, then sites,
+        then all clients).</p>
+      <div class="table-wrap" id="sched-list"></div>
+      <div id="sched-result"></div>
+      <h3 id="sched-form-title" style="margin:1rem 0 .4rem">New schedule</h3>
+      <form class="stack card" id="sched-form" autocomplete="off">
+        <div class="row-3">
+          <div class="field">
+            <label for="sched-name">Name</label>
+            <input id="sched-name" required maxlength="128" placeholder="Evening and night">
+          </div>
+          <div class="field">
+            <label for="sched-tz" title="IANA time zone of your subscribers: the hours below are local to it, and daylight saving time is handled.">Time zone</label>
+            <input id="sched-tz" required maxlength="64" list="sched-tz-list" placeholder="Europe/Paris">
+            <datalist id="sched-tz-list"></datalist>
+          </div>
+          <div class="field">
+            <label for="sched-scope">Applies to</label>
+            <select id="sched-scope">
+              <option value="all">All clients</option>
+              <option value="pops">Sites</option>
+              <option value="plans">Plans (download rate)</option>
+              <option value="subscribers">Named clients</option>
+            </select>
+          </div>
+        </div>
+        <div class="field" id="sched-targets-field" hidden>
+          <label for="sched-targets" id="sched-targets-label">Targets</label>
+          <input id="sched-targets" maxlength="4000" list="sched-targets-list"
+            placeholder="comma separated">
+          <datalist id="sched-targets-list"></datalist>
+        </div>
+        <div class="table-wrap">
+          <table id="sched-windows"><thead><tr>
+            <th></th><th>Slot</th><th>From</th><th>To</th><th>Days (start)</th>
+            <th>Rate</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+        <div class="actions">
+          <button type="button" class="sm" id="sched-add-window">Add a time slot</button>
+          <label class="chk"><input type="checkbox" id="sched-enabled" checked> Enabled</label>
+          <span class="spacer"></span>
+          <button type="button" class="sm" id="sched-cancel" hidden>Cancel</button>
+          <button type="submit" class="primary" id="sched-submit">Create and apply</button>
+        </div>
+      </form>
+
       <h2>Clients</h2>
       <div class="toolbar">
         <input id="plans-search" placeholder="Client, site or address" style="max-width:260px">
@@ -685,6 +742,13 @@
           </div>
 
           <div class="row-3">
+            <!-- PLUSIEURS POOLS SUR LA MEME VLAN : un client, un debit, une
+                 file -- dont la cible liste toutes ses plages. -->
+            <div class="field" style="grid-column: span 2">
+              <label for="sc-extra" title="Other pools of the SAME client: on the same VLAN, or routed behind its CPE. They share its single queue, hence its plan. Separate with commas, spaces or new lines.">Additional ranges (same client, same plan)</label>
+              <input id="sc-extra" maxlength="2000"
+                placeholder="optional: 10.0.1.0/28, 10.0.2.10-10.0.2.50">
+            </div>
             <div class="field">
               <label for="sc-note">Note</label>
               <input id="sc-note" maxlength="512" placeholder="optional">

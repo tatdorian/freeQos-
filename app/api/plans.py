@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.api.accounts import UserDep
 from app.api.deps import ContainerDep
+from app.enforcement.schedules import BOOK as SCHEDULE_BOOK
 from app.models import KIND_STATIC
 from app.services.plans import apply_now, default_plan
 
@@ -127,6 +128,18 @@ async def _roster(container: ContainerDep) -> list[dict[str, Any]]:
         force = forcees.get(login)
         client["forced_down_mbps"] = force[0] if force else None
         client["forced_up_mbps"] = force[1] if force else None
+        # LE PROFIL HORAIRE qui gouverne ce client, et son debit s'il est dans
+        # une plage en ce moment (soiree, nuit...). Meme carnet que le
+        # planificateur : la page ne peut pas dire autre chose que le routeur.
+        sites = (client["pop_name"],)
+        profil = SCHEDULE_BOOK.governing(login=login, sites=sites, plan_down=client["down_mbps"])
+        horaire = SCHEDULE_BOOK.rate_for(
+            login=login, sites=sites, plan_down=client["down_mbps"], plan_up=client["up_mbps"]
+        )
+        client["schedule"] = profil.name if profil else None
+        client["schedule_down_mbps"] = horaire.down_mbps if horaire else None
+        client["schedule_up_mbps"] = horaire.up_mbps if horaire else None
+        client["schedule_window"] = horaire.window if horaire else None
         sortie.append(client)
     return sortie
 

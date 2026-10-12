@@ -900,10 +900,11 @@ appliqué immédiatement si l'écriture est autorisée, et **expire tout seul** 
 vérifie l'échéance toutes les 30 s et ramène la file au débit normal. La file RouterOS ne
 sait rien de la durée : c'est le contrôleur qui la fait respecter.
 
-Trois niveaux de débit, du plus fort au plus faible : **boost** (tant qu'il court),
-**surcharge permanente**, **plan RADIUS**. Le boost n'écrase pas la surcharge, il passe
-par-dessus puis s'efface. Un boost sans échéance est refusé : ce serait une surcharge
-déguisée qui ne s'effacerait jamais.
+Quatre niveaux de débit, du plus fort au plus faible : **boost** (tant qu'il court),
+**surcharge permanente**, **profil horaire** (pendant l'une de ses plages, cf.
+[Profils de débit horaires](#profils-de-débit-horaires--jour-soirée-nuit)), **plan RADIUS**.
+Le boost n'écrase pas la surcharge, il passe par-dessus puis s'efface. Un boost sans
+échéance est refusé : ce serait une surcharge déguisée qui ne s'effacerait jamais.
 
 **Cinq garde-fous, dans cet ordre :**
 
@@ -1189,6 +1190,49 @@ curl -X POST localhost:8000/api/v1/static-clients -H 'content-type: application/
 
 # Il devient un abonné comme un autre au cycle suivant
 curl 'localhost:8000/api/v1/subscribers/latest?kind=static'
+```
+
+#### Plusieurs plages d'adresses pour un même client
+
+D'ordinaire, un client sur VLAN a **un seul pool** d'adresses. Certains en ont
+**plusieurs sur la même VLAN** (un bloc public ajouté, un pool de service), ou un bloc
+routé derrière leur CPE. Ce sont alors les **plages additionnelles** de la fiche
+(champ *Additional ranges* du formulaire, `extra_prefixes` dans l'API) :
+
+| Saisie | Exemple | Ce qui est retenu |
+|---|---|---|
+| une IP | `10.0.1.5` | `10.0.1.5/32` |
+| un bloc | `10.0.1.0/28` | `10.0.1.0/28` |
+| une plage de pool MikroTik | `10.0.1.10-10.0.1.17` | les blocs exacts qui la couvrent : `10.0.1.10/31`, `10.0.1.12/30`, `10.0.1.16/31` |
+
+**Un client, un débit, une seule file.** Le client a souscrit **un** débit : deux files
+lui en donneraient deux. Toutes ses plages partagent donc la même file, dont la cible les
+liste (`target=10.0.0.0/29,10.0.1.0/28`) — RouterOS applique alors un seul `max-limit` à
+l'ensemble. La cible est canonique (triée, un bloc déjà contenu dans un autre retiré) :
+la relire dans l'ordre de RouterOS n'est pas un écart. La file ne pend sous un lien parent
+que si le segment de ce lien contient **toutes** les plages ; une plage revendiquée par
+deux clients les rend ambigus tous les deux, et aucune des deux files n'est écrite.
+
+**Seul sur sa VLAN.** Quand un seul client est déclaré sur une VLAN (sans serveur PPPoE
+dessus), **tous** les réseaux de l'interface VLAN lui appartiennent — y compris quand elle
+porte plusieurs pools — plus ses plages déclarées : sa file vise toute la liste, et NetFlow
+lui attribue tout ce trafic. Auparavant, seul le premier réseau était retenu, et le trafic
+des autres pools passait sans plafond.
+
+Une adresse de n'importe quelle plage confirme la présence du client (« Vu actif ») et
+n'est jamais proposée comme candidat. Plusieurs **clients** sur la même VLAN se déclarent
+simplement chacun sur sa fiche. Un service poussé par l'API Preseem avec plusieurs
+`network_prefixes` suit exactement le même chemin.
+
+```bash
+curl -X POST localhost:8000/api/v1/static-clients -H 'content-type: application/json' -d '{
+  "reference": "clinique-st-jean", "pop_name": "Site 1", "vlan": 120,
+  "address": "10.0.0.0/29", "extra_prefixes": ["10.0.1.0/28", "10.0.2.10-10.0.2.50"],
+  "plan_down_mbps": 200, "plan_up_mbps": 50
+}'
+# Une liste vide retire les plages additionnelles :
+curl -X PATCH localhost:8000/api/v1/static-clients/1 -H 'content-type: application/json' \
+  -d '{"extra_prefixes": []}'
 ```
 
 ### Parité avec LibreQoS : ce qui est possible, ce qui ne l'est pas
@@ -1764,6 +1808,74 @@ inconnue — souvent la plus grosse — disparaîtrait de la discussion.
 
 ---
 
+## Profils de débit horaires : jour, soirée, nuit
+
+Beaucoup d'opérateurs vendent des débits qui changent avec l'heure : un forfait bridé en
+soirée, ouvert la nuit, normal le jour — et la bascule doit se faire **toute seule**, à
+l'heure dite. Un **profil horaire** (onglet *Plans › Bandwidth schedules*, ou
+`/api/v1/bandwidth-schedules`) est un ensemble de **plages**, chacune avec le débit qui
+s'applique pendant la plage :
+
+- un **pourcentage du forfait** (`percent` : 200 = le double la nuit, 70 = 30 % de moins
+  en soirée), qui suit le forfait de chaque abonné sans le recopier ;
+- ou un **débit fixe** (`down_mbps` / `up_mbps` ; un seul sens possible, l'autre garde
+  son forfait).
+
+Hors de toute plage, c'est le forfait normal.
+
+| Champ | Ce qu'il veut dire |
+|---|---|
+| `start`, `end` | `HH:MM` locales. Une fin avant le début passe minuit (`22:00`–`06:00`) ; `24:00` est minuit en fin de plage (`00:00`–`24:00` = toute la journée) |
+| `days` | Les jours où la plage **commence** (`mon` … `sun`, vide = tous). La nuit du vendredi court jusqu'au samedi matin |
+| `timezone` | Fuseau IANA des abonnés (`Europe/Paris`, `Africa/Abidjan`…). Les heures y sont locales et l'heure d'été est gérée ; l'interface pré-remplit celui du navigateur |
+| `scope`, `targets` | `all` (tous) ; `pops` (noms de sites, comparés sans casse ni accents) ; `plans` (débit **descendant** du forfait en Mbps : `20` = tous les forfaits 20 Mbps) ; `subscribers` (logins PPPoE ou références de clients déclarés) |
+
+**Deux plages d'un même profil ne se chevauchent jamais.** Laquelle gagnerait à 19h entre
+« soirée 18:00–23:00 » et « pointe 19:00–21:00 » ? Toute règle de priorité serait une
+surprise : le chevauchement est refusé à la saisie, avec le jour et l'heure où il se produit.
+
+**Un seul profil par abonné.** Quand plusieurs profils visent le même abonné, le plus
+**précis** gouverne seul : abonnés nommés, puis forfaits, puis sites, puis tous ; à
+précision égale, le plus récent. Pas de composition : l'exploitant doit pouvoir dire,
+abonné par abonné, d'où vient son débit. Le bouton *Clients* d'un profil
+(`GET /api/v1/bandwidth-schedules/{id}/preview`) liste les abonnés qu'il gouverne, leur
+forfait et leur débit **en ce moment**, et ceux qu'un profil plus précis lui prend.
+
+**Sa place dans la hiérarchie :** boost > surcharge manuelle > **profil horaire** > forfait.
+Un profil ne défait jamais une surcharge : une décision prise sur *cet* abonné (bridé pour
+impayé) ne se lève pas parce que la nuit commence.
+
+**La bascule est automatique.** Un job relit les profils toutes les 30 s et compare, pour
+chacun, la plage en cours à celle du passage précédent : dès qu'une plage commence ou
+finit, les files sont replanifiées et écrites (auteur `system:schedule` dans le journal),
+sans attendre la réconciliation de deux minutes — qui, de toute façon, écrit elle aussi le
+débit horaire. Enregistrer, suspendre ou supprimer un profil l'applique tout de suite.
+Mêmes garde-fous que la réconciliation : rien n'est écrit tant que l'écriture est coupée,
+et une bascule ne supprime jamais une file. Le garde-fou anti-oscillation ne surveille pas
+`max-limit` : trois bascules par jour ne sont jamais prises pour une oscillation. La
+dernière bascule (quand, pourquoi, combien d'écritures, sur quels routeurs) est affichée
+sous la liste des profils.
+
+```bash
+# Soirée bridée à 70 %, nuit au double, pour tous les forfaits 20 et 50 Mbps
+curl -X POST localhost:8000/api/v1/bandwidth-schedules -H 'content-type: application/json' -d '{
+  "name": "Soirée et nuit", "timezone": "Europe/Paris",
+  "scope": "plans", "targets": ["20", "50"],
+  "windows": [
+    {"label": "soirée", "start": "18:00", "end": "23:00", "percent": 70},
+    {"label": "nuit",   "start": "23:00", "end": "06:00", "percent": 200}
+  ]
+}'
+# Qui est concerné, et à quel débit en ce moment
+curl localhost:8000/api/v1/bandwidth-schedules/1/preview
+```
+
+La liste des abonnés affiche un débit horaire avec un badge *schedule* (profil et plage
+au survol), et la page *Plans* montre sous chaque forfait le débit appliqué en ce moment
+et le profil qui le gouverne.
+
+---
+
 ## Restrictions de trafic
 
 Bloquer ou plafonner un trafic désigné par un **service** ou une **famille** — pour tous
@@ -2046,6 +2158,9 @@ le dit.
 | `GET` | `/api/v1/netflow/lookup/{ip ou nom}` | **Trouver une IP** : analyse à la demande d'une adresse ou d'un nom de domaine, sans rien écrire |
 | `GET` | `/api/v1/netflow/catalogue` | Les services que le contrôleur sait reconnaître, et ce qu'il faut savoir avant de restreindre |
 | `GET` | `/api/v1/netflow/intel` · `POST /intel/run` | État de l'identification / nommer les adresses en attente tout de suite |
+| `GET` · `POST` | `/api/v1/bandwidth-schedules` | **Profils horaires** (jour / soirée / nuit) : lire, avec la plage en cours et la prochaine bascule / créer (appliqué aussitôt) |
+| `PATCH` · `DELETE` | `/api/v1/bandwidth-schedules/{id}` | Modifier / suspendre / supprimer un profil (appliqué aussitôt) |
+| `GET` | `/api/v1/bandwidth-schedules/{id}/preview` | Les abonnés qu'un profil gouverne et leur débit en ce moment |
 | `GET` · `POST` | `/api/v1/traffic-rules` | **Restrictions de trafic** : lire / enregistrer une règle (**n'écrit rien sur les routeurs**) |
 | `PATCH` · `DELETE` | `/api/v1/traffic-rules/{id}` | Modifier / suspendre / supprimer une restriction |
 | `GET` | `/api/v1/traffic-rules/{id}/preview` | **Ce que la règle vise aujourd'hui** — elle grossit toute seule |
@@ -2081,7 +2196,8 @@ Documentation interactive : `/docs`.
 ## Modèle de données
 
 **Référentiel** — `pops`, `subscribers` (identité unique `login`, `kind`, plan, PoP,
-`last_seen`), `static_clients` (inventaire déclaratif des clients à IP fixe),
+`last_seen`), `static_clients` (inventaire déclaratif des clients à IP fixe ;
+`extra_prefixes` porte leurs plages additionnelles),
 `vlan_sightings` (présence observée par le recensement du PoP — ARP, baux DHCP, table de
 ponts, routes, files : confirme un client déclaré, ou produit un candidat à déclarer),
 `backhauls` (PoP, `uisp_device_id`, capacité nominale), `routers` (PoPs ajoutés depuis
@@ -2095,7 +2211,8 @@ et `hidden` portent la disposition posée à la main dans l'éditeur d'arbre),
 `enforcement_audit` (journal des commandes envoyées), `runtime_flags` (drapeaux
 basculables à chaud, dont l'autorisation d'écriture), `traffic_rules` (les restrictions
 telles qu'elles sont **saisies** : un critère — un service, une famille, des blocs — et
-jamais une liste d'adresses figée).
+jamais une liste d'adresses figée), `bandwidth_schedules` (les profils de débit horaires :
+plages validées et sans chevauchement, portée, fuseau).
 
 Le schéma comporte une section de **migrations de colonnes** (`ADD COLUMN IF NOT EXISTS`) :
 `CREATE TABLE IF NOT EXISTS` ne touche pas une table déjà présente, une installation

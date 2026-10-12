@@ -75,8 +75,10 @@ from app.enforcement.models import (
     network_target,
     other_instance,
     slugify,
+    target_members,
 )
 from app.enforcement.planner import (
+    SOURCE_SCHEDULE,
     LinkTarget,
     SubscriberTarget,
     build_plan,
@@ -90,6 +92,8 @@ from app.enforcement.routeros import (
     RouterOsWriteClient,
     apply_plan,
 )
+from app.enforcement.schedules import BOOK as SCHEDULE_BOOK
+from app.enforcement.schedules import ScheduleBook
 from app.models import KIND_STATIC, StaticClient
 from app.services.limit_audit import audit_router
 from app.services.pop_match import explain as explain_pop
@@ -284,6 +288,17 @@ class ShapingService:
         #: quelle que soit l'adresse qui l'emet.
         self.sole_vlan_interfaces: dict[str, str] = {}
         self.sole_vlan_networks: dict[str, str] = {}
+        #: Profils de debit horaires (jour / soiree / nuit). Le carnet global
+        #: par defaut : c'est aussi celui que lit l'affichage des limites.
+        self.schedule_book: ScheduleBook = SCHEDULE_BOOK
+        #: Les profils se relisent ici (cf. ``apply_schedules``). None : aucune
+        #: base, le carnet reste ce qu'on y a pose.
+        self.schedules_repo: Any = None
+        #: Plage en cours de chaque profil au dernier passage, et ce qu'a fait
+        #: la derniere bascule. C'est la preuve, pour l'exploitant, que le
+        #: changement d'heure a bien ete pousse.
+        self._signature_horaire: tuple[tuple[int, int | None], ...] | None = None
+        self.last_schedule_switch: dict[str, Any] | None = None
         # Ce qu'a fait le DERNIER passage de la boucle de reconciliation. C'est
         # elle qui ecrit sur les routeurs ; sans cette trace, l'exploitant n'a
         # aucun moyen de voir qu'elle tourne, et croit que rien ne se passe.
@@ -1276,7 +1291,16 @@ class ShapingService:
         sites_du_routeur = await self._sites_of_router(router_name, pop_name)
 
         abonnes: list[SubscriberTarget] = []
-        for ligne in await self.metrics.subscriber_latest(limit=5000, order_by="login"):
+        # UN SEUL instant pour tout le plan : un profil horaire ne doit pas
+        # basculer entre deux abonnes du meme routeur.
+        maintenant = datetime.now(tz=UTC)
+        lignes_abonnes = await self.metrics.subscriber_latest(limit=5000, order_by="login")
+        # Le site AFFICHE de chaque abonne (VLAN comprise) : c'est lui que vise
+        # un profil horaire par site, ici comme dans la liste des abonnes.
+        sites_par_login = {
+            str(ligne.get("login")): ligne.get("pop_name") for ligne in lignes_abonnes
+        }
+        for ligne in lignes_abonnes:
             if _cle_site(str(ligne.get("pop_name") or "")) not in sites_du_routeur:
                 continue
             # Les clients a IP fixe sont traites plus bas, a partir de leur
@@ -1293,14 +1317,18 @@ class ShapingService:
             if service is not None:
                 plan_bas, plan_haut = self._plan_du_service(service)
             abonnes.append(
-                self._cible_abonne(
-                    login,
-                    collector=collector,
-                    session=session,
-                    plan_down=plan_bas,
-                    plan_up=plan_haut,
-                    surcharge=surcharge,
-                    parent=parent_par_noeud.get(secteur) if secteur else None,
+                self._horaire(
+                    self._cible_abonne(
+                        login,
+                        collector=collector,
+                        session=session,
+                        plan_down=plan_bas,
+                        plan_up=plan_haut,
+                        surcharge=surcharge,
+                        parent=parent_par_noeud.get(secteur) if secteur else None,
+                    ),
+                    site=ligne.get("pop_name"),
+                    maintenant=maintenant,
                 )
             )
 
@@ -1317,14 +1345,18 @@ class ShapingService:
             )
             secteur = rattachements.get(login)
             abonnes.append(
-                self._cible_abonne(
-                    login,
-                    collector=collector,
-                    session=session,
-                    plan_down=plan_bas,
-                    plan_up=plan_haut,
-                    surcharge=surcharge,
-                    parent=parent_par_noeud.get(secteur) if secteur else None,
+                self._horaire(
+                    self._cible_abonne(
+                        login,
+                        collector=collector,
+                        session=session,
+                        plan_down=plan_bas,
+                        plan_up=plan_haut,
+                        surcharge=surcharge,
+                        parent=parent_par_noeud.get(secteur) if secteur else None,
+                    ),
+                    site=pop_name,
+                    maintenant=maintenant,
                 )
             )
 
@@ -1359,7 +1391,13 @@ class ShapingService:
                     parent = parent_par_interface.get(port)
                     if parent is not None:
                         break
-            abonnes.append(self._cible_statique(client, surcharge=surcharge, parent=parent))
+            abonnes.append(
+                self._horaire(
+                    self._cible_statique(client, surcharge=surcharge, parent=parent),
+                    site=sites_par_login.get(client.reference) or client.pop_name,
+                    maintenant=maintenant,
+                )
+            )
 
         protect_infrastructure(router_name, liens, abonnes)
         return liens, abonnes
@@ -1420,7 +1458,9 @@ class ShapingService:
             # L'IP D'ABORD (contrat Preseem) : un client dont l'adresse tombe
             # dans un reseau connecte d'un routeur est derriere CE routeur, quel
             # que soit le nom de site que la facturation lui a donne.
-            porteur = router_serving(client.address)
+            # Toutes ses plages comptent : la premiere peut tres bien n'etre
+            # portee par aucun reseau connecte, et la seconde l'etre.
+            porteur = next((p for p in map(router_serving, client.prefixes) if p is not None), None)
             if porteur is not None:
                 if porteur[0] == collector.name:
                     retenus.append(client)
@@ -1501,14 +1541,21 @@ class ShapingService:
         bas, haut = client.plan_down_mbps, client.plan_up_mbps
         if bas is None and haut is None:
             bas, haut = self._default_plan()
+        # JAMAIS l'interface : une file qui la vise ne voit pas l'upload.
+        # Seul sur sa VLAN, le client est vise par les RESEAUX de sa VLAN --
+        # TOUS, quand la VLAN porte plusieurs pools -- les deux sens, et toutes
+        # les IP du VLAN (son routeur compris). Ses plages declarees s'y
+        # ajoutent : un bloc route derriere lui n'est dans aucun reseau de la
+        # VLAN, et en sortirait sinon sans plafond.
+        reseaux_vlan = self.sole_vlan_networks.get(client.reference)
         return SubscriberTarget(
             login=client.reference,
-            # JAMAIS l'interface : une file qui la vise ne voit pas l'upload.
-            # Seul sur sa VLAN, le client est vise par le RESEAU de sa VLAN --
-            # les deux sens, et toutes les IP du VLAN (son routeur compris).
             interface="",
             kind=KIND_STATIC,
-            address=self.sole_vlan_networks.get(client.reference) or client.address,
+            address=reseaux_vlan or client.address,
+            extra_addresses=(
+                (client.address, *client.extra_prefixes) if reseaux_vlan else client.extra_prefixes
+            ),
             plan_down_mbps=bas,
             plan_up_mbps=haut,
             override_down_mbps=surcharge.get("max_down_mbps"),
@@ -1519,6 +1566,28 @@ class ShapingService:
             enabled=surcharge.get("enabled", True),
             parent=parent,
         )
+
+    def _horaire(
+        self, cible: SubscriberTarget, *, site: str | None, maintenant: datetime
+    ) -> SubscriberTarget:
+        """Pose sur la cible le debit du profil horaire en cours, s'il y en a un.
+
+        Calcule sur le forfait de la cible : un profil en pourcentage suit le
+        forfait de chaque abonne. La surcharge et le boost restent au-dessus
+        (cf. ``effective_rate``).
+        """
+        horaire = self.schedule_book.rate_for(
+            login=cible.login,
+            sites=(site,),
+            plan_down=cible.plan_down_mbps,
+            plan_up=cible.plan_up_mbps,
+            now=maintenant,
+        )
+        if horaire is not None:
+            cible.schedule_down_mbps = horaire.down_mbps
+            cible.schedule_up_mbps = horaire.up_mbps
+            cible.schedule_name = f"{horaire.schedule_name} ({horaire.window})"
+        return cible
 
     def _cible_abonne(
         self,
@@ -1668,6 +1737,9 @@ class ShapingService:
                         "override": abonne.override_down_mbps is not None
                         or abonne.override_up_mbps is not None,
                         "boost": abonne.boost_active(),
+                        "schedule": abonne.schedule_name
+                        if abonne.rate_source() == SOURCE_SCHEDULE
+                        else None,
                     },
                     a_ecrire=a_ecrire,
                     conflits=conflits,
@@ -2645,6 +2717,83 @@ class ShapingService:
                 logger.exception("Retrait de boost impossible sur %s", router_name)
         return resultat
 
+    # ------------------------------------------------- profils horaires
+    async def load_schedules(self) -> int:
+        """Relit les profils horaires en base, dans le carnet partage.
+
+        Une base illisible garde le carnet tel quel : mieux vaut les profils
+        d'il y a trente secondes que plus aucun profil -- ce qui ferait
+        basculer tout le monde au forfait plein en pleine soiree.
+        """
+        if self.schedules_repo is None:
+            return len(self.schedule_book.schedules)
+        try:
+            self.schedule_book.replace(await self.schedules_repo.load_enabled())
+        except Exception:  # noqa: BLE001 - le carnet precedent reste en place
+            logger.exception("Profils horaires illisibles : le carnet precedent est garde")
+        return len(self.schedule_book.schedules)
+
+    async def apply_schedules(self, *, force: bool = False, reason: str = "") -> dict[str, Any]:
+        """Pousse les debits horaires quand une plage commence ou finit.
+
+        LE CHANGEMENT D'HEURE EST UN EVENEMENT. La reconciliation (toutes les
+        deux minutes) finirait par appliquer le debit de soiree ; mais « vers
+        18h02 » n'est pas « a 18h00 ». Ce job compare, a chaque passage, la
+        plage en cours de chaque profil a celle du passage precedent : des
+        qu'une plage change, il replanifie et ecrit.
+
+        ``force`` : un profil vient d'etre cree, modifie ou supprime -- on
+        applique tout de suite, comme pour un plafond saisi a la main.
+
+        Memes garde-fous que la reconciliation : rien n'est ecrit tant que
+        l'enforcement est coupe, et JAMAIS de purge (ce job ecrit sans revue).
+        Au tout premier passage, rien n'est ecrit : la reconciliation qui suit
+        le demarrage pose deja l'etat du moment.
+        """
+        await self.load_schedules()
+        maintenant = datetime.now(tz=UTC)
+        signature = self.schedule_book.signature(maintenant)
+        precedente = self._signature_horaire
+        self._signature_horaire = signature
+        resultat: dict[str, Any] = {
+            "at": maintenant.isoformat(),
+            "changed": signature != precedente,
+            "reason": reason or ("schedule edited" if force else "time slot change"),
+            "active": [{"schedule_id": ident, "window": index} for ident, index in signature],
+            "enabled": self._enforcement_enabled,
+            "routers": [],
+            "applied": 0,
+            "errors": [],
+        }
+        if not force and (precedente is None or signature == precedente):
+            return resultat
+        if not self._enforcement_enabled:
+            resultat["errors"].append(
+                "enforcement is off: the new rates are computed, nothing is written"
+            )
+            self.last_schedule_switch = resultat
+            return resultat
+        for collector in self.registry.collectors:
+            nom = collector.name
+            try:
+                plan = await self.plan_router(nom, prune=False)
+                if plan.is_empty:
+                    continue
+                applique = await self.apply(plan, dry_run=False, author="system:schedule")
+                resultat["routers"].append(nom)
+                resultat["applied"] += applique.applied
+            except Exception as exc:  # noqa: BLE001 - un routeur ne bloque pas les autres
+                resultat["errors"].append(f"{nom}: {type(exc).__name__}: {exc}")
+                logger.exception("Bascule horaire impossible sur %s", nom)
+        logger.info(
+            "Profils horaires : %s -- %d ecriture(s) sur %d routeur(s)",
+            resultat["reason"],
+            resultat["applied"],
+            len(resultat["routers"]),
+        )
+        self.last_schedule_switch = resultat
+        return resultat
+
     # --------------------------------------------------------- reconciliation
     async def reconcile(self) -> dict[str, Any]:
         """Reapplique l'etat desire sur tous les routeurs, sans intervention.
@@ -3439,14 +3588,19 @@ def protect_infrastructure(
     for abonne in subscribers:
         if abonne.skip_reason or not abonne.address:
             continue
-        try:
-            reseau = ipaddress.ip_network(str(abonne.address).strip(), strict=False)
-        except ValueError:
-            continue
-        hote = reseau.num_addresses == 1
-        for ip, (porteur, couvrable) in protegees.items():
-            if ip.version == reseau.version and ip in reseau and (hote or couvrable):
-                abonne.skip_reason = INFRA_SKIP.format(address=ip, owner=porteur)
+        # CHAQUE plage d'un client a plusieurs pools : une seule qui couvre
+        # notre infrastructure suffit a ecarter la file, qui les vise toutes.
+        for membre in (*target_members(abonne.address), *abonne.extra_addresses):
+            try:
+                reseau = ipaddress.ip_network(str(membre).strip(), strict=False)
+            except ValueError:
+                continue
+            hote = reseau.num_addresses == 1
+            for ip, (porteur, couvrable) in protegees.items():
+                if ip.version == reseau.version and ip in reseau and (hote or couvrable):
+                    abonne.skip_reason = INFRA_SKIP.format(address=ip, owner=porteur)
+                    break
+            if abonne.skip_reason:
                 break
 
 
@@ -3494,6 +3648,8 @@ def _origine_du_debit(kind: str, detail: dict[str, Any]) -> str:
         )
     elif detail.get("boost"):
         origine = "boost running"
+    elif detail.get("schedule"):
+        origine = f"bandwidth schedule: {detail['schedule']}"
     elif detail.get("plan_down_mbps") or detail.get("plan_up_mbps"):
         origine = "plan souscrit"
     else:
