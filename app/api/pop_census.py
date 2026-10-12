@@ -63,11 +63,19 @@ def _rapprocher(hote: dict[str, Any], fiches: list[dict[str, Any]]) -> dict[str,
         return None
     trouvees: list[tuple[int, dict[str, Any]]] = []
     for fiche in fiches:
-        reseau = _reseau_declare(fiche)
-        if reseau is None or reseau.version != adresse.version:
-            continue
-        if adresse in reseau:
-            trouvees.append((reseau.prefixlen, fiche))
+        # L'adresse declaree ET les plages additionnelles : un second pool de
+        # la meme VLAN appartient au meme client, il n'est pas "non declare".
+        reseaux = [_reseau_declare(fiche)]
+        for plage in fiche.get("extra_prefixes") or []:
+            try:
+                reseaux.append(ipaddress.ip_network(str(plage), strict=False))
+            except ValueError:
+                continue
+        for reseau in reseaux:
+            if reseau is None or reseau.version != adresse.version:
+                continue
+            if adresse in reseau:
+                trouvees.append((reseau.prefixlen, fiche))
     if not trouvees:
         return None
     trouvees.sort(key=lambda paire: -paire[0])

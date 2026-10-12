@@ -64,22 +64,34 @@ def _with_effective_limits(row: dict[str, Any]) -> dict[str, Any]:
     bride a 512 kbps continuerait de s'afficher avec son plan de 500 Mbps.
     """
     from app.enforcement.planner import effective_rate
+    from app.enforcement.schedules import BOOK
 
+    # Le profil horaire en cours, lu dans le MEME carnet que le planificateur.
+    horaire = BOOK.rate_for(
+        login=str(row.get("login") or ""),
+        sites=(row.get("pop_name"),),
+        plan_down=row.get("plan_down_mbps"),
+        plan_up=row.get("plan_up_mbps"),
+    )
     descendant, source = effective_rate(
         plan_mbps=row.get("plan_down_mbps"),
         override_mbps=row.get("override_down_mbps"),
         boost_mbps=row.get("boost_down_mbps"),
         boost_expires_at=row.get("boost_expires_at"),
+        schedule_mbps=horaire.down_mbps if horaire else None,
     )
     montant, _ = effective_rate(
         plan_mbps=row.get("plan_up_mbps"),
         override_mbps=row.get("override_up_mbps"),
         boost_mbps=row.get("boost_up_mbps"),
         boost_expires_at=row.get("boost_expires_at"),
+        schedule_mbps=horaire.up_mbps if horaire else None,
     )
     row["effective_down_mbps"] = descendant
     row["effective_up_mbps"] = montant
     row["limit_source"] = source
+    row["schedule_name"] = horaire.schedule_name if horaire else None
+    row["schedule_window"] = horaire.window if horaire else None
     return row
 
 

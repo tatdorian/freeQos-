@@ -87,10 +87,19 @@ class StaticClient:
     plan_up_mbps: float | None = None
     enabled: bool = True
     note: str | None = None
+    # PLAGES ADDITIONNELLES, sur la meme VLAN ou routees derriere le client :
+    # un second pool, un bloc public en plus du reseau de service. Elles
+    # partagent la file de ``address`` -- un client, un debit souscrit.
+    extra_prefixes: tuple[str, ...] = ()
 
     @property
     def display_name(self) -> str:
         return self.label or self.reference
+
+    @property
+    def prefixes(self) -> tuple[str, ...]:
+        """Tous les blocs du client : l'adresse declaree, puis les plages en plus."""
+        return (self.address, *self.extra_prefixes)
 
 
 @dataclass(frozen=True, slots=True)

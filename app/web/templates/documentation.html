@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="75398f7191ba865c">
+  <meta name="freeqos-docs-source" content="59a507d89ec191f5">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -72,6 +72,7 @@
     <a class="sub" href="#reconciliation">Reconciliation</a>
     <a class="sub" href="#safeguards">Safeguards</a>
     <a class="sub" href="#manual-adjustments">Manual adjustments</a>
+    <a class="sub" href="#bandwidth-schedules-day-evening-night">Bandwidth schedules (day, evening, night)</a>
     <a class="sub" href="#the-shaping-map">The shaping map</a>
     <a class="sub" href="#where-a-subscriber-queue-points-and-when-it-is-skipped">Where a subscriber queue points, and when it is skipped</a>
     <a class="sub" href="#are-the-caps-actually-held">Are the caps actually held?</a>
@@ -165,6 +166,7 @@
     <a class="sub" href="#health">Health</a>
     <a class="sub" href="#accounts_1">Accounts</a>
     <a class="sub" href="#api-keys_1">API keys</a>
+    <a class="sub" href="#bandwidth-schedules">Bandwidth schedules</a>
   </nav>
 
   <main>
@@ -1455,6 +1457,8 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 </tbody>
 </table></div>
+<p><strong>Several address ranges for one client.</strong> A VLAN client usually has a single IP pool. When the same client has <strong>several pools on the same VLAN</strong> (an extra public block, a service pool), or a block routed behind its CPE, list them in <em>Additional ranges</em> (<code>extra_prefixes</code> in the API). Each item is an IP (<code>10.0.1.5</code>), a block (<code>10.0.1.0/28</code>) or a MikroTik pool range (<code>10.0.1.10-10.0.1.50</code>, split into the exact covering blocks). They all share <strong>one</strong> queue — RouterOS accepts a list as target (<code>target=10.0.0.0/29,10.0.1.0/28</code>) and applies a single <code>max-limit</code> to the whole list — because the client bought <strong>one</strong> rate; two queues would give it two. The target is canonical (sorted, a block contained in another one dropped), so reading it back in RouterOS's own order is not a change. The queue hangs under a parent link only if that link's segment contains <strong>every</strong> range; a range claimed by two clients makes both ambiguous, and neither queue is written. An address of any range confirms the client's presence and is never proposed as a candidate. Several <strong>clients</strong> on the same VLAN are simply declared separately, one record each.</p>
+<p><strong>Alone on its VLAN.</strong> When a single client is declared on a VLAN (and no PPPoE server listens on it), every network of that VLAN interface belongs to it — <strong>all of them</strong> when the VLAN carries several pools — plus its declared ranges: its queue targets the whole list, and its traffic is attributed to it in NetFlow.</p>
 <p><strong>Census and candidates.</strong> The census of a PoP (<code>GET /api/v1/pops/census</code>, see above) confirms declared clients — an address inside a declared block is "seen active" — and lists the addresses that match nothing. <code>GET /api/v1/static-clients/candidates</code> returns those candidates and <code>GET /api/v1/static-clients/candidates/diagnostic</code> the reason each ARP line was set aside. A candidate is never turned into a subscriber automatically: a printer, a camera or another operator's device leaves exactly the same trace, and nobody can guess the sold rate. Declaring always goes through <code>POST /api/v1/static-clients</code> (or the <em>Add a client</em> form) with a reference and a plan.</p>
 <h3 id="ubiquiti-antennas-and-radio-capacity">Ubiquiti antennas and radio capacity</h3>
 <p>The capacity of a radio link changes with rain, interference and alignment. freeQoS only knows it by <strong>asking the antenna</strong>, in one of two ways:</p>
@@ -2395,11 +2399,48 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Dry run</strong> (<code>POST /api/v1/shaping/plan</code>): the commands that would be sent, without sending anything.</li>
 </ul>
 <p><strong>Units.</strong> Every rate field has a <strong>kbps / Mbps / Gbps</strong> selector: a subscriber capped at 512 kbps is typed as such, not as <code>0.512 Mbps</code>, and displayed as "512 kbps". Internally everything is converted once, at the input, to Mbit/s. The API accepts <code>max_down_mbps</code>, <code>max_down_kbps</code> or <code>max_down_gbps</code> (same for upload, and <code>down_*</code> / <code>up_*</code> for a boost); two units for the same direction are refused as ambiguous.</p>
-<p><strong>Which rate wins.</strong> From strongest to weakest: a running <strong>boost</strong>, a permanent <strong>override</strong>, the subscriber's <strong>plan</strong>. A boost goes over the override then disappears; it does not erase it.</p>
+<p><strong>Which rate wins.</strong> From strongest to weakest: a running <strong>boost</strong>, a permanent <strong>override</strong>, the <strong>bandwidth schedule</strong> in its current time slot (see below), the subscriber's <strong>plan</strong>. A boost goes over the override then disappears; it does not erase it. A schedule never undoes an override: a decision taken on <em>this</em> subscriber (capped for non-payment, for instance) is not lifted because the night begins.</p>
 <p><strong>Boosts.</strong> A duration (1 minute to 7 days), then either a multiplier of the plan (the interface offers ×2, ×3 and ×5; the API accepts more than 1, up to 50) or explicit rates, and a reason. It is written immediately if writing is allowed and <strong>expires by itself</strong>: a job checks expiries every 30 s and brings the queue back to its normal rate — RouterOS knows nothing about the duration. A boost without an expiry is refused: it would be an override in disguise that never goes away.</p>
 <p><strong>A rate set by hand is written at once.</strong> Setting a subscriber's or a link's rate writes the corresponding queue immediately (the full plan of the router, restricted to that queue), and the reply says what was written, on which router, or what prevented it (<code>apply_now=false</code> only records the intention).</p>
+<h3 id="bandwidth-schedules-day-evening-night">Bandwidth schedules (day, evening, night)</h3>
+<p>Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched <strong>automatically</strong>, on time. A <strong>bandwidth schedule</strong> (<em>Plans › Bandwidth schedules</em>, or <code>/api/v1/bandwidth-schedules</code>) is a set of <strong>time slots</strong>, each with the rate that applies during it:</p>
+<ul>
+<li>a <strong>percentage of the plan</strong> (<code>percent</code>: 200 = twice the plan at night, 70 = 30 % less in the evening), which follows every subscriber's own plan without copying it; or</li>
+<li>a <strong>fixed rate</strong> (<code>down_mbps</code> / <code>up_mbps</code>; a single direction is allowed, the other one keeps its plan).</li>
+</ul>
+<p>Outside every slot, the normal plan applies.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>start</code>, <code>end</code></td>
+<td>Local <code>HH:MM</code>. An end before the start crosses midnight (<code>22:00</code>–<code>06:00</code>); <code>24:00</code> is midnight at the end of a slot (<code>00:00</code>–<code>24:00</code> = the whole day)</td>
+</tr>
+<tr>
+<td><code>days</code></td>
+<td>The days on which the slot <strong>starts</strong> (<code>mon</code> … <code>sun</code>; empty = every day). Friday's night runs into Saturday morning</td>
+</tr>
+<tr>
+<td><code>timezone</code></td>
+<td>IANA name of the subscribers' time zone (<code>Europe/Paris</code>, <code>Africa/Abidjan</code>…). The hours are local to it and daylight saving time is handled; the interface pre-fills the browser's zone</td>
+</tr>
+<tr>
+<td><code>scope</code>, <code>targets</code></td>
+<td><code>all</code> clients; <code>pops</code> (site names, matched like everywhere else, case and accents ignored); <code>plans</code> (the plan's <strong>download rate</strong> in Mbps: <code>20</code> = every 20 Mbps plan); <code>subscribers</code> (PPPoE logins or static-client references)</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Two slots of one schedule may not overlap</strong> — which one would win at 19:00 between "evening 18:00–23:00" and "peak 19:00–21:00"? The overlap is refused when saving, with the day and time where it happens.</p>
+<p><strong>One schedule per subscriber.</strong> When several schedules target the same subscriber, the most <strong>precise</strong> one governs it alone: named subscribers, then plans, then sites, then all clients; at equal precision, the most recent. Schedules never combine: the operator can always say, subscriber by subscriber, where its rate comes from. The <em>Clients</em> button of a schedule (<code>GET /api/v1/bandwidth-schedules/{id}/preview</code>) lists the subscribers it governs, their plan and their rate <strong>right now</strong>, and those a more precise schedule takes away from it.</p>
+<p><strong>The switch is automatic.</strong> A job re-reads the schedules every 30 s and compares, for each schedule, the slot running now to the one of the previous pass: as soon as a slot starts or ends, the queues are re-planned and written (author <code>system:schedule</code> in the audit), without waiting for the 2-minute reconciliation — which, in any case, writes the scheduled rate too. Saving, suspending or deleting a schedule applies it at once. The same safeguards as reconciliation apply: nothing is written while writing is off, and a scheduled switch never deletes a queue. The oscillation guard does not watch <code>max-limit</code>, so three switches a day are never mistaken for an oscillation. The last switch (when, why, how many writes, on which routers) is shown under the list.</p>
+<p>The subscriber list shows a scheduled rate with a <em>schedule</em> badge (the schedule and slot in the tooltip), and the <em>Plans</em> page shows, under each plan, the rate applied right now and the governing schedule.</p>
 <h3 id="the-shaping-map">The shaping map</h3>
-<p><em>Settings › Shaping and writing to the routers</em> shows the <strong>map</strong>, not the commands: where the network is capped, at how much, and where that cap comes from (measured capacity, override, plan, boost, QoE tightening). <code>GET /api/v1/shaping/points</code> returns it, read-only.</p>
+<p><em>Settings › Shaping and writing to the routers</em> shows the <strong>map</strong>, not the commands: where the network is capped, at how much, and where that cap comes from (measured capacity, override, plan, bandwidth schedule, boost, QoE tightening). <code>GET /api/v1/shaping/points</code> returns it, read-only.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -2750,7 +2791,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 <tr>
 <td>Several prefixes</td>
-<td>The first prefix is the queue's target; all of them count in the traffic measurement</td>
+<td>All of them share <strong>one</strong> queue, whose target lists them (<code>target=10.0.0.0/29,10.0.1.0/28</code>): one service, one subscribed rate. All of them count in the traffic measurement</td>
 </tr>
 </tbody>
 </table></div>
@@ -3681,7 +3722,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tr>
 <tr>
 <td><code>static_clients</code></td>
-<td>Declared static-IP clients and services pushed through <code>/model/v1</code> (<code>source</code>)</td>
+<td>Declared static-IP clients and services pushed through <code>/model/v1</code> (<code>source</code>); <code>extra_prefixes</code> holds their additional ranges</td>
 </tr>
 <tr>
 <td><code>client_plans</code></td>
@@ -3726,6 +3767,10 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <tr>
 <td><code>traffic_rules</code></td>
 <td>Restrictions as entered: a criterion, never a frozen address list</td>
+</tr>
+<tr>
+<td><code>bandwidth_schedules</code></td>
+<td>Time-of-day bandwidth schedules: time slots (validated, without overlap), scope and targets, time zone</td>
 </tr>
 <tr>
 <td><code>app_users</code>, <code>app_sessions</code>, <code>auth_events</code>, <code>api_keys</code></td>
@@ -4898,7 +4943,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 160 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 165 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -5888,6 +5933,43 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>DELETE</code></td>
 <td><code>/api/v1/api-keys/{key_id}</code></td>
 <td>Revoke a key for good</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="bandwidth-schedules">Bandwidth schedules</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/bandwidth-schedules</code></td>
+<td>Time-of-day bandwidth schedules</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/bandwidth-schedules</code></td>
+<td>Create a bandwidth schedule (applied right away)</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/bandwidth-schedules/{schedule_id}</code></td>
+<td>Edit a bandwidth schedule</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/bandwidth-schedules/{schedule_id}</code></td>
+<td>Delete a bandwidth schedule</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/bandwidth-schedules/{schedule_id}/preview</code></td>
+<td>Which subscribers this schedule governs, and their rate right now</td>
 </tr>
 </tbody>
 </table></div>

@@ -38,6 +38,7 @@ from app.db.model_repo import ModelRepository
 from app.db.plans_repo import ClientPlansRepository
 from app.db.repository import MetricsRepository
 from app.db.routers_repo import RoutersRepository
+from app.db.schedules_repo import SchedulesRepository
 from app.db.settings_repo import SettingsRepository
 from app.db.static_clients_repo import StaticClientsRepository, VlanSightingsRepository
 from app.db.topology_repo import TopologyRepository
@@ -56,6 +57,7 @@ from app.services.collection import (
     JOB_QOE_LOOP,
     JOB_RECONCILE,
     JOB_RTT,
+    JOB_SCHEDULES,
     JOB_SUBSCRIBERS,
     JOB_TOPOLOGY,
     CollectionService,
@@ -192,6 +194,7 @@ class Container:
     exporters_repo: NetflowExportersRepository | None = None
     destinations_repo: DestinationsRepository | None = None
     traffic_rules_repo: TrafficRulesRepository | None = None
+    schedules_repo: SchedulesRepository | None = None
     netflow: NetflowService | None = None
     netflow_export: NetflowExportService | None = None
     intel: IntelService | None = None
@@ -330,6 +333,8 @@ async def build_container(settings: Settings) -> Container:
     # Les restrictions de trafic, telles qu'elles sont saisies. Aucune adresse
     # n'y est figee : une regle est un critere, resolu a chaque passage.
     traffic_rules_repo = TrafficRulesRepository(database.pool)
+    # Les profils de debit horaires (jour / soiree / nuit).
+    schedules_repo = SchedulesRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
@@ -355,6 +360,11 @@ async def build_container(settings: Settings) -> Container:
     # Le drapeau d'ecriture vient de la base une fois amorce : le basculer depuis
     # l'interface ne doit pas demander un redemarrage.
     await shaping.load_flags()
+    # Les profils horaires AVANT le premier plan : sans eux, la premiere
+    # reconciliation poserait le forfait plein en pleine plage de soiree, et
+    # la bascule suivante le corrigerait -- deux ecritures pour rien.
+    shaping.schedules_repo = schedules_repo
+    await shaping.load_schedules()
 
     # Sonde de latence : TOUJOURS instanciee et planifiee. Son execution est
     # gouvernee par un drapeau basculable depuis l'interface (comme l'enforcement),
@@ -481,6 +491,13 @@ async def build_container(settings: Settings) -> Container:
         await shaping.reconcile()
 
     scheduler.add_job(JOB_RECONCILE, settings.shaping_reconcile_interval_s, reconcile_shaping)
+
+    # Profils horaires : relus toutes les 30 s, et les files repoussees des
+    # qu'une plage commence ou finit (18:00 pile, pas « vers 18:02 »).
+    async def apply_schedules() -> None:
+        await shaping.apply_schedules()
+
+    scheduler.add_job(JOB_SCHEDULES, 30.0, apply_schedules)
 
     # Verification des plafonds en tache de fond : la page lit son resultat
     # sans jamais attendre les routeurs.
@@ -675,6 +692,7 @@ async def build_container(settings: Settings) -> Container:
         exporters_repo=exporters_repo,
         destinations_repo=destinations_repo,
         traffic_rules_repo=traffic_rules_repo,
+        schedules_repo=schedules_repo,
         netflow=netflow,
         netflow_export=netflow_export,
         intel=intel,

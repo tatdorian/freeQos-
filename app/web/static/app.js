@@ -3926,14 +3926,22 @@ function limitCell(r, etat) {
   const sceau = depassement(r) || limitProof(etat);
   if (r.limit_source === 'plan') return texte + sceau;
 
+  // PROFIL HORAIRE : le debit de la plage en cours (soiree, nuit...). Il n'a
+  // rien d'une anomalie -- couleur neutre, et le nom du profil au survol.
+  const horaire = r.limit_source === 'schedule';
   const marque = r.limit_source === 'boost'
     ? '<span class="boost-pill" style="margin-left:.4rem">boost</span>'
-    : '<span class="badge warn" style="margin-left:.4rem">forced</span>';
+    : horaire
+      ? '<span class="badge" style="margin-left:.4rem">schedule</span>'
+      : '<span class="badge warn" style="margin-left:.4rem">forced</span>';
   const plan = r.plan_down_mbps
     ? 'Plan: ' + mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0)
     : 'No RADIUS plan';
-  const note = r.policy_note || r.boost_reason;
-  const couleur = r.limit_source === 'boost' ? '#a78bfa' : 'var(--warn)';
+  const note = horaire
+    ? (r.schedule_name || '') + (r.schedule_window ? ' — ' + r.schedule_window : '')
+    : r.policy_note || r.boost_reason;
+  const couleur = r.limit_source === 'boost' ? '#a78bfa'
+    : horaire ? 'var(--accent)' : 'var(--warn)';
 
   return '<span title="' + esc(plan + (note ? ' — ' + note : '')) + '">' +
     '<span style="color:' + couleur + '">' + texte + '</span>' + marque + sceau + '</span>';
@@ -4414,6 +4422,7 @@ function scRemplirFormulaire(fiche) {
   v('sc-down', fiche ? fiche.plan_down_mbps : '');
   v('sc-up', fiche ? fiche.plan_up_mbps : '');
   v('sc-cpe', fiche ? fiche.cpe_mac : '');
+  v('sc-extra', fiche ? (fiche.extra_prefixes || []).join(', ') : '');
   v('sc-note', fiche ? fiche.note : '');
   document.getElementById('sc-enabled').checked = fiche ? !!fiche.enabled : true;
   document.getElementById('sc-submit').textContent = fiche ? 'Save' : 'Declare';
@@ -4452,6 +4461,9 @@ function scPayload() {
     plan_down_mbps: nb('sc-down'),
     plan_up_mbps: nb('sc-up'),
     cpe_mac: txt('sc-cpe'),
+    // Toujours une liste, vide comprise : vider le champ RETIRE les plages.
+    extra_prefixes: (document.getElementById('sc-extra').value || '')
+      .split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean),
     note: txt('sc-note'),
     enabled: document.getElementById('sc-enabled').checked,
   };
@@ -4561,7 +4573,7 @@ async function loadStaticClients() {
       '<td class="login">' + esc(f.reference) + '</td>' +
       '<td>' + esc(f.label || '-') + '</td>' +
       '<td>' + esc(f.pop_name) + '</td>' +
-      '<td><code>' + esc(f.address) + '</code></td>' +
+      '<td>' + scPlages(f) + '</td>' +
       '<td class="num">' + esc(f.vlan === null || f.vlan === undefined ? '-' : f.vlan) + '</td>' +
       '<td>' + esc(f.sector_key || '-') + '</td>' +
       '<td class="num">' + esc(
@@ -4597,6 +4609,20 @@ async function loadStaticClients() {
     b.addEventListener('click', () => scSupprimer(b.dataset.scDel, fiches));
   });
   scEtatDesFiles(host);
+}
+
+/** L'adresse d'un client et ses plages additionnelles.
+ *
+ *  Plusieurs pools sur la meme VLAN restent UN client : une seule file les
+ *  vise toutes, et son debit est celui du contrat. On les montre ensemble
+ *  pour que cela se lise. */
+function scPlages(f) {
+  const plus = f.extra_prefixes || [];
+  const premiere = '<code>' + esc(f.address) + '</code>';
+  if (!plus.length) return premiere;
+  return premiere + plus.map((p) => '<br><code>' + esc(p) + '</code>').join('') +
+    '<br><span class="hint" title="One queue targets all these ranges: they share the plan.">' +
+    esc(plus.length + 1) + ' ranges, one queue</span>';
 }
 
 /** Remplit la colonne "File" APRES l'affichage du tableau.
@@ -4729,7 +4755,10 @@ async function openSubscriber(id) {
             : s.limit_source === 'override'
               ? '<span class="badge warn">forced</span> plan: ' +
                 esc(mbps(s.plan_down_mbps || 0))
-              : esc(s.plan_source || 'RADIUS plan')) +
+              : s.limit_source === 'schedule'
+                ? '<span class="badge">schedule</span> ' + esc(s.schedule_name || '') +
+                  ' · plan: ' + esc(mbps(s.plan_down_mbps || 0))
+                : esc(s.plan_source || 'RADIUS plan')) +
         statCard('', 'Queue target', esc(s.last_ip ? s.last_ip + '/32' : '-'), '',
           s.last_ip
             ? 'session address'
@@ -9330,6 +9359,368 @@ async function loadPlans() {
         : 'no limit');
   renderPlanPackages();
   renderPlanClients();
+  await loadSchedules();
+}
+
+/* ------------------------------------------------------- profils horaires
+ *
+ * Des debits qui changent avec l'heure (jour, soiree, nuit), TOUT SEULS. Une
+ * plage pose un pourcentage du forfait ou un debit fixe ; hors de toute plage,
+ * le forfait s'applique. La liste se rafraichit avec la page ; le formulaire,
+ * lui, n'est jamais redessine pendant une saisie. */
+const SCHED = { data: null, editing: null, preview: null, previewData: null };
+const SCHED_JOURS = [['mon', 'Mo'], ['tue', 'Tu'], ['wed', 'We'], ['thu', 'Th'],
+  ['fri', 'Fr'], ['sat', 'Sa'], ['sun', 'Su']];
+const SCHED_PORTEE = {
+  all: 'All clients', pops: 'Sites', plans: 'Plans', subscribers: 'Named clients',
+};
+
+function schedRate(w) {
+  if (w.percent != null) return esc(String(w.percent)) + ' % of plan';
+  return [w.down_mbps != null ? '&darr; ' + esc(mbps(w.down_mbps)) : '',
+    w.up_mbps != null ? '&uarr; ' + esc(mbps(w.up_mbps)) : ''].filter(Boolean).join(' ');
+}
+
+function schedWindowText(w) {
+  const jours = (w.days || []).length === 7 ? 'every day' : (w.days || []).join(', ');
+  return (w.label ? '<b>' + esc(w.label) + '</b> ' : '') + esc(w.start + '–' + w.end) +
+    ' <span class="hint" style="display:inline">' + esc(jours) + '</span> · ' + schedRate(w);
+}
+
+async function loadSchedules() {
+  const host = document.getElementById('sched-list');
+  if (!host) return;
+  try {
+    SCHED.data = await api('/bandwidth-schedules');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  renderSchedules();
+}
+
+function renderSchedules() {
+  const host = document.getElementById('sched-list');
+  const d = SCHED.data;
+  if (!host || !d) return;
+  const lignes = d.schedules || [];
+  if (!lignes.length) {
+    host.innerHTML = '<div class="empty">No schedule: every client gets its plan at all hours.</div>';
+    return;
+  }
+  const cible = (f) => f.scope === 'all' ? 'All clients'
+    : esc(SCHED_PORTEE[f.scope] || f.scope) + ': ' + esc((f.targets || []).join(', ') +
+      (f.scope === 'plans' ? ' Mbps' : ''));
+  host.innerHTML = (d.enforcement_enabled ? '' : '<div class="notice warn">Writing to the ' +
+      'routers is off (Settings): the scheduled rates are computed and shown, nothing is ' +
+      'written.</div>') +
+    '<table><thead><tr><th>Schedule</th><th>Applies to</th><th>Time slots</th>' +
+    '<th>Now</th><th>Next switch</th><th>State</th><th></th></tr></thead><tbody>' +
+    lignes.map((f) => {
+      const maintenant = f.error
+        ? sqCell('Invalid', 'crit', f.error)
+        : f.active_window
+          ? sqCell(f.active_window.label || 'In a slot', 'ok') +
+            '<span class="hint">' + schedRate(f.active_window) + '</span>'
+          : '<span class="na">plan</span>';
+      const ligne = '<tr>' +
+        '<td><b>' + esc(f.name) + '</b><span class="hint">' + esc(f.timezone) +
+          (f.local_time ? ' · ' + esc(f.local_time) : '') + '</span></td>' +
+        '<td>' + cible(f) + '</td>' +
+        '<td>' + (f.windows || []).map(schedWindowText).join('<br>') + '</td>' +
+        '<td>' + maintenant + '</td>' +
+        '<td>' + (f.next_change_local ? esc(f.next_change_local) : '<span class="na">-</span>') +
+          '</td>' +
+        '<td>' + (f.enabled ? sqCell('active', 'ok') : sqCell('suspended', 'warn')) + '</td>' +
+        '<td class="nowrap">' +
+          '<button class="sm" data-sched-edit="' + esc(f.id) + '">Edit</button> ' +
+          '<button class="sm" data-sched-preview="' + esc(f.id) + '">Clients</button> ' +
+          '<button class="sm" data-sched-toggle="' + esc(f.id) + '">' +
+            (f.enabled ? 'Suspend' : 'Resume') + '</button> ' +
+          '<button class="sm" data-sched-del="' + esc(f.id) + '">Delete</button>' +
+        '</td></tr>';
+      if (String(SCHED.preview) !== String(f.id)) return ligne;
+      return ligne + '<tr class="plan-edit"><td colspan="7">' + schedPreviewHtml() + '</td></tr>';
+    }).join('') + '</tbody></table>' + schedLastSwitch(d.last_switch);
+
+  host.querySelectorAll('[data-sched-edit]').forEach((b) => b.addEventListener('click', () => {
+    const fiche = lignes.find((f) => String(f.id) === b.dataset.schedEdit);
+    schedFill(fiche);
+    document.getElementById('sched-name').scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }));
+  host.querySelectorAll('[data-sched-preview]').forEach((b) => b.addEventListener('click',
+    () => schedPreview(b.dataset.schedPreview)));
+  host.querySelectorAll('[data-sched-toggle]').forEach((b) => b.addEventListener('click', () => {
+    const fiche = lignes.find((f) => String(f.id) === b.dataset.schedToggle);
+    schedSave(fiche.id, { enabled: !fiche.enabled });
+  }));
+  host.querySelectorAll('[data-sched-del]').forEach((b) => b.addEventListener('click', () => {
+    const fiche = lignes.find((f) => String(f.id) === b.dataset.schedDel);
+    schedDelete(fiche);
+  }));
+}
+
+/** La derniere bascule : la preuve que le changement d'heure a ete pousse. */
+function schedLastSwitch(bascule) {
+  if (!bascule) return '';
+  const erreurs = (bascule.errors || []).length
+    ? ' <span class="badge warn" title="' + esc((bascule.errors || []).join('\n')) + '">' +
+      esc(bascule.errors[0]) + (bascule.errors.length > 1 ? ' (+' + (bascule.errors.length - 1) +
+      ')' : '') + '</span>' : '';
+  return '<p class="hint" style="display:block">Last switch: ' + esc(depuis(bascule.at)) +
+    ' (' + esc(bascule.reason || '') + ') — ' + esc(bascule.applied || 0) +
+    ' change(s) written on ' + esc((bascule.routers || []).length) + ' router(s).' +
+    erreurs + '</p>';
+}
+
+async function schedPreview(id) {
+  if (String(SCHED.preview) === String(id)) {
+    SCHED.preview = null;
+    renderSchedules();
+    return;
+  }
+  SCHED.preview = id;
+  SCHED.previewData = null;
+  renderSchedules();
+  try {
+    SCHED.previewData = await api('/bandwidth-schedules/' + encodeURIComponent(id) +
+      '/preview?limit=200');
+  } catch (err) {
+    SCHED.previewData = { error: err.message };
+  }
+  renderSchedules();
+}
+
+function schedPreviewHtml() {
+  const p = SCHED.previewData;
+  if (!p) return '<span class="hint">reading...</span>';
+  if (p.error) return '<div class="notice err">' + esc(p.error) + '</div>';
+  const c = p.counts || {};
+  const debit = (v) => (v == null ? '<span class="na">no limit</span>' : esc(mbps(v)));
+  const SOURCES = { schedule: ['ok', 'schedule'], plan: ['none', 'plan'],
+    override: ['warn', 'forced'], boost: ['warn', 'boost'], none: ['none', '-'] };
+  const tableau = (p.subscribers || []).length
+    ? '<table><thead><tr><th>Client</th><th>Site</th><th class="num">Plan</th>' +
+      '<th class="num">Now</th><th>From</th></tr></thead><tbody>' +
+      p.subscribers.map((a) => {
+        const src = SOURCES[a.source] || ['none', a.source];
+        return '<tr><td>' + esc(a.login) + '</td><td>' + esc(a.pop_name || '-') + '</td>' +
+          '<td class="num">' + debit(a.plan_down_mbps) + ' / ' + debit(a.plan_up_mbps) + '</td>' +
+          '<td class="num">' + debit(a.now_down_mbps) + ' / ' + debit(a.now_up_mbps) + '</td>' +
+          '<td>' + sqCell(src[1], src[0]) + '</td></tr>';
+      }).join('') + '</tbody></table>'
+    : '<div class="empty">This schedule governs no client yet.</div>';
+  const ailleurs = (p.overridden || []).length
+    ? '<p class="hint" style="display:block">' + esc(p.overridden.length) +
+      ' client(s) targeted here follow a more precise schedule: ' +
+      esc(p.overridden.slice(0, 20).map((o) => o.login + ' (' + o.governed_by + ')').join(', ')) +
+      '</p>' : '';
+  return '<p class="hint" style="display:block"><b>' + esc(c.governed || 0) +
+    '</b> client(s) governed, <b>' + esc(c.on_schedule_now || 0) +
+    '</b> on a scheduled rate right now.</p>' + ailleurs + tableau;
+}
+
+function schedWindowRow(w) {
+  const f = w || { start: '', end: '', days: SCHED_JOURS.map((j) => j[0]), percent: null };
+  const jours = new Set(f.days && f.days.length ? f.days : SCHED_JOURS.map((j) => j[0]));
+  const pourcent = !(f.down_mbps != null || f.up_mbps != null);
+  return '<tr data-sched-window>' +
+    '<td><button type="button" class="sm" data-sched-remove title="Remove this time slot" ' +
+      'aria-label="Remove this time slot">&times;</button></td>' +
+    '<td><input name="label" maxlength="64" placeholder="evening" style="width:5.5rem" value="' +
+      esc(f.label || '') + '"></td>' +
+    '<td><input name="start" required maxlength="5" placeholder="18:00" style="width:4rem" ' +
+      'pattern="[0-2]?[0-9]:[0-5][0-9]" value="' + esc(f.start || '') + '"></td>' +
+    '<td><input name="end" required maxlength="5" placeholder="23:00" style="width:4rem" ' +
+      'pattern="[0-2]?[0-9]:[0-5][0-9]" title="Before the start time: the slot ends the next ' +
+      'day (22:00 to 06:00). 24:00 = midnight." value="' + esc(f.end || '') + '"></td>' +
+    '<td style="min-width:11rem">' + SCHED_JOURS.map(([cle, nom]) =>
+      '<label class="chk" style="margin-right:.25rem"><input type="checkbox" name="day" value="' +
+        cle + '"' + (jours.has(cle) ? ' checked' : '') + '>' + nom + '</label>').join('') + '</td>' +
+    '<td class="nowrap"><select name="mode" style="width:auto">' +
+      '<option value="percent"' + (pourcent ? ' selected' : '') + '>% of plan</option>' +
+      '<option value="rate"' + (pourcent ? '' : ' selected') + '>fixed rate</option></select> ' +
+      '<span data-mode="percent"' + (pourcent ? '' : ' hidden') + '><input name="percent" ' +
+        'type="number" min="1" max="1000" step="any" style="width:4.5rem" value="' +
+        esc(f.percent == null ? '' : f.percent) + '"> %</span>' +
+      '<span data-mode="rate"' + (pourcent ? ' hidden' : '') + '>&darr; <input name="down" ' +
+        'type="number" min="0" step="any" style="width:5rem" value="' +
+        esc(f.down_mbps == null ? '' : f.down_mbps) + '"> &uarr; <input name="up" type="number" ' +
+        'min="0" step="any" style="width:5rem" value="' + esc(f.up_mbps == null ? '' : f.up_mbps) +
+        '"> Mbps</span></td>' +
+    '</tr>';
+}
+
+function schedBindRows() {
+  const corps = document.querySelector('#sched-windows tbody');
+  corps.querySelectorAll('tr[data-sched-window]').forEach((tr) => {
+    if (tr.dataset.lie) return;
+    tr.dataset.lie = '1';
+    tr.querySelector('[data-sched-remove]').addEventListener('click', () => tr.remove());
+    tr.querySelector('select[name="mode"]').addEventListener('change', (e) => {
+      tr.querySelectorAll('[data-mode]').forEach((span) => {
+        span.hidden = span.dataset.mode !== e.target.value;
+      });
+    });
+  });
+}
+
+function schedAddRow(w) {
+  document.querySelector('#sched-windows tbody').insertAdjacentHTML('beforeend', schedWindowRow(w));
+  schedBindRows();
+}
+
+function schedTargetsField() {
+  const portee = document.getElementById('sched-scope').value;
+  document.getElementById('sched-targets-field').hidden = portee === 'all';
+  const libelles = {
+    pops: 'Sites (comma separated)',
+    plans: 'Plan download rates in Mbps (e.g. 20, 50)',
+    subscribers: 'Clients: logins or static-client references (comma separated)',
+  };
+  document.getElementById('sched-targets-label').textContent = libelles[portee] || 'Targets';
+  const clients = (PLANS.data && PLANS.data.clients) || [];
+  let options = [];
+  if (portee === 'pops' && !POPS_CONNUS.length && !schedTargetsField.lu) {
+    // La liste des sites n'est chargee que par l'onglet des abonnes : la lire
+    // une fois ici, puis reproposer.
+    schedTargetsField.lu = true;
+    remplirMenusPop().then(schedTargetsField).catch(() => {});
+  }
+  if (portee === 'pops') options = POPS_CONNUS.slice();
+  if (portee === 'subscribers') options = clients.map((c) => c.login);
+  if (portee === 'plans') {
+    options = [...new Set(clients.map((c) => c.down_mbps).filter((v) => v))]
+      .sort((a, b) => a - b).map(String);
+  }
+  document.getElementById('sched-targets-list').innerHTML = options.slice(0, 500)
+    .map((o) => '<option value="' + esc(o) + '">').join('');
+}
+
+function schedFill(fiche) {
+  SCHED.editing = fiche || null;
+  document.getElementById('sched-name').value = fiche ? fiche.name : '';
+  document.getElementById('sched-tz').value = fiche ? fiche.timezone
+    : (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  document.getElementById('sched-scope').value = fiche ? fiche.scope : 'all';
+  document.getElementById('sched-targets').value = fiche ? (fiche.targets || []).join(', ') : '';
+  document.getElementById('sched-enabled').checked = fiche ? !!fiche.enabled : true;
+  document.querySelector('#sched-windows tbody').innerHTML = '';
+  const plages = fiche ? fiche.windows || [] : [
+    { label: 'evening', start: '18:00', end: '23:00', percent: 70 },
+    { label: 'night', start: '23:00', end: '06:00', percent: 200 },
+  ];
+  plages.forEach((w) => schedAddRow(w));
+  document.getElementById('sched-submit').textContent = fiche ? 'Save and apply' : 'Create and apply';
+  document.getElementById('sched-cancel').hidden = !fiche;
+  document.getElementById('sched-form-title').textContent = fiche
+    ? 'Edit ' + fiche.name : 'New schedule';
+  schedTargetsField();
+}
+
+function schedPayload() {
+  const plages = [...document.querySelectorAll('#sched-windows tr[data-sched-window]')].map((tr) => {
+    const champ = (nom) => (tr.querySelector('[name="' + nom + '"]').value || '').trim();
+    const nombre = (nom) => (champ(nom) === '' ? null : Number(champ(nom)));
+    const w = {
+      label: champ('label') || null,
+      start: champ('start'),
+      end: champ('end'),
+      days: [...tr.querySelectorAll('input[name="day"]:checked')].map((c) => c.value),
+    };
+    if (tr.querySelector('select[name="mode"]').value === 'percent') {
+      w.percent = nombre('percent');
+    } else {
+      w.down_mbps = nombre('down') || null;
+      w.up_mbps = nombre('up') || null;
+    }
+    return w;
+  });
+  const portee = document.getElementById('sched-scope').value;
+  return {
+    name: document.getElementById('sched-name').value.trim(),
+    timezone: document.getElementById('sched-tz').value.trim() || 'UTC',
+    scope: portee,
+    targets: portee === 'all' ? [] : document.getElementById('sched-targets').value
+      .split(',').map((x) => x.trim()).filter(Boolean),
+    enabled: document.getElementById('sched-enabled').checked,
+    windows: plages,
+  };
+}
+
+/** Ce que l'enregistrement a REELLEMENT ecrit, dit en clair. */
+function schedEnforcement(rapport) {
+  if (!rapport) return '';
+  if ((rapport.errors || []).length) {
+    return ' <span class="hint" style="display:inline">' + esc(rapport.errors.join(' · ')) + '</span>';
+  }
+  return ' <span class="hint" style="display:inline">' + esc(rapport.applied || 0) +
+    ' change(s) written on the routers right away.</span>';
+}
+
+async function schedSave(id, corps) {
+  const res = document.getElementById('sched-result');
+  try {
+    const r = id
+      ? await api('/bandwidth-schedules/' + encodeURIComponent(id), {
+        method: 'PATCH', body: JSON.stringify(corps),
+      })
+      : await api('/bandwidth-schedules', { method: 'POST', body: JSON.stringify(corps) });
+    res.innerHTML = '<div class="notice ok">Schedule "' + esc(r.name) + '" saved.' +
+      schedEnforcement(r.enforcement) + '</div>';
+    return true;
+  } catch (err) {
+    res.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return false;
+  } finally {
+    await loadSchedules();
+  }
+}
+
+async function schedDelete(fiche) {
+  if (!confirm('Delete the schedule "' + fiche.name + '"?\n\nIts clients get their normal ' +
+      'plan back right away.')) return;
+  const res = document.getElementById('sched-result');
+  try {
+    const r = await api('/bandwidth-schedules/' + encodeURIComponent(fiche.id), { method: 'DELETE' });
+    res.innerHTML = '<div class="notice ok">Schedule deleted.' + schedEnforcement(r.enforcement) +
+      '</div>';
+    if (SCHED.editing && String(SCHED.editing.id) === String(fiche.id)) schedFill(null);
+  } catch (err) {
+    res.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+  await loadSchedules();
+}
+
+function schedInit() {
+  const fuseaux = typeof Intl.supportedValuesOf === 'function'
+    ? Intl.supportedValuesOf('timeZone') : [];
+  document.getElementById('sched-tz-list').innerHTML = fuseaux
+    .map((z) => '<option value="' + esc(z) + '">').join('');
+  document.getElementById('sched-scope').addEventListener('change', schedTargetsField);
+  document.getElementById('sched-add-window').addEventListener('click', () => schedAddRow(null));
+  document.getElementById('sched-cancel').addEventListener('click', () => schedFill(null));
+  document.getElementById('sched-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const bouton = document.getElementById('sched-submit');
+    bouton.disabled = true;
+    try {
+      const ok = await schedSave(SCHED.editing ? SCHED.editing.id : null, schedPayload());
+      if (ok) schedFill(null);
+    } finally {
+      bouton.disabled = false;
+    }
+  });
+  schedFill(null);
+}
+
+/** Le debit du profil horaire en cours, sous le forfait : c'est lui qui
+ *  s'applique pendant la plage. */
+function planHoraire(c, sens) {
+  const v = c['schedule_' + sens + '_mbps'];
+  if (v == null) return '';
+  return '<span class="hint" title="' + esc(c.schedule_window || '') + '">now ' +
+    esc(mbps(v)) + '</span>';
 }
 
 const ORIGINE_PLAN = {
@@ -9384,9 +9775,10 @@ function renderPlanClients() {
             '<td>' + sqCell('Forced', 'warn', 'Limit set by hand in Subscribers (Rate): it overrides ' +
               'the plan until you change the plan here or reset the queues') +
               '<span class="hint">plan: ' + esc(o[1]) + '</span></td>'
-          : '<td class="num">' + debit(c.down_mbps) + '</td>' +
-            '<td class="num">' + debit(c.up_mbps) + '</td>' +
+          : '<td class="num">' + debit(c.down_mbps) + planHoraire(c, 'down') + '</td>' +
+            '<td class="num">' + debit(c.up_mbps) + planHoraire(c, 'up') + '</td>' +
             '<td>' + sqCell(o[1], o[0]) + (detail ? '<span class="hint">' + esc(detail) + '</span>' : '') +
+              (c.schedule ? '<span class="hint">schedule: ' + esc(c.schedule) + '</span>' : '') +
               '</td>') +
         '<td>' + (c.updated_at ? esc(depuis(c.updated_at)) : '<span class="na">-</span>') + '</td>' +
         '<td class="nowrap"><button class="sm" data-plan-edit="' + esc(c.login) + '">Change</button>' +
@@ -9726,6 +10118,7 @@ document.getElementById('btn-test').addEventListener('click', testConnection);
 document.getElementById('flow-range').addEventListener('change', loadTraffic);
 document.getElementById('exec-lat-search').addEventListener('input', renderLatencyClients);
 document.getElementById('plans-search').addEventListener('input', renderPlanClients);
+schedInit();
 document.getElementById('plans-origin').addEventListener('change', renderPlanClients);
 document.getElementById('plans-default-form').addEventListener('submit', async (e) => {
   e.preventDefault();
