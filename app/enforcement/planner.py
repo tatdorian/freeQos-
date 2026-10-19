@@ -36,7 +36,9 @@ from app.enforcement.models import (
     needs_claim,
     network_target,
     other_instance,
+    prefixes_target,
     slugify,
+    target_members,
 )
 from app.models import KIND_PPPOE, KIND_STATIC
 
@@ -68,6 +70,7 @@ TARGET_INTERFACE = "interface"
 # Source du debit finalement applique, exposee a l'interface.
 SOURCE_BOOST = "boost"
 SOURCE_OVERRIDE = "override"
+SOURCE_SCHEDULE = "schedule"
 SOURCE_PLAN = "plan"
 SOURCE_NONE = "none"
 
@@ -79,6 +82,7 @@ def effective_rate(
     boost_mbps: float | None,
     boost_expires_at: datetime | None,
     now: datetime | None = None,
+    schedule_mbps: float | None = None,
 ) -> tuple[float | None, str]:
     """Debit reellement applique, et d'ou il vient.
 
@@ -86,13 +90,18 @@ def effective_rate(
     exactement ce que le planificateur va ecrire : recoder la regle cote client
     garantirait qu'elles divergent un jour.
 
-    Priorite : boost non expire, puis surcharge permanente, puis plan RADIUS.
+    Priorite : boost non expire, puis surcharge permanente, puis profil horaire
+    en cours (jour / soiree / nuit), puis plan RADIUS. Le profil passe SOUS la
+    surcharge : une decision prise sur cet abonne-la (bride pour impaye) ne se
+    defait pas parce que la nuit commence.
     """
     if boost_mbps and boost_expires_at is not None:
         if boost_expires_at > (now or datetime.now(tz=UTC)):
             return boost_mbps, SOURCE_BOOST
     if override_mbps:
         return override_mbps, SOURCE_OVERRIDE
+    if schedule_mbps:
+        return schedule_mbps, SOURCE_SCHEDULE
     if plan_mbps:
         return plan_mbps, SOURCE_PLAN
     return None, SOURCE_NONE
@@ -102,10 +111,11 @@ def effective_rate(
 class SubscriberTarget:
     """Un abonne a shaper, PPPoE ou a IP fixe.
 
-    Trois niveaux de debit, du plus fort au plus faible :
+    Quatre niveaux de debit, du plus fort au plus faible :
       1. le BOOST, tant qu'il n'a pas expire ;
       2. la surcharge manuelle permanente ;
-      3. le plan souscrit -- venu de RADIUS pour un abonne PPPoE, de
+      3. le profil horaire, pendant l'une de ses plages (soiree, nuit...) ;
+      4. le plan souscrit -- venu de RADIUS pour un abonne PPPoE, de
          l'inventaire saisi a la main pour un client statique.
 
     Les deux natures partagent volontairement cet objet : a partir d'ici, la
@@ -124,12 +134,20 @@ class SubscriberTarget:
     # pour un client statique. C'est elle qui porte la file : sans elle,
     # l'abonne est hors ligne et il n'y a rien a brider.
     address: str | None = None
+    # Client statique seulement : ses autres plages (second pool de la VLAN,
+    # bloc routé derriere lui). Elles rejoignent la cible de la MEME file.
+    extra_addresses: tuple[str, ...] = ()
     parent: str | None = None
     override_down_mbps: float | None = None
     override_up_mbps: float | None = None
     boost_down_mbps: float | None = None
     boost_up_mbps: float | None = None
     boost_expires_at: datetime | None = None
+    # Debit du profil horaire EN COURS (calcule a la construction de la cible,
+    # donc a l'heure du plan). None : pas de plage en cours, le forfait vaut.
+    schedule_down_mbps: float | None = None
+    schedule_up_mbps: float | None = None
+    schedule_name: str | None = None
     enabled: bool = True
     # Raison de ne pas brider cette adresse (c'est celle d'un de nos routeurs).
     skip_reason: str | None = None
@@ -156,9 +174,13 @@ class SubscriberTarget:
           premiere adresse. On garde donc le reseau declare, la ou une session
           PPPoE est toujours ramenee a un /32 (une session ne porte qu'une
           adresse, et elargir serait shaper les voisins de l'abonne).
+
+        Plusieurs plages : une seule file, dont la cible les liste toutes
+        (``10.0.0.0/29,10.0.1.0/28``). Le debit souscrit est UN debit -- deux
+        files lui en donneraient deux.
         """
         if self.kind == KIND_STATIC:
-            return network_target(self.address)
+            return prefixes_target((self.address or "", *self.extra_addresses))
         if mode == TARGET_INTERFACE:
             return self.interface or None
         return address_target(self.address)
@@ -178,6 +200,7 @@ class SubscriberTarget:
             boost_mbps=self.boost_down_mbps,
             boost_expires_at=self.boost_expires_at,
             now=now,
+            schedule_mbps=self.schedule_down_mbps,
         )[0]
 
     def effective_up_at(self, now: datetime | None = None) -> float | None:
@@ -187,7 +210,19 @@ class SubscriberTarget:
             boost_mbps=self.boost_up_mbps,
             boost_expires_at=self.boost_expires_at,
             now=now,
+            schedule_mbps=self.schedule_up_mbps,
         )[0]
+
+    def rate_source(self, now: datetime | None = None) -> str:
+        """D'ou vient le debit descendant applique (boost, surcharge, horaire...)."""
+        return effective_rate(
+            plan_mbps=self.plan_down_mbps,
+            override_mbps=self.override_down_mbps,
+            boost_mbps=self.boost_down_mbps,
+            boost_expires_at=self.boost_expires_at,
+            now=now,
+            schedule_mbps=self.schedule_down_mbps,
+        )[1]
 
     @property
     def effective_down(self) -> float | None:
@@ -445,6 +480,10 @@ def desired_state(
     # (session fermee dont l'IP a ete reattribuee, doublon de collecte). On ne
     # peut pas savoir lequel, et RouterOS n'appliquerait de toute facon que la
     # premiere file, en silence. On n'ecrit donc ni l'une ni l'autre.
+    #
+    # Comptee MEMBRE PAR MEMBRE : un client a plusieurs plages vise une liste
+    # (``10.0.0.0/29,10.0.1.0/28``). Qu'un autre reclame l'une d'elles suffit a
+    # rendre la situation ambigue -- une egalite de chaine ne le verrait pas.
     occurrences: dict[str, list[str]] = {}
     for subscriber in subscribers:
         # Seuls comptent ceux qui produiraient VRAIMENT une file : un abonne
@@ -459,7 +498,10 @@ def desired_state(
             continue
         cible = subscriber.queue_target(target_mode)
         if cible is not None:
-            occurrences.setdefault(cible, []).append(subscriber.login)
+            for membre in target_members(cible):
+                logins = occurrences.setdefault(membre, [])
+                if subscriber.login not in logins:
+                    logins.append(subscriber.login)
     ambigues = {cible: logins for cible, logins in occurrences.items() if len(logins) > 1}
 
     for subscriber in subscribers:
@@ -495,12 +537,13 @@ def desired_state(
             )
             continue
 
-        if cible in ambigues:
-            autres = [x for x in ambigues[cible] if x != subscriber.login]
+        disputee = next((m for m in target_members(cible) if m in ambigues), None)
+        if disputee is not None:
+            autres = [x for x in ambigues[disputee] if x != subscriber.login]
             ecartes.append(
                 PlanSkip(
                     subscriber.login,
-                    f"address {cible} is also claimed by {', '.join(autres)}: "
+                    f"address {disputee} is also claimed by {', '.join(autres)}: "
                     "no way to tell which one is current, no queue written",
                 )
             )
@@ -540,14 +583,25 @@ def _parent_par_adresse(target: str, reseaux: list[tuple[Any, str]]) -> str | No
     Un abonne peut tenir dans plusieurs segments emboites (un /23 de PoP et un
     /27 de secteur) : le parent utile est le plus SPECIFIQUE, celui qui decrit
     le vrai goulot le plus proche de lui.
+
+    Une cible en liste (client a plusieurs plages) n'a de parent que si UN
+    MEME segment les contient toutes : RouterOS n'admet dans une file enfant
+    que le trafic qui correspond aussi a son parent, et une plage restee hors
+    du parent ne serait ni plafonnee ni comptee.
     """
     if not reseaux:
         return None
     try:
-        adresse = ipaddress.ip_interface(target).ip
+        adresses = [ipaddress.ip_interface(m).ip for m in target_members(target)]
     except ValueError:
         return None
-    candidats = [(reseau.prefixlen, nom) for reseau, nom in reseaux if adresse in reseau]
+    if not adresses:
+        return None
+    candidats = [
+        (reseau.prefixlen, nom)
+        for reseau, nom in reseaux
+        if all(adresse in reseau for adresse in adresses)
+    ]
     if not candidats:
         return None
     return max(candidats)[1]
@@ -555,12 +609,19 @@ def _parent_par_adresse(target: str, reseaux: list[tuple[Any, str]]) -> str | No
 
 def _contenu_dans(cible: str, reseau: Any) -> bool:
     """La cible d'une file tient-elle dans le reseau de son parent ? Sinon
-    RouterOS n'y fait passer qu'une partie du trafic, ou rien."""
-    try:
-        bloc = ipaddress.ip_network(cible, strict=False)
-    except ValueError:
+    RouterOS n'y fait passer qu'une partie du trafic, ou rien. Une cible en
+    liste doit y tenir EN ENTIER, chaque membre."""
+    membres = target_members(cible)
+    if not membres:
         return False
-    return bloc.version == reseau.version and bloc.subnet_of(reseau)
+    for membre in membres:
+        try:
+            bloc = ipaddress.ip_network(membre, strict=False)
+        except ValueError:
+            return False
+        if bloc.version != reseau.version or not bloc.subnet_of(reseau):
+            return False
+    return True
 
 
 def _is_managed(row: dict[str, Any]) -> bool:
@@ -731,12 +792,15 @@ def build_plan(
     # Une file DESACTIVEE ne compte pas : elle ne shape rien, donc elle ne masque
     # rien non plus, et la notre peut etre creee normalement.
     etrangeres_par_cible: dict[str, list[dict[str, Any]]] = {}
+    etrangeres_par_ensemble: dict[str, list[dict[str, Any]]] = {}
     for row in actual_queues:
         if _is_managed(row) or _is_disabled(row):
             continue
         cible = str(row.get("target") or "").strip()
         if cible:
             etrangeres_par_cible.setdefault(cible, []).append(row)
+            if "," in cible:
+                etrangeres_par_ensemble.setdefault(normalise_field(cible) or "", []).append(row)
 
     # Les parents d'abord : RouterOS refuse un enfant dont le parent n'existe pas.
     for file_spec in sorted(desired_queues, key=lambda q: q.order):
@@ -745,7 +809,13 @@ def build_plan(
         champs = file_spec.routeros_fields()
 
         if existante is None:
-            etrangeres = etrangeres_par_cible.get(file_spec.target) or []
+            # Egalite de forme d'abord, puis d'ENSEMBLE : RouterOS rend une
+            # cible en liste dans son ordre a lui.
+            etrangeres = (
+                etrangeres_par_cible.get(file_spec.target)
+                or etrangeres_par_ensemble.get(normalise_field(file_spec.target) or "")
+                or []
+            )
             if etrangeres:
                 _traiter_file_tierce(plan, file_spec, etrangeres, adopt=adopt)
                 continue

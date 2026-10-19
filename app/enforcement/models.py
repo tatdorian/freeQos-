@@ -140,6 +140,65 @@ def network_target(value: Any) -> str | None:
     return str(interface.network)
 
 
+#: Plafond du nombre de blocs qu'une seule file peut viser. Une cible de
+#: ``/queue/simple`` est une liste, mais RouterOS la parcourt a chaque paquet :
+#: au-dela, c'est presque toujours une plage mal saisie, pas un contrat.
+MAX_TARGET_PREFIXES = 64
+
+
+def target_members(value: Any) -> list[str]:
+    """Les membres d'une cible ecrite en liste RouterOS (``a,b,c``)."""
+    return [m.strip() for m in str(value or "").split(",") if m.strip()]
+
+
+def prefixes_target(values: Any) -> str | None:
+    """Cible d'une file qui vise PLUSIEURS blocs d'adresses, ou None.
+
+    UN CLIENT, PLUSIEURS PLAGES, UNE SEULE FILE. Quand un client sur VLAN porte
+    plusieurs pools (un /29 public et un /28 de service sur la meme VLAN), il a
+    souscrit UN debit : deux files separees lui en donneraient deux. RouterOS
+    accepte une cible en liste (``target=10.0.0.0/29,10.0.1.0/28``) et partage
+    alors un seul ``max-limit`` entre tous ses membres -- exactement le contrat.
+
+    Sortie CANONIQUE, pour que la reconciliation ne voie pas d'ecart a chaque
+    cycle : chaque membre ramene a son reseau, doublons et blocs deja contenus
+    dans un autre retires, puis tries (IPv4 d'abord, adresse puis longueur).
+    Un seul membre donne exactement ``network_target`` : rien ne change pour le
+    client a plage unique.
+
+    ``values`` accepte une chaine (eventuellement deja en liste) ou une
+    sequence de chaines : l'adresse declaree, les reseaux de la VLAN et les
+    plages additionnelles s'y melangent sans precaution.
+    """
+    if values is None:
+        return None
+    if isinstance(values, str):
+        brutes: list[Any] = [values]
+    else:
+        brutes = list(values)
+    reseaux: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for brute in brutes:
+        for membre in target_members(brute):
+            cible = network_target(membre)
+            if cible is None:
+                continue
+            reseau = ipaddress.ip_network(cible)
+            if reseau not in reseaux:
+                reseaux.append(reseau)
+    gardes = [
+        r
+        for r in reseaux
+        if not any(
+            autre != r and autre.version == r.version and r.subnet_of(autre)  # type: ignore[arg-type]
+            for autre in reseaux
+        )
+    ]
+    if not gardes:
+        return None
+    gardes.sort(key=lambda r: (r.version, int(r.network_address), r.prefixlen))
+    return ",".join(str(r) for r in gardes)
+
+
 def format_rate(mbps: float | None) -> str:
     """Debit au format RouterOS.
 

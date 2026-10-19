@@ -1487,6 +1487,7 @@ def attach_static_clients(
                     "pop_name": getattr(client, "pop_name", None),
                     "plan_down_mbps": getattr(client, "plan_down_mbps", None),
                     "plan_up_mbps": getattr(client, "plan_up_mbps", None),
+                    "extra_prefixes": list(getattr(client, "extra_prefixes", ()) or ()),
                 },
             )
         )

@@ -101,7 +101,7 @@ async def database():
             "static_clients, vlan_sightings, "
             "api_keys, model_accounts, model_packages, model_sites, "
             "model_access_points, netflow_exporters, flow_metrics, "
-            "flow_app_metrics, flow_hosts "
+            "flow_app_metrics, flow_hosts, bandwidth_schedules "
             "RESTART IDENTITY CASCADE"
         )
     yield db
@@ -2204,6 +2204,35 @@ async def test_une_adresse_du_bloc_declare_confirme_la_presence(
     assert await observations.candidates() == []
 
 
+async def test_les_plages_additionnelles_vivent_en_base(database: Database, now: datetime) -> None:
+    """Un client, plusieurs pools sur la meme VLAN : les plages sont stockees
+    sous forme canonique, relues jusqu'au modele, et une adresse du second pool
+    confirme la presence du client au lieu d'apparaitre en candidat."""
+    inventaire = StaticClientsRepository(database.pool)
+    observations = VlanSightingsRepository(database.pool)
+
+    cree = await inventaire.create(
+        {
+            "reference": "clinique",
+            "pop_name": "PoP Altair",
+            "address": "10.0.0.0/29",
+            "extra_prefixes": ["10.0.1.0/28", "10.0.2.10-10.0.2.11"],
+        }
+    )
+    assert cree["extra_prefixes"] == ["10.0.1.0/28", "10.0.2.10/31"]
+    [client] = await inventaire.load_enabled()
+    assert client.prefixes == ("10.0.0.0/29", "10.0.1.0/28", "10.0.2.10/31")
+
+    await observations.record([_vue("10.0.1.7"), _vue("10.20.0.77")], seen_at=now)
+    assert set(await observations.presence()) == {"clinique"}
+    assert [c["address"] for c in await observations.candidates()] == ["10.20.0.77"]
+
+    # Une liste vide est une valeur : elle retire les plages.
+    modifie = await inventaire.update(cree["id"], {"extra_prefixes": []})
+    assert modifie["extra_prefixes"] == []
+    assert {c["address"] for c in await observations.candidates()} == {"10.0.1.7", "10.20.0.77"}
+
+
 async def test_une_adresse_hors_de_tout_bloc_devient_candidate(
     database: Database, now: datetime
 ) -> None:
@@ -4190,3 +4219,45 @@ async def test_effacer_les_latences_garde_les_debits(database: Database) -> None
             sid,
         )
     assert debits == 3
+
+
+async def test_cycle_de_vie_d_un_profil_horaire(database: Database) -> None:
+    """Un profil horaire en base : cree, relu jusqu'au modele, suspendu, retire."""
+    from app.db.schedules_repo import (
+        ScheduleConflictError,
+        ScheduleNotFoundError,
+        SchedulesRepository,
+    )
+
+    depot = SchedulesRepository(database.pool)
+    cree = await depot.create(
+        {
+            "name": "soiree-nuit",
+            "timezone": "Europe/Paris",
+            "scope": "plans",
+            "targets": ["20"],
+            "windows": [
+                {"label": "evening", "start": "18:00", "end": "23:00", "percent": 70},
+                {"label": "night", "start": "23:00", "end": "06:00", "down_mbps": 50},
+            ],
+        }
+    )
+    assert cree["targets"] == ["20"]
+    assert cree["windows"][1]["down_mbps"] == 50
+
+    [profil] = await depot.load_enabled()
+    assert profil.name == "soiree-nuit"
+    assert profil.timezone == "Europe/Paris"
+    assert [w.label for w in profil.windows] == ["evening", "night"]
+
+    with pytest.raises(ScheduleConflictError):
+        await depot.create({"name": "soiree-nuit", "windows": []})
+
+    modifie = await depot.update(cree["id"], {"enabled": False, "targets": ["20", "50"]})
+    assert modifie["targets"] == ["20", "50"] and modifie["enabled"] is False
+    assert await depot.load_enabled() == []
+
+    await depot.delete(cree["id"])
+    assert await depot.list_all() == []
+    with pytest.raises(ScheduleNotFoundError):
+        await depot.get(cree["id"])
