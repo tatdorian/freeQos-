@@ -284,3 +284,64 @@ def test_une_application_externe_pilote_routeurs_et_limites(app_client, routeur)
     assert app_client.get("/api/v1/users", headers=cle).status_code == 403
     # Sans cle ni session : rien.
     assert app_client.get("/api/v1/plans").status_code == 401
+
+
+def test_un_forfait_pousse_avant_la_premiere_connexion(app_client, routeur) -> None:
+    """L'interface de gestion (celle qui alimente le RADIUS) cree l'abonne et son
+    forfait AVANT sa premiere session : le forfait attend, puis la file est posee
+    des que la session apparait -- sans que l'integration ait a reessayer."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+        },
+    )
+    assert r.status_code == 201, r.text
+
+    def mise_en_service_finie() -> bool:
+        etat = app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle).json()
+        return bool(etat.get("finished_at"))
+
+    _attendre(mise_en_service_finie, 20)
+
+    # --- 1. martin n'existe que dans l'interface de gestion : forfait en attente
+    r = app_client.put("/api/v1/plans/martin", headers=cle, json={"down_mbps": 20, "up_mbps": 5})
+    assert r.status_code == 200, r.text
+    assert r.json()["pending"] is True
+    assert r.json()["enforcement"]["state"] == "en-attente-de-connexion"
+    attente = app_client.get("/api/v1/plans", headers=cle).json()["pending"]
+    assert [p["login"] for p in attente] == ["martin"]
+
+    # --- 2. martin se connecte : la collecte reprend son forfait, la file suit
+    routeur.add_session("martin", address="10.20.0.11")
+    r = app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle)
+    assert r.status_code == 200, r.text
+    r = app_client.post(
+        "/api/v1/shaping/apply",
+        headers=cle,
+        json={"router": "nas-test", "dry_run": False, "confirm": True},
+    )
+    assert r.status_code == 200, r.text
+    file = _file(routeur, "10.20.0.11")
+    assert file is not None, routeur.simple_queue_rows
+    assert file["max-limit"] == "5000000/20000000"
+
+    # --- 3. il n'est plus en attente : c'est un client comme un autre
+    liste = app_client.get("/api/v1/plans", headers=cle).json()
+    assert liste["pending"] == []
+    martin = next(c for c in liste["clients"] if c["login"] == "martin")
+    assert (martin["down_mbps"], martin["up_mbps"]) == (20, 5)
+
+    # --- 4. un identifiant mal saisi s'oublie ; un inconnu reste inconnu
+    app_client.put("/api/v1/plans/martni", headers=cle, json={"down_mbps": 20})
+    assert app_client.delete("/api/v1/plans/martni", headers=cle).status_code == 200
+    assert app_client.get("/api/v1/plans", headers=cle).json()["pending"] == []
+    assert app_client.delete("/api/v1/plans/personne", headers=cle).status_code == 404

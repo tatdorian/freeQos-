@@ -4,14 +4,23 @@ Le plan appartient au client -- un PoP n'est qu'un point de connexion. Il est
 pousse par la facturation (API Preseem, plusieurs fois par jour s'il le faut)
 ou saisi ici ; la derniere ecriture gagne. Sans plan, un client (y compris un
 nouveau client detecte) recoit le plan par defaut.
+
+UN FORFAIT PEUT PRECEDER L'ABONNE. L'interface de gestion de l'operateur, celle
+qui alimente le RADIUS, cree l'abonne et son forfait AVANT sa premiere
+connexion PPPoE, et une synchronisation de depart pousse aussi les abonnes hors
+ligne a ce moment-la. Refuser ces forfaits ("unknown client") obligeait
+l'integration a reessayer plus tard, sans savoir quand. Le forfait d'un
+identifiant encore jamais vu est donc GARDE, liste a part ("en attente de
+premiere connexion"), et repris tout seul quand la session apparait : le
+fournisseur de plans lit la meme table pour tout identifiant nouveau.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import BaseModel, Field
 
 from app.api.accounts import UserDep
@@ -25,6 +34,18 @@ router = APIRouter(tags=["plans"])
 ORIGINE_API = "api"
 ORIGINE_MANUELLE = "ui"
 ORIGINE_DEFAUT = "default"
+
+#: Le forfait est enregistre, l'abonne n'a encore jamais ete vu connecte.
+ETAT_EN_ATTENTE = "en-attente-de-connexion"
+MOTIF_EN_ATTENTE = (
+    "no session seen yet for this login: the plan is kept and applied as soon as "
+    "the subscriber connects (at the latest at the next reconciliation pass)"
+)
+
+#: L'identifiant tel que le RADIUS le connait (login PPPoE) ou la reference
+#: d'un client declare. Borne et sans espace en bord : un identifiant mal
+#: copie ne doit pas creer un forfait qui n'attendra jamais personne.
+Login = Annotated[str, Path(min_length=1, max_length=128)]
 
 
 class PlanInput(BaseModel):
@@ -175,9 +196,44 @@ async def _lever_limite_forcee(container: ContainerDep, login: str) -> bool:
         return False
 
 
+async def _en_attente(
+    container: ContainerDep, clients: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """Les forfaits ecrits pour des identifiants encore jamais vus connectes.
+
+    Montres a part : un identifiant mal saisi dans l'interface de gestion y
+    attendrait pour toujours, et c'est ici qu'on le voit.
+    """
+    _depot, plans = _repos(container)
+    if clients is None:
+        clients = await _roster(container)
+    connus = {str(c["login"]) for c in clients}
+    statiques: set[str] = set()
+    if container.static_clients_repo is not None:
+        statiques = {str(f["reference"]) for f in await container.static_clients_repo.list_all()}
+    sortie: list[dict[str, Any]] = []
+    for login, ligne in sorted((await plans.list_all()).items()):
+        if login in connus or login in statiques:
+            continue
+        sortie.append(
+            {
+                "login": login,
+                "down_mbps": ligne.get("down_mbps"),
+                "up_mbps": ligne.get("up_mbps"),
+                "package_id": ligne.get("package_id"),
+                "origin": str(ligne.get("source") or ORIGINE_MANUELLE),
+                "service_id": ligne.get("service_id"),
+                "updated_at": ligne.get("updated_at"),
+                "updated_by": ligne.get("updated_by"),
+            }
+        )
+    return sortie
+
+
 @router.get("/plans", summary="The plan of every client, and where it comes from")
 async def list_plans(container: ContainerDep) -> dict[str, Any]:
     clients = await _roster(container)
+    attente = await _en_attente(container, clients)
     defaut = default_plan(container.settings)
     return {
         "default": {
@@ -191,23 +247,71 @@ async def list_plans(container: ContainerDep) -> dict[str, Any]:
             "api": sum(1 for c in clients if c["origin"] == ORIGINE_API),
             "manual": sum(1 for c in clients if c["origin"] == ORIGINE_MANUELLE),
             "default": sum(1 for c in clients if c["origin"] == ORIGINE_DEFAUT),
+            "pending": len(attente),
         },
         "clients": clients,
+        # Forfaits deja recus pour des abonnes jamais vus connectes.
+        "pending": attente,
     }
 
 
-async def _client(container: ContainerDep, login: str) -> dict[str, Any]:
+async def _client_connu(container: ContainerDep, login: str) -> dict[str, Any] | None:
     for client in await _roster(container):
         if client["login"] == login:
             return client
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown client: {login}")
+    return None
 
 
-@router.put("/plans/{login}", summary="Set the plan of a client")
+async def _client(container: ContainerDep, login: str) -> dict[str, Any]:
+    client = await _client_connu(container, login)
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown client: {login}"
+        )
+    return client
+
+
+async def _fiche_statique(container: ContainerDep, reference: str) -> dict[str, Any] | None:
+    """Un client declare dont la fiche existe deja, meme pas encore collecte."""
+    depot = container.static_clients_repo
+    if depot is None:
+        return None
+    return next((f for f in await depot.list_all() if str(f["reference"]) == reference), None)
+
+
+#: Avec PLAN_PROVIDER=freeradius_sql, le forfait d'un abonne qui se connecte
+#: pour la premiere fois vient du RADIUS, pas de la table des forfaits.
+MOTIF_RADIUS = (
+    "plans are read from RADIUS (PLAN_PROVIDER=freeradius_sql): the plan of a login never "
+    "seen connected cannot be kept here, it would not be applied. Set it in RADIUS: it is "
+    "read at the subscriber's first connection."
+)
+
+
+def _forfaits_lus_dans_radius(container: ContainerDep) -> bool:
+    return str(getattr(container.settings, "plan_provider", "")) == "freeradius_sql"
+
+
+def _valider_login(login: str) -> None:
+    if login != login.strip() or any(ord(c) < 32 for c in login):
+        raise HTTPException(
+            status_code=422,
+            detail="invalid login: no leading or trailing spaces, no control characters",
+        )
+
+
+@router.put("/plans/{login}", summary="Set the plan of a client (even before its first connection)")
 async def set_plan(
-    login: str, payload: PlanInput, container: ContainerDep, user: UserDep
+    login: Login, payload: PlanInput, container: ContainerDep, user: UserDep
 ) -> dict[str, Any]:
-    client = await _client(container, login)
+    """Pose le forfait d'un client, et l'applique tout de suite s'il est connecte.
+
+    Un identifiant encore jamais vu (abonne cree dans l'interface de gestion,
+    pas encore connecte) n'est PAS refuse : son forfait est garde, et repris a
+    sa premiere connexion. La reponse le dit (``pending``).
+    """
+    _valider_login(login)
+    client = await _client_connu(container, login)
     _depot, plans = _repos(container)
     bas, haut, forfait = payload.down_mbps, payload.up_mbps, payload.package_id
     if forfait:
@@ -218,11 +322,51 @@ async def set_plan(
     if bas is None and haut is None:
         raise HTTPException(status_code=422, detail="a rate or a package is required")
     auteur = f"ui:{user.get('email')}"
+    statique = None if client is not None else await _fiche_statique(container, login)
+    if client is None and statique is None and _forfaits_lus_dans_radius(container):
+        # Le forfait d'un NOUVEL abonne est lu dans le RADIUS a sa premiere
+        # connexion : garder celui-ci ici serait promettre ce qui n'arrivera
+        # pas. Refuser, et dire ou le poser.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MOTIF_RADIUS)
     # Un plan choisi ici est LA regle : la limite forcee ailleurs est levee.
     leve = await _lever_limite_forcee(container, login)
-    if client["kind"] == KIND_STATIC and container.static_clients_repo is not None:
+    if client is None and statique is None:
+        # JAMAIS VU CONNECTE : le forfait attend l'abonne. Rien a poser sur un
+        # routeur tant qu'aucune session ne porte cet identifiant.
+        ligne = await plans.set(
+            login,
+            down_mbps=bas,
+            up_mbps=haut,
+            source=ORIGINE_MANUELLE,
+            package_id=forfait,
+            updated_by=str(user.get("email")),
+        )
+        return {
+            "client": {
+                "login": login,
+                "down_mbps": ligne.get("down_mbps"),
+                "up_mbps": ligne.get("up_mbps"),
+                "package_id": ligne.get("package_id"),
+                "updated_at": ligne.get("updated_at"),
+            },
+            "pending": True,
+            "enforcement": {"state": ETAT_EN_ATTENTE, "reason": MOTIF_EN_ATTENTE},
+            "forced_limit_lifted": leve,
+        }
+    if (
+        statique is not None or (client is not None and client["kind"] == KIND_STATIC)
+    ) and container.static_clients_repo is not None:
         await container.static_clients_repo.set_plan(login, bas, haut)
         pose: dict[str, Any] | None = await _pose_statique(container, login, auteur)
+        if client is None:
+            # Fiche declaree, pas encore collectee : elle apparaitra au cycle
+            # suivant, avec ce forfait.
+            return {
+                "client": {"login": login, "kind": KIND_STATIC, "down_mbps": bas, "up_mbps": haut},
+                "pending": False,
+                "enforcement": pose,
+                "forced_limit_lifted": leve,
+            }
     else:
         await plans.set(
             login,
@@ -235,15 +379,31 @@ async def set_plan(
         pose = await apply_now(container, login, author=auteur)
     return {
         "client": await _client(container, login),
+        "pending": False,
         "enforcement": pose,
         "forced_limit_lifted": leve,
     }
 
 
 @router.delete("/plans/{login}", summary="Remove a client's plan (observed, not throttled)")
-async def reset_plan(login: str, container: ContainerDep, user: UserDep) -> dict[str, Any]:
-    client = await _client(container, login)
+async def reset_plan(login: Login, container: ContainerDep, user: UserDep) -> dict[str, Any]:
+    """Retire le forfait. Celui d'un abonne jamais connecte est simplement oublie."""
+    client = await _client_connu(container, login)
     _depot, plans = _repos(container)
+    if client is None and await _fiche_statique(container, login) is None:
+        if not await plans.delete(login):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown client: {login}"
+            )
+        return {
+            "client": None,
+            "pending": True,
+            "enforcement": {"state": "retire", "reason": "pending plan forgotten"},
+            "forced_limit_lifted": await _lever_limite_forcee(container, login),
+        }
+    if client is None:
+        # Fiche statique pas encore collectee : son forfait vit dans la fiche.
+        client = {"login": login, "kind": KIND_STATIC}
     auteur = f"ui:{user.get('email')}"
     leve = await _lever_limite_forcee(container, login)
     pose: dict[str, Any] | None
@@ -254,7 +414,8 @@ async def reset_plan(login: str, container: ContainerDep, user: UserDep) -> dict
         await plans.delete(login)
         pose = await apply_now(container, login, author=auteur)
     return {
-        "client": await _client(container, login),
+        "client": await _client_connu(container, login),
+        "pending": False,
         "enforcement": pose,
         "forced_limit_lifted": leve,
     }
