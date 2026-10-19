@@ -217,7 +217,8 @@ curl -u '&lt;key&gt;:' <span class="base-url">&lt;your-freeqos-url&gt;</span>/mo
       <p class="ep"><span class="m get">GET</span><code>/api/v1/plans</code></p>
       <p>Every known client (detected on a router or declared), its plan and where the plan
         comes from (<code>api</code>, <code>ui</code>, <code>default</code>). Use it to find
-        the logins to push plans for.</p>
+        the logins to push plans for. <code>pending</code> lists the plans received for logins
+        never seen connected yet.</p>
 
       <p class="ep"><span class="m put">PUT</span><code>/api/v1/plans/{login}</code></p>
       <pre><code>curl -X PUT <span class="base-url">&lt;your-freeqos-url&gt;</span>/api/v1/plans/john.doe \
@@ -233,10 +234,17 @@ curl -u '&lt;key&gt;:' <span class="base-url">&lt;your-freeqos-url&gt;</span>/mo
         </tbody>
       </table>
       <ul>
-        <li>The client must be known to freeQoS (seen on a router, or declared): an unknown
-          login returns <code>404</code>. Push it again once the client has connected, or
-          declare it first (<a href="#static">static-IP clients</a>,
-          <a href="#model">model services</a>).</li>
+        <li><b>The client does not need to have connected yet.</b> Your management interface
+          (the one that feeds your RADIUS) can push the plan as soon as it creates the
+          subscriber, and an initial sync can push every subscriber, online or not. The plan of
+          a login never seen connected is kept, answered with <code>"pending": true</code> and
+          the state <code>en-attente-de-connexion</code>, and applied by itself at the
+          subscriber's first PPPoE session (at the latest at the next reconciliation pass,
+          2 minutes by default). Use the PPPoE login, which is the RADIUS username. A login
+          with leading or trailing spaces or control characters is refused (<code>422</code>).
+          When plans are read from RADIUS (<code>PLAN_PROVIDER=freeradius_sql</code>), a new
+          subscriber's plan comes from RADIUS at its first connection: a pending plan is then
+          refused (<code>409</code>) rather than silently ignored.</li>
         <li>Setting a plan <b>lifts a forced limit</b> on that client: the plan becomes the
           rule.</li>
       </ul>
@@ -253,6 +261,8 @@ curl -u '&lt;key&gt;:' <span class="base-url">&lt;your-freeqos-url&gt;</span>/mo
           <tr><td><code>conflit</code></td><td>Another queue already targets this client on the
             router; it must be cleaned by hand.</td></tr>
           <tr><td><code>sans-routeur</code></td><td>No router carries this client yet.</td></tr>
+          <tr><td><code>en-attente-de-connexion</code></td><td>Plan kept for a login never seen
+            connected: applied at its first connection.</td></tr>
           <tr><td><code>erreur</code></td><td>The router refused or could not be reached:
             <code>reason</code> gives the RouterOS message.</td></tr>
         </tbody>
@@ -260,7 +270,9 @@ curl -u '&lt;key&gt;:' <span class="base-url">&lt;your-freeqos-url&gt;</span>/mo
 
       <p class="ep"><span class="m delete">DELETE</span><code>/api/v1/plans/{login}</code></p>
       <p>Removes the plan: the client's queue is removed and it is <b>no longer
-        throttled</b> (it stays observed).</p>
+        throttled</b> (it stays observed). For a login still waiting for its first connection,
+        the pending plan is simply forgotten. A login with neither a session nor a plan returns
+        <code>404</code>.</p>
 
       <p class="ep"><span class="m post">POST</span><code>/api/v1/plans/refresh</code></p>
       <p>Re-reads every plan and re-writes the queues right away, instead of waiting for the

@@ -1987,11 +1987,24 @@ d'édition fait. La gestion des comptes et des clés reste réservée aux person
 |---|---|
 | Ajouter un routeur (mis en service seul : CAKE, files, NetFlow) | `POST /api/v1/pops/routers` |
 | Suivre sa mise en service | `GET /api/v1/pops/provisioning/{nom}` |
-| Donner un forfait à un client (écrit sur le routeur aussitôt) | `PUT /api/v1/plans/{login}` `{"down_mbps":100,"up_mbps":20}` |
+| Donner un forfait à un client (écrit sur le routeur aussitôt ; **même avant sa première connexion**, cf. ci-dessous) | `PUT /api/v1/plans/{login}` `{"down_mbps":100,"up_mbps":20}` |
 | Remettre le forfait par défaut | `DELETE /api/v1/plans/{login}` |
 | Forcer une limite au-dessus du forfait | `PUT /api/v1/shaping/policies` `{"scope":"subscriber","target_key":"<login>","max_down_mbps":5,"max_up_mbps":1}` |
 | Boost temporaire | `POST /api/v1/shaping/boosts` |
 | Client à IP fixe, format Preseem | `PUT /model/v1/services/{id}` |
+
+**Un forfait peut précéder l'abonné.** L'interface de gestion de l'opérateur — celle qui
+alimente le RADIUS — crée l'abonné et son forfait **avant** sa première session PPPoE, et
+sa synchronisation de départ pousse aussi les abonnés hors ligne. `PUT /api/v1/plans/{login}`
+accepte donc un identifiant jamais vu connecté : le forfait est gardé (réponse
+`"pending": true`, état `en-attente-de-connexion`), listé dans *Plans › Waiting for first
+connection* (et dans `pending` de `GET /api/v1/plans`), puis appliqué tout seul à la
+première connexion — au plus tard au passage suivant de la réconciliation. `DELETE` oublie
+un forfait en attente : un identifiant mal saisi y attendrait sinon pour toujours. La clé
+commune est le **login PPPoE**, c'est-à-dire le nom d'utilisateur RADIUS : contrairement à
+l'adresse IP, il ne change jamais. Avec `PLAN_PROVIDER=freeradius_sql`, le forfait d'un
+nouvel abonné vient du RADIUS à sa première connexion : un forfait en attente est alors
+refusé (`409`) plutôt qu'ignoré en silence.
 
 Ce parcours complet — clé, nouveau routeur, mise en service, forfait, changement, limite
 forcée, retour au défaut, service Preseem posé puis retiré — est rejoué à chaque

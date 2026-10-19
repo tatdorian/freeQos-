@@ -9356,10 +9356,52 @@ async function loadPlans() {
     statCard('', 'Set here', String(s.manual || 0), '', 'until the next API push') +
     statCard('', 'Default plan', String(s.default || 0), '',
       d.default.down_mbps ? mbps(d.default.down_mbps) + ' / ' + mbps(d.default.up_mbps || 0)
-        : 'no limit');
+        : 'no limit') +
+    (s.pending
+      ? statCard('', 'Waiting for 1st connection', String(s.pending), '',
+        'plan received, subscriber not seen yet')
+      : '');
   renderPlanPackages();
   renderPlanClients();
+  renderPlanPending();
   await loadSchedules();
+}
+
+/** Les forfaits recus pour des abonnes jamais vus connectes.
+ *
+ *  L'interface de gestion cree l'abonne et son forfait AVANT sa premiere
+ *  session : le forfait attend ici, puis s'applique tout seul. Un identifiant
+ *  qui y reste est sans doute mal saisi -- d'ou le bouton pour l'oublier. */
+function renderPlanPending() {
+  const bloc = document.getElementById('plans-pending-block');
+  const host = document.getElementById('plans-pending');
+  const d = PLANS.data;
+  if (!bloc || !host || !d) return;
+  const lignes = d.pending || [];
+  bloc.hidden = !lignes.length;
+  if (!lignes.length) { host.innerHTML = ''; return; }
+  const debit = (v) => (v == null ? '<span class="na">default plan</span>' : esc(mbps(v)));
+  host.innerHTML = '<table><thead><tr><th>Login</th><th class="num">&darr; Download</th>' +
+    '<th class="num">&uarr; Upload</th><th>Source</th><th>Received</th><th></th></tr></thead><tbody>' +
+    lignes.map((p) => {
+      const o = ORIGINE_PLAN[p.origin] || ['none', p.origin];
+      return '<tr><td><b>' + esc(p.login) + '</b></td>' +
+        '<td class="num">' + debit(p.down_mbps) + '</td>' +
+        '<td class="num">' + debit(p.up_mbps) + '</td>' +
+        '<td>' + sqCell(o[1], o[0]) +
+          (p.updated_by ? '<span class="hint">by ' + esc(p.updated_by) + '</span>' : '') + '</td>' +
+        '<td>' + (p.updated_at ? esc(depuis(p.updated_at)) : '<span class="na">-</span>') + '</td>' +
+        '<td><button class="sm" data-plan-forget="' + esc(p.login) + '">Forget</button></td></tr>';
+    }).join('') + '</tbody></table>';
+  host.querySelectorAll('[data-plan-forget]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('Forget the pending plan of "' + b.dataset.planForget + '"?')) return;
+    try {
+      await api('/plans/' + encodeURIComponent(b.dataset.planForget), { method: 'DELETE' });
+    } catch (err) {
+      alert(err.message);
+    }
+    await loadPlans();
+  }));
 }
 
 /* ------------------------------------------------------- profils horaires
