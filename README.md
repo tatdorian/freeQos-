@@ -2002,7 +2002,9 @@ connection* (et dans `pending` de `GET /api/v1/plans`), puis appliqué tout seul
 première connexion — au plus tard au passage suivant de la réconciliation. `DELETE` oublie
 un forfait en attente : un identifiant mal saisi y attendrait sinon pour toujours. La clé
 commune est le **login PPPoE**, c'est-à-dire le nom d'utilisateur RADIUS : contrairement à
-l'adresse IP, il ne change jamais.
+l'adresse IP, il ne change jamais. Avec `PLAN_PROVIDER=freeradius_sql`, le forfait d'un
+nouvel abonné vient du RADIUS à sa première connexion : un forfait en attente est alors
+refusé (`409`) plutôt qu'ignoré en silence.
 
 Ce parcours complet — clé, nouveau routeur, mise en service, forfait, changement, limite
 forcée, retour au défaut, service Preseem posé puis retiré — est rejoué à chaque

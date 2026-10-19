@@ -241,7 +241,10 @@ curl -u '&lt;key&gt;:' <span class="base-url">&lt;your-freeqos-url&gt;</span>/mo
           the state <code>en-attente-de-connexion</code>, and applied by itself at the
           subscriber's first PPPoE session (at the latest at the next reconciliation pass,
           2 minutes by default). Use the PPPoE login, which is the RADIUS username. A login
-          with leading or trailing spaces or control characters is refused (<code>422</code>).</li>
+          with leading or trailing spaces or control characters is refused (<code>422</code>).
+          When plans are read from RADIUS (<code>PLAN_PROVIDER=freeradius_sql</code>), a new
+          subscriber's plan comes from RADIUS at its first connection: a pending plan is then
+          refused (<code>409</code>) rather than silently ignored.</li>
         <li>Setting a plan <b>lifts a forced limit</b> on that client: the plan becomes the
           rule.</li>
       </ul>

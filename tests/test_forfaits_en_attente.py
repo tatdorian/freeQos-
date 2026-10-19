@@ -149,3 +149,18 @@ def test_un_identifiant_mal_forme_est_refuse(api, login: str) -> None:
 def test_un_forfait_sans_debit_reste_refuse(api) -> None:
     client, _, _ = api
     assert client.put("/api/v1/plans/martin", json={}).status_code == 422
+
+
+def test_avec_les_forfaits_lus_dans_radius_le_forfait_en_attente_est_refuse(
+    api, settings: Settings
+) -> None:
+    """PLAN_PROVIDER=freeradius_sql : a la premiere connexion, le forfait vient du
+    RADIUS. Garder celui-ci promettrait ce qui n'arrivera pas : refus explicite."""
+    client, forfaits, _ = api
+    settings.plan_provider = "freeradius_sql"
+    reponse = client.put("/api/v1/plans/martin", json={"down_mbps": 20})
+    assert reponse.status_code == 409
+    assert "RADIUS" in reponse.json()["detail"]
+    assert forfaits.lignes == {}
+    # Un abonne deja connu garde le comportement d'avant.
+    assert client.put("/api/v1/plans/dupont", json={"down_mbps": 50}).status_code == 200
