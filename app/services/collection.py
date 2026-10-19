@@ -53,6 +53,7 @@ JOB_INVENTORY = "reload_inventory"
 JOB_RTT = "probe_rtt"
 JOB_BOOSTS = "expire_boosts"
 JOB_RECONCILE = "reconcile_shaping"
+JOB_SCHEDULES = "bandwidth_schedules"
 JOB_QOE_LOOP = "qoe_closed_loop"
 JOB_VLAN_CLIENTS = "detect_vlan_clients"
 JOB_TOPOLOGY = "discover_topology"
@@ -183,8 +184,9 @@ class CollectionService:
         #: Client a IP fixe SEUL sur sa VLAN (sans PPPoE) -> interface VLAN. Le
         #: shaping y pose sa file, la mesure y lit son compteur.
         self.sole_vlan_interfaces: dict[str, str] = {}
-        #: Meme client -> reseau de sa VLAN : c'est lui que sa file vise (une
-        #: file sur l'interface ne voit pas l'upload).
+        #: Meme client -> reseau(x) de sa VLAN, en liste RouterOS quand elle
+        #: porte plusieurs pools : c'est ce que sa file vise (une file sur
+        #: l'interface ne voit pas l'upload).
         self.sole_vlan_networks: dict[str, str] = {}
         # Latence par segment (PoP -> amont, PoP -> internet), meme drapeau.
         self.path_prober = path_prober
@@ -525,8 +527,13 @@ class CollectionService:
                 self.sole_vlan_interfaces[client.reference] = vlan.interface
                 routeur_vlan = collector.name if collector is not None else ""
                 reseau = vlan_network_for(routeur_vlan, vlan.interface, client.address)
-                if reseau:
-                    self.sole_vlan_networks[client.reference] = reseau
+                # TOUS les reseaux de la VLAN : une VLAN qui porte plusieurs
+                # pools en porte autant sur son interface, et ils sont tous a
+                # ce client puisqu'il y est seul. N'en garder qu'un laissait
+                # le trafic des autres pools sans plafond.
+                reseaux = vlan_networks_for(routeur_vlan, vlan.interface)
+                if reseaux:
+                    self.sole_vlan_networks[client.reference] = ",".join(reseaux)
                 else:
                     self.sole_vlan_networks.pop(client.reference, None)
                 # LA FILE D'ABORD : elle compte ce qui est PASSE, dans les deux
@@ -535,7 +542,9 @@ class CollectionService:
                 # que la file jette. Ordre : file sur le reseau de la VLAN, file
                 # sur l'adresse saisie, et seulement a defaut le compteur VLAN.
                 files = compteurs.get(collector.name, {}) if collector else {}
-                trouve = files.get(reseau) if reseau else None
+                # Une file en liste est comptee sous CHACUN de ses membres :
+                # n'importe lequel de ses reseaux la retrouve.
+                trouve = next((files[r] for r in reseaux if r in files), None)
                 octets = trouve if trouve is not None else _counters_for(files, client)
                 if octets == (None, None):
                     octets = _counters_covering(files, client.address, within=reseau)
@@ -1088,6 +1097,23 @@ def sole_vlan_counter(
     return seul
 
 
+def vlan_networks_for(router: str, interface: str) -> list[str]:
+    """TOUS les reseaux portes par cette interface VLAN, dans l'ordre du routeur.
+
+    Une VLAN a d'ordinaire un seul pool, donc un seul reseau. Quand elle en
+    porte plusieurs (``/ip/address`` en a autant sur l'interface), ce sont
+    autant de plages du meme site.
+    """
+    from app.collectors.mikrotik import _RESEAUX_CONNECTES
+
+    reseaux: list[str] = []
+    for reseau, iface in _RESEAUX_CONNECTES.get(router, []):
+        texte = str(reseau)
+        if iface == interface and texte not in reseaux:
+            reseaux.append(texte)
+    return reseaux
+
+
 def vlan_network_for(router: str, interface: str, address: str | None) -> str | None:
     """Le reseau de l'interface VLAN qui contient l'adresse du client (sinon le
     premier reseau de cette interface)."""
@@ -1138,6 +1164,12 @@ def _counters_for(
     hote = _single_host(client.address)
     if hote is not None:
         trouve = compteurs.get(hote)
+        if trouve is not None:
+            return trouve
+    # Plages additionnelles : la file du client les vise toutes, elle est donc
+    # comptee sous chacune (cf. ``queue_counters_sync``).
+    for plage in client.extra_prefixes:
+        trouve = compteurs.get(plage)
         if trouve is not None:
             return trouve
     return (None, None)

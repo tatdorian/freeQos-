@@ -18,6 +18,10 @@ dependencies = [
     "jinja2>=3.1",
     "pyyaml>=6.0",
     "cryptography>=42.0",
+    # Fuseaux horaires des profils de debit (jour / soiree / nuit). L'image
+    # python:*-slim ne garantit pas /usr/share/zoneinfo : sans ce paquet,
+    # ZoneInfo("Europe/Paris") echouerait dans le conteneur.
+    "tzdata>=2024.1",
 ]
 
 [project.optional-dependencies]

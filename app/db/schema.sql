@@ -732,8 +732,10 @@ ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS package_ref      TEXT;
 ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS access_point_ref TEXT;
 ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS site_ref         TEXT;
 ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS cpe_mac          TEXT;
--- Un service peut porter plusieurs prefixes. Le premier est l'adresse shapee
--- (une file vise une cible) ; les autres comptent dans la mesure de trafic.
+-- Un client peut porter plusieurs prefixes (plusieurs pools sur la meme VLAN,
+-- un bloc route derriere lui). Le premier vit dans 'address', les autres ici :
+-- tous comptent dans la mesure, et UNE seule file les vise tous (cible en
+-- liste RouterOS), parce que le contrat est un seul debit.
 ALTER TABLE static_clients ADD COLUMN IF NOT EXISTS extra_prefixes   JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 DO $$
@@ -1234,3 +1236,37 @@ ALTER TABLE traffic_rules ADD COLUMN IF NOT EXISTS pops JSONB NOT NULL DEFAULT '
 ALTER TABLE traffic_rules DROP CONSTRAINT IF EXISTS traffic_rules_scope_check;
 ALTER TABLE traffic_rules ADD CONSTRAINT traffic_rules_scope_check
     CHECK (scope IN ('all', 'subscribers', 'pops'));
+
+-- -----------------------------------------------------------------------------
+-- PROFILS DE DEBIT HORAIRES (jour / soiree / nuit)
+--
+-- Un profil est un ensemble de PLAGES HORAIRES, chacune avec son debit : absolu
+-- (down/up en Mbps) ou en pourcentage du forfait. Hors de toute plage, le
+-- forfait normal s'applique. Le changement se fait TOUT SEUL a l'heure dite :
+-- un job relit les profils toutes les 30 s et repousse les files quand une
+-- plage commence ou finit.
+--
+-- Hierarchie : boost > surcharge manuelle > profil horaire > forfait. Un seul
+-- profil gouverne un abonne : le plus precis (abonnes nommes, puis forfaits,
+-- puis sites, puis tous), puis le plus recent.
+--
+-- Les heures sont LOCALES au fuseau du profil (IANA) : 18:00 est l'heure des
+-- abonnes, pas celle du serveur, et l'heure d'ete ne decale rien.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS bandwidth_schedules (
+    id          SERIAL PRIMARY KEY,
+    name        TEXT NOT NULL UNIQUE,
+    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
+    timezone    TEXT NOT NULL DEFAULT 'UTC',
+    -- 'all' | 'pops' (sites) | 'plans' (debit descendant du forfait, Mbps)
+    -- | 'subscribers' (logins / references)
+    scope       TEXT NOT NULL DEFAULT 'all'
+                CHECK (scope IN ('all', 'pops', 'plans', 'subscribers')),
+    targets     JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- [{label, start "HH:MM", end "HH:MM", days ["mon",...], down_mbps,
+    --   up_mbps, percent}], deja valides et sans recouvrement.
+    windows     JSONB NOT NULL DEFAULT '[]'::jsonb,
+    note        TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -540,6 +540,10 @@ A static-IP client announces nothing: no session, no RADIUS plan. **The declarat
 | **The sector is declared** | No `caller-id` exists; the *Sector* field attaches the client to its link so that it counts in that link's sharing |
 | **Measured only once a queue exists** | Its bytes are read on its queue; until then it shows its plan and state, without a rate |
 
+**Several address ranges for one client.** A VLAN client usually has a single IP pool. When the same client has **several pools on the same VLAN** (an extra public block, a service pool), or a block routed behind its CPE, list them in *Additional ranges* (`extra_prefixes` in the API). Each item is an IP (`10.0.1.5`), a block (`10.0.1.0/28`) or a MikroTik pool range (`10.0.1.10-10.0.1.50`, split into the exact covering blocks). They all share **one** queue — RouterOS accepts a list as target (`target=10.0.0.0/29,10.0.1.0/28`) and applies a single `max-limit` to the whole list — because the client bought **one** rate; two queues would give it two. The target is canonical (sorted, a block contained in another one dropped), so reading it back in RouterOS's own order is not a change. The queue hangs under a parent link only if that link's segment contains **every** range; a range claimed by two clients makes both ambiguous, and neither queue is written. An address of any range confirms the client's presence and is never proposed as a candidate. Several **clients** on the same VLAN are simply declared separately, one record each.
+
+**Alone on its VLAN.** When a single client is declared on a VLAN (and no PPPoE server listens on it), every network of that VLAN interface belongs to it — **all of them** when the VLAN carries several pools — plus its declared ranges: its queue targets the whole list, and its traffic is attributed to it in NetFlow.
+
 **Census and candidates.** The census of a PoP (`GET /api/v1/pops/census`, see above) confirms declared clients — an address inside a declared block is "seen active" — and lists the addresses that match nothing. `GET /api/v1/static-clients/candidates` returns those candidates and `GET /api/v1/static-clients/candidates/diagnostic` the reason each ARP line was set aside. A candidate is never turned into a subscriber automatically: a printer, a camera or another operator's device leaves exactly the same trace, and nobody can guess the sold rate. Declaring always goes through `POST /api/v1/static-clients` (or the *Add a client* form) with a reference and a plan.
 
 ### Ubiquiti antennas and radio capacity
@@ -1055,15 +1059,39 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 
 **Units.** Every rate field has a **kbps / Mbps / Gbps** selector: a subscriber capped at 512 kbps is typed as such, not as `0.512 Mbps`, and displayed as "512 kbps". Internally everything is converted once, at the input, to Mbit/s. The API accepts `max_down_mbps`, `max_down_kbps` or `max_down_gbps` (same for upload, and `down_*` / `up_*` for a boost); two units for the same direction are refused as ambiguous.
 
-**Which rate wins.** From strongest to weakest: a running **boost**, a permanent **override**, the subscriber's **plan**. A boost goes over the override then disappears; it does not erase it.
+**Which rate wins.** From strongest to weakest: a running **boost**, a permanent **override**, the **bandwidth schedule** in its current time slot (see below), the subscriber's **plan**. A boost goes over the override then disappears; it does not erase it. A schedule never undoes an override: a decision taken on *this* subscriber (capped for non-payment, for instance) is not lifted because the night begins.
 
 **Boosts.** A duration (1 minute to 7 days), then either a multiplier of the plan (the interface offers ×2, ×3 and ×5; the API accepts more than 1, up to 50) or explicit rates, and a reason. It is written immediately if writing is allowed and **expires by itself**: a job checks expiries every 30 s and brings the queue back to its normal rate — RouterOS knows nothing about the duration. A boost without an expiry is refused: it would be an override in disguise that never goes away.
 
 **A rate set by hand is written at once.** Setting a subscriber's or a link's rate writes the corresponding queue immediately (the full plan of the router, restricted to that queue), and the reply says what was written, on which router, or what prevented it (`apply_now=false` only records the intention).
 
+### Bandwidth schedules (day, evening, night)
+
+Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Plans › Bandwidth schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it:
+
+- a **percentage of the plan** (`percent`: 200 = twice the plan at night, 70 = 30 % less in the evening), which follows every subscriber's own plan without copying it; or
+- a **fixed rate** (`down_mbps` / `up_mbps`; a single direction is allowed, the other one keeps its plan).
+
+Outside every slot, the normal plan applies.
+
+| Field | Meaning |
+| --- | --- |
+| `start`, `end` | Local `HH:MM`. An end before the start crosses midnight (`22:00`–`06:00`); `24:00` is midnight at the end of a slot (`00:00`–`24:00` = the whole day) |
+| `days` | The days on which the slot **starts** (`mon` … `sun`; empty = every day). Friday's night runs into Saturday morning |
+| `timezone` | IANA name of the subscribers' time zone (`Europe/Paris`, `Africa/Abidjan`…). The hours are local to it and daylight saving time is handled; the interface pre-fills the browser's zone |
+| `scope`, `targets` | `all` clients; `pops` (site names, matched like everywhere else, case and accents ignored); `plans` (the plan's **download rate** in Mbps: `20` = every 20 Mbps plan); `subscribers` (PPPoE logins or static-client references) |
+
+**Two slots of one schedule may not overlap** — which one would win at 19:00 between "evening 18:00–23:00" and "peak 19:00–21:00"? The overlap is refused when saving, with the day and time where it happens.
+
+**One schedule per subscriber.** When several schedules target the same subscriber, the most **precise** one governs it alone: named subscribers, then plans, then sites, then all clients; at equal precision, the most recent. Schedules never combine: the operator can always say, subscriber by subscriber, where its rate comes from. The *Clients* button of a schedule (`GET /api/v1/bandwidth-schedules/{id}/preview`) lists the subscribers it governs, their plan and their rate **right now**, and those a more precise schedule takes away from it.
+
+**The switch is automatic.** A job re-reads the schedules every 30 s and compares, for each schedule, the slot running now to the one of the previous pass: as soon as a slot starts or ends, the queues are re-planned and written (author `system:schedule` in the audit), without waiting for the 2-minute reconciliation — which, in any case, writes the scheduled rate too. Saving, suspending or deleting a schedule applies it at once. The same safeguards as reconciliation apply: nothing is written while writing is off, and a scheduled switch never deletes a queue. The oscillation guard does not watch `max-limit`, so three switches a day are never mistaken for an oscillation. The last switch (when, why, how many writes, on which routers) is shown under the list.
+
+The subscriber list shows a scheduled rate with a *schedule* badge (the schedule and slot in the tooltip), and the *Plans* page shows, under each plan, the rate applied right now and the governing schedule.
+
 ### The shaping map
 
-*Settings › Shaping and writing to the routers* shows the **map**, not the commands: where the network is capped, at how much, and where that cap comes from (measured capacity, override, plan, boost, QoE tightening). `GET /api/v1/shaping/points` returns it, read-only.
+*Settings › Shaping and writing to the routers* shows the **map**, not the commands: where the network is capped, at how much, and where that cap comes from (measured capacity, override, plan, bandwidth schedule, boost, QoE tightening). `GET /api/v1/shaping/points` returns it, read-only.
 
 | State of a point | Meaning |
 | --- | --- |
@@ -1242,7 +1270,7 @@ A billing system (Splynx, UISP CRM, Powercode…) knows its customers and what i
 | Codes | `200` for every success (including `DELETE`), `400` for malformed JSON or a contradictory identifier, `401` for a missing or refused key **and for a key lacking the scope** (as Preseem does), `404` for an absent object, `409` for an identifier owned by a hand-entered record |
 | Responses | The record as Preseem returns it: an unset field (a rate, for example) is **omitted**, never `null`; the CPE MAC is lower case |
 | Enforcement report | For a service, what was written on the router is in the `X-FreeQoS-Enforcement` response header, outside the body |
-| Several prefixes | The first prefix is the queue's target; all of them count in the traffic measurement |
+| Several prefixes | All of them share **one** queue, whose target lists them (`target=10.0.0.0/29,10.0.1.0/28`): one service, one subscribed rate. All of them count in the traffic measurement |
 
 **Usage API parameters** (`GET /usage/v1/services` and `/usage/v1/services/{id}`): `start` and `end` (ISO 8601, UTC), or `days` (default 30, up to 366) when `start` is absent; `bucket` = `total`, `hour`, `day` or `month`; `vantage` = `auto`, `edge` or `pop` to override the accounting vantage point.
 
@@ -1650,7 +1678,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 | --- | --- |
 | `pops` | Sites: PoPs and VLAN sites, with the router serving each |
 | `subscribers` | Every subscriber, PPPoE or static (`kind`), unique `login`, plan, PoP, last address, last seen |
-| `static_clients` | Declared static-IP clients and services pushed through `/model/v1` (`source`) |
+| `static_clients` | Declared static-IP clients and services pushed through `/model/v1` (`source`); `extra_prefixes` holds their additional ranges |
 | `client_plans` | The plan written for each client, and its source (`api`, `ui`) |
 | `routers`, `hidden_file_routers` | Routers added from the interface (encrypted password, unique loopback, last connection diagnostic); routers of the file hidden by hand |
 | `backhauls`, `airos_antennas` | Radio links and the antennas polled for their capacity |
@@ -1662,6 +1690,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 | `enforcement_audit` | Every command sent, with its author and result |
 | `runtime_flags`, `runtime_settings` | Live switches (write, probe) and settings changed from the interface, with their history |
 | `traffic_rules` | Restrictions as entered: a criterion, never a frozen address list |
+| `bandwidth_schedules` | Time-of-day bandwidth schedules: time slots (validated, without overlap), scope and targets, time zone |
 | `app_users`, `app_sessions`, `auth_events`, `api_keys` | Accounts, sessions, login journal, API keys (fingerprints only) |
 | `model_accounts`, `model_packages`, `model_sites`, `model_access_points`, `model_services_unplaced` | The Preseem-compatible commercial model |
 | `netflow_exporters` | Exporters and their vantage point and sampling |

@@ -456,6 +456,10 @@ th.num { text-align: right; }
 /* ========================================================== formulaires */
 form.stack { display: grid; gap: 1rem; }
 .field { display: grid; gap: .35rem; }
+.field[hidden] { display: none; }
+/* Profils horaires : une plage par ligne, sans debordement de la carte. */
+#sched-windows input:not([type="checkbox"]), #sched-windows select { padding: .4rem .5rem; }
+#sched-windows .chk { font-size: .78rem; }
 .field label { font-size: .8rem; color: var(--muted); font-weight: 500; }
 .field .help { font-size: .75rem; color: var(--faint); }
 input, select, textarea {

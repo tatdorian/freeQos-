@@ -21,6 +21,7 @@ et lui n'en fait que des files.
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 from collections.abc import Sequence
 from datetime import datetime
@@ -28,6 +29,7 @@ from typing import Any
 
 import asyncpg
 
+from app.enforcement.models import MAX_TARGET_PREFIXES
 from app.models import StaticClient, VlanSighting
 
 logger = logging.getLogger(__name__)
@@ -36,7 +38,7 @@ COLUMNS = """
     id, reference, label, pop_name, host(address) AS address,
     masklen(address) AS prefix_len, vlan, sector_key,
     plan_down_mbps, plan_up_mbps, enabled, note, created_at, updated_at,
-    source, account_ref, package_ref, access_point_ref, cpe_mac
+    source, account_ref, package_ref, access_point_ref, cpe_mac, extra_prefixes
 """
 
 CHAMPS_MODIFIABLES = (
@@ -51,6 +53,7 @@ CHAMPS_MODIFIABLES = (
     "enabled",
     "note",
     "cpe_mac",
+    "extra_prefixes",
 )
 
 
@@ -96,6 +99,77 @@ def normalise_address(value: Any) -> str:
     return str(interface.network)
 
 
+def _plage_en_blocs(texte: str) -> list[str]:
+    """``10.0.0.10-10.0.0.50`` -> les blocs CIDR qui couvrent exactement la plage.
+
+    C'est la forme d'un pool MikroTik (``/ip/pool ranges=``). Une file RouterOS
+    ne vise pas de plage, seulement des blocs : on la decoupe donc au plus
+    juste, sans deborder sur les voisins de debut et de fin de plage.
+    """
+    debut_txt, _, fin_txt = texte.partition("-")
+    try:
+        debut = ipaddress.ip_address(debut_txt.strip())
+        fin = ipaddress.ip_address(fin_txt.strip())
+    except ValueError as exc:
+        raise InvalidStaticClientError(f"invalid range: {texte}") from exc
+    if debut.version != fin.version:
+        raise InvalidStaticClientError(f"range mixes IPv4 and IPv6: {texte}")
+    if int(fin) < int(debut):
+        raise InvalidStaticClientError(f"range ends before it starts: {texte}")
+    return [str(bloc) for bloc in ipaddress.summarize_address_range(debut, fin)]
+
+
+def normalise_extra_prefixes(value: Any) -> list[str]:
+    """Valide les plages additionnelles d'un client, sous forme canonique.
+
+    POURQUOI PLUSIEURS PLAGES. Un client sur VLAN a d'ordinaire un seul pool ;
+    certains en ont plusieurs sur la meme VLAN (un bloc public ajoute, un pool
+    de service). Toutes portent le trafic du MEME contrat : elles partagent sa
+    file, et donc son debit.
+
+    Chaque element est une IP (``10.0.1.5``), un bloc (``10.0.1.0/28``) ou une
+    plage de pool (``10.0.1.10-10.0.1.50``, decoupee en blocs exacts). On
+    accepte une liste ou un texte separe par virgules, espaces ou retours a la
+    ligne -- ce qu'on colle depuis ``/ip/pool``. Doublons retires, ordre de
+    saisie conserve.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        morceaux = value.replace(",", " ").split()
+    else:
+        morceaux = [str(v) for v in value]
+    blocs: list[str] = []
+    for morceau in morceaux:
+        texte = morceau.strip()
+        if not texte:
+            continue
+        candidats = _plage_en_blocs(texte) if "-" in texte else [normalise_address(texte)]
+        for bloc in candidats:
+            if bloc not in blocs:
+                blocs.append(bloc)
+    if len(blocs) > MAX_TARGET_PREFIXES - 1:
+        raise InvalidStaticClientError(
+            f"too many address blocks ({len(blocs)}): one queue targets at most "
+            f"{MAX_TARGET_PREFIXES} -- check the ranges entered"
+        )
+    return blocs
+
+
+def _liste_json(value: Any) -> list[str]:
+    """Une colonne JSONB de liste, quelle que soit la forme rendue par asyncpg."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            return []
+    if not isinstance(value, list):
+        return []
+    return [str(v) for v in value if v]
+
+
 def _to_row(record: asyncpg.Record) -> dict[str, Any]:
     """Recompose l'adresse au format CIDR attendu par l'interface."""
     row = dict(record)
@@ -103,6 +177,8 @@ def _to_row(record: asyncpg.Record) -> dict[str, Any]:
     longueur = row.pop("prefix_len", None)
     if adresse is not None:
         row["address"] = f"{adresse}/{longueur}" if longueur is not None else str(adresse)
+    if "extra_prefixes" in row:
+        row["extra_prefixes"] = _liste_json(row["extra_prefixes"])
     return row
 
 
@@ -118,6 +194,7 @@ def to_model(row: dict[str, Any]) -> StaticClient:
         plan_up_mbps=row.get("plan_up_mbps"),
         enabled=bool(row.get("enabled", True)),
         note=row.get("note"),
+        extra_prefixes=tuple(_liste_json(row.get("extra_prefixes"))),
     )
 
 
@@ -170,14 +247,17 @@ class StaticClientsRepository:
     # ------------------------------------------------------------ ecritures
     async def create(self, payload: dict[str, Any]) -> dict[str, Any]:
         adresse = normalise_address(payload.get("address"))
+        plages = normalise_extra_prefixes(payload.get("extra_prefixes"))
         async with self._pool.acquire() as conn:
             try:
                 row = await conn.fetchrow(
                     f"""
                     INSERT INTO static_clients (reference, label, pop_name, address, vlan,
                                                 sector_key, plan_down_mbps, plan_up_mbps,
-                                                enabled, note, cpe_mac, source)
-                    VALUES ($1, $2, $3, $4::inet, $5, $6, $7, $8, $9, $10, $11, 'manual')
+                                                enabled, note, cpe_mac, source,
+                                                extra_prefixes)
+                    VALUES ($1, $2, $3, $4::inet, $5, $6, $7, $8, $9, $10, $11, 'manual',
+                            $12::jsonb)
                     RETURNING {COLUMNS}
                     """,  # noqa: S608
                     payload["reference"],
@@ -191,6 +271,7 @@ class StaticClientsRepository:
                     payload.get("enabled", True),
                     payload.get("note"),
                     _mac(payload.get("cpe_mac")),
+                    json.dumps(plages),
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise DuplicateStaticClientError(
@@ -211,12 +292,17 @@ class StaticClientsRepository:
             # minuscules ou avec des tirets ne se rapprocherait plus de celle du
             # voisinage radio, et le client paraitrait introuvable.
             fields["cpe_mac"] = _mac(fields["cpe_mac"])
+        if "extra_prefixes" in fields:
+            # Une liste VIDE est une valeur : elle retire les plages en plus.
+            fields["extra_prefixes"] = json.dumps(
+                normalise_extra_prefixes(fields["extra_prefixes"])
+            )
         if not fields:
             return await self.get(client_id)
 
+        conversions = {"address": "::inet", "extra_prefixes": "::jsonb"}
         assignments = ", ".join(
-            f"{name} = ${i + 2}" + ("::inet" if name == "address" else "")
-            for i, name in enumerate(fields)
+            f"{name} = ${i + 2}" + conversions.get(name, "") for i, name in enumerate(fields)
         )
         async with self._pool.acquire() as conn:
             try:
@@ -307,7 +393,9 @@ class VlanSightingsRepository:
 
     Le rapprochement entre une adresse vue et un client declare se fait par
     CONTENANCE reseau (``<<=``), pas par egalite : un client declare en
-    10.0.0.0/29 doit etre reconnu quand c'est 10.0.0.3 qui parle.
+    10.0.0.0/29 doit etre reconnu quand c'est 10.0.0.3 qui parle. Ses plages
+    additionnelles comptent autant que son adresse : un second pool de la meme
+    VLAN n'est pas un candidat, c'est le meme client.
     """
 
     def __init__(self, pool: asyncpg.Pool) -> None:
@@ -365,6 +453,10 @@ class VlanSightingsRepository:
                  WHERE NOT EXISTS (
                            SELECT 1 FROM static_clients c
                             WHERE v.address <<= c.address
+                               OR EXISTS (
+                                      SELECT 1
+                                        FROM jsonb_array_elements_text(c.extra_prefixes) p
+                                       WHERE v.address <<= p::inet)
                        )
                    AND ($1::float IS NULL
                         OR v.last_seen > now() - make_interval(secs => $1::float))
@@ -392,7 +484,11 @@ class VlanSightingsRepository:
                        (array_agg(v.vlan_interface ORDER BY v.last_seen DESC))[1] AS vlan_interface,
                        (array_agg(v.router_name ORDER BY v.last_seen DESC))[1]    AS router_name
                   FROM static_clients c
-                  JOIN vlan_sightings v ON v.address <<= c.address
+                  JOIN vlan_sightings v
+                    ON v.address <<= c.address
+                    OR EXISTS (
+                           SELECT 1 FROM jsonb_array_elements_text(c.extra_prefixes) p
+                            WHERE v.address <<= p::inet)
                  GROUP BY c.reference
                 """
             )

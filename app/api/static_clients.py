@@ -39,6 +39,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["static clients"])
 
+EXTRA_PREFIXES_DOC = (
+    "Additional address ranges of the SAME client: another pool on the same VLAN, "
+    "or a block routed behind its CPE. Each item is an IP (10.0.1.5), a block "
+    "(10.0.1.0/28) or a pool range (10.0.1.10-10.0.1.50). They share the client's "
+    "single queue, hence its subscribed rate. An empty list removes them."
+)
+
 
 class StaticClientInput(BaseModel):
     reference: str = Field(
@@ -77,6 +84,11 @@ class StaticClientInput(BaseModel):
             "permet de rapprocher le client du voisinage radio."
         ),
     )
+    extra_prefixes: list[str] = Field(
+        default_factory=list,
+        max_length=64,
+        description=EXTRA_PREFIXES_DOC,
+    )
     enabled: bool = True
     note: str | None = Field(default=None, max_length=512)
 
@@ -93,6 +105,9 @@ class StaticClientUpdate(BaseModel):
     plan_down_mbps: float | None = Field(default=None, gt=0, le=100_000)
     plan_up_mbps: float | None = Field(default=None, gt=0, le=100_000)
     cpe_mac: str | None = Field(default=None, max_length=32)
+    extra_prefixes: list[str] | None = Field(
+        default=None, max_length=64, description=EXTRA_PREFIXES_DOC
+    )
     enabled: bool | None = None
     note: str | None = Field(default=None, max_length=512)
 
