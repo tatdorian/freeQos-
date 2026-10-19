@@ -627,6 +627,18 @@
       <div id="plans-result"></div>
       <div class="table-wrap" id="plans-clients"></div>
 
+      <!-- FORFAITS EN ATTENTE : recus (API ou saisie) pour des identifiants
+           jamais vus connectes. Repris tout seuls a la premiere connexion ;
+           un identifiant mal saisi y resterait pour toujours, d'ou la liste. -->
+      <div id="plans-pending-block" hidden>
+        <h2>Waiting for first connection</h2>
+        <p class="hint" style="display:block">Plans received for logins that have never been seen
+          connected yet (a subscriber created in your management interface before its first
+          PPPoE session). Each plan is applied by itself as soon as the subscriber connects. A
+          login that stays here may be misspelt.</p>
+        <div class="table-wrap" id="plans-pending"></div>
+      </div>
+
       <h2>Packages pushed by the API</h2>
       <div class="table-wrap" id="plans-packages"></div>
     </section>

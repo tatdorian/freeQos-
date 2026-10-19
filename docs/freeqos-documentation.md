@@ -1276,6 +1276,8 @@ A billing system (Splynx, UISP CRM, Powercode…) knows its customers and what i
 
 **For a PPPoE subscriber**, the simplest is still `PUT /api/v1/plans/{login}`: the login is enough to find it on its router.
 
+**A plan can come before the subscriber.** A management interface that feeds the RADIUS creates the subscriber and its plan before its first PPPoE session, and an initial sync pushes offline subscribers too. `PUT /api/v1/plans/{login}` therefore accepts a login never seen connected: the plan is kept (`"pending": true`, state `en-attente-de-connexion`), listed under *Plans › Waiting for first connection* and in the `pending` field of `GET /api/v1/plans`, and applied by itself at the first session — the plan source reads the same table for every new login. `DELETE` forgets a pending plan (a misspelt login would otherwise wait forever). Use the PPPoE login, which is the RADIUS username: unlike an address, it never changes.
+
 **Consumption** (`/usage/v1`) comes from NetFlow, not from queue counters: those restart from zero at each reconnection and do not exist for a subscriber without a queue. With no router exporting, this API returns zeros and says so in its `source` field.
 
 ### Authentication
@@ -1327,7 +1329,7 @@ Every response that touches a queue contains an `enforcement` object telling wha
 | --- | --- |
 | Add a router | `POST /api/v1/pops/routers` then `GET /api/v1/pops/provisioning/{name}` |
 | List subscribers and their plan | `GET /api/v1/plans` |
-| Give a plan | `PUT /api/v1/plans/{login}` with `down_mbps`, `up_mbps` or `package_id` |
+| Give a plan (even before the first connection) | `PUT /api/v1/plans/{login}` with `down_mbps`, `up_mbps` or `package_id` |
 | Remove a plan | `DELETE /api/v1/plans/{login}` |
 | Force a limit (unpaid bill, fair use) | `PUT /api/v1/shaping/policies` |
 | Temporary boost | `POST /api/v1/shaping/boosts` |

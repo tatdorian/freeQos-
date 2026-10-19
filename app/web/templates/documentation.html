@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="59a507d89ec191f5">
+  <meta name="freeqos-docs-source" content="3482e11ebb80a3b3">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2797,6 +2797,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </table></div>
 <p><strong>Usage API parameters</strong> (<code>GET /usage/v1/services</code> and <code>/usage/v1/services/{id}</code>): <code>start</code> and <code>end</code> (ISO 8601, UTC), or <code>days</code> (default 30, up to 366) when <code>start</code> is absent; <code>bucket</code> = <code>total</code>, <code>hour</code>, <code>day</code> or <code>month</code>; <code>vantage</code> = <code>auto</code>, <code>edge</code> or <code>pop</code> to override the accounting vantage point.</p>
 <p><strong>For a PPPoE subscriber</strong>, the simplest is still <code>PUT /api/v1/plans/{login}</code>: the login is enough to find it on its router.</p>
+<p><strong>A plan can come before the subscriber.</strong> A management interface that feeds the RADIUS creates the subscriber and its plan before its first PPPoE session, and an initial sync pushes offline subscribers too. <code>PUT /api/v1/plans/{login}</code> therefore accepts a login never seen connected: the plan is kept (<code>"pending": true</code>, state <code>en-attente-de-connexion</code>), listed under <em>Plans › Waiting for first connection</em> and in the <code>pending</code> field of <code>GET /api/v1/plans</code>, and applied by itself at the first session — the plan source reads the same table for every new login. <code>DELETE</code> forgets a pending plan (a misspelt login would otherwise wait forever). Use the PPPoE login, which is the RADIUS username: unlike an address, it never changes.</p>
 <p><strong>Consumption</strong> (<code>/usage/v1</code>) comes from NetFlow, not from queue counters: those restart from zero at each reconnection and do not exist for a subscriber without a queue. With no router exporting, this API returns zeros and says so in its <code>source</code> field.</p>
 <h3 id="authentication">Authentication</h3>
 <p>A key is created in the <em>API</em> tab. The secret is shown only once. Two scopes:</p>
@@ -2878,7 +2879,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <td><code>GET /api/v1/plans</code></td>
 </tr>
 <tr>
-<td>Give a plan</td>
+<td>Give a plan (even before the first connection)</td>
 <td><code>PUT /api/v1/plans/{login}</code> with <code>down_mbps</code>, <code>up_mbps</code> or <code>package_id</code></td>
 </tr>
 <tr>
@@ -5098,7 +5099,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <tr>
 <td><code>PUT</code></td>
 <td><code>/api/v1/plans/{login}</code></td>
-<td>Set the plan of a client</td>
+<td>Set the plan of a client (even before its first connection)</td>
 </tr>
 <tr>
 <td><code>DELETE</code></td>
