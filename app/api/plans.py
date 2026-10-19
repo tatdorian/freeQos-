@@ -279,6 +279,19 @@ async def _fiche_statique(container: ContainerDep, reference: str) -> dict[str, 
     return next((f for f in await depot.list_all() if str(f["reference"]) == reference), None)
 
 
+#: Avec PLAN_PROVIDER=freeradius_sql, le forfait d'un abonne qui se connecte
+#: pour la premiere fois vient du RADIUS, pas de la table des forfaits.
+MOTIF_RADIUS = (
+    "plans are read from RADIUS (PLAN_PROVIDER=freeradius_sql): the plan of a login never "
+    "seen connected cannot be kept here, it would not be applied. Set it in RADIUS: it is "
+    "read at the subscriber's first connection."
+)
+
+
+def _forfaits_lus_dans_radius(container: ContainerDep) -> bool:
+    return str(getattr(container.settings, "plan_provider", "")) == "freeradius_sql"
+
+
 def _valider_login(login: str) -> None:
     if login != login.strip() or any(ord(c) < 32 for c in login):
         raise HTTPException(
@@ -309,9 +322,14 @@ async def set_plan(
     if bas is None and haut is None:
         raise HTTPException(status_code=422, detail="a rate or a package is required")
     auteur = f"ui:{user.get('email')}"
+    statique = None if client is not None else await _fiche_statique(container, login)
+    if client is None and statique is None and _forfaits_lus_dans_radius(container):
+        # Le forfait d'un NOUVEL abonne est lu dans le RADIUS a sa premiere
+        # connexion : garder celui-ci ici serait promettre ce qui n'arrivera
+        # pas. Refuser, et dire ou le poser.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MOTIF_RADIUS)
     # Un plan choisi ici est LA regle : la limite forcee ailleurs est levee.
     leve = await _lever_limite_forcee(container, login)
-    statique = None if client is not None else await _fiche_statique(container, login)
     if client is None and statique is None:
         # JAMAIS VU CONNECTE : le forfait attend l'abonne. Rien a poser sur un
         # routeur tant qu'aucune session ne porte cet identifiant.
