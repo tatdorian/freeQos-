@@ -1167,7 +1167,7 @@ Every 5 minutes, freeQoS looks at the QoE of each sector over the last 15 minute
 
 A single degraded subscriber points at its last mile (CPE, home Wi-Fi), not at the sector. This is why at least two are needed.
 
-**On and off.** The setting `qoe_loop_enabled` (*Settings › Write safeguards*, live, on by default) turns the loop on or off. Off, the loop reads no score and decides nothing, and every tightening it had applied is released: the planner ignores the tightenings at once, the next reconciliation brings the links back to their normal envelope, and the stored tightenings are reset (`last_action` = `release`), so that turning the loop back on starts from scratch rather than re-applying old decisions. Like every write, the loop is also subject to the global switch and to each router's switch: on a read-only router, the tightening is decided and the plan computed, nothing is sent.
+**On and off.** The setting `qoe_loop_enabled` (*Settings › Write safeguards*, live, on by default) turns the loop on or off. Off, the loop reads no score and decides nothing, and every tightening it had applied is released: the planner ignores the tightenings at once, the next reconciliation brings the links back to their normal envelope, and the stored tightenings are reset (`last_action` = `release`) as soon as the setting changes, without waiting for the loop's next pass, so that turning the loop back on starts from scratch rather than re-applying old decisions (turning it back on resets them again, in case some were left over). Like every write, the loop is also subject to the global switch and to each router's switch: on a read-only router, the tightening is decided and the plan computed, nothing is sent.
 
 ## 8. Capacity and business insights
 

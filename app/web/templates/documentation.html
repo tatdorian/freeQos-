@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="82b3947f4a5c95f3">
+  <meta name="freeqos-docs-source" content="99223c9eb1d783ca">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2570,7 +2570,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>What does not count:</strong> a subscriber that has never answered the ping.</li>
 </ul>
 <p>A single degraded subscriber points at its last mile (CPE, home Wi-Fi), not at the sector. This is why at least two are needed.</p>
-<p><strong>On and off.</strong> The setting <code>qoe_loop_enabled</code> (<em>Settings › Write safeguards</em>, live, on by default) turns the loop on or off. Off, the loop reads no score and decides nothing, and every tightening it had applied is released: the planner ignores the tightenings at once, the next reconciliation brings the links back to their normal envelope, and the stored tightenings are reset (<code>last_action</code> = <code>release</code>), so that turning the loop back on starts from scratch rather than re-applying old decisions. Like every write, the loop is also subject to the global switch and to each router's switch: on a read-only router, the tightening is decided and the plan computed, nothing is sent.</p>
+<p><strong>On and off.</strong> The setting <code>qoe_loop_enabled</code> (<em>Settings › Write safeguards</em>, live, on by default) turns the loop on or off. Off, the loop reads no score and decides nothing, and every tightening it had applied is released: the planner ignores the tightenings at once, the next reconciliation brings the links back to their normal envelope, and the stored tightenings are reset (<code>last_action</code> = <code>release</code>) as soon as the setting changes, without waiting for the loop's next pass, so that turning the loop back on starts from scratch rather than re-applying old decisions (turning it back on resets them again, in case some were left over). Like every write, the loop is also subject to the global switch and to each router's switch: on a read-only router, the tightening is decided and the plan computed, nothing is sent.</p>
 <h2 id="8-capacity-and-business-insights">8. Capacity and business insights</h2>
 <p>The measurements answer operating questions ("is it working?"). The same data, read over days, answers capacity and commercial ones: how much was sold behind each link, when links saturate, who is about to leave, who is ready for a bigger plan, and how many more subscribers each site can take.</p>
 <h3 id="sold-against-real-capacity">Sold against real capacity</h3>
