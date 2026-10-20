@@ -76,6 +76,20 @@ class RouterConfig(BaseModel):
     # /ppp/active/print ne les expose pas.
     pppoe_interface_pattern: str = "<pppoe-{login}>"
 
+    # ECRITURE AUTORISEE SUR CE ROUTEUR, dans freeQoS.
+    #
+    # Le deploiement prudent se fait routeur par routeur : tout declarer, tout
+    # observer en lecture, puis laisser freeQoS ecrire sur UN NAS pilote, puis
+    # sur les autres. Jusqu'ici, garder un routeur declare en lecture seule
+    # obligeait a retirer la politique 'write' de son compte RouterOS -- un
+    # garde-fou qui vivait sur le routeur, pas dans l'interface.
+    #
+    # Faux : RIEN n'est envoye a ce routeur (files, types CAKE, export NetFlow,
+    # restrictions), quel que soit l'interrupteur global ; le plan reste calcule
+    # et affiche. Vrai par defaut : une installation existante continue d'ecrire
+    # exactement comme avant.
+    write_enabled: bool = True
+
     # --- Phase 2 : enforcement (declare, non utilise) ---
     rw_username: str | None = None
     rw_password_env: str | None = None
@@ -619,6 +633,11 @@ class Settings(BaseSettings):
     # tant que la sonde RTT ne fournit pas de latence a correler. Mettre 0
     # desactive la boucle.
     qoe_loop_interval_s: float = 300.0
+    # Interrupteur de la boucle, pilotable depuis l'interface (reglage a chaud).
+    # Faux : le job ne decide plus rien, et les resserrages deja decides ne sont
+    # plus appliques -- la reconciliation suivante ramene les enveloppes des
+    # liens a leur valeur normale.
+    qoe_loop_enabled: bool = True
     # Fenetre d'observation. Trop courte, on reagit a un pic ; trop longue, on
     # reagit a de l'histoire ancienne. Doit couvrir plusieurs tours de sonde RTT.
     qoe_window_minutes: int = 15

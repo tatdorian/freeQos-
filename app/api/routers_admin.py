@@ -4,6 +4,11 @@ Ces endpoints ecrivent en base, jamais sur un equipement : ils declarent quels
 routeurs INTERROGER. Le controleur reste hors-bande et en lecture seule vis-a-vis
 du reseau.
 
+Ils portent aussi l'interrupteur d'ecriture PAR ROUTEUR (``write_enabled``) :
+le deploiement prudent se fait NAS par NAS, et ce garde-fou doit se poser dans
+l'interface, pas en retirant une politique au compte RouterOS. Chaque
+changement est journalise avec son auteur et son motif.
+
 Le mot de passe entre par ces routes et n'en ressort jamais : il est chiffre a
 l'ecriture et aucune reponse ne le contient, meme chiffre.
 """
@@ -17,6 +22,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import BaseModel, Field, SecretStr
 
+from app.api.accounts import UserDep
 from app.api.deps import ContainerDep
 from app.config import RouterConfig, RouterRole
 from app.db.routers_repo import DuplicateRouterError, RouterNotFoundError, RoutersRepository
@@ -48,6 +54,12 @@ class RouterInput(BaseModel):
     loopback: str | None = Field(default=None, max_length=64)
     timeout_s: float = Field(default=5.0, ge=0.5, le=60.0)
     pppoe_interface_pattern: str = "<pppoe-{login}>"
+    # Ecriture autorisee sur ce routeur. VRAI par defaut dans l'API, pour qu'une
+    # integration existante garde son comportement ; l'interface, elle, envoie
+    # la case explicitement, DECOCHEE par defaut.
+    write_enabled: bool = True
+    # Motif journalise avec l'etat initial de l'interrupteur.
+    reason: str | None = Field(default=None, max_length=300)
 
 
 class RouterUpdate(BaseModel):
@@ -67,6 +79,61 @@ class RouterUpdate(BaseModel):
     loopback: str | None = Field(default=None, max_length=64)
     timeout_s: float | None = Field(default=None, ge=0.5, le=60.0)
     pppoe_interface_pattern: str | None = None
+    write_enabled: bool | None = None
+    # Motif du changement d'interrupteur, journalise avec son auteur.
+    reason: str | None = Field(default=None, max_length=300)
+    # Autoriser l'ecriture sur un routeur de production merite un geste
+    # explicite, comme pour l'interrupteur global. La couper, jamais.
+    confirm: bool = False
+
+
+class WriteSwitch(BaseModel):
+    """Interrupteur d'ecriture d'un routeur de l'inventaire FICHIER."""
+
+    enabled: bool
+    reason: str | None = Field(default=None, max_length=300)
+    confirm: bool = False
+
+
+CONFIRMATION_REQUISE = (
+    "Allowing writes lets freeQoS change this router (queues, NetFlow export, "
+    "restrictions): 'confirm' must be true."
+)
+
+
+def _auteur(user: dict[str, Any]) -> str:
+    """Meme forme que les autres gestes de l'interface ("ui:<compte>")."""
+    return f"ui:{user.get('email')}"
+
+
+async def _journaliser_interrupteur(
+    container: ContainerDep,
+    router_name: str,
+    *,
+    avant: bool | None,
+    apres: bool,
+    auteur: str,
+    motif: str | None,
+) -> None:
+    """Trace un changement d'interrupteur, comme l'interrupteur global garde les
+    siens : qui, quand, pourquoi. Un journal indisponible ne bloque pas le geste
+    -- couper l'ecriture doit toujours aboutir -- mais le serveur le dit."""
+    logger.warning(
+        "Ecriture %s sur %s par %s%s",
+        "AUTORISEE" if apres else "coupee",
+        router_name,
+        auteur,
+        f" ({motif})" if motif else "",
+    )
+    depot = container.topology_repo
+    if depot is None or not hasattr(depot, "record_write_switch"):
+        return
+    try:
+        await depot.record_write_switch(
+            router_name, write_enabled=apres, before=avant, author=auteur, reason=motif
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Changement d'interrupteur de %s non journalise", router_name)
 
 
 def _require_repository(container: ContainerDep) -> RoutersRepository:
@@ -140,6 +207,9 @@ async def list_routers(container: ContainerDep) -> dict[str, Any]:
 
     # Les routeurs de l'inventaire fichier n'ont pas de ligne en base : on les
     # expose quand meme, marques non modifiables.
+    # Ce que le FICHIER autorise : l'interface peut couper l'ecriture d'un
+    # routeur du fichier, jamais l'ouvrir quand le fichier la refuse.
+    fichier = {r.name: r for r in container.settings.routers}
     depuis_fichier = [
         {
             "id": None,
@@ -150,6 +220,10 @@ async def list_routers(container: ContainerDep) -> dict[str, Any]:
             "role": entry["role"],
             "pop_name": entry["pop"],
             "enabled": True,
+            "write_enabled": entry.get("write_enabled", True),
+            "write_locked": (
+                entry["name"] in fichier and not fichier[str(entry["name"])].write_enabled
+            ),
             "source": "file",
             "editable": False,
             "active": True,
@@ -203,6 +277,53 @@ async def restore_file_router(container: ContainerDep, name: str) -> dict[str, A
     restored = await repository.unhide_file_router(name)
     await _apply(container)
     return {"name": name, "restored": restored}
+
+
+@router.put(
+    "/pops/routers/file/{name}/write",
+    summary="Allow or stop writing on a router of the file inventory",
+)
+async def set_file_router_write(
+    name: str, payload: WriteSwitch, container: ContainerDep, user: UserDep
+) -> dict[str, Any]:
+    """L'interrupteur d'ecriture d'un routeur declare dans le fichier.
+
+    Le fichier reste la source de verite : l'interface peut COUPER l'ecriture
+    (marqueur en base, sans editer le YAML ni redemarrer), et la rendre tant que
+    le fichier l'autorise. Un fichier qui porte ``write_enabled: false`` garde
+    le dernier mot.
+    """
+    repository = _require_repository(container)
+    fiche = next((r for r in container.settings.routers if r.name == name), None)
+    if fiche is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Router '{name}' is not in the routers file",
+        )
+    if payload.enabled and not fiche.write_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"'{name}' carries write_enabled: false in the routers file: the file "
+                "has the last word. Change it there to allow writing."
+            ),
+        )
+    avant = fiche.write_enabled and name not in await repository.read_only_file_routers()
+    if payload.enabled and not avant and not payload.confirm:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=CONFIRMATION_REQUISE)
+    auteur = _auteur(user)
+    await repository.set_file_router_read_only(
+        name, not payload.enabled, updated_by=auteur, reason=payload.reason
+    )
+    if avant != payload.enabled:
+        await _journaliser_interrupteur(
+            container, name, avant=avant, apres=payload.enabled, auteur=auteur, motif=payload.reason
+        )
+    await _apply(container)
+    reponse: dict[str, Any] = {"name": name, "write_enabled": payload.enabled}
+    if payload.enabled and avant is False:
+        reponse["provisioning"] = provisioning.start(container, name)
+    return reponse
 
 
 @router.post("/pops/routers/test", summary="Test a connection without saving it")
@@ -273,12 +394,14 @@ def _hint_for(exc: Exception, config: RouterConfig) -> str:
     status_code=status.HTTP_201_CREATED,
     summary="Save a router",
 )
-async def create_router(payload: RouterInput, container: ContainerDep) -> dict[str, Any]:
+async def create_router(
+    payload: RouterInput, container: ContainerDep, user: UserDep
+) -> dict[str, Any]:
     repository = _require_repository(container)
     _guard_secrets(container)
     try:
         created = await repository.create(
-            payload.model_dump(exclude={"password"}),
+            payload.model_dump(exclude={"password", "reason"}),
             payload.password.get_secret_value(),
         )
     except DuplicateRouterError as exc:
@@ -286,6 +409,16 @@ async def create_router(payload: RouterInput, container: ContainerDep) -> dict[s
     except SecretUnavailableError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    # L'etat de depart de l'interrupteur est une decision comme une autre : qui
+    # a declare ce routeur en ecriture (ou en lecture seule), et pourquoi.
+    await _journaliser_interrupteur(
+        container,
+        str(created["name"]),
+        avant=None,
+        apres=bool(created.get("write_enabled", True)),
+        auteur=_auteur(user),
+        motif=payload.reason or "router declared",
+    )
     await _apply(container)
     logger.info("Routeur '%s' enregistre depuis l'interface", created["name"])
     # MISE EN SERVICE IMMEDIATE : CAKE, premieres files, export NetFlow, arbre.
@@ -299,6 +432,7 @@ async def create_router(payload: RouterInput, container: ContainerDep) -> dict[s
 async def update_router(
     payload: RouterUpdate,
     container: ContainerDep,
+    user: UserDep,
     router_id: Annotated[int, Path(ge=1)],
 ) -> dict[str, Any]:
     repository = _require_repository(container)
@@ -306,17 +440,45 @@ async def update_router(
     if password:
         _guard_secrets(container)
     try:
+        avant = (
+            await repository.write_enabled_of(router_id)
+            if payload.write_enabled is not None
+            else None
+        )
+        # Seul le PASSAGE en ecriture demande une confirmation : renvoyer la
+        # fiche telle qu'on l'a lue (write_enabled deja vrai) ne doit pas
+        # echouer.
+        if payload.write_enabled and avant is False and not payload.confirm:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST, detail=CONFIRMATION_REQUISE
+            )
         updated = await repository.update(
-            router_id, payload.model_dump(exclude={"password"}), password
+            router_id, payload.model_dump(exclude={"password", "reason", "confirm"}), password
         )
     except RouterNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except DuplicateRouterError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    bascule = payload.write_enabled is not None and avant != payload.write_enabled
+    if bascule:
+        await _journaliser_interrupteur(
+            container,
+            str(updated["name"]),
+            avant=avant,
+            apres=bool(payload.write_enabled),
+            auteur=_auteur(user),
+            motif=payload.reason,
+        )
     await _apply(container)
     # Adresse, compte ou mot de passe corriges : on remet tout en place aussitot.
-    if updated.get("enabled", True):
+    # Ecriture tout juste autorisee : meme chose, c'est la mise en service que
+    # l'exploitant attend. Ecriture coupee, et rien d'autre : rien a remettre.
+    autres = payload.model_dump(
+        exclude={"password", "reason", "confirm", "write_enabled"}, exclude_none=True
+    )
+    seulement_coupee = payload.write_enabled is False and not autres and not password
+    if updated.get("enabled", True) and not seulement_coupee:
         updated["provisioning"] = provisioning.start(container, str(updated["name"]))
     return updated
 

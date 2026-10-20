@@ -50,6 +50,9 @@ ACTION_RELAX = "relax"  # retablie assez longtemps : on rend un cran
 ACTION_HOLD = "hold"  # rien a faire (sain sans resserrage, ou delai de garde)
 ACTION_FLOOR = "floor"  # degrade mais deja au plancher : on ne descend plus
 ACTION_UNKNOWN = "unknown"  # pas assez de mesures pour conclure
+# Boucle coupee depuis l'interface : le resserrage est rendu d'un coup. Ecrit
+# par la base (``release_qoe_trims``), jamais decide par ``decide_sector``.
+ACTION_RELEASE = "release"
 
 # Un resserrage ne change rien tant qu'il reste dans le bruit d'arrondi.
 EPSILON = 1e-6

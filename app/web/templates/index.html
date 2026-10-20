@@ -877,6 +877,18 @@
             </label>
           </div>
 
+          <!-- ECRITURE PAR ROUTEUR : decochee par defaut. Un routeur ajoute est
+               lu et mesure, jamais modifie, tant que l'exploitant ne l'a pas
+               autorise ici ou dans la liste ci-dessous. -->
+          <div class="field">
+            <label style="display:flex;align-items:center;gap:.5rem;cursor:pointer"
+                   title="Unticked, freeQoS reads and measures this router and only shows what it would write (Settings). You can allow writing later from the list below.">
+              <input type="checkbox" id="f-write" name="write_enabled">
+              Allow freeQoS to write on this router (queues, NetFlow export, restrictions)
+            </label>
+            <span class="hint">Unticked, the router stays read-only: nothing is written to it until you tick this.</span>
+          </div>
+
           <div id="form-result"></div>
 
           <div class="actions">

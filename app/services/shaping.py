@@ -65,7 +65,11 @@ from app.collectors.topology import (
 )
 from app.config import Settings
 from app.db.topology_repo import TopologyRepository
-from app.enforcement.capability import WriteCapability, inspect_write_capability
+from app.enforcement.capability import (
+    WriteCapability,
+    disabled_in_freeqos,
+    inspect_write_capability,
+)
 from app.enforcement.models import (
     PREFIX,
     Plan,
@@ -125,6 +129,31 @@ class EnforcementDisabledError(RuntimeError):
 
 class EnforcementLockedError(RuntimeError):
     """La bascule a chaud est interdite par la configuration."""
+
+
+#: Motif rendu partout ou l'ecriture est refusee parce que l'exploitant l'a
+#: coupee sur CE routeur : verdict des droits, rapport de mise en service, carte
+#: du shaping, export NetFlow, restrictions. Le meme texte partout, parce qu'il
+#: n'y a qu'un geste a faire, et qu'il se fait a un seul endroit.
+MOTIF_ROUTEUR_LECTURE_SEULE = "Writing is disabled for this router in freeQoS (Devices)"
+
+
+class RouterWriteDisabledError(EnforcementDisabledError):
+    """L'ecriture est coupee sur CE routeur, dans freeQoS (Appareils).
+
+    Herite du refus global : tout chemin qui sait deja dire "rien n'est envoye"
+    le dit aussi pour un routeur en lecture seule.
+    """
+
+
+def ecriture_autorisee(collector: Any) -> bool:
+    """L'exploitant autorise-t-il freeQoS a ecrire sur le routeur de ce collecteur ?
+
+    Lu sur la configuration du collecteur, que le registre rafraichit a chaque
+    rechargement : basculer l'interrupteur prend effet sans redemarrage. Un
+    double de test sans configuration est un routeur ordinaire (vrai).
+    """
+    return bool(getattr(getattr(collector, "config", None), "write_enabled", True))
 
 
 @dataclass
@@ -1155,7 +1184,12 @@ class ShapingService:
         # decision d'exploitant, un resserrage une decision de la boucle, et les
         # confondre ferait qu'un cycle automatique ecraserait un debit saisi a la
         # main. Les deux se composent dans ``shaped_capacity``.
-        resserrages = await self.repository.qoe_trims()
+        #
+        # BOUCLE COUPEE (reglage qoe_loop_enabled) : aucun resserrage n'est plus
+        # applique, meme ceux encore en base. C'est ce qui garantit que la
+        # reconciliation suivante RAMENE les enveloppes a leur valeur normale --
+        # sans attendre que le job, inerte, les ait effaces.
+        resserrages = await self.repository.qoe_trims() if self.settings.qoe_loop_enabled else {}
 
         collector = self._collector(router_name)
         pop_name = collector.config.effective_pop_name
@@ -1655,6 +1689,7 @@ class ShapingService:
                 routeurs.append(
                     {
                         "router": nom,
+                        "write_enabled": self.router_write_enabled(nom),
                         "error": f"{type(resultat).__name__}: {resultat}",
                         "points": [],
                         "counts": {},
@@ -1664,6 +1699,7 @@ class ShapingService:
             routeurs.append(resultat)
         return {
             "enforcement_enabled": self._enforcement_enabled,
+            "read_only_routers": self.read_only_routers(),
             "last_reconcile": self.last_reconcile,
             "reconcile_interval_s": self.settings.shaping_reconcile_interval_s,
             "routers": routeurs,
@@ -1706,6 +1742,7 @@ class ShapingService:
         for lien in liens:
             points.append(
                 self._point(
+                    router_name=router_name,
                     kind=self.POINT_LIEN,
                     label=lien.name,
                     spec=specs.get(lien.queue_name),
@@ -1725,6 +1762,7 @@ class ShapingService:
         for abonne in abonnes:
             points.append(
                 self._point(
+                    router_name=router_name,
                     kind=self.POINT_ABONNE,
                     label=abonne.login,
                     spec=specs.get(abonne.queue_name),
@@ -1775,6 +1813,9 @@ class ShapingService:
         return {
             "router": router_name,
             "pop_name": collector.config.effective_pop_name,
+            # La carte est calculee meme en lecture seule : c'est elle qui dit,
+            # AVANT d'autoriser ce routeur, ce que freeQoS y poserait.
+            "write_enabled": ecriture_autorisee(collector),
             "reachable": etat.reachable,
             "error": etat.error,
             "points": _en_arbre(points),
@@ -1784,6 +1825,7 @@ class ShapingService:
     def _point(
         self,
         *,
+        router_name: str,
         kind: str,
         label: str,
         spec: QueueSpec | None,
@@ -1801,10 +1843,10 @@ class ShapingService:
             motif = motifs.get(label, "no queue: nothing to apply here")
         elif queue_name in a_ecrire:
             etat = self.ETAT_A_POSER
-            motif = (
-                "will be written at the next reconciliation pass"
-                if self._enforcement_enabled
-                else "enforcement is off: nothing is written until it is on"
+            motif = self._motif_a_poser(
+                router_name,
+                "will be written at the next reconciliation pass",
+                "enforcement is off: nothing is written until it is on",
             )
         else:
             etat, motif = self.ETAT_POSEE, "queue in place, as planned"
@@ -2400,9 +2442,20 @@ class ShapingService:
             ligne["state"] = self.ETAT_A_POSER
             ligne["reason"] = "simulation: nothing was written"
             return ligne
+        if not self.router_write_enabled(router_name):
+            # Le geste est explicite, mais le routeur est en lecture seule :
+            # la file est calculee, rien ne part. Le dire tel quel.
+            ligne["state"] = self.ETAT_A_POSER
+            ligne["reason"] = f"{MOTIF_ROUTEUR_LECTURE_SEULE}: the queue is computed, not sent"
+            return ligne
 
         try:
             resultat = await self.apply(restreint, dry_run=False, author=author, explicit=True)
+        except RouterWriteDisabledError as exc:
+            # Interrupteur bascule entre la verification et l'envoi.
+            ligne["state"] = self.ETAT_A_POSER
+            ligne["reason"] = str(exc)
+            return ligne
         except EnforcementDisabledError:
             # Mode simulation : la file est calculee, rien n'est envoye. Ce n'est
             # pas une erreur, et l'exploitant doit le lire comme tel.
@@ -2559,11 +2612,11 @@ class ShapingService:
             return {
                 "router": plan.router_name,
                 "state": self.ETAT_A_POSER,
-                "reason": (
-                    "queue to set: it will be written at the next reconciliation"
-                    if self._enforcement_enabled
-                    else "enforcement is off: nothing will be written "
-                    "until it is on (Settings > Shaping and writing)"
+                "reason": self._motif_a_poser(
+                    plan.router_name,
+                    "queue to set: it will be written at the next reconciliation",
+                    "enforcement is off: nothing will be written "
+                    "until it is on (Settings > Shaping and writing)",
                 ),
                 "applied": 0,
                 "actions": actions,
@@ -2575,6 +2628,13 @@ class ShapingService:
             "applied": 0,
             "actions": [],
         }
+
+    def _motif_a_poser(self, router_name: str, actif: str, coupe: str) -> str:
+        """Pourquoi une file "a poser" ne l'est pas encore, du plus bloquant au
+        moins bloquant : le routeur en lecture seule, puis l'interrupteur global."""
+        if not self.router_write_enabled(router_name):
+            return f"{MOTIF_ROUTEUR_LECTURE_SEULE}: computed, nothing is sent to this router"
+        return actif if self._enforcement_enabled else coupe
 
     async def clean_queues(self, router_name: str, *, author: str | None = None) -> dict[str, Any]:
         """Supprime TOUTES les files freeQoS d'un routeur, puis les repose.
@@ -2589,9 +2649,16 @@ class ShapingService:
         instance) : jamais une file posee a la main, par RADIUS ou par une autre
         instance de freeQoS. Les types
         CAKE restent, le plan les reutilise. Geste humain : ecrit meme
-        interrupteur coupe, comme toute demande explicite.
+        interrupteur coupe, comme toute demande explicite -- SAUF sur un routeur
+        en lecture seule, refuse d'emblee, avant toute lecture.
         """
-        etat = await self._inspect_one(self._collector(router_name))
+        collecteur = self._collector(router_name)
+        if not ecriture_autorisee(collecteur):
+            raise RouterWriteDisabledError(
+                f"{router_name}: {MOTIF_ROUTEUR_LECTURE_SEULE}. Reset queues sends "
+                "nothing to a read-only router: allow writing on it in Devices first."
+            )
+        etat = await self._inspect_one(collecteur)
         # Geste explicite de l'exploitant : les lignes gelees pour oscillation
         # sont liberees, l'etat repart de zero.
         self.unfreeze(router_name)
@@ -2696,6 +2763,10 @@ class ShapingService:
             return resultat
 
         for router_name in await self._routers_for_logins(logins):
+            if not self.router_write_enabled(router_name):
+                # Lecture seule : aucun boost n'y a ete pose, rien a ramener.
+                resultat.setdefault("read_only", []).append(router_name)
+                continue
             try:
                 # JAMAIS de purge dans une application automatique.
                 #
@@ -2775,6 +2846,9 @@ class ShapingService:
             return resultat
         for collector in self.registry.collectors:
             nom = collector.name
+            if not ecriture_autorisee(collector):
+                resultat.setdefault("read_only", []).append(nom)
+                continue
             try:
                 plan = await self.plan_router(nom, prune=False)
                 if plan.is_empty:
@@ -2818,6 +2892,11 @@ class ShapingService:
             "applied": 0,
             "errors": [],
         }
+        # Routeurs passes sans rien lire ni ecrire : l'exploitant y a coupe
+        # l'ecriture (Appareils). Les nommer evite de les croire oublies.
+        lecture_seule = self.read_only_routers()
+        if lecture_seule:
+            resultat["read_only"] = lecture_seule
         if not self._enforcement_enabled:
             resultat["at"] = datetime.now(tz=UTC).isoformat()
             self.last_reconcile = resultat
@@ -2825,6 +2904,8 @@ class ShapingService:
 
         for collector in self.registry.collectors:
             nom = collector.name
+            if not ecriture_autorisee(collector):
+                continue
             try:
                 plan = await self.plan_router(nom, prune=False)
                 if plan.is_empty:
@@ -2884,6 +2965,7 @@ class ShapingService:
         """
         resultat: dict[str, Any] = {
             "enabled": self._enforcement_enabled,
+            "loop_enabled": self.settings.qoe_loop_enabled,
             "window_minutes": self.settings.qoe_window_minutes,
             "threshold": self.settings.qoe_score_threshold,
             "scored": 0,
@@ -2894,6 +2976,19 @@ class ShapingService:
             "errors": [],
         }
         if self.repository is None or self.metrics is None:
+            return resultat
+        if not self.settings.qoe_loop_enabled:
+            # BOUCLE COUPEE DEPUIS L'INTERFACE : aucune lecture de score, aucune
+            # decision, aucun plan. Seul geste : effacer les resserrages encore
+            # en base, pour que l'etat affiche dise vrai et qu'une remise en
+            # marche reparte de zero plutot que de reappliquer d'un coup des
+            # decisions anciennes. Le planificateur les ignore deja (cf.
+            # ``build_targets``) : la reconciliation suivante ramene les liens a
+            # leur enveloppe normale.
+            liberer = getattr(self.repository, "release_qoe_trims", None)
+            resultat["released"] = (
+                await liberer("closed QoE loop turned off in Settings") if callable(liberer) else []
+            )
             return resultat
 
         notes = await self.metrics.qoe_subscribers(minutes=self.settings.qoe_window_minutes)
@@ -3001,6 +3096,12 @@ class ShapingService:
                 plan = await self.plan_router(nom, prune=False)
                 resultat["plans"].append(plan.to_dict())
                 if plan.is_empty:
+                    continue
+                if not self.router_write_enabled(nom):
+                    resultat["errors"].append(
+                        f"{nom}: {MOTIF_ROUTEUR_LECTURE_SEULE}, the tightening is recorded "
+                        "and the plan computed but nothing is written on the router"
+                    )
                     continue
                 if not self._enforcement_enabled:
                     resultat["errors"].append(
@@ -3174,7 +3275,16 @@ class ShapingService:
         (enregistrer une fiche, pousser un service). DEMANDE EXPLICITE : ca
         ecrit quoi qu'il arrive ; l'interrupteur ne retient que les boucles
         automatiques.
+
+        Un troisieme verrou passe avant les deux autres : l'interrupteur PAR
+        ROUTEUR (Appareils). Il ne connait aucune exception, pas meme le geste
+        explicite : un routeur en lecture seule ne recoit RIEN.
         """
+        if not dry_run and not self.router_write_enabled(plan.router_name):
+            raise RouterWriteDisabledError(
+                f"{plan.router_name}: {MOTIF_ROUTEUR_LECTURE_SEULE}. Nothing was sent: "
+                "allow writing on this router in Devices to apply the plan."
+            )
         if (
             not dry_run
             and not self._enforcement_enabled
@@ -3318,6 +3428,19 @@ class ShapingService:
             del self._ecrits[ecrit]
         return len(cles)
 
+    # ------------------------------------------------- ecriture par routeur
+    def router_write_enabled(self, router_name: str) -> bool:
+        """L'interrupteur de CE routeur (Appareils). Un routeur hors inventaire
+        n'est pas juge ici : ``_collector`` le dira, avec son propre message."""
+        for collector in self.registry.collectors:
+            if collector.name == router_name:
+                return ecriture_autorisee(collector)
+        return True
+
+    def read_only_routers(self) -> list[str]:
+        """Les routeurs sur lesquels l'exploitant a coupe l'ecriture."""
+        return [c.name for c in self.registry.collectors if not ecriture_autorisee(c)]
+
     # ------------------------------------------------------------ interne
     def _collector(self, router_name: str) -> MikrotikCollector:
         for collector in self.registry.collectors:
@@ -3360,14 +3483,20 @@ class ShapingService:
                 asyncio.to_thread(lire), timeout=max(config.timeout_s * 3, 8.0)
             )
         except Exception as exc:  # noqa: BLE001
-            return WriteCapability(
+            verdict = WriteCapability(
                 username=utilisateur,
                 detail=(
                     f"rights could not be checked ({type(exc).__name__}): the command "
                     "will be tried and RouterOS will decide"
                 ),
             )
-        return inspect_write_capability(utilisateur, comptes, groupes)
+        else:
+            verdict = inspect_write_capability(utilisateur, comptes, groupes)
+        if not ecriture_autorisee(collector):
+            # Les droits du compte restent lus : ils diront, le jour ou l'on
+            # autorise ce routeur, si l'ecriture passera.
+            return disabled_in_freeqos(verdict, MOTIF_ROUTEUR_LECTURE_SEULE)
+        return verdict
 
     def close(self) -> None:
         for client in self._write_clients.values():
@@ -3720,6 +3849,9 @@ def sectors(snapshot: TopologySnapshot) -> list[str]:
 __all__ = [
     "FLAG_ENFORCEMENT",
     "EnforcementDisabledError",
+    "MOTIF_ROUTEUR_LECTURE_SEULE",
+    "RouterWriteDisabledError",
+    "ecriture_autorisee",
     "EnforcementLockedError",
     "RouterShapingState",
     "ShapingService",

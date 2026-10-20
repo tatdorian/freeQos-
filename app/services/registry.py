@@ -93,6 +93,9 @@ class RouterRegistry:
         self._fingerprints: dict[str, tuple[Any, ...]] = {}
         self._sources: dict[str, str] = {}
         self._ids: dict[str, int | None] = {}
+        # Routeurs fichier passes en lecture seule depuis l'interface, au
+        # dernier chargement reussi (cf. ``_read_only_names``).
+        self._lecture_seule: set[str] = set()
         # Routeurs ecartes, chacun {name, reason} : garder le nom permet de
         # proposer "Retirer" dans l'interface plutot qu'un simple message.
         self.skipped: list[dict[str, str]] = []
@@ -149,6 +152,7 @@ class RouterRegistry:
                 "pop": collector.config.effective_pop_name,
                 "username": collector.config.username,
                 "editable": self._sources.get(name) == SOURCE_DB,
+                "write_enabled": bool(getattr(collector.config, "write_enabled", True)),
             }
             for name, collector in self._collectors.items()
         ]
@@ -168,6 +172,22 @@ class RouterRegistry:
             logger.warning("Liste des routeurs masques illisible")
             return set()
 
+    async def _read_only_names(self) -> set[str]:
+        """Routeurs FICHIER sur lesquels l'interface a coupe l'ecriture.
+
+        Une base illisible ne doit rien casser -- mais elle ne doit pas non plus
+        rouvrir l'ecriture en silence : on garde alors les marqueurs du dernier
+        chargement reussi.
+        """
+        lecteur = getattr(self._repository, "read_only_file_routers", None)
+        if not callable(lecteur):
+            return set()
+        try:
+            self._lecture_seule = set(await lecteur())
+        except Exception:  # noqa: BLE001
+            logger.warning("Liste des routeurs fichier en lecture seule illisible")
+        return set(self._lecture_seule)
+
     async def _charger_base(self) -> tuple[list[RouterConfig], list[dict[str, str]]]:
         """Configs et ecartes du depot, quelle que soit sa generation.
 
@@ -185,6 +205,7 @@ class RouterRegistry:
         entries: dict[str, RouterEntry] = {}
         skipped: list[dict[str, str]] = []
         hidden = await self._hidden_names()
+        lecture_seule = await self._read_only_names()
 
         if self._repository is not None:
             try:
@@ -237,6 +258,12 @@ class RouterRegistry:
                     }
                 )
                 continue
+            # LECTURE SEULE POSEE DEPUIS L'INTERFACE. Le fichier dit si l'on PEUT
+            # ecrire ; l'interface peut toujours rendre un routeur plus sur, jamais
+            # l'inverse. Une copie : la configuration chargee au demarrage ne doit
+            # pas garder la trace d'un marqueur retire depuis.
+            if config.name in lecture_seule and config.write_enabled:
+                config = config.model_copy(update={"write_enabled": False})
             # Le fichier prime sur la base en cas d'homonymie.
             entries[config.name] = RouterEntry(config, SOURCE_FILE)
 
