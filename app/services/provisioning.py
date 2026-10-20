@@ -9,9 +9,9 @@ NetFlow sous 10 min, arbre sous 15 min. Ici on les deroule TOUT DE SUITE, dans
 l'ordre ou chacun a besoin du precedent, puis on relit le routeur pour dire ce
 qui y est reellement pose -- pas ce qu'on a cru envoyer.
 
-Rien n'est contourne : l'ecriture reste soumise a ENFORCEMENT_ENABLED et aux
-droits reels du compte. S'il manque l'un ou l'autre, le rapport le dit en
-clair, avec le geste qui debloque.
+Rien n'est contourne : l'ecriture reste soumise a l'interrupteur du routeur
+(Appareils), a ENFORCEMENT_ENABLED et aux droits reels du compte. S'il manque
+l'un d'eux, le rapport le dit en clair, avec le geste qui debloque.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from app.services.collection import (
 from app.services.dns_names import JOB_DNS_NAMES
 from app.services.netflow_export import JOB_NETFLOW_EXPORT
 from app.services.restrictions import JOB_RESTRICTIONS
+from app.services.shaping import MOTIF_ROUTEUR_LECTURE_SEULE
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,26 @@ async def _derouler(container: Any, etat: Provisioning) -> None:
                 or (f"account '{droits.username}', group '{droits.group}'" if droits.group else ""),
             }
         )
-    if not ecriture_ok:
+    # L'interrupteur DE CE ROUTEUR (Appareils) passe avant le reste : c'est le
+    # geste le plus proche, et il ne connait aucune exception. Lu sur la fiche
+    # du collecteur, et pas seulement dans le verdict : une lecture des droits
+    # qui echoue ne doit pas le faire oublier.
+    collecteur = next(c for c in container.registry.collectors if c.name == etat.router)
+    routeur_ok = bool(getattr(getattr(collecteur, "config", None), "write_enabled", True))
+    routeur_ok = routeur_ok and getattr(droits, "write_enabled", True) is not False
+    if not routeur_ok:
+        etat.blocker = (
+            f"{MOTIF_ROUTEUR_LECTURE_SEULE}: nothing was created on this router. The plan "
+            "is still computed: read it in Settings > Shaping and writing, then allow "
+            "writing on this router in Devices to set it up."
+            + (
+                ""
+                if ecriture_ok
+                else " Writing to the routers is also off globally (Settings > Shaping and "
+                "writing)."
+            )
+        )
+    elif not ecriture_ok:
         etat.blocker = (
             "Writing to the routers is off: nothing was created. Turn it on in "
             "Settings > Shaping and writing (or ENFORCEMENT_ENABLED=true), and every "

@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 PUBLIC_COLUMNS = """
     id, name, host, port, username, role, pop_name, enabled, use_ssl,
     tls_verify, tls_fingerprint, host(loopback) AS loopback, timeout_s,
-    pppoe_interface_pattern, last_ok_at, last_error, identity, board_name,
-    routeros_version, created_at, updated_at
+    pppoe_interface_pattern, write_enabled, last_ok_at, last_error, identity,
+    board_name, routeros_version, created_at, updated_at
 """
 
 
@@ -164,6 +164,7 @@ class RoutersRepository:
                         loopback=(str(row["loopback"]) if row["loopback"] is not None else None),
                         timeout_s=row["timeout_s"],
                         pppoe_interface_pattern=row["pppoe_interface_pattern"],
+                        write_enabled=bool(row["write_enabled"]),
                     )
                 )
             except (ValueError, TypeError, KeyError) as exc:
@@ -187,8 +188,9 @@ class RoutersRepository:
                     INSERT INTO routers (name, host, port, username, password_enc, role,
                                          pop_name, enabled, use_ssl, tls_verify,
                                          tls_fingerprint, loopback, timeout_s,
-                                         pppoe_interface_pattern)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::inet, $13, $14)
+                                         pppoe_interface_pattern, write_enabled)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::inet, $13, $14,
+                            $15)
                     RETURNING {PUBLIC_COLUMNS}
                     """,  # noqa: S608
                     payload["name"],
@@ -205,6 +207,9 @@ class RoutersRepository:
                     payload.get("loopback"),
                     payload.get("timeout_s", 5.0),
                     payload.get("pppoe_interface_pattern", "<pppoe-{login}>"),
+                    # Vrai par defaut, comme la colonne : un appel d'API qui ne
+                    # dit rien garde le comportement d'avant.
+                    bool(payload.get("write_enabled", True)),
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise _conflit(exc, payload) from exc
@@ -233,6 +238,7 @@ class RoutersRepository:
                 "loopback",
                 "timeout_s",
                 "pppoe_interface_pattern",
+                "write_enabled",
             }
             and value is not None
         }
@@ -292,6 +298,17 @@ class RoutersRepository:
                 error[:1000],
             )
 
+    async def write_enabled_of(self, router_id: int) -> bool:
+        """L'ecriture est-elle autorisee sur ce routeur ? Lu AVANT une modification,
+        pour ne journaliser que les vrais changements."""
+        async with self._pool.acquire() as conn:
+            valeur = await conn.fetchval(
+                "SELECT write_enabled FROM routers WHERE id = $1", router_id
+            )
+        if valeur is None:
+            raise RouterNotFoundError(f"routeur {router_id} inconnu")
+        return bool(valeur)
+
     async def find_id_by_name(self, name: str) -> int | None:
         async with self._pool.acquire() as conn:
             value = await conn.fetchval("SELECT id FROM routers WHERE name = $1", name)
@@ -344,3 +361,40 @@ class RoutersRepository:
         async with self._pool.acquire() as conn:
             result = await conn.execute("DELETE FROM hidden_file_routers WHERE name = $1", name)
         return not result.endswith(" 0")
+
+    # ------------------------------------ routeurs fichier en lecture seule
+    async def read_only_file_routers(self) -> set[str]:
+        """Noms de routeurs fichier sur lesquels l'interface a coupe l'ecriture."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch("SELECT name FROM read_only_file_routers")
+        return {row["name"] for row in rows}
+
+    async def set_file_router_read_only(
+        self,
+        name: str,
+        read_only: bool,
+        *,
+        updated_by: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Coupe (ou rend) l'ecriture sur un routeur du fichier.
+
+        Rendre l'ecriture efface le marqueur : le routeur retrouve ce que le
+        fichier declare, rien de plus.
+        """
+        async with self._pool.acquire() as conn:
+            if read_only:
+                await conn.execute(
+                    """
+                    INSERT INTO read_only_file_routers (name, updated_by, reason)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (name) DO UPDATE SET
+                        updated_by = EXCLUDED.updated_by, reason = EXCLUDED.reason,
+                        updated_at = now()
+                    """,
+                    name,
+                    updated_by,
+                    reason,
+                )
+            else:
+                await conn.execute("DELETE FROM read_only_file_routers WHERE name = $1", name)

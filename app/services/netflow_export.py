@@ -53,7 +53,7 @@ from app.enforcement.models import (
     needs_claim,
 )
 from app.services.registry import RouterRegistry
-from app.services.shaping import ShapingService
+from app.services.shaping import MOTIF_ROUTEUR_LECTURE_SEULE, ShapingService, ecriture_autorisee
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +218,9 @@ class RouterExportState:
     nat_fields_missing: list[str] = field(default_factory=list)
     state: str = ETAT_A_POSER
     reason: str = ""
+    #: Interrupteur du routeur dans freeQoS (Appareils). Faux : ce qui manque
+    #: est montre, jamais pose.
+    write_enabled: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -233,6 +236,7 @@ class RouterExportState:
             "configured": self.ours is not None and self.enabled,
             "state": self.state,
             "reason": self.reason,
+            "write_enabled": self.write_enabled,
         }
 
 
@@ -370,7 +374,11 @@ class NetflowExportService:
         )
 
     async def state_of(self, collector: MikrotikCollector) -> RouterExportState:
-        etat = RouterExportState(router=collector.name, host=collector.config.host)
+        etat = RouterExportState(
+            router=collector.name,
+            host=collector.config.host,
+            write_enabled=ecriture_autorisee(collector),
+        )
         etat.collector = await self.resolve_collector(collector)
         # Les flux partent du loopback : on s'assure de le connaitre AVANT de
         # calculer la cible (lu sur le routeur s'il n'est ni declare ni decouvert).
@@ -450,6 +458,8 @@ class NetflowExportService:
                 # trente minutes : tout se passe comme si le streaming en cours
                 # n'existait pas.
                 etat.reason = f"active flows only exported after {etat.active_timeout or '?'}"
+            if not etat.write_enabled:
+                etat.reason += f" ({MOTIF_ROUTEUR_LECTURE_SEULE}: freeQoS will not set it)"
         return etat
 
     async def states(self) -> list[RouterExportState]:
@@ -655,8 +665,17 @@ class NetflowExportService:
 
         plan = self.plan_for(collector, etat)
         ligne["actions"] = [action.command for action in plan.actions]
+        ligne["write_enabled"] = ecriture_autorisee(collector)
         if plan.is_empty:
             ligne["state"] = ETAT_POSE
+            return ligne
+        if not ligne["write_enabled"]:
+            # Routeur en lecture seule (Appareils) : la cible est calculee et
+            # montree, rien n'est envoye -- simulation ou pas.
+            ligne["state"] = ETAT_A_POSER
+            ligne["reason"] = (
+                f"{MOTIF_ROUTEUR_LECTURE_SEULE}: commands are computed, nothing is sent"
+            )
             return ligne
         if dry_run or not self.shaping.enforcement_enabled:
             ligne["state"] = ETAT_A_POSER

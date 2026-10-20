@@ -184,8 +184,18 @@ curl -u '&lt;key&gt;:' <span class="base-url">&lt;your-freeqos-url&gt;</span>/mo
             automatically when omitted.</td></tr>
           <tr><td><code>enabled</code></td><td>no</td><td><code>false</code> keeps the router
             in the inventory without polling it.</td></tr>
+          <tr><td><code>write_enabled</code></td><td>no</td><td>Allow freeQoS to write on this
+            router: queues, CAKE types, NetFlow export, restrictions (default <code>true</code>,
+            as before). <code>false</code> keeps it <b>read-only</b>: it is read and measured,
+            its plan is computed and shown, nothing is sent to it. The interface sends
+            <code>false</code> unless the operator ticks the box.</td></tr>
+          <tr><td><code>reason</code></td><td>no</td><td>Why writing is allowed or not, recorded
+            with its author in the command log.</td></tr>
         </tbody>
       </table>
+      <p>Writing reaches a router only when the global switch is on
+        (<code>GET /api/v1/shaping/enforcement</code>), its <code>write_enabled</code> is
+        <code>true</code>, and its RouterOS account has the <code>write</code> policy.</p>
       <h3>Related calls</h3>
       <table class="eps">
         <tbody>
@@ -199,7 +209,13 @@ curl -u '&lt;key&gt;:' <span class="base-url">&lt;your-freeqos-url&gt;</span>/mo
           <tr><td><span class="m get">GET</span></td><td><code>/api/v1/pops/routers</code></td>
             <td>The router inventory, with each router's <code>id</code>.</td></tr>
           <tr><td><span class="m patch">PATCH</span></td><td><code>/api/v1/pops/routers/{router_id}</code></td>
-            <td>Edit a router: send only the fields to change.</td></tr>
+            <td>Edit a router: send only the fields to change. To allow writing on a read-only
+              router: <code>{"write_enabled": true, "confirm": true, "reason": "pilot"}</code>;
+              <code>{"write_enabled": false}</code> makes it read-only at once.</td></tr>
+          <tr><td><span class="m put">PUT</span></td><td><code>/api/v1/pops/routers/file/{name}/write</code></td>
+            <td>The same switch for a router of the routers file:
+              <code>{"enabled": false}</code>, or <code>{"enabled": true, "confirm": true}</code>
+              when the file allows it.</td></tr>
           <tr><td><span class="m delete">DELETE</span></td><td><code>/api/v1/pops/routers/{router_id}</code></td>
             <td>Remove a router from the inventory.</td></tr>
           <tr><td><span class="m get">GET</span></td><td><code>/api/v1/pops/health</code></td>
