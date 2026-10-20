@@ -39,6 +39,35 @@ AMORCAGE = [
 ]
 
 
+async def _apres_changement(container: ContainerDep, name: str, avant: Any, apres: Any) -> None:
+    """Le geste qui accompagne une bascule, fait AU MOMENT du changement.
+
+    Boucle QoE (``qoe_loop_enabled``) : ses resserrages encore en base sont
+    rendus des que le reglage change, dans un sens comme dans l'autre. Attendre
+    le prochain tour de la boucle ne suffit pas : il ne vient jamais si sa
+    cadence est a 0, et une remise en marche avant son passage reappliquerait
+    d'un coup des decisions anciennes. Rendre aussi a la remise en marche
+    couvre le cas ou la boucle etait deja coupee au demarrage.
+    """
+    if name != "qoe_loop_enabled" or avant == apres:
+        return
+    liberer = getattr(container.topology_repo, "release_qoe_trims", None)
+    if not callable(liberer):
+        return
+    motif = (
+        "closed QoE loop turned back on in Settings: starting from scratch"
+        if apres
+        else "closed QoE loop turned off in Settings"
+    )
+    try:
+        liberes = await liberer(motif)
+    except Exception:  # noqa: BLE001 - le reglage est deja applique et persiste
+        logger.exception("Resserrages QoE non rendus apres la bascule de '%s'", name)
+        return
+    if liberes:
+        logger.info("Resserrages QoE rendus (%s) : %s", motif, ", ".join(liberes))
+
+
 def _config(container: ContainerDep) -> RuntimeConfig:
     config = container.runtime_config
     if config is None:
@@ -101,6 +130,7 @@ async def set_setting(
     config = _config(container)
     repo = _repo(container)
     try:
+        avant = config.value(name)
         valeur = config.set(name, payload.value)
     except ReglageInconnuError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -111,6 +141,7 @@ async def set_setting(
 
     await repo.set(name, valeur, updated_by="ui", reason=payload.reason)
     logger.info("Reglage '%s' fixe a %r depuis l'interface", name, valeur)
+    await _apres_changement(container, name, avant, valeur)
     return {"name": name, "value": valeur, "source": "db", "applied": True}
 
 
@@ -124,9 +155,11 @@ async def clear_setting(
     config = _config(container)
     repo = _repo(container)
     try:
+        avant = config.value(name)
         valeur = config.clear(name)
     except ReglageInconnuError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     await repo.delete(name)
     logger.info("Reglage '%s' remis a son defaut (%r)", name, valeur)
+    await _apres_changement(container, name, avant, valeur)
     return {"name": name, "value": valeur, "source": "defaut", "applied": True}

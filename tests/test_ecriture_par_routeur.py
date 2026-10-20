@@ -819,6 +819,42 @@ async def test_boucle_qoe_coupee_reste_inerte_et_rend_les_resserrages(
     assert [lien.trim_factor for lien in liens] == [1.0]
 
 
+def test_basculer_le_reglage_rend_les_resserrages_sans_attendre_la_boucle(
+    settings: Settings,
+) -> None:
+    """La boucle peut ne jamais repasser (cadence a 0), ou etre remise en marche
+    avant son tour : c'est la bascule elle-meme qui rend les resserrages."""
+    from tests.test_api import InMemorySettingsRepository
+
+    depot = DepotQoeLiberable()
+    depot.etats[LIEN] = {"link_key": LIEN, "trim_factor": 0.8, "healthy_cycles": 0}
+    container = build_container(
+        settings, settings_repo=InMemorySettingsRepository(), topology_repo=depot
+    )
+    app = FastAPI()
+    app.state.settings = settings
+    register_routes(app, settings)
+    app.dependency_overrides[get_container] = lambda: container
+    client = TestClient(app)
+
+    assert client.put("/api/v1/settings/qoe_loop_enabled", json={"value": False}).status_code == 200
+    assert depot.etats[LIEN]["trim_factor"] == 1.0
+    assert depot.etats[LIEN]["last_reason"] == "closed QoE loop turned off in Settings"
+
+    # Un resserrage reste en base pendant que la boucle est coupee (ecrit avant
+    # la bascule, ou par une version anterieure) : la remise en marche le rend
+    # aussi, au lieu de le reappliquer d'un coup.
+    depot.etats[LIEN] = {"link_key": LIEN, "trim_factor": 0.7, "healthy_cycles": 0}
+    assert client.delete("/api/v1/settings/qoe_loop_enabled").status_code == 200
+    assert settings.qoe_loop_enabled is True
+    assert depot.etats[LIEN]["trim_factor"] == 1.0
+
+    # Sans changement de valeur, rien n'est touche.
+    depot.etats[LIEN] = {"link_key": LIEN, "trim_factor": 0.6, "healthy_cycles": 0}
+    assert client.put("/api/v1/settings/qoe_loop_enabled", json={"value": True}).status_code == 200
+    assert depot.etats[LIEN]["trim_factor"] == 0.6
+
+
 def test_le_role_d_un_routeur_n_influe_pas_sur_l_interrupteur() -> None:
     """Coeur et passerelle se pilotent comme un PoP : rien n'est implicite."""
     for role in RouterRole:
