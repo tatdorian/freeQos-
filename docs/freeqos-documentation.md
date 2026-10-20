@@ -258,7 +258,7 @@ On the router, the firewall's `input` chain must accept TCP 8728 or 8729 from th
 /ip/service set api address=<freeQoS-IP>/32
 ```
 
-`address=` restricts the account and the API service to the freeQoS address. For the encrypted API, enable `api-ssl` (port 8729) with a certificate, and tick *SSL* when adding the router. To start read-only, remove `write` from the group: freeQoS will measure without writing anything.
+`address=` restricts the account and the API service to the freeQoS address. For the encrypted API, enable `api-ssl` (port 8729) with a certificate, and tick *SSL* when adding the router. To start read-only, there is nothing to change on the router: leave *Allow freeQoS to write on this router* unticked when you add it in *Devices* (the default). freeQoS then reads and measures without writing anything, and you allow writing later, router by router, from the same page (see *Rolling out router by router*, section 7).
 
 **4. Install freeQoS** on the server:
 
@@ -333,7 +333,7 @@ freeQoS recognises a pod (`KUBERNETES_SERVICE_HOST`, `/var/run/secrets/kubernete
 | Item | Value |
 | --- | --- |
 | API service | `api` (8728) or `api-ssl` (8729) reachable from freeQoS |
-| Account | A group with the policies `read,write,api,test` (`test` is used by the ping probe) |
+| Account | A group with the policies `read,write,api,test` (`test` is used by the ping probe). The `write` policy can stay in place even for a router you want read-only: that is decided in freeQoS (*Devices*, per router) |
 | NetFlow export | Set up by freeQoS itself; UDP port 2055 must be reachable from the routers |
 | Version | RouterOS 7 recommended (VRF, `ping vrf=`, CAKE) |
 
@@ -362,7 +362,7 @@ freeQoS uses a single channel: the **RouterOS API**. No SSH, no SNMP, no script 
 | `write` | Changing the configuration | Queues, queue types, NetFlow export, restrictions |
 | `test` | Running `/ping` and `/tool/traceroute` | The latency probe |
 
-Without `write`, freeQoS runs read-only: measurement, latency and NetFlow (if the export was set up by hand) work, shaping does not.
+Without `write`, freeQoS runs read-only: measurement, latency and NetFlow (if the export was set up by hand) work, shaping does not. The same result, without touching the router, is one switch in *Devices*: the per-router *writing allowed* switch (see *The write switch and the account's rights*, section 7).
 
 **Failures.** Each request has a timeout (`timeout_s`, 5 s by default). Routers are queried in parallel: a router that does not answer misses its read and reports it, the others are read normally.
 
@@ -384,6 +384,9 @@ Two sources add up:
 | `loopback` | inferred | Identity of the router in the tree (a /32 on a `lo*` interface, or the router-id) |
 | `timeout_s` | 5 | Between 0.5 and 60 s |
 | `pppoe_interface_pattern` | `<pppoe-{login}>` | Name of a subscriber's dynamic interface |
+| `write_enabled` | `true` in the API and the file, **unticked** in the interface | Allow freeQoS to write on this router (queues, CAKE types, NetFlow export, restrictions). `false` = read-only: everything is read and measured, the plan is computed and shown, nothing is sent |
+
+The form of *Devices › Connect a router* sends `write_enabled` explicitly, unticked by default: a router added from the interface stays read-only until you allow it. The API keeps `true` as its default so that an existing integration behaves as before. `PATCH /api/v1/pops/routers/{id}` changes it (`write_enabled`, with `confirm: true` and an optional `reason` to allow writing); a router of the file is switched with `PUT /api/v1/pops/routers/file/{name}/write` (`enabled`, `confirm`, `reason`). The file can be overridden towards **read-only** only: a router whose file entry says `write_enabled: false` cannot be allowed from the interface.
 
 `POST /api/v1/pops/routers/test` tries a connection without saving anything; on failure, the response gives a hint (port closed, wrong credentials, missing `api` policy, certificate).
 
@@ -402,7 +405,7 @@ As soon as a router is added, freeQoS immediately runs, in order, the cycles tha
 9. Read the DNS cache.
 10. Measure latency.
 
-The report (`GET /api/v1/pops/provisioning/{router}`) then reads the router back and says what is **actually** in place. If writing is disabled or the account lacks `write`, the state becomes `blocked`, with the action that unblocks it.
+The report (`GET /api/v1/pops/provisioning/{router}`) then reads the router back and says what is **actually** in place. If writing is disabled — for this router in *Devices*, or globally in *Settings* — or the account lacks `write`, the state becomes `blocked`, with the action that unblocks it; steps 6 to 8 are skipped and nothing is sent. A read-only router still goes through steps 2 to 5, 9 and 10: it appears in the tree, its subscribers are measured, and its plan can be read in *Settings*. Allowing writing on it later runs the commissioning again.
 
 ### Who is a subscriber on this PoP?
 
@@ -1044,6 +1047,7 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 | Safeguard | Effect |
 | --- | --- |
 | **Simulation by default** | `ENFORCEMENT_ENABLED=false` at startup. Plans are computed and displayed, nothing is written. Writing is enabled in the interface, after reading the plan. If the variable is `false` in the environment, enabling is locked. |
+| **Read-only router** | A router whose *writing allowed* switch is off in *Devices* receives **nothing**, whatever the global switch says and even for a gesture made by hand (rate entered, *Reset queues*). Its plan is still computed and shown. A router added from the interface starts read-only. |
 | **Ownership** | Only objects marked by **this** instance are modified or deleted. A queue from another instance or created by hand is never touched, nor set to 0/0. |
 | **Transit links** | No parent queue on a routing link, towards a managed router, towards the gateway or the core, or on the uplink. The reason is shown (`skip_reason`). |
 | **Duplicate targets** | Two queues that would target the same address: neither is written and a planning error is reported. |
@@ -1130,9 +1134,26 @@ A background job checks these four causes **on the routers**, queue by queue, ev
 
 ### The write switch and the account's rights
 
-The switch in *Settings › Shaping and writing to the routers* turns writing on or off **without a restart**; the database keeps its state. Turning it on asks for a confirmation and a reason, recorded in the log; turning it off is immediate. `ENFORCEMENT_LOCKED=true`, or `ENFORCEMENT_ENABLED=false` in the environment, forbids turning it on from the interface.
+freeQoS writes to a router only when **all three** agree:
 
-Writing needs the `write` and `api` policies. freeQoS reads the **real rights** of the account on the router (`/user` and `/user/group`) and gives one of three verdicts: can write, cannot (with the missing policy), or undetermined. When `/user` cannot be read (an account authenticated by RADIUS, for example), freeQoS **does not block**: it tries the command and reports what RouterOS answers, translating `not enough permissions` into the fix to make. A separate write account can be declared per router (`rw_username`); `REQUIRE_SEPARATE_WRITE_ACCOUNT=true` makes it mandatory.
+1. the **global switch** (*Settings › Shaping and writing to the routers*) is on;
+2. the router's own **writing allowed** switch (*Devices*, list of polled routers) is on;
+3. the RouterOS **account** has the rights (below).
+
+The global switch turns writing on or off **without a restart**; the database keeps its state. Turning it on asks for a confirmation and a reason, recorded in the log; turning it off is immediate. `ENFORCEMENT_LOCKED=true`, or `ENFORCEMENT_ENABLED=false` in the environment, forbids turning it on from the interface.
+
+The **per-router switch** works the same way: turning it on first shows what freeQoS would write on that router, then asks for a confirmation and a reason; turning it off is immediate. Each change is recorded in the command log (`GET /api/v1/shaping/audit`, verb `switch`) with its author and its reason. While it is off, every write path skips the router — reconciliation, CAKE queue types, NetFlow export, restrictions, boosts, bandwidth schedules, the closed QoE loop, a rate written at once, *Reset queues* and commissioning — and nothing is sent, not even for a gesture made by hand. Reading, measurement, the latency probe and NetFlow collection go on as usual. The router's plan is still computed: the map and the plan of *Settings* show it marked **read-only**, so you can read what would happen before allowing it. A router of `ROUTERS_FILE` accepts `write_enabled` too (default `true`); the interface can make it read-only, and allow it again as long as the file does.
+
+Writing needs the `write` and `api` policies. freeQoS reads the **real rights** of the account on the router (`/user` and `/user/group`) and gives one of three verdicts: can write, cannot (with the missing policy, or *Writing is disabled for this router in freeQoS (Devices)* when the per-router switch is off — the account's own rights are then still reported, in `account_can_write`), or undetermined. When `/user` cannot be read (an account authenticated by RADIUS, for example), freeQoS **does not block**: it tries the command and reports what RouterOS answers, translating `not enough permissions` into the fix to make. A separate write account can be declared per router (`rw_username`); `REQUIRE_SEPARATE_WRITE_ACCOUNT=true` makes it mandatory.
+
+### Rolling out router by router
+
+The safe way to put freeQoS next to an existing shaper (Preseem, scripts, RADIUS rate limits) is, entirely from the interface:
+
+1. Declare the core and every NAS in *Devices*, leaving *Allow freeQoS to write on this router* unticked. Leave the global switch off.
+2. Observe for as long as needed: tree, subscribers, latency, traffic, and in *Settings › Shaping and writing to the routers* the plan each router would receive, marked read-only.
+3. Allow writing on **one** pilot NAS (its switch in *Devices*: the plan is shown, a reason is asked), then turn the global switch on. Only that NAS receives commands.
+4. Then NAS by NAS. Turning a router's switch off puts it back to read-only at once; the global switch stops everything.
 
 ### Closed QoE loop
 
@@ -1145,6 +1166,8 @@ Every 5 minutes, freeQoS looks at the QoE of each sector over the last 15 minute
 - **What does not count:** a subscriber that has never answered the ping.
 
 A single degraded subscriber points at its last mile (CPE, home Wi-Fi), not at the sector. This is why at least two are needed.
+
+**On and off.** The setting `qoe_loop_enabled` (*Settings › Write safeguards*, live, on by default) turns the loop on or off. Off, the loop reads no score and decides nothing, and every tightening it had applied is released: the planner ignores the tightenings at once, the next reconciliation brings the links back to their normal envelope, and the stored tightenings are reset (`last_action` = `release`), so that turning the loop back on starts from scratch rather than re-applying old decisions. Like every write, the loop is also subject to the global switch and to each router's switch: on a read-only router, the tightening is decided and the plan computed, nothing is sent.
 
 ## 8. Capacity and business insights
 
@@ -1209,7 +1232,7 @@ Each page reads in sections, with a table of contents at the top and a tooltip o
 
 ### Read the Settings page before enabling writes
 
-The *Shaping and writing to the routers* section shows, before enabling, what freeQoS would do on each router: queues created, modified, deleted, and links skipped with their reason.
+The *Shaping and writing to the routers* section shows, before enabling, what freeQoS would do on each router: queues created, modified, deleted, and links skipped with their reason. A router whose writing is disabled in *Devices* is listed too, marked **read-only**: its plan is what it would receive once allowed, and it is left out of the commands counted when the global switch is turned on.
 
 Two banners can appear at the top of the interface:
 
@@ -1397,6 +1420,7 @@ sudo docker compose exec timescaledb psql -U qos -d qos -c "TRUNCATE app_users C
 
 - Simulation by default; explicit enabling, after reading the plan.
 - `ENFORCEMENT_ENABLED=false` in the environment locks writing: the interface cannot turn it back on.
+- Writing is allowed **router by router** in *Devices*; a router added from the interface starts read-only, and a read-only router receives nothing at all.
 - Only objects of **this** instance are touched; the others are read, never modified.
 - The circuit breaker refuses an abnormally large plan.
 - The command log (`/api/v1/shaping/audit`) gives the author, target and result of each write.
@@ -1495,6 +1519,8 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 | A router's password changed | `PATCH /api/v1/pops/routers/{id}` then `POST /api/v1/pops/provisioning/{name}` |
 | Vanished boxes in the tree | `POST /api/v1/topology/forget-stale` |
 | Stop writing urgently | Switch in *Settings*, or `ENFORCEMENT_ENABLED=false` then restart |
+| Stop writing on one router only | Its *writing allowed* switch in *Devices* (immediate) |
+| Stop the closed QoE loop | `qoe_loop_enabled` = No in *Settings* (tightenings released at the next reconciliation) |
 | Stop the latency probe | `PUT /api/v1/rtt` |
 
 ### Several instances
@@ -1544,9 +1570,10 @@ In order:
 
 1. Is writing enabled? `GET /api/v1/shaping/enforcement`.
 2. Is it locked by the environment? `ENFORCEMENT_ENABLED=false` in `.env`.
-3. Does the account have `write`? `GET /api/v1/shaping/capability`.
-4. Did the plan trip the circuit breaker? The log says so.
-5. Does the subscriber have a plan? A subscriber that is only detected is observed, not limited.
+3. Is writing allowed on **this** router? Its switch in *Devices* (`write_enabled` in `GET /api/v1/pops/routers`); a router added from the interface starts read-only.
+4. Does the account have `write`? `GET /api/v1/shaping/capability`.
+5. Did the plan trip the circuit breaker? The log says so.
+6. Does the subscriber have a plan? A subscriber that is only detected is observed, not limited.
 
 ### No NetFlow traffic
 
@@ -1648,6 +1675,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 
 | Variable | Default | Role |
 | --- | --- | --- |
+| `QOE_LOOP_ENABLED` ✱ | `true` | Closed QoE loop on or off; off releases its tightenings |
 | `QOE_LOOP_INTERVAL_S` | 300 | Cycle |
 | `QOE_WINDOW_MINUTES` | 15 | Analysis window |
 | `QOE_SCORE_THRESHOLD` | 55 | Score below which a subscriber is degraded |
@@ -1682,7 +1710,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 | `subscribers` | Every subscriber, PPPoE or static (`kind`), unique `login`, plan, PoP, last address, last seen |
 | `static_clients` | Declared static-IP clients and services pushed through `/model/v1` (`source`); `extra_prefixes` holds their additional ranges |
 | `client_plans` | The plan written for each client, and its source (`api`, `ui`) |
-| `routers`, `hidden_file_routers` | Routers added from the interface (encrypted password, unique loopback, last connection diagnostic); routers of the file hidden by hand |
+| `routers`, `hidden_file_routers`, `read_only_file_routers` | Routers added from the interface (encrypted password, unique loopback, writing allowed or not, last connection diagnostic); routers of the file hidden by hand, or made read-only from the interface |
 | `backhauls`, `airos_antennas` | Radio links and the antennas polled for their capacity |
 | `link_media` | Links declared wired (with a capacity) or radio (with their antenna) |
 | `topology_nodes`, `topology_links`, `topology_aliases`, `topology_layout` | Discovered graph, manual merges, box positions and hand-made choices |
@@ -1736,13 +1764,13 @@ A row is created in `ip_intel` with no resolution date **as soon as a subscriber
 
 **Does freeQoS cut subscribers if it stops?** No. The queues stay on the routers and traffic flows; only measurement, timed boosts and adjustments pause. A boost that should have expired keeps running until freeQoS comes back.
 
-**Can I try it without touching my routers?** Yes: it starts in simulation. Give the account only `read,api,test` to make writing impossible, or keep the switch off and read the plan.
+**Can I try it without touching my routers?** Yes: it starts in simulation, and a router added from the interface starts read-only. Keep its *writing allowed* switch off in *Devices* (or the global switch off) and read the plan; giving the account only `read,api,test` also makes writing impossible, from the router side.
 
 **Will it touch the queues I created myself?** Never. Only objects carrying `freeqos:managed instance=<this instance>` are modified or deleted; your queues are shown on the map as manual queues.
 
 **Why does a subscriber show no latency?** Most often its CPE does not answer ping (`client_blocks_icmp`). *Find the cause* says which of the eight causes applies (section 5).
 
-**Why is a subscriber not capped?** Is writing on? Does it have a plan? Is it online? Then look at *Are the caps actually held?*: FastTrack is the first cause of a cap that does not cap (section 7).
+**Why is a subscriber not capped?** Is writing on, globally and on its router (*Devices*)? Does it have a plan? Is it online? Then look at *Are the caps actually held?*: FastTrack is the first cause of a cap that does not cap (section 7).
 
 **Why is the Traffic page empty?** The page names the cause: no router, export not set up yet, writing off, or a network path problem — most often UDP 2055 not published or filtered (section 6).
 

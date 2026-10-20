@@ -5019,8 +5019,14 @@ async function loadRouters() {
   // La sante interroge les routeurs un par un : lancee sans attendre, pour ne
   // pas retarder la page ou l'on vient d'ajouter un equipement.
   loadRoutersHealth();
-  const data = await api('/pops/routers');
+  // L'interrupteur global dit si "ecriture autorisee" sur un routeur ecrit
+  // vraiment quelque chose aujourd'hui : on le lit en meme temps.
+  const [data, ecriture] = await Promise.all([
+    api('/pops/routers'),
+    api('/shaping/enforcement').catch(() => null),
+  ]);
   state.routers = data.routers;
+  state.enforcement = ecriture;
 
   const notice = document.getElementById('pops-notice');
   let html = '';
@@ -5061,7 +5067,7 @@ async function loadRouters() {
   }
   host.innerHTML =
     '<table><thead><tr><th>PoP</th><th>Address</th><th>Account</th><th>Source</th>' +
-    '<th>State</th><th>Model</th><th></th></tr></thead><tbody>' +
+    '<th>State</th><th>Writing</th><th>Model</th><th></th></tr></thead><tbody>' +
     state.routers.map((r) => {
       let badge = '<span class="badge">never tested</span>';
       if (r.last_error) {
@@ -5094,6 +5100,7 @@ async function loadRouters() {
           ? '<span class="badge file">file inventory</span>'
           : '<span class="badge">interface</span>') + '</td>' +
         '<td>' + badge + '</td>' +
+        routerWriteCell(r, ecriture) +
         // Un routeur du fichier n'a pas de fiche en base : son modele vient de
         // la lecture de sante, qui le connait deja ("-" alors qu'on sait).
         (r.board_name
@@ -5107,9 +5114,11 @@ async function loadRouters() {
             'Set up</button>' +
           '<button class="sm" data-config="' + esc(r.name) +
             '" title="See the full config (/export) the controller reads">Config</button>' +
-          '<button class="sm danger" data-clean-queues="' + esc(r.name) +
-            '" title="Delete every freeQoS queue of this router, then lay them down again">' +
-            'Reset queues</button>' +
+          '<button class="sm danger" data-clean-queues="' + esc(r.name) + '"' +
+            (r.write_enabled === false
+              ? ' disabled title="Read-only router: allow writing on it first"'
+              : ' title="Delete every freeQoS queue of this router, then lay them down again"') +
+            '>Reset queues</button>' +
           (r.editable
             ? '<button class="sm" data-probe="' + r.id + '">Test</button>' +
               '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button>' +
@@ -5142,6 +5151,106 @@ async function loadRouters() {
     b.addEventListener('click', () => toggleRouter(b.dataset.toggle)));
   host.querySelectorAll('[data-hide-file]').forEach((b) =>
     b.addEventListener('click', () => hideFileRouter(b.dataset.hideFile)));
+  host.querySelectorAll('[data-write-switch]').forEach((input) =>
+    input.addEventListener('change', () =>
+      toggleRouterWrite(input.dataset.writeSwitch, input.checked, input)));
+}
+
+/** L'INTERRUPTEUR D'ECRITURE D'UN ROUTEUR, et son etat lisible d'un coup d'oeil.
+ *
+ *  Le deploiement prudent se fait NAS par NAS : tout declarer, observer en
+ *  lecture, puis laisser freeQoS ecrire sur UN routeur pilote. La case dit ce
+ *  que freeQoS a le droit de faire sur CE routeur ; l'infobulle dit ce qu'il y
+ *  fait vraiment aujourd'hui (l'interrupteur global peut encore tout retenir). */
+function routerWriteCell(r, ecriture) {
+  const autorise = r.write_enabled !== false;
+  const verrou = r.write_locked === true;
+  const globalCoupe = ecriture && ecriture.enabled === false;
+  let titre;
+  if (verrou) {
+    titre = 'write_enabled: false in the routers file: the file has the last word.';
+  } else if (autorise) {
+    titre = 'freeQoS may write on this router: queues, CAKE types, NetFlow export, ' +
+      'restrictions.' + (globalCoupe
+      ? ' Writing to the routers is off globally (Settings > Shaping and writing): ' +
+        'nothing is written until it is on too.'
+      : '') + ' Untick to make it read-only at once.';
+  } else {
+    titre = 'Read-only: freeQoS reads and measures this router and only shows what it ' +
+      'would write (Settings > Shaping and writing). Tick to allow writing: you will be ' +
+      'shown the plan and asked to confirm.';
+  }
+  const etiquette = autorise
+    ? '<span class="badge warn">writing allowed</span>' +
+      (globalCoupe ? '<span class="hint">global switch off</span>' : '')
+    : '<span class="badge">read-only</span>';
+  return '<td class="nowrap"><label class="switch switch-sm" title="' + esc(titre) + '">' +
+    '<input type="checkbox" data-write-switch="' + esc(r.name) + '"' +
+      (autorise ? ' checked' : '') + (verrou ? ' disabled' : '') +
+      ' aria-label="Allow freeQoS to write on ' + esc(r.name) + '">' +
+    '<span class="rail"></span><span class="write-state">' + etiquette + '</span>' +
+    '</label></td>';
+}
+
+/** Autoriser l'ecriture montre d'abord le plan de CE routeur et demande un
+ *  motif, comme l'interrupteur global ; la couper est immediat -- revenir en
+ *  lecture seule ne doit jamais attendre une confirmation. */
+async function toggleRouterWrite(name, active, input) {
+  const router = (state.routers || []).find((r) => r.name === name);
+  if (!router) return;
+  let motif = null;
+  if (active) {
+    input.disabled = true;
+    let resume;
+    try {
+      const plan = await api('/shaping/plan', {
+        method: 'POST', body: JSON.stringify({ router: name }),
+      });
+      resume = planSummary(name, plan).lignes.join('\n');
+    } catch (err) {
+      resume = '(plan unavailable: ' + err.message + ')';
+    }
+    input.disabled = false;
+    const globalCoupe = state.enforcement && state.enforcement.enabled === false;
+    if (!confirm(
+        'Allow freeQoS to write on ' + name + '?\n\n' +
+        'This is what it would write there now:\n\n' + resume + '\n\n' +
+        'It will also set up the CAKE queue types, the NetFlow export and the traffic ' +
+        'restrictions. Only lines marked freeqos:managed by THIS instance are ever ' +
+        'changed or removed.' +
+        (globalCoupe ? '\n\nWriting to the routers is still off globally (Settings > ' +
+          'Shaping and writing): nothing is written until it is on too.' : ''))) {
+      input.checked = false;
+      return;
+    }
+    motif = prompt('Reason (recorded in the log, optional):') || null;
+  }
+  input.disabled = true;
+  const sortie = document.getElementById('router-export');
+  let reponse = null;
+  try {
+    reponse = router.source === 'file'
+      ? await api('/pops/routers/file/' + encodeURIComponent(name) + '/write', {
+        method: 'PUT', body: JSON.stringify({ enabled: active, confirm: true, reason: motif }),
+      })
+      : await api('/pops/routers/' + router.id, {
+        method: 'PATCH',
+        body: JSON.stringify({ write_enabled: active, confirm: true, reason: motif }),
+      });
+  } catch (err) {
+    alert(err.message);
+  }
+  await loadRouters();
+  // Ecriture tout juste autorisee : le serveur met le routeur en service, on
+  // suit l'avancement au meme endroit que pour un ajout.
+  const apres = document.getElementById('router-export');
+  if (reponse && reponse.provisioning && apres) {
+    followProvisioning(name, apres);
+  } else if (!active && apres && sortie) {
+    apres.innerHTML = '<div class="notice ok"><b>' + esc(name) + ' is read-only.</b> ' +
+      'Nothing is sent to it any more; its plan stays visible in Settings &gt; Shaping and ' +
+      'writing.</div>';
+  }
 }
 
 /** Supprime toutes les files freeQoS d'un routeur puis les repose : repartir
@@ -5258,6 +5367,9 @@ function formPayload() {
     timeout_s: Number(data.get('timeout_s') || 5),
     pppoe_interface_pattern: data.get('pppoe_interface_pattern') || '<pppoe-{login}>',
     enabled: true,
+    // ENVOYE EXPLICITEMENT : l'API garde "vrai" par defaut pour les
+    // integrations existantes, la case de l'interface est decochee par defaut.
+    write_enabled: document.getElementById('f-write').checked,
   };
 }
 
@@ -5300,8 +5412,11 @@ async function saveRouter(event) {
   button.disabled = true;
   try {
     const created = await api('/pops/routers', { method: 'POST', body: JSON.stringify(formPayload()) });
-    showFormResult('<div class="notice ok"><b>' + esc(created.name) +
-      ' saved.</b> Setting it up now (CAKE, queues, NetFlow export, tree)...</div>' +
+    showFormResult('<div class="notice ok"><b>' + esc(created.name) + ' saved.</b> ' +
+      (created.write_enabled
+        ? 'Setting it up now (CAKE, queues, NetFlow export, tree)...'
+        : 'Reading it now (sessions, ports, tree). It stays <b>read-only</b>: nothing is ' +
+          'written until you allow it in the list below.') + '</div>' +
       '<div id="provision-out"></div>');
     document.getElementById('router-form').reset();
     document.getElementById('f-username').value = 'qos-ro';
@@ -8803,6 +8918,9 @@ async function loadPoints() {
         : ' &middot; first pass still to come') +
       ((passe && (passe.errors || []).length)
         ? '<span class="hint">' + esc(passe.errors.join(' | ')) + '</span>' : '') +
+      ((data.read_only_routers || []).length
+        ? '<span class="hint">Read-only in Devices, nothing sent: ' +
+          esc(data.read_only_routers.join(', ')) + '</span>' : '') +
       (state.enforcementReason
         ? '<span class="hint">Writing allowed, reason: ' +
           esc(state.enforcementReason) + '</span>' : '') +
@@ -8816,11 +8934,20 @@ async function loadPoints() {
         esc(r.error) + '</div>';
     }
     const c = r.counts || {};
+    // LECTURE SEULE : la carte est calculee comme ailleurs, pour qu'on lise ce
+    // que freeQoS poserait avant d'autoriser ce routeur. Rien n'y part.
+    const lecture = r.write_enabled === false;
     const entete = '<h2 style="margin-top:1rem">' + esc(r.router) +
-      ' <span class="hint">' + esc(r.pop_name || '') + '</span></h2>' +
+      ' <span class="hint">' + esc(r.pop_name || '') + '</span>' +
+      (lecture ? ' <span class="badge" title="Writing is disabled for this router in ' +
+        'freeQoS (Devices): the plan is computed, nothing is sent">read-only</span>' : '') +
+      '</h2>' +
+      (lecture ? '<div class="notice"><strong>Read-only router.</strong> Writing is disabled ' +
+        'for this router in freeQoS (Devices): the points below are what freeQoS would set, ' +
+        'nothing is sent.</div>' : '') +
       '<div class="hint" style="margin-bottom:.4rem">' +
       esc(c['file-posee'] || 0) + ' point(s) throttled &middot; ' +
-      esc(c['file-a-poser'] || 0) + ' pending &middot; ' +
+      esc(c['file-a-poser'] || 0) + (lecture ? ' would be written' : ' pending') + ' &middot; ' +
       esc(c['ecarte'] || 0) + ' with no queue &middot; ' +
       esc(c['posee-a-la-main'] || 0) + ' manual queue(s)' +
       ((c['conflit'] || 0) ? ' &middot; ' + esc(c['conflit']) + ' conflict(s)' : '') +
@@ -8868,6 +8995,23 @@ async function refreshEnforcement() {
   state.enforcementReason = (etat.last_change && etat.last_change.reason) || null;
 }
 
+/** Le plan d'UN routeur, en quelques lignes de texte (boites de confirmation).
+ *
+ *  Un routeur en lecture seule (Appareils) a son plan comme les autres -- c'est
+ *  ce qu'on lit avant de l'autoriser -- mais il est marque tel quel et ne compte
+ *  pas dans ce qui va partir. */
+function planSummary(r, p) {
+  const actions = p.actions || [];
+  const c = p.counts || {};
+  const lecture = p.write_enabled === false;
+  const lignes = [r + (lecture ? ' (read-only in Devices: nothing will be written)' : '') + ': ' +
+    (c.add || 0) + ' add, ' + (c.set || 0) + ' set, ' + (c.remove || 0) + ' remove' +
+    ((p.conflicts || []).length ? ', ' + p.conflicts.length + ' conflict(s) left alone' : '')];
+  actions.slice(0, 4).forEach((a) => lignes.push('   ' + (a.command || a.summary || '')));
+  if (actions.length > 4) lignes.push('   … and ' + (actions.length - 4) + ' more');
+  return { lignes, total: lecture ? 0 : actions.length };
+}
+
 /** Le plan de CHAQUE routeur, en texte : ce que l'activation va ecrire. */
 async function resumePlans() {
   const routeurs = [...document.querySelectorAll('#shaping-router option')]
@@ -8877,13 +9021,9 @@ async function resumePlans() {
   for (const r of routeurs) {
     try {
       const p = await api('/shaping/plan', { method: 'POST', body: JSON.stringify({ router: r }) });
-      const actions = p.actions || [];
-      total += actions.length;
-      const c = p.counts || {};
-      lignes.push(r + ': ' + (c.add || 0) + ' add, ' + (c.set || 0) + ' set, ' + (c.remove || 0) +
-        ' remove' + ((p.conflicts || []).length ? ', ' + p.conflicts.length + ' conflict(s) left alone' : ''));
-      actions.slice(0, 4).forEach((a) => lignes.push('   ' + (a.command || a.summary || '')));
-      if (actions.length > 4) lignes.push('   … and ' + (actions.length - 4) + ' more');
+      const resume = planSummary(r, p);
+      total += resume.total;
+      lignes.push(...resume.lignes);
     } catch (err) {
       lignes.push(r + ': plan unavailable (' + err.message + ')');
     }
@@ -8939,8 +9079,14 @@ async function loadAudit() {
     rows.map((r) => '<tr>' +
       '<td class="num" style="color:var(--faint)">' + esc(clock(r.ts)) + '</td>' +
       '<td>' + esc(r.router_name) + '</td>' +
-      '<td class="login" style="font-size:.74rem">' + esc(r.command) + '</td>' +
-      '<td>' + (r.dry_run ? '<span class="badge">dry run</span>'
+      '<td class="login" style="font-size:.74rem">' + esc(r.command) +
+        // Un changement d'interrupteur n'est pas une commande RouterOS : on dit
+        // qui l'a fait, et pourquoi -- c'est tout son interet.
+        (r.verb === 'switch'
+          ? '<span class="hint">by ' + esc(r.author || '?') +
+            (r.detail ? ' &middot; ' + esc(r.detail) : '') + '</span>' : '') + '</td>' +
+      '<td>' + (r.verb === 'switch' ? '<span class="badge">setting</span>'
+        : r.dry_run ? '<span class="badge">dry run</span>'
         : '<span class="badge warn">applied</span>') + '</td>' +
       '<td>' + (r.ok ? '<span class="badge ok">ok</span>'
         : '<span class="badge crit" title="' + esc(r.detail || '') + '">failed</span>') + '</td>' +
@@ -8963,7 +9109,13 @@ async function inspectShaping() {
       }
       let bandeauDroits = '';
       if (droits) {
-        if (droits.can_write === true) {
+        if (droits.write_enabled === false) {
+          // Le geste a faire est dans freeQoS, pas sur le routeur : on ne propose
+          // surtout pas de commande /user/group ici.
+          bandeauDroits = '<div class="notice warn"><strong>Read-only router.</strong> ' +
+            esc(droits.detail) + '<span class="hint">Allow writing on ' + esc(e.router) +
+            ' in Devices when you are ready.</span></div>';
+        } else if (droits.can_write === true) {
           bandeauDroits = '<div class="notice ok">Account <code>' +
             esc(droits.username) + '</code> can write: ' + esc(droits.detail) + '</div>';
         } else if (droits.can_write === false) {
@@ -9084,7 +9236,18 @@ function renderPlan(plan, routeur, hote) {
   const c = plan.counts;
   const total = c.add + c.set + c.remove;
 
-  let html = '<h2>Plan for ' + esc(routeur) + '</h2>';
+  const lecture = plan.write_enabled === false;
+  let html = '<h2>Plan for ' + esc(routeur) +
+    (lecture ? ' <span class="badge">read-only</span>' : '') + '</h2>';
+
+  if (lecture) {
+    // Le plan est calcule pour etre LU : c'est ce que freeQoS poserait le jour
+    // ou l'on autorise ce routeur dans Appareils.
+    html += '<div class="notice warn"><strong>Read-only router.</strong> ' +
+      esc(plan.read_only_reason || 'Writing is disabled for this router in freeQoS (Devices)') +
+      '.<span class="hint">This is what freeQoS would write once you allow writing on ' +
+      esc(routeur) + ' in Devices.</span></div>';
+  }
 
   if (plan.conflicts.length) {
     html += '<div class="notice err"><strong>' + plan.conflicts.length +
@@ -9109,7 +9272,8 @@ function renderPlan(plan, routeur, hote) {
     '<strong>' + total + ' command(s)</strong>: ' +
     c.add + ' add(s), ' + c.set + ' change(s), ' + c.remove + ' removal(s). ' +
     plan.unchanged + ' item(s) already correct.' +
-    '<span class="hint">Nothing is sent until you apply.</span></div>';
+    '<span class="hint">' + (lecture ? 'Nothing is sent to a read-only router.'
+      : 'Nothing is sent until you apply.') + '</span></div>';
 
   html += '<div class="table-wrap"><table><thead><tr><th>Action</th><th>Reason</th>' +
     '<th>RouterOS command</th></tr></thead><tbody>' +
@@ -9125,7 +9289,9 @@ function renderPlan(plan, routeur, hote) {
 
   html += '<div class="actions" style="margin-top:1rem">' +
     '<button data-act="simulate">Dry run</button>' +
-    '<button data-act="apply" class="primary">Apply on ' + esc(routeur) + '</button>' +
+    '<button data-act="apply" class="primary"' +
+      (lecture ? ' disabled title="Read-only router: allow writing on it in Devices"' : '') +
+      '>Apply on ' + esc(routeur) + '</button>' +
     '</div><div data-act="result"></div>';
 
   host.innerHTML = html;

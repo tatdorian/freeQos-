@@ -140,6 +140,8 @@ CREATE TABLE IF NOT EXISTS routers (
     -- Identite du routeur dans la topologie : unique par construction dans un
     -- reseau d'operateur, et independante des interfaces. NULL = a deduire.
     loopback                 INET,
+    -- Ecriture autorisee sur ce routeur, dans freeQoS (cf. migration plus bas).
+    write_enabled            BOOLEAN NOT NULL DEFAULT TRUE,
     timeout_s                DOUBLE PRECISION NOT NULL DEFAULT 5.0,
     pppoe_interface_pattern  TEXT NOT NULL DEFAULT '<pppoe-{login}>',
     -- Diagnostic de la derniere tentative de connexion, affiche dans l'interface.
@@ -170,6 +172,19 @@ CREATE TABLE IF NOT EXISTS backhauls (
 -- cote base, de passer outre la regle "le fichier gagne", et il est reversible.
 CREATE TABLE IF NOT EXISTS hidden_file_routers (
     name        TEXT PRIMARY KEY,
+    reason      TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Routeurs de l'inventaire FICHIER passes en LECTURE SEULE depuis l'interface.
+-- Meme principe que la table precedente : le fichier reste la source de verite,
+-- mais un garde-fou de securite doit pouvoir se poser depuis l'interface, sans
+-- editer le YAML ni redemarrer. Le sens est unique : l'interface peut couper
+-- l'ecriture sur un routeur du fichier, jamais l'autoriser quand le fichier
+-- porte write_enabled: false. Presence d'une ligne = lecture seule.
+CREATE TABLE IF NOT EXISTS read_only_file_routers (
+    name        TEXT PRIMARY KEY,
+    updated_by  TEXT,
     reason      TEXT,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -544,6 +559,11 @@ ALTER TABLE routers ADD COLUMN IF NOT EXISTS routeros_version TEXT;
 ALTER TABLE routers ADD COLUMN IF NOT EXISTS tls_verify      TEXT NOT NULL DEFAULT 'strict';
 ALTER TABLE routers ADD COLUMN IF NOT EXISTS tls_fingerprint TEXT;
 ALTER TABLE routers ADD COLUMN IF NOT EXISTS loopback        INET;
+-- Ecriture autorisee sur ce routeur, DANS freeQoS (Appareils). Faux : rien n'est
+-- envoye a ce routeur, le plan reste calcule et affiche. VRAI par defaut : une
+-- installation existante continue d'ecrire exactement comme avant ; c'est
+-- l'interface qui coche la case decochee a l'ajout d'un nouveau routeur.
+ALTER TABLE routers ADD COLUMN IF NOT EXISTS write_enabled   BOOLEAN NOT NULL DEFAULT TRUE;
 -- Unicite : c'est la promesse du modele. Deux routeurs qui la partagent sont
 -- une erreur de configuration, et l'index la fait remonter a la saisie plutot
 -- qu'a la reconciliation, ou elle fusionnerait silencieusement deux routeurs.

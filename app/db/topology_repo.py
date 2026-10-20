@@ -674,6 +674,28 @@ class TopologyRepository:
             )
         return {row["link_key"]: float(row["trim_factor"]) for row in rows}
 
+    async def release_qoe_trims(self, reason: str) -> list[str]:
+        """Rend leur enveloppe normale a tous les liens resserres par la boucle.
+
+        Appele quand la boucle est coupee depuis l'interface. Le compteur de
+        cycles sains repart a zero : une remise en marche repart d'un etat
+        neutre. ``last_trigger_at`` est horodate -- c'est un vrai changement de
+        l'enveloppe, et le journal doit le montrer comme tel.
+        """
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                UPDATE qoe_link_states
+                   SET trim_factor = 1.0, healthy_cycles = 0,
+                       last_action = 'release', last_reason = $1,
+                       last_trigger_at = now(), updated_at = now()
+                 WHERE trim_factor < 1.0
+                RETURNING link_key
+                """,
+                reason,
+            )
+        return sorted(str(row["link_key"]) for row in rows)
+
     async def save_qoe_link_state(
         self,
         *,
@@ -914,6 +936,42 @@ class TopologyRepository:
                 lignes,
             )
         return len(lignes)
+
+    async def record_write_switch(
+        self,
+        router_name: str,
+        *,
+        write_enabled: bool,
+        before: bool | None,
+        author: str | None,
+        reason: str | None,
+    ) -> None:
+        """Journalise un changement de l'interrupteur d'ecriture d'UN routeur.
+
+        Ce n'est pas une commande envoyee au routeur, mais c'est la decision qui
+        les autorise toutes : elle a sa place dans le meme journal, avec son
+        auteur et son motif, comme l'interrupteur global garde les siens. Le
+        verbe ``switch`` la distingue des commandes RouterOS.
+        """
+        commande = (
+            "freeQoS: writing ALLOWED on this router"
+            if write_enabled
+            else "freeQoS: writing disabled on this router (read-only)"
+        )
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO enforcement_audit
+                       (router_name, verb, path, command, dry_run, ok, detail, author, changes)
+                VALUES ($1, 'switch', 'freeqos/write_enabled', $2, FALSE, TRUE, $3, $4,
+                        $5::jsonb)
+                """,
+                router_name,
+                commande,
+                (reason or "")[:2000],
+                author,
+                json.dumps({"write_enabled": [before, write_enabled]}),
+            )
 
     async def audit(self, *, limit: int = 100) -> list[dict[str, Any]]:
         async with self._pool.acquire() as conn:

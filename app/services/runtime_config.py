@@ -285,6 +285,15 @@ REGLAGES: tuple[Reglage, ...] = (
         "Require a SEPARATE write account (rw_username) rather than trusting the "
         "real rights of the configured account.",
     ),
+    Reglage(
+        "qoe_loop_enabled",
+        "enforcement",
+        "bool",
+        "Closed QoE loop: tighten the shared queue of a sector whose subscribers' QoE "
+        "drops, then relax it. No: the loop decides nothing, and any tightening it had "
+        "applied is released at the next reconciliation (links back to their normal "
+        "envelope). Still subject to the write switches.",
+    ),
     # --- Cadences (prises en compte au tour de boucle suivant) ---
     _cadence(
         "subscriber_interval_s", "collect_subscribers", "How often PPPoE sessions are collected."

@@ -101,7 +101,7 @@ async def database():
             "static_clients, vlan_sightings, "
             "api_keys, model_accounts, model_packages, model_sites, "
             "model_access_points, netflow_exporters, flow_metrics, "
-            "flow_app_metrics, flow_hosts, bandwidth_schedules "
+            "flow_app_metrics, flow_hosts, bandwidth_schedules, read_only_file_routers "
             "RESTART IDENTITY CASCADE"
         )
     yield db
@@ -703,6 +703,134 @@ async def test_routeur_dont_le_secret_est_illisible_est_ecarte(database: Databas
     assert [c.name for c in configs] == ["pop-bon"]
     assert (await repo.get_public(casse["id"]))["last_error"] is not None
     assert (await repo.get_public(bon["id"]))["last_error"] is None
+
+
+async def test_un_routeur_deja_declare_garde_l_ecriture_apres_la_migration(
+    database: Database,
+) -> None:
+    """Installation EXISTANTE : la colonne write_enabled arrive par migration,
+    et les routeurs deja declares continuent d'ecrire exactement comme avant.
+
+    On rejoue le cas reel : une table routers SANS la colonne, une ligne dedans,
+    puis le schema rejoue au demarrage."""
+    from app.db.routers_repo import RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    secrets = SecretBox(generate_key())
+    async with database.pool.acquire() as conn:
+        await conn.execute("ALTER TABLE routers DROP COLUMN IF EXISTS write_enabled")
+        await conn.execute(
+            "INSERT INTO routers (name, host, password_enc) VALUES ($1, $2, $3)",
+            "nas-ancien",
+            "10.10.0.30",
+            secrets.encrypt("secret"),
+        )
+
+    await database.migrate()
+
+    repo = RoutersRepository(database.pool, secrets)
+    [ancien] = await repo.list_public()
+    assert ancien["write_enabled"] is True
+    assert (await repo.load_configs())[0].write_enabled is True
+    assert await repo.write_enabled_of(int(ancien["id"])) is True
+
+
+async def test_l_interrupteur_d_ecriture_d_un_routeur_en_base(database: Database) -> None:
+    from app.db.routers_repo import RouterNotFoundError, RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    repo = RoutersRepository(database.pool, SecretBox(generate_key()))
+
+    # Sans le champ : vrai, comme avant (contrat de l'API).
+    par_defaut = await repo.create({"name": "nas-api", "host": "10.10.0.31"}, "s")
+    assert par_defaut["write_enabled"] is True
+
+    pilote = await repo.create(
+        {"name": "nas-pilote", "host": "10.10.0.32", "write_enabled": False}, "s"
+    )
+    assert pilote["write_enabled"] is False
+    configs = {c.name: c.write_enabled for c in await repo.load_configs()}
+    assert configs == {"nas-api": True, "nas-pilote": False}
+
+    # Faux n'est pas "absent" : la mise a jour partielle doit le poser.
+    assert (await repo.update(par_defaut["id"], {"write_enabled": False}))["write_enabled"] is False
+    assert (await repo.update(pilote["id"], {"write_enabled": True}))["write_enabled"] is True
+    assert await repo.write_enabled_of(int(pilote["id"])) is True
+    # Une mise a jour qui ne dit rien de l'interrupteur n'y touche pas.
+    assert (await repo.update(pilote["id"], {"host": "10.10.0.33"}))["write_enabled"] is True
+
+    with pytest.raises(RouterNotFoundError):
+        await repo.write_enabled_of(9999)
+
+
+async def test_un_routeur_du_fichier_passe_en_lecture_seule(database: Database) -> None:
+    from app.db.routers_repo import RoutersRepository
+    from app.services.crypto import SecretBox, generate_key
+
+    repo = RoutersRepository(database.pool, SecretBox(generate_key()))
+    assert await repo.read_only_file_routers() == set()
+
+    await repo.set_file_router_read_only("pop-fichier", True, updated_by="ui:a", reason="pilote")
+    await repo.set_file_router_read_only("pop-fichier", True, updated_by="ui:b", reason="encore")
+    assert await repo.read_only_file_routers() == {"pop-fichier"}
+
+    await repo.set_file_router_read_only("pop-fichier", False, updated_by="ui:a")
+    assert await repo.read_only_file_routers() == set()
+
+
+async def test_une_bascule_d_interrupteur_est_journalisee(database: Database) -> None:
+    """Meme journal que les commandes, avec auteur, motif et avant/apres."""
+    repo = TopologyRepository(database.pool)
+
+    await repo.record_write_switch(
+        "nas-pilote", write_enabled=True, before=False, author="ui:a@isp", reason="NAS pilote"
+    )
+
+    [ligne] = await repo.audit(limit=5)
+    assert ligne["router_name"] == "nas-pilote"
+    assert ligne["verb"] == "switch"
+    assert ligne["dry_run"] is False and ligne["ok"] is True
+    assert ligne["author"] == "ui:a@isp"
+    assert ligne["detail"] == "NAS pilote"
+    assert "ALLOWED" in ligne["command"]
+    changements = ligne["changes"]
+    if isinstance(changements, str):
+        import json
+
+        changements = json.loads(changements)
+    assert changements == {"write_enabled": [False, True]}
+
+
+async def test_couper_la_boucle_qoe_rend_ses_resserrages(database: Database) -> None:
+    from app.db.topology_repo import TopologyRepository as Depot
+
+    repo = Depot(database.pool)
+    async with database.pool.acquire() as conn:
+        await conn.execute("DELETE FROM qoe_link_states")
+    for cle, facteur in (("lien-resserre", 0.8), ("lien-normal", 1.0)):
+        await repo.save_qoe_link_state(
+            link_key=cle,
+            sector_key=None,
+            trim_factor=facteur,
+            healthy_cycles=2,
+            scored_count=4,
+            degraded_count=2,
+            worst_score=18.0,
+            last_action="tighten",
+            last_reason="test",
+            triggered=True,
+        )
+
+    liberes = await repo.release_qoe_trims("closed QoE loop turned off in Settings")
+
+    assert liberes == ["lien-resserre"]
+    assert await repo.qoe_trims() == {}
+    etat = (await repo.qoe_link_states())["lien-resserre"]
+    assert etat["trim_factor"] == 1.0 and etat["healthy_cycles"] == 0
+    assert etat["last_action"] == "release"
+    # Un lien qui n'etait pas resserre n'est pas reecrit.
+    assert (await repo.qoe_link_states())["lien-normal"]["last_action"] == "tighten"
+    assert await repo.release_qoe_trims("encore") == []
 
 
 # ---------------------------------------------------------------------------

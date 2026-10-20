@@ -9,6 +9,11 @@ On interroge donc le routeur : quel groupe porte ce compte, et quelles politique
 ce groupe accorde. En cas de doute — compte authentifie par RADIUS, ``/user`` non
 lisible — on ne bloque pas : on tente la commande et on rapporte ce que RouterOS
 repond vraiment.
+
+Un verrou passe avant les droits du compte : l'interrupteur PAR ROUTEUR de
+freeQoS (Appareils). Coupe, le verdict est "ne peut pas" quels que soient les
+droits -- et ces droits restent rapportes, pour savoir d'avance si l'ecriture
+passera le jour ou l'on autorise ce routeur.
 """
 
 from __future__ import annotations
@@ -34,6 +39,10 @@ class WriteCapability:
       True   le routeur confirme que le compte a les politiques necessaires ;
       False  le routeur confirme qu'il ne les a pas ;
       None   indeterminable — il faut essayer plutot que de bloquer.
+
+    ``write_enabled`` est l'interrupteur du routeur dans freeQoS : faux, le
+    verdict est False quoi que disent les droits, et ``account_can_write``
+    garde ce que les droits du compte, seuls, auraient permis.
     """
 
     username: str
@@ -41,10 +50,19 @@ class WriteCapability:
     group: str | None = None
     policies: list[str] = field(default_factory=list)
     detail: str = ""
+    write_enabled: bool = True
+    account_can_write: bool | None = None
+
+    @property
+    def compte(self) -> bool | None:
+        """Le verdict des seuls droits du compte, interrupteur du routeur mis a part."""
+        return self.can_write if self.write_enabled else self.account_can_write
 
     @property
     def missing(self) -> list[str]:
-        if self.can_write is not False:
+        # Les politiques manquantes sont celles du COMPTE : un routeur coupe dans
+        # freeQoS dont le compte a tous les droits ne manque de rien sur le routeur.
+        if self.compte is not False:
             return []
         return [p for p in REQUIRED if p not in self.policies]
 
@@ -56,7 +74,26 @@ class WriteCapability:
             "policies": self.policies,
             "missing_policies": self.missing,
             "detail": self.detail,
+            "write_enabled": self.write_enabled,
+            "account_can_write": self.compte,
         }
+
+
+def disabled_in_freeqos(verdict: WriteCapability, motif: str) -> WriteCapability:
+    """Le verdict d'un routeur sur lequel l'exploitant a coupe l'ecriture.
+
+    "Ne peut pas", motif en tete : c'est le geste a faire, et il se fait dans
+    freeQoS, pas sur le routeur. Les droits du compte suivent, pour information.
+    """
+    return WriteCapability(
+        username=verdict.username,
+        can_write=False,
+        group=verdict.group,
+        policies=list(verdict.policies),
+        detail=f"{motif}. Account rights: {verdict.detail}" if verdict.detail else motif,
+        write_enabled=False,
+        account_can_write=verdict.can_write,
+    )
 
 
 def _split_policies(raw: Any) -> list[str]:
