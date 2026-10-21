@@ -1203,7 +1203,13 @@ routé derrière leur CPE. Ce sont alors les **plages additionnelles** de la fic
 |---|---|---|
 | une IP | `10.0.1.5` | `10.0.1.5/32` |
 | un bloc | `10.0.1.0/28` | `10.0.1.0/28` |
-| une plage de pool MikroTik | `10.0.1.10-10.0.1.17` | les blocs exacts qui la couvrent : `10.0.1.10/31`, `10.0.1.12/30`, `10.0.1.16/31` |
+| une plage de pool MikroTik | `10.0.1.10-10.0.1.17` (espaces autour du tiret acceptés) | les blocs exacts qui la couvrent : `10.0.1.10/31`, `10.0.1.12/30`, `10.0.1.16/31` |
+
+**L'adresse principale accepte la même saisie.** Une plage (`10.0.0.10-10.0.0.20`) ou
+plusieurs IP séparées par des virgules (`10.0.0.5, 10.0.0.6, 10.0.0.9`) peuvent être tapées
+directement dans le champ *IP address, subnet or range* : le premier bloc devient l'adresse
+de la fiche, les autres rejoignent les plages additionnelles. Modifier ensuite l'adresse
+seule avec une plage **ajoute** ses autres blocs aux plages déjà déclarées.
 
 **Un client, un débit, une seule file.** Le client a souscrit **un** débit : deux files
 lui en donneraient deux. Toutes ses plages partagent donc la même file, dont la cible les

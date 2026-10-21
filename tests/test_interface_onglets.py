@@ -322,7 +322,7 @@ def test_le_pop_et_l_adresse_sont_exiges_et_nommes() -> None:
     assert "required" in champ("sc-pop")
     assert "required" in champ("sc-address")
     assert "Attached PoP" in HTML
-    assert "IP address or subnet" in HTML
+    assert "IP address, subnet or range" in HTML
 
 
 def test_le_formulaire_dit_s_il_ajoute_ou_s_il_modifie() -> None:

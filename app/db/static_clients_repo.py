@@ -23,6 +23,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
@@ -135,10 +136,12 @@ def normalise_extra_prefixes(value: Any) -> list[str]:
     """
     if value is None:
         return []
-    if isinstance(value, str):
-        morceaux = value.replace(",", " ").split()
-    else:
-        morceaux = [str(v) for v in value]
+    texte = value if isinstance(value, str) else " ".join(str(v) for v in value)
+    # "10.0.1.10 - 10.0.1.50" s'ecrit aussi avec des espaces autour du tiret :
+    # decoupee sur les espaces, la plage devenait trois morceaux, dont un "-"
+    # refuse avec un message incomprehensible.
+    texte = re.sub(r"\s*-\s*", "-", texte)
+    morceaux = re.split(r"[\s,;]+", texte)
     blocs: list[str] = []
     for morceau in morceaux:
         texte = morceau.strip()
@@ -154,6 +157,28 @@ def normalise_extra_prefixes(value: Any) -> list[str]:
             f"{MAX_TARGET_PREFIXES} -- check the ranges entered"
         )
     return blocs
+
+
+def split_address(address: Any, extra: Any) -> tuple[str, list[str]]:
+    """Adresse principale et plages en plus, depuis ce qui a ete saisi.
+
+    L'adresse principale accepte, elle aussi, une PLAGE (``10.0.0.10-10.0.0.20``)
+    ou PLUSIEURS IP (``10.0.0.5, 10.0.0.6``) : c'est la saisie naturelle d'un
+    client VLAN a qui l'on a donne quelques adresses. Le premier bloc devient
+    l'adresse de la fiche, les autres rejoignent les plages en plus -- une
+    seule file, un seul debit, comme si on les avait saisies la.
+    """
+    texte = str(address or "").strip()
+    if not texte:
+        raise InvalidStaticClientError("adresse manquante")
+    if not re.search(r"[-,;\s]", texte):
+        return normalise_address(texte), normalise_extra_prefixes(extra)
+    blocs = normalise_extra_prefixes(texte)
+    if not blocs:
+        raise InvalidStaticClientError("adresse manquante")
+    principale, autres = blocs[0], blocs[1:]
+    plages = [b for b in autres + normalise_extra_prefixes(extra) if b != principale]
+    return principale, normalise_extra_prefixes(plages)
 
 
 def _liste_json(value: Any) -> list[str]:
@@ -246,8 +271,7 @@ class StaticClientsRepository:
 
     # ------------------------------------------------------------ ecritures
     async def create(self, payload: dict[str, Any]) -> dict[str, Any]:
-        adresse = normalise_address(payload.get("address"))
-        plages = normalise_extra_prefixes(payload.get("extra_prefixes"))
+        adresse, plages = split_address(payload.get("address"), payload.get("extra_prefixes"))
         async with self._pool.acquire() as conn:
             try:
                 row = await conn.fetchrow(
@@ -286,7 +310,17 @@ class StaticClientsRepository:
             if key in CHAMPS_MODIFIABLES and value is not None
         }
         if "address" in fields:
-            fields["address"] = normalise_address(fields["address"])
+            if "extra_prefixes" in fields:
+                deja = fields["extra_prefixes"]
+            elif re.search(r"[-,;\s]", str(fields["address"]).strip()):
+                # Une plage dans l'adresse, sans toucher aux plages en plus :
+                # ses autres blocs s'AJOUTENT a celles de la fiche.
+                deja = (await self.get(client_id)).get("extra_prefixes") or []
+            else:
+                deja = None
+            fields["address"], plages = split_address(fields["address"], deja)
+            if deja is not None:
+                fields["extra_prefixes"] = plages
         if "cpe_mac" in fields:
             # Meme normalisation qu'a la creation : sans elle, une MAC saisie en
             # minuscules ou avec des tirets ne se rapprocherait plus de celle du
