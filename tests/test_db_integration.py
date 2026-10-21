@@ -1806,6 +1806,33 @@ async def test_la_vue_expose_la_nature(database: Database, now: datetime) -> Non
     assert [r["login"] for r in listes] == ["dupont"]
 
 
+async def test_un_client_vlan_saisi_avec_une_plage_ou_plusieurs_ip(database: Database) -> None:
+    """Une plage, ou plusieurs IP, dans l'adresse principale : le premier bloc
+    devient l'adresse, les autres rejoignent les plages en plus."""
+    repo = StaticClientsRepository(database.pool)
+    fiche = await repo.create(
+        {
+            "reference": "acme-vlan",
+            "pop_name": "PoP Altair",
+            "address": "10.70.0.10 - 10.70.0.13",
+            "vlan": 812,
+            "extra_prefixes": ["10.70.9.0/28"],
+        }
+    )
+    assert fiche["address"] == "10.70.0.10/31"
+    assert fiche["extra_prefixes"] == ["10.70.0.12/31", "10.70.9.0/28"]
+
+    # Modifier l'adresse seule : ses autres blocs S'AJOUTENT aux plages.
+    fiche = await repo.update(fiche["id"], {"address": "10.70.0.5, 10.70.0.6"})
+    assert fiche["address"] == "10.70.0.5/32"
+    assert fiche["extra_prefixes"] == ["10.70.0.6/32", "10.70.0.12/31", "10.70.9.0/28"]
+
+    # Une adresse simple ne touche pas aux plages.
+    fiche = await repo.update(fiche["id"], {"address": "10.70.0.7"})
+    assert fiche["address"] == "10.70.0.7/32"
+    assert fiche["extra_prefixes"] == ["10.70.0.6/32", "10.70.0.12/31", "10.70.9.0/28"]
+
+
 async def test_l_inventaire_fait_autorite_sur_le_plan_d_un_statique(
     database: Database,
 ) -> None:

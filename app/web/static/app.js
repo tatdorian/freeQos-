@@ -4462,7 +4462,9 @@ function scPayload() {
     plan_up_mbps: nb('sc-up'),
     cpe_mac: txt('sc-cpe'),
     // Toujours une liste, vide comprise : vider le champ RETIRE les plages.
+    // « 10.0.1.10 - 10.0.1.50 » : les espaces autour du tiret ne coupent pas la plage.
     extra_prefixes: (document.getElementById('sc-extra').value || '')
+      .replace(/\s*-\s*/g, '-')
       .split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean),
     note: txt('sc-note'),
     enabled: document.getElementById('sc-enabled').checked,

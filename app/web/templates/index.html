@@ -717,8 +717,8 @@
               </select>
             </div>
             <div class="field">
-              <label for="sc-address">IP address or subnet</label>
-              <input id="sc-address" required maxlength="64" placeholder="10.0.0.5 or 10.0.0.0/29">
+              <label for="sc-address" title="One IP, a subnet, a pool range or several IPs separated by commas. Every address shares the client's single queue, hence its plan.">IP address, subnet or range</label>
+              <input id="sc-address" required maxlength="2000" placeholder="10.0.0.5, 10.0.0.0/29 or 10.0.0.10-10.0.0.20">
             </div>
           </div>
 
