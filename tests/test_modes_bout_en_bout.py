@@ -174,3 +174,60 @@ def test_le_journal_raconte_chaque_geste_et_le_forfait_garde_le_mode(app_client,
     assert journal[3]["written"] is True
     assert all(a["actor"].startswith("api:") for a in journal)
     assert app_client.get("/api/v1/activity?q=Night", headers=cle).json()
+
+
+def test_un_boost_jusqu_a_arret_tourne_jusqu_au_stop(app_client, routeur) -> None:
+    """Allume maintenant, eteint plus tard : pas de minuterie, c'est "Stop
+    boost" qui le termine."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    r = app_client.post(
+        "/api/v1/clients/actions",
+        headers=cle,
+        json={
+            "logins": ["dupont"],
+            "action": "boost",
+            "boost_multiplier": 2,
+            "boost_until_stopped": True,
+        },
+    )
+    assert r.json()["succeeded"] == 1, r.text
+    [boost] = app_client.get("/api/v1/shaping/boosts", headers=cle).json()
+    assert boost["seconds_left"] > 365 * 86400
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "20000000/40000000"
+
+    r = app_client.post(
+        "/api/v1/clients/actions", headers=cle, json={"logins": ["dupont"], "action": "stop_boost"}
+    )
+    assert r.json()["results"][0]["stopped"] is True
+    assert app_client.get("/api/v1/shaping/boosts", headers=cle).json() == []
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/20000000"
+    detail = app_client.get("/api/v1/activity?login=dupont", headers=cle).json()
+    assert [a["action"] for a in detail[:2]] == ["stop_boost", "boost"]
+    assert "until stopped" in detail[1]["detail"]
+
+
+def test_un_forfait_temporaire_pour_une_duree_choisie(app_client, routeur) -> None:
+    """Un debit explicite pour 3 jours, ici PLUS BAS que le forfait : le client
+    y est tout de suite, et le journal dit quoi et pour combien de temps."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    r = app_client.post(
+        "/api/v1/clients/actions",
+        headers=cle,
+        json={
+            "logins": ["dupont"],
+            "action": "boost",
+            "boost_down_mbps": 5,
+            "boost_up_mbps": 2,
+            "boost_minutes": 3 * 1440,
+        },
+    )
+    assert r.json()["succeeded"] == 1, r.text
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "2000000/5000000"
+    [boost] = app_client.get("/api/v1/shaping/boosts", headers=cle).json()
+    assert 2.9 * 86400 < boost["seconds_left"] <= 3 * 86400
+    [geste] = app_client.get("/api/v1/activity?login=dupont&limit=1", headers=cle).json()
+    assert geste["detail"] == "temporary rate 5 / 2 Mbps for 3 days"

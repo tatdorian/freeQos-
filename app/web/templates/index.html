@@ -50,9 +50,10 @@
     </div>
     <nav class="tabs">
       <a href="#/clients" data-view="clients"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><path d="M15.5 12.5l2 2 4-4.5"/></svg><span>Clients</span></a>
+      <a href="#/modes" data-view="modes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg><span>Modes</span></a>
       <a href="#/alerts" data-view="alerts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16z"/><path d="M10 21h4"/></svg><span>Alerts</span></a>
       <a href="#/activity" data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span>Activity</span></a>
-      <a href="#/management" data-view="management"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg><span>Management</span></a>
+      <a href="#/management" data-view="management"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg><span>Schedules</span></a>
       <a href="#/dashboard" data-view="dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Dashboard</span></a>
       <a href="#/exec" data-view="exec"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-5 3 3 5-6"/></svg><span>Executive</span></a>
       <a href="#/traffic" data-view="traffic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16"/><path d="M3 8l4-4 4 4"/><path d="M17 20V4"/><path d="M13 16l4 4 4-4"/></svg><span>Traffic</span></a>
@@ -627,19 +628,90 @@
          technique. -->
     <section id="view-management">
       <p class="eyebrow">Client management</p>
-      <p class="hint" style="display:block;margin-top:0">How your clients' rates are managed: the
-        <b>bandwidth modes</b> given in one click from the Clients page, and the <b>bandwidth
-        schedules</b> that change rates with the time of day (day, evening, night, weekend), on
-        their own.</p>
+      <p class="hint" style="display:block;margin-top:0">Rates that change with the time of day
+        (day, evening, night, weekend), on their own, for all clients, some sites, some plans or
+        named clients. A client in a bandwidth mode keeps its mode until it is put back to
+        Automatic.</p>
       <!-- PROFILS HORAIRES : des debits qui changent avec l'heure (jour,
            soiree, nuit), tout seuls. Hierarchie : boost > limite forcee >
            profil horaire > forfait. Un seul profil gouverne un client : le
            plus precis (clients nommes, forfaits, sites, tous), puis le plus
            recent. -->
+
+
+      <h2>Bandwidth schedules</h2>
+      <p class="hint" style="display:block">Rates that change with the time of day (day, evening,
+        night), automatically. Each time slot sets a <b>percentage of the plan</b> (200 % = twice
+        the plan at night) or a <b>fixed rate</b>. Outside every slot, the normal plan applies.
+        A forced limit or a boost still takes precedence. When several schedules target the same
+        client, the most precise one governs it alone (named clients, then plans, then sites,
+        then all clients).</p>
+      <div class="table-wrap" id="sched-list"></div>
+      <div id="sched-result"></div>
+      <h3 id="sched-form-title" style="margin:1rem 0 .4rem">New schedule</h3>
+      <form class="stack card" id="sched-form" autocomplete="off">
+        <div class="row-3">
+          <div class="field">
+            <label for="sched-name">Name</label>
+            <input id="sched-name" required maxlength="128" placeholder="Evening and night">
+          </div>
+          <div class="field">
+            <label for="sched-tz" title="IANA time zone of your subscribers: the hours below are local to it, and daylight saving time is handled.">Time zone</label>
+            <input id="sched-tz" required maxlength="64" list="sched-tz-list" placeholder="Europe/Paris">
+            <datalist id="sched-tz-list"></datalist>
+          </div>
+          <div class="field">
+            <label for="sched-scope">Applies to</label>
+            <select id="sched-scope">
+              <option value="all">All clients</option>
+              <option value="pops">Sites</option>
+              <option value="plans">Plans (download rate)</option>
+              <option value="subscribers">Named clients</option>
+            </select>
+          </div>
+        </div>
+        <!-- A QUI S'APPLIQUE LE PROFIL : une liste a cocher (clients, sites ou
+             forfaits), avec recherche. Le champ cache garde la saisie. -->
+        <div class="field" id="sched-targets-field" hidden>
+          <label id="sched-targets-label">Targets</label>
+          <input type="hidden" id="sched-targets">
+          <div class="pick">
+            <div class="pick-bar">
+              <input type="search" id="sched-pick-q" placeholder="Search..." autocomplete="off">
+              <button type="button" class="sm" id="sched-pick-all">Select all shown</button>
+              <button type="button" class="sm link-btn" id="sched-pick-none">Clear</button>
+              <span class="mode" id="sched-pick-count"></span>
+            </div>
+            <div class="pick-items" id="sched-pick-items"></div>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table id="sched-windows"><thead><tr>
+            <th></th><th>Slot</th><th>From</th><th>To</th><th>Days (start)</th>
+            <th>Rate</th>
+          </tr></thead><tbody></tbody></table>
+        </div>
+        <div class="actions">
+          <button type="button" class="sm" id="sched-add-window">Add a time slot</button>
+          <label class="chk"><input type="checkbox" id="sched-enabled" checked> Enabled</label>
+          <span class="spacer"></span>
+          <button type="button" class="sm" id="sched-cancel" hidden>Cancel</button>
+          <button type="submit" class="primary" id="sched-submit">Create and apply</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- MODES : les modes de debit, et QUI est dans quel mode. On en cree de
+         nouveaux ici ; on les donne depuis Clients. -->
+    <section id="view-modes">
+      <p class="eyebrow">Bandwidth modes</p>
+      <p class="hint" style="display:block;margin-top:0">Each mode is a named rate given to clients
+        in one click. Here you see every mode, which clients are in it, and you create new ones.</p>
+      <div id="modes-board"></div>
       <!-- MODES DE DEBIT : les debits nommes que les operateurs donnent a un
            client d'un geste (Clients > Change mode). Les definir est de la
            gestion, comme les donner : niveau Operator. -->
-      <h2>Bandwidth modes</h2>
+      <h2>All modes</h2>
       <p class="hint" style="display:block">Named rates an operator gives a client in one click
         from the <b>Clients</b> page: <i>Backup</i>, <i>Extreme backup</i>, <i>Night</i>... Each
         mode is a <b>fixed rate</b> or a <b>share of the client's plan</b>. A client in a mode keeps
@@ -690,58 +762,6 @@
           <button type="submit" class="primary" id="mode-submit">Add the mode</button>
         </div>
       </form>
-
-      <h2>Bandwidth schedules</h2>
-      <p class="hint" style="display:block">Rates that change with the time of day (day, evening,
-        night), automatically. Each time slot sets a <b>percentage of the plan</b> (200 % = twice
-        the plan at night) or a <b>fixed rate</b>. Outside every slot, the normal plan applies.
-        A forced limit or a boost still takes precedence. When several schedules target the same
-        client, the most precise one governs it alone (named clients, then plans, then sites,
-        then all clients).</p>
-      <div class="table-wrap" id="sched-list"></div>
-      <div id="sched-result"></div>
-      <h3 id="sched-form-title" style="margin:1rem 0 .4rem">New schedule</h3>
-      <form class="stack card" id="sched-form" autocomplete="off">
-        <div class="row-3">
-          <div class="field">
-            <label for="sched-name">Name</label>
-            <input id="sched-name" required maxlength="128" placeholder="Evening and night">
-          </div>
-          <div class="field">
-            <label for="sched-tz" title="IANA time zone of your subscribers: the hours below are local to it, and daylight saving time is handled.">Time zone</label>
-            <input id="sched-tz" required maxlength="64" list="sched-tz-list" placeholder="Europe/Paris">
-            <datalist id="sched-tz-list"></datalist>
-          </div>
-          <div class="field">
-            <label for="sched-scope">Applies to</label>
-            <select id="sched-scope">
-              <option value="all">All clients</option>
-              <option value="pops">Sites</option>
-              <option value="plans">Plans (download rate)</option>
-              <option value="subscribers">Named clients</option>
-            </select>
-          </div>
-        </div>
-        <div class="field" id="sched-targets-field" hidden>
-          <label for="sched-targets" id="sched-targets-label">Targets</label>
-          <input id="sched-targets" maxlength="4000" list="sched-targets-list"
-            placeholder="comma separated">
-          <datalist id="sched-targets-list"></datalist>
-        </div>
-        <div class="table-wrap">
-          <table id="sched-windows"><thead><tr>
-            <th></th><th>Slot</th><th>From</th><th>To</th><th>Days (start)</th>
-            <th>Rate</th>
-          </tr></thead><tbody></tbody></table>
-        </div>
-        <div class="actions">
-          <button type="button" class="sm" id="sched-add-window">Add a time slot</button>
-          <label class="chk"><input type="checkbox" id="sched-enabled" checked> Enabled</label>
-          <span class="spacer"></span>
-          <button type="button" class="sm" id="sched-cancel" hidden>Cancel</button>
-          <button type="submit" class="primary" id="sched-submit">Create and apply</button>
-        </div>
-      </form>
     </section>
 
     <!-- ALERTES : ce qui demande quelqu'un, regroupe. Une panne de site ne doit
@@ -770,6 +790,10 @@
         <div class="table-wrap" id="act-table"></div>
       </div>
     </section>
+
+    <!-- LA PAGE D'UN CLIENT (#/client/<login>) : ce qu'il consomme, son mode,
+         son forfait, son historique, et les gestes a portee de main. -->
+    <section id="view-client"><div id="client-page"></div></section>
 
     <!-- CLIENTS : la page du quotidien. Le client au centre : le voir, changer
          son mode de debit, lui donner un boost -- seul ou a plusieurs. C'est

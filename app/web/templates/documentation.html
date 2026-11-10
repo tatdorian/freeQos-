@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="c6e54b3e45a1db0a">
+  <meta name="freeqos-docs-source" content="23d31ae24f71479a">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -142,7 +142,8 @@
     <a class="sub" href="#clients">Clients</a>
     <a class="sub" href="#alerts">Alerts</a>
     <a class="sub" href="#activity">Activity</a>
-    <a class="sub" href="#management">Management</a>
+    <a class="sub" href="#modes">Modes</a>
+    <a class="sub" href="#schedules">Schedules</a>
     <a class="sub" href="#dashboard">Dashboard</a>
     <a class="sub" href="#executive">Executive</a>
     <a class="sub" href="#traffic">Traffic</a>
@@ -173,7 +174,7 @@
     <a class="sub" href="#accounts_1">Accounts</a>
     <a class="sub" href="#api-keys_1">API keys</a>
     <a class="sub" href="#bandwidth-schedules_1">Bandwidth schedules</a>
-    <a class="sub" href="#modes">Modes</a>
+    <a class="sub" href="#modes_1">Modes</a>
   </nav>
 
   <main>
@@ -2420,7 +2421,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p><strong>Boosts.</strong> A duration (1 minute to 7 days), then either a multiplier of the plan (the interface offers ×2, ×3 and ×5; the API accepts more than 1, up to 50) or explicit rates, and a reason. It is written immediately if writing is allowed and <strong>expires by itself</strong>: a job checks expiries every 30 s and brings the queue back to its normal rate — RouterOS knows nothing about the duration. A boost without an expiry is refused: it would be an override in disguise that never goes away.</p>
 <p><strong>A rate set by hand is written at once.</strong> Setting a subscriber's or a link's rate writes the corresponding queue immediately (the full plan of the router, restricted to that queue), and the reply says what was written, on which router, or what prevented it (<code>apply_now=false</code> only records the intention).</p>
 <h3 id="bandwidth-modes-backup-night">Bandwidth modes (Backup, Night…)</h3>
-<p>A <strong>bandwidth mode</strong> is a named rate given to a client in one click, from the <strong>Clients</strong> page: <em>Backup</em> when the backhaul is degraded, <em>Extreme backup</em> for a crisis or non-payment, <em>Night</em>... The operator picks a name in a list instead of typing rates (<em>Management › Bandwidth modes</em>, or <code>/api/v1/bandwidth-modes</code>).</p>
+<p>A <strong>bandwidth mode</strong> is a named rate given to a client in one click, from the <strong>Clients</strong> page: <em>Backup</em> when the backhaul is degraded, <em>Extreme backup</em> for a crisis or non-payment, <em>Night</em>... The operator picks a name in a list instead of typing rates (<em>Modes</em>, or <code>/api/v1/bandwidth-modes</code>).</p>
 <ul>
 <li><strong>Rate:</strong> fixed (<code>rate_kind=fixed</code>, Mbps) or a <strong>share of the client's plan</strong> (<code>percent</code>: 200 = twice the plan). A share needs the client's plan; a client without a known plan can only get a fixed mode.</li>
 <li><strong>Automatic</strong> is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its <strong>bandwidth schedule</strong> — its rate then changes with the hour on its own.</li>
@@ -2431,8 +2432,14 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Changing a client's plan keeps its mode and its boost:</strong> only a manual limit (an override without a mode) is lifted, so that the new plan takes effect. A mode expressed as a share of the plan follows the new plan at once.</li>
 </ul>
 <p><strong>Client actions</strong> (<code>POST /api/v1/clients/actions</code>, <code>{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}</code>) act on one or several clients. The reply gives a result <strong>per client</strong> (<code>succeeded</code>, <code>failed</code>, <code>results[]</code>): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.</p>
+<p><strong>Boost or temporary plan, from the Clients page.</strong> On one or several selected clients (or from a client's page):</p>
+<ul>
+<li><strong>Duration:</strong> a quick choice (30 min, 1 h, 4 h, 1 day, 7 days), a <strong>custom</strong> value in minutes, hours or days (up to 365 days), or <strong>until stopped</strong> (<code>boost_until_stopped: true</code>): it runs until someone clicks <em>Stop boost</em> (<code>action: "stop_boost"</code>). Internally it still has an expiry, five years away, so that the expiry check and the planner treat it like any boost; the interface shows it as "until stopped".</li>
+<li><strong>Rate:</strong> the plan <strong>multiplied</strong> by any factor above 1 (up to ×50, <code>boost_multiplier</code>), or a <strong>temporary plan</strong>: explicit download and upload rates (<code>boost_down_mbps</code>, <code>boost_up_mbps</code>), higher <strong>or lower</strong> than the plan. At the end of the duration the client goes back to its plan, its schedule or its mode on its own.</li>
+<li>The log records what and for how long ("x2 of the plan for 4 h", "temporary rate 5 / 2 Mbps for 3 days", "... until stopped").</li>
+</ul>
 <h3 id="bandwidth-schedules-day-evening-night">Bandwidth schedules (day, evening, night)</h3>
-<p>Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched <strong>automatically</strong>, on time. A <strong>bandwidth schedule</strong> (<em>Management › Bandwidth schedules</em>, or <code>/api/v1/bandwidth-schedules</code>) is a set of <strong>time slots</strong>, each with the rate that applies during it:</p>
+<p>Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched <strong>automatically</strong>, on time. A <strong>bandwidth schedule</strong> (<em>Schedules</em>, or <code>/api/v1/bandwidth-schedules</code>) is a set of <strong>time slots</strong>, each with the rate that applies during it. <em>Applies to</em> chooses all clients, or a <strong>list to tick</strong> (with search and "Select all shown") of sites, plans or named clients:</p>
 <ul>
 <li>a <strong>percentage of the plan</strong> (<code>percent</code>: 200 = twice the plan at night, 70 = 30 % less in the evening), which follows every subscriber's own plan without copying it; or</li>
 <li>a <strong>fixed rate</strong> (<code>down_mbps</code> / <code>up_mbps</code>; a single direction is allowed, the other one keeps its plan).</li>
@@ -2996,7 +3003,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <td><strong>Operator</strong> (<code>operator</code>)</td>
 <td>Clients</td>
 <td><strong>Client management</strong>, on one or several clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan; define the bandwidth modes and the bandwidth schedules (rates by time of day)</td>
-<td><strong>Clients</strong>, <strong>Alerts</strong>, <strong>Activity</strong>, <strong>Management</strong>; no Settings (password and log out from the account card)</td>
+<td><strong>Clients</strong>, <strong>Modes</strong>, <strong>Alerts</strong>, <strong>Activity</strong>, <strong>Schedules</strong>; no Settings (password and log out from the account card)</td>
 </tr>
 <tr>
 <td><strong>Administrator</strong> (<code>edit</code>)</td>
@@ -3968,7 +3975,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <h2 id="appendix-a-interface-reference">Appendix A. Interface reference</h2>
 <p>The explanations below are exactly those the interface shows behind each (i), extracted from the application at build time: they cannot differ from what operators read on screen.</p>
 <h3 id="clients">Clients</h3>
-<p>The daily page of Operators (who also have Alerts, Activity and Management, and no Settings): every client, its connection, its usage, its bandwidth mode, its boost and its plan, for one client or for a selection. Clicking a client opens its sheet: usage over 1 hour, 24 hours or 7 days, mode, plan, limit applied, recent activity.</p>
+<p>The daily page of Operators (who also have Alerts, Activity and Management, and no Settings): every client, its connection, its usage, its bandwidth mode, its boost and its plan, for one client or for a selection. Clicking a client opens its page (Overview: usage now and over 1 hour, 24 hours or 7 days, limit applied, latency, connection; Plan &amp; mode: change its mode, plan and boost; Activity: its history).</p>
 <h4 id="client-operations">Client operations</h4>
 <p><strong>What it shows.</strong> The daily page: every client, its connection, its usage, its bandwidth mode and its boost.</p>
 <p><strong>How it is measured.</strong> Operators only see this page and their account. They act on one client or on a selection.</p>
@@ -3997,15 +4004,17 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><strong>What it shows.</strong> Every change made on a client: bandwidth mode, boost, plan. Who asked for it, when, and whether it reached the router.</p>
 <p><strong>How it is measured.</strong> “Applied”: the queue was written. “Pending on router”: writing is off or the router is unreachable, it is written later. “Refused”: nothing changed (for instance a boost in a mode that stops boosts).</p>
 <p><strong>How to read it.</strong> Kept 400 days. Export CSV gives the list shown.</p>
-<h3 id="management">Management</h3>
-<p>The bandwidth modes and the bandwidth schedules, open to Operators.</p>
-<h4 id="client-management">Client management</h4>
-<p><strong>What it shows.</strong> How clients' rates are managed: the bandwidth modes and the bandwidth schedules (rates by time of day).</p>
-<p><strong>How it is measured.</strong> Open to Operators: these are commercial decisions about clients. Adding clients, sites, routers, antennas and APIs stays with the Administrator.</p>
+<h3 id="modes">Modes</h3>
+<p>Every bandwidth mode, the clients in each one, and creating or editing modes. Open to Operators.</p>
 <h4 id="bandwidth-modes">Bandwidth modes</h4>
 <p><strong>What it shows.</strong> Named rates operators give a client in one click: a fixed rate, or a share of the client's plan.</p>
 <p><strong>How it is measured.</strong> Defining modes needs the Administrator level; giving one to clients, the Operator level. Changing a mode's rate applies it at once to every client in it.</p>
 <p><strong>How to read it.</strong> A mode that “stops boosts” clears the running boost and refuses new ones: use it for a crisis or non-payment.</p>
+<h3 id="schedules">Schedules</h3>
+<p>The bandwidth schedules: rates that change with the time of day, on their own. Open to Operators.</p>
+<h4 id="client-management">Client management</h4>
+<p><strong>What it shows.</strong> Bandwidth schedules: rates that change with the time of day, on their own (Schedules tab).</p>
+<p><strong>How it is measured.</strong> Open to Operators: these are commercial decisions about clients. Adding clients, sites, routers, antennas and APIs stays with the Administrator.</p>
 <h4 id="bandwidth-schedules">Bandwidth schedules</h4>
 <p><strong>What it shows.</strong> Rates that change with the time of day (day, evening, night, weekend), on their own, for all clients, some sites, some plans or named clients.</p>
 <p><strong>How it is measured.</strong> Each time slot sets a share of the plan (200 % = twice the plan) or a fixed rate. A client in a bandwidth mode or with a boost is not affected until it is back in Automatic.</p>
@@ -6118,7 +6127,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tr>
 </tbody>
 </table></div>
-<h3 id="modes">Modes</h3>
+<h3 id="modes_1">Modes</h3>
 <div class="table-wrap"><table>
 <thead>
 <tr>
