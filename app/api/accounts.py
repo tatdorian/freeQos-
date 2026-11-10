@@ -28,6 +28,7 @@ plus simple de remarquer qu'un autre s'est servi de son compte.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
@@ -46,6 +47,8 @@ from app.db.users_repo import (
 from app.services.accounts import (
     PASSWORD_MIN,
     ROLE_EDIT,
+    ROLE_LABELS,
+    ROLE_OPERATOR,
     SAFE_METHODES,
     InvalidAccountError,
     LoginThrottle,
@@ -54,6 +57,7 @@ from app.services.accounts import (
     hash_password,
     new_session_token,
     normalise_email,
+    role_at_least,
     token_digest,
     verify_or_decoy,
     verify_password,
@@ -76,11 +80,11 @@ class Credentials(BaseModel):
 
 
 class NewUser(Credentials):
-    role: Literal["read", "edit"] = "read"
+    role: Literal["read", "operator", "edit"] = "read"
 
 
 class UserUpdate(BaseModel):
-    role: Literal["read", "edit"] | None = None
+    role: Literal["read", "operator", "edit"] | None = None
     password: str | None = Field(default=None, max_length=256)
     disabled: bool | None = None
 
@@ -279,8 +283,35 @@ def _meme_origine(request: Request) -> bool:
     return urlsplit(origine).netloc == hote
 
 
+#: LES GESTES DU QUOTIDIEN, ouverts au niveau Operator : le mode, le boost et le
+#: forfait d'un ou de plusieurs clients. Toute autre ecriture -- ajouter des
+#: clients, des PoPs, des routeurs, des antennes et leur API, definir les modes,
+#: les reglages, les cles d'API, les comptes -- est reservee a l'Administrator.
+#: La liste est FERMEE : une route ajoutee demain est reservee a
+#: l'Administrator tant qu'on ne l'a pas ouverte ici, sciemment.
+OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
+    ("POST", re.compile(r"^/shaping/boosts$"), ROLE_OPERATOR),
+    ("DELETE", re.compile(r"^/shaping/boosts/[^/]+$"), ROLE_OPERATOR),
+    ("PUT", re.compile(r"^/clients/[^/]+/mode$"), ROLE_OPERATOR),
+    ("POST", re.compile(r"^/clients/actions$"), ROLE_OPERATOR),
+    ("PUT", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
+    ("DELETE", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
+)
+
+
+def niveau_requis(methode: str, chemin: str, prefixe: str = "") -> str:
+    """Le niveau minimum pour ecrire sur ce chemin."""
+    relatif = chemin[len(prefixe) :] if prefixe and chemin.startswith(prefixe) else chemin
+    for verbe, motif, niveau in OPERATIONS_CLIENT:
+        if methode.upper() == verbe and motif.match(relatif):
+            return niveau
+    return ROLE_EDIT
+
+
 async def require_access(request: Request, user: UserDep) -> dict[str, Any]:
     """Dependance posee sur TOUTES les routes d'exploitation."""
+    # Le compte est retenu pour la requete : le journal nomme qui a agi.
+    request.state.user = user
     # Une cle ne fabrique pas d'autres cles : sinon une cle volee se
     # perpetuerait apres sa revocation.
     if user.get("api_key") and "/api-keys" in request.url.path:
@@ -289,10 +320,21 @@ async def require_access(request: Request, user: UserDep) -> dict[str, Any]:
         return user
     if not _meme_origine(request):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cross-origin request")
-    if user.get("role") != ROLE_EDIT:
+    prefixe = str(getattr(request.app.state, "api_prefix", "") or "")
+    requis = niveau_requis(request.method, request.url.path, prefixe)
+    if not role_at_least(user.get("role"), requis):
+        role = str(user.get("role") or "")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Read-only account: this change needs an account with edit rights",
+            detail=(
+                (
+                    "Read-only account (Viewer)"
+                    if role == "read"
+                    else f"{ROLE_LABELS.get(role, role or 'This')} account"
+                )
+                + f": this change needs the {ROLE_LABELS[requis]} level"
+                + (" or above" if requis != ROLE_EDIT else "")
+            ),
         )
     return user
 
@@ -342,7 +384,9 @@ async def _ouvre_session(
 
 
 def _public(fiche: dict[str, Any]) -> dict[str, Any]:
-    return {k: fiche.get(k) for k in ("id", "email", "role")}
+    public = {k: fiche.get(k) for k in ("id", "email", "role")}
+    public["role_label"] = ROLE_LABELS.get(str(fiche.get("role") or ""), "")
+    return public
 
 
 async def _connexion_precedente(container: ContainerDep, email: str) -> dict[str, Any] | None:

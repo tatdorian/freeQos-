@@ -1,4 +1,27 @@
 {
+ "client operations": {
+  "t": "The daily page: every client, its connection, its usage, its bandwidth mode and its boost.",
+  "m": "Operators only see this page and their account. They act on one client or on a selection.",
+  "r": "Tick clients to change their mode or boost them together; a group change reports a result per client. The Plan button sets the rate the client subscribed to."
+ },
+ "bandwidth mode": {
+  "t": "The named rate the client is in: Automatic, or a mode such as Backup or Night.",
+  "m": "Automatic follows the plan and, when there is one, the bandwidth schedule: the rate changes with the hour on its own. A mode stays until the client is put back to Automatic.",
+  "r": "“Manual limit” is a rate set by hand by an Administrator, outside the modes."
+ },
+ "connection": "Connected = a measurement less than 90 s old. Otherwise, when the client was last seen.",
+ "current usage": "Download (↓) and upload (↑) of the client right now, from the last measurement.",
+ "not in automatic": "Clients in a bandwidth mode or under a manual limit: their rate does not follow their plan and schedule.",
+ "boosts active": "Clients with a running boost. A boost ends on its own at its expiry.",
+ "bandwidth modes": {
+  "t": "Named rates operators give a client in one click: a fixed rate, or a share of the client's plan.",
+  "m": "Defining modes needs the Administrator level; giving one to clients, the Operator level. Changing a mode's rate applies it at once to every client in it.",
+  "r": "A mode that “stops boosts” clears the running boost and refuses new ones: use it for a crisis or non-payment."
+ },
+ "access level": {
+  "t": "What the account may do. Each level includes the previous ones; the server enforces them.",
+  "m": "Viewer: sees everything, changes nothing. Operator: bandwidth mode, boost and plan of clients, one or several at a time. Administrator: everything else, such as adding clients, PoPs, routers, antennas and their API (Ubiquiti), modes, settings, API keys and accounts."
+ },
  "network throughput": {
   "t": "Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.",
   "m": "Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.",

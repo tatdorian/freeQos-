@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="99223c9eb1d783ca">
+  <meta name="freeqos-docs-source" content="f843a2e9de367254">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -72,6 +72,7 @@
     <a class="sub" href="#reconciliation">Reconciliation</a>
     <a class="sub" href="#safeguards">Safeguards</a>
     <a class="sub" href="#manual-adjustments">Manual adjustments</a>
+    <a class="sub" href="#bandwidth-modes-backup-night">Bandwidth modes (Backup, Night…)</a>
     <a class="sub" href="#bandwidth-schedules-day-evening-night">Bandwidth schedules (day, evening, night)</a>
     <a class="sub" href="#the-shaping-map">The shaping map</a>
     <a class="sub" href="#where-a-subscriber-queue-points-and-when-it-is-skipped">Where a subscriber queue points, and when it is skipped</a>
@@ -138,6 +139,7 @@
     <a class="sub" href="#limitations-by-design">Limitations, by design</a>
     <a class="sub" href="#faq">FAQ</a>
     <a href="#appendix-a-interface-reference">Appendix A. Interface reference</a>
+    <a class="sub" href="#clients">Clients</a>
     <a class="sub" href="#dashboard">Dashboard</a>
     <a class="sub" href="#executive">Executive</a>
     <a class="sub" href="#traffic">Traffic</a>
@@ -168,6 +170,7 @@
     <a class="sub" href="#accounts_1">Accounts</a>
     <a class="sub" href="#api-keys_1">API keys</a>
     <a class="sub" href="#bandwidth-schedules">Bandwidth schedules</a>
+    <a class="sub" href="#modes">Modes</a>
   </nav>
 
   <main>
@@ -1464,7 +1467,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 </tbody>
 </table></div>
-<p><strong>Several address ranges for one client.</strong> A VLAN client usually has a single IP pool. When the same client has <strong>several pools on the same VLAN</strong> (an extra public block, a service pool), or a block routed behind its CPE, list them in <em>Additional ranges</em> (<code>extra_prefixes</code> in the API). Each item is an IP (<code>10.0.1.5</code>), a block (<code>10.0.1.0/28</code>) or a MikroTik pool range (<code>10.0.1.10-10.0.1.50</code>, split into the exact covering blocks). They all share <strong>one</strong> queue — RouterOS accepts a list as target (<code>target=10.0.0.0/29,10.0.1.0/28</code>) and applies a single <code>max-limit</code> to the whole list — because the client bought <strong>one</strong> rate; two queues would give it two. The target is canonical (sorted, a block contained in another one dropped), so reading it back in RouterOS's own order is not a change. The queue hangs under a parent link only if that link's segment contains <strong>every</strong> range; a range claimed by two clients makes both ambiguous, and neither queue is written. An address of any range confirms the client's presence and is never proposed as a candidate. Several <strong>clients</strong> on the same VLAN are simply declared separately, one record each.</p>
+<p><strong>Several address ranges for one client.</strong> A VLAN client usually has a single IP pool. When the same client has <strong>several pools on the same VLAN</strong> (an extra public block, a service pool), or a block routed behind its CPE, list them in <em>Additional ranges</em> (<code>extra_prefixes</code> in the API). Each item is an IP (<code>10.0.1.5</code>), a block (<code>10.0.1.0/28</code>) or a MikroTik pool range (<code>10.0.1.10-10.0.1.50</code>, split into the exact covering blocks; spaces around the dash are accepted). The main <em>IP address, subnet or range</em> field takes the same input: a range or several comma-separated IPs typed there keep their first block as the client's address and add the others to its additional ranges (editing the address alone with a range <strong>adds</strong> its other blocks to the ranges already declared). They all share <strong>one</strong> queue — RouterOS accepts a list as target (<code>target=10.0.0.0/29,10.0.1.0/28</code>) and applies a single <code>max-limit</code> to the whole list — because the client bought <strong>one</strong> rate; two queues would give it two. The target is canonical (sorted, a block contained in another one dropped), so reading it back in RouterOS's own order is not a change. The queue hangs under a parent link only if that link's segment contains <strong>every</strong> range; a range claimed by two clients makes both ambiguous, and neither queue is written. An address of any range confirms the client's presence and is never proposed as a candidate. Several <strong>clients</strong> on the same VLAN are simply declared separately, one record each.</p>
 <p><strong>Alone on its VLAN.</strong> When a single client is declared on a VLAN (and no PPPoE server listens on it), every network of that VLAN interface belongs to it — <strong>all of them</strong> when the VLAN carries several pools — plus its declared ranges: its queue targets the whole list, and its traffic is attributed to it in NetFlow.</p>
 <p><strong>Census and candidates.</strong> The census of a PoP (<code>GET /api/v1/pops/census</code>, see above) confirms declared clients — an address inside a declared block is "seen active" — and lists the addresses that match nothing. <code>GET /api/v1/static-clients/candidates</code> returns those candidates and <code>GET /api/v1/static-clients/candidates/diagnostic</code> the reason each ARP line was set aside. A candidate is never turned into a subscriber automatically: a printer, a camera or another operator's device leaves exactly the same trace, and nobody can guess the sold rate. Declaring always goes through <code>POST /api/v1/static-clients</code> (or the <em>Add a client</em> form) with a reference and a plan.</p>
 <h3 id="ubiquiti-antennas-and-radio-capacity">Ubiquiti antennas and radio capacity</h3>
@@ -2410,9 +2413,20 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Dry run</strong> (<code>POST /api/v1/shaping/plan</code>): the commands that would be sent, without sending anything.</li>
 </ul>
 <p><strong>Units.</strong> Every rate field has a <strong>kbps / Mbps / Gbps</strong> selector: a subscriber capped at 512 kbps is typed as such, not as <code>0.512 Mbps</code>, and displayed as "512 kbps". Internally everything is converted once, at the input, to Mbit/s. The API accepts <code>max_down_mbps</code>, <code>max_down_kbps</code> or <code>max_down_gbps</code> (same for upload, and <code>down_*</code> / <code>up_*</code> for a boost); two units for the same direction are refused as ambiguous.</p>
-<p><strong>Which rate wins.</strong> From strongest to weakest: a running <strong>boost</strong>, a permanent <strong>override</strong>, the <strong>bandwidth schedule</strong> in its current time slot (see below), the subscriber's <strong>plan</strong>. A boost goes over the override then disappears; it does not erase it. A schedule never undoes an override: a decision taken on <em>this</em> subscriber (capped for non-payment, for instance) is not lifted because the night begins.</p>
+<p><strong>Which rate wins.</strong> From strongest to weakest: a running <strong>boost</strong>, a permanent <strong>override</strong> (a hand-set rate, or the client's <strong>bandwidth mode</strong>), the <strong>bandwidth schedule</strong> in its current time slot (see below), the subscriber's <strong>plan</strong>. A boost goes over the override then disappears; it does not erase it. A schedule never undoes an override: a decision taken on <em>this</em> subscriber (capped for non-payment, for instance) is not lifted because the night begins.</p>
 <p><strong>Boosts.</strong> A duration (1 minute to 7 days), then either a multiplier of the plan (the interface offers ×2, ×3 and ×5; the API accepts more than 1, up to 50) or explicit rates, and a reason. It is written immediately if writing is allowed and <strong>expires by itself</strong>: a job checks expiries every 30 s and brings the queue back to its normal rate — RouterOS knows nothing about the duration. A boost without an expiry is refused: it would be an override in disguise that never goes away.</p>
 <p><strong>A rate set by hand is written at once.</strong> Setting a subscriber's or a link's rate writes the corresponding queue immediately (the full plan of the router, restricted to that queue), and the reply says what was written, on which router, or what prevented it (<code>apply_now=false</code> only records the intention).</p>
+<h3 id="bandwidth-modes-backup-night">Bandwidth modes (Backup, Night…)</h3>
+<p>A <strong>bandwidth mode</strong> is a named rate given to a client in one click, from the <strong>Clients</strong> page: <em>Backup</em> when the backhaul is degraded, <em>Extreme backup</em> for a crisis or non-payment, <em>Night</em>... The operator picks a name in a list instead of typing rates (<em>Plans › Bandwidth modes</em>, or <code>/api/v1/bandwidth-modes</code>).</p>
+<ul>
+<li><strong>Rate:</strong> fixed (<code>rate_kind=fixed</code>, Mbps) or a <strong>share of the client's plan</strong> (<code>percent</code>: 200 = twice the plan). A share needs the client's plan; a client without a known plan can only get a fixed mode.</li>
+<li><strong>Automatic</strong> is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its <strong>bandwidth schedule</strong> — its rate then changes with the hour on its own.</li>
+<li><strong>Where it sits:</strong> a client's mode is its permanent override (<code>shaping_policies.max_down_mbps/max_up_mbps</code>, with <code>mode_id</code> and <code>mode_name</code>). It is therefore above the schedule (a client in <em>Backup</em> stays in <em>Backup</em> when the night begins) and below a running boost. Back to Automatic removes the override and keeps a running boost.</li>
+<li><strong>Modes that stop boosts</strong> (<code>disables_boost</code>): entering the mode clears the running boost, and a new boost is refused (<code>409 Boost is unavailable in &lt;mode&gt;. Change the mode first.</code>).</li>
+<li><strong>Editing a mode's rate</strong> re-applies it at once to every client in it. A mode given to clients cannot be deleted (<code>409</code>): put them back to Automatic or in another mode first.</li>
+<li><strong>Writing:</strong> like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.</li>
+</ul>
+<p><strong>Client actions</strong> (<code>POST /api/v1/clients/actions</code>, <code>{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}</code>) act on one or several clients. The reply gives a result <strong>per client</strong> (<code>succeeded</code>, <code>failed</code>, <code>results[]</code>): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.</p>
 <h3 id="bandwidth-schedules-day-evening-night">Bandwidth schedules (day, evening, night)</h3>
 <p>Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched <strong>automatically</strong>, on time. A <strong>bandwidth schedule</strong> (<em>Plans › Bandwidth schedules</em>, or <code>/api/v1/bandwidth-schedules</code>) is a set of <strong>time slots</strong>, each with the rate that applies during it:</p>
 <ul>
@@ -2955,16 +2969,47 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <p>freeQoS holds router credentials that can write across the whole network. Security follows a simple principle: <strong>what writes is rare, explicit and logged</strong>.</p>
 <h3 id="interface-accounts">Interface accounts</h3>
 <ul>
-<li><strong>First account:</strong> on the first visit, the interface offers to create one. It has the <code>edit</code> role.</li>
-<li><strong>Two roles:</strong> <code>read</code> and <code>edit</code>. A <code>read</code> account gets a <code>403</code> from the <strong>server</strong> on any write, whatever the route. Only an <code>edit</code> account manages accounts.</li>
-<li><strong>Passwords:</strong> 12 characters minimum, too-common words are refused. They are hashed with scrypt (N=2^14, r=8, p=1, salted, compared in constant time).</li>
-<li><strong>Anti-guessing:</strong> 5 failures in 5 minutes lock the email <strong>and</strong> the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.</li>
-<li><strong>Session:</strong> an <code>HttpOnly</code>, <code>SameSite=Strict</code> cookie, valid 24 h, 30 days at most (<code>SESSION_TTL_HOURS</code>, <code>SESSION_MAX_HOURS</code>). Writes also check <code>Origin</code> and <code>Sec-Fetch-Site</code>.</li>
-<li><strong>Log:</strong> every login (successful, refused, locked), logout and account change is recorded with the address and browser. At login, everyone sees the date and origin of their previous login.</li>
-<li><strong>Last editor:</strong> at least one active account with edit rights always remains; the last one can be neither deleted, downgraded nor disabled.</li>
-<li><strong>Sessions:</strong> at most 10 open sessions per account; everyone sees their own sessions (browser, address, last activity) and can close them remotely. Changing a password or a role closes the other sessions.</li>
-<li><strong>Journal retention:</strong> login events are kept 180 days (<em>Settings › Accounts › Login journal</em>) and are also written to the container log (<code>auth login_failed …</code>), usable by fail2ban.</li>
+<li><strong>First account:</strong> on the first visit, the interface offers to create one. It is an Administrator (<code>edit</code>).</li>
+<li><strong>Three access levels</strong>, each including the rights of the previous one, enforced by the <strong>server</strong> (a refused write is a <code>403</code> naming the level it needs, whatever the interface shows):</li>
 </ul>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Level (<code>role</code>)</th>
+<th>Sees</th>
+<th>Can do</th>
+<th>Interface</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Viewer</strong> (<code>read</code>)</td>
+<td>Everything</td>
+<td>Nothing</td>
+<td>Every page, read-only banner</td>
+</tr>
+<tr>
+<td><strong>Operator</strong> (<code>operator</code>)</td>
+<td>Clients</td>
+<td>On <strong>one or several</strong> clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan</td>
+<td><strong>Clients</strong> page and own account only</td>
+</tr>
+<tr>
+<td><strong>Administrator</strong> (<code>edit</code>)</td>
+<td>Everything</td>
+<td>Everything else: adding clients, PoPs, routers, antennas and their API (Ubiquiti), bandwidth modes and schedules, settings, API keys, accounts</td>
+<td>Every page</td>
+</tr>
+</tbody>
+</table></div>
+<p>The writes open to the Operator form a <strong>closed list</strong> (<code>POST/DELETE /api/v1/shaping/boosts</code>, <code>PUT /api/v1/clients/{login}/mode</code>, <code>POST /api/v1/clients/actions</code>, <code>PUT/DELETE /api/v1/plans/{login}</code>): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the <strong>account</strong> that made it (the boost or mode's <code>updated_by</code>, the plan's author, the enforcement audit). An API key keeps its two scopes: <code>read</code>, or <code>write</code> (Administrator rights except accounts, which no key can manage). The stored values <code>read</code> and <code>edit</code> are those of the former two roles: existing accounts keep their level without migration.
+- <strong>Passwords:</strong> 12 characters minimum, too-common words are refused. They are hashed with scrypt (N=2^14, r=8, p=1, salted, compared in constant time).
+- <strong>Anti-guessing:</strong> 5 failures in 5 minutes lock the email <strong>and</strong> the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.
+- <strong>Session:</strong> an <code>HttpOnly</code>, <code>SameSite=Strict</code> cookie, valid 24 h, 30 days at most (<code>SESSION_TTL_HOURS</code>, <code>SESSION_MAX_HOURS</code>). Writes also check <code>Origin</code> and <code>Sec-Fetch-Site</code>.
+- <strong>Log:</strong> every login (successful, refused, locked), logout and account change is recorded with the address and browser. At login, everyone sees the date and origin of their previous login.
+- <strong>Last Administrator:</strong> at least one active Administrator account always remains; the last one can be neither deleted, downgraded nor disabled.
+- <strong>Sessions:</strong> at most 10 open sessions per account; everyone sees their own sessions (browser, address, last activity) and can close them remotely. Changing a password or a role closes the other sessions.
+- <strong>Journal retention:</strong> login events are kept 180 days (<em>Settings › Accounts › Login journal</em>) and are also written to the container log (<code>auth login_failed …</code>), usable by fail2ban.</p>
 <p><strong>Behind an HTTPS reverse proxy</strong>, set <code>FORWARDED_ALLOW_IPS=&lt;proxy address&gt;</code> so that the application trusts the proxy's <code>X-Forwarded-Proto</code>: the session cookie is then sent <code>Secure</code>, HSTS is set, and the address recorded for each login is the client's, not the proxy's.</p>
 <p><strong>Locked out of every edit account?</strong> Emptying the accounts table reopens the first-account screen; measurements and inventory are untouched:</p>
 <pre><code>sudo docker compose exec timescaledb psql -U qos -d qos -c &quot;TRUNCATE app_users CASCADE&quot;
@@ -3917,6 +3962,24 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><strong>Where are the logs?</strong> <code>make logs</code> (or <code>sudo docker compose logs -f app</code>). Every command written to a router is also in <em>Settings › Log of commands sent</em>.</p>
 <h2 id="appendix-a-interface-reference">Appendix A. Interface reference</h2>
 <p>The explanations below are exactly those the interface shows behind each (i), extracted from the application at build time: they cannot differ from what operators read on screen.</p>
+<h3 id="clients">Clients</h3>
+<p>The daily page, and the only one Operators see (with their account): every client, its connection, its usage, its bandwidth mode, its boost and its plan, for one client or for a selection.</p>
+<h4 id="client-operations">Client operations</h4>
+<p><strong>What it shows.</strong> The daily page: every client, its connection, its usage, its bandwidth mode and its boost.</p>
+<p><strong>How it is measured.</strong> Operators only see this page and their account. They act on one client or on a selection.</p>
+<p><strong>How to read it.</strong> Tick clients to change their mode or boost them together; a group change reports a result per client. The Plan button sets the rate the client subscribed to.</p>
+<h4 id="bandwidth-mode">Bandwidth mode</h4>
+<p><strong>What it shows.</strong> The named rate the client is in: Automatic, or a mode such as Backup or Night.</p>
+<p><strong>How it is measured.</strong> Automatic follows the plan and, when there is one, the bandwidth schedule: the rate changes with the hour on its own. A mode stays until the client is put back to Automatic.</p>
+<p><strong>How to read it.</strong> “Manual limit” is a rate set by hand by an Administrator, outside the modes.</p>
+<h4 id="connection">Connection</h4>
+<p>Connected = a measurement less than 90 s old. Otherwise, when the client was last seen.</p>
+<h4 id="current-usage">Current usage</h4>
+<p>Download (↓) and upload (↑) of the client right now, from the last measurement.</p>
+<h4 id="not-in-automatic">Not in automatic</h4>
+<p>Clients in a bandwidth mode or under a manual limit: their rate does not follow their plan and schedule.</p>
+<h4 id="boosts-active">Boosts active</h4>
+<p>Clients with a running boost. A boost ends on its own at its expiry.</p>
 <h3 id="dashboard">Dashboard</h3>
 <p>What is happening on the network right now.</p>
 <h4 id="network-throughput">Network throughput</h4>
@@ -4033,11 +4096,15 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <h3 id="subscribers">Subscribers</h3>
 <p>Every subscriber of every PoP, PPPoE and static-IP, filterable by PoP, kind and login: rate against plan, latency, bufferbloat grade, running boost. The <em>Add a client</em> form declares a static-IP client; <em>Declared static-IP clients</em> and <em>Clients by VLAN</em> list the inventory.</p>
 <h3 id="plans">Plans</h3>
-<p>Which rate for whom: the default plan, every client's plan and its source, and the packages pushed through the API.</p>
+<p>Which rate for whom: the default plan, the bandwidth modes, every client's plan and its source, and the packages pushed through the API.</p>
 <h4 id="default-plan">Default plan</h4>
 <p><strong>What it shows.</strong> The limit given to a client pushed by the API (or entered) without a rate. A client only DETECTED on a router, with no plan pushed, is observed and never throttled.</p>
 <p><strong>How to read it.</strong> 0 = no limit. To also cap detected clients, turn on default_plan_for_detected_clients in Settings. Changing it re-writes the queues of the clients that use it.</p>
-<h4 id="clients">Clients</h4>
+<h4 id="bandwidth-modes">Bandwidth modes</h4>
+<p><strong>What it shows.</strong> Named rates operators give a client in one click: a fixed rate, or a share of the client's plan.</p>
+<p><strong>How it is measured.</strong> Defining modes needs the Administrator level; giving one to clients, the Operator level. Changing a mode's rate applies it at once to every client in it.</p>
+<p><strong>How to read it.</strong> A mode that “stops boosts” clears the running boost and refuses new ones: use it for a crisis or non-payment.</p>
+<h4 id="clients_1">Clients</h4>
 <p><strong>What it shows.</strong> Each client and the plan applied to it, with where that plan comes from.</p>
 <p><strong>How to read it.</strong> Source: pushed by the API (billing / CRM), set by hand here, or the default plan. A limit forced in Subscribers (Rate) overrides all three — it is shown here so you know why the plan is not what is applied.</p>
 <h4 id="packages-pushed-by-the-api">Packages pushed by the API</h4>
@@ -4197,6 +4264,11 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td>Access</td>
 <td></td>
 <td>PoP to its subscribers: median of their medians (p90 when hovering). The part of the latency your access network adds.</td>
+</tr>
+<tr>
+<td>Access level</td>
+<td></td>
+<td>What the account may do. Each level includes the previous ones; the server enforces them. Viewer: sees everything, changes nothing. Operator: bandwidth mode, boost and plan of clients, one or several at a time. Administrator: everything else, such as adding clients, PoPs, routers, antennas and their API (Ubiquiti), modes, settings, API keys and accounts.</td>
 </tr>
 <tr>
 <td>Account</td>
@@ -4986,7 +5058,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 166 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 172 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -6018,6 +6090,48 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>GET</code></td>
 <td><code>/api/v1/bandwidth-schedules/{schedule_id}/preview</code></td>
 <td>Which subscribers this schedule governs, and their rate right now</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="modes">Modes</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/bandwidth-modes</code></td>
+<td>Bandwidth modes a client can be put in</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/bandwidth-modes</code></td>
+<td>Create a bandwidth mode</td>
+</tr>
+<tr>
+<td><code>PATCH</code></td>
+<td><code>/api/v1/bandwidth-modes/{mode_id}</code></td>
+<td>Edit a bandwidth mode</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/bandwidth-modes/{mode_id}</code></td>
+<td>Delete a bandwidth mode</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/clients/actions</code></td>
+<td>Change mode or boost of one or several clients</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/clients/{login}/mode</code></td>
+<td>Put one client in a bandwidth mode</td>
 </tr>
 </tbody>
 </table></div>

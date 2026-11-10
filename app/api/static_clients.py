@@ -61,8 +61,13 @@ class StaticClientInput(BaseModel):
     pop_name: str = Field(min_length=1, max_length=128)
     address: str = Field(
         min_length=1,
-        max_length=64,
-        description="Static IP (10.0.0.5) or subnet assigned to the client (10.0.0.0/29)",
+        max_length=2000,
+        description=(
+            "Static IP (10.0.0.5) or subnet assigned to the client (10.0.0.0/29). "
+            "A pool range (10.0.0.10-10.0.0.20) or several IPs (10.0.0.5, 10.0.0.6) "
+            "are accepted too: the first block becomes the address, the others are "
+            "added to extra_prefixes, under the same single queue."
+        ),
     )
     label: str | None = Field(default=None, max_length=128)
     vlan: int | None = Field(default=None, ge=1, le=4094)
@@ -98,7 +103,7 @@ class StaticClientUpdate(BaseModel):
 
     reference: str | None = Field(default=None, min_length=1, max_length=64)
     pop_name: str | None = Field(default=None, min_length=1, max_length=128)
-    address: str | None = Field(default=None, min_length=1, max_length=64)
+    address: str | None = Field(default=None, min_length=1, max_length=2000)
     label: str | None = Field(default=None, max_length=128)
     vlan: int | None = Field(default=None, ge=1, le=4094)
     sector_key: str | None = Field(default=None, max_length=128)

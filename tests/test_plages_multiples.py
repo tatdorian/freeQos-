@@ -28,6 +28,7 @@ from app.db.static_clients_repo import (
     InvalidStaticClientError,
     normalise_address,
     normalise_extra_prefixes,
+    split_address,
     to_model,
 )
 from app.enforcement.models import prefixes_target
@@ -102,6 +103,45 @@ def test_aucune_plage_n_est_une_liste_vide() -> None:
 def test_plages_refusees(saisie: str) -> None:
     with pytest.raises(InvalidStaticClientError):
         normalise_extra_prefixes([saisie])
+
+
+def test_une_plage_avec_des_espaces_autour_du_tiret() -> None:
+    """« 10.0.1.10 - 10.0.1.13 » : decoupee sur les espaces, la plage devenait
+    trois morceaux, dont un « - » refuse avec un message incomprehensible."""
+    attendu = ["10.0.1.10/31", "10.0.1.12/31"]
+    assert normalise_extra_prefixes("10.0.1.10 - 10.0.1.13") == attendu
+    # Le formulaire envoie une liste deja decoupee : meme resultat.
+    assert normalise_extra_prefixes(["10.0.1.10", "-", "10.0.1.13"]) == attendu
+
+
+def test_l_adresse_principale_accepte_une_plage() -> None:
+    adresse, plages = split_address("10.0.0.10-10.0.0.13", None)
+    assert (adresse, plages) == ("10.0.0.10/31", ["10.0.0.12/31"])
+
+
+def test_l_adresse_principale_accepte_plusieurs_ip() -> None:
+    adresse, plages = split_address("10.0.0.5, 10.0.0.6 10.0.0.9", ["10.0.1.0/28"])
+    assert adresse == "10.0.0.5/32"
+    assert plages == ["10.0.0.6/32", "10.0.0.9/32", "10.0.1.0/28"]
+
+
+def test_une_adresse_seule_ne_change_rien() -> None:
+    assert split_address("10.0.0.0/29", ["10.0.0.0/29", "10.0.1.5"]) == (
+        "10.0.0.0/29",
+        ["10.0.0.0/29", "10.0.1.5/32"],
+    )
+    assert split_address("2001:db8::1", None) == ("2001:db8::1/128", [])
+
+
+def test_l_adresse_principale_n_est_pas_repetee_dans_les_plages() -> None:
+    adresse, plages = split_address("10.0.0.5, 10.0.0.6", ["10.0.0.5", "10.0.0.6"])
+    assert (adresse, plages) == ("10.0.0.5/32", ["10.0.0.6/32"])
+
+
+@pytest.mark.parametrize("saisie", ["", "  ", "10.0.0.20-10.0.0.10", "pas une ip, 10.0.0.1"])
+def test_une_adresse_principale_invalide_est_refusee(saisie: str) -> None:
+    with pytest.raises(InvalidStaticClientError):
+        split_address(saisie, None)
 
 
 def test_trop_de_blocs_est_refuse() -> None:

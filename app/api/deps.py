@@ -78,3 +78,13 @@ RepositoryDep = Annotated[MetricsRepository, Depends(get_repository)]
 SchedulerDep = Annotated[Scheduler, Depends(get_scheduler)]
 CollectionDep = Annotated[CollectionService, Depends(get_collection)]
 TimeRangeDep = Annotated[TimeRange, Depends(time_range)]
+
+
+def acteur(request: Request) -> str:
+    """Qui fait le geste, pour le journal : l'adresse du compte, ou la cle.
+
+    Le compte est pose sur la requete par la garde d'acces (require_access) ;
+    sans elle (tests, authentification coupee), le geste reste signe "ui".
+    """
+    user = getattr(request.state, "user", None) or {}
+    return str(user.get("email") or "ui")

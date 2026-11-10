@@ -185,17 +185,28 @@ Sans routeur sous la main, les providers `mock` suffisent à faire tourner toute
 ### Comptes et connexion
 
 Au premier lancement, la page demande de **créer le premier compte** (email + mot de
-passe) : il a les droits d'**édition**. Ensuite, toute l'interface exige une connexion.
+passe) : il est **Administrator**. Ensuite, toute l'interface exige une connexion.
 
-| Grade | Ce qu'il peut faire |
-|---|---|
-| **Lecture seule** | Tout voir. Toute modification est **refusée par le serveur** (403), quelle que soit la page — pas seulement masquée |
-| **Édition** | Tout faire, y compris gérer les comptes dans *Settings › Accounts* : email, mot de passe et grade de chacun, désactivation, suppression |
+Trois niveaux d'accès, chacun avec les droits du précédent, **tenus par le serveur**
+(une modification hors niveau est refusée en 403, quelle que soit la page) :
+
+| Niveau | Ce qu'il peut faire | Interface |
+|---|---|---|
+| **Viewer** | Tout voir, rien modifier (lecture seule) | Toutes les pages, en lecture |
+| **Operator** | Sur **un ou plusieurs** clients : changer le **mode de débit**, donner ou retirer un **boost**, poser ou retirer le **forfait** | Page **Clients** et son compte uniquement |
+| **Administrator** | Tout le reste : ajouter des clients, des PoPs, des routeurs, des antennes et leur **API (Ubiquiti)**, les modes et profils horaires, les réglages, les clés d'API et les comptes (*Settings › Accounts*) | Toutes les pages |
+
+**Les modes de débit.** Un mode est un débit nommé qu'on donne à un client d'un clic depuis
+la page *Clients* : *Backup*, *Extreme backup*, *Night*… L'Administrator les définit dans
+*Plans › Bandwidth modes* : débit fixe (Mbps) ou part du forfait du client (%), et s'il
+coupe les boosts. **Automatic** = pas de mode : le client suit son forfait et son profil
+horaire, son débit change alors tout seul selon l'heure. Un changement de mode écrit la file
+tout de suite ; sur plusieurs clients, le résultat est rendu client par client.
 
 - Chacun peut changer son propre mot de passe (*Settings › Accounts › My password*),
   voir **ses sessions ouvertes** (navigateur, adresse, dernière activité) et les fermer
   à distance (*My sessions*).
-- Il reste toujours au moins un compte d'édition actif : le dernier ne peut être ni
+- Il reste toujours au moins un compte Administrator actif : le dernier ne peut être ni
   supprimé, ni rétrogradé, ni désactivé.
 
 **Sécurité de la connexion**
@@ -1227,7 +1238,13 @@ routé derrière leur CPE. Ce sont alors les **plages additionnelles** de la fic
 |---|---|---|
 | une IP | `10.0.1.5` | `10.0.1.5/32` |
 | un bloc | `10.0.1.0/28` | `10.0.1.0/28` |
-| une plage de pool MikroTik | `10.0.1.10-10.0.1.17` | les blocs exacts qui la couvrent : `10.0.1.10/31`, `10.0.1.12/30`, `10.0.1.16/31` |
+| une plage de pool MikroTik | `10.0.1.10-10.0.1.17` (espaces autour du tiret acceptés) | les blocs exacts qui la couvrent : `10.0.1.10/31`, `10.0.1.12/30`, `10.0.1.16/31` |
+
+**L'adresse principale accepte la même saisie.** Une plage (`10.0.0.10-10.0.0.20`) ou
+plusieurs IP séparées par des virgules (`10.0.0.5, 10.0.0.6, 10.0.0.9`) peuvent être tapées
+directement dans le champ *IP address, subnet or range* : le premier bloc devient l'adresse
+de la fiche, les autres rejoignent les plages additionnelles. Modifier ensuite l'adresse
+seule avec une plage **ajoute** ses autres blocs aux plages déjà déclarées.
 
 **Un client, un débit, une seule file.** Le client a souscrit **un** débit : deux files
 lui en donneraient deux. Toutes ses plages partagent donc la même file, dont la cible les

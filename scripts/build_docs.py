@@ -79,6 +79,20 @@ _GENERE = re.compile(r"^<!-- generated: ([a-z0-9-]+) -->$", re.MULTILINE)
 # aucune explication de l'interface ne peut manquer a la documentation.
 PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     (
+        "Clients",
+        "The daily page, and the only one Operators see (with their account): every client, "
+        "its connection, its usage, its bandwidth mode, its boost and its plan, for one "
+        "client or for a selection.",
+        [
+            "client operations",
+            "bandwidth mode",
+            "connection",
+            "current usage",
+            "not in automatic",
+            "boosts active",
+        ],
+    ),
+    (
         "Dashboard",
         "What is happening on the network right now.",
         ["network throughput", "routers — live traffic", "top consumers", "radio backhauls"],
@@ -130,9 +144,9 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     ),
     (
         "Plans",
-        "Which rate for whom: the default plan, every client's plan and its source, and the "
-        "packages pushed through the API.",
-        ["default plan", "clients", "packages pushed by the api"],
+        "Which rate for whom: the default plan, the bandwidth modes, every client's plan and "
+        "its source, and the packages pushed through the API.",
+        ["default plan", "bandwidth modes", "clients", "packages pushed by the api"],
     ),
     (
         "Insights",

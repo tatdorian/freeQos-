@@ -69,7 +69,12 @@ def test_le_premier_compte_est_en_edition_et_ouvre_une_session(
     app_client: TestClient, users: InMemoryUsersRepository
 ) -> None:
     r = app_client.post("/api/v1/auth/setup", json={"email": " Admin@Exemple.FR ", "password": MDP})
-    assert r.json()["user"] == {"id": 1, "email": "admin@exemple.fr", "role": "edit"}
+    assert r.json()["user"] == {
+        "id": 1,
+        "email": "admin@exemple.fr",
+        "role": "edit",
+        "role_label": "Administrator",
+    }
     cookie = r.headers["set-cookie"].lower()
     assert "httponly" in cookie and "samesite=strict" in cookie and "secure" in cookie
     assert app_client.get("/api/v1/auth/status").json()["user"]["role"] == "edit"

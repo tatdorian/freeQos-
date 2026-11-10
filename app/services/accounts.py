@@ -33,9 +33,32 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+#: TROIS NIVEAUX D'ACCES, du plus faible au plus fort. Les identifiants stockes
+#: "read" et "edit" sont ceux d'avant le niveau intermediaire : on les garde
+#: tels quels, ce qui laisse chaque compte existant a son niveau sans migration.
+#:
+#: - read (Viewer) : voit tout, ne change rien ;
+#: - operator (Operator) : opere les CLIENTS, un ou plusieurs a la fois -- leur
+#:   mode de debit, leur boost, leur forfait. Le geste quotidien du support ;
+#: - edit (Administrator) : tout le reste -- ajouter des clients, des PoPs, des
+#:   routeurs, des antennes et leur API (Ubiquiti), les modes, les reglages, les
+#:   cles d'API et les comptes.
 ROLE_READ = "read"
+ROLE_OPERATOR = "operator"
 ROLE_EDIT = "edit"
-ROLES: tuple[str, ...] = (ROLE_READ, ROLE_EDIT)
+ROLES: tuple[str, ...] = (ROLE_READ, ROLE_OPERATOR, ROLE_EDIT)
+ROLE_LABELS: dict[str, str] = {
+    ROLE_READ: "Viewer",
+    ROLE_OPERATOR: "Operator",
+    ROLE_EDIT: "Administrator",
+}
+_RANG: dict[str, int] = {role: rang for rang, role in enumerate(ROLES)}
+
+
+def role_at_least(role: str | None, minimum: str) -> bool:
+    """Le compte a-t-il AU MOINS ce niveau ? Un role inconnu n'a rien."""
+    return _RANG.get(str(role or ""), -1) >= _RANG[minimum]
+
 
 #: Methodes qu'un compte en lecture seule peut employer.
 SAFE_METHODES = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -91,7 +114,9 @@ def normalise_email(value: str) -> str:
 def check_role(value: str) -> str:
     role = (value or "").strip().lower()
     if role not in ROLES:
-        raise InvalidAccountError("role must be 'read' or 'edit'")
+        raise InvalidAccountError(
+            "role must be one of: " + ", ".join(f"'{r}' ({ROLE_LABELS[r]})" for r in ROLES)
+        )
     return role
 
 

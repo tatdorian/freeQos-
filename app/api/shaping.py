@@ -18,10 +18,10 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, model_validator
 
-from app.api.deps import ContainerDep, RepositoryDep
+from app.api.deps import ContainerDep, RepositoryDep, acteur
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.routeros import MissingWriteCredentialsError
 from app.models import KIND_STATIC
@@ -1024,7 +1024,7 @@ async def list_boosts(container: ContainerDep) -> list[dict[str, Any]]:
 
 @router.post("/shaping/boosts", summary="Give a temporary rate boost")
 async def create_boost(
-    payload: BoostInput, container: ContainerDep, metrics: RepositoryDep
+    payload: BoostInput, request: Request, container: ContainerDep, metrics: RepositoryDep
 ) -> dict[str, Any]:
     """Pose un boost puis, si demande, l'applique immediatement.
 
@@ -1032,30 +1032,80 @@ async def create_boost(
     normal. Sans cela le boost resterait indefiniment, la file RouterOS ne
     sachant rien de sa duree.
     """
-    repo = _require_topology(container)
+    return await poser_boost(
+        container,
+        metrics,
+        login=payload.login,
+        down_mbps=payload.down_mbps,
+        up_mbps=payload.up_mbps,
+        multiplier=payload.multiplier,
+        duration_minutes=payload.duration_minutes,
+        reason=payload.reason,
+        apply_now=payload.apply_now,
+        author=acteur(request),
+    )
 
+
+async def client_connu(container: Any, metrics: Any, login: str) -> dict[str, Any] | None:
+    """La ligne d'un abonne ou, a defaut, la fiche d'un client a IP fixe."""
+    # Recherche ciblee, et MESURE OU NON : un client declare qui n'a encore
+    # produit aucun echantillon (hors ligne a l'instant) reste un client, et
+    # son mode doit pouvoir etre change avant qu'il revienne.
     abonne = next(
         (
             row
-            for row in await metrics.subscriber_latest(limit=5000, order_by="login")
-            if row["login"] == payload.login
+            for row in await metrics.subscriber_latest(
+                search=login, limit=500, order_by="login", include_unmeasured=True
+            )
+            if row["login"] == login
         ),
         None,
     )
     if abonne is None:
         # Un client a IP fixe declare a l'instant n'a pas encore d'echantillon :
-        # sa fiche suffit a le booster, il est joignable en permanence.
-        abonne = await _fiche_statique(container, payload.login)
+        # sa fiche suffit, il est joignable en permanence.
+        abonne = await _fiche_statique(container, login)
+    return abonne
+
+
+async def poser_boost(
+    container: Any,
+    metrics: Any,
+    *,
+    login: str,
+    down_mbps: float | None,
+    up_mbps: float | None,
+    multiplier: float | None,
+    duration_minutes: int,
+    reason: str | None,
+    apply_now: bool,
+    author: str,
+) -> dict[str, Any]:
+    repo = _require_topology(container)
+    abonne = await client_connu(container, metrics, login)
     if abonne is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"No active subscriber nor declared client for '{payload.login}'",
+            detail=f"No active subscriber nor declared client for '{login}'",
         )
+    # UN MODE DE CRISE REFUSE LE BOOST. "Extreme backup" existe pour soulager
+    # le reseau ou suspendre un impaye : un boost le defairait en un clic.
+    politique_actuelle = await repo.policy_of(login) if hasattr(repo, "policy_of") else None
+    if politique_actuelle and politique_actuelle.get("mode_id") and container.modes_repo:
+        try:
+            mode = await container.modes_repo.get(int(politique_actuelle["mode_id"]))
+        except LookupError:
+            mode = None
+        if mode and mode.get("disables_boost"):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Boost is unavailable in {mode['name']}. Change the mode first.",
+            )
 
-    down, up = payload.down_mbps, payload.up_mbps
-    if payload.multiplier is not None:
-        down = down or (abonne.get("plan_down_mbps") or 0) * payload.multiplier or None
-        up = up or (abonne.get("plan_up_mbps") or 0) * payload.multiplier or None
+    down, up = down_mbps, up_mbps
+    if multiplier is not None:
+        down = down or (abonne.get("plan_down_mbps") or 0) * multiplier or None
+        up = up or (abonne.get("plan_up_mbps") or 0) * multiplier or None
     if down is None and up is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1064,43 +1114,46 @@ async def create_boost(
             ),
         )
 
-    expire_le = datetime.now(tz=UTC) + timedelta(minutes=payload.duration_minutes)
+    expire_le = datetime.now(tz=UTC) + timedelta(minutes=duration_minutes)
     politique = await repo.set_boost(
         scope="subscriber",
-        target_key=payload.login,
+        target_key=login,
         down_mbps=down,
         up_mbps=up,
         expires_at=expire_le,
-        reason=payload.reason,
-        updated_by="ui",
+        reason=reason,
+        updated_by=author,
     )
 
     resultat: dict[str, Any] = {
         "boost": {
-            "login": payload.login,
+            "login": login,
             "down_mbps": politique["boost_down_mbps"],
             "up_mbps": politique["boost_up_mbps"],
             "expires_at": expire_le,
-            "duration_minutes": payload.duration_minutes,
+            "duration_minutes": duration_minutes,
         },
         "applied": None,
     }
 
-    if payload.apply_now:
-        resultat["applied"] = await _apply_for_subscriber(container, payload.login, author="ui")
+    if apply_now:
+        resultat["applied"] = await _apply_for_subscriber(container, login, author=author)
     return resultat
 
 
 @router.delete("/shaping/boosts/{login}", summary="Remove a boost before it expires")
 async def clear_boost(
     login: str,
+    request: Request,
     container: ContainerDep,
     apply_now: Annotated[bool, Query()] = True,
 ) -> dict[str, Any]:
     retire = await _require_topology(container).clear_boost("subscriber", login)
     if not retire:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No boost running")
-    applique = await _apply_for_subscriber(container, login, author="ui") if apply_now else None
+    applique = (
+        await _apply_for_subscriber(container, login, author=acteur(request)) if apply_now else None
+    )
     return {"cleared": True, "applied": applique}
 
 

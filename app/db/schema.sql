@@ -606,7 +606,7 @@ CREATE TABLE IF NOT EXISTS app_users (
     id             SERIAL PRIMARY KEY,
     email          TEXT NOT NULL UNIQUE,
     password_hash  TEXT NOT NULL,
-    role           TEXT NOT NULL CHECK (role IN ('read', 'edit')),
+    role           TEXT NOT NULL CHECK (role IN ('read', 'operator', 'edit')),
     disabled       BOOLEAN NOT NULL DEFAULT FALSE,
     created_by     TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1290,3 +1290,39 @@ CREATE TABLE IF NOT EXISTS bandwidth_schedules (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- NIVEAUX D'ACCES (Viewer, Operator, Administrator). Les bases creees avant
+-- n'acceptaient que 'read' et 'edit' ; une version intermediaire avait cinq
+-- niveaux, ramenes ici aux trois : User/Supervisor -> Operator,
+-- Technician -> Administrator.
+ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_role_check;
+UPDATE app_users SET role = 'operator' WHERE role IN ('user', 'supervisor');
+UPDATE app_users SET role = 'edit' WHERE role = 'technician';
+ALTER TABLE app_users ADD CONSTRAINT app_users_role_check
+    CHECK (role IN ('read', 'operator', 'edit'));
+
+-- MODES DE DEBIT. Un mode est un debit nomme que l'on donne a un client d'un
+-- geste : "Backup", "Extreme backup", "Day", "Night"... L'exploitant le choisit
+-- dans une liste, il ne saisit pas de chiffres. Le debit est fixe (Mbps) ou une
+-- part du forfait du client (percent). "Automatic" n'est pas une ligne : c'est
+-- l'absence de mode -- le client suit son forfait et son profil horaire.
+CREATE TABLE IF NOT EXISTS bandwidth_modes (
+    id              BIGSERIAL PRIMARY KEY,
+    name            TEXT NOT NULL UNIQUE,
+    rate_kind       TEXT NOT NULL DEFAULT 'fixed' CHECK (rate_kind IN ('fixed', 'percent')),
+    down_value      DOUBLE PRECISION NOT NULL CHECK (down_value > 0),
+    up_value        DOUBLE PRECISION NOT NULL CHECK (up_value > 0),
+    -- Un mode de crise (impaye, saturation) coupe le boost en cours et le refuse.
+    disables_boost  BOOLEAN NOT NULL DEFAULT FALSE,
+    position        INTEGER NOT NULL DEFAULT 0,
+    note            TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Le mode d'un client vit dans SA politique : son debit est la surcharge
+-- permanente (max_down/up_mbps), qui passe deja au-dessus du profil horaire et
+-- sous le boost. mode_id dit d'ou vient cette surcharge ; mode_name la nomme
+-- encore si le mode est renomme entre-temps.
+ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS mode_id   BIGINT;
+ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS mode_name TEXT;
