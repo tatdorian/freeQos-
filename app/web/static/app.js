@@ -11784,6 +11784,41 @@ function jaugeUsage(r, on) {
     esc(mbps(lim)) + ' · <b class="use-word ' + cls + '">' + mot + '</b>';
 }
 
+/* --- sante du client : un diagnostic en trois lignes, et ce qu'il consomme --- */
+const NIVEAU_MOT = { ok: 'lv-ok', warn: 'lv-warn', crit: 'lv-crit', unknown: 'lv-idle' };
+
+/** Pourquoi ce peut etre lent : le signal, le site, la limite. Une ligne chacun,
+ *  une pastille, une phrase. Ce qui n'est pas mesure le dit, sans alarmer. */
+function carteDiagnostic(sante) {
+  if (!sante) return '';
+  const ligne = (icone, nom, d) => !d ? '' : '<div class="dg-row"><i class="dg-dot lv-' + d.level + '"></i>' +
+    '<div class="dg-txt"><span class="dg-name">' + nom + '</span><b>' + esc(d.title) + '</b>' +
+    (d.detail ? '<small>' + esc(d.detail) + '</small>' : '') + '</div></div>';
+  return '<div class="card dg-card"><h3>Diagnosis</h3>' +
+    ligne('antenna', 'Radio signal', sante.radio) +
+    ligne('chart', 'Its site', sante.site) +
+    ligne('limit', 'Limit on the router', sante.limit) + '</div>';
+}
+
+/** Ce que le client consomme : volumes 24 h / 30 jours et ses usages (7 jours). */
+function carteUsages(sante) {
+  const u = sante && sante.usage;
+  if (!u) return '';
+  const top = (u.top || []).filter((a) => a.bytes > 0);
+  const max = Math.max(1, ...top.map((a) => a.bytes));
+  return '<div class="card us-card"><div class="cp-card-head"><h3>What it uses</h3></div><div class="us-grid">' +
+    '<div class="us-vol"><div><span>Last 24 h</span><b>&darr; ' + esc(octetsText(u.day_down_bytes)) + '</b>' +
+      '<small>&uarr; ' + esc(octetsText(u.day_up_bytes)) + '</small></div>' +
+    '<div><span>Last 30 days</span><b>&darr; ' + esc(octetsText(u.month_down_bytes)) + '</b>' +
+      '<small>&uarr; ' + esc(octetsText(u.month_up_bytes)) + '</small></div></div>' +
+    '<div class="us-apps">' + (top.length ? top.map((a) => '<div class="us-app"><span class="us-name">' +
+        esc(a.app.charAt(0).toUpperCase() + a.app.slice(1)) + '</span><span class="us-bar"><i style="width:' +
+        Math.max(3, Math.round(a.bytes / max * 100)) + '%"></i></span><span class="us-share">' + esc(a.share) + ' %</span></div>').join('') +
+      '<small class="hint" style="display:block">Main uses over the last 7 days (traffic flows).</small>'
+      : '<div class="empty" style="padding:1rem">No traffic flow for this client yet: the uses appear once the router exports its flows.</div>') +
+    '</div></div></div>';
+}
+
 /** La latence en un mot. */
 function qualiteLatence(ms) {
   const v = Number(ms);
@@ -11819,10 +11854,11 @@ async function loadClientPage() {
     return;
   }
   const pas = FICHE.periode <= 60 ? 30 : FICHE.periode <= 1440 ? 300 : 3600;
-  const [data, journal] = await Promise.all([
+  const [data, journal, sante] = await Promise.all([
     r.subscriber_id ? api('/subscribers/' + r.subscriber_id + '/metrics?minutes=' + FICHE.periode +
       '&bucket_seconds=' + pas).catch(() => null) : Promise.resolve(null),
     api('/activity?limit=50&login=' + encodeURIComponent(login)).catch(() => []),
+    FICHE.onglet === 'overview' ? api('/clients/' + encodeURIComponent(login) + '/health').catch(() => null) : Promise.resolve(null),
   ]);
   const s = (data && data.subscriber) || r;
   const pts = (data && data.points) || [];
@@ -11861,9 +11897,15 @@ async function loadClientPage() {
       kpi('limit', 'k-lim', 'Limit', s.effective_down_mbps ? sansUnite(s.effective_down_mbps) : 'None',
         s.effective_down_mbps ? 'Mbps' : '', s.effective_down_mbps ? '&uarr; ' + esc(mbps(s.effective_up_mbps || 0)) +
           ' up · ' + esc(SOURCE_LIMITE[s.limit_source] || '') : 'no limit applied') +
-      kpi('rtt', 'k-rtt', 'Latency', r.rtt_ms ? String(Math.round(r.rtt_ms)) : '-', r.rtt_ms ? 'ms' : '',
-        r.rtt_ms ? qualiteLatence(r.rtt_ms) + (data && data.bufferbloat ? ' · under load: grade ' +
-          esc(data.bufferbloat.grade) : '') : 'not measured') +
+      // L'EXPERIENCE plutot que la latence seule : une note, un mot, et ce
+      // qui la fait (latence, lenteur sous charge, pertes).
+      (sante && sante.experience && sante.experience.score != null
+        ? kpi('rtt', 'k-' + ({ ok: 'ok', warn: 'up', crit: 'bad' }[sante.experience.level] || 'rtt'), 'Experience',
+          String(Math.round(sante.experience.score)), '/100',
+          '<b class="use-word ' + NIVEAU_MOT[sante.experience.level] + '">' + esc(sante.experience.title.split(' · ')[0].toLowerCase()) +
+          '</b> ' + esc(sante.experience.detail))
+        : kpi('rtt', 'k-rtt', 'Latency', r.rtt_ms ? String(Math.round(r.rtt_ms)) : '-', r.rtt_ms ? 'ms' : '',
+          r.rtt_ms ? qualiteLatence(r.rtt_ms) : 'not measured')) +
       '</div><div class="cp-grid"><div class="card cp-usage"><div class="cp-card-head"><div><h3>Usage over time</h3>' +
       '</div>' +
       '<div class="segmented" id="cp-range">' + [[60, '1 hour'], [1440, '24 hours'], [10080, '7 days']].map(([v, l]) =>
@@ -11871,7 +11913,7 @@ async function loadClientPage() {
       '</div></div><div id="cp-chart"></div><div class="cp-totals">' +
         '<div><span>&darr; Downloaded</span><b>' + esc(octetsText(octets('tx_bps_avg'))) + '</b></div>' +
         '<div><span>&uarr; Uploaded</span><b>' + esc(octetsText(octets('rx_bps_avg'))) + '</b></div></div></div>' +
-      '<div class="cp-side"><div class="card"><h3>Bandwidth &amp; mode</h3><table class="kv"><tbody>' +
+      '<div class="cp-side">' + carteDiagnostic(sante) + '<div class="card"><h3>Bandwidth &amp; mode</h3><table class="kv"><tbody>' +
         '<tr><td>Mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
         '<tr><td>Plan</td><td>' + (s.plan_down_mbps ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : 'default plan') + '</td></tr>' +
         '<tr><td>Applied now</td><td>' + esc(limite) + '</td></tr>' +
@@ -11886,7 +11928,7 @@ async function loadClientPage() {
         '<tr><td>Kind</td><td>' + esc(r.kind === 'static' ? 'static IP' : 'PPPoE') + '</td></tr>' +
         '<tr><td>Session</td><td>' + (r.session_uptime_s ? esc(uptime(r.session_uptime_s)) : '-') + '</td></tr>' +
         '<tr><td>Last measurement</td><td>' + (r.ts ? esc(depuis(r.ts)) : 'never') + '</td></tr>' +
-      '</tbody></table></div></div></div>' +
+      '</tbody></table></div></div></div>' + carteUsages(sante) +
       '<div class="card" style="margin-top:1rem"><div class="cp-card-head"><h3>Recent activity</h3>' +
       (journal.length > 5 ? '<button class="sm link-btn" data-tab="activity">See all &rarr;</button>' : '') + '</div>' +
       '<div class="table-wrap">' + lignesActivite(journal.slice(0, 5), false) + '</div></div>';

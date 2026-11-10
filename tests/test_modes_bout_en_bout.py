@@ -453,3 +453,21 @@ def test_uisp_se_branche_et_montre_ses_antennes(app_client, routeur, monkeypatch
     assert antenne["linked_pop"] == "Plateau"
     assert app_client.delete("/api/v1/uisp/links/dev-1", headers=cle).status_code == 200
     assert app_client.delete("/api/v1/uisp", headers=cle).status_code == 200
+
+
+def test_la_sante_d_un_client_se_lit_meme_sans_mesure(app_client, routeur) -> None:  # noqa: F811
+    """La route de sante repond pour un client reel : chaque reponse est la,
+    « inconnue » quand sa source manque (pas d'antenne, pas de NetFlow)."""
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    r = app_client.get(
+        "/api/v1/clients/dupont/health", headers={"Authorization": f"Bearer {lecture}"}
+    )
+    assert r.status_code == 200, r.text
+    corps = r.json()
+    for cle_ in ("experience", "radio", "site", "limit", "usage"):
+        assert cle_ in corps
+    assert corps["radio"]["level"] == "unknown"
+    assert corps["site"]["site"] == "PoP Test"
+    assert app_client.get("/api/v1/clients/inconnu/health", headers=cle).status_code == 404
