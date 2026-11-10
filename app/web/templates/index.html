@@ -627,11 +627,6 @@
          Ouvert a l'Operator : ce sont des decisions commerciales, pas de la
          technique. -->
     <section id="view-management">
-      <p class="eyebrow">Client management</p>
-      <p class="hint" style="display:block;margin-top:0">Rates that change with the time of day
-        (day, evening, night, weekend), on their own, for all clients, some sites, some plans or
-        named clients. A client in a bandwidth mode keeps its mode until it is put back to
-        Automatic.</p>
       <!-- PROFILS HORAIRES : des debits qui changent avec l'heure (jour,
            soiree, nuit), tout seuls. Hierarchie : boost > limite forcee >
            profil horaire > forfait. Un seul profil gouverne un client : le
@@ -640,12 +635,6 @@
 
 
       <h2>Bandwidth schedules</h2>
-      <p class="hint" style="display:block">Rates that change with the time of day (day, evening,
-        night), automatically. Each time slot sets a <b>percentage of the plan</b> (200 % = twice
-        the plan at night) or a <b>fixed rate</b>. Outside every slot, the normal plan applies.
-        A forced limit or a boost still takes precedence. When several schedules target the same
-        client, the most precise one governs it alone (named clients, then plans, then sites,
-        then all clients).</p>
       <div class="table-wrap" id="sched-list"></div>
       <div id="sched-result"></div>
       <h3 id="sched-form-title" style="margin:1rem 0 .4rem">New schedule</h3>
@@ -704,20 +693,11 @@
     <!-- MODES : les modes de debit, et QUI est dans quel mode. On en cree de
          nouveaux ici ; on les donne depuis Clients. -->
     <section id="view-modes">
-      <p class="eyebrow">Bandwidth modes</p>
-      <p class="hint" style="display:block;margin-top:0">Each mode is a named rate given to clients
-        in one click. Here you see every mode, which clients are in it, and you create new ones.</p>
       <div id="modes-board"></div>
       <!-- MODES DE DEBIT : les debits nommes que les operateurs donnent a un
            client d'un geste (Clients > Change mode). Les definir est de la
            gestion, comme les donner : niveau Operator. -->
       <h2>All modes</h2>
-      <p class="hint" style="display:block">Named rates an operator gives a client in one click
-        from the <b>Clients</b> page: <i>Backup</i>, <i>Extreme backup</i>, <i>Night</i>... Each
-        mode is a <b>fixed rate</b> or a <b>share of the client's plan</b>. A client in a mode keeps
-        it until it is put back to <b>Automatic</b>, which follows its plan and its bandwidth
-        schedule (the rate then changes with the time of day on its own). A boost still takes
-        precedence, except in a mode that <b>stops boosts</b>.</p>
       <div class="table-wrap" id="modes-list"></div>
       <div id="modes-result"></div>
       <h3 id="modes-form-title" style="margin:1rem 0 .4rem">New mode</h3>
@@ -767,21 +747,15 @@
     <!-- ALERTES : ce qui demande quelqu'un, regroupe. Une panne de site ne doit
          pas devenir vingt alertes de clients. -->
     <section id="view-alerts">
-      <p class="eyebrow">Connection health</p>
-      <p class="hint" style="display:block;margin-top:0">What needs you, grouped: when several
-        clients of the same site are down, it is one site problem, not many client problems.</p>
       <div id="alerts-list"></div>
     </section>
 
     <!-- ACTIVITE : qui a change quoi, quand, sur quel client, et si c'est
          arrive jusqu'au routeur. -->
     <section id="view-activity">
-      <p class="eyebrow">Team activity</p>
-      <p class="hint" style="display:block;margin-top:0">Every change made on a client: who asked
-        for it, when, and whether it reached the router.</p>
       <div class="card cli-card">
         <div class="toolbar cli-filters">
-          <input type="search" id="act-search" placeholder="Search a client, an operator, an action..."
+          <input type="search" id="act-search" placeholder="Search"
                  autocomplete="off" spellcheck="false">
           <span class="spacer"></span>
           <span class="mode" id="act-count"></span>
@@ -799,19 +773,15 @@
          son mode de debit, lui donner un boost -- seul ou a plusieurs. C'est
          la page d'arrivee du niveau Operator. -->
     <section id="view-clients">
-      <p class="eyebrow">Client operations</p>
-      <p class="hint" style="display:block;margin-top:0">Every client in one place: see its
-        connection and its usage, change its <b>bandwidth mode</b> or give it a <b>boost</b>, for
-        one client or for a selection.</p>
       <div class="grid stats" id="cli-stats"></div>
       <div id="cli-notice"></div>
       <div class="card cli-card">
         <div class="toolbar cli-filters">
-          <input type="search" id="cli-search" placeholder="Search name, client ID or IP address..."
+          <input type="search" id="cli-search" placeholder="Search a client or an IP"
                  autocomplete="off" spellcheck="false">
           <select id="cli-pop" style="width:auto" aria-label="Site"></select>
           <select id="cli-status" style="width:auto" aria-label="Connection">
-            <option value="">All statuses</option>
+            <option value="">Status</option>
             <option value="online">Connected</option>
             <option value="offline">Not connected</option>
             <option value="boost">Boost running</option>
@@ -824,10 +794,10 @@
         <div class="cli-selbar" id="cli-selbar" hidden>
           <span id="cli-selcount"></span>
           <span class="spacer"></span>
-          <button type="button" class="sm primary" id="cli-sel-mode">Change mode</button>
+          <button type="button" class="sm primary" id="cli-sel-mode">Mode</button>
           <button type="button" class="sm" id="cli-sel-boost">Boost</button>
-          <button type="button" class="sm" id="cli-sel-stop">Stop boost</button>
-          <button type="button" class="sm link-btn" id="cli-sel-none">Unselect</button>
+          <button type="button" class="sm" id="cli-sel-stop">Stop</button>
+          <button type="button" class="sm link-btn" id="cli-sel-none" aria-label="Unselect">&times;</button>
         </div>
         <div class="table-wrap" id="cli-table"></div>
       </div>
