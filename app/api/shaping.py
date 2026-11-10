@@ -26,6 +26,7 @@ from app.db.topology_repo import TopologyRepository
 from app.enforcement.routeros import MissingWriteCredentialsError
 from app.models import KIND_STATIC
 from app.services.shaping import (
+    MOTIF_ROUTEUR_LECTURE_SEULE,
     EnforcementDisabledError,
     EnforcementLockedError,
     discover_with_devices,
@@ -733,6 +734,9 @@ async def qoe_loop_state(container: ContainerDep) -> dict[str, Any]:
     settings = container.settings
     return {
         "enabled": container.shaping.enforcement_enabled,
+        # Interrupteur de la boucle elle-meme (Reglages) : coupee, elle ne decide
+        # plus rien et ses resserrages ne sont plus appliques.
+        "loop_enabled": settings.qoe_loop_enabled,
         "interval_s": settings.qoe_loop_interval_s,
         "window_minutes": settings.qoe_window_minutes,
         "score_threshold": settings.qoe_score_threshold,
@@ -779,6 +783,13 @@ async def build_shaping_plan(
 
     orphelins = [a.login for a in abonnes if a.parent is None]
     donnees = plan.to_dict()
+    # Le plan d'un routeur en lecture seule est calcule comme les autres : c'est
+    # lui qu'on lit AVANT d'autoriser ce routeur. Mais il faut le dire.
+    donnees["write_enabled"] = container.shaping.router_write_enabled(payload.router)
+    if not donnees["write_enabled"]:
+        donnees["read_only_reason"] = (
+            f"{MOTIF_ROUTEUR_LECTURE_SEULE}: these commands are computed, nothing is sent"
+        )
     donnees["unparented_subscribers"] = len(orphelins)
     if orphelins:
         donnees["notes"] = [
@@ -847,7 +858,20 @@ async def clean_router_queues(
 
     « Repartir sur de bonnes bases » vaut aussi pour les LIMITES : les plafonds
     forces a la main (Subscribers > Rate) sont leves, chaque client revient a
-    son plan. Sans cela, le reset reposait fidelement... la limite d'essai."""
+    son plan. Sans cela, le reset reposait fidelement... la limite d'essai.
+
+    Un routeur en LECTURE SEULE (Appareils) est refuse d'emblee, avant de lever
+    quoi que ce soit : un reset qui leverait les limites sans pouvoir reposer
+    les files laisserait la base dire autre chose que le routeur."""
+    autorise = getattr(container.shaping, "router_write_enabled", None)
+    if callable(autorise) and not autorise(router_name):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{router_name}: {MOTIF_ROUTEUR_LECTURE_SEULE}. Reset queues sends nothing "
+                "to a read-only router: allow writing on it in Devices first."
+            ),
+        )
     levees: list[str] = []
     if reset_limits and container.topology_repo is not None:
         try:
@@ -861,6 +885,8 @@ async def clean_router_queues(
             logger.warning("Limites forcees non levees sur %s : %s", router_name, exc)
     try:
         rapport = await container.shaping.clean_queues(router_name, author="ui:clean-queues")
+    except EnforcementDisabledError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except MissingWriteCredentialsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except KeyError as exc:

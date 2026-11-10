@@ -156,8 +156,10 @@ docker compose up -d --build
 ```
 
 C'est tout. Ouvrir ensuite `http://<serveur>:8000/`, créer le premier compte, puis ajouter
-les routeurs depuis l'onglet **Devices** : types CAKE, premières files et export NetFlow
-sont posés automatiquement. Rien à préparer :
+les routeurs depuis l'onglet **Devices** : ils y entrent **en lecture seule** (case *Allow
+freeQoS to write on this router* décochée par défaut). Une fois l'écriture autorisée sur un
+routeur, types CAKE, premières files et export NetFlow y sont posés automatiquement. Rien à
+préparer :
 
 - pas de `.env` à écrire (il reste possible pour surcharger un réglage, cf. `.env.example`) ;
 - pas de fichier d'inventaire : les routeurs vivent en base, mot de passe chiffré ;
@@ -185,19 +187,17 @@ Sans routeur sous la main, les providers `mock` suffisent à faire tourner toute
 Au premier lancement, la page demande de **créer le premier compte** (email + mot de
 passe) : il est **Administrator**. Ensuite, toute l'interface exige une connexion.
 
-Cinq niveaux d'accès, chacun avec les droits des précédents, **tenus par le serveur**
+Trois niveaux d'accès, chacun avec les droits du précédent, **tenus par le serveur**
 (une modification hors niveau est refusée en 403, quelle que soit la page) :
 
 | Niveau | Ce qu'il peut faire | Interface |
 |---|---|---|
-| **Viewer** | Tout voir, rien modifier | Toutes les pages, en lecture |
-| **User** | Sur **un** client à la fois : changer son **mode de débit**, lui donner ou retirer un **boost** | Page **Clients** et son compte uniquement |
-| **Supervisor** | Les gestes du User sur **plusieurs** clients d'un coup | Page **Clients** et son compte uniquement |
-| **Technician** | Tout le technique : routeurs, forfaits, modes et profils horaires, clients déclarés, réglages, **connexion d'API** (clés) | Toutes les pages |
-| **Administrator** | Tout, y compris les comptes et leurs niveaux (*Settings › Accounts*) | Toutes les pages |
+| **Viewer** | Tout voir, rien modifier (lecture seule) | Toutes les pages, en lecture |
+| **Operator** | Sur **un ou plusieurs** clients : changer le **mode de débit**, donner ou retirer un **boost**, poser ou retirer le **forfait** | Page **Clients** et son compte uniquement |
+| **Administrator** | Tout le reste : ajouter des clients, des PoPs, des routeurs, des antennes et leur **API (Ubiquiti)**, les modes et profils horaires, les réglages, les clés d'API et les comptes (*Settings › Accounts*) | Toutes les pages |
 
 **Les modes de débit.** Un mode est un débit nommé qu'on donne à un client d'un clic depuis
-la page *Clients* : *Backup*, *Extreme backup*, *Night*… Le Technician les définit dans
+la page *Clients* : *Backup*, *Extreme backup*, *Night*… L'Administrator les définit dans
 *Plans › Bandwidth modes* : débit fixe (Mbps) ou part du forfait du client (%), et s'il
 coupe les boosts. **Automatic** = pas de mode : le client suit son forfait et son profil
 horaire, son débit change alors tout seul selon l'heure. Un changement de mode écrit la file
@@ -297,6 +297,13 @@ corrélés, qui est le seul chiffre qui garantit qu'un débit sera calculable.
 **Enregistrer** ajoute le PoP à l'inventaire : il est interrogé **au cycle suivant,
 sans redémarrage**.
 
+**Lecture seule par défaut.** La case *Allow freeQoS to write on this router* est
+**décochée** : le routeur est lu et mesuré (sessions, ports, arbre, latence, NetFlow
+collecté), son plan est calculé et affiché dans *Réglages › Shaping et écriture*, marqué
+*read-only* — et **rien ne lui est envoyé**, quel que soit l'interrupteur global. Inutile de
+retirer la politique `write` du compte RouterOS pour démarrer en lecture seule : la décision
+se prend dans l'interface, routeur par routeur.
+
 Aucun prérequis : la clé de chiffrement est générée au premier démarrage (voir plus haut).
 Si elle manque malgré tout — chemin non inscriptible, volume Docker absent — l'API
 **refuse** d'enregistrer un PoP et le dit dans l'interface : elle n'écrira jamais un mot de
@@ -308,8 +315,8 @@ Les deux inventaires coexistent :
 
 | Source | Secrets | Modifiable dans l'UI |
 |---|---|---|
-| `config/routers.yml` (fichier) | variables d'environnement | non — signalé « édité dans routers.yml » |
-| Interface | chiffrés en base (Fernet) | oui — tester / désactiver / retirer |
+| `config/routers.yml` (fichier) | variables d'environnement | non — signalé « édité dans routers.yml » ; seul l'interrupteur d'écriture se coupe depuis l'interface |
+| Interface | chiffrés en base (Fernet) | oui — tester / désactiver / retirer / autoriser l'écriture |
 
 En cas d'homonymie **le fichier gagne** : une déclaration versionnée et revue prime sur
 une saisie au clavier.
@@ -714,6 +721,20 @@ Activer demande une confirmation et un motif, tracé dans le journal ; couper es
 et sans cérémonie. `ENFORCEMENT_LOCKED=true` interdit la bascule depuis l'interface, pour
 qui préfère garder la friction du redémarrage.
 
+**Puis routeur par routeur.** Chaque routeur porte son propre interrupteur
+(`write_enabled`, onglet **Devices**, colonne *Writing*) : freeQoS n'écrit sur un routeur
+que si l'interrupteur global est allumé, **et** celui du routeur, **et** que le compte
+RouterOS en a les droits. Le déploiement prudent à côté d'un shaper existant (Preseem) se
+fait donc entièrement depuis l'interface : tout déclarer en lecture seule, observer
+plusieurs jours, autoriser l'écriture sur **un** NAS pilote, puis NAS par NAS. Autoriser
+montre d'abord le plan de ce routeur et demande une confirmation et un motif ; couper est
+immédiat. Chaque bascule est journalisée dans `enforcement_audit` (verbe `switch`) avec son
+auteur et son motif. Un routeur en lecture seule ne reçoit **rien** — réconciliation,
+types CAKE, export NetFlow, restrictions, boosts, profils horaires, boucle QoE, débit posé
+à la main, *Reset queues*, mise en service — pas même sur un geste explicite ; son plan
+reste calculé et visible. L'API garde `write_enabled: true` par défaut pour les
+intégrations existantes ; les routeurs déjà déclarés continuent d'écrire comme avant.
+
 **Les commandes partent seules.** La boucle de réconciliation
 (`SHAPING_RECONCILE_INTERVAL_S`, 120 s par défaut) relit l'état désiré, le compare aux
 routeurs et écrit l'écart — sans que personne n'ait rien à cliquer. C'est elle qui fait
@@ -928,7 +949,8 @@ Le boost n'écrase pas la surcharge, il passe par-dessus puis s'efface. Un boost
    commandes comme données. Rien ne part tant qu'on n'a pas appliqué.
 3. **`dry_run` par défaut**, et l'application réelle exige `confirm: true`.
 4. **`ENFORCEMENT_ENABLED`**, le drapeau global : à `false`, aucune écriture ne part,
-   quelle que soit la confirmation.
+   quelle que soit la confirmation. Et **l'interrupteur du routeur** (`write_enabled`,
+   onglet **Devices**) : coupé, ce routeur ne reçoit rien, sans aucune exception.
 5. **Droits réels du compte.** Si un compte `rw_*` distinct est déclaré, il est utilisé.
    Sinon le compte configuré sert à l'écriture — **ses droits réels décident, pas la
    déclaration** : le contrôleur lit `/user` et `/user/group` sur le routeur pour savoir
@@ -1354,8 +1376,9 @@ Trois principes assumés :
    un secteur déjà à genoux. La boucle le signale au lieu de continuer.
 
 Les garde-fous sont ceux des autres boucles automatiques : rien n'est écrit tant que
-`ENFORCEMENT_ENABLED` est faux (la décision est quand même prise et le plan calculé, ce qui
-permet de **lire** ce que la boucle ferait avant de lui donner la main), **jamais de purge**,
+`ENFORCEMENT_ENABLED` est faux, ni sur un routeur en lecture seule (la décision est quand
+même prise et le plan calculé, ce qui permet de **lire** ce que la boucle ferait avant de
+lui donner la main), **jamais de purge**,
 et le plan passe par `build_plan` comme tous les autres — donc diffable, journalisé dans
 `enforcement_audit` sous l'auteur `system:qoe-loop`, et visible dans l'interface. Aucun
 chemin d'écriture parallèle.
@@ -1365,7 +1388,15 @@ manuelles : une surcharge est une décision d'exploitant, un resserrage une déc
 boucle, et les confondre ferait qu'un cycle automatique écraserait un débit saisi à la main.
 Les deux se composent dans le planificateur, elles ne se marchent jamais dessus.
 
+**Couper la boucle depuis l'interface.** Le réglage `qoe_loop_enabled` (*Réglages ›
+Write safeguards*, à chaud, vrai par défaut) arrête la boucle : elle ne lit plus aucun
+score et ne décide plus rien, et **les resserrages déjà décidés ne sont plus appliqués** —
+le planificateur les ignore aussitôt, la réconciliation suivante ramène les liens à leur
+enveloppe normale, et les resserrages stockés sont remis à zéro (`last_action` =
+`release`) pour qu'une remise en marche reparte d'un état neutre.
+
 ```bash
+QOE_LOOP_ENABLED=true             # amorçage ; ensuite, Réglages › Write safeguards
 QOE_LOOP_INTERVAL_S=300           # 0 désactive la boucle
 QOE_WINDOW_MINUTES=15             # fenêtre d'observation
 QOE_SCORE_THRESHOLD=55            # sous ce score, l'abonné est dégradé
@@ -1497,6 +1528,7 @@ routers:
     role: pop                 # pop | core | gateway
     pop_name: Site 1
     pppoe_interface_pattern: "<pppoe-{login}>"
+    write_enabled: true       # false = lecture seule (rien n'est envoyé à ce routeur)
     rw_username: qos-rw       # utilisé uniquement par l'enforcement
     rw_password_env: MT_POP_1_RW_PASSWORD
 
@@ -1577,9 +1609,10 @@ l'inventaire fichier (`ROUTERS_FILE`), et `APP_ENV` / `LOG_LEVEL` / `API_PREFIX`
 Le contrôleur reste **hors-bande** (jamais sur le chemin des paquets) mais **écrit**
 désormais des files `/queue/simple` sur les routeurs, sous garde-fous : rien ne part tant
 que `ENFORCEMENT_ENABLED` est faux, seules les files marquées `freeqos:managed` sont
-touchées, et **toute commande est journalisée dans `enforcement_audit`** avec son origine
-(`ui`, ou `system:reconcile` / `system:boost-expiry` pour les boucles automatiques) et le
-détail des changements. La vérification TLS vers chaque routeur est configurable
+touchées, rien ne part vers un routeur dont l'écriture est coupée dans **Devices**
+(`write_enabled`), et **toute commande est journalisée dans `enforcement_audit`** avec son
+origine (`ui`, ou `system:reconcile` / `system:boost-expiry` pour les boucles automatiques)
+et le détail des changements — comme chaque bascule de l'interrupteur d'un routeur. La vérification TLS vers chaque routeur est configurable
 (`tls_verify` : `strict` par défaut, `fingerprint`, ou `insecure` assumé).
 
 > L'authentification de l'API n'est pas encore activée : les endpoints sont anonymes.
@@ -2144,7 +2177,8 @@ le dit.
 | `GET` | `/api/v1/pops/routers` | Inventaire des routeurs (fichier + base) |
 | `POST` | `/api/v1/pops/routers/test` | Teste une connexion **sans rien enregistrer** |
 | `POST` | `/api/v1/pops/routers` | Enregistre un routeur |
-| `PATCH` · `DELETE` | `/api/v1/pops/routers/{id}` | Modifie / retire un routeur |
+| `PATCH` · `DELETE` | `/api/v1/pops/routers/{id}` | Modifie / retire un routeur (dont `write_enabled` : autoriser exige `confirm: true`, motif journalisé) |
+| `PUT` | `/api/v1/pops/routers/file/{name}/write` | Interrupteur d'écriture d'un routeur du fichier (le couper toujours, le rendre si le fichier l'autorise) |
 | `POST` | `/api/v1/pops/routers/{id}/probe` | Teste un routeur enregistré |
 | `GET` · `POST` | `/api/v1/static-clients` | Inventaire déclaratif des clients à IP fixe |
 | `GET` | `/api/v1/static-clients/enforcement` | État réel de la file de chaque fiche, et le motif quand il n'y en a pas |

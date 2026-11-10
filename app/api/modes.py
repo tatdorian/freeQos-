@@ -1,15 +1,12 @@
 """Modes de debit et gestes sur les clients : ce que fait l'exploitant au quotidien.
 
-DEUX NIVEAUX DE GESTE
----------------------
-- UN client (niveau User) : lui donner un mode (Backup, Night...), le remettre
-  en Automatic, lui donner ou lui retirer un boost ;
-- PLUSIEURS clients d'un coup (niveau Supervisor) : les memes gestes sur une
-  selection. Le resultat est rendu CLIENT PAR CLIENT : un echec partiel ne doit
-  jamais ressembler a une reussite complete.
+LE GESTE QUOTIDIEN (niveau Operator), sur un client ou sur une selection :
+lui donner un mode (Backup, Night...), le remettre en Automatic, lui donner ou
+lui retirer un boost. Sur une selection, le resultat est rendu CLIENT PAR
+CLIENT : un echec partiel ne doit jamais ressembler a une reussite complete.
 
-Definir les modes eux-memes (leur nom, leur debit) est un geste technique,
-reserve au niveau Technician par la garde d'acces.
+Definir les modes eux-memes (leur nom, leur debit) est reserve a
+l'Administrator par la garde d'acces.
 
 "AUTOMATIC" N'EST PAS UN MODE STOCKE : c'est l'absence de mode. Le client suit
 son forfait et, s'il en a un, son profil horaire (jour / soiree / nuit) -- son
@@ -33,7 +30,6 @@ from app.db.modes_repo import (
     ModesRepository,
     mode_rates,
 )
-from app.services.accounts import ROLE_SUPERVISOR, role_at_least
 
 logger = logging.getLogger(__name__)
 
@@ -248,16 +244,6 @@ async def client_actions(
     logins = list(dict.fromkeys(x.strip() for x in payload.logins if x.strip()))
     if not logins:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No client selected")
-    user = getattr(request.state, "user", None)
-    if (
-        len(logins) > 1
-        and user is not None
-        and not role_at_least(user.get("role"), ROLE_SUPERVISOR)
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Group actions are available to Supervisors and above: act on one client",
-        )
     auteur = acteur(request)
     mode = await _mode_choisi(container, payload.mode_id) if payload.action == "mode" else None
     if payload.action == "boost" and not (

@@ -1,13 +1,13 @@
 # ruff: noqa: F811 - les fixtures importees portent le nom des parametres
 """Niveaux d'acces : ce que le SERVEUR laisse faire a chacun.
 
-Viewer < User < Supervisor < Technician < Administrator. Chaque niveau a les
-droits des precedents. Le serveur fait foi : masquer un bouton n'interdit rien.
+Viewer < Operator < Administrator. Chaque niveau a les droits du precedent. Le
+serveur fait foi : masquer un bouton n'interdit rien.
 
-- User : les gestes du quotidien sur UN client (mode, boost) ;
-- Supervisor : les memes sur plusieurs clients d'un coup ;
-- Technician : tout le technique (routeurs, forfaits, modes, reglages, cles) ;
-- Administrator : en plus, les comptes.
+- Viewer : lecture seule ;
+- Operator : le mode, le boost et le forfait d'un ou de plusieurs clients ;
+- Administrator : tout le reste (clients, PoPs, routeurs, antennes et leur
+  API, modes, reglages, cles, comptes).
 """
 
 from __future__ import annotations
@@ -22,29 +22,33 @@ from app.services.accounts import ROLES, check_role, hash_password, role_at_leas
 from tests.test_comptes import MDP, app_client, login, setup, users  # noqa: F401 - fixtures
 
 
-def test_les_cinq_niveaux_sont_ordonnes() -> None:
-    assert ROLES == ("read", "user", "supervisor", "technician", "edit")
-    assert role_at_least("supervisor", "user")
-    assert not role_at_least("user", "supervisor")
-    assert role_at_least("edit", "technician")
+def test_les_trois_niveaux_sont_ordonnes() -> None:
+    assert ROLES == ("read", "operator", "edit")
+    assert role_at_least("edit", "operator")
+    assert not role_at_least("operator", "edit")
+    assert not role_at_least("read", "operator")
     assert not role_at_least("inconnu", "read")
-    assert check_role("Technician") == "technician"
+    assert check_role("Operator") == "operator"
 
 
 @pytest.mark.parametrize(
     ("methode", "chemin", "niveau"),
     [
-        ("POST", "/api/v1/shaping/boosts", "user"),
-        ("DELETE", "/api/v1/shaping/boosts/dupont", "user"),
-        ("PUT", "/api/v1/clients/dupont/mode", "user"),
-        ("POST", "/api/v1/clients/actions", "user"),
-        ("POST", "/api/v1/bandwidth-modes", "technician"),
-        ("PATCH", "/api/v1/bandwidth-modes/3", "technician"),
-        ("POST", "/api/v1/routers", "technician"),
-        ("POST", "/api/v1/api-keys", "technician"),
-        ("PUT", "/api/v1/shaping/policies", "technician"),
-        # Un autre verbe sur un chemin ouvert reste technique.
-        ("DELETE", "/api/v1/clients/dupont/mode", "technician"),
+        ("POST", "/api/v1/shaping/boosts", "operator"),
+        ("DELETE", "/api/v1/shaping/boosts/dupont", "operator"),
+        ("PUT", "/api/v1/clients/dupont/mode", "operator"),
+        ("POST", "/api/v1/clients/actions", "operator"),
+        ("PUT", "/api/v1/plans/dupont", "operator"),
+        ("DELETE", "/api/v1/plans/dupont", "operator"),
+        ("POST", "/api/v1/plans/refresh", "edit"),
+        ("POST", "/api/v1/bandwidth-modes", "edit"),
+        ("PATCH", "/api/v1/bandwidth-modes/3", "edit"),
+        ("POST", "/api/v1/pops/routers", "edit"),
+        ("POST", "/api/v1/static-clients", "edit"),
+        ("POST", "/api/v1/api-keys", "edit"),
+        ("PUT", "/api/v1/shaping/policies", "edit"),
+        # Un autre verbe sur un chemin ouvert reste reserve a l'Administrator.
+        ("DELETE", "/api/v1/clients/dupont/mode", "edit"),
     ],
 )
 def test_le_niveau_requis_par_route(methode: str, chemin: str, niveau: str) -> None:
@@ -79,42 +83,25 @@ def test_un_viewer_ne_change_aucun_client(app_client: TestClient, users) -> None
     assert app_client.post("/api/v1/clients/actions", json=ACTION_SEULE).status_code == 403
 
 
-def test_un_user_opere_un_client_mais_pas_un_groupe(app_client: TestClient, users) -> None:  # noqa: F811
-    _en_tant_que(app_client, users, "user")
-    # Un client : la garde laisse passer (la suite depend des donnees).
+def test_un_operator_opere_un_ou_plusieurs_clients(app_client: TestClient, users) -> None:
+    _en_tant_que(app_client, users, "operator")
+    # La garde laisse passer (la suite depend des donnees).
     assert app_client.put("/api/v1/clients/dupont/mode", json={"mode_id": None}).status_code != 403
     assert app_client.post("/api/v1/clients/actions", json=ACTION_SEULE).status_code != 403
-    # Plusieurs clients : niveau Supervisor.
-    r = app_client.post("/api/v1/clients/actions", json=ACTION_GROUPE)
-    assert r.status_code == 403
-    assert "Supervisor" in r.json()["detail"]
-    # Rien de technique.
-    r = app_client.post(
-        "/api/v1/bandwidth-modes", json={"name": "Backup", "down_value": 6, "up_value": 6}
-    )
-    assert r.status_code == 403
-    assert "Technician" in r.json()["detail"]
-
-
-def test_un_supervisor_opere_un_groupe(app_client: TestClient, users) -> None:  # noqa: F811
-    _en_tant_que(app_client, users, "supervisor")
     assert app_client.post("/api/v1/clients/actions", json=ACTION_GROUPE).status_code != 403
+    r = app_client.put("/api/v1/plans/dupont", json={"down_mbps": 20, "up_mbps": 10})
+    assert r.status_code != 403
+    # Rien d'autre : ni les modes eux-memes, ni ajouter un client ou un routeur.
     r = app_client.post(
         "/api/v1/bandwidth-modes", json={"name": "Backup", "down_value": 6, "up_value": 6}
     )
     assert r.status_code == 403
-
-
-def test_un_technician_fait_le_technique_mais_pas_les_comptes(
-    app_client: TestClient,
-    users,  # noqa: F811
-) -> None:
-    _en_tant_que(app_client, users, "technician")
+    assert "Administrator" in r.json()["detail"]
     r = app_client.post(
-        "/api/v1/bandwidth-modes", json={"name": "Backup", "down_value": 6, "up_value": 6}
+        "/api/v1/static-clients",
+        json={"reference": "x", "pop_name": "PoP", "address": "10.0.0.5"},
     )
-    assert r.status_code != 403  # 503 ici : pas de base, mais la garde a laisse passer
-    assert app_client.post("/api/v1/clients/actions", json=ACTION_GROUPE).status_code != 403
+    assert r.status_code == 403
     r = app_client.post(
         "/api/v1/users", json={"email": "x@exemple.fr", "password": MDP, "role": "read"}
     )

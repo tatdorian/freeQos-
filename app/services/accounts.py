@@ -33,28 +33,23 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-#: NIVEAUX D'ACCES, du plus faible au plus fort. Les identifiants stockes
-#: "read" et "edit" sont ceux d'avant les niveaux intermediaires : on les garde
+#: TROIS NIVEAUX D'ACCES, du plus faible au plus fort. Les identifiants stockes
+#: "read" et "edit" sont ceux d'avant le niveau intermediaire : on les garde
 #: tels quels, ce qui laisse chaque compte existant a son niveau sans migration.
 #:
 #: - read (Viewer) : voit tout, ne change rien ;
-#: - user (User) : voit les clients et opere UN client a la fois -- son mode de
-#:   debit, son boost. Le geste quotidien du support, rien d'autre ;
-#: - supervisor (Supervisor) : les memes gestes sur PLUSIEURS clients d'un coup ;
-#: - technician (Technician) : tout le technique -- routeurs, forfaits, modes et
-#:   profils horaires, clients declares, reglages, connexion d'API (cles) ;
-#: - edit (Administrator) : tout, y compris les comptes et leurs niveaux.
+#: - operator (Operator) : opere les CLIENTS, un ou plusieurs a la fois -- leur
+#:   mode de debit, leur boost, leur forfait. Le geste quotidien du support ;
+#: - edit (Administrator) : tout le reste -- ajouter des clients, des PoPs, des
+#:   routeurs, des antennes et leur API (Ubiquiti), les modes, les reglages, les
+#:   cles d'API et les comptes.
 ROLE_READ = "read"
-ROLE_USER = "user"
-ROLE_SUPERVISOR = "supervisor"
-ROLE_TECHNICIAN = "technician"
+ROLE_OPERATOR = "operator"
 ROLE_EDIT = "edit"
-ROLES: tuple[str, ...] = (ROLE_READ, ROLE_USER, ROLE_SUPERVISOR, ROLE_TECHNICIAN, ROLE_EDIT)
+ROLES: tuple[str, ...] = (ROLE_READ, ROLE_OPERATOR, ROLE_EDIT)
 ROLE_LABELS: dict[str, str] = {
     ROLE_READ: "Viewer",
-    ROLE_USER: "User",
-    ROLE_SUPERVISOR: "Supervisor",
-    ROLE_TECHNICIAN: "Technician",
+    ROLE_OPERATOR: "Operator",
     ROLE_EDIT: "Administrator",
 }
 _RANG: dict[str, int] = {role: rang for rang, role in enumerate(ROLES)}

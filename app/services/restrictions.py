@@ -51,7 +51,7 @@ from app.enforcement.restrictions import (
 )
 from app.services import ipfinder
 from app.services.registry import RouterRegistry
-from app.services.shaping import ShapingService
+from app.services.shaping import MOTIF_ROUTEUR_LECTURE_SEULE, ShapingService, ecriture_autorisee
 
 logger = logging.getLogger(__name__)
 
@@ -393,6 +393,14 @@ class RestrictionService:
         ligne["skipped"] = [{"rule": s.login, "reason": s.reason} for s in plan.skipped]
         ligne["conflicts"] = [{"rule": c.name, "detail": c.detail} for c in plan.conflicts]
         if plan.is_empty:
+            return ligne
+        if not ecriture_autorisee(self._collector(router_name)):
+            # Routeur en lecture seule (Appareils) : aucune exception, pas meme
+            # le geste explicite. Le plan est calcule et montre, rien ne part.
+            ligne["state"] = ETAT_A_POSER
+            ligne["reason"] = (
+                f"{MOTIF_ROUTEUR_LECTURE_SEULE}: the restriction is computed, nothing is sent"
+            )
             return ligne
         # DEMANDE EXPLICITE : un exploitant qui APPLIQUE ecrit quoi qu'il
         # arrive ; l'interrupteur ne retient que la boucle automatique.

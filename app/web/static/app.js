@@ -201,7 +201,7 @@ function startApp(user) {
   document.getElementById('auth-gate').hidden = true;
   document.body.classList.remove('gated');
   document.body.classList.toggle('role-read', user.role === 'read');
-  document.body.classList.toggle('role-limited', user.role === 'user' || user.role === 'supervisor');
+  document.body.classList.toggle('role-limited', user.role === 'operator');
   document.getElementById('readonly-banner').hidden = user.role !== 'read';
   document.getElementById('user-chip').hidden = false;
   document.getElementById('user-email').textContent = user.email;
@@ -5023,8 +5023,14 @@ async function loadRouters() {
   // La sante interroge les routeurs un par un : lancee sans attendre, pour ne
   // pas retarder la page ou l'on vient d'ajouter un equipement.
   loadRoutersHealth();
-  const data = await api('/pops/routers');
+  // L'interrupteur global dit si "ecriture autorisee" sur un routeur ecrit
+  // vraiment quelque chose aujourd'hui : on le lit en meme temps.
+  const [data, ecriture] = await Promise.all([
+    api('/pops/routers'),
+    api('/shaping/enforcement').catch(() => null),
+  ]);
   state.routers = data.routers;
+  state.enforcement = ecriture;
 
   const notice = document.getElementById('pops-notice');
   let html = '';
@@ -5065,7 +5071,7 @@ async function loadRouters() {
   }
   host.innerHTML =
     '<table><thead><tr><th>PoP</th><th>Address</th><th>Account</th><th>Source</th>' +
-    '<th>State</th><th>Model</th><th></th></tr></thead><tbody>' +
+    '<th>State</th><th>Writing</th><th>Model</th><th></th></tr></thead><tbody>' +
     state.routers.map((r) => {
       let badge = '<span class="badge">never tested</span>';
       if (r.last_error) {
@@ -5098,6 +5104,7 @@ async function loadRouters() {
           ? '<span class="badge file">file inventory</span>'
           : '<span class="badge">interface</span>') + '</td>' +
         '<td>' + badge + '</td>' +
+        routerWriteCell(r, ecriture) +
         // Un routeur du fichier n'a pas de fiche en base : son modele vient de
         // la lecture de sante, qui le connait deja ("-" alors qu'on sait).
         (r.board_name
@@ -5111,9 +5118,11 @@ async function loadRouters() {
             'Set up</button>' +
           '<button class="sm" data-config="' + esc(r.name) +
             '" title="See the full config (/export) the controller reads">Config</button>' +
-          '<button class="sm danger" data-clean-queues="' + esc(r.name) +
-            '" title="Delete every freeQoS queue of this router, then lay them down again">' +
-            'Reset queues</button>' +
+          '<button class="sm danger" data-clean-queues="' + esc(r.name) + '"' +
+            (r.write_enabled === false
+              ? ' disabled title="Read-only router: allow writing on it first"'
+              : ' title="Delete every freeQoS queue of this router, then lay them down again"') +
+            '>Reset queues</button>' +
           (r.editable
             ? '<button class="sm" data-probe="' + r.id + '">Test</button>' +
               '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button>' +
@@ -5146,6 +5155,106 @@ async function loadRouters() {
     b.addEventListener('click', () => toggleRouter(b.dataset.toggle)));
   host.querySelectorAll('[data-hide-file]').forEach((b) =>
     b.addEventListener('click', () => hideFileRouter(b.dataset.hideFile)));
+  host.querySelectorAll('[data-write-switch]').forEach((input) =>
+    input.addEventListener('change', () =>
+      toggleRouterWrite(input.dataset.writeSwitch, input.checked, input)));
+}
+
+/** L'INTERRUPTEUR D'ECRITURE D'UN ROUTEUR, et son etat lisible d'un coup d'oeil.
+ *
+ *  Le deploiement prudent se fait NAS par NAS : tout declarer, observer en
+ *  lecture, puis laisser freeQoS ecrire sur UN routeur pilote. La case dit ce
+ *  que freeQoS a le droit de faire sur CE routeur ; l'infobulle dit ce qu'il y
+ *  fait vraiment aujourd'hui (l'interrupteur global peut encore tout retenir). */
+function routerWriteCell(r, ecriture) {
+  const autorise = r.write_enabled !== false;
+  const verrou = r.write_locked === true;
+  const globalCoupe = ecriture && ecriture.enabled === false;
+  let titre;
+  if (verrou) {
+    titre = 'write_enabled: false in the routers file: the file has the last word.';
+  } else if (autorise) {
+    titre = 'freeQoS may write on this router: queues, CAKE types, NetFlow export, ' +
+      'restrictions.' + (globalCoupe
+      ? ' Writing to the routers is off globally (Settings > Shaping and writing): ' +
+        'nothing is written until it is on too.'
+      : '') + ' Untick to make it read-only at once.';
+  } else {
+    titre = 'Read-only: freeQoS reads and measures this router and only shows what it ' +
+      'would write (Settings > Shaping and writing). Tick to allow writing: you will be ' +
+      'shown the plan and asked to confirm.';
+  }
+  const etiquette = autorise
+    ? '<span class="badge warn">writing allowed</span>' +
+      (globalCoupe ? '<span class="hint">global switch off</span>' : '')
+    : '<span class="badge">read-only</span>';
+  return '<td class="nowrap"><label class="switch switch-sm" title="' + esc(titre) + '">' +
+    '<input type="checkbox" data-write-switch="' + esc(r.name) + '"' +
+      (autorise ? ' checked' : '') + (verrou ? ' disabled' : '') +
+      ' aria-label="Allow freeQoS to write on ' + esc(r.name) + '">' +
+    '<span class="rail"></span><span class="write-state">' + etiquette + '</span>' +
+    '</label></td>';
+}
+
+/** Autoriser l'ecriture montre d'abord le plan de CE routeur et demande un
+ *  motif, comme l'interrupteur global ; la couper est immediat -- revenir en
+ *  lecture seule ne doit jamais attendre une confirmation. */
+async function toggleRouterWrite(name, active, input) {
+  const router = (state.routers || []).find((r) => r.name === name);
+  if (!router) return;
+  let motif = null;
+  if (active) {
+    input.disabled = true;
+    let resume;
+    try {
+      const plan = await api('/shaping/plan', {
+        method: 'POST', body: JSON.stringify({ router: name }),
+      });
+      resume = planSummary(name, plan).lignes.join('\n');
+    } catch (err) {
+      resume = '(plan unavailable: ' + err.message + ')';
+    }
+    input.disabled = false;
+    const globalCoupe = state.enforcement && state.enforcement.enabled === false;
+    if (!confirm(
+        'Allow freeQoS to write on ' + name + '?\n\n' +
+        'This is what it would write there now:\n\n' + resume + '\n\n' +
+        'It will also set up the CAKE queue types, the NetFlow export and the traffic ' +
+        'restrictions. Only lines marked freeqos:managed by THIS instance are ever ' +
+        'changed or removed.' +
+        (globalCoupe ? '\n\nWriting to the routers is still off globally (Settings > ' +
+          'Shaping and writing): nothing is written until it is on too.' : ''))) {
+      input.checked = false;
+      return;
+    }
+    motif = prompt('Reason (recorded in the log, optional):') || null;
+  }
+  input.disabled = true;
+  const sortie = document.getElementById('router-export');
+  let reponse = null;
+  try {
+    reponse = router.source === 'file'
+      ? await api('/pops/routers/file/' + encodeURIComponent(name) + '/write', {
+        method: 'PUT', body: JSON.stringify({ enabled: active, confirm: true, reason: motif }),
+      })
+      : await api('/pops/routers/' + router.id, {
+        method: 'PATCH',
+        body: JSON.stringify({ write_enabled: active, confirm: true, reason: motif }),
+      });
+  } catch (err) {
+    alert(err.message);
+  }
+  await loadRouters();
+  // Ecriture tout juste autorisee : le serveur met le routeur en service, on
+  // suit l'avancement au meme endroit que pour un ajout.
+  const apres = document.getElementById('router-export');
+  if (reponse && reponse.provisioning && apres) {
+    followProvisioning(name, apres);
+  } else if (!active && apres && sortie) {
+    apres.innerHTML = '<div class="notice ok"><b>' + esc(name) + ' is read-only.</b> ' +
+      'Nothing is sent to it any more; its plan stays visible in Settings &gt; Shaping and ' +
+      'writing.</div>';
+  }
 }
 
 /** Supprime toutes les files freeQoS d'un routeur puis les repose : repartir
@@ -5262,6 +5371,9 @@ function formPayload() {
     timeout_s: Number(data.get('timeout_s') || 5),
     pppoe_interface_pattern: data.get('pppoe_interface_pattern') || '<pppoe-{login}>',
     enabled: true,
+    // ENVOYE EXPLICITEMENT : l'API garde "vrai" par defaut pour les
+    // integrations existantes, la case de l'interface est decochee par defaut.
+    write_enabled: document.getElementById('f-write').checked,
   };
 }
 
@@ -5304,8 +5416,11 @@ async function saveRouter(event) {
   button.disabled = true;
   try {
     const created = await api('/pops/routers', { method: 'POST', body: JSON.stringify(formPayload()) });
-    showFormResult('<div class="notice ok"><b>' + esc(created.name) +
-      ' saved.</b> Setting it up now (CAKE, queues, NetFlow export, tree)...</div>' +
+    showFormResult('<div class="notice ok"><b>' + esc(created.name) + ' saved.</b> ' +
+      (created.write_enabled
+        ? 'Setting it up now (CAKE, queues, NetFlow export, tree)...'
+        : 'Reading it now (sessions, ports, tree). It stays <b>read-only</b>: nothing is ' +
+          'written until you allow it in the list below.') + '</div>' +
       '<div id="provision-out"></div>');
     document.getElementById('router-form').reset();
     document.getElementById('f-username').value = 'qos-ro';
@@ -8807,6 +8922,9 @@ async function loadPoints() {
         : ' &middot; first pass still to come') +
       ((passe && (passe.errors || []).length)
         ? '<span class="hint">' + esc(passe.errors.join(' | ')) + '</span>' : '') +
+      ((data.read_only_routers || []).length
+        ? '<span class="hint">Read-only in Devices, nothing sent: ' +
+          esc(data.read_only_routers.join(', ')) + '</span>' : '') +
       (state.enforcementReason
         ? '<span class="hint">Writing allowed, reason: ' +
           esc(state.enforcementReason) + '</span>' : '') +
@@ -8820,11 +8938,20 @@ async function loadPoints() {
         esc(r.error) + '</div>';
     }
     const c = r.counts || {};
+    // LECTURE SEULE : la carte est calculee comme ailleurs, pour qu'on lise ce
+    // que freeQoS poserait avant d'autoriser ce routeur. Rien n'y part.
+    const lecture = r.write_enabled === false;
     const entete = '<h2 style="margin-top:1rem">' + esc(r.router) +
-      ' <span class="hint">' + esc(r.pop_name || '') + '</span></h2>' +
+      ' <span class="hint">' + esc(r.pop_name || '') + '</span>' +
+      (lecture ? ' <span class="badge" title="Writing is disabled for this router in ' +
+        'freeQoS (Devices): the plan is computed, nothing is sent">read-only</span>' : '') +
+      '</h2>' +
+      (lecture ? '<div class="notice"><strong>Read-only router.</strong> Writing is disabled ' +
+        'for this router in freeQoS (Devices): the points below are what freeQoS would set, ' +
+        'nothing is sent.</div>' : '') +
       '<div class="hint" style="margin-bottom:.4rem">' +
       esc(c['file-posee'] || 0) + ' point(s) throttled &middot; ' +
-      esc(c['file-a-poser'] || 0) + ' pending &middot; ' +
+      esc(c['file-a-poser'] || 0) + (lecture ? ' would be written' : ' pending') + ' &middot; ' +
       esc(c['ecarte'] || 0) + ' with no queue &middot; ' +
       esc(c['posee-a-la-main'] || 0) + ' manual queue(s)' +
       ((c['conflit'] || 0) ? ' &middot; ' + esc(c['conflit']) + ' conflict(s)' : '') +
@@ -8872,6 +8999,23 @@ async function refreshEnforcement() {
   state.enforcementReason = (etat.last_change && etat.last_change.reason) || null;
 }
 
+/** Le plan d'UN routeur, en quelques lignes de texte (boites de confirmation).
+ *
+ *  Un routeur en lecture seule (Appareils) a son plan comme les autres -- c'est
+ *  ce qu'on lit avant de l'autoriser -- mais il est marque tel quel et ne compte
+ *  pas dans ce qui va partir. */
+function planSummary(r, p) {
+  const actions = p.actions || [];
+  const c = p.counts || {};
+  const lecture = p.write_enabled === false;
+  const lignes = [r + (lecture ? ' (read-only in Devices: nothing will be written)' : '') + ': ' +
+    (c.add || 0) + ' add, ' + (c.set || 0) + ' set, ' + (c.remove || 0) + ' remove' +
+    ((p.conflicts || []).length ? ', ' + p.conflicts.length + ' conflict(s) left alone' : '')];
+  actions.slice(0, 4).forEach((a) => lignes.push('   ' + (a.command || a.summary || '')));
+  if (actions.length > 4) lignes.push('   … and ' + (actions.length - 4) + ' more');
+  return { lignes, total: lecture ? 0 : actions.length };
+}
+
 /** Le plan de CHAQUE routeur, en texte : ce que l'activation va ecrire. */
 async function resumePlans() {
   const routeurs = [...document.querySelectorAll('#shaping-router option')]
@@ -8881,13 +9025,9 @@ async function resumePlans() {
   for (const r of routeurs) {
     try {
       const p = await api('/shaping/plan', { method: 'POST', body: JSON.stringify({ router: r }) });
-      const actions = p.actions || [];
-      total += actions.length;
-      const c = p.counts || {};
-      lignes.push(r + ': ' + (c.add || 0) + ' add, ' + (c.set || 0) + ' set, ' + (c.remove || 0) +
-        ' remove' + ((p.conflicts || []).length ? ', ' + p.conflicts.length + ' conflict(s) left alone' : ''));
-      actions.slice(0, 4).forEach((a) => lignes.push('   ' + (a.command || a.summary || '')));
-      if (actions.length > 4) lignes.push('   … and ' + (actions.length - 4) + ' more');
+      const resume = planSummary(r, p);
+      total += resume.total;
+      lignes.push(...resume.lignes);
     } catch (err) {
       lignes.push(r + ': plan unavailable (' + err.message + ')');
     }
@@ -8943,8 +9083,14 @@ async function loadAudit() {
     rows.map((r) => '<tr>' +
       '<td class="num" style="color:var(--faint)">' + esc(clock(r.ts)) + '</td>' +
       '<td>' + esc(r.router_name) + '</td>' +
-      '<td class="login" style="font-size:.74rem">' + esc(r.command) + '</td>' +
-      '<td>' + (r.dry_run ? '<span class="badge">dry run</span>'
+      '<td class="login" style="font-size:.74rem">' + esc(r.command) +
+        // Un changement d'interrupteur n'est pas une commande RouterOS : on dit
+        // qui l'a fait, et pourquoi -- c'est tout son interet.
+        (r.verb === 'switch'
+          ? '<span class="hint">by ' + esc(r.author || '?') +
+            (r.detail ? ' &middot; ' + esc(r.detail) : '') + '</span>' : '') + '</td>' +
+      '<td>' + (r.verb === 'switch' ? '<span class="badge">setting</span>'
+        : r.dry_run ? '<span class="badge">dry run</span>'
         : '<span class="badge warn">applied</span>') + '</td>' +
       '<td>' + (r.ok ? '<span class="badge ok">ok</span>'
         : '<span class="badge crit" title="' + esc(r.detail || '') + '">failed</span>') + '</td>' +
@@ -8967,7 +9113,13 @@ async function inspectShaping() {
       }
       let bandeauDroits = '';
       if (droits) {
-        if (droits.can_write === true) {
+        if (droits.write_enabled === false) {
+          // Le geste a faire est dans freeQoS, pas sur le routeur : on ne propose
+          // surtout pas de commande /user/group ici.
+          bandeauDroits = '<div class="notice warn"><strong>Read-only router.</strong> ' +
+            esc(droits.detail) + '<span class="hint">Allow writing on ' + esc(e.router) +
+            ' in Devices when you are ready.</span></div>';
+        } else if (droits.can_write === true) {
           bandeauDroits = '<div class="notice ok">Account <code>' +
             esc(droits.username) + '</code> can write: ' + esc(droits.detail) + '</div>';
         } else if (droits.can_write === false) {
@@ -9088,7 +9240,18 @@ function renderPlan(plan, routeur, hote) {
   const c = plan.counts;
   const total = c.add + c.set + c.remove;
 
-  let html = '<h2>Plan for ' + esc(routeur) + '</h2>';
+  const lecture = plan.write_enabled === false;
+  let html = '<h2>Plan for ' + esc(routeur) +
+    (lecture ? ' <span class="badge">read-only</span>' : '') + '</h2>';
+
+  if (lecture) {
+    // Le plan est calcule pour etre LU : c'est ce que freeQoS poserait le jour
+    // ou l'on autorise ce routeur dans Appareils.
+    html += '<div class="notice warn"><strong>Read-only router.</strong> ' +
+      esc(plan.read_only_reason || 'Writing is disabled for this router in freeQoS (Devices)') +
+      '.<span class="hint">This is what freeQoS would write once you allow writing on ' +
+      esc(routeur) + ' in Devices.</span></div>';
+  }
 
   if (plan.conflicts.length) {
     html += '<div class="notice err"><strong>' + plan.conflicts.length +
@@ -9113,7 +9276,8 @@ function renderPlan(plan, routeur, hote) {
     '<strong>' + total + ' command(s)</strong>: ' +
     c.add + ' add(s), ' + c.set + ' change(s), ' + c.remove + ' removal(s). ' +
     plan.unchanged + ' item(s) already correct.' +
-    '<span class="hint">Nothing is sent until you apply.</span></div>';
+    '<span class="hint">' + (lecture ? 'Nothing is sent to a read-only router.'
+      : 'Nothing is sent until you apply.') + '</span></div>';
 
   html += '<div class="table-wrap"><table><thead><tr><th>Action</th><th>Reason</th>' +
     '<th>RouterOS command</th></tr></thead><tbody>' +
@@ -9129,7 +9293,9 @@ function renderPlan(plan, routeur, hote) {
 
   html += '<div class="actions" style="margin-top:1rem">' +
     '<button data-act="simulate">Dry run</button>' +
-    '<button data-act="apply" class="primary">Apply on ' + esc(routeur) + '</button>' +
+    '<button data-act="apply" class="primary"' +
+      (lecture ? ' disabled title="Read-only router: allow writing on it in Devices"' : '') +
+      '>Apply on ' + esc(routeur) + '</button>' +
     '</div><div data-act="result"></div>';
 
   host.innerHTML = html;
@@ -10024,21 +10190,17 @@ async function loadInsights() {
 
 /** NIVEAUX D'ACCES. Le serveur fait foi (il refuse ce qui depasse le niveau) ;
  *  l'interface se contente de ne pas proposer un geste qui serait refuse. */
-const ROLE_RANK = { read: 0, user: 1, supervisor: 2, technician: 3, edit: 4 };
-const ROLE_LABEL = {
-  read: 'Viewer', user: 'User', supervisor: 'Supervisor', technician: 'Technician', edit: 'Administrator',
-};
+const ROLE_RANK = { read: 0, operator: 1, edit: 2 };
+const ROLE_LABEL = { read: 'Viewer', operator: 'Operator', edit: 'Administrator' };
 const ROLE_HELP = {
   read: 'sees everything, changes nothing',
-  user: 'manages clients one at a time: mode and boost',
-  supervisor: 'User rights, on several clients at once',
-  technician: 'every technical change: routers, plans, modes, settings, API keys',
-  edit: 'everything, accounts included',
+  operator: 'manages clients, one or several at a time: bandwidth mode, boost and plan',
+  edit: 'everything else too: adds clients, PoPs, routers, antennas and their API (Ubiquiti), modes, settings, API keys, accounts',
 };
 function rangRole() { const r = (AUTH.user || {}).role; return r in ROLE_RANK ? ROLE_RANK[r] : 0; }
 function peut(niveau) { return rangRole() >= ROLE_RANK[niveau]; }
-/** User et Supervisor : une interface centree sur les clients, rien d'autre. */
-function estLimite() { const r = (AUTH.user || {}).role; return r === 'user' || r === 'supervisor'; }
+/** Operator : une interface centree sur les clients, rien d'autre. */
+function estLimite() { return (AUTH.user || {}).role === 'operator'; }
 function roleOptions(choisi) {
   return Object.keys(ROLE_RANK).map((r) => '<option value="' + r + '"' + (r === choisi ? ' selected' : '') +
     ' title="' + esc(ROLE_HELP[r]) + '">' + esc(ROLE_LABEL[r]) + '</option>').join('');
@@ -10130,9 +10292,9 @@ async function loadClients() {
     statCard('', 'Boosts active', String(boostes), '', 'they end on their own');
   document.getElementById('cli-notice').innerHTML = !CLI.modes.length
     ? '<div class="notice">No bandwidth mode is defined yet: only <b>Automatic</b> and boosts are ' +
-      'offered. ' + (peut('technician') ? '<a href="#/plans">Define modes in Plans</a>.'
-        : 'A Technician defines them in Plans.') + '</div>'
-    : (!peut('user') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '');
+      'offered. ' + (peut('edit') ? '<a href="#/plans">Define modes in Plans</a>.'
+        : 'An Administrator defines them in Plans.') + '</div>'
+    : (!peut('operator') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '');
   renderClients();
 }
 
@@ -10148,7 +10310,7 @@ function renderClients() {
     return;
   }
   const tous = lignes.every((r) => CLI.sel.has(r.login));
-  const ecrire = peut('user');
+  const ecrire = peut('operator');
   host.innerHTML = '<table><thead><tr>' +
     '<th class="chk"><input type="checkbox" id="cli-all" aria-label="Select all shown"' +
       (tous ? ' checked' : '') + '></th>' +
@@ -10181,6 +10343,8 @@ function renderClients() {
         '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
           '<button class="sm" data-cli-mode="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
             '>Mode</button>' +
+          '<button class="sm" data-cli-plan="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
+            '>Plan</button>' +
           (b ? '<button class="sm" data-cli-stop="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
               '>Stop boost</button>'
             : '<button class="sm" data-cli-boost="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
@@ -10203,6 +10367,8 @@ function renderClients() {
   }));
   host.querySelectorAll('[data-cli-mode]').forEach((b) =>
     b.addEventListener('click', () => openModeDialog([b.dataset.cliMode])));
+  host.querySelectorAll('[data-cli-plan]').forEach((b) =>
+    b.addEventListener('click', () => openPlanDialog(b.dataset.cliPlan)));
   host.querySelectorAll('[data-cli-boost]').forEach((b) =>
     b.addEventListener('click', () => openGroupBoost([b.dataset.cliBoost])));
   host.querySelectorAll('[data-cli-stop]').forEach((b) =>
@@ -10214,9 +10380,8 @@ function majSelection() {
   const n = CLI.sel.size;
   const barre = document.getElementById('cli-selbar');
   barre.hidden = n === 0;
-  document.getElementById('cli-selcount').textContent = n + ' client(s) selected' +
-    (n > 1 && !peut('supervisor') ? ' · group changes need the Supervisor level' : '');
-  const permis = peut('user') && (n <= 1 || peut('supervisor'));
+  document.getElementById('cli-selcount').textContent = n + ' client(s) selected';
+  const permis = peut('operator');
   ['cli-sel-mode', 'cli-sel-boost', 'cli-sel-stop'].forEach((id) => {
     document.getElementById(id).disabled = !permis;
   });
@@ -10260,12 +10425,12 @@ function sousTitreCibles(logins) {
 }
 
 function refusGroupe(logins) {
-  if (logins.length > 1 && !peut('supervisor')) {
+  if (!peut('operator')) {
     openModal('<div class="modal-head"><div><h3>This action needs permission</h3>' +
-      '<div class="sub">Group actions are available to Supervisors and above.</div></div>' +
+      '<div class="sub">Changing clients needs the Operator level.</div></div>' +
       '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
-      '<div class="modal-body">Select a single client, or ask an Administrator for the ' +
-      'Supervisor level.</div><div class="modal-foot"><button class="primary" data-modal-close>OK</button></div>');
+      '<div class="modal-body">Your account is read-only (Viewer). Ask an Administrator for the ' +
+      'Operator level.</div><div class="modal-foot"><button class="primary" data-modal-close>OK</button></div>');
     return true;
   }
   return false;
@@ -10384,6 +10549,59 @@ function openGroupBoost(logins) {
   });
 }
 
+/** Le forfait d'UN client : son debit souscrit. Le retirer le rend au forfait
+ *  par defaut (ou le laisse sans plafond s'il n'y en a pas). */
+function openPlanDialog(login) {
+  if (refusGroupe([login])) return;
+  const r = CLI.rows.find((x) => x.login === login) || {};
+  const { root, fermer } = openModal(
+    '<div class="modal-head"><div><h3>Plan</h3><div class="sub">' + sousTitreCibles([login]) + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body"><p class="hint" style="display:block;margin-top:0">The rate the client ' +
+    'subscribed to. It applies in <b>Automatic</b> mode, and the bandwidth schedule and the modes in ' +
+    '% are computed from it.' + (r.plan_source ? ' Current source: <b>' + esc(r.plan_source) + '</b>.' : '') +
+    '</p><div class="row-3"><div class="field"><label for="pl-down">Download (Mbps)</label>' +
+    '<input id="pl-down" type="number" min="0.001" step="any" value="' + esc(r.plan_down_mbps || '') + '"></div>' +
+    '<div class="field"><label for="pl-up">Upload (Mbps)</label>' +
+    '<input id="pl-up" type="number" min="0.001" step="any" value="' + esc(r.plan_up_mbps || '') + '"></div></div>' +
+    '<div id="pl-out"></div></div>' +
+    '<div class="modal-foot" id="pl-foot"><button class="danger" id="pl-reset" title="The default plan ' +
+    'applies again">Remove the plan</button><span class="spacer"></span>' +
+    '<button data-modal-close>Cancel</button><button class="primary" id="pl-save">Save and apply</button></div>');
+  const fin = (html) => {
+    root.querySelector('#pl-out').innerHTML = html;
+    root.querySelector('#pl-foot').innerHTML = '<button class="primary" id="pl-done">Close</button>';
+    root.querySelector('#pl-done').addEventListener('click', fermer);
+    refresh();
+  };
+  root.querySelector('#pl-save').addEventListener('click', async (e) => {
+    const bas = Number(root.querySelector('#pl-down').value);
+    const haut = Number(root.querySelector('#pl-up').value);
+    if (!(bas > 0) || !(haut > 0)) {
+      root.querySelector('#pl-out').innerHTML = '<div class="notice warn">Give both rates, above 0.</div>';
+      return;
+    }
+    e.target.disabled = true;
+    try {
+      await api('/plans/' + encodeURIComponent(login), { method: 'PUT',
+        body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
+      fin('<div class="notice ok">Plan saved: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) + '.</div>');
+    } catch (err) {
+      root.querySelector('#pl-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      e.target.disabled = false;
+    }
+  });
+  root.querySelector('#pl-reset').addEventListener('click', async () => {
+    if (!confirm('Remove the plan of ' + login + '? The default plan applies again.')) return;
+    try {
+      await api('/plans/' + encodeURIComponent(login), { method: 'DELETE' });
+      fin('<div class="notice ok">Plan removed: the default plan applies.</div>');
+    } catch (err) {
+      root.querySelector('#pl-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+}
+
 async function stopBoosts(logins) {
   if (!logins.length || refusGroupe(logins)) return;
   if (!confirm('Stop the boost of ' + (logins.length === 1 ? logins[0] : logins.length + ' clients') + '?')) return;
@@ -10405,7 +10623,7 @@ async function loadModesAdmin() {
   cablerModes();
   const data = await api('/bandwidth-modes').catch(() => ({ modes: [] }));
   const modes = data.modes || [];
-  const ecrire = peut('technician');
+  const ecrire = peut('edit');
   document.getElementById('modes-form').hidden = !ecrire;
   document.getElementById('modes-form-title').hidden = !ecrire;
   host.innerHTML = !modes.length
@@ -10589,7 +10807,7 @@ async function refresh() {
 
 function route() {
   if (!AUTH.ready) return;
-  // User et Supervisor n'ont que la page Clients (et leur compte) : un lien
+  // L'Operator n'a que la page Clients (et son compte) : un lien
   // vers une autre page les y ramene plutot que d'ouvrir une page vide.
   let vue = (location.hash || '').replace('#/', '');
   if (estLimite() && vue !== 'clients' && vue !== 'settings') vue = 'clients';
@@ -11097,13 +11315,13 @@ const ECHELLE_BLOAT = [[OK, 'A+ / A: up to +30 ms — imperceptible'], [WARN, 'B
 const AIDE = {
   'client operations': {
     t: 'The daily page: every client, its connection, its usage, its bandwidth mode and its boost.',
-    m: 'Users and Supervisors only see this page and their account. A User acts on one client at a time; a Supervisor on a selection.',
-    r: 'Tick clients to change their mode or boost them together; a group change reports a result per client.',
+    m: 'Operators only see this page and their account. They act on one client or on a selection.',
+    r: 'Tick clients to change their mode or boost them together; a group change reports a result per client. The Plan button sets the rate the client subscribed to.',
   },
   'bandwidth mode': {
     t: 'The named rate the client is in: Automatic, or a mode such as Backup or Night.',
     m: 'Automatic follows the plan and, when there is one, the bandwidth schedule: the rate changes with the hour on its own. A mode stays until the client is put back to Automatic.',
-    r: '“Manual limit” is a rate set by hand by a Technician, outside the modes.',
+    r: '“Manual limit” is a rate set by hand by an Administrator, outside the modes.',
   },
   'connection': 'Connected = a measurement less than 90 s old. Otherwise, when the client was last seen.',
   'current usage': 'Download (↓) and upload (↑) of the client right now, from the last measurement.',
@@ -11111,12 +11329,12 @@ const AIDE = {
   'boosts active': 'Clients with a running boost. A boost ends on its own at its expiry.',
   'bandwidth modes': {
     t: 'Named rates operators give a client in one click: a fixed rate, or a share of the client\'s plan.',
-    m: 'Defining modes needs the Technician level; giving one to a client, the User level. Changing a mode\'s rate applies it at once to every client in it.',
+    m: 'Defining modes needs the Administrator level; giving one to clients, the Operator level. Changing a mode\'s rate applies it at once to every client in it.',
     r: 'A mode that “stops boosts” clears the running boost and refuses new ones: use it for a crisis or non-payment.',
   },
   'access level': {
     t: 'What the account may do. Each level includes the previous ones; the server enforces them.',
-    m: 'Viewer: sees everything. User: mode and boost of one client. Supervisor: the same on a selection. Technician: every technical change (routers, plans, modes, settings, API keys). Administrator: accounts too.',
+    m: 'Viewer: sees everything, changes nothing. Operator: bandwidth mode, boost and plan of clients, one or several at a time. Administrator: everything else, such as adding clients, PoPs, routers, antennas and their API (Ubiquiti), modes, settings, API keys and accounts.',
   },
   // ---------------------------------------------------------- sections
   'network throughput': {

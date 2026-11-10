@@ -26,6 +26,13 @@ routers:
     # utilise un autre nommage.
     pppoe_interface_pattern: "<pppoe-{login}>"
 
+    # Ecriture autorisee sur CE routeur (files, export NetFlow, restrictions).
+    # false = lecture seule : le routeur est lu et mesure, son plan est calcule
+    # et affiche, rien ne lui est envoye. L'interface peut aussi couper
+    # l'ecriture d'un routeur de ce fichier (Devices), jamais l'autoriser quand
+    # ce fichier dit false.
+    write_enabled: true
+
     # OPTIONNEL. Compte d'ecriture distinct, si vous separez les privileges.
     # Sans lui, le compte ci-dessus est utilise pour l'enforcement : ce sont ses
     # droits REELS sur le routeur qui decident, pas cette declaration.

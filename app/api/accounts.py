@@ -48,8 +48,7 @@ from app.services.accounts import (
     PASSWORD_MIN,
     ROLE_EDIT,
     ROLE_LABELS,
-    ROLE_TECHNICIAN,
-    ROLE_USER,
+    ROLE_OPERATOR,
     SAFE_METHODES,
     InvalidAccountError,
     LoginThrottle,
@@ -81,11 +80,11 @@ class Credentials(BaseModel):
 
 
 class NewUser(Credentials):
-    role: Literal["read", "user", "supervisor", "technician", "edit"] = "read"
+    role: Literal["read", "operator", "edit"] = "read"
 
 
 class UserUpdate(BaseModel):
-    role: Literal["read", "user", "supervisor", "technician", "edit"] | None = None
+    role: Literal["read", "operator", "edit"] | None = None
     password: str | None = Field(default=None, max_length=256)
     disabled: bool | None = None
 
@@ -284,20 +283,19 @@ def _meme_origine(request: Request) -> bool:
     return urlsplit(origine).netloc == hote
 
 
-#: LES GESTES DU QUOTIDIEN, ouverts au niveau User. Toute autre ecriture --
-#: routeurs, forfaits, definition des modes, reglages, cles d'API -- demande le
-#: niveau Technician ; les comptes, l'administrateur (cf. require_editor). La
-#: liste est FERMEE : une route ajoutee demain est technique tant qu'on ne l'a
-#: pas ouverte ici, sciemment.
-#:
-#: (methode, motif du chemin sous le prefixe d'API, niveau minimum). Le niveau
-#: "plusieurs clients a la fois" (Supervisor) se verifie dans la route elle-meme,
-#: qui seule connait le nombre de clients vises.
+#: LES GESTES DU QUOTIDIEN, ouverts au niveau Operator : le mode, le boost et le
+#: forfait d'un ou de plusieurs clients. Toute autre ecriture -- ajouter des
+#: clients, des PoPs, des routeurs, des antennes et leur API, definir les modes,
+#: les reglages, les cles d'API, les comptes -- est reservee a l'Administrator.
+#: La liste est FERMEE : une route ajoutee demain est reservee a
+#: l'Administrator tant qu'on ne l'a pas ouverte ici, sciemment.
 OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
-    ("POST", re.compile(r"^/shaping/boosts$"), ROLE_USER),
-    ("DELETE", re.compile(r"^/shaping/boosts/[^/]+$"), ROLE_USER),
-    ("PUT", re.compile(r"^/clients/[^/]+/mode$"), ROLE_USER),
-    ("POST", re.compile(r"^/clients/actions$"), ROLE_USER),
+    ("POST", re.compile(r"^/shaping/boosts$"), ROLE_OPERATOR),
+    ("DELETE", re.compile(r"^/shaping/boosts/[^/]+$"), ROLE_OPERATOR),
+    ("PUT", re.compile(r"^/clients/[^/]+/mode$"), ROLE_OPERATOR),
+    ("POST", re.compile(r"^/clients/actions$"), ROLE_OPERATOR),
+    ("PUT", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
+    ("DELETE", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
 )
 
 
@@ -307,7 +305,7 @@ def niveau_requis(methode: str, chemin: str, prefixe: str = "") -> str:
     for verbe, motif, niveau in OPERATIONS_CLIENT:
         if methode.upper() == verbe and motif.match(relatif):
             return niveau
-    return ROLE_TECHNICIAN
+    return ROLE_EDIT
 
 
 async def require_access(request: Request, user: UserDep) -> dict[str, Any]:
@@ -334,7 +332,8 @@ async def require_access(request: Request, user: UserDep) -> dict[str, Any]:
                     if role == "read"
                     else f"{ROLE_LABELS.get(role, role or 'This')} account"
                 )
-                + f": this change needs the {ROLE_LABELS[requis]} level or above"
+                + f": this change needs the {ROLE_LABELS[requis]} level"
+                + (" or above" if requis != ROLE_EDIT else "")
             ),
         )
     return user
