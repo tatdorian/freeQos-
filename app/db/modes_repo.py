@@ -8,6 +8,8 @@ liste. Le mode EN COURS d'un client, lui, vit dans sa politique de shaping
 
 from __future__ import annotations
 
+import builtins
+import json
 from typing import Any
 
 import asyncpg
@@ -153,6 +155,26 @@ class ModesRepository:
                         f"{en_cours} client(s) are in this mode: put them back to "
                         "Automatic or in another mode first"
                     )
+                profils = await self._schedules_using(conn, mode_id)
+                if profils:
+                    raise ModeConflictError(
+                        "this mode is used by the schedule(s) "
+                        + ", ".join(f"'{n}'" for n in profils)
+                        + ": change those time slots first"
+                    )
                 resultat = await conn.execute("DELETE FROM bandwidth_modes WHERE id = $1", mode_id)
         if resultat.endswith(" 0"):
             raise ModeNotFoundError(f"no bandwidth mode {mode_id}")
+
+    @staticmethod
+    async def _schedules_using(conn: Any, mode_id: int) -> builtins.list[str]:
+        rows = await conn.fetch(
+            "SELECT name FROM bandwidth_schedules WHERE windows @> $1::jsonb ORDER BY name",
+            json.dumps([{"mode_id": mode_id}]),
+        )
+        return [str(r["name"]) for r in rows]
+
+    async def schedules_using(self, mode_id: int) -> builtins.list[str]:
+        """Les profils horaires dont une plage donne ce mode."""
+        async with self._pool.acquire() as conn:
+            return await self._schedules_using(conn, mode_id)

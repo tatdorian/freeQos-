@@ -382,6 +382,9 @@ class DepotProfilsApi:
     def __init__(self) -> None:
         self.lignes: list[dict] = []
 
+    async def modes(self) -> dict:
+        return {}
+
     async def list_all(self) -> list[dict]:
         return [dict(x) for x in self.lignes]
 
@@ -527,3 +530,23 @@ def test_api_apercu_des_clients_gouvernes(api) -> None:
     apercu = client.get(f"/api/v1/bandwidth-schedules/{general['id']}/preview").json()
     assert apercu["counts"]["governed"] == 0
     assert apercu["overridden"] == [{"login": "dupont", "governed_by": "vip"}]
+
+
+# ------------------------------------------------------- plage en mode
+def test_une_plage_donne_un_mode_fixe_ou_en_part_du_forfait() -> None:
+    from app.enforcement.schedules import parse_window
+
+    modes = {
+        1: {"name": "Backup", "rate_kind": "fixed", "down_value": 6, "up_value": 4},
+        2: {"name": "Night", "rate_kind": "percent", "down_value": 200, "up_value": 50},
+    }
+    fixe = parse_window({"start": "18:00", "end": "23:00", "mode_id": 1}, modes)
+    assert fixe.rates(20, 10) == (6.0, 4.0)
+    assert fixe.to_dict()["mode_name"] == "Backup"
+    assert fixe.to_dict()["down_mbps"] is None  # la reference, pas le debit
+    part = parse_window({"start": "23:00", "end": "06:00", "mode_id": 2}, modes)
+    assert part.rates(20, 10) == (40.0, 5.0)
+    with pytest.raises(InvalidScheduleError, match="unknown bandwidth mode"):
+        parse_window({"start": "18:00", "end": "23:00", "mode_id": 9}, modes)
+    with pytest.raises(InvalidScheduleError, match="not both"):
+        parse_window({"start": "18:00", "end": "23:00", "mode_id": 1, "percent": 50}, modes)

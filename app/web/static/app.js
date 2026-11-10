@@ -9595,6 +9595,7 @@ const SCHED_PORTEE = {
 };
 
 function schedRate(w) {
+  if (w.mode_id != null) return 'mode <b>' + esc(w.mode_name || '#' + w.mode_id) + '</b>';
   if (w.percent != null) return esc(String(w.percent)) + ' % of plan';
   return [w.down_mbps != null ? '&darr; ' + esc(mbps(w.down_mbps)) : '',
     w.up_mbps != null ? '&uarr; ' + esc(mbps(w.up_mbps)) : ''].filter(Boolean).join(' ');
@@ -9610,12 +9611,16 @@ async function loadSchedules() {
   const host = document.getElementById('sched-list');
   if (!host) return;
   try {
-    SCHED.data = await api('/bandwidth-schedules');
+    const [d, m] = await Promise.all([api('/bandwidth-schedules'),
+      api('/bandwidth-modes').catch(() => ({ modes: [] }))]);
+    SCHED.data = d;
+    SCHED.modes = m.modes || [];
   } catch (err) {
     host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
     return;
   }
   renderSchedules();
+  document.querySelectorAll('#sched-windows select[name="mode_id"]').forEach(schedModeOptions);
 }
 
 function renderSchedules() {
@@ -9742,7 +9747,8 @@ function schedPreviewHtml() {
 function schedWindowRow(w) {
   const f = w || { start: '', end: '', days: SCHED_JOURS.map((j) => j[0]), percent: null };
   const jours = new Set(f.days && f.days.length ? f.days : SCHED_JOURS.map((j) => j[0]));
-  const pourcent = !(f.down_mbps != null || f.up_mbps != null);
+  const genre = f.mode_id != null ? 'mode'
+    : (f.down_mbps != null || f.up_mbps != null) ? 'rate' : 'percent';
   const heure = (nom, val, ph, titre) => '<input name="' + nom + '" class="slot-time" required ' +
     'maxlength="5" inputmode="numeric" placeholder="' + ph + '" pattern="[0-2]?[0-9]:[0-5][0-9]"' +
     (titre ? ' title="' + titre + '"' : '') + ' aria-label="' + (nom === 'start' ? 'From' : 'To') +
@@ -9761,17 +9767,21 @@ function schedWindowRow(w) {
         heure('end', f.end, '23:00', 'Before the start time: the slot ends the next day ' +
           '(22:00 to 06:00). 24:00 = midnight.') + '</span>' +
       '<span class="slot-rate">' +
-        '<input type="hidden" name="mode" value="' + (pourcent ? 'percent' : 'rate') + '">' +
-        '<span data-mode="percent"' + (pourcent ? '' : ' hidden') + '>' +
+        '<input type="hidden" name="mode" value="' + genre + '">' +
+        '<span data-mode="percent"' + (genre === 'percent' ? '' : ' hidden') + '>' +
           nombre('percent', f.percent, 'min="1" max="1000" placeholder="70" aria-label="Percent of plan"') +
           '<span class="slot-unit">% of plan</span></span>' +
-        '<span data-mode="rate"' + (pourcent ? ' hidden' : '') + '>&darr;' +
+        '<span data-mode="rate"' + (genre === 'rate' ? '' : ' hidden') + '>&darr;' +
           nombre('down', f.down_mbps, 'min="0" placeholder="20" aria-label="Download Mbps"') + '&uarr;' +
           nombre('up', f.up_mbps, 'min="0" placeholder="5" aria-label="Upload Mbps"') +
           '<span class="slot-unit">Mbps</span></span>' +
+        '<span data-mode="mode"' + (genre === 'mode' ? '' : ' hidden') + '>' +
+          '<select name="mode_id" class="slot-mode" aria-label="Bandwidth mode" data-value="' +
+            esc(f.mode_id == null ? '' : f.mode_id) + '"></select></span>' +
         '<span class="segmented seg-xs" role="group" aria-label="Rate type">' +
-          '<button type="button" data-rate="percent"' + (pourcent ? ' class="active"' : '') + '>%</button>' +
-          '<button type="button" data-rate="rate"' + (pourcent ? '' : ' class="active"') + '>Mbps</button>' +
+          [['percent', '%'], ['rate', 'Mbps'], ['mode', 'Mode']].map(([v, t]) =>
+            '<button type="button" data-rate="' + v + '"' + (genre === v ? ' class="active"' : '') +
+            '>' + t + '</button>').join('') +
         '</span>' +
       '</span>' +
     '</div>' +
@@ -9801,6 +9811,22 @@ function schedBindRows() {
 function schedAddRow(w) {
   document.getElementById('sched-windows').insertAdjacentHTML('beforeend', schedWindowRow(w));
   schedBindRows();
+  const sel = document.querySelector('#sched-windows [data-sched-window]:last-child select[name="mode_id"]');
+  if (sel) schedModeOptions(sel);
+}
+
+/** Les modes de debit dans le choix d'une plage, sans perdre le mode choisi. */
+function schedModeOptions(sel) {
+  const choisi = sel.value || sel.dataset.value || '';
+  const modes = SCHED.modes || [];
+  const valeurs = (m) => Number(m.down_value) === Number(m.up_value) ? sansUnite(m.down_value)
+    : sansUnite(m.down_value) + ' / ' + sansUnite(m.up_value);
+  const debit = (m) => valeurs(m) + (m.rate_kind === 'percent' ? ' % of plan' : ' Mbps');
+  sel.innerHTML = (modes.length ? '<option value="">Choose a mode</option>'
+    : '<option value="">No mode yet (Modes page)</option>') +
+    modes.map((m) => '<option value="' + esc(m.id) + '"' +
+      (String(m.id) === String(choisi) ? ' selected' : '') + '>' + esc(m.name) + ' · ' +
+      esc(debit(m)) + '</option>').join('');
 }
 
 /** Le controle segmente « Applies to » reflete le select cache. */
@@ -9886,7 +9912,10 @@ function schedPayload() {
       end: champ('end'),
       days: [...tr.querySelectorAll('input[name="day"]:checked')].map((c) => c.value),
     };
-    if (tr.querySelector('[name="mode"]').value === 'percent') {
+    const genre = tr.querySelector('[name="mode"]').value;
+    if (genre === 'mode') {
+      w.mode_id = nombre('mode_id');
+    } else if (genre === 'percent') {
       w.percent = nombre('percent');
     } else {
       w.down_mbps = nombre('down') || null;
@@ -10403,7 +10432,7 @@ function renderClients() {
           (CLI.sel.has(r.login) ? ' checked' : '') + ' aria-label="Select ' + esc(r.login) + '"></td>' +
         '<td class="cli-main"><span class="cli-name"><i class="dot-co ' + (on ? 'on' : 'off') + '" title="' +
           (on ? 'Connected' : (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '"></i>' + esc(r.login) + '</span>' +
-          '<span class="cli-sub">' + esc([r.pop_name, r.last_ip].filter(Boolean).join(' · ')) + '</span></td>' +
+          '<span class="cli-sub">' + esc(r.pop_name || '') + '</span></td>' +
         '<td class="cli-mode"><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
           (b ? '<span class="boost-pill cli-boost">&#9889; ' + esc(boostReste(b)) + '</span>' : '') + '</td>' +
         '<td class="cli-usage">' + (on ? '<span class="d">&darr; ' + esc(bpsText(r.tx_bps)) +

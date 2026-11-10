@@ -231,3 +231,72 @@ def test_un_forfait_temporaire_pour_une_duree_choisie(app_client, routeur) -> No
     assert 2.9 * 86400 < boost["seconds_left"] <= 3 * 86400
     [geste] = app_client.get("/api/v1/activity?login=dupont&limit=1", headers=cle).json()
     assert geste["detail"] == "temporary rate 5 / 2 Mbps for 3 days"
+
+
+def test_un_profil_horaire_donne_un_mode_a_des_clients_choisis(app_client, routeur) -> None:  # noqa: F811
+    """Une plage peut donner un MODE : le profil garde la reference, pas le debit,
+    et suit le mode quand on le modifie."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    backup = app_client.post(
+        "/api/v1/bandwidth-modes",
+        headers=cle,
+        json={"name": "Backup", "down_value": 6, "up_value": 6},
+    ).json()
+    nuit = app_client.post(
+        "/api/v1/bandwidth-modes",
+        headers=cle,
+        json={"name": "Night", "rate_kind": "percent", "down_value": 200, "up_value": 100},
+    ).json()
+
+    plage = {"label": "all day", "start": "00:00", "end": "24:00", "mode_id": backup["id"]}
+    r = app_client.post(
+        "/api/v1/bandwidth-schedules",
+        headers=cle,
+        json={"name": "Secours", "scope": "subscribers", "targets": ["dupont"], "windows": [plage]},
+    )
+    assert r.status_code == 201, r.text
+    profil = r.json()
+    assert profil["windows"][0]["mode_name"] == "Backup"
+    assert profil["windows"][0]["percent"] is None
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "6000000/6000000"
+
+    # Le mode change : la plage suit, sans retoucher le profil.
+    r = app_client.patch(
+        f"/api/v1/bandwidth-modes/{backup['id']}",
+        headers=cle,
+        json={"down_value": 8, "up_value": 8},
+    )
+    assert r.status_code == 200, r.text
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "8000000/8000000"
+
+    # Un mode qu'un profil utilise ne se supprime pas en silence.
+    r = app_client.delete(f"/api/v1/bandwidth-modes/{backup['id']}", headers=cle)
+    assert r.status_code == 409
+    assert "Secours" in r.json()["detail"]
+
+    # Un mode en part du forfait : 200 % de 20 descendant, 100 % de 10 montant.
+    r = app_client.patch(
+        f"/api/v1/bandwidth-schedules/{profil['id']}",
+        headers=cle,
+        json={"windows": [{**plage, "mode_id": nuit["id"]}]},
+    )
+    assert r.status_code == 200, r.text
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/40000000"
+
+    # Un mode inconnu, ou un mode ET un debit : refuses.
+    r = app_client.patch(
+        f"/api/v1/bandwidth-schedules/{profil['id']}",
+        headers=cle,
+        json={"windows": [{**plage, "mode_id": 999999}]},
+    )
+    assert r.status_code == 400
+    r = app_client.patch(
+        f"/api/v1/bandwidth-schedules/{profil['id']}",
+        headers=cle,
+        json={"windows": [{**plage, "percent": 50}]},
+    )
+    assert r.status_code == 400
+    liste = app_client.get("/api/v1/bandwidth-schedules", headers=cle).json()["schedules"]
+    assert liste[0]["windows"][0]["mode_name"] == "Night"

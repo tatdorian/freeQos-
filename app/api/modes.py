@@ -154,7 +154,18 @@ async def update_mode(
         resultats.append(
             await _donner_mode(container, metrics, login, mode, author=acteur(request))
         )
-    return {"mode": mode, "clients": resultats}
+    sortie: dict[str, Any] = {"mode": mode, "clients": resultats}
+    # Les profils horaires qui donnent ce mode suivent, eux aussi, tout de suite.
+    profils = await _modes(container).schedules_using(mode_id)
+    if profils:
+        try:
+            sortie["schedules"] = await container.shaping.apply_schedules(
+                force=True, reason=f"mode '{mode['name']}' edited"
+            )
+        except Exception as exc:  # noqa: BLE001 - le mode est deja enregistre
+            logger.exception("Profils horaires non reappliques")
+            sortie["schedules"] = {"applied": 0, "errors": [f"{type(exc).__name__}: {exc}"]}
+    return sortie
 
 
 @router.delete("/bandwidth-modes/{mode_id}", summary="Delete a bandwidth mode")
