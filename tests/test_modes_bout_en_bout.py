@@ -332,3 +332,72 @@ def test_la_carte_place_un_site_et_le_rend(app_client, routeur) -> None:  # noqa
     assert r.status_code == 403
     assert app_client.delete("/api/v1/site-locations/PoP Test", headers=cle).status_code == 200
     assert app_client.get("/api/v1/site-locations", headers=cle).json()["locations"] == []
+    # Un client se place pareil, par son login.
+    r = app_client.put(
+        "/api/v1/client-locations/dupont", headers=cle, json={"latitude": 13.52, "longitude": 2.11}
+    )
+    assert r.status_code == 200, r.text
+    lieux = app_client.get("/api/v1/client-locations", headers=lire).json()["locations"]
+    assert [(x["name"], x["longitude"]) for x in lieux] == [("dupont", 2.11)]
+    assert app_client.delete("/api/v1/client-locations/dupont", headers=lire).status_code == 403
+    assert app_client.delete("/api/v1/client-locations/dupont", headers=cle).status_code == 200
+    assert app_client.delete("/api/v1/client-locations/dupont", headers=cle).status_code == 404
+
+
+def test_un_boost_multiplie_le_debit_en_vigueur_puis_le_rend(app_client, routeur) -> None:  # noqa: F811
+    """Le cas reel : un client bride a 550 kbps, boost x1,5 -> 825 kbps (et
+    non x1,5 de son forfait de base). A la fin du boost, arrete OU echu, il
+    retrouve ses 550 kbps, pas son forfait."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)  # forfait 20 / 10
+    bride = app_client.post(
+        "/api/v1/bandwidth-modes",
+        headers=cle,
+        json={"name": "Bride", "down_value": 0.55, "up_value": 0.55},
+    ).json()
+    app_client.put("/api/v1/clients/dupont/mode", headers=cle, json={"mode_id": bride["id"]})
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "550000/550000"
+
+    r = app_client.post(
+        "/api/v1/clients/actions",
+        headers=cle,
+        json={
+            "logins": ["dupont"],
+            "action": "boost",
+            "boost_multiplier": 1.5,
+            "boost_minutes": 30,
+        },
+    )
+    assert r.json()["succeeded"] == 1, r.text
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "825000/825000"
+    detail = app_client.get("/api/v1/activity?login=dupont", headers=cle).json()[0]["detail"]
+    assert "550 kbps -> 825 kbps" in detail
+
+    # Arrete : retour au mode, pas au forfait.
+    app_client.post(
+        "/api/v1/clients/actions", headers=cle, json={"logins": ["dupont"], "action": "stop_boost"}
+    )
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "550000/550000"
+
+    # Echu : pareil, par le job d'echeance.
+    app_client.post(
+        "/api/v1/clients/actions",
+        headers=cle,
+        json={"logins": ["dupont"], "action": "boost", "boost_multiplier": 2, "boost_minutes": 30},
+    )
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "1100000/1100000"
+    conteneur = app_client.app.state.container
+
+    async def echoir() -> None:
+        async with conteneur.database.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE shaping_policies SET boost_expires_at = now() - interval '1 minute' "
+                "WHERE target_key = 'dupont'"
+            )
+        await conteneur.shaping.expire_boosts()
+
+    assert app_client.portal is not None
+    app_client.portal.call(echoir)
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "550000/550000"
+    assert app_client.get("/api/v1/shaping/boosts", headers=cle).json() == []

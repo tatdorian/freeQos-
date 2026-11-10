@@ -11014,6 +11014,13 @@ async function openGroupTraffic(logins) {
   dessiner();
 }
 
+/** Le debit en vigueur d'un client, boost mis a part (meme regle que le
+ *  serveur) : mode ou limite manuelle, sinon profil horaire, sinon forfait. */
+function debitSansBoost(r, sens) {
+  return Number(r['override_' + sens + '_mbps']) || Number(r['schedule_' + sens + '_mbps']) ||
+    Number(r['plan_' + sens + '_mbps']) || 0;
+}
+
 function openModeDialog(logins) {
   if (!logins.length || refusGroupe(logins)) return;
   const seul = logins.length === 1 ? CLI.rows.find((x) => x.login === logins[0]) : null;
@@ -11084,7 +11091,8 @@ function openGroupBoost(logins) {
   let genre = 'x';
   const { root, fermer } = openModal(
     '<div class="modal-head"><div><h3>Boost or temporary plan</h3><div class="sub">' + sousTitreCibles(logins) +
-    (seul && seul.plan_down_mbps ? ' · plan ' + esc(mbps(seul.plan_down_mbps) + ' / ' + mbps(seul.plan_up_mbps || 0)) : '') +
+    (seul && debitSansBoost(seul, 'down') ? ' · now ' + esc(mbps(debitSansBoost(seul, 'down')) + ' / ' +
+      mbps(debitSansBoost(seul, 'up') || 0)) : '') +
     '</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
     '<div class="modal-body">' +
     '<div class="field"><label>Duration</label><div class="choice-row" id="gb-min">' +
@@ -11094,20 +11102,20 @@ function openGroupBoost(logins) {
     '<select id="gb-unit"><option value="1">minutes</option><option value="60" selected>hours</option>' +
     '<option value="1440">days</option></select></div></div>' +
     '<div class="field" style="margin-top:1rem"><label>Rate</label><div class="segmented" id="gb-kind">' +
-    '<button type="button" data-k="x" class="active">Multiply the plan</button>' +
+    '<button type="button" data-k="x" class="active">Multiply the current rate</button>' +
     '<button type="button" data-k="rate">Temporary plan</button></div>' +
     '<div id="gb-x-box" class="gb-box"><span>&times;</span><input id="gb-x" type="number" min="1.1" max="50" step="0.1" value="2">' +
     '<div class="choice-row">' + [1.5, 2, 3, 5].map((x) => '<button type="button" class="sm" data-x="' + x + '">&times;' + x + '</button>').join('') +
-    '</div></div>' +
+    '</div><span class="hint gb-preview" id="gb-preview"></span></div>' +
     '<div id="gb-rate-box" class="gb-box" hidden><label>&darr; <input id="gb-down" type="number" min="0.001" step="any" value="' +
       esc(seul && seul.plan_down_mbps ? seul.plan_down_mbps : '') + '"> Mbps</label>' +
     '<label>&uarr; <input id="gb-up" type="number" min="0.001" step="any" value="' +
       esc(seul && seul.plan_up_mbps ? seul.plan_up_mbps : '') + '"> Mbps</label>' +
-    '<span class="hint">Higher or lower than the plan: it applies for the duration, then the client goes back to its plan on its own.</span></div></div>' +
+    '<span class="hint">Higher or lower than now: it applies for the duration, then the client goes back to what it had (mode, schedule or plan) on its own.</span></div></div>' +
     '<div class="field" style="margin-top:1rem"><label for="gb-reason">Reason</label>' +
     '<input id="gb-reason" maxlength="300" placeholder="optional: goodwill gesture, event, troubleshooting..."></div>' +
-    '<p class="hint" style="display:block">It takes precedence over the plan, the schedule and the mode, except in a mode that stops ' +
-    'boosts. “Until I stop it” runs until someone clicks Stop boost.</p>' +
+    '<p class="hint" style="display:block">When the boost ends or is stopped, the client goes back to the rate it had before ' +
+    '(its mode, schedule or plan). “Until I stop it” runs until someone clicks Stop boost.</p>' +
     '<div id="gb-out"></div></div>' +
     '<div class="modal-foot" id="gb-foot"><button data-modal-close>Cancel</button>' +
     '<button class="primary" id="gb-go">Apply to ' + logins.length + ' client(s)</button></div>');
@@ -11122,9 +11130,26 @@ function openGroupBoost(logins) {
     root.querySelector('#gb-x-box').hidden = genre !== 'x';
     root.querySelector('#gb-rate-box').hidden = genre !== 'rate';
   }));
+  // Ce que donnera le boost : x N du debit EN VIGUEUR (mode, limite, profil
+  // ou forfait), pas du forfait de base.
+  const apercu = () => {
+    const x = Number(root.querySelector('#gb-x').value) || 0;
+    const p = root.querySelector('#gb-preview');
+    if (!seul) {
+      p.textContent = 'Each client gets ×' + x + ' of its own current rate.';
+      return;
+    }
+    const b = debitSansBoost(seul, 'down');
+    const h = debitSansBoost(seul, 'up');
+    p.textContent = b ? mbps(b) + ' → ' + mbps(b * x) + ' down' + (h ? ' · ' + mbps(h) + ' → ' + mbps(h * x) + ' up' : '')
+      : 'This client has no rate to multiply: use a temporary plan.';
+  };
   root.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', () => {
     root.querySelector('#gb-x').value = b.dataset.x;
+    apercu();
   }));
+  root.querySelector('#gb-x').addEventListener('input', apercu);
+  apercu();
   root.querySelector('#gb-go').addEventListener('click', async (e) => {
     const sortie = root.querySelector('#gb-out');
     let duree = minutes;
@@ -11549,12 +11574,18 @@ function octetsText(n) {
 }
 
 /* ---------------------------------------------------------------- carte
- * Les sites (PoPs) sur une carte OpenStreetMap, sans bibliotheque : des
- * tuiles posees a la main (projection de Mercator), des pastilles par site
- * (taille = nombre de clients, couleur = part connectee). Glisser deplace,
- * la molette / les boutons / un double clic zooment. */
-const MAP = { z: 3, lat: 20, lon: 10, locs: [], sel: null, placing: null, wired: false, fitted: false };
+ * Les sites (PoPs) ET les clients sur une carte OpenStreetMap, sans
+ * bibliotheque. Le deplacement ne redessine rien : le calque entier glisse
+ * (transform), avec de l'elan au lacher ; le zoom s'anime, se pince sur
+ * telephone, et garde les anciennes tuiles le temps que les nouvelles
+ * arrivent. Un client sans position se dessine en couronne autour de son site.
+ */
+const MAP = {
+  z: 3, lat: 20, lon: 10, sites: [], clis: [], sel: null, placing: null, wired: false,
+  fitted: false, ox: 0, oy: 0, dx: 0, dy: 0, anim: null, q: '',
+};
 const TUILE = 256;
+const ZOOM_CLIENTS = 13;
 
 function mercX(lon, z) { return (lon + 180) / 360 * TUILE * 2 ** z; }
 function mercY(lat, z) {
@@ -11567,25 +11598,51 @@ function mercLat(y, z) {
   return 180 / Math.PI * Math.atan(Math.sinh(n));
 }
 
-function mapSites() {
-  // Un site = un nom de PoP porte par des clients, ou une position posee.
+/** « 13.5137, 2.1098 », « 13.5137 2.1098 » ou un lien Google Maps / OSM. */
+function lireCoordonnees(texte) {
+  const t = String(texte || '').trim();
+  const motifs = [/@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/, /[?&](?:q|ll|query|mlat)=(-?\d+(?:\.\d+)?)(?:,|%2C|&mlon=)\s*(-?\d+(?:\.\d+)?)/i,
+    /#map=\d+\/(-?\d+(?:\.\d+)?)\/(-?\d+(?:\.\d+)?)/, /^(-?\d+(?:[.,]\d+)?)[\s,;]+(-?\d+(?:[.,]\d+)?)$/];
+  for (const m of motifs) {
+    const r = m.exec(t);
+    if (r) {
+      const lat = Number(r[1].replace(',', '.'));
+      const lon = Number(r[2].replace(',', '.'));
+      if (Math.abs(lat) <= 90 && Math.abs(lon) <= 180) return [lat, lon];
+    }
+  }
+  return null;
+}
+
+function mapDonnees() {
+  // Sites : noms portes par les clients, ou positions posees. Clients : tous.
   const sites = {};
-  (CLI.rows || []).forEach((r) => {
+  const posSite = {};
+  MAP.sites.forEach((l) => { posSite[l.name] = l; });
+  const posCli = {};
+  MAP.clis.forEach((l) => { posCli[l.name] = l; });
+  const clients = (CLI.rows || []).map((r) => {
     const n = r.pop_name || '';
-    if (!n) return;
-    const s = sites[n] = sites[n] || { name: n, n: 0, on: 0, mode: 0, boost: 0, logins: [] };
-    s.n += 1;
-    s.logins.push(r.login);
-    if (clientEnLigne(r)) s.on += 1;
-    if (r.mode_id || r.override_down_mbps) s.mode += 1;
-    if (CLI.boosts[r.login]) s.boost += 1;
+    if (n) {
+      const s = sites[n] = sites[n] || { name: n, n: 0, on: 0, mode: 0, boost: 0, logins: [] };
+      s.n += 1;
+      s.logins.push(r.login);
+      if (clientEnLigne(r)) s.on += 1;
+      if (r.mode_id || r.override_down_mbps) s.mode += 1;
+      if (CLI.boosts[r.login]) s.boost += 1;
+    }
+    const p = posCli[r.login];
+    return { r, login: r.login, site: n, lat: p ? p.latitude : null, lon: p ? p.longitude : null, place: !!p };
   });
-  MAP.locs.forEach((l) => {
-    const s = sites[l.name] = sites[l.name] || { name: l.name, n: 0, on: 0, mode: 0, boost: 0, logins: [] };
-    s.lat = l.latitude;
-    s.lon = l.longitude;
+  MAP.sites.forEach((l) => {
+    sites[l.name] = sites[l.name] || { name: l.name, n: 0, on: 0, mode: 0, boost: 0, logins: [] };
   });
-  return Object.values(sites);
+  Object.values(sites).forEach((s) => {
+    const p = posSite[s.name];
+    s.lat = p ? p.latitude : null;
+    s.lon = p ? p.longitude : null;
+  });
+  return { sites: Object.values(sites), clients };
 }
 
 function siteTeinte(s) {
@@ -11593,17 +11650,23 @@ function siteTeinte(s) {
   const p = s.on / s.n;
   return p >= 0.8 ? 'green' : p >= 0.5 ? 'orange' : 'red';
 }
+function clientTeinte(r) { return clientEnLigne(r) ? 'green' : r.ts ? 'red' : 'gray'; }
 
 async function loadMap() {
   cablerCarte();
-  const [, locs] = await Promise.all([
+  const [, sites, clis] = await Promise.all([
     loadClientsData().catch(() => null),
     api('/site-locations').catch(() => ({ locations: [] })),
+    api('/client-locations').catch(() => ({ locations: [] })),
   ]);
-  MAP.locs = (locs && locs.locations) || [];
+  MAP.sites = (sites && sites.locations) || [];
+  MAP.clis = (clis && clis.locations) || [];
   if (!MAP.fitted) { mapAjuster(); MAP.fitted = true; }
-  dessinerCarte();
-  dessinerCoteCarte();
+  // Le rafraichissement automatique ne doit ni casser un glissement en cours,
+  // ni effacer une saisie de coordonnees.
+  if (!MAP.dx && !MAP.dy && !MAP.anim) dessinerCarte();
+  const actif = document.activeElement;
+  if (!(actif && actif.closest && actif.closest('#map-side') && actif.tagName === 'INPUT')) dessinerCoteCarte();
 }
 
 function mapTaille() {
@@ -11613,36 +11676,56 @@ function mapTaille() {
 
 /** Cadre toutes les positions connues ; sans position, le monde. */
 function mapAjuster() {
-  const places = mapSites().filter((s) => s.lat != null);
-  if (!places.length) { MAP.z = 2; MAP.lat = 15; MAP.lon = 10; return; }
+  const { sites, clients } = mapDonnees();
+  const pts = sites.filter((s) => s.lat != null).concat(clients.filter((c) => c.lat != null));
+  if (!pts.length) { MAP.z = 2; MAP.lat = 15; MAP.lon = 10; return; }
   const { l, h } = mapTaille();
-  const lats = places.map((s) => s.lat);
-  const lons = places.map((s) => s.lon);
+  const lats = pts.map((s) => s.lat);
+  const lons = pts.map((s) => s.lon);
   MAP.lat = (Math.min(...lats) + Math.max(...lats)) / 2;
   MAP.lon = (Math.min(...lons) + Math.max(...lons)) / 2;
-  MAP.z = 15;
+  MAP.z = 16;
   while (MAP.z > 2) {
     const dx = mercX(Math.max(...lons), MAP.z) - mercX(Math.min(...lons), MAP.z);
     const dy = mercY(Math.min(...lats), MAP.z) - mercY(Math.max(...lats), MAP.z);
-    if (dx < l - 120 && dy < h - 120) break;
+    if (dx < l - 140 && dy < h - 140) break;
     MAP.z -= 1;
   }
-  if (places.length === 1) MAP.z = 13;
+  if (pts.length === 1) MAP.z = 14;
+}
+
+/** Positions des clients sans coordonnees : une couronne autour du site. */
+function couronne(site, index, total) {
+  const parTour = 10;
+  const tour = Math.floor(index / parTour);
+  const dansTour = Math.min(parTour, total - tour * parTour);
+  const a = (index % parTour) / dansTour * 2 * Math.PI - Math.PI / 2 + tour * 0.3;
+  const rayon = 46 + tour * 24;
+  return [Math.cos(a) * rayon, Math.sin(a) * rayon];
 }
 
 function dessinerCarte() {
   const tuiles = document.getElementById('map-tiles');
   const pins = document.getElementById('map-pins');
+  const liens = document.getElementById('map-links');
   if (!tuiles) return;
+  const pane = document.getElementById('map-pane');
+  pane.style.transition = '';
+  pane.style.transform = '';
+  MAP.dx = 0;
+  MAP.dy = 0;
   const { l, h } = mapTaille();
   const z = MAP.z;
-  const cx = mercX(MAP.lon, z) - l / 2;
-  const cy = mercY(MAP.lat, z) - h / 2;
+  const ox = Math.round(mercX(MAP.lon, z) - l / 2);
+  const oy = Math.round(mercY(MAP.lat, z) - h / 2);
+  MAP.ox = ox;
+  MAP.oy = oy;
   const n = 2 ** z;
-  const x0 = Math.floor(cx / TUILE);
-  const y0 = Math.floor(cy / TUILE);
-  const x1 = Math.floor((cx + l) / TUILE);
-  const y1 = Math.floor((cy + h) / TUILE);
+  // Une couronne de tuiles en plus autour de la vue : on peut glisser sans trou.
+  const x0 = Math.floor(ox / TUILE) - 1;
+  const y0 = Math.floor(oy / TUILE) - 1;
+  const x1 = Math.floor((ox + l) / TUILE) + 1;
+  const y1 = Math.floor((oy + h) / TUILE) + 1;
   const garder = new Set();
   for (let x = x0; x <= x1; x++) {
     for (let y = y0; y <= y1; y++) {
@@ -11657,108 +11740,265 @@ function dessinerCarte() {
         img.alt = '';
         img.draggable = false;
         img.referrerPolicy = 'origin';
+        img.decoding = 'async';
+        img.onload = () => img.classList.add('ok');
         img.onerror = () => img.classList.add('failed');
         img.src = '//tile.openstreetmap.org/' + z + '/' + xx + '/' + y + '.png';
         tuiles.appendChild(img);
       }
-      img.style.transform = 'translate(' + Math.round(x * TUILE - cx) + 'px,' + Math.round(y * TUILE - cy) + 'px)';
+      img.style.transform = 'translate(' + (x * TUILE - ox) + 'px,' + (y * TUILE - oy) + 'px)';
     }
   }
   tuiles.querySelectorAll('img').forEach((img) => { if (!garder.has(img.dataset.k)) img.remove(); });
-  const sites = mapSites().filter((s) => s.lat != null);
-  const maxN = Math.max(1, ...sites.map((s) => s.n));
-  pins.innerHTML = sites.map((s) => {
-    const px = mercX(s.lon, z) - cx;
-    const py = mercY(s.lat, z) - cy;
-    const taille = Math.round(30 + 22 * Math.sqrt(s.n / maxN));
-    return '<button type="button" class="map-pin t-' + siteTeinte(s) + (MAP.sel === s.name ? ' sel' : '') +
-      '" data-site="' + esc(s.name) + '" style="left:' + px.toFixed(0) + 'px;top:' + py.toFixed(0) +
-      'px;width:' + taille + 'px;height:' + taille + 'px" title="' + esc(s.name) + '">' +
-      '<b>' + s.n + '</b><span class="map-pin-name">' + esc(s.name) + '</span></button>';
-  }).join('');
-  pins.querySelectorAll('[data-site]').forEach((b) => b.addEventListener('click', (e) => {
-    e.stopPropagation();
-    MAP.sel = b.dataset.site;
-    dessinerCarte();
-    dessinerCoteCarte();
-  }));
+
+  const { sites, clients } = mapDonnees();
+  const places = sites.filter((s) => s.lat != null);
+  const maxN = Math.max(1, ...places.map((s) => s.n));
+  const posSite = {};
+  places.forEach((s) => { posSite[s.name] = [mercX(s.lon, z) - ox, mercY(s.lat, z) - oy]; });
+  const selSite = MAP.sel && MAP.sel.kind === 'site' ? MAP.sel.name : null;
+  const selCli = MAP.sel && MAP.sel.kind === 'client' ? MAP.sel.name : null;
+  // Les clients : au zoom de quartier, ou ceux du site choisi.
+  const parSite = {};
+  clients.forEach((c) => { if (!c.place && c.site) (parSite[c.site] = parSite[c.site] || []).push(c); });
+  const vus = [];
+  clients.forEach((c) => {
+    const visible = z >= ZOOM_CLIENTS || (selSite && c.site === selSite) || selCli === c.login;
+    if (!visible) return;
+    let px;
+    let py;
+    if (c.place) {
+      px = mercX(c.lon, z) - ox;
+      py = mercY(c.lat, z) - oy;
+    } else if (posSite[c.site]) {
+      const groupe = parSite[c.site];
+      const [ax, ay] = couronne(c.site, groupe.indexOf(c), groupe.length);
+      px = posSite[c.site][0] + ax;
+      py = posSite[c.site][1] + ay;
+    } else return;
+    if (px < -60 || py < -60 || px > l + 60 || py > h + 60) return;
+    vus.push({ c, px, py });
+  });
+  liens.setAttribute('width', l);
+  liens.setAttribute('height', h);
+  liens.innerHTML = vus.filter((v) => posSite[v.c.site]).map((v) =>
+    '<line x1="' + posSite[v.c.site][0].toFixed(1) + '" y1="' + posSite[v.c.site][1].toFixed(1) +
+    '" x2="' + v.px.toFixed(1) + '" y2="' + v.py.toFixed(1) + '" class="' + (v.c.place ? 'placed' : '') + '"/>').join('');
+  pins.innerHTML = vus.map((v) =>
+    '<button type="button" class="map-cli t-' + clientTeinte(v.c.r) + (selCli === v.c.login ? ' sel' : '') +
+      (v.c.place ? ' placed' : '') + '" data-cli="' + esc(v.c.login) + '" style="left:' + v.px.toFixed(0) +
+      'px;top:' + v.py.toFixed(0) + 'px" title="' + esc(v.c.login) + '">' +
+      (selCli === v.c.login || z >= 16 ? '<span class="map-pin-name">' + esc(v.c.login) + '</span>' : '') + '</button>').join('') +
+    places.map((s) => {
+      const [px, py] = posSite[s.name];
+      const taille = Math.round(30 + 22 * Math.sqrt(s.n / maxN));
+      return '<button type="button" class="map-pin t-' + siteTeinte(s) + (selSite === s.name ? ' sel' : '') +
+        '" data-site="' + esc(s.name) + '" style="left:' + px.toFixed(0) + 'px;top:' + py.toFixed(0) +
+        'px;width:' + taille + 'px;height:' + taille + 'px" title="' + esc(s.name) + '">' +
+        '<b>' + s.n + '</b><span class="map-pin-name">' + esc(s.name) + '</span></button>';
+    }).join('');
 }
 
-function mapZoom(delta, ancre) {
-  const z2 = Math.max(2, Math.min(18, MAP.z + delta));
-  if (z2 === MAP.z) return;
-  if (ancre) {
-    // Le point sous la souris reste sous la souris.
-    const { l, h } = mapTaille();
-    const ax = mercX(MAP.lon, MAP.z) - l / 2 + ancre.x;
-    const ay = mercY(MAP.lat, MAP.z) - h / 2 + ancre.y;
-    const f = 2 ** (z2 - MAP.z);
-    MAP.lon = mercLon(ax * f - ancre.x + l / 2, z2);
-    MAP.lat = mercLat(ay * f - ancre.y + h / 2, z2);
-  }
-  MAP.z = z2;
-  document.getElementById('map-tiles').innerHTML = '';
+/** Deplace le calque sans rien redessiner (pendant un geste). */
+function mapGlisser(dx, dy) {
+  MAP.dx = dx;
+  MAP.dy = dy;
+  document.getElementById('map-pane').style.transform = 'translate3d(' + dx + 'px,' + dy + 'px,0)';
+}
+
+/** Fin d'un glissement : le centre suit, puis on redessine. */
+function mapFixer() {
+  if (!MAP.dx && !MAP.dy) return;
+  MAP.lon = mercLon(mercX(MAP.lon, MAP.z) - MAP.dx, MAP.z);
+  MAP.lat = mercLat(mercY(MAP.lat, MAP.z) - MAP.dy, MAP.z);
   dessinerCarte();
+}
+
+function mapStopAnim() {
+  if (MAP.anim) cancelAnimationFrame(MAP.anim);
+  MAP.anim = null;
+}
+
+/** Zoom anime autour d'un point : le calque grossit, puis les tuiles du
+ *  nouveau niveau se posent par-dessus les anciennes. */
+function mapZoom(delta, ancre, sansAnim) {
+  mapStopAnim();
+  mapFixer();
+  const z2 = Math.max(2, Math.min(19, MAP.z + delta));
+  if (z2 === MAP.z) return;
+  const { l, h } = mapTaille();
+  const a = ancre || { x: l / 2, y: h / 2 };
+  const f = 2 ** (z2 - MAP.z);
+  const ax = MAP.ox + a.x;
+  const ay = MAP.oy + a.y;
+  const pane = document.getElementById('map-pane');
+  const fini = () => {
+    // Les anciennes tuiles restent dessous, agrandies, le temps du chargement.
+    const ancien = document.getElementById('map-tiles');
+    const fond = ancien.cloneNode(true);
+    fond.id = '';
+    fond.classList.add('map-old');
+    fond.style.transformOrigin = a.x + 'px ' + a.y + 'px';
+    fond.style.transform = 'scale(' + f + ')';
+    document.getElementById('map-view').insertBefore(fond, pane);
+    setTimeout(() => fond.remove(), 900);
+    ancien.innerHTML = '';
+    MAP.lon = mercLon(ax * f - a.x + l / 2, z2);
+    MAP.lat = mercLat(ay * f - a.y + h / 2, z2);
+    MAP.z = z2;
+    dessinerCarte();
+  };
+  if (sansAnim) { fini(); return; }
+  pane.style.transformOrigin = a.x + 'px ' + a.y + 'px';
+  pane.style.transition = 'transform .2s cubic-bezier(.2,.8,.2,1)';
+  pane.style.transform = 'scale(' + f + ')';
+  setTimeout(() => { pane.style.transformOrigin = ''; fini(); }, 200);
 }
 
 function cablerCarte() {
   if (MAP.wired) return;
   MAP.wired = true;
   const vue = document.getElementById('map-view');
+  const doigts = new Map();
   let geste = null;
+  let pince = null;
+  let roue = 0;
+  let roueT = 0;
+  const local = (e) => { const r = vue.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
   vue.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.map-ctrl, .map-pin, .map-attrib')) return;
-    geste = { x: e.clientX, y: e.clientY, lon: MAP.lon, lat: MAP.lat, bouge: false };
+    if (e.target.closest('.map-ctrl, .map-attrib, .map-hint')) return;
+    mapStopAnim();
+    doigts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     vue.setPointerCapture(e.pointerId);
+    if (doigts.size === 2) {
+      // Deux doigts : on pince.
+      const [p1, p2] = [...doigts.values()];
+      pince = { d0: Math.hypot(p1.x - p2.x, p1.y - p2.y), m0: { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 }, s: 1, mx: 0, my: 0 };
+      geste = null;
+      return;
+    }
+    geste = { x: e.clientX, y: e.clientY, bouge: false, cible: e.target, traces: [{ x: e.clientX, y: e.clientY, t: performance.now() }] };
   });
   vue.addEventListener('pointermove', (e) => {
+    if (!doigts.has(e.pointerId)) return;
+    doigts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pince && doigts.size === 2) {
+      const [p1, p2] = [...doigts.values()];
+      pince.s = Math.max(0.25, Math.min(8, Math.hypot(p1.x - p2.x, p1.y - p2.y) / pince.d0));
+      pince.mx = (p1.x + p2.x) / 2 - pince.m0.x;
+      pince.my = (p1.y + p2.y) / 2 - pince.m0.y;
+      const r = vue.getBoundingClientRect();
+      const pane = document.getElementById('map-pane');
+      pane.style.transformOrigin = (pince.m0.x - r.left) + 'px ' + (pince.m0.y - r.top) + 'px';
+      pane.style.transform = 'translate3d(' + pince.mx + 'px,' + pince.my + 'px,0) scale(' + pince.s + ')';
+      return;
+    }
     if (!geste) return;
     const dx = e.clientX - geste.x;
     const dy = e.clientY - geste.y;
-    if (Math.abs(dx) + Math.abs(dy) > 4) geste.bouge = true;
+    if (!geste.bouge && Math.abs(dx) + Math.abs(dy) > 5) { geste.bouge = true; vue.classList.add('dragging'); }
     if (!geste.bouge) return;
-    MAP.lon = mercLon(mercX(geste.lon, MAP.z) - dx, MAP.z);
-    MAP.lat = mercLat(mercY(geste.lat, MAP.z) - dy, MAP.z);
-    vue.classList.add('dragging');
-    dessinerCarte();
+    geste.traces.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+    if (geste.traces.length > 6) geste.traces.shift();
+    mapGlisser(dx, dy);
+    // Un long glissement : on recale, pour que les tuiles suivent.
+    if (Math.abs(dx) > TUILE * 0.9 || Math.abs(dy) > TUILE * 0.9) {
+      mapFixer();
+      geste.x = e.clientX;
+      geste.y = e.clientY;
+    }
   });
-  vue.addEventListener('pointerup', async (e) => {
+  const lacher = async (e) => {
+    doigts.delete(e.pointerId);
+    if (pince) {
+      if (doigts.size === 0) {
+        const r = vue.getBoundingClientRect();
+        const p = pince;
+        pince = null;
+        const pane = document.getElementById('map-pane');
+        pane.style.transform = '';
+        pane.style.transformOrigin = '';
+        MAP.dx = p.mx;
+        MAP.dy = p.my;
+        mapFixer();
+        const dz = Math.round(Math.log2(p.s));
+        if (dz) mapZoom(dz, { x: p.m0.x - r.left + p.mx, y: p.m0.y - r.top + p.my }, true);
+      }
+      return;
+    }
     const g = geste;
     geste = null;
     vue.classList.remove('dragging');
-    if (!g || g.bouge) return;
+    if (!g) return;
+    if (g.bouge) {
+      // De l'elan : la carte continue un peu, puis s'arrete.
+      const t = g.traces;
+      const a = t[0];
+      const b = t[t.length - 1];
+      const dt = Math.max(1, b.t - a.t);
+      let vx = (b.x - a.x) / dt;
+      let vy = (b.y - a.y) / dt;
+      if (performance.now() - b.t > 80 || Math.hypot(vx, vy) < 0.15) { mapFixer(); return; }
+      let prec = performance.now();
+      const pas = (now) => {
+        const ecoule = now - prec;
+        prec = now;
+        mapGlisser(MAP.dx + vx * ecoule, MAP.dy + vy * ecoule);
+        const k = 0.94 ** (ecoule / 16);
+        vx *= k;
+        vy *= k;
+        if (Math.hypot(vx, vy) < 0.03 || Math.abs(MAP.dx) > TUILE || Math.abs(MAP.dy) > TUILE) {
+          MAP.anim = null;
+          mapFixer();
+          if (Math.hypot(vx, vy) >= 0.03) { prec = performance.now(); MAP.anim = requestAnimationFrame(pas); }
+          return;
+        }
+        MAP.anim = requestAnimationFrame(pas);
+      };
+      MAP.anim = requestAnimationFrame(pas);
+      return;
+    }
+    // Un simple toucher.
+    const pin = g.cible.closest && g.cible.closest('[data-site], [data-cli]');
     if (MAP.placing) {
-      // Placer un site : la ou l'on vient de cliquer.
-      const r = vue.getBoundingClientRect();
-      const { l, h } = mapTaille();
-      const x = mercX(MAP.lon, MAP.z) - l / 2 + (e.clientX - r.left);
-      const y = mercY(MAP.lat, MAP.z) - h / 2 + (e.clientY - r.top);
-      const nom = MAP.placing;
-      MAP.placing = null;
-      document.getElementById('map-hint').hidden = true;
-      try {
-        await api('/site-locations/' + encodeURIComponent(nom), { method: 'PUT',
-          body: JSON.stringify({ latitude: mercLat(y, MAP.z), longitude: mercLon(x, MAP.z) }) });
-        MAP.sel = nom;
-        toast('<b>' + esc(nom) + '</b> placed on the map.', 4000);
-      } catch (err) {
-        toast(esc(err.message), 6000);
-      }
-      await loadMap();
+      const p = local(e);
+      const x = MAP.ox + p.x;
+      const y = MAP.oy + p.y;
+      await mapPoser(MAP.placing, mercLat(y, MAP.z), mercLon(x, MAP.z));
+      return;
+    }
+    if (pin) {
+      MAP.sel = pin.dataset.site ? { kind: 'site', name: pin.dataset.site } : { kind: 'client', name: pin.dataset.cli };
+      MAP.edit = false;
     } else if (MAP.sel) {
       MAP.sel = null;
-      dessinerCarte();
-      dessinerCoteCarte();
-    }
-  });
+    } else return;
+    dessinerCarte();
+    dessinerCoteCarte();
+  };
+  vue.addEventListener('pointerup', lacher);
+  vue.addEventListener('pointercancel', (e) => { doigts.delete(e.pointerId); geste = null; pince = null; vue.classList.remove('dragging'); mapFixer(); });
   vue.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const r = vue.getBoundingClientRect();
-    mapZoom(e.deltaY < 0 ? 1 : -1, { x: e.clientX - r.left, y: e.clientY - r.top });
+    // Les pave tactiles envoient de petits pas : on les cumule.
+    const maintenant = performance.now();
+    if (maintenant - roueT > 300) roue = 0;
+    roueT = maintenant;
+    roue += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+    if (Math.abs(roue) < 60) return;
+    const d = roue < 0 ? 1 : -1;
+    roue = 0;
+    mapZoom(d, local(e));
   }, { passive: false });
   vue.addEventListener('dblclick', (e) => {
-    const r = vue.getBoundingClientRect();
-    mapZoom(1, { x: e.clientX - r.left, y: e.clientY - r.top });
+    if (e.target.closest('.map-ctrl')) return;
+    mapZoom(1, local(e));
+  });
+  vue.addEventListener('keydown', (e) => {
+    const pas = { ArrowLeft: [120, 0], ArrowRight: [-120, 0], ArrowUp: [0, 120], ArrowDown: [0, -120] }[e.key];
+    if (pas) { e.preventDefault(); mapGlisser(pas[0], pas[1]); mapFixer(); }
+    if (e.key === '+' || e.key === '=') mapZoom(1);
+    if (e.key === '-') mapZoom(-1);
   });
   document.getElementById('map-zin').addEventListener('click', () => mapZoom(1));
   document.getElementById('map-zout').addEventListener('click', () => mapZoom(-1));
@@ -11770,77 +12010,193 @@ function cablerCarte() {
   window.addEventListener('resize', () => { if (state.view === 'map') dessinerCarte(); });
 }
 
-function mapPlacer(nom) {
-  MAP.placing = nom;
+function mapCentrer(lat, lon, zMin) {
+  MAP.lat = lat;
+  MAP.lon = lon;
+  if (zMin && MAP.z < zMin) { MAP.z = zMin; document.getElementById('map-tiles').innerHTML = ''; }
+  dessinerCarte();
+}
+
+async function mapPoser(cible, lat, lon) {
+  const chemin = cible.kind === 'site' ? '/site-locations/' : '/client-locations/';
+  MAP.placing = null;
+  document.getElementById('map-hint').hidden = true;
+  try {
+    await api(chemin + encodeURIComponent(cible.name), { method: 'PUT',
+      body: JSON.stringify({ latitude: Number(lat.toFixed(6)), longitude: Number(lon.toFixed(6)) }) });
+    MAP.sel = { kind: cible.kind, name: cible.name };
+    MAP.edit = false;
+    toast('<b>' + esc(cible.name) + '</b> placed on the map.', 4000);
+  } catch (err) {
+    toast(esc(err.message), 6000);
+  }
+  await loadMap();
+}
+
+function mapPlacer(cible) {
+  MAP.placing = cible;
   const hint = document.getElementById('map-hint');
   hint.hidden = false;
-  hint.innerHTML = 'Tap the map where <b>' + esc(nom) + '</b> is. <button type="button" class="sm link-btn" id="map-cancel">Cancel</button>';
+  hint.innerHTML = 'Tap the map where <b>' + esc(cible.name) + '</b> is. <button type="button" class="sm link-btn" id="map-cancel">Cancel</button>';
   document.getElementById('map-cancel').addEventListener('click', (e) => {
     e.stopPropagation();
     MAP.placing = null;
     hint.hidden = true;
   });
-  if (window.matchMedia('(max-width: 760px)').matches) document.getElementById('map-view').scrollIntoView({ behavior: 'smooth' });
+  if (window.matchMedia('(max-width: 1000px)').matches) document.getElementById('map-view').scrollIntoView({ behavior: 'smooth' });
+}
+
+/** Le bloc « Position » : coordonnees a coller, GPS, ou un toucher sur la carte. */
+function blocPosition(kind, nom, pos) {
+  return '<div class="map-pos">' +
+    '<label for="map-coords">Coordinates</label>' +
+    '<div class="map-pos-row"><input id="map-coords" inputmode="decimal" autocomplete="off" placeholder="13.5137, 2.1098" value="' +
+      (pos ? esc(pos[0].toFixed(6) + ', ' + pos[1].toFixed(6)) : '') + '">' +
+      '<button type="button" class="sm primary" id="map-coords-save">Save</button></div>' +
+    '<span class="hint">Latitude, longitude, or paste a Google Maps / OpenStreetMap link.</span>' +
+    '<div class="actions"><button type="button" class="sm" id="map-pick">Tap on the map</button>' +
+      '<button type="button" class="sm" id="map-gps">Use my GPS position</button>' +
+      (pos ? '<button type="button" class="sm danger" id="map-unplace">Remove from the map</button>' : '') + '</div>' +
+    '<div id="map-pos-msg"></div></div>';
+}
+
+function cablerPosition(cote, kind, nom) {
+  const cible = { kind, name: nom };
+  const msg = (t) => { cote.querySelector('#map-pos-msg').innerHTML = '<div class="notice err">' + esc(t) + '</div>'; };
+  const enregistrer = () => {
+    const c = lireCoordonnees(cote.querySelector('#map-coords').value);
+    if (!c) { msg('Not understood: write "latitude, longitude", e.g. 13.5137, 2.1098.'); return; }
+    mapPoser(cible, c[0], c[1]).then(() => mapCentrer(c[0], c[1], 14));
+  };
+  cote.querySelector('#map-coords-save').addEventListener('click', enregistrer);
+  cote.querySelector('#map-coords').addEventListener('keydown', (e) => { if (e.key === 'Enter') enregistrer(); });
+  cote.querySelector('#map-pick').addEventListener('click', () => mapPlacer(cible));
+  cote.querySelector('#map-gps').addEventListener('click', () => {
+    if (!navigator.geolocation) { msg('This browser gives no position.'); return; }
+    navigator.geolocation.getCurrentPosition(
+      (p) => mapPoser(cible, p.coords.latitude, p.coords.longitude).then(() => mapCentrer(p.coords.latitude, p.coords.longitude, 15)),
+      (err) => msg('No position: ' + err.message + ' (the page must be opened over HTTPS, and the permission given).'),
+      { enableHighAccuracy: true, timeout: 15000 });
+  });
+  const retirer = cote.querySelector('#map-unplace');
+  if (retirer) retirer.addEventListener('click', async () => {
+    try {
+      await api((kind === 'site' ? '/site-locations/' : '/client-locations/') + encodeURIComponent(nom), { method: 'DELETE' });
+    } catch (err) { msg(err.message); return; }
+    await loadMap();
+  });
 }
 
 function dessinerCoteCarte() {
   const cote = document.getElementById('map-side');
   if (!cote) return;
   const admin = peut('edit');
-  const sites = mapSites();
+  const { sites, clients } = mapDonnees();
   const places = sites.filter((s) => s.lat != null);
-  const aPlacer = sites.filter((s) => s.lat == null);
-  const s = sites.find((x) => x.name === MAP.sel);
-  const ligne = (x) => '<button type="button" class="map-site" data-goto="' + esc(x.name) + '">' +
-    '<i class="map-dot t-' + siteTeinte(x) + '"></i><span class="map-site-name">' + esc(x.name) + '</span>' +
-    '<span class="map-site-n">' + x.on + ' / ' + x.n + '</span></button>';
-  const fiche = s ? '<div class="map-card">' +
-      '<div class="map-card-head"><i class="map-dot t-' + siteTeinte(s) + '"></i><b>' + esc(s.name) + '</b>' +
-        '<button type="button" class="sm link-btn" data-close aria-label="Close">&times;</button></div>' +
-      '<div class="map-stats"><div><b>' + s.n + '</b><span>clients</span></div>' +
-        '<div><b>' + s.on + '</b><span>connected</span></div>' +
-        '<div><b>' + s.mode + '</b><span>in a mode</span></div>' +
-        '<div><b>' + s.boost + '</b><span>boosts</span></div></div>' +
-      '<div class="actions">' +
-        (s.n ? '<button type="button" class="sm primary" data-show="' + esc(s.name) + '">Show its clients</button>' +
-          '<button type="button" class="sm" data-traffic="' + esc(s.name) + '">Traffic</button>' : '') +
-        '<button type="button" class="sm" data-pdf="' + esc(s.name) + '">PDF report</button>' +
-        (admin ? '<button type="button" class="sm" data-place="' + esc(s.name) + '">' + (s.lat != null ? 'Move' : 'Place') + '</button>' : '') +
-      '</div></div>' : '';
-  // Les sites ou trop de clients sont deconnectes d'abord.
+  const aPlacer = sites.filter((s) => s.lat == null && s.n);
   const tri = (a, b) => (a.n ? a.on / a.n : 1) - (b.n ? b.on / b.n : 1) || a.name.localeCompare(b.name);
-  cote.innerHTML = fiche +
-    '<div class="map-legend"><span><i class="map-dot t-green"></i>80 %+ connected</span>' +
-      '<span><i class="map-dot t-orange"></i>50–80 %</span><span><i class="map-dot t-red"></i>under 50 %</span></div>' +
+  const pastille = (t) => '<i class="map-dot t-' + t + '"></i>';
+  let fiche = '';
+  const sel = MAP.sel;
+  if (sel && sel.kind === 'site') {
+    const s = sites.find((x) => x.name === sel.name);
+    if (s) {
+      const siens = clients.filter((c) => c.site === s.name)
+        .sort((a, b) => (clientEnLigne(a.r) - clientEnLigne(b.r)) || a.login.localeCompare(b.login));
+      fiche = '<div class="map-card">' +
+        '<div class="map-card-head">' + pastille(siteTeinte(s)) + '<b>' + esc(s.name) + '</b><span class="hint">site</span>' +
+          '<button type="button" class="sm link-btn" data-close aria-label="Close">&times;</button></div>' +
+        '<div class="map-stats"><div><b>' + s.n + '</b><span>clients</span></div>' +
+          '<div><b>' + s.on + '</b><span>connected</span></div>' +
+          '<div><b>' + s.mode + '</b><span>in a mode</span></div>' +
+          '<div><b>' + s.boost + '</b><span>boosts</span></div></div>' +
+        '<div class="actions">' + (s.n ? '<button type="button" class="sm primary" data-show="' + esc(s.name) + '">Show its clients</button>' : '') +
+          '<button type="button" class="sm" data-pdf="' + esc(s.name) + '">PDF report</button>' +
+          (admin ? '<button type="button" class="sm" data-edit>' + (s.lat != null ? 'Position' : 'Place it') + '</button>' : '') + '</div>' +
+        (admin && MAP.edit ? blocPosition('site', s.name, s.lat != null ? [s.lat, s.lon] : null) : '') +
+        (siens.length ? '<div class="map-list">' + siens.map((c) =>
+          '<button type="button" class="map-site" data-goto-cli="' + esc(c.login) + '">' + pastille(clientTeinte(c.r)) +
+          '<span class="map-site-name">' + esc(c.login) + '</span>' +
+          '<span class="map-site-n">' + (clientEnLigne(c.r) ? esc(bpsText(c.r.tx_bps)) : (c.r.ts ? 'offline' : 'never seen')) +
+            (c.place ? ' · <span title="Has its own position">&#9679;</span>' : '') + '</span></button>').join('') + '</div>' : '') +
+        '</div>';
+    }
+  } else if (sel && sel.kind === 'client') {
+    const c = clients.find((x) => x.login === sel.name);
+    if (c) {
+      const r = c.r;
+      const m = modeDuClient(r);
+      fiche = '<div class="map-card">' +
+        '<div class="map-card-head">' + pastille(clientTeinte(r)) + '<b>' + esc(c.login) + '</b><span class="hint">client</span>' +
+          '<button type="button" class="sm link-btn" data-close aria-label="Close">&times;</button></div>' +
+        '<table class="kv"><tbody>' +
+          '<tr><td>Status</td><td>' + (clientEnLigne(r) ? 'Online' : r.ts ? 'Offline · seen ' + esc(depuis(r.ts)) : 'Never seen') + '</td></tr>' +
+          '<tr><td>Site</td><td>' + (c.site ? '<a href="#" data-goto="' + esc(c.site) + '">' + esc(c.site) + '</a>' : '-') + '</td></tr>' +
+          '<tr><td>Mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
+          '<tr><td>Position</td><td>' + (c.place ? esc(c.lat.toFixed(5) + ', ' + c.lon.toFixed(5)) : 'around its site') + '</td></tr>' +
+        '</tbody></table>' +
+        '<div class="actions"><a class="btn sm primary" href="#/client/' + encodeURIComponent(c.login) + '">Open the client</a>' +
+          (admin ? '<button type="button" class="sm" data-edit>' + (c.place ? 'Position' : 'Place it') + '</button>' : '') + '</div>' +
+        (admin && MAP.edit ? blocPosition('client', c.login, c.place ? [c.lat, c.lon] : null) : '') + '</div>';
+    }
+  }
+  const q = MAP.q.trim().toLowerCase();
+  const trouves = q ? sites.filter((s) => s.name.toLowerCase().includes(q)).slice(0, 8).map((s) => ({ k: 'site', s }))
+    .concat(clients.filter((c) => c.login.toLowerCase().includes(q) || String(c.r.last_ip || '').includes(q)).slice(0, 12).map((c) => ({ k: 'client', c }))) : [];
+  const ligneSite = (x) => '<button type="button" class="map-site" data-goto="' + esc(x.name) + '">' + pastille(siteTeinte(x)) +
+    '<span class="map-site-name">' + esc(x.name) + '</span><span class="map-site-n">' + x.on + ' / ' + x.n + '</span></button>';
+  const recherche = document.getElementById('map-q');
+  const focus = recherche && document.activeElement === recherche;
+  cote.innerHTML = '<input type="search" id="map-q" placeholder="Find a site or a client" autocomplete="off" value="' + esc(MAP.q) + '">' +
+    (q ? '<div class="map-sites">' + (trouves.length ? trouves.map((t) => t.k === 'site' ? ligneSite(t.s)
+      : '<button type="button" class="map-site" data-goto-cli="' + esc(t.c.login) + '">' + pastille(clientTeinte(t.c.r)) +
+        '<span class="map-site-name">' + esc(t.c.login) + '</span><span class="map-site-n">' + esc(t.c.site || '') + '</span></button>').join('')
+      : '<div class="empty">Nothing found.</div>') + '</div>' : '') +
+    fiche +
+    '<div class="map-legend"><span><i class="map-dot t-green"></i>connected (site: 80 %+)</span>' +
+      '<span><i class="map-dot t-orange"></i>50–80 %</span><span><i class="map-dot t-red"></i>offline / under 50 %</span>' +
+      '<span><i class="map-dot t-gray"></i>never seen</span></div>' +
+    '<p class="hint" style="display:block">Clients show from street zoom, or when their site is selected. A client without a position sits around its site.</p>' +
     '<h3>Sites <span class="hint">' + places.length + ' on the map</span></h3>' +
-    '<div class="map-sites">' + (places.length ? places.sort(tri).map(ligne).join('')
-      : '<div class="empty">No site on the map yet.' + (admin ? ' Place them below.' : ' An Administrator places them.') + '</div>') + '</div>' +
+    '<div class="map-sites">' + (places.length ? places.sort(tri).map(ligneSite).join('')
+      : '<div class="empty">No site on the map yet.' + (admin ? ' Choose one below and give its position.' : ' An Administrator places them.') + '</div>') + '</div>' +
     (aPlacer.length ? '<h3>Not placed <span class="hint">' + aPlacer.length + '</span></h3><div class="map-sites">' +
-      aPlacer.sort(tri).map((x) => '<div class="map-site off"><i class="map-dot t-' + siteTeinte(x) + '"></i>' +
-        '<span class="map-site-name">' + esc(x.name) + '</span><span class="map-site-n">' + x.on + ' / ' + x.n + '</span>' +
-        (admin ? '<button type="button" class="sm" data-place="' + esc(x.name) + '">Place</button>' : '') + '</div>').join('') +
+      aPlacer.sort(tri).map((x) => '<button type="button" class="map-site off" data-goto="' + esc(x.name) + '">' + pastille(siteTeinte(x)) +
+        '<span class="map-site-name">' + esc(x.name) + '</span><span class="map-site-n">' + x.on + ' / ' + x.n + '</span></button>').join('') +
       '</div>' : '');
-  cote.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => {
+  const champ = document.getElementById('map-q');
+  champ.addEventListener('input', () => { MAP.q = champ.value; dessinerCoteCarte(); });
+  if (focus) { champ.focus(); champ.setSelectionRange(champ.value.length, champ.value.length); }
+  cote.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', (e) => {
+    e.preventDefault();
     const x = sites.find((y) => y.name === b.dataset.goto);
-    MAP.sel = x.name;
-    MAP.lat = x.lat;
-    MAP.lon = x.lon;
-    if (MAP.z < 12) { MAP.z = 13; document.getElementById('map-tiles').innerHTML = ''; }
-    dessinerCarte();
+    MAP.sel = { kind: 'site', name: x.name };
+    MAP.edit = x.lat == null && admin;
+    MAP.q = '';
+    if (x.lat != null) mapCentrer(x.lat, x.lon, 14); else dessinerCarte();
     dessinerCoteCarte();
   }));
-  cote.querySelectorAll('[data-place]').forEach((b) => b.addEventListener('click', () => mapPlacer(b.dataset.place)));
+  cote.querySelectorAll('[data-goto-cli]').forEach((b) => b.addEventListener('click', () => {
+    const c = clients.find((y) => y.login === b.dataset.gotoCli);
+    MAP.sel = { kind: 'client', name: c.login };
+    MAP.edit = false;
+    MAP.q = '';
+    const s = sites.find((y) => y.name === c.site);
+    if (c.place) mapCentrer(c.lat, c.lon, 16);
+    else if (s && s.lat != null) mapCentrer(s.lat, s.lon, 15);
+    else dessinerCarte();
+    dessinerCoteCarte();
+  }));
+  const edit = cote.querySelector('[data-edit]');
+  if (edit) edit.addEventListener('click', () => { MAP.edit = !MAP.edit; dessinerCoteCarte(); });
+  if (MAP.edit && sel && cote.querySelector('#map-coords')) cablerPosition(cote, sel.kind, sel.name);
   cote.querySelectorAll('[data-pdf]').forEach((b) => b.addEventListener('click', () => rapportPdf(b.dataset.pdf)));
   cote.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => {
     CLI.presetSite = b.dataset.show;
     location.hash = '#/clients';
   }));
-  cote.querySelectorAll('[data-traffic]').forEach((b) => b.addEventListener('click', () => {
-    const x = sites.find((y) => y.name === b.dataset.traffic);
-    openGroupTraffic(x.logins);
-  }));
   const fermer = cote.querySelector('[data-close]');
-  if (fermer) fermer.addEventListener('click', () => { MAP.sel = null; dessinerCarte(); dessinerCoteCarte(); });
+  if (fermer) fermer.addEventListener('click', () => { MAP.sel = null; MAP.edit = false; dessinerCarte(); dessinerCoteCarte(); });
 }
 
 /* ------------------------------------------------------------- activite */

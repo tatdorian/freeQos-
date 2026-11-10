@@ -2050,3 +2050,37 @@ tr.cli-group td button { float: right; }
   .alert-bar select { margin-left: 0; flex: 1 1 auto; }
   .alert-bar .alert-count { width: 100%; }
 }
+
+/* Carte v2 : un calque qui glisse, des tuiles qui apparaissent en fondu. */
+a.btn {
+  display: inline-flex; align-items: center; background: var(--fill); color: var(--accent); border-radius: 999px;
+  padding: .5rem 1.05rem; font-size: .86rem; font-weight: 550; text-decoration: none;
+}
+a.btn.sm { padding: .3rem .75rem; font-size: .78rem; }
+a.btn.primary { background: var(--accent); color: #fff; }
+a.btn:hover { text-decoration: none; filter: brightness(1.05); }
+.map-pane { position: absolute; inset: 0; will-change: transform; }
+.map-old { position: absolute; inset: 0; pointer-events: none; }
+.map-tiles img { opacity: 0; transition: opacity .25s ease; }
+.map-tiles img.ok { opacity: 1; }
+.map-old img { opacity: 1; }
+.map-links { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.map-links line { stroke: rgba(60, 60, 67, .35); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.map-links line.placed { stroke: rgba(10, 132, 255, .5); stroke-dasharray: none; }
+.map-cli {
+  position: absolute; width: 14px; height: 14px; padding: 0; border-radius: 50%; transform: translate(-50%, -50%);
+  background: var(--t); border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, .35); pointer-events: auto;
+}
+.map-cli.placed { width: 16px; height: 16px; border-radius: 5px; }
+.map-cli:hover:not(:disabled) { background: var(--t); transform: translate(-50%, -50%) scale(1.25); }
+.map-cli.sel { box-shadow: 0 0 0 4px color-mix(in srgb, var(--t) 45%, transparent), 0 1px 4px rgba(0, 0, 0, .35); z-index: 2; }
+.map-cli .map-pin-name { top: calc(100% + 3px); }
+#map-q { width: 100%; }
+.map-card .kv td { font-size: .84rem; }
+.map-list { display: grid; max-height: 280px; overflow-y: auto; border-radius: 10px; background: var(--surface-2); }
+.map-pos { display: grid; gap: .45rem; padding-top: .3rem; border-top: .5px solid var(--border); }
+.map-pos label { font-size: .78rem; color: var(--muted); font-weight: 500; }
+.map-pos-row { display: flex; gap: .4rem; }
+.map-pos-row input { flex: 1 1 auto; font-variant-numeric: tabular-nums; }
+.map-pos .hint { display: block; }
+.map-card-head .hint { display: inline; font-size: .74rem; }

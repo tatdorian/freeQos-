@@ -1,8 +1,8 @@
-"""Position des sites sur la carte.
+"""Position des sites et des clients sur la carte.
 
-Une ligne par site, par son NOM (celui que portent les clients) : latitude,
-longitude, qui l'a posee. Rien d'autre : ce que la carte montre de chaque site
-(clients, connectes, alertes) se calcule a l'affichage.
+Une ligne par site (son NOM, celui que portent les clients) ou par client (son
+login) : latitude, longitude, qui l'a posee. Rien d'autre : ce que la carte
+montre (clients, connectes, trafic) se calcule a l'affichage.
 """
 
 from __future__ import annotations
@@ -28,15 +28,22 @@ def check_location(latitude: Any, longitude: Any) -> tuple[float, float]:
     return round(lat, 6), round(lon, 6)
 
 
+#: Les tables de positions : une liste blanche, le nom entre dans le SQL.
+TABLES = ("site_locations", "client_locations")
+
+
 class SiteLocationsRepository:
-    def __init__(self, pool: asyncpg.Pool) -> None:
+    def __init__(self, pool: asyncpg.Pool, table: str = "site_locations") -> None:
+        if table not in TABLES:
+            raise ValueError(f"unknown location table {table!r}")
         self._pool = pool
+        self._table = table
 
     async def list(self) -> list[dict[str, Any]]:
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT name, latitude, longitude, updated_by, updated_at "
-                "FROM site_locations ORDER BY lower(name)"
+                f"FROM {self._table} ORDER BY lower(name)"  # noqa: S608
             )
         return [dict(r) for r in rows]
 
@@ -45,18 +52,18 @@ class SiteLocationsRepository:
     ) -> dict[str, Any]:
         nom = name.strip()
         if not nom:
-            raise InvalidLocationError("a site needs a name")
+            raise InvalidLocationError("a location needs a name")
         lat, lon = check_location(latitude, longitude)
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                """
-                INSERT INTO site_locations (name, latitude, longitude, updated_by)
+                f"""
+                INSERT INTO {self._table} (name, latitude, longitude, updated_by)
                 VALUES ($1, $2, $3, $4)
                 ON CONFLICT (name) DO UPDATE
                    SET latitude = EXCLUDED.latitude, longitude = EXCLUDED.longitude,
                        updated_by = EXCLUDED.updated_by, updated_at = now()
                 RETURNING name, latitude, longitude, updated_by, updated_at
-                """,
+                """,  # noqa: S608 - table issue de la liste blanche
                 nom,
                 lat,
                 lon,
@@ -66,5 +73,8 @@ class SiteLocationsRepository:
 
     async def delete(self, name: str) -> bool:
         async with self._pool.acquire() as conn:
-            resultat = await conn.execute("DELETE FROM site_locations WHERE name = $1", name)
+            resultat = await conn.execute(
+                f"DELETE FROM {self._table} WHERE name = $1",  # noqa: S608
+                name,
+            )
         return not resultat.endswith(" 0")

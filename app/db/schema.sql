@@ -1358,3 +1358,13 @@ CREATE TABLE IF NOT EXISTS site_locations (
     updated_by  TEXT,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- OU SONT LES CLIENTS : la position d'un client sur la carte, par son login.
+-- Un client sans position se dessine autour de son site.
+CREATE TABLE IF NOT EXISTS client_locations (
+    name        TEXT PRIMARY KEY,
+    latitude    DOUBLE PRECISION NOT NULL CHECK (latitude BETWEEN -90 AND 90),
+    longitude   DOUBLE PRECISION NOT NULL CHECK (longitude BETWEEN -180 AND 180),
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
