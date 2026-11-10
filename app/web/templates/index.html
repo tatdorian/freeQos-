@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>freeQoS</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
   <!-- Le theme choisi s'applique AVANT le premier affichage : sinon la page
@@ -18,7 +18,7 @@
        derriere ne charge rien : toutes ses routes exigent une session. -->
   <div id="auth-gate" class="auth-gate" hidden>
     <form class="auth-card" id="auth-form" autocomplete="on">
-      <div class="auth-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16l5-6 4 4 7-8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+      <div class="auth-logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.34 18.66A8 8 0 1 1 17.66 18.66" fill="none" stroke="#fff" stroke-opacity=".38" stroke-width="2.2" stroke-linecap="round"/><path d="M6.34 18.66A8 8 0 0 1 16 6.07" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M12 13l2.6-4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="13" r="1.9" fill="#fff"/></svg></div>
       <h1 id="auth-title">Log in</h1>
       <p class="auth-sub" id="auth-sub">freeQoS controller</p>
       <label>Email<input type="email" id="auth-email" autocomplete="username" required maxlength="254"></label>
@@ -38,8 +38,8 @@
   </div>
   <header class="top">
     <div class="brand">
-      <span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16l5-6 4 4 7-8" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-      freeQoS
+      <span class="logo"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.34 18.66A8 8 0 1 1 17.66 18.66" fill="none" stroke="#fff" stroke-opacity=".38" stroke-width="2.2" stroke-linecap="round"/><path d="M6.34 18.66A8 8 0 0 1 16 6.07" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M12 13l2.6-4.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="13" r="1.9" fill="#fff"/></svg></span>
+      <span class="wordmark">free<b>QoS</b></span>
       <span class="dot" id="health-dot" title="Controller health"></span>
     </div>
     <!-- RECHERCHE INSTANTANEE : un nom, une IP, une MAC, un equipement, un site. -->
@@ -54,6 +54,7 @@
       <a href="#/alerts" data-view="alerts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16z"/><path d="M10 21h4"/></svg><span>Alerts</span></a>
       <a href="#/activity" data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span>Activity</span></a>
       <a href="#/management" data-view="management"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg><span>Schedules</span></a>
+      <a href="#/map" data-view="map"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/></svg><span>Map</span></a>
       <a href="#/dashboard" data-view="dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Dashboard</span></a>
       <a href="#/exec" data-view="exec"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-5 3 3 5-6"/></svg><span>Executive</span></a>
       <a href="#/traffic" data-view="traffic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16"/><path d="M3 8l4-4 4 4"/><path d="M17 20V4"/><path d="M13 16l4 4 4-4"/></svg><span>Traffic</span></a>
@@ -675,10 +676,11 @@
               <div class="pick-items" id="sched-pick-items"></div>
             </div>
           </div>
+          <!-- Fuseau : un MENU (une molette native sur telephone), qui part du
+               fuseau du navigateur. Les heures des plages sont celles-la. -->
           <label class="ios-row" for="sched-tz">
-            <span class="ios-key" title="Time zone of your subscribers: the hours below are local to it, and daylight saving time is handled.">Time zone</span>
-            <input id="sched-tz" class="ios-val" required maxlength="64" list="sched-tz-list" placeholder="Europe/Paris">
-            <datalist id="sched-tz-list"></datalist>
+            <span class="ios-key">Time zone<span class="ios-note" id="sched-tz-now"></span></span>
+            <select id="sched-tz" class="ios-val ios-select" required></select>
           </label>
           <label class="ios-row switch">
             <span class="ios-key">Enabled</span>
@@ -716,11 +718,15 @@
             <input id="mode-name" required maxlength="64" placeholder="Backup">
           </div>
           <div class="field">
-            <label for="mode-kind">Rate</label>
-            <select id="mode-kind">
-              <option value="fixed">Fixed rate (Mbps)</option>
-              <option value="percent">Share of the plan (%)</option>
-            </select>
+            <label>Unit</label>
+            <!-- L'unite : kbps ou Mbps (un debit fixe), ou % du forfait. Le
+                 serveur range un debit fixe en Mbps. -->
+            <div class="segmented" id="mode-unit" role="group" aria-label="Unit">
+              <button type="button" data-u="kbps">kbps</button>
+              <button type="button" data-u="mbps" class="active">Mbps</button>
+              <button type="button" data-u="percent">% of plan</button>
+            </div>
+            <input type="hidden" id="mode-kind" value="fixed">
           </div>
           <div class="field">
             <label for="mode-position">Order in the list</label>
@@ -742,9 +748,6 @@
           </div>
         </div>
         <div class="actions">
-          <label class="chk" title="Stops any running boost when a client enters this mode, and refuses new boosts">
-            <input type="checkbox" id="mode-noboost"> Stops boosts
-          </label>
           <span class="spacer"></span>
           <button type="button" class="sm" id="mode-cancel" hidden>Cancel</button>
           <button type="submit" class="primary" id="mode-submit">Add the mode</button>
@@ -760,6 +763,26 @@
 
     <!-- ACTIVITE : qui a change quoi, quand, sur quel client, et si c'est
          arrive jusqu'au routeur. -->
+    <!-- CARTE : les sites (PoPs) et leurs clients. Un site se place d'un clic
+         (Administrator) ; chacun y retrouve les clients d'un site. -->
+    <section id="view-map">
+      <div class="map-wrap">
+        <div class="map-view" id="map-view" tabindex="0" aria-label="Map of the sites">
+          <div class="map-tiles" id="map-tiles"></div>
+          <div class="map-pins" id="map-pins"></div>
+          <div class="map-ctrl">
+            <button type="button" id="map-zin" aria-label="Zoom in">+</button>
+            <button type="button" id="map-zout" aria-label="Zoom out">&minus;</button>
+            <button type="button" id="map-fit" aria-label="Show every site" title="Show every site">
+              <svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+          </div>
+          <div class="map-hint" id="map-hint" hidden></div>
+          <div class="map-attrib">&copy; <a href="//www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors</div>
+        </div>
+        <aside class="map-side" id="map-side"></aside>
+      </div>
+    </section>
+
     <section id="view-activity">
       <div class="card cli-card">
         <div class="toolbar cli-filters">
@@ -795,9 +818,19 @@
             <option value="boost">Boost running</option>
           </select>
           <select id="cli-mode" style="width:auto" aria-label="Bandwidth mode"></select>
+          <select id="cli-sort" style="width:auto" aria-label="Sort">
+            <option value="name">Sort: name</option>
+            <option value="site">Sort: site</option>
+            <option value="offline">Not connected first</option>
+            <option value="usage">Highest usage</option>
+          </select>
           <span class="spacer"></span>
           <span class="mode" id="cli-count"></span>
           <button type="button" class="sm link-btn" id="cli-clear">Clear</button>
+          <a class="icon-btn" href="#/map" id="cli-map" title="See on the map" aria-label="See on the map">
+            <svg viewBox="0 0 24 24"><path d="M9 4L3 6v14l6-2 6 2 6-2V4l-6 2z"/><path d="M9 4v14M15 6v14"/></svg></a>
+          <button type="button" class="icon-btn" id="cli-csv" title="Export the list (CSV)" aria-label="Export CSV">
+            <svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg></button>
         </div>
         <div class="cli-selbar" id="cli-selbar" hidden>
           <span id="cli-selcount"></span>
@@ -805,9 +838,11 @@
           <button type="button" class="sm primary" id="cli-sel-mode">Mode</button>
           <button type="button" class="sm" id="cli-sel-boost">Boost</button>
           <button type="button" class="sm" id="cli-sel-stop">Stop</button>
+          <button type="button" class="sm" id="cli-sel-traffic">Traffic</button>
           <button type="button" class="sm link-btn" id="cli-sel-none" aria-label="Unselect">&times;</button>
         </div>
         <div class="table-wrap" id="cli-table"></div>
+        <div class="cli-pager" id="cli-pager"></div>
       </div>
     </section>
 

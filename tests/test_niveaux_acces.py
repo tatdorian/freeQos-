@@ -152,3 +152,29 @@ def test_un_mode_fixe_ou_en_part_du_forfait() -> None:
 def test_un_mode_invalide_est_refuse(saisie: dict) -> None:
     with pytest.raises(InvalidModeError):
         check_mode(saisie)
+
+
+def test_placer_un_site_est_un_geste_d_administrateur() -> None:
+    assert niveau_requis("PUT", "/api/v1/site-locations/Plateau", "/api/v1") == "edit"
+    assert niveau_requis("DELETE", "/api/v1/site-locations/Plateau", "/api/v1") == "edit"
+
+
+def test_une_position_hors_de_la_terre_est_refusee() -> None:
+    from app.db.site_locations_repo import InvalidLocationError, check_location
+
+    assert check_location("13.51371234", 2.1) == (13.513712, 2.1)
+    for lat, lon in ((91, 0), (0, 181), ("x", 0)):
+        with pytest.raises(InvalidLocationError):
+            check_location(lat, lon)
+
+
+def test_un_mode_ne_coupe_jamais_la_connexion() -> None:
+    """Un plafond sous 64 kbps coupe un client en pratique : refuse, jamais ecrit."""
+    with pytest.raises(InvalidModeError, match="cut"):
+        check_mode({"name": "X", "down_value": 0.01, "up_value": 1})
+    assert check_mode({"name": "X", "down_value": 0.064, "up_value": 0.064})
+    # Un pourcentage d'un forfait trop petit (ou mal saisi) aussi.
+    part = {"name": "Night", "rate_kind": "percent", "down_value": 50, "up_value": 50}
+    with pytest.raises(InvalidModeError, match="cuts the connection"):
+        mode_rates(part, 0.1, 0.1)
+    assert mode_rates(part, 20, 10) == (10.0, 5.0)

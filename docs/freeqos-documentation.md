@@ -1073,10 +1073,10 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 
 A **bandwidth mode** is a named rate given to a client in one click, from the **Clients** page: *Backup* when the backhaul is degraded, *Extreme backup* for a crisis or non-payment, *Night*... The operator picks a name in a list instead of typing rates (*Modes*, or `/api/v1/bandwidth-modes`).
 
-- **Rate:** fixed (`rate_kind=fixed`, Mbps) or a **share of the client's plan** (`percent`: 200 = twice the plan). A share needs the client's plan; a client without a known plan can only get a fixed mode.
+- **Rate:** fixed (`rate_kind=fixed`) or a **share of the client's plan** (`percent`: 200 = twice the plan). A share needs the client's plan; a client without a known plan can only get a fixed mode. In the form, the unit is a switch: **kbps**, **Mbps** or **% of plan**. A rate typed in kbps is stored in Mbps (512 kbps = 0.512 Mbps), and shown again in kbps when the mode is edited.
 - **Automatic** is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its **bandwidth schedule** — its rate then changes with the hour on its own.
 - **Where it sits:** a client's mode is its permanent override (`shaping_policies.max_down_mbps/max_up_mbps`, with `mode_id` and `mode_name`). It is therefore above the schedule (a client in *Backup* stays in *Backup* when the night begins) and below a running boost. Back to Automatic removes the override and keeps a running boost.
-- **Modes that stop boosts** (`disables_boost`): entering the mode clears the running boost, and a new boost is refused (`409 Boost is unavailable in <mode>. Change the mode first.`).
+- **Modes that stop boosts** (`disables_boost`, API only): entering the mode clears the running boost, and a new boost is refused (`409 Boost is unavailable in <mode>. Change the mode first.`). The form no longer offers this option: a mode saved from the form has it off.
 - **Editing a mode's rate** re-applies it at once to every client in it. A mode given to clients cannot be deleted (`409`): put them back to Automatic or in another mode first.
 - **Writing:** like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.
 - **Changing a client's plan keeps its mode and its boost:** only a manual limit (an override without a mode) is lifted, so that the new plan takes effect. A mode expressed as a share of the plan follows the new plan at once.
@@ -1089,9 +1089,37 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 - **Rate:** the plan **multiplied** by any factor above 1 (up to ×50, `boost_multiplier`), or a **temporary plan**: explicit download and upload rates (`boost_down_mbps`, `boost_up_mbps`), higher **or lower** than the plan. At the end of the duration the client goes back to its plan, its schedule or its mode on its own.
 - The log records what and for how long ("x2 of the plan for 4 h", "temporary rate 5 / 2 Mbps for 3 days", "... until stopped").
 
+### Clients page, map, alerts and reports
+
+**Clients page.** Four cards on top: *Clients* (and the number of sites), *Connected* (with a bar, green above 80 %, orange from 50 %, red below), *In a mode*, *Boosts*. A card is also a filter: tap it to list those clients. For each client, **Usage now** is a bar of its download rate against its limit, with a word: *Quiet* (under 10 %), *Normal*, *Busy* (60 % and more), *At its limit* (90 % and more). The IP address is not shown in the list: it is on the client's page (search by IP still works).
+
+Made for **hundreds of clients** (20 sites of 20 clients): search, filters by site, connection and mode, **sort** (name, site, not connected first, highest usage), and **pages** of 25, 50, 100 or 200. Sorted by site, each site gets a header with its count, its connected clients and a *Select the site* button. The box at the top of the list selects every client matching the filters, on every page.
+
+- **Traffic** (with clients selected): the traffic of the whole selection as a chart, then each client with its own small chart, its current rate and its volume, over 1 hour, 24 hours or 7 days.
+- **Export (CSV)**: the list as filtered, every page, for a spreadsheet: client, IP address, site, status, last seen, mode, boost, current rates, limit, plan.
+
+**Client page.** *Status* (online or offline, since when), *Usage now* (gauge and word against its limit), *Limit* (and where it comes from), *Latency* with a word (*good* under 40 ms, *fair* under 100 ms, *poor* above). Then the usage chart, the mode and boost, the connection (IP, site, session) and the recent changes.
+
+**Map** (`#/map`, every level). The sites on an OpenStreetMap map, one pin per site: its size follows the number of clients, its colour the share connected (green 80 % and more, orange 50–80 %, red below). Drag to move, the wheel, the buttons or a double click to zoom. Tap a site: its clients, connected, in a mode, boosts, and *Show its clients*, *Traffic*, *PDF report*. The side list puts the sites with the most disconnected clients first. An **Administrator** places a site (*Place*, then a tap on the map) or moves it (`PUT /api/v1/site-locations/{site}`, `{"latitude", "longitude"}`; read with `GET /api/v1/site-locations`). The map tiles come from `tile.openstreetmap.org`: without internet, the pins stay usable on a plain background.
+
+**Alerts and error codes.** Every alert carries a stable **code**, the clients concerned and **what to check**:
+
+| Code | Level | Meaning | What to check |
+|---|---|---|---|
+| `ERR_POP_TIMEOUT` | critical | Several clients of a site (at least 2, and half of those measured) went offline together | The site's shared link: backhaul radio, power, site router |
+| `ERR_ROUTER_WRITE` | critical | The last change of a client failed on the router (last 24 h) | The router's API access on the Devices page |
+| `ERR_CLIENT_DISCONNECT` | warning | One client offline, its site otherwise up | Client side: power, antenna alignment, cable, PPPoE login |
+| `ERR_HIGH_LATENCY` | warning | Latency of 150 ms or more right now | Radio signal and the site's load |
+| `ERR_NO_ROUTER` | warning | The last change is saved but no router carries the client | The site's router, or the client's session |
+| `ERR_QUEUE_CONFLICT` | warning | A queue set by hand on the router targets the client | Remove it, or let freeQoS manage it |
+| `ERR_NEVER_SEEN` | info | Declared but never measured | Not connected yet, or a wrong address / login |
+| `MODE_CRISIS` | info | Clients in a mode that stops boosts | Put them back to Automatic when it is over |
+
+**PDF report.** *Alerts › PDF report* (all sites, or the site chosen in the list) and *Map › a site › PDF report* (audit of one site) download a PDF made in the browser (no server, no internet needed): the counts, every alert with its code and what to check, the sites, the offline clients with their IP and last contact, for a site all its clients, and the list of codes.
+
 ### Bandwidth schedules (day, evening, night)
 
-Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it. *Applies to* is a segmented control (*All*, *Clients*, *Sites*, *Plans*); except for *All*, it opens a **list to tick**, with search and *All* / *None*. Each slot is one card: its name, the hours (*18:00 → 23:00*), the rate with a **% / Mbps / Mode** switch, and the days as round pills (tap to turn a day off). The rate is either:
+Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it. *Applies to* is a segmented control (*All*, *Clients*, *Sites*, *Plans*); except for *All*, it opens a **list to tick**, with search and *All* / *None*. Each slot is one card: its name, the hours (*18:00 → 23:00*), the rate with a **% / Mbps / Mode** switch, and the days as round pills (tap to turn a day off). The hours are not typed: **tap** an hour to open a wheel (hours, then minutes by 5), or **drag it up or down** to move it by a quarter of an hour (up = later, down = earlier); the mouse wheel and the arrow keys work too. **Time zone** is a menu that starts on the browser's own time zone and shows the time it is there; the list of schedules shows each schedule's next switch in **your** local time. The rate is either:
 
 - a **percentage of the plan** (`percent`: 200 = twice the plan at night, 70 = 30 % less in the evening), which follows every subscriber's own plan without copying it; or
 - a **fixed rate** (`down_mbps` / `up_mbps`; a single direction is allowed, the other one keeps its plan); or
@@ -1405,7 +1433,7 @@ freeQoS holds router credentials that can write across the whole network. Securi
 | Level (`role`) | Sees | Can do | Interface |
 | --- | --- | --- | --- |
 | **Viewer** (`read`) | Everything | Nothing | Every page, read-only banner |
-| **Operator** (`operator`) | Clients | **Client management**, on one or several clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan; define the bandwidth modes and the bandwidth schedules (rates by time of day) | **Clients**, **Modes**, **Alerts**, **Activity**, **Schedules**; no Settings (password and log out from the account card) |
+| **Operator** (`operator`) | Clients | **Client management**, on one or several clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan; define the bandwidth modes and the bandwidth schedules (rates by time of day) | **Clients**, **Modes**, **Alerts**, **Activity**, **Schedules**, **Map**; no Settings (password and log out from the account card) |
 | **Administrator** (`edit`) | Everything | Everything else: adding clients, PoPs, routers, antennas and their API (Ubiquiti), settings, API keys, accounts | Every page |
 
   The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`, `POST/PATCH/DELETE /api/v1/bandwidth-modes` and `/api/v1/bandwidth-schedules`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it, in the **activity log** below and in the enforcement audit.
@@ -1751,6 +1779,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 | `runtime_flags`, `runtime_settings` | Live switches (write, probe) and settings changed from the interface, with their history |
 | `traffic_rules` | Restrictions as entered: a criterion, never a frozen address list |
 | `bandwidth_schedules` | Time-of-day bandwidth schedules: time slots (validated, without overlap), scope and targets, time zone |
+| `site_locations` | Position of each site (PoP) on the map, by site name: latitude, longitude, who placed it |
 | `app_users`, `app_sessions`, `auth_events`, `api_keys` | Accounts, sessions, login journal, API keys (fingerprints only) |
 | `model_accounts`, `model_packages`, `model_sites`, `model_access_points`, `model_services_unplaced` | The Preseem-compatible commercial model |
 | `netflow_exporters` | Exporters and their vantage point and sampling |
