@@ -33,6 +33,7 @@ from app.api import (
     health,
     metrics,
     model_v1,
+    modes,
     netflow,
     plans,
     pop_census,
@@ -177,6 +178,8 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     app.include_router(health.router)
     # Connexion et comptes : ces routes portent leurs propres gardes (ouvrir une
     # session ne peut pas exiger d'en avoir une).
+    # Le prefixe sert a la garde d'acces pour lire le chemin d'une ecriture.
+    app.state.api_prefix = settings.api_prefix
     app.include_router(accounts.router, prefix=settings.api_prefix)
     # TOUTE route d'exploitation exige une session, et un compte en lecture
     # seule n'y obtient que les methodes de lecture. La garde est posee ICI,
@@ -198,6 +201,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         api_keys,
         plans,
         schedules,
+        modes,
     ):
         app.include_router(module.router, prefix=settings.api_prefix, dependencies=proteges)
     # API PUBLIQUE. Volontairement HORS du prefixe d'exploitation : son chemin

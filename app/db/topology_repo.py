@@ -773,6 +773,91 @@ class TopologyRepository:
             )
         return dict(row)
 
+    async def set_mode(
+        self,
+        *,
+        target_key: str,
+        mode_id: int,
+        mode_name: str,
+        down_mbps: float,
+        up_mbps: float,
+        clear_boost: bool = False,
+        updated_by: str | None = None,
+    ) -> dict[str, Any]:
+        """Donne un mode a un client : son debit devient la surcharge permanente.
+
+        Le boost en cours est garde, sauf pour un mode qui l'interdit (crise,
+        impaye) : il est alors efface dans la meme ecriture.
+        """
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO shaping_policies
+                       (scope, target_key, max_down_mbps, max_up_mbps, enabled,
+                        mode_id, mode_name, updated_by)
+                VALUES ('subscriber', $1, $2, $3, TRUE, $4, $5, $6)
+                ON CONFLICT (scope, target_key) DO UPDATE SET
+                    max_down_mbps = EXCLUDED.max_down_mbps,
+                    max_up_mbps   = EXCLUDED.max_up_mbps,
+                    enabled       = TRUE,
+                    mode_id       = EXCLUDED.mode_id,
+                    mode_name     = EXCLUDED.mode_name,
+                    boost_down_mbps  = CASE WHEN $7 THEN NULL
+                                            ELSE shaping_policies.boost_down_mbps END,
+                    boost_up_mbps    = CASE WHEN $7 THEN NULL
+                                            ELSE shaping_policies.boost_up_mbps END,
+                    boost_expires_at = CASE WHEN $7 THEN NULL
+                                            ELSE shaping_policies.boost_expires_at END,
+                    boost_reason     = CASE WHEN $7 THEN NULL
+                                            ELSE shaping_policies.boost_reason END,
+                    updated_by    = EXCLUDED.updated_by,
+                    updated_at    = now()
+                RETURNING *
+                """,
+                target_key,
+                down_mbps,
+                up_mbps,
+                mode_id,
+                mode_name,
+                updated_by,
+                clear_boost,
+            )
+        return dict(row)
+
+    async def clear_mode(self, target_key: str, *, updated_by: str | None = None) -> bool:
+        """Retour en "Automatic" : plus de surcharge, le forfait et le profil
+        horaire reprennent. Le boost en cours, lui, reste."""
+        async with self._pool.acquire() as conn:
+            resultat = await conn.execute(
+                """
+                UPDATE shaping_policies
+                   SET max_down_mbps = NULL, max_up_mbps = NULL,
+                       mode_id = NULL, mode_name = NULL,
+                       updated_by = $2, updated_at = now()
+                 WHERE scope = 'subscriber' AND target_key = $1
+                """,
+                target_key,
+                updated_by,
+            )
+        return not resultat.endswith(" 0")
+
+    async def policy_of(self, target_key: str) -> dict[str, Any] | None:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT * FROM shaping_policies WHERE scope = 'subscriber' AND target_key = $1",
+                target_key,
+            )
+        return dict(row) if row else None
+
+    async def clients_in_mode(self, mode_id: int) -> list[str]:
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT target_key FROM shaping_policies "
+                "WHERE scope = 'subscriber' AND mode_id = $1 ORDER BY target_key",
+                mode_id,
+            )
+        return [str(r["target_key"]) for r in rows]
+
     async def clear_boost(self, scope: str, target_key: str) -> bool:
         async with self._pool.acquire() as conn:
             resultat = await conn.execute(

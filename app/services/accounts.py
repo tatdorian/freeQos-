@@ -33,9 +33,37 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+#: NIVEAUX D'ACCES, du plus faible au plus fort. Les identifiants stockes
+#: "read" et "edit" sont ceux d'avant les niveaux intermediaires : on les garde
+#: tels quels, ce qui laisse chaque compte existant a son niveau sans migration.
+#:
+#: - read (Viewer) : voit tout, ne change rien ;
+#: - user (User) : voit les clients et opere UN client a la fois -- son mode de
+#:   debit, son boost. Le geste quotidien du support, rien d'autre ;
+#: - supervisor (Supervisor) : les memes gestes sur PLUSIEURS clients d'un coup ;
+#: - technician (Technician) : tout le technique -- routeurs, forfaits, modes et
+#:   profils horaires, clients declares, reglages, connexion d'API (cles) ;
+#: - edit (Administrator) : tout, y compris les comptes et leurs niveaux.
 ROLE_READ = "read"
+ROLE_USER = "user"
+ROLE_SUPERVISOR = "supervisor"
+ROLE_TECHNICIAN = "technician"
 ROLE_EDIT = "edit"
-ROLES: tuple[str, ...] = (ROLE_READ, ROLE_EDIT)
+ROLES: tuple[str, ...] = (ROLE_READ, ROLE_USER, ROLE_SUPERVISOR, ROLE_TECHNICIAN, ROLE_EDIT)
+ROLE_LABELS: dict[str, str] = {
+    ROLE_READ: "Viewer",
+    ROLE_USER: "User",
+    ROLE_SUPERVISOR: "Supervisor",
+    ROLE_TECHNICIAN: "Technician",
+    ROLE_EDIT: "Administrator",
+}
+_RANG: dict[str, int] = {role: rang for rang, role in enumerate(ROLES)}
+
+
+def role_at_least(role: str | None, minimum: str) -> bool:
+    """Le compte a-t-il AU MOINS ce niveau ? Un role inconnu n'a rien."""
+    return _RANG.get(str(role or ""), -1) >= _RANG[minimum]
+
 
 #: Methodes qu'un compte en lecture seule peut employer.
 SAFE_METHODES = frozenset({"GET", "HEAD", "OPTIONS"})
@@ -91,7 +119,9 @@ def normalise_email(value: str) -> str:
 def check_role(value: str) -> str:
     role = (value or "").strip().lower()
     if role not in ROLES:
-        raise InvalidAccountError("role must be 'read' or 'edit'")
+        raise InvalidAccountError(
+            "role must be one of: " + ", ".join(f"'{r}' ({ROLE_LABELS[r]})" for r in ROLES)
+        )
     return role
 
 

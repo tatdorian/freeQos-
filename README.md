@@ -183,17 +183,30 @@ Sans routeur sous la main, les providers `mock` suffisent à faire tourner toute
 ### Comptes et connexion
 
 Au premier lancement, la page demande de **créer le premier compte** (email + mot de
-passe) : il a les droits d'**édition**. Ensuite, toute l'interface exige une connexion.
+passe) : il est **Administrator**. Ensuite, toute l'interface exige une connexion.
 
-| Grade | Ce qu'il peut faire |
-|---|---|
-| **Lecture seule** | Tout voir. Toute modification est **refusée par le serveur** (403), quelle que soit la page — pas seulement masquée |
-| **Édition** | Tout faire, y compris gérer les comptes dans *Settings › Accounts* : email, mot de passe et grade de chacun, désactivation, suppression |
+Cinq niveaux d'accès, chacun avec les droits des précédents, **tenus par le serveur**
+(une modification hors niveau est refusée en 403, quelle que soit la page) :
+
+| Niveau | Ce qu'il peut faire | Interface |
+|---|---|---|
+| **Viewer** | Tout voir, rien modifier | Toutes les pages, en lecture |
+| **User** | Sur **un** client à la fois : changer son **mode de débit**, lui donner ou retirer un **boost** | Page **Clients** et son compte uniquement |
+| **Supervisor** | Les gestes du User sur **plusieurs** clients d'un coup | Page **Clients** et son compte uniquement |
+| **Technician** | Tout le technique : routeurs, forfaits, modes et profils horaires, clients déclarés, réglages, **connexion d'API** (clés) | Toutes les pages |
+| **Administrator** | Tout, y compris les comptes et leurs niveaux (*Settings › Accounts*) | Toutes les pages |
+
+**Les modes de débit.** Un mode est un débit nommé qu'on donne à un client d'un clic depuis
+la page *Clients* : *Backup*, *Extreme backup*, *Night*… Le Technician les définit dans
+*Plans › Bandwidth modes* : débit fixe (Mbps) ou part du forfait du client (%), et s'il
+coupe les boosts. **Automatic** = pas de mode : le client suit son forfait et son profil
+horaire, son débit change alors tout seul selon l'heure. Un changement de mode écrit la file
+tout de suite ; sur plusieurs clients, le résultat est rendu client par client.
 
 - Chacun peut changer son propre mot de passe (*Settings › Accounts › My password*),
   voir **ses sessions ouvertes** (navigateur, adresse, dernière activité) et les fermer
   à distance (*My sessions*).
-- Il reste toujours au moins un compte d'édition actif : le dernier ne peut être ni
+- Il reste toujours au moins un compte Administrator actif : le dernier ne peut être ni
   supprimé, ni rétrogradé, ni désactivé.
 
 **Sécurité de la connexion**

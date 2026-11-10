@@ -200,13 +200,14 @@ function startApp(user) {
   AUTH.ready = true;
   document.getElementById('auth-gate').hidden = true;
   document.body.classList.remove('gated');
-  document.body.classList.toggle('role-read', user.role !== 'edit');
-  document.getElementById('readonly-banner').hidden = user.role === 'edit';
+  document.body.classList.toggle('role-read', user.role === 'read');
+  document.body.classList.toggle('role-limited', user.role === 'user' || user.role === 'supervisor');
+  document.getElementById('readonly-banner').hidden = user.role !== 'read';
   document.getElementById('user-chip').hidden = false;
   document.getElementById('user-email').textContent = user.email;
   document.getElementById('user-avatar').textContent = initiales(user.email, AUTH.authDisabled);
-  document.getElementById('user-role').textContent = user.role === 'edit' ? 'edit' : 'read only';
-  document.getElementById('user-role').className = 'badge ' + (user.role === 'edit' ? 'file' : '');
+  document.getElementById('user-role').textContent = ROLE_LABEL[user.role] || user.role;
+  document.getElementById('user-role').className = 'badge ' + (user.role === 'read' ? '' : 'file');
   document.getElementById('logout-btn').hidden = AUTH.authDisabled === true;
   route();
   refreshHealth();
@@ -377,7 +378,8 @@ async function renderAccounts() {
   }
   if (moi.role !== 'edit') {
     host.innerHTML = '<div class="acc-me">Logged in as <b>' + esc(moi.email) + '</b> ' +
-      '<span class="badge">read only</span></div>' + monMdp + mesSessions;
+      '<span class="badge">' + esc(ROLE_LABEL[moi.role] || moi.role) + '</span> &middot; ' +
+      esc(ROLE_HELP[moi.role] || '') + '</div>' + monMdp + mesSessions;
     brancherMonMdp();
     chargerSessions();
     return;
@@ -391,13 +393,12 @@ async function renderAccounts() {
   }
   host.innerHTML =
     '<div class="acc-block"><h3>Who can log in</h3>' +
-    '<div class="table-wrap"><table><thead><tr><th>Email</th><th>Role</th><th>State</th>' +
+    '<div class="table-wrap"><table><thead><tr><th>Email</th><th>Access level</th><th>State</th>' +
       '<th>Last login</th><th>Created by</th><th></th></tr></thead><tbody>' +
       comptes.map((u) => '<tr data-user="' + u.id + '">' +
         '<td><b>' + esc(u.email) + '</b>' + (u.id === moi.id ? ' <span class="pct-hint">(you)</span>' : '') + '</td>' +
-        '<td><select data-acc-role aria-label="Role">' +
-          '<option value="read"' + (u.role === 'read' ? ' selected' : '') + '>Read only</option>' +
-          '<option value="edit"' + (u.role === 'edit' ? ' selected' : '') + '>Edit</option></select></td>' +
+        '<td><select data-acc-role aria-label="Access level">' +
+          roleOptions(u.role) + '</select></td>' +
         '<td>' + (u.disabled ? '<span class="badge warn">disabled</span>' : '<span class="badge ok">active</span>') + '</td>' +
         '<td title="' + esc(u.last_login_at ? dateLongue(u.last_login_at) : '') + '">' +
           esc(u.last_login_at ? depuis(u.last_login_at) : 'never') + '</td>' +
@@ -410,11 +411,12 @@ async function renderAccounts() {
     '<form class="acc-form" id="acc-new-form"><b>New account</b>' +
       '<input type="email" id="acc-new-email" placeholder="Email" required maxlength="254" autocomplete="off">' +
       champMdp('acc-new-pwd', 'Password (' + AUTH.passwordMin + '+ characters)', true) +
-      '<select id="acc-new-role" aria-label="Role"><option value="read">Read only</option><option value="edit">Edit</option></select>' +
+      '<select id="acc-new-role" aria-label="Access level">' + roleOptions('read') + '</select>' +
       '<button class="sm primary" type="submit">Create</button></form>' +
     '<div id="acc-result"></div>' +
-    '<div class="exec-legend"><span><b>Read only</b>: sees everything, every change is refused by the server.</span>' +
-      '<span><b>Edit</b>: can change everything, including accounts.</span></div></div>' +
+    '<div class="exec-legend">' + Object.keys(ROLE_RANK).map((r) =>
+      '<span><b>' + esc(ROLE_LABEL[r]) + '</b>: ' + esc(ROLE_HELP[r]) + '.</span>').join('') +
+      '<span>Each level includes the rights of the levels before it. The server enforces them.</span></div></div>' +
     monMdp + mesSessions +
     '<div class="acc-block"><h3>Login journal</h3>' +
       '<div class="toolbar acc-journal-bar">' +
@@ -9366,6 +9368,7 @@ async function loadPlans() {
   renderPlanPackages();
   renderPlanClients();
   renderPlanPending();
+  loadModesAdmin();
   await loadSchedules();
 }
 
@@ -10017,7 +10020,481 @@ async function loadInsights() {
   }));
 }
 
+/* --------------------------------------------------------------- clients */
+
+/** NIVEAUX D'ACCES. Le serveur fait foi (il refuse ce qui depasse le niveau) ;
+ *  l'interface se contente de ne pas proposer un geste qui serait refuse. */
+const ROLE_RANK = { read: 0, user: 1, supervisor: 2, technician: 3, edit: 4 };
+const ROLE_LABEL = {
+  read: 'Viewer', user: 'User', supervisor: 'Supervisor', technician: 'Technician', edit: 'Administrator',
+};
+const ROLE_HELP = {
+  read: 'sees everything, changes nothing',
+  user: 'manages clients one at a time: mode and boost',
+  supervisor: 'User rights, on several clients at once',
+  technician: 'every technical change: routers, plans, modes, settings, API keys',
+  edit: 'everything, accounts included',
+};
+function rangRole() { const r = (AUTH.user || {}).role; return r in ROLE_RANK ? ROLE_RANK[r] : 0; }
+function peut(niveau) { return rangRole() >= ROLE_RANK[niveau]; }
+/** User et Supervisor : une interface centree sur les clients, rien d'autre. */
+function estLimite() { const r = (AUTH.user || {}).role; return r === 'user' || r === 'supervisor'; }
+function roleOptions(choisi) {
+  return Object.keys(ROLE_RANK).map((r) => '<option value="' + r + '"' + (r === choisi ? ' selected' : '') +
+    ' title="' + esc(ROLE_HELP[r]) + '">' + esc(ROLE_LABEL[r]) + '</option>').join('');
+}
+
+const CLI = { rows: [], modes: [], boosts: {}, sel: new Set(), wired: false };
+
+function modeTaux(m) {
+  if (!m) return '';
+  return m.rate_kind === 'percent'
+    ? (m.down_value === m.up_value ? String(Number(m.down_value)) + ' % of the plan each way'
+      : String(Number(m.down_value)) + ' % / ' + String(Number(m.up_value)) + ' % of the plan')
+    : (m.down_value === m.up_value ? mbps(m.down_value) + ' in each direction'
+      : mbps(m.down_value) + ' down · ' + mbps(m.up_value) + ' up');
+}
+
+function modeDuClient(r) {
+  if (r.mode_id) {
+    const m = CLI.modes.find((x) => x.id === r.mode_id);
+    return { cls: m && m.disables_boost ? 'crit' : 'set', text: r.mode_name || (m ? m.name : 'Mode') };
+  }
+  if (r.override_down_mbps) return { cls: 'set', text: 'Manual limit' };
+  return { cls: 'auto', text: r.limit_source === 'schedule' ? 'Automatic · schedule' : 'Automatic' };
+}
+
+function clientEnLigne(r) { return mesureFraiche(r); }
+
+function filtrerClients() {
+  const q = (document.getElementById('cli-search').value || '').trim().toLowerCase();
+  const site = document.getElementById('cli-pop').value;
+  const etat = document.getElementById('cli-status').value;
+  const mode = document.getElementById('cli-mode').value;
+  return CLI.rows.filter((r) => {
+    if (q && ![r.login, r.last_ip, r.pop_name].some((v) => String(v || '').toLowerCase().includes(q))) return false;
+    if (site && r.pop_name !== site) return false;
+    if (etat === 'online' && !clientEnLigne(r)) return false;
+    if (etat === 'offline' && clientEnLigne(r)) return false;
+    if (etat === 'boost' && !CLI.boosts[r.login]) return false;
+    if (mode === 'auto' && (r.mode_id || r.override_down_mbps)) return false;
+    if (mode === 'manual' && !(r.override_down_mbps && !r.mode_id)) return false;
+    if (mode && mode !== 'auto' && mode !== 'manual' && String(r.mode_id) !== mode) return false;
+    return true;
+  });
+}
+
+async function loadClients() {
+  cablerClients();
+  const [rows, modes, boosts] = await Promise.all([
+    api('/subscribers/latest?limit=500&include_unmeasured=true'),
+    api('/bandwidth-modes').catch(() => ({ modes: [] })),
+    api('/shaping/boosts').catch(() => []),
+  ]);
+  CLI.rows = rows;
+  CLI.modes = (modes && modes.modes) || [];
+  CLI.boosts = {};
+  (boosts || []).forEach((b) => { if (b.scope === 'subscriber') CLI.boosts[b.target_key] = b; });
+  // Une selection ne survit qu'aux clients qui existent encore.
+  const connus = new Set(rows.map((r) => r.login));
+  [...CLI.sel].forEach((l) => { if (!connus.has(l)) CLI.sel.delete(l); });
+
+  const sites = [...new Set(rows.map((r) => r.pop_name).filter(Boolean))].sort();
+  const selPop = document.getElementById('cli-pop');
+  const sig = sites.join('|');
+  if (selPop.dataset.sig !== sig) {
+    const v = selPop.value;
+    selPop.innerHTML = '<option value="">All sites</option>' +
+      sites.map((s) => '<option>' + esc(s) + '</option>').join('');
+    selPop.value = sites.includes(v) ? v : '';
+    selPop.dataset.sig = sig;
+  }
+  const selMode = document.getElementById('cli-mode');
+  const sigM = CLI.modes.map((m) => m.id + ':' + m.name).join('|');
+  if (selMode.dataset.sig !== sigM) {
+    const v = selMode.value;
+    selMode.innerHTML = '<option value="">All modes</option><option value="auto">Automatic</option>' +
+      '<option value="manual">Manual limit</option>' +
+      CLI.modes.map((m) => '<option value="' + m.id + '">' + esc(m.name) + '</option>').join('');
+    selMode.value = v;
+    selMode.dataset.sig = sigM;
+  }
+
+  const enLigne = rows.filter(clientEnLigne).length;
+  const enMode = rows.filter((r) => r.mode_id || r.override_down_mbps).length;
+  const boostes = rows.filter((r) => CLI.boosts[r.login]).length;
+  document.getElementById('cli-stats').innerHTML =
+    statCard('', 'Total clients', String(rows.length), '', sites.length + ' site(s)') +
+    statCard(enLigne ? 'ok' : '', 'Connected', String(enLigne), '', 'measured in the last 90 s') +
+    statCard(enMode ? 'warn' : '', 'Not in Automatic', String(enMode), '', 'in a mode or a manual limit') +
+    statCard('', 'Boosts active', String(boostes), '', 'they end on their own');
+  document.getElementById('cli-notice').innerHTML = !CLI.modes.length
+    ? '<div class="notice">No bandwidth mode is defined yet: only <b>Automatic</b> and boosts are ' +
+      'offered. ' + (peut('technician') ? '<a href="#/plans">Define modes in Plans</a>.'
+        : 'A Technician defines them in Plans.') + '</div>'
+    : (!peut('user') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '');
+  renderClients();
+}
+
+function renderClients() {
+  const lignes = filtrerClients();
+  document.getElementById('cli-count').textContent = lignes.length + ' client(s)';
+  const host = document.getElementById('cli-table');
+  if (!lignes.length) {
+    host.innerHTML = '<div class="empty">' + (CLI.rows.length ? 'No client matches the filters.'
+      : 'No client yet. They appear as soon as a router reports sessions or a client is declared.') +
+      '</div>';
+    majSelection();
+    return;
+  }
+  const tous = lignes.every((r) => CLI.sel.has(r.login));
+  const ecrire = peut('user');
+  host.innerHTML = '<table><thead><tr>' +
+    '<th class="chk"><input type="checkbox" id="cli-all" aria-label="Select all shown"' +
+      (tous ? ' checked' : '') + '></th>' +
+    '<th>Client</th><th>Site</th><th>Connection</th><th>Bandwidth mode</th>' +
+    '<th>Current usage</th><th class="num" title="Rate applied right now">Limit</th><th>Boost</th>' +
+    '<th class="sticky-actions"></th></tr></thead><tbody>' +
+    lignes.map((r) => {
+      const m = modeDuClient(r);
+      const b = CLI.boosts[r.login];
+      const on = clientEnLigne(r);
+      return '<tr class="clickable" data-cli="' + esc(r.login) + '">' +
+        '<td class="chk"><input type="checkbox" data-sel="' + esc(r.login) + '"' +
+          (CLI.sel.has(r.login) ? ' checked' : '') + ' aria-label="Select ' + esc(r.login) + '"></td>' +
+        '<td><div class="cli-who"><span class="cli-avatar">' + esc(initiales(r.login)) + '</span>' +
+          '<span><span class="cli-name">' + esc(r.login) + '</span>' +
+          '<span class="cli-sub">' + esc(r.last_ip || (r.kind === 'static' ? 'static IP' : '-')) +
+          '</span></span></div></td>' +
+        '<td>' + esc(r.pop_name || '-') + '</td>' +
+        '<td><span class="cli-conn ' + (on ? 'on">Connected' : 'off">' +
+          (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '</span></td>' +
+        '<td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td>' +
+        '<td class="cli-usage">' + (on ? '<span class="d">&darr; ' + esc(bpsText(r.tx_bps)) +
+          '</span> &nbsp;<span class="u">&uarr; ' + esc(bpsText(r.rx_bps)) + '</span>'
+          : '<span style="color:var(--faint)">-</span>') + '</td>' +
+        '<td class="num">' + (r.effective_down_mbps ? esc(mbps(r.effective_down_mbps)) + ' / ' +
+          esc(mbps(r.effective_up_mbps || 0)) : '<span style="color:var(--faint)">no limit</span>') + '</td>' +
+        '<td>' + (b ? '<span class="boost-pill">' +
+          esc(Math.max(0, Math.round(b.seconds_left / 60))) + ' min</span>'
+          : '<span style="color:var(--faint)">-</span>') + '</td>' +
+        '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
+          '<button class="sm" data-cli-mode="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
+            '>Mode</button>' +
+          (b ? '<button class="sm" data-cli-stop="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
+              '>Stop boost</button>'
+            : '<button class="sm" data-cli-boost="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
+              '>Boost</button>') +
+        '</div></td></tr>';
+    }).join('') + '</tbody></table>';
+
+  host.querySelector('#cli-all').addEventListener('change', (e) => {
+    lignes.forEach((r) => (e.target.checked ? CLI.sel.add(r.login) : CLI.sel.delete(r.login)));
+    renderClients();
+  });
+  host.querySelectorAll('[data-sel]').forEach((c) => c.addEventListener('change', () => {
+    if (c.checked) CLI.sel.add(c.dataset.sel); else CLI.sel.delete(c.dataset.sel);
+    majSelection();
+  }));
+  host.querySelectorAll('tr[data-cli]').forEach((tr) => tr.addEventListener('click', (e) => {
+    if (e.target.closest('button, input')) return;
+    const r = CLI.rows.find((x) => x.login === tr.dataset.cli);
+    if (r && r.subscriber_id) openSubscriber(r.subscriber_id);
+  }));
+  host.querySelectorAll('[data-cli-mode]').forEach((b) =>
+    b.addEventListener('click', () => openModeDialog([b.dataset.cliMode])));
+  host.querySelectorAll('[data-cli-boost]').forEach((b) =>
+    b.addEventListener('click', () => openGroupBoost([b.dataset.cliBoost])));
+  host.querySelectorAll('[data-cli-stop]').forEach((b) =>
+    b.addEventListener('click', () => stopBoosts([b.dataset.cliStop])));
+  majSelection();
+}
+
+function majSelection() {
+  const n = CLI.sel.size;
+  const barre = document.getElementById('cli-selbar');
+  barre.hidden = n === 0;
+  document.getElementById('cli-selcount').textContent = n + ' client(s) selected' +
+    (n > 1 && !peut('supervisor') ? ' · group changes need the Supervisor level' : '');
+  const permis = peut('user') && (n <= 1 || peut('supervisor'));
+  ['cli-sel-mode', 'cli-sel-boost', 'cli-sel-stop'].forEach((id) => {
+    document.getElementById(id).disabled = !permis;
+  });
+}
+
+function cablerClients() {
+  if (CLI.wired) return;
+  CLI.wired = true;
+  ['cli-search'].forEach((id) => document.getElementById(id).addEventListener('input', renderClients));
+  ['cli-pop', 'cli-status', 'cli-mode'].forEach((id) =>
+    document.getElementById(id).addEventListener('change', renderClients));
+  document.getElementById('cli-clear').addEventListener('click', () => {
+    ['cli-search', 'cli-pop', 'cli-status', 'cli-mode'].forEach((id) => { document.getElementById(id).value = ''; });
+    renderClients();
+  });
+  document.getElementById('cli-sel-none').addEventListener('click', () => { CLI.sel.clear(); renderClients(); });
+  document.getElementById('cli-sel-mode').addEventListener('click', () => openModeDialog([...CLI.sel]));
+  document.getElementById('cli-sel-boost').addEventListener('click', () => openGroupBoost([...CLI.sel]));
+  document.getElementById('cli-sel-stop').addEventListener('click', () => stopBoosts([...CLI.sel]));
+}
+
+/** Fenetre centree, au-dessus de tout, fermee par Echap ou le fond. */
+function openModal(html) {
+  const root = document.getElementById('drawer-root');
+  root.innerHTML = '<div class="modal-backdrop" id="modal-bg"><div class="modal" role="dialog" ' +
+    'aria-modal="true">' + html + '</div></div>';
+  const fermer = () => { root.innerHTML = ''; document.removeEventListener('keydown', echap); };
+  const echap = (e) => { if (e.key === 'Escape') fermer(); };
+  document.addEventListener('keydown', echap);
+  document.getElementById('modal-bg').addEventListener('click', (e) => { if (e.target.id === 'modal-bg') fermer(); });
+  root.querySelectorAll('[data-modal-close]').forEach((b) => b.addEventListener('click', fermer));
+  return { root: root.querySelector('.modal'), fermer };
+}
+
+function sousTitreCibles(logins) {
+  if (logins.length === 1) {
+    const r = CLI.rows.find((x) => x.login === logins[0]) || {};
+    return esc(logins[0]) + (r.pop_name ? ' · ' + esc(r.pop_name) : '');
+  }
+  return logins.length + ' clients selected';
+}
+
+function refusGroupe(logins) {
+  if (logins.length > 1 && !peut('supervisor')) {
+    openModal('<div class="modal-head"><div><h3>This action needs permission</h3>' +
+      '<div class="sub">Group actions are available to Supervisors and above.</div></div>' +
+      '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+      '<div class="modal-body">Select a single client, or ask an Administrator for the ' +
+      'Supervisor level.</div><div class="modal-foot"><button class="primary" data-modal-close>OK</button></div>');
+    return true;
+  }
+  return false;
+}
+
+/** Resultat client par client : un echec partiel ne ressemble jamais a une reussite. */
+function rendreResultats(res) {
+  const lignes = (res.results || []).map((r) => {
+    const ap = r.applied;
+    const nonEcrit = ap && ap.ok === false;
+    return '<li>' + (r.ok ? (nonEcrit ? '&#9888; ' : '&#10003; ') : '&#10007; ') + '<b>' + esc(r.login) + '</b>' +
+      (r.ok ? (nonEcrit ? ': saved, not written on the router yet (' + esc(ap.detail || '') + ')' : '')
+        : ': ' + esc(typeof r.detail === 'string' ? r.detail : JSON.stringify(r.detail))) + '</li>';
+  }).join('');
+  return '<div class="notice ' + (res.failed ? 'warn' : 'ok') + '"><b>' + res.succeeded + ' of ' +
+    res.requested + ' client(s) done.</b>' + (res.failed ? ' ' + res.failed + ' failed: see below.' : '') +
+    '</div><ul class="result-list">' + lignes + '</ul>';
+}
+
+function openModeDialog(logins) {
+  if (!logins.length || refusGroupe(logins)) return;
+  const seul = logins.length === 1 ? CLI.rows.find((x) => x.login === logins[0]) : null;
+  let choix = seul ? (seul.mode_id || null) : null;
+  const carte = (id, nom, sous, large) => {
+    const sel = String(choix) === String(id);
+    return '<label class="mode-card' + (large ? ' wide' : '') + (sel ? ' sel' : '') + '">' +
+      '<input type="radio" name="mode-choice" value="' + (id === null ? '' : id) + '"' + (sel ? ' checked' : '') + '>' +
+      '<span><b>' + esc(nom) + '</b><small>' + sous + '</small></span></label>';
+  };
+  const cartes = carte(null, 'Automatic', 'Follows the plan and the time-of-day schedule<br>' +
+      'The rate changes with the hour on its own', true) +
+    CLI.modes.map((m) => carte(m.id, m.name,
+      (m.disables_boost ? 'Schedule paused · Boost stopped and refused' : 'Manual mode · Schedule paused until Automatic') +
+      '<br>' + esc(modeTaux(m)))).join('');
+  const { root, fermer } = openModal(
+    '<div class="modal-head"><div><h3>Change bandwidth mode</h3><div class="sub">' + sousTitreCibles(logins) +
+    '</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body" id="mode-body"><div class="mode-cards">' + cartes + '</div>' +
+    '<p class="hint" style="display:block;margin-top:.8rem">A mode stays until the client is put back to ' +
+    'Automatic. Rates apply to download and upload. A boost still takes precedence, except in a mode ' +
+    'that stops boosts.</p></div>' +
+    '<div class="modal-foot" id="mode-foot"><button data-modal-close>Cancel</button>' +
+    '<button class="primary" id="mode-review">Review change &rarr;</button></div>');
+  root.querySelectorAll('input[name="mode-choice"]').forEach((i) => i.addEventListener('change', () => {
+    choix = i.value === '' ? null : Number(i.value);
+    root.querySelectorAll('.mode-card').forEach((c) => c.classList.toggle('sel', c.contains(i)));
+  }));
+  root.querySelector('#mode-review').addEventListener('click', () => {
+    const mode = CLI.modes.find((m) => m.id === choix);
+    const nom = mode ? mode.name : 'Automatic';
+    const noms = logins.slice(0, 8).map(esc).join(', ') + (logins.length > 8 ? ' and ' + (logins.length - 8) + ' more' : '');
+    root.querySelector('#mode-body').innerHTML = '<p>Put <b>' + noms + '</b> in <b>' + esc(nom) + '</b>' +
+      (mode ? ' (' + esc(modeTaux(mode)) + ')' : ' (plan and schedule)') + '.</p>' +
+      (mode && mode.disables_boost ? '<div class="notice warn">Running boosts on these clients will be stopped.</div>' : '') +
+      '<div id="mode-out"></div>';
+    root.querySelector('#mode-foot').innerHTML = '<button id="mode-back">Back</button>' +
+      '<button class="primary" id="mode-apply">Apply to ' + logins.length + ' client(s)</button>';
+    root.querySelector('#mode-back').addEventListener('click', () => { fermer(); openModeDialog(logins); });
+    root.querySelector('#mode-apply').addEventListener('click', async (e) => {
+      e.target.disabled = true;
+      try {
+        const res = await api('/clients/actions', { method: 'POST',
+          body: JSON.stringify({ logins, action: 'mode', mode_id: choix }) });
+        root.querySelector('#mode-out').innerHTML = rendreResultats(res);
+        root.querySelector('#mode-foot').innerHTML = '<button class="primary" id="mode-done">Close</button>';
+        root.querySelector('#mode-done').addEventListener('click', fermer);
+        if (!res.failed) CLI.sel.clear();
+        refresh();
+      } catch (err) {
+        root.querySelector('#mode-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+        e.target.disabled = false;
+      }
+    });
+  });
+}
+
+function openGroupBoost(logins) {
+  if (!logins.length || refusGroupe(logins)) return;
+  let minutes = 60;
+  let facteur = 2;
+  const { root, fermer } = openModal(
+    '<div class="modal-head"><div><h3>Boost</h3><div class="sub">' + sousTitreCibles(logins) + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body"><div class="field"><label>Duration</label><div class="choice-row" id="gb-min">' +
+    [[30, '30 min'], [60, '1 h'], [240, '4 h'], [1440, '24 h']].map(([m, l]) =>
+      '<button type="button" data-v="' + m + '"' + (m === minutes ? ' class="active"' : '') + '>' + l + '</button>').join('') +
+    '</div></div><div class="field" style="margin-top:.8rem"><label>Rate</label><div class="choice-row" id="gb-x">' +
+    [2, 3, 5].map((x) => '<button type="button" data-v="' + x + '"' + (x === facteur ? ' class="active"' : '') +
+      '>&times;' + x + ' the plan</button>').join('') + '</div></div>' +
+    '<div class="field" style="margin-top:.8rem"><label for="gb-reason">Reason</label>' +
+    '<input id="gb-reason" maxlength="300" placeholder="optional: goodwill gesture, troubleshooting..."></div>' +
+    '<p class="hint" style="display:block">The boost ends on its own. It is refused for a client in a mode that stops boosts.</p>' +
+    '<div id="gb-out"></div></div>' +
+    '<div class="modal-foot" id="gb-foot"><button data-modal-close>Cancel</button>' +
+    '<button class="primary" id="gb-go">Start the boost on ' + logins.length + ' client(s)</button></div>');
+  const groupe = (id, set) => root.querySelectorAll('#' + id + ' button').forEach((b) => b.addEventListener('click', () => {
+    root.querySelectorAll('#' + id + ' button').forEach((x) => x.classList.toggle('active', x === b));
+    set(Number(b.dataset.v));
+  }));
+  groupe('gb-min', (v) => { minutes = v; });
+  groupe('gb-x', (v) => { facteur = v; });
+  root.querySelector('#gb-go').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const res = await api('/clients/actions', { method: 'POST', body: JSON.stringify({
+        logins, action: 'boost', boost_multiplier: facteur, boost_minutes: minutes,
+        reason: root.querySelector('#gb-reason').value || null }) });
+      root.querySelector('#gb-out').innerHTML = rendreResultats(res);
+      root.querySelector('#gb-foot').innerHTML = '<button class="primary" id="gb-done">Close</button>';
+      root.querySelector('#gb-done').addEventListener('click', fermer);
+      refresh();
+    } catch (err) {
+      root.querySelector('#gb-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      e.target.disabled = false;
+    }
+  });
+}
+
+async function stopBoosts(logins) {
+  if (!logins.length || refusGroupe(logins)) return;
+  if (!confirm('Stop the boost of ' + (logins.length === 1 ? logins[0] : logins.length + ' clients') + '?')) return;
+  try {
+    const res = await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins, action: 'stop_boost' }) });
+    toast(res.failed ? res.failed + ' client(s) failed.' : 'Boost stopped.', 5000);
+  } catch (err) {
+    toast(esc(err.message), 8000);
+  }
+  refresh();
+}
+
+/* -------------------------------------------- modes (page Plans, technique) */
+const MODES = { editing: null, wired: false };
+
+async function loadModesAdmin() {
+  const host = document.getElementById('modes-list');
+  if (!host) return;
+  cablerModes();
+  const data = await api('/bandwidth-modes').catch(() => ({ modes: [] }));
+  const modes = data.modes || [];
+  const ecrire = peut('technician');
+  document.getElementById('modes-form').hidden = !ecrire;
+  document.getElementById('modes-form-title').hidden = !ecrire;
+  host.innerHTML = !modes.length
+    ? '<div class="empty">No mode yet. Typical set: Backup (6 Mbps), Extreme backup (2 Mbps, stops boosts), ' +
+      'Night (200 % of the plan).</div>'
+    : '<table><thead><tr><th>Mode</th><th>Rate</th><th>Boost</th><th class="num">Clients</th>' +
+      '<th>Note</th><th></th></tr></thead><tbody>' +
+      modes.map((m) => '<tr><td><b>' + esc(m.name) + '</b></td><td>' + esc(modeTaux(m)) + '</td>' +
+        '<td>' + (m.disables_boost ? '<span class="badge crit">stopped</span>' : 'allowed') + '</td>' +
+        '<td class="num">' + (m.clients || 0) + '</td><td>' + esc(m.note || '') + '</td>' +
+        '<td><div class="actions" style="justify-content:flex-end">' + (ecrire
+          ? '<button class="sm" data-mode-edit="' + m.id + '">Edit</button>' +
+            '<button class="sm danger" data-mode-del="' + m.id + '"' + (m.clients ? ' disabled title="Clients are in this mode"' : '') +
+            '>Delete</button>' : '') + '</div></td></tr>').join('') + '</tbody></table>';
+  host.querySelectorAll('[data-mode-edit]').forEach((b) => b.addEventListener('click', () => {
+    const m = modes.find((x) => String(x.id) === b.dataset.modeEdit);
+    MODES.editing = m.id;
+    document.getElementById('mode-name').value = m.name;
+    document.getElementById('mode-kind').value = m.rate_kind;
+    document.getElementById('mode-down').value = m.down_value;
+    document.getElementById('mode-up').value = m.up_value;
+    document.getElementById('mode-position').value = m.position || 0;
+    document.getElementById('mode-note').value = m.note || '';
+    document.getElementById('mode-noboost').checked = !!m.disables_boost;
+    majUniteMode();
+    document.getElementById('modes-form-title').textContent = 'Edit ' + m.name;
+    document.getElementById('mode-submit').textContent = 'Save and apply to its clients';
+    document.getElementById('mode-cancel').hidden = false;
+    document.getElementById('mode-name').focus();
+  }));
+  host.querySelectorAll('[data-mode-del]').forEach((b) => b.addEventListener('click', async () => {
+    if (!confirm('Delete this mode?')) return;
+    try {
+      await api('/bandwidth-modes/' + b.dataset.modeDel, { method: 'DELETE' });
+      loadModesAdmin();
+    } catch (err) {
+      document.getElementById('modes-result').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  }));
+}
+
+function majUniteMode() {
+  const u = document.getElementById('mode-kind').value === 'percent' ? '% of the plan' : 'Mbps';
+  document.getElementById('mode-unit-down').textContent = u;
+  document.getElementById('mode-unit-up').textContent = u;
+}
+
+function resetModeForm() {
+  MODES.editing = null;
+  document.getElementById('modes-form').reset();
+  document.getElementById('modes-form-title').textContent = 'New mode';
+  document.getElementById('mode-submit').textContent = 'Add the mode';
+  document.getElementById('mode-cancel').hidden = true;
+  majUniteMode();
+}
+
+function cablerModes() {
+  if (MODES.wired) return;
+  MODES.wired = true;
+  document.getElementById('mode-kind').addEventListener('change', majUniteMode);
+  document.getElementById('mode-cancel').addEventListener('click', resetModeForm);
+  document.getElementById('modes-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const corps = {
+      name: document.getElementById('mode-name').value.trim(),
+      rate_kind: document.getElementById('mode-kind').value,
+      down_value: Number(document.getElementById('mode-down').value),
+      up_value: Number(document.getElementById('mode-up').value),
+      position: Number(document.getElementById('mode-position').value) || 0,
+      note: document.getElementById('mode-note').value.trim() || null,
+      disables_boost: document.getElementById('mode-noboost').checked,
+    };
+    const sortie = document.getElementById('modes-result');
+    try {
+      const res = MODES.editing
+        ? await api('/bandwidth-modes/' + MODES.editing, { method: 'PATCH', body: JSON.stringify(corps) })
+        : await api('/bandwidth-modes', { method: 'POST', body: JSON.stringify(corps) });
+      const n = res && res.clients ? res.clients.length : 0;
+      sortie.innerHTML = '<div class="notice ok">Mode saved' + (n ? ', new rate applied to ' + n + ' client(s)' : '') + '.</div>';
+      resetModeForm();
+      loadModesAdmin();
+    } catch (err) {
+      sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+}
+
 const LOADERS = {
+  clients: loadClients,
   dashboard: loadDashboard,
   exec: loadExec,
   traffic: loadTraffic,
@@ -10110,7 +10587,14 @@ async function refresh() {
   }
 }
 
-function route() { if (!AUTH.ready) return; show((location.hash || '#/dashboard').replace('#/', '')); }
+function route() {
+  if (!AUTH.ready) return;
+  // User et Supervisor n'ont que la page Clients (et leur compte) : un lien
+  // vers une autre page les y ramene plutot que d'ouvrir une page vide.
+  let vue = (location.hash || '').replace('#/', '');
+  if (estLimite() && vue !== 'clients' && vue !== 'settings') vue = 'clients';
+  show(vue || 'dashboard');
+}
 
 /* ------------------------------------------------------------ apparence */
 
@@ -10611,6 +11095,29 @@ const ECHELLE_BLOAT = [[OK, 'A+ / A: up to +30 ms — imperceptible'], [WARN, 'B
   [CRIT, 'D / F: over +100 ms — real-time use breaks under load']];
 
 const AIDE = {
+  'client operations': {
+    t: 'The daily page: every client, its connection, its usage, its bandwidth mode and its boost.',
+    m: 'Users and Supervisors only see this page and their account. A User acts on one client at a time; a Supervisor on a selection.',
+    r: 'Tick clients to change their mode or boost them together; a group change reports a result per client.',
+  },
+  'bandwidth mode': {
+    t: 'The named rate the client is in: Automatic, or a mode such as Backup or Night.',
+    m: 'Automatic follows the plan and, when there is one, the bandwidth schedule: the rate changes with the hour on its own. A mode stays until the client is put back to Automatic.',
+    r: '“Manual limit” is a rate set by hand by a Technician, outside the modes.',
+  },
+  'connection': 'Connected = a measurement less than 90 s old. Otherwise, when the client was last seen.',
+  'current usage': 'Download (↓) and upload (↑) of the client right now, from the last measurement.',
+  'not in automatic': 'Clients in a bandwidth mode or under a manual limit: their rate does not follow their plan and schedule.',
+  'boosts active': 'Clients with a running boost. A boost ends on its own at its expiry.',
+  'bandwidth modes': {
+    t: 'Named rates operators give a client in one click: a fixed rate, or a share of the client\'s plan.',
+    m: 'Defining modes needs the Technician level; giving one to a client, the User level. Changing a mode\'s rate applies it at once to every client in it.',
+    r: 'A mode that “stops boosts” clears the running boost and refuses new ones: use it for a crisis or non-payment.',
+  },
+  'access level': {
+    t: 'What the account may do. Each level includes the previous ones; the server enforces them.',
+    m: 'Viewer: sees everything. User: mode and boost of one client. Supervisor: the same on a selection. Technician: every technical change (routers, plans, modes, settings, API keys). Administrator: accounts too.',
+  },
   // ---------------------------------------------------------- sections
   'network throughput': {
     t: 'Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.',

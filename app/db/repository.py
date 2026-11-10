@@ -232,7 +232,8 @@ class MetricsRepository:
                        pol.max_down_mbps AS override_down_mbps,
                        pol.max_up_mbps   AS override_up_mbps,
                        pol.boost_down_mbps, pol.boost_up_mbps, pol.boost_expires_at,
-                       pol.boost_reason, pol.note AS policy_note
+                       pol.boost_reason, pol.note AS policy_note,
+                       pol.mode_id, pol.mode_name
                   FROM subscribers s
                   LEFT JOIN pops p ON p.id = s.pop_id
                   LEFT JOIN shaping_policies pol
@@ -601,7 +602,9 @@ class MetricsRepository:
                        p.boost_up_mbps,
                        p.boost_expires_at,
                        p.boost_reason,
-                       p.note           AS policy_note
+                       p.note           AS policy_note,
+                       p.mode_id,
+                       p.mode_name
                   FROM subscribers s
                   LEFT JOIN pops pop ON pop.id = s.pop_id
                   LEFT JOIN subscriber_latest l ON l.subscriber_id = s.id
