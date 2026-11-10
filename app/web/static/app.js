@@ -209,6 +209,14 @@ function startApp(user) {
   document.getElementById('user-role').textContent = ROLE_LABEL[user.role] || user.role;
   document.getElementById('user-role').className = 'badge ' + (user.role === 'read' ? '' : 'file');
   document.getElementById('logout-btn').hidden = AUTH.authDisabled === true;
+  const carte = document.querySelector('#user-chip .user-card');
+  if (carte && !carte.dataset.wired) {
+    carte.dataset.wired = '1';
+    carte.addEventListener('click', (e) => {
+      // L'Operator n'a pas de page Settings : son compte s'ouvre ici.
+      if (estLimite()) { e.preventDefault(); openMyAccount(); }
+    });
+  }
   route();
   refreshHealth();
   AUTH.started = true;
@@ -9534,8 +9542,6 @@ async function loadPlans() {
   renderPlanPackages();
   renderPlanClients();
   renderPlanPending();
-  loadModesAdmin();
-  await loadSchedules();
 }
 
 /** Les forfaits recus pour des abonnes jamais vus connectes.
@@ -10229,6 +10235,8 @@ function modeDuClient(r) {
 function clientEnLigne(r) { return mesureFraiche(r); }
 
 function filtrerClients() {
+  if (CLI.onlySel && CLI.sel.size) return CLI.rows.filter((r) => CLI.sel.has(r.login));
+  CLI.onlySel = false;
   const q = (document.getElementById('cli-search').value || '').trim().toLowerCase();
   const site = document.getElementById('cli-pop').value;
   const etat = document.getElementById('cli-status').value;
@@ -10248,15 +10256,8 @@ function filtrerClients() {
 
 async function loadClients() {
   cablerClients();
-  const [rows, modes, boosts] = await Promise.all([
-    api('/subscribers/latest?limit=500&include_unmeasured=true'),
-    api('/bandwidth-modes').catch(() => ({ modes: [] })),
-    api('/shaping/boosts').catch(() => []),
-  ]);
-  CLI.rows = rows;
-  CLI.modes = (modes && modes.modes) || [];
-  CLI.boosts = {};
-  (boosts || []).forEach((b) => { if (b.scope === 'subscriber') CLI.boosts[b.target_key] = b; });
+  await loadClientsData();
+  const rows = CLI.rows;
   // Une selection ne survit qu'aux clients qui existent encore.
   const connus = new Set(rows.map((r) => r.login));
   [...CLI.sel].forEach((l) => { if (!connus.has(l)) CLI.sel.delete(l); });
@@ -10292,13 +10293,20 @@ async function loadClients() {
     statCard('', 'Boosts active', String(boostes), '', 'they end on their own');
   document.getElementById('cli-notice').innerHTML = !CLI.modes.length
     ? '<div class="notice">No bandwidth mode is defined yet: only <b>Automatic</b> and boosts are ' +
-      'offered. ' + (peut('edit') ? '<a href="#/plans">Define modes in Plans</a>.'
-        : 'An Administrator defines them in Plans.') + '</div>'
+      'offered. ' + (peut('operator') ? '<a href="#/management">Define modes in Management</a>.'
+        : 'An Operator defines them in Management.') + '</div>'
     : (!peut('operator') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '');
   renderClients();
 }
 
 function renderClients() {
+  if (CLI.focus) {
+    // Venu d'une alerte : ses clients sont selectionnes, et seuls montres.
+    CLI.focus = false;
+    document.getElementById('cli-status').value = '';
+    document.getElementById('cli-search').value = '';
+    CLI.onlySel = true;
+  }
   const lignes = filtrerClients();
   document.getElementById('cli-count').textContent = lignes.length + ' client(s)';
   const host = document.getElementById('cli-table');
@@ -10362,8 +10370,7 @@ function renderClients() {
   }));
   host.querySelectorAll('tr[data-cli]').forEach((tr) => tr.addEventListener('click', (e) => {
     if (e.target.closest('button, input')) return;
-    const r = CLI.rows.find((x) => x.login === tr.dataset.cli);
-    if (r && r.subscriber_id) openSubscriber(r.subscriber_id);
+    openClientSheet(tr.dataset.cli);
   }));
   host.querySelectorAll('[data-cli-mode]').forEach((b) =>
     b.addEventListener('click', () => openModeDialog([b.dataset.cliMode])));
@@ -10394,10 +10401,13 @@ function cablerClients() {
   ['cli-pop', 'cli-status', 'cli-mode'].forEach((id) =>
     document.getElementById(id).addEventListener('change', renderClients));
   document.getElementById('cli-clear').addEventListener('click', () => {
+    CLI.onlySel = false;
     ['cli-search', 'cli-pop', 'cli-status', 'cli-mode'].forEach((id) => { document.getElementById(id).value = ''; });
     renderClients();
   });
-  document.getElementById('cli-sel-none').addEventListener('click', () => { CLI.sel.clear(); renderClients(); });
+  document.getElementById('cli-sel-none').addEventListener('click', () => {
+    CLI.sel.clear(); CLI.onlySel = false; renderClients();
+  });
   document.getElementById('cli-sel-mode').addEventListener('click', () => openModeDialog([...CLI.sel]));
   document.getElementById('cli-sel-boost').addEventListener('click', () => openGroupBoost([...CLI.sel]));
   document.getElementById('cli-sel-stop').addEventListener('click', () => stopBoosts([...CLI.sel]));
@@ -10623,7 +10633,7 @@ async function loadModesAdmin() {
   cablerModes();
   const data = await api('/bandwidth-modes').catch(() => ({ modes: [] }));
   const modes = data.modes || [];
-  const ecrire = peut('edit');
+  const ecrire = peut('operator');
   document.getElementById('modes-form').hidden = !ecrire;
   document.getElementById('modes-form-title').hidden = !ecrire;
   host.innerHTML = !modes.length
@@ -10711,8 +10721,279 @@ function cablerModes() {
   });
 }
 
+/* ----------------------------------------------- fiche client (operateur) */
+
+const ACTION_LABEL = {
+  mode: 'Bandwidth mode', boost: 'Boost', stop_boost: 'Boost stopped',
+  plan: 'Plan', plan_removed: 'Plan removed',
+};
+
+/** Ou en est la file apres le geste : posee, en attente d'ecriture, ou pourquoi pas. */
+const ETAT_FILE = {
+  'file-a-poser': 'pending on router', 'sans-routeur': 'no router', ecarte: 'skipped',
+  conflit: 'conflict', erreur: 'error', 'posee-a-la-main': 'set by hand on the router',
+};
+function etatGeste(a) {
+  if (!a.ok) return '<span class="badge crit">refused</span>';
+  if (!a.queue_state) return '<span class="badge">saved</span>';
+  if (a.written) return '<span class="badge ok">applied</span>';
+  return '<span class="badge warn" title="' + esc(a.queue_reason || '') + '">' +
+    esc(ETAT_FILE[a.queue_state] || a.queue_state) + '</span>';
+}
+const SOURCE_LIMITE = {
+  plan: 'from the plan', override: 'from the mode or a manual limit', schedule: 'from the schedule',
+  boost: 'boost running', none: 'no limit',
+};
+
+function lignesActivite(liste, avecClient) {
+  if (!liste.length) return '<div class="empty">No change recorded yet.</div>';
+  return '<table><thead><tr><th>When</th>' + (avecClient ? '<th>Client</th>' : '') +
+    '<th>Change</th><th>Detail</th><th>By</th><th>State</th></tr></thead><tbody>' +
+    liste.map((a) => '<tr><td class="nowrap" title="' + esc(dateLongue(a.ts)) + '">' + esc(depuis(a.ts)) + '</td>' +
+      (avecClient ? '<td><a href="#" data-act-client="' + esc(a.login) + '">' + esc(a.login) + '</a></td>' : '') +
+      '<td><b>' + esc(ACTION_LABEL[a.action] || a.action) + '</b></td>' +
+      '<td>' + esc(a.detail || '') + '</td><td>' + esc(a.actor) + '</td><td>' + etatGeste(a) +
+      (a.queue_reason && !a.written ? '<span class="hint" style="display:block">' + esc(a.queue_reason) + '</span>' : '') +
+      '</td></tr>').join('') +
+    '</tbody></table>';
+}
+
+/** La fiche d'un client, pensee pour l'operateur : ce qu'il consomme, ou il en
+ *  est (mode, limite, boost), son historique, et les gestes a portee de main. */
+async function openClientSheet(login) {
+  const r = CLI.rows.find((x) => x.login === login);
+  if (!r) return;
+  const { root, fermer } = openModal('<div class="modal-head"><div><h3>' + esc(login) + '</h3><div class="sub">' +
+    esc(r.pop_name || '') + (r.last_ip ? ' · ' + esc(r.last_ip) : '') + ' · ' +
+    (clientEnLigne(r) ? '<span class="cli-conn on">Connected</span>'
+      : '<span class="cli-conn off">' + (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen') + '</span>') +
+    '</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body" id="cs-body"><div class="empty">Loading…</div></div>' +
+    '<div class="modal-foot"><button id="cs-plan">Plan</button><button id="cs-boost">' +
+    (CLI.boosts[login] ? 'Stop boost' : 'Boost') + '</button>' +
+    '<button class="primary" id="cs-mode">Change mode</button></div>');
+  root.classList.add('wide');
+  const ecrire = peut('operator');
+  ['cs-plan', 'cs-boost', 'cs-mode'].forEach((id) => { root.querySelector('#' + id).disabled = !ecrire; });
+  root.querySelector('#cs-mode').addEventListener('click', () => { fermer(); openModeDialog([login]); });
+  root.querySelector('#cs-plan').addEventListener('click', () => { fermer(); openPlanDialog(login); });
+  root.querySelector('#cs-boost').addEventListener('click', () => {
+    fermer();
+    if (CLI.boosts[login]) stopBoosts([login]); else openGroupBoost([login]);
+  });
+  const m = modeDuClient(r);
+  const b = CLI.boosts[login];
+  const corps = root.querySelector('#cs-body');
+  let periode = 60;
+  const dessiner = async () => {
+    const pas = periode <= 60 ? 30 : periode <= 1440 ? 300 : 3600;
+    let data = null;
+    let journal = [];
+    try {
+      [data, journal] = await Promise.all([
+        r.subscriber_id ? api('/subscribers/' + r.subscriber_id + '/metrics?minutes=' + periode + '&bucket_seconds=' + pas)
+          : Promise.resolve(null),
+        api('/activity?limit=8&login=' + encodeURIComponent(login)).catch(() => []),
+      ]);
+    } catch (err) {
+      corps.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      return;
+    }
+    const s = (data && data.subscriber) || r;
+    const pts = (data && data.points) || [];
+    const octets = (cle) => pts.reduce((a, p) => a + (Number(p[cle]) || 0) * pas / 8, 0);
+    corps.innerHTML =
+      '<div class="grid stats">' +
+        statCard('', 'Download now', clientEnLigne(r) ? bpsText(r.tx_bps) : '-', '', '') +
+        statCard('', 'Upload now', clientEnLigne(r) ? bpsText(r.rx_bps) : '-', '', '') +
+        statCard('', 'Limit applied', s.effective_down_mbps ? mbps(s.effective_down_mbps) + ' / ' +
+          mbps(s.effective_up_mbps || 0) : 'none', '', esc(SOURCE_LIMITE[s.limit_source] || s.limit_source || '')) +
+        statCard('', 'Latency', r.rtt_ms ? Math.round(r.rtt_ms) + ' ms' : '-', '',
+          data && data.bufferbloat ? 'under load: grade ' + esc(data.bufferbloat.grade) : '') +
+      '</div>' +
+      '<div class="cs-grid"><div class="card"><div class="toolbar" style="margin:0 0 .5rem">' +
+        '<b>Usage over time</b><span class="spacer"></span><div class="choice-row" id="cs-range">' +
+        [[60, '1 hour'], [1440, '24 hours'], [10080, '7 days']].map(([v, l]) =>
+          '<button type="button" class="sm' + (v === periode ? ' active' : '') + '" data-v="' + v + '">' + l + '</button>').join('') +
+        '</div></div><div id="cs-chart"></div>' +
+        '<div class="hint" style="display:block">Downloaded ≈ ' + esc(octetsText(octets('tx_bps_avg'))) +
+        ' · uploaded ≈ ' + esc(octetsText(octets('rx_bps_avg'))) + ' over the period</div></div>' +
+      '<div class="card"><b>Bandwidth &amp; mode</b><table class="kv"><tbody>' +
+        '<tr><td>Mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
+        '<tr><td>Plan</td><td>' + (s.plan_down_mbps ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : 'default plan') + '</td></tr>' +
+        '<tr><td>Applied now</td><td>' + (s.effective_down_mbps ? esc(mbps(s.effective_down_mbps) + ' / ' + mbps(s.effective_up_mbps || 0)) : 'no limit') + '</td></tr>' +
+        '<tr><td>Boost</td><td>' + (b ? '<span class="boost-pill">' + esc(Math.max(0, Math.round(b.seconds_left / 60))) + ' min left</span>' : 'none') + '</td></tr>' +
+        '<tr><td>Site</td><td>' + esc(r.pop_name || '-') + '</td></tr>' +
+        '<tr><td>Address</td><td><code>' + esc(r.last_ip || '-') + '</code></td></tr>' +
+      '</tbody></table></div></div>' +
+      '<h3 style="margin:1rem 0 .4rem">Recent activity</h3><div class="table-wrap">' + lignesActivite(journal, false) + '</div>';
+    renderThroughput(corps.querySelector('#cs-chart'),
+      pts.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_bps_max, rx_bps: p.rx_bps_max, subscribers: p.samples })));
+    corps.querySelectorAll('#cs-range button').forEach((x) => x.addEventListener('click', () => {
+      periode = Number(x.dataset.v);
+      dessiner();
+    }));
+  };
+  dessiner();
+}
+
+function octetsText(n) {
+  const v = Number(n) || 0;
+  if (v >= 1e12) return (v / 1e12).toFixed(2) + ' TB';
+  if (v >= 1e9) return (v / 1e9).toFixed(2) + ' GB';
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + ' MB';
+  return Math.round(v / 1e3) + ' kB';
+}
+
+/* ------------------------------------------------------------- activite */
+const ACT = { rows: [], wired: false };
+
+async function loadActivity() {
+  if (!ACT.wired) {
+    ACT.wired = true;
+    let minuterie = null;
+    document.getElementById('act-search').addEventListener('input', () => {
+      clearTimeout(minuterie);
+      minuterie = setTimeout(loadActivity, 250);
+    });
+    document.getElementById('act-export').addEventListener('click', () => {
+      const ligne = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const csv = ['Time,Client,Change,Detail,By,State'].concat(ACT.rows.map((a) =>
+        [a.ts, a.login, ACTION_LABEL[a.action] || a.action, a.detail, a.actor,
+          !a.ok ? 'refused' : a.written ? 'applied' : (a.queue_state || 'saved')].map(ligne).join(','))).join('\n');
+      const lien = document.createElement('a');
+      lien.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+      lien.download = 'freeqos-activity.csv';
+      lien.click();
+    });
+  }
+  const q = document.getElementById('act-search').value.trim();
+  ACT.rows = await api('/activity?limit=500' + (q ? '&q=' + encodeURIComponent(q) : ''));
+  document.getElementById('act-count').textContent = ACT.rows.length + ' change(s)';
+  const host = document.getElementById('act-table');
+  host.innerHTML = lignesActivite(ACT.rows, true);
+  host.querySelectorAll('[data-act-client]').forEach((a) => a.addEventListener('click', async (e) => {
+    e.preventDefault();
+    if (!CLI.rows.length) await loadClientsData();
+    openClientSheet(a.dataset.actClient);
+  }));
+}
+
+/* --------------------------------------------------------------- alertes */
+
+/** Ce qui demande quelqu'un, REGROUPE : un site dont plusieurs clients
+ *  tombent ensemble est un probleme de site, pas vingt problemes de clients. */
+async function loadAlerts() {
+  await loadClientsData();
+  const rows = CLI.rows;
+  const alertes = [];
+  const parSite = {};
+  rows.forEach((r) => { (parSite[r.pop_name || '-'] = parSite[r.pop_name || '-'] || []).push(r); });
+  Object.entries(parSite).forEach(([site, liste]) => {
+    const mesures = liste.filter((r) => r.ts);
+    const tombes = mesures.filter((r) => !clientEnLigne(r));
+    if (tombes.length >= 2 && tombes.length >= mesures.length / 2) {
+      alertes.push({ niveau: 'crit', titre: site + ': connection loss',
+        texte: tombes.length + ' of ' + mesures.length + ' clients of this site are offline together. ' +
+          'Check the shared connection before investigating each client.',
+        quoi: 'Site outage', logins: tombes.map((r) => r.login) });
+    } else {
+      tombes.forEach((r) => alertes.push({ niveau: 'warn', titre: r.login + ': offline',
+        texte: 'Last seen ' + depuis(r.ts) + '. Its site is otherwise up: check the client side.',
+        quoi: 'Client offline', logins: [r.login] }));
+    }
+  });
+  const lents = rows.filter((r) => clientEnLigne(r) && r.rtt_ms >= 150);
+  if (lents.length) {
+    alertes.push({ niveau: 'warn', titre: lents.length + ' client(s) with high latency',
+      texte: 'Latency of 150 ms or more right now: the experience suffers (calls, games, video).',
+      quoi: 'Latency', logins: lents.map((r) => r.login) });
+  }
+  const crise = rows.filter((r) => {
+    const m = r.mode_id && CLI.modes.find((x) => x.id === r.mode_id);
+    return m && m.disables_boost;
+  });
+  if (crise.length) {
+    alertes.push({ niveau: 'info', titre: crise.length + ' client(s) in a crisis mode',
+      texte: 'Their rate is reduced and boosts are refused until they are put back to Automatic.',
+      quoi: 'Bandwidth mode', logins: crise.map((r) => r.login) });
+  }
+  const jamais = rows.filter((r) => !r.ts);
+  if (jamais.length) {
+    alertes.push({ niveau: 'info', titre: jamais.length + ' client(s) never measured',
+      texte: 'Declared but never seen on a router: not connected yet, or a wrong address.',
+      quoi: 'No data', logins: jamais.map((r) => r.login) });
+  }
+  const host = document.getElementById('alerts-list');
+  if (!alertes.length) {
+    host.innerHTML = '<div class="notice ok"><b>Nothing needs you right now.</b> Every measured client is connected.</div>';
+    return;
+  }
+  host.innerHTML = '<div class="card cli-card">' + alertes.map((a, i) =>
+    '<div class="alert-row"><span class="alert-ico lvl-' + a.niveau + '">' + (a.niveau === 'crit' ? '!' : a.niveau === 'warn' ? '!' : 'i') + '</span>' +
+    '<div class="alert-txt"><b>' + esc(a.titre) + '</b><span>' + esc(a.texte) + '</span>' +
+    '<small>' + esc(a.quoi) + ' · ' + a.logins.length + ' affected</small></div>' +
+    '<button class="sm" data-alert="' + i + '">View clients</button></div>').join('') + '</div>';
+  host.querySelectorAll('[data-alert]').forEach((bt) => bt.addEventListener('click', () => {
+    CLI.sel = new Set(alertes[Number(bt.dataset.alert)].logins);
+    CLI.focus = true;
+    location.hash = '#/clients';
+  }));
+}
+
+/** Les donnees de la page Clients, sans la dessiner (alertes, activite). */
+async function loadClientsData() {
+  const [rows, modes, boosts] = await Promise.all([
+    api('/subscribers/latest?limit=500&include_unmeasured=true'),
+    api('/bandwidth-modes').catch(() => ({ modes: [] })),
+    api('/shaping/boosts').catch(() => []),
+  ]);
+  CLI.rows = rows;
+  CLI.modes = (modes && modes.modes) || [];
+  CLI.boosts = {};
+  (boosts || []).forEach((b) => { if (b.scope === 'subscriber') CLI.boosts[b.target_key] = b; });
+}
+
+/* -------------------------------------------------------------- gestion */
+async function loadManagement() {
+  await Promise.all([loadModesAdmin(), loadSchedules()]);
+}
+
+/* ------------------------------------------------- mon compte (operateur) */
+function openMyAccount() {
+  const u = AUTH.user || {};
+  const { root, fermer } = openModal('<div class="modal-head"><div><h3>My account</h3><div class="sub">' +
+    esc(u.email || '') + ' · ' + esc(ROLE_LABEL[u.role] || u.role || '') + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body"><p class="hint" style="display:block;margin-top:0">' + esc(ROLE_HELP[u.role] || '') + '.</p>' +
+    '<form class="stack" id="ma-form"><b>Change my password</b>' +
+    '<input type="password" id="ma-cur" placeholder="Current password" autocomplete="current-password" required>' +
+    '<input type="password" id="ma-new" placeholder="New password (' + AUTH.passwordMin + '+ characters)" ' +
+    'autocomplete="new-password" required minlength="' + AUTH.passwordMin + '">' +
+    '<button class="primary" type="submit">Change the password</button></form><div id="ma-out"></div></div>' +
+    '<div class="modal-foot"><button class="danger" id="ma-logout">Log out</button></div>');
+  root.querySelector('#ma-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+      await api('/auth/password', { method: 'POST', body: JSON.stringify({
+        current: root.querySelector('#ma-cur').value, new: root.querySelector('#ma-new').value }) });
+      root.querySelector('#ma-out').innerHTML = '<div class="notice ok">Password changed. Your other sessions are closed.</div>';
+      root.querySelector('#ma-form').reset();
+    } catch (err) {
+      root.querySelector('#ma-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+  root.querySelector('#ma-logout').addEventListener('click', () => {
+    fermer();
+    document.getElementById('logout-btn').click();
+  });
+}
+
 const LOADERS = {
   clients: loadClients,
+  alerts: loadAlerts,
+  activity: loadActivity,
+  management: loadManagement,
   dashboard: loadDashboard,
   exec: loadExec,
   traffic: loadTraffic,
@@ -10807,10 +11088,10 @@ async function refresh() {
 
 function route() {
   if (!AUTH.ready) return;
-  // L'Operator n'a que la page Clients (et son compte) : un lien
+  // L'Operator n'a que ses pages (clients, alertes, activite, gestion) : un lien
   // vers une autre page les y ramene plutot que d'ouvrir une page vide.
   let vue = (location.hash || '').replace('#/', '');
-  if (estLimite() && vue !== 'clients' && vue !== 'settings') vue = 'clients';
+  if (estLimite() && !['clients', 'alerts', 'activity', 'management'].includes(vue)) vue = 'clients';
   show(vue || 'dashboard');
 }
 
@@ -11313,6 +11594,24 @@ const ECHELLE_BLOAT = [[OK, 'A+ / A: up to +30 ms — imperceptible'], [WARN, 'B
   [CRIT, 'D / F: over +100 ms — real-time use breaks under load']];
 
 const AIDE = {
+  'connection health': {
+    t: 'What needs someone, grouped: a site where several clients are down together is one site problem, not many client problems.',
+    m: 'Also listed: clients offline on a site that is up, high latency (150 ms or more right now), clients in a mode that stops boosts, clients never measured.',
+    r: '“View clients” opens the Clients page with these clients selected, ready for a mode or a boost.',
+  },
+  'team activity': {
+    t: 'Every change made on a client: bandwidth mode, boost, plan. Who asked for it, when, and whether it reached the router.',
+    m: '“Applied”: the queue was written. “Pending on router”: writing is off or the router is unreachable, it is written later. “Refused”: nothing changed (for instance a boost in a mode that stops boosts).',
+    r: 'Kept 400 days. Export CSV gives the list shown.',
+  },
+  'client management': {
+    t: 'How clients\' rates are managed: the bandwidth modes and the bandwidth schedules (rates by time of day).',
+    m: 'Open to Operators: these are commercial decisions about clients. Adding clients, sites, routers, antennas and APIs stays with the Administrator.',
+  },
+  'bandwidth schedules': {
+    t: 'Rates that change with the time of day (day, evening, night, weekend), on their own, for all clients, some sites, some plans or named clients.',
+    m: 'Each time slot sets a share of the plan (200 % = twice the plan) or a fixed rate. A client in a bandwidth mode or with a boost is not affected until it is back in Automatic.',
+  },
   'client operations': {
     t: 'The daily page: every client, its connection, its usage, its bandwidth mode and its boost.',
     m: 'Operators only see this page and their account. They act on one client or on a selection.',

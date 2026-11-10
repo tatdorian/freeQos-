@@ -132,3 +132,45 @@ def test_un_mode_de_crise_coupe_et_refuse_le_boost(app_client, routeur) -> None:
     corps = r.json()
     assert corps["failed"] == 2
     assert "Extreme backup" in corps["results"][0]["detail"]
+
+
+def test_le_journal_raconte_chaque_geste_et_le_forfait_garde_le_mode(app_client, routeur) -> None:
+    """Qui a change quoi : chaque geste est au journal. Et changer le forfait
+    d'un client ne lui retire ni son mode ni son boost."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    nuit = app_client.post(
+        "/api/v1/bandwidth-modes",
+        headers=cle,
+        json={"name": "Night", "rate_kind": "percent", "down_value": 200, "up_value": 100},
+    ).json()
+    app_client.put("/api/v1/clients/dupont/mode", headers=cle, json={"mode_id": nuit["id"]})
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/40000000"
+
+    # Nouveau forfait : le mode reste, et suit le forfait (200 % de 30).
+    r = app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 30, "up_mbps": 10})
+    assert r.status_code == 200, r.text
+    ligne = next(
+        x
+        for x in app_client.get("/api/v1/subscribers/latest", headers=cle).json()
+        if x["login"] == "dupont"
+    )
+    assert ligne["mode_name"] == "Night"
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/60000000"
+
+    app_client.post(
+        "/api/v1/clients/actions",
+        headers=cle,
+        json={"logins": ["dupont"], "action": "boost", "boost_multiplier": 2, "boost_minutes": 30},
+    )
+    app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 25, "up_mbps": 10})
+    assert app_client.get("/api/v1/shaping/boosts", headers=cle).json(), "le boost reste"
+
+    journal = app_client.get("/api/v1/activity?login=dupont", headers=cle).json()
+    actions = [a["action"] for a in journal]
+    assert actions[:4] == ["plan", "boost", "plan", "mode"]
+    assert journal[3]["detail"].startswith("Night: 40")
+    assert journal[3]["written"] is True
+    assert all(a["actor"].startswith("api:") for a in journal)
+    assert app_client.get("/api/v1/activity?q=Night", headers=cle).json()

@@ -21,7 +21,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field, model_validator
 
-from app.api.deps import ContainerDep, RepositoryDep, acteur
+from app.api.deps import ContainerDep, RepositoryDep, acteur, noter
 from app.db.topology_repo import TopologyRepository
 from app.enforcement.routeros import MissingWriteCredentialsError
 from app.models import KIND_STATIC
@@ -1097,6 +1097,15 @@ async def poser_boost(
         except LookupError:
             mode = None
         if mode and mode.get("disables_boost"):
+            await noter(
+                container,
+                None,
+                actor=author,
+                login=login,
+                action="boost",
+                detail=f"refused: client in {mode['name']}",
+                ok=False,
+            )
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Boost is unavailable in {mode['name']}. Change the mode first.",
@@ -1138,6 +1147,19 @@ async def poser_boost(
 
     if apply_now:
         resultat["applied"] = await _apply_for_subscriber(container, login, author=author)
+    await noter(
+        container,
+        None,
+        actor=author,
+        login=login,
+        action="boost",
+        detail=(
+            f"x{multiplier:g} of the plan" if multiplier else f"{down or 0:g} / {up or 0:g} Mbps"
+        )
+        + f" for {duration_minutes} min"
+        + (f" ({reason})" if reason else ""),
+        applied=resultat["applied"],
+    )
     return resultat
 
 
@@ -1153,6 +1175,14 @@ async def clear_boost(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No boost running")
     applique = (
         await _apply_for_subscriber(container, login, author=acteur(request)) if apply_now else None
+    )
+    await noter(
+        container,
+        request,
+        login=login,
+        action="stop_boost",
+        detail="boost stopped",
+        applied=applique,
     )
     return {"cleared": True, "applied": applique}
 

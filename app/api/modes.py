@@ -5,8 +5,8 @@ lui donner un mode (Backup, Night...), le remettre en Automatic, lui donner ou
 lui retirer un boost. Sur une selection, le resultat est rendu CLIENT PAR
 CLIENT : un echec partiel ne doit jamais ressembler a une reussite complete.
 
-Definir les modes eux-memes (leur nom, leur debit) est reserve a
-l'Administrator par la garde d'acces.
+Definir les modes eux-memes (leur nom, leur debit) est aussi de la gestion :
+ouvert au niveau Operator, comme les profils horaires.
 
 "AUTOMATIC" N'EST PAS UN MODE STOCKE : c'est l'absence de mode. Le client suit
 son forfait et, s'il en a un, son profil horaire (jour / soiree / nuit) -- son
@@ -18,10 +18,10 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Path, Request, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, Field
 
-from app.api.deps import ContainerDep, RepositoryDep, acteur
+from app.api.deps import ContainerDep, RepositoryDep, acteur, noter
 from app.api.shaping import _apply_for_subscriber, _require_topology, client_connu, poser_boost
 from app.db.modes_repo import (
     InvalidModeError,
@@ -170,7 +170,17 @@ async def _donner_mode(
     pas : le resultat dit ce qui s'est passe pour CE client."""
     topo = _require_topology(container)
     abonne = await client_connu(container, metrics, login)
+    nom = str(mode["name"]) if mode else "Automatic"
     if abonne is None:
+        await noter(
+            container,
+            None,
+            actor=author,
+            login=login,
+            action="mode",
+            detail=f"{nom}: unknown client",
+            ok=False,
+        )
         return {"login": login, "ok": False, "detail": "unknown client"}
     if mode is None:
         await topo.clear_mode(login, updated_by=author)
@@ -179,6 +189,15 @@ async def _donner_mode(
         try:
             bas, haut = mode_rates(mode, abonne.get("plan_down_mbps"), abonne.get("plan_up_mbps"))
         except InvalidModeError as exc:
+            await noter(
+                container,
+                None,
+                actor=author,
+                login=login,
+                action="mode",
+                detail=f"{nom}: {exc}",
+                ok=False,
+            )
             return {"login": login, "ok": False, "detail": str(exc)}
         await topo.set_mode(
             target_key=login,
@@ -200,6 +219,21 @@ async def _donner_mode(
     logger.info("Mode de %s -> %s (par %s)", login, mode["name"] if mode else "Automatic", author)
     if apply_now:
         rapport["applied"] = await _apply_for_subscriber(container, login, author=author)
+    if mode is None:
+        detail = "Automatic: plan and schedule"
+    else:
+        detail = f"{nom}: {rapport['down_mbps']:g} / {rapport['up_mbps']:g} Mbps" + (
+            ", boost stopped" if rapport.get("boost_stopped") else ""
+        )
+    await noter(
+        container,
+        None,
+        actor=author,
+        login=login,
+        action="mode",
+        detail=detail,
+        applied=rapport.get("applied"),
+    )
     return rapport
 
 
@@ -274,17 +308,20 @@ async def client_actions(
                 resultats.append({"login": login, "ok": True, **pose})
             else:
                 retire = await _require_topology(container).clear_boost("subscriber", login)
+                applique = (
+                    await _apply_for_subscriber(container, login, author=auteur) if retire else None
+                )
+                if retire:
+                    await noter(
+                        container,
+                        request,
+                        login=login,
+                        action="stop_boost",
+                        detail="boost stopped",
+                        applied=applique,
+                    )
                 resultats.append(
-                    {
-                        "login": login,
-                        "ok": True,
-                        "stopped": retire,
-                        "applied": (
-                            await _apply_for_subscriber(container, login, author=auteur)
-                            if retire
-                            else None
-                        ),
-                    }
+                    {"login": login, "ok": True, "stopped": retire, "applied": applique}
                 )
         except HTTPException as exc:
             resultats.append({"login": login, "ok": False, "detail": exc.detail})
@@ -296,3 +333,18 @@ async def client_actions(
         "failed": len(logins) - reussis,
         "results": resultats,
     }
+
+
+# ---------------------------------------------------------------- journal
+@router.get("/activity", summary="Changes made on clients: who, when, what")
+async def client_activity(
+    container: ContainerDep,
+    login: Annotated[str | None, Query(max_length=128)] = None,
+    q: Annotated[str | None, Query(max_length=128)] = None,
+    limit: Annotated[int, Query(ge=1, le=1000)] = 200,
+) -> list[dict[str, Any]]:
+    journal = getattr(container, "activity_repo", None)
+    if journal is None:
+        return []
+    lignes: list[dict[str, Any]] = await journal.list(login=login, search=q, limit=limit)
+    return lignes

@@ -50,6 +50,9 @@
     </div>
     <nav class="tabs">
       <a href="#/clients" data-view="clients"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><path d="M15.5 12.5l2 2 4-4.5"/></svg><span>Clients</span></a>
+      <a href="#/alerts" data-view="alerts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16z"/><path d="M10 21h4"/></svg><span>Alerts</span></a>
+      <a href="#/activity" data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span>Activity</span></a>
+      <a href="#/management" data-view="management"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg><span>Management</span></a>
       <a href="#/dashboard" data-view="dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Dashboard</span></a>
       <a href="#/exec" data-view="exec"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-5 3 3 5-6"/></svg><span>Executive</span></a>
       <a href="#/traffic" data-view="traffic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16"/><path d="M3 8l4-4 4 4"/><path d="M17 20V4"/><path d="M13 16l4 4 4-4"/></svg><span>Traffic</span></a>
@@ -556,14 +559,86 @@
         <div id="plans-default-result"></div>
       </div>
 
+
+      <h2>Clients</h2>
+      <div class="toolbar">
+        <input id="plans-search" placeholder="Client, site or address" style="max-width:260px">
+        <select id="plans-origin" style="width:auto">
+          <option value="">All sources</option>
+          <option value="api">Pushed by the API</option>
+          <option value="ui">Set here</option>
+          <option value="default">Default plan</option>
+        </select>
+        <span class="spacer"></span>
+        <span class="mode" id="plans-count"></span>
+      </div>
+      <div id="plans-result"></div>
+      <div class="table-wrap" id="plans-clients"></div>
+
+      <!-- FORFAITS EN ATTENTE : recus (API ou saisie) pour des identifiants
+           jamais vus connectes. Repris tout seuls a la premiere connexion ;
+           un identifiant mal saisi y resterait pour toujours, d'ou la liste. -->
+      <div id="plans-pending-block" hidden>
+        <h2>Waiting for first connection</h2>
+        <p class="hint" style="display:block">Plans received for logins that have never been seen
+          connected yet (a subscriber created in your management interface before its first
+          PPPoE session). Each plan is applied by itself as soon as the subscriber connects. A
+          login that stays here may be misspelt.</p>
+        <div class="table-wrap" id="plans-pending"></div>
+      </div>
+
+      <h2>Packages pushed by the API</h2>
+      <div class="table-wrap" id="plans-packages"></div>
+    </section>
+
+    <section id="view-insights">
+      <div class="toolbar">
+        <select id="ins-days" style="width:auto">
+          <option value="7" selected>Last 7 days vs the 7 before</option>
+          <option value="14">Last 14 days vs the 14 before</option>
+          <option value="30">Last 30 days vs the 30 before</option>
+        </select>
+        <span class="spacer"></span>
+        <span class="mode" id="ins-count"></span>
+      </div>
+      <p class="hint" style="display:block">Commercial reading of the measurements: who is
+        likely to cancel (poor experience, usage collapsing, silent line), who is ready to
+        be sold a bigger plan (lives at its ceiling with a good experience), and how many
+        more subscribers each site can take before quality drops. It compares the chosen
+        period with the one before, so it needs history.</p>
+      <div id="ins-notice"></div>
+      <div class="grid stats" id="ins-stats"></div>
+
+      <h2>At risk of leaving</h2>
+      <div class="table-wrap" id="ins-risk"></div>
+
+      <h2>Ready for a bigger plan</h2>
+      <div class="table-wrap" id="ins-upgrade"></div>
+
+      <h2>Sites and access points: room for more subscribers</h2>
+      <div class="table-wrap" id="ins-capacity"></div>
+
+      <h2>Every subscriber: plan, usage, experience</h2>
+      <div class="table-wrap" id="ins-all"></div>
+    </section>
+
+    <!-- GESTION : les debits des clients selon l'heure et les modes de debit.
+         Ouvert a l'Operator : ce sont des decisions commerciales, pas de la
+         technique. -->
+    <section id="view-management">
+      <p class="eyebrow">Client management</p>
+      <p class="hint" style="display:block;margin-top:0">How your clients' rates are managed: the
+        <b>bandwidth modes</b> given in one click from the Clients page, and the <b>bandwidth
+        schedules</b> that change rates with the time of day (day, evening, night, weekend), on
+        their own.</p>
       <!-- PROFILS HORAIRES : des debits qui changent avec l'heure (jour,
            soiree, nuit), tout seuls. Hierarchie : boost > limite forcee >
            profil horaire > forfait. Un seul profil gouverne un client : le
            plus precis (clients nommes, forfaits, sites, tous), puis le plus
            recent. -->
       <!-- MODES DE DEBIT : les debits nommes que les operateurs donnent a un
-           client d'un geste (Clients > Change mode). Les definir est un geste
-           technique ; les donner est le geste quotidien. -->
+           client d'un geste (Clients > Change mode). Les definir est de la
+           gestion, comme les donner : niveau Operator. -->
       <h2>Bandwidth modes</h2>
       <p class="hint" style="display:block">Named rates an operator gives a client in one click
         from the <b>Clients</b> page: <i>Backup</i>, <i>Extreme backup</i>, <i>Night</i>... Each
@@ -667,67 +742,33 @@
           <button type="submit" class="primary" id="sched-submit">Create and apply</button>
         </div>
       </form>
-
-      <h2>Clients</h2>
-      <div class="toolbar">
-        <input id="plans-search" placeholder="Client, site or address" style="max-width:260px">
-        <select id="plans-origin" style="width:auto">
-          <option value="">All sources</option>
-          <option value="api">Pushed by the API</option>
-          <option value="ui">Set here</option>
-          <option value="default">Default plan</option>
-        </select>
-        <span class="spacer"></span>
-        <span class="mode" id="plans-count"></span>
-      </div>
-      <div id="plans-result"></div>
-      <div class="table-wrap" id="plans-clients"></div>
-
-      <!-- FORFAITS EN ATTENTE : recus (API ou saisie) pour des identifiants
-           jamais vus connectes. Repris tout seuls a la premiere connexion ;
-           un identifiant mal saisi y resterait pour toujours, d'ou la liste. -->
-      <div id="plans-pending-block" hidden>
-        <h2>Waiting for first connection</h2>
-        <p class="hint" style="display:block">Plans received for logins that have never been seen
-          connected yet (a subscriber created in your management interface before its first
-          PPPoE session). Each plan is applied by itself as soon as the subscriber connects. A
-          login that stays here may be misspelt.</p>
-        <div class="table-wrap" id="plans-pending"></div>
-      </div>
-
-      <h2>Packages pushed by the API</h2>
-      <div class="table-wrap" id="plans-packages"></div>
     </section>
 
-    <section id="view-insights">
-      <div class="toolbar">
-        <select id="ins-days" style="width:auto">
-          <option value="7" selected>Last 7 days vs the 7 before</option>
-          <option value="14">Last 14 days vs the 14 before</option>
-          <option value="30">Last 30 days vs the 30 before</option>
-        </select>
-        <span class="spacer"></span>
-        <span class="mode" id="ins-count"></span>
+    <!-- ALERTES : ce qui demande quelqu'un, regroupe. Une panne de site ne doit
+         pas devenir vingt alertes de clients. -->
+    <section id="view-alerts">
+      <p class="eyebrow">Connection health</p>
+      <p class="hint" style="display:block;margin-top:0">What needs you, grouped: when several
+        clients of the same site are down, it is one site problem, not many client problems.</p>
+      <div id="alerts-list"></div>
+    </section>
+
+    <!-- ACTIVITE : qui a change quoi, quand, sur quel client, et si c'est
+         arrive jusqu'au routeur. -->
+    <section id="view-activity">
+      <p class="eyebrow">Team activity</p>
+      <p class="hint" style="display:block;margin-top:0">Every change made on a client: who asked
+        for it, when, and whether it reached the router.</p>
+      <div class="card cli-card">
+        <div class="toolbar cli-filters">
+          <input type="search" id="act-search" placeholder="Search a client, an operator, an action..."
+                 autocomplete="off" spellcheck="false">
+          <span class="spacer"></span>
+          <span class="mode" id="act-count"></span>
+          <button type="button" class="sm" id="act-export">Export CSV</button>
+        </div>
+        <div class="table-wrap" id="act-table"></div>
       </div>
-      <p class="hint" style="display:block">Commercial reading of the measurements: who is
-        likely to cancel (poor experience, usage collapsing, silent line), who is ready to
-        be sold a bigger plan (lives at its ceiling with a good experience), and how many
-        more subscribers each site can take before quality drops. It compares the chosen
-        period with the one before, so it needs history.</p>
-      <div id="ins-notice"></div>
-      <div class="grid stats" id="ins-stats"></div>
-
-      <h2>At risk of leaving</h2>
-      <div class="table-wrap" id="ins-risk"></div>
-
-      <h2>Ready for a bigger plan</h2>
-      <div class="table-wrap" id="ins-upgrade"></div>
-
-      <h2>Sites and access points: room for more subscribers</h2>
-      <div class="table-wrap" id="ins-capacity"></div>
-
-      <h2>Every subscriber: plan, usage, experience</h2>
-      <div class="table-wrap" id="ins-all"></div>
     </section>
 
     <!-- CLIENTS : la page du quotidien. Le client au centre : le voir, changer

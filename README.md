@@ -193,12 +193,16 @@ Trois niveaux d'accès, chacun avec les droits du précédent, **tenus par le se
 | Niveau | Ce qu'il peut faire | Interface |
 |---|---|---|
 | **Viewer** | Tout voir, rien modifier (lecture seule) | Toutes les pages, en lecture |
-| **Operator** | Sur **un ou plusieurs** clients : changer le **mode de débit**, donner ou retirer un **boost**, poser ou retirer le **forfait** | Page **Clients** et son compte uniquement |
-| **Administrator** | Tout le reste : ajouter des clients, des PoPs, des routeurs, des antennes et leur **API (Ubiquiti)**, les modes et profils horaires, les réglages, les clés d'API et les comptes (*Settings › Accounts*) | Toutes les pages |
+| **Operator** | La **gestion des clients**, un ou plusieurs à la fois : **mode de débit**, **boost**, **forfait** ; définir les modes de débit et les **profils horaires** (débits selon l'heure) | **Clients**, **Alerts**, **Activity**, **Management** ; pas de Settings (mot de passe et déconnexion depuis la carte du compte) |
+| **Administrator** | Tout le reste : ajouter des clients, des PoPs, des routeurs, des antennes et leur **API (Ubiquiti)**, les réglages, les clés d'API et les comptes (*Settings › Accounts*) | Toutes les pages |
+
+Chaque geste sur un client (mode, boost, forfait) est **journalisé** : qui, quand, quoi, et
+si la file a été écrite sur le routeur — page *Activity*, fiche du client, et
+`GET /api/v1/activity`. Changer le forfait d'un client lui **garde** son mode et son boost.
 
 **Les modes de débit.** Un mode est un débit nommé qu'on donne à un client d'un clic depuis
-la page *Clients* : *Backup*, *Extreme backup*, *Night*… L'Administrator les définit dans
-*Plans › Bandwidth modes* : débit fixe (Mbps) ou part du forfait du client (%), et s'il
+la page *Clients* : *Backup*, *Extreme backup*, *Night*… L'Operator les définit dans
+*Management* : débit fixe (Mbps) ou part du forfait du client (%), et s'il
 coupe les boosts. **Automatic** = pas de mode : le client suit son forfait et son profil
 horaire, son débit change alors tout seul selon l'heure. Un changement de mode écrit la file
 tout de suite ; sur plusieurs clients, le résultat est rendu client par client.
@@ -1864,7 +1868,7 @@ inconnue — souvent la plus grosse — disparaîtrait de la discussion.
 
 Beaucoup d'opérateurs vendent des débits qui changent avec l'heure : un forfait bridé en
 soirée, ouvert la nuit, normal le jour — et la bascule doit se faire **toute seule**, à
-l'heure dite. Un **profil horaire** (onglet *Plans › Bandwidth schedules*, ou
+l'heure dite. Un **profil horaire** (onglet *Management › Bandwidth schedules*, ou
 `/api/v1/bandwidth-schedules`) est un ensemble de **plages**, chacune avec le débit qui
 s'applique pendant la plage :
 
