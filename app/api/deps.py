@@ -7,7 +7,7 @@ conteneur factice sans base ni routeur, via ``dependency_overrides``.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Query, Request, status
 
@@ -88,3 +88,29 @@ def acteur(request: Request) -> str:
     """
     user = getattr(request.state, "user", None) or {}
     return str(user.get("email") or "ui")
+
+
+async def noter(
+    container: Any,
+    request: Request | None,
+    *,
+    login: str,
+    action: str,
+    detail: str | None = None,
+    ok: bool = True,
+    applied: Any = None,
+    actor: str | None = None,
+) -> None:
+    """Inscrit un geste au journal des clients. Sans journal (tests, base
+    absente), ne fait rien : le geste ne depend jamais de son recit."""
+    journal = getattr(container, "activity_repo", None)
+    if journal is None:
+        return
+    await journal.record(
+        actor=actor or (acteur(request) if request is not None else "system"),
+        login=login,
+        action=action,
+        detail=detail,
+        ok=ok,
+        applied=applied,
+    )

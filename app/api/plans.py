@@ -24,7 +24,8 @@ from fastapi import APIRouter, HTTPException, Path, status
 from pydantic import BaseModel, Field
 
 from app.api.accounts import UserDep
-from app.api.deps import ContainerDep
+from app.api.deps import ContainerDep, noter
+from app.db.modes_repo import mode_rates
 from app.enforcement.schedules import BOOK as SCHEDULE_BOOK
 from app.models import KIND_STATIC
 from app.services.plans import apply_now, default_plan
@@ -182,16 +183,53 @@ async def _limites_forcees(container: ContainerDep) -> dict[str, tuple[Any, Any]
     }
 
 
-async def _lever_limite_forcee(container: ContainerDep, login: str) -> bool:
-    """Retire la limite forcee d'un client : son PLAN redevient la regle.
+async def _lever_limite_forcee(
+    container: ContainerDep,
+    login: str,
+    bas: float | None = None,
+    haut: float | None = None,
+    auteur: str | None = None,
+) -> bool:
+    """Retire la limite forcee A LA MAIN d'un client : son PLAN redevient la regle.
 
     Changer un plan sans cela n'avait aucun effet visible -- la limite posee
-    dans Subscribers continuait de primer, et l'on croyait le plan ignore."""
+    dans Subscribers continuait de primer, et l'on croyait le plan ignore.
+
+    LE MODE ET LE BOOST RESTENT. Un client en "Backup" y reste quand son forfait
+    change, et un boost en cours va a son terme : effacer toute la politique les
+    faisait disparaitre sans que personne l'ait demande. Un mode exprime en part
+    du forfait suit le nouveau forfait.
+    """
     topo = getattr(container, "topology_repo", None)
     if topo is None:
         return False
     try:
-        return bool(await topo.delete_policy("subscriber", login))
+        if not hasattr(topo, "policy_of"):
+            return bool(await topo.delete_policy("subscriber", login))
+        politique = await topo.policy_of(login)
+        if not politique:
+            return False
+        if politique.get("mode_id"):
+            modes = getattr(container, "modes_repo", None)
+            if modes is not None and bas and haut:
+                try:
+                    mode = await modes.get(int(politique["mode_id"]))
+                except LookupError:
+                    mode = None
+                if mode and mode.get("rate_kind") == "percent":
+                    nouveau_bas, nouveau_haut = mode_rates(mode, bas, haut)
+                    await topo.set_mode(
+                        target_key=login,
+                        mode_id=int(mode["id"]),
+                        mode_name=str(mode["name"]),
+                        down_mbps=nouveau_bas,
+                        up_mbps=nouveau_haut,
+                        updated_by=auteur,
+                    )
+            return False
+        if politique.get("max_down_mbps") or politique.get("max_up_mbps"):
+            return bool(await topo.clear_mode(login, updated_by=auteur))
+        return False
     except Exception:  # noqa: BLE001
         return False
 
@@ -329,7 +367,15 @@ async def set_plan(
         # pas. Refuser, et dire ou le poser.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=MOTIF_RADIUS)
     # Un plan choisi ici est LA regle : la limite forcee ailleurs est levee.
-    leve = await _lever_limite_forcee(container, login)
+    leve = await _lever_limite_forcee(container, login, bas, haut, auteur)
+    await noter(
+        container,
+        None,
+        actor=str(user.get("email")),
+        login=login,
+        action="plan",
+        detail=f"plan {bas:g} / {haut:g} Mbps" if bas and haut else "plan changed",
+    )
     if client is None and statique is None:
         # JAMAIS VU CONNECTE : le forfait attend l'abonne. Rien a poser sur un
         # routeur tant qu'aucune session ne porte cet identifiant.
@@ -401,11 +447,19 @@ async def reset_plan(login: Login, container: ContainerDep, user: UserDep) -> di
             "enforcement": {"state": "retire", "reason": "pending plan forgotten"},
             "forced_limit_lifted": await _lever_limite_forcee(container, login),
         }
+    await noter(
+        container,
+        None,
+        actor=str(user.get("email")),
+        login=login,
+        action="plan_removed",
+        detail="plan removed: the default plan applies",
+    )
     if client is None:
         # Fiche statique pas encore collectee : son forfait vit dans la fiche.
         client = {"login": login, "kind": KIND_STATIC}
     auteur = f"ui:{user.get('email')}"
-    leve = await _lever_limite_forcee(container, login)
+    leve = await _lever_limite_forcee(container, login, auteur=auteur)
     pose: dict[str, Any] | None
     if client["kind"] == KIND_STATIC and container.static_clients_repo is not None:
         await container.static_clients_repo.set_plan(login, None, None)

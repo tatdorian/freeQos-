@@ -283,10 +283,11 @@ def _meme_origine(request: Request) -> bool:
     return urlsplit(origine).netloc == hote
 
 
-#: LES GESTES DU QUOTIDIEN, ouverts au niveau Operator : le mode, le boost et le
-#: forfait d'un ou de plusieurs clients. Toute autre ecriture -- ajouter des
-#: clients, des PoPs, des routeurs, des antennes et leur API, definir les modes,
-#: les reglages, les cles d'API, les comptes -- est reservee a l'Administrator.
+#: LA GESTION DES CLIENTS, ouverte au niveau Operator : le mode, le boost et le
+#: forfait d'un ou de plusieurs clients, les modes de debit et les profils
+#: horaires. Toute autre ecriture -- ajouter des clients, des PoPs, des
+#: routeurs, des antennes et leur API, les reglages, les cles d'API, les
+#: comptes -- est reservee a l'Administrator.
 #: La liste est FERMEE : une route ajoutee demain est reservee a
 #: l'Administrator tant qu'on ne l'a pas ouverte ici, sciemment.
 OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
@@ -296,6 +297,14 @@ OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("POST", re.compile(r"^/clients/actions$"), ROLE_OPERATOR),
     ("PUT", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
     ("DELETE", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
+    # LA GESTION : les modes de debit et les profils horaires (jour / soiree /
+    # nuit) sont des decisions commerciales sur les clients, pas de la technique.
+    ("POST", re.compile(r"^/bandwidth-modes$"), ROLE_OPERATOR),
+    ("PATCH", re.compile(r"^/bandwidth-modes/\d+$"), ROLE_OPERATOR),
+    ("DELETE", re.compile(r"^/bandwidth-modes/\d+$"), ROLE_OPERATOR),
+    ("POST", re.compile(r"^/bandwidth-schedules$"), ROLE_OPERATOR),
+    ("PATCH", re.compile(r"^/bandwidth-schedules/\d+$"), ROLE_OPERATOR),
+    ("DELETE", re.compile(r"^/bandwidth-schedules/\d+$"), ROLE_OPERATOR),
 )
 
 

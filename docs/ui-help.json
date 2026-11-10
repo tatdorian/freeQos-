@@ -1,4 +1,22 @@
 {
+ "connection health": {
+  "t": "What needs someone, grouped: a site where several clients are down together is one site problem, not many client problems.",
+  "m": "Also listed: clients offline on a site that is up, high latency (150 ms or more right now), clients in a mode that stops boosts, clients never measured.",
+  "r": "“View clients” opens the Clients page with these clients selected, ready for a mode or a boost."
+ },
+ "team activity": {
+  "t": "Every change made on a client: bandwidth mode, boost, plan. Who asked for it, when, and whether it reached the router.",
+  "m": "“Applied”: the queue was written. “Pending on router”: writing is off or the router is unreachable, it is written later. “Refused”: nothing changed (for instance a boost in a mode that stops boosts).",
+  "r": "Kept 400 days. Export CSV gives the list shown."
+ },
+ "client management": {
+  "t": "How clients' rates are managed: the bandwidth modes and the bandwidth schedules (rates by time of day).",
+  "m": "Open to Operators: these are commercial decisions about clients. Adding clients, sites, routers, antennas and APIs stays with the Administrator."
+ },
+ "bandwidth schedules": {
+  "t": "Rates that change with the time of day (day, evening, night, weekend), on their own, for all clients, some sites, some plans or named clients.",
+  "m": "Each time slot sets a share of the plan (200 % = twice the plan) or a fixed rate. A client in a bandwidth mode or with a boost is not affected until it is back in Automatic."
+ },
  "client operations": {
   "t": "The daily page: every client, its connection, its usage, its bandwidth mode and its boost.",
   "m": "Operators only see this page and their account. They act on one client or on a selection.",

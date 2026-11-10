@@ -80,9 +80,10 @@ _GENERE = re.compile(r"^<!-- generated: ([a-z0-9-]+) -->$", re.MULTILINE)
 PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     (
         "Clients",
-        "The daily page, and the only one Operators see (with their account): every client, "
-        "its connection, its usage, its bandwidth mode, its boost and its plan, for one "
-        "client or for a selection.",
+        "The daily page of Operators (who also have Alerts, Activity and Management, and no "
+        "Settings): every client, its connection, its usage, its bandwidth mode, its boost "
+        "and its plan, for one client or for a selection. Clicking a client opens its sheet: "
+        "usage over 1 hour, 24 hours or 7 days, mode, plan, limit applied, recent activity.",
         [
             "client operations",
             "bandwidth mode",
@@ -91,6 +92,21 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
             "not in automatic",
             "boosts active",
         ],
+    ),
+    (
+        "Alerts",
+        "What needs someone, grouped by cause.",
+        ["connection health"],
+    ),
+    (
+        "Activity",
+        "The log of every change made on clients.",
+        ["team activity"],
+    ),
+    (
+        "Management",
+        "The bandwidth modes and the bandwidth schedules, open to Operators.",
+        ["client management", "bandwidth modes", "bandwidth schedules"],
     ),
     (
         "Dashboard",
@@ -144,9 +160,9 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     ),
     (
         "Plans",
-        "Which rate for whom: the default plan, the bandwidth modes, every client's plan and "
-        "its source, and the packages pushed through the API.",
-        ["default plan", "bandwidth modes", "clients", "packages pushed by the api"],
+        "Which rate for whom: the default plan, every client's plan and its source, and the "
+        "packages pushed through the API.",
+        ["default plan", "clients", "packages pushed by the api"],
     ),
     (
         "Insights",

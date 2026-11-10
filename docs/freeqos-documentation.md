@@ -1071,7 +1071,7 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 
 ### Bandwidth modes (Backup, Night…)
 
-A **bandwidth mode** is a named rate given to a client in one click, from the **Clients** page: *Backup* when the backhaul is degraded, *Extreme backup* for a crisis or non-payment, *Night*... The operator picks a name in a list instead of typing rates (*Plans › Bandwidth modes*, or `/api/v1/bandwidth-modes`).
+A **bandwidth mode** is a named rate given to a client in one click, from the **Clients** page: *Backup* when the backhaul is degraded, *Extreme backup* for a crisis or non-payment, *Night*... The operator picks a name in a list instead of typing rates (*Management › Bandwidth modes*, or `/api/v1/bandwidth-modes`).
 
 - **Rate:** fixed (`rate_kind=fixed`, Mbps) or a **share of the client's plan** (`percent`: 200 = twice the plan). A share needs the client's plan; a client without a known plan can only get a fixed mode.
 - **Automatic** is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its **bandwidth schedule** — its rate then changes with the hour on its own.
@@ -1079,12 +1079,13 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 - **Modes that stop boosts** (`disables_boost`): entering the mode clears the running boost, and a new boost is refused (`409 Boost is unavailable in <mode>. Change the mode first.`).
 - **Editing a mode's rate** re-applies it at once to every client in it. A mode given to clients cannot be deleted (`409`): put them back to Automatic or in another mode first.
 - **Writing:** like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.
+- **Changing a client's plan keeps its mode and its boost:** only a manual limit (an override without a mode) is lifted, so that the new plan takes effect. A mode expressed as a share of the plan follows the new plan at once.
 
 **Client actions** (`POST /api/v1/clients/actions`, `{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}`) act on one or several clients. The reply gives a result **per client** (`succeeded`, `failed`, `results[]`): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.
 
 ### Bandwidth schedules (day, evening, night)
 
-Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Plans › Bandwidth schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it:
+Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Management › Bandwidth schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it:
 
 - a **percentage of the plan** (`percent`: 200 = twice the plan at night, 70 = 30 % less in the evening), which follows every subscriber's own plan without copying it; or
 - a **fixed rate** (`down_mbps` / `up_mbps`; a single direction is allowed, the other one keeps its plan).
@@ -1397,10 +1398,11 @@ freeQoS holds router credentials that can write across the whole network. Securi
 | Level (`role`) | Sees | Can do | Interface |
 | --- | --- | --- | --- |
 | **Viewer** (`read`) | Everything | Nothing | Every page, read-only banner |
-| **Operator** (`operator`) | Clients | On **one or several** clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan | **Clients** page and own account only |
-| **Administrator** (`edit`) | Everything | Everything else: adding clients, PoPs, routers, antennas and their API (Ubiquiti), bandwidth modes and schedules, settings, API keys, accounts | Every page |
+| **Operator** (`operator`) | Clients | **Client management**, on one or several clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan; define the bandwidth modes and the bandwidth schedules (rates by time of day) | **Clients**, **Alerts**, **Activity**, **Management**; no Settings (password and log out from the account card) |
+| **Administrator** (`edit`) | Everything | Everything else: adding clients, PoPs, routers, antennas and their API (Ubiquiti), settings, API keys, accounts | Every page |
 
-  The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it (the boost or mode's `updated_by`, the plan's author, the enforcement audit). An API key keeps its two scopes: `read`, or `write` (Administrator rights except accounts, which no key can manage). The stored values `read` and `edit` are those of the former two roles: existing accounts keep their level without migration.
+  The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`, `POST/PATCH/DELETE /api/v1/bandwidth-modes` and `/api/v1/bandwidth-schedules`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it, in the **activity log** below and in the enforcement audit.
+- **Activity log:** every change made on a client (bandwidth mode, boost, boost stopped, plan, plan removed) is recorded in `client_activity`: who, when, which client, the detail, and the state of the queue afterwards (written, pending on the router because writing is off, no router, refused). It is read on the **Activity** page (search, CSV export), in each client's sheet, and through `GET /api/v1/activity?login=&q=&limit=`. Kept 400 days. An API key keeps its two scopes: `read`, or `write` (Administrator rights except accounts, which no key can manage). The stored values `read` and `edit` are those of the former two roles: existing accounts keep their level without migration.
 - **Passwords:** 12 characters minimum, too-common words are refused. They are hashed with scrypt (N=2^14, r=8, p=1, salted, compared in constant time).
 - **Anti-guessing:** 5 failures in 5 minutes lock the email **and** the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.
 - **Session:** an `HttpOnly`, `SameSite=Strict` cookie, valid 24 h, 30 days at most (`SESSION_TTL_HOURS`, `SESSION_MAX_HOURS`). Writes also check `Origin` and `Sec-Fetch-Site`.
