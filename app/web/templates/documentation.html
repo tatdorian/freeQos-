@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="23d31ae24f71479a">
+  <meta name="freeqos-docs-source" content="83295ff17f307dab">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' fill='none'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2439,7 +2439,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <li>The log records what and for how long ("x2 of the plan for 4 h", "temporary rate 5 / 2 Mbps for 3 days", "... until stopped").</li>
 </ul>
 <h3 id="bandwidth-schedules-day-evening-night">Bandwidth schedules (day, evening, night)</h3>
-<p>Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched <strong>automatically</strong>, on time. A <strong>bandwidth schedule</strong> (<em>Schedules</em>, or <code>/api/v1/bandwidth-schedules</code>) is a set of <strong>time slots</strong>, each with the rate that applies during it. <em>Applies to</em> chooses all clients, or a <strong>list to tick</strong> (with search and "Select all shown") of sites, plans or named clients:</p>
+<p>Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched <strong>automatically</strong>, on time. A <strong>bandwidth schedule</strong> (<em>Schedules</em>, or <code>/api/v1/bandwidth-schedules</code>) is a set of <strong>time slots</strong>, each with the rate that applies during it. <em>Applies to</em> is a segmented control (<em>All</em>, <em>Clients</em>, <em>Sites</em>, <em>Plans</em>); except for <em>All</em>, it opens a <strong>list to tick</strong>, with search and <em>All</em> / <em>None</em>. Each slot is one card: its name, the hours (<em>18:00 → 23:00</em>), the rate with a <strong>% / Mbps</strong> switch, and the days as round pills (tap to turn a day off). The rate is either:</p>
 <ul>
 <li>a <strong>percentage of the plan</strong> (<code>percent</code>: 200 = twice the plan at night, 70 = 30 % less in the evening), which follows every subscriber's own plan without copying it; or</li>
 <li>a <strong>fixed rate</strong> (<code>down_mbps</code> / <code>up_mbps</code>; a single direction is allowed, the other one keeps its plan).</li>
