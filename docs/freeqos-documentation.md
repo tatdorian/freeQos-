@@ -1077,6 +1077,7 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 - **Automatic** is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its **bandwidth schedule** — its rate then changes with the hour on its own.
 - **Where it sits:** a client's mode is its permanent override (`shaping_policies.max_down_mbps/max_up_mbps`, with `mode_id` and `mode_name`). It is therefore above the schedule (a client in *Backup* stays in *Backup* when the night begins) and below a running boost. Back to Automatic removes the override and keeps a running boost.
 - **Modes that stop boosts** (`disables_boost`, API only): entering the mode clears the running boost, and a new boost is refused (`409 Boost is unavailable in <mode>. Change the mode first.`). The form no longer offers this option: a mode saved from the form has it off.
+- **Its clients:** on the *Modes* page, *Add or remove clients* on a mode (or *Its clients* while editing it) opens a list to tick, with search and a site filter: ticking puts the client in the mode, unticking puts it back to Automatic.
 - **Editing a mode's rate** re-applies it at once to every client in it. A mode given to clients cannot be deleted (`409`): put them back to Automatic or in another mode first.
 - **Writing:** like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.
 - **Changing a client's plan keeps its mode and its boost:** only a manual limit (an override without a mode) is lifted, so that the new plan takes effect. A mode expressed as a share of the plan follows the new plan at once.
@@ -1097,7 +1098,8 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 Made for **hundreds of clients** (20 sites of 20 clients): search, filters by site, connection and mode, **sort** (name, site, not connected first, highest usage), and **pages** of 25, 50, 100 or 200. Sorted by site, each site gets a header with its count, its connected clients and a *Select the site* button. The box at the top of the list selects every client matching the filters, on every page.
 
 - **Traffic** (with clients selected): the traffic of the whole selection as a chart, then each client with its own small chart, its current rate and its volume, over 1 hour, 24 hours or 7 days.
-- **Export (CSV)**: the list as filtered, every page, for a spreadsheet: client, IP address, site, status, last seen, mode, boost, current rates, limit, plan.
+- **Export**: the list as filtered, every page, in two formats. **Excel (.xlsx)**: a formatted workbook — coloured header, columns at the right width, filters, frozen header row, real numbers and dates, status coloured (green online, red offline, grey never seen), use of the limit coloured, and a second sheet summing up each site. **CSV**: a plain table whose separator follows the browser's language (`;` and a decimal comma in French, so that Excel opens it in columns). Columns: client, status, last seen, site, kind, IP address, mode, what sets the limit, boost and its end, download and upload now, use of the limit, limit, plan, latency, session.
+- **+ Add a client** (Administrator): declares a static-IP or VLAN client (address, subnet or range, additional ranges, plan, CPE MAC) and lists the declared clients and the clients by VLAN. It replaces the former *Subscribers* tab, whose content is now on this page.
 
 **Client page.** *Status* (online or offline, since when), *Usage now* (gauge and word against its limit), *Limit* (and where it comes from), *Latency* with a word (*good* under 40 ms, *fair* under 100 ms, *poor* above). Then the usage chart, the mode and boost, the connection (IP, site, session) and the recent changes.
 
@@ -1119,6 +1121,12 @@ An **Administrator** gives a position (*Position* / *Place it*) in three ways: *
 | `MODE_CRISIS` | info | Clients in a mode that stops boosts | Put them back to Automatic when it is over |
 
 **PDF report.** *Alerts › PDF report* (all sites, or the site chosen in the list) and *Map › a site › PDF report* (audit of one site) download a PDF made in the browser (no server, no internet needed): the counts, every alert with its code and what to check, the sites, the offline clients with their IP and last contact, for a site all its clients, and the list of codes.
+
+### Ubiquiti UISP (antennas)
+
+*Devices › Ubiquiti UISP* connects the **UISP controller** (formerly UNMS), which knows every airMAX / airFiber / LTU antenna of the network. An **Administrator** gives its address (`https://uisp.example.net`) and an **API token** with read access (UISP › Settings › Users › API tokens), then *Test the connection* and *Save*. The token is stored **encrypted** (same vault as router passwords) and never comes back through the API. Unticking *Verify the certificate* accepts a self-signed UISP.
+
+The section then lists the antennas UISP knows: model, role, IP, UISP site, status, **radio capacity** down and up, **signal** and **airtime** — the potential of each link. **Attach** a backhaul antenna to its site: its capacity is read every backhaul cycle and becomes the ceiling of the site's queue, like an antenna added by its own address (*Add an antenna*). API: `GET/PUT/DELETE /api/v1/uisp`, `POST /api/v1/uisp/test`, `GET /api/v1/uisp/devices`, `PUT/DELETE /api/v1/uisp/links/{device_id}` (`{"name", "pop_name"}`). The environment variables `BACKHAUL_PROVIDER=uisp`, `UISP_BASE_URL`, `UISP_TOKEN` keep working for a controller declared in the file.
 
 ### Bandwidth schedules (day, evening, night)
 
@@ -1267,7 +1275,7 @@ The capacity view also ranks subscribers by **volume** over the period. The top 
 
 ## 9. Interface
 
-Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation.
+Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. The two long configuration pages, **Settings** and **Devices**, show one section at a time: their table of contents works as tabs.
 
 | Page | Question it answers | Sections |
 | --- | --- | --- |
@@ -1275,7 +1283,7 @@ Each page reads in sections, with a table of contents at the top and a tooltip o
 | **Executive** | Where is the risk? | Saturation risks, latency per subscriber, load and queues per node, health over time (QoE heatmap) |
 | **Traffic** | Who consumes what, where to? | Consumers, services, countries, who talks to whom, destinations, IP lookup, restrictions |
 | **Network tree** | How is the network wired? | Discovered tree, editable with the mouse (move, re-parent, merge, hide) |
-| **Subscribers** | Who are the non-PPPoE subscribers? | Static-IP subscribers, subscribers per VLAN |
+| **Clients** | Who are my clients, and how are they doing? | Every client (PPPoE, static IP, VLAN), its mode, boost and usage; *+ Add a client* (Administrator) declares static-IP and VLAN clients and lists them. The former *Subscribers* tab is merged here. |
 | **Plans** | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
 | **Insights** | What to do commercially? | Subscribers at risk of leaving, ready for a bigger plan, sites with room to grow |
 | **Devices** | Which equipment? | Router health, adding a router, Ubiquiti antennas, radio health, inventory |
@@ -1782,6 +1790,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 | `runtime_flags`, `runtime_settings` | Live switches (write, probe) and settings changed from the interface, with their history |
 | `traffic_rules` | Restrictions as entered: a criterion, never a frozen address list |
 | `bandwidth_schedules` | Time-of-day bandwidth schedules: time slots (validated, without overlap), scope and targets, time zone |
+| `uisp_controllers`, `uisp_links` | The UISP controller connected from the interface (address, encrypted token, last reading) and the antennas attached to a site |
 | `site_locations`, `client_locations` | Position of each site (by name) and client (by login) on the map: latitude, longitude, who placed it |
 | `app_users`, `app_sessions`, `auth_events`, `api_keys` | Accounts, sessions, login journal, API keys (fingerprints only) |
 | `model_accounts`, `model_packages`, `model_sites`, `model_access_points`, `model_services_unplaced` | The Preseem-compatible commercial model |

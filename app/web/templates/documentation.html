@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="b80ffcb77d951fbb">
+  <meta name="freeqos-docs-source" content="2d88a7ec89821485">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -74,6 +74,7 @@
     <a class="sub" href="#manual-adjustments">Manual adjustments</a>
     <a class="sub" href="#bandwidth-modes-backup-night">Bandwidth modes (Backup, Night…)</a>
     <a class="sub" href="#clients-page-map-alerts-and-reports">Clients page, map, alerts and reports</a>
+    <a class="sub" href="#ubiquiti-uisp-antennas">Ubiquiti UISP (antennas)</a>
     <a class="sub" href="#bandwidth-schedules-day-evening-night">Bandwidth schedules (day, evening, night)</a>
     <a class="sub" href="#the-shaping-map">The shaping map</a>
     <a class="sub" href="#where-a-subscriber-queue-points-and-when-it-is-skipped">Where a subscriber queue points, and when it is skipped</a>
@@ -150,7 +151,6 @@
     <a class="sub" href="#executive">Executive</a>
     <a class="sub" href="#traffic">Traffic</a>
     <a class="sub" href="#network-tree">Network tree</a>
-    <a class="sub" href="#subscribers">Subscribers</a>
     <a class="sub" href="#plans">Plans</a>
     <a class="sub" href="#insights">Insights</a>
     <a class="sub" href="#devices">Devices</a>
@@ -178,6 +178,7 @@
     <a class="sub" href="#bandwidth-schedules_1">Bandwidth schedules</a>
     <a class="sub" href="#map_1">Map</a>
     <a class="sub" href="#modes_1">Modes</a>
+    <a class="sub" href="#ubiquiti">Ubiquiti</a>
   </nav>
 
   <main>
@@ -2430,6 +2431,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Automatic</strong> is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its <strong>bandwidth schedule</strong> — its rate then changes with the hour on its own.</li>
 <li><strong>Where it sits:</strong> a client's mode is its permanent override (<code>shaping_policies.max_down_mbps/max_up_mbps</code>, with <code>mode_id</code> and <code>mode_name</code>). It is therefore above the schedule (a client in <em>Backup</em> stays in <em>Backup</em> when the night begins) and below a running boost. Back to Automatic removes the override and keeps a running boost.</li>
 <li><strong>Modes that stop boosts</strong> (<code>disables_boost</code>, API only): entering the mode clears the running boost, and a new boost is refused (<code>409 Boost is unavailable in &lt;mode&gt;. Change the mode first.</code>). The form no longer offers this option: a mode saved from the form has it off.</li>
+<li><strong>Its clients:</strong> on the <em>Modes</em> page, <em>Add or remove clients</em> on a mode (or <em>Its clients</em> while editing it) opens a list to tick, with search and a site filter: ticking puts the client in the mode, unticking puts it back to Automatic.</li>
 <li><strong>Editing a mode's rate</strong> re-applies it at once to every client in it. A mode given to clients cannot be deleted (<code>409</code>): put them back to Automatic or in another mode first.</li>
 <li><strong>Writing:</strong> like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.</li>
 <li><strong>Changing a client's plan keeps its mode and its boost:</strong> only a manual limit (an override without a mode) is lifted, so that the new plan takes effect. A mode expressed as a share of the plan follows the new plan at once.</li>
@@ -2447,7 +2449,8 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>Made for <strong>hundreds of clients</strong> (20 sites of 20 clients): search, filters by site, connection and mode, <strong>sort</strong> (name, site, not connected first, highest usage), and <strong>pages</strong> of 25, 50, 100 or 200. Sorted by site, each site gets a header with its count, its connected clients and a <em>Select the site</em> button. The box at the top of the list selects every client matching the filters, on every page.</p>
 <ul>
 <li><strong>Traffic</strong> (with clients selected): the traffic of the whole selection as a chart, then each client with its own small chart, its current rate and its volume, over 1 hour, 24 hours or 7 days.</li>
-<li><strong>Export (CSV)</strong>: the list as filtered, every page, for a spreadsheet: client, IP address, site, status, last seen, mode, boost, current rates, limit, plan.</li>
+<li><strong>Export</strong>: the list as filtered, every page, in two formats. <strong>Excel (.xlsx)</strong>: a formatted workbook — coloured header, columns at the right width, filters, frozen header row, real numbers and dates, status coloured (green online, red offline, grey never seen), use of the limit coloured, and a second sheet summing up each site. <strong>CSV</strong>: a plain table whose separator follows the browser's language (<code>;</code> and a decimal comma in French, so that Excel opens it in columns). Columns: client, status, last seen, site, kind, IP address, mode, what sets the limit, boost and its end, download and upload now, use of the limit, limit, plan, latency, session.</li>
+<li><strong>+ Add a client</strong> (Administrator): declares a static-IP or VLAN client (address, subnet or range, additional ranges, plan, CPE MAC) and lists the declared clients and the clients by VLAN. It replaces the former <em>Subscribers</em> tab, whose content is now on this page.</li>
 </ul>
 <p><strong>Client page.</strong> <em>Status</em> (online or offline, since when), <em>Usage now</em> (gauge and word against its limit), <em>Limit</em> (and where it comes from), <em>Latency</em> with a word (<em>good</em> under 40 ms, <em>fair</em> under 100 ms, <em>poor</em> above). Then the usage chart, the mode and boost, the connection (IP, site, session) and the recent changes.</p>
 <p><strong>Map</strong> (<code>#/map</code>, every level). The sites <strong>and the clients</strong> on an OpenStreetMap map. A site is a pin: its size follows the number of clients, its colour the share connected (green 80 % and more, orange 50–80 %, red below). A client is a dot (green online, red offline, grey never seen): at street zoom (or when its site is selected), each client appears at its own position — a small square, linked to its site — or, without a position, in a ring around its site. Moving is smooth: drag (the map keeps a little momentum when released), pinch with two fingers on a phone, the mouse wheel, the + / − buttons, a double click, or the arrow keys. A search box finds a site or a client (by name or IP). Tap a site: its counts, its clients (offline first), <em>Show its clients</em>, <em>PDF report</em>. Tap a client: its status, site, mode, position, <em>Open the client</em>.</p>
@@ -2514,6 +2517,9 @@ curl -s http://127.0.0.1:8000/health/ready
 </tbody>
 </table></div>
 <p><strong>PDF report.</strong> <em>Alerts › PDF report</em> (all sites, or the site chosen in the list) and <em>Map › a site › PDF report</em> (audit of one site) download a PDF made in the browser (no server, no internet needed): the counts, every alert with its code and what to check, the sites, the offline clients with their IP and last contact, for a site all its clients, and the list of codes.</p>
+<h3 id="ubiquiti-uisp-antennas">Ubiquiti UISP (antennas)</h3>
+<p><em>Devices › Ubiquiti UISP</em> connects the <strong>UISP controller</strong> (formerly UNMS), which knows every airMAX / airFiber / LTU antenna of the network. An <strong>Administrator</strong> gives its address (<code>https://uisp.example.net</code>) and an <strong>API token</strong> with read access (UISP › Settings › Users › API tokens), then <em>Test the connection</em> and <em>Save</em>. The token is stored <strong>encrypted</strong> (same vault as router passwords) and never comes back through the API. Unticking <em>Verify the certificate</em> accepts a self-signed UISP.</p>
+<p>The section then lists the antennas UISP knows: model, role, IP, UISP site, status, <strong>radio capacity</strong> down and up, <strong>signal</strong> and <strong>airtime</strong> — the potential of each link. <strong>Attach</strong> a backhaul antenna to its site: its capacity is read every backhaul cycle and becomes the ceiling of the site's queue, like an antenna added by its own address (<em>Add an antenna</em>). API: <code>GET/PUT/DELETE /api/v1/uisp</code>, <code>POST /api/v1/uisp/test</code>, <code>GET /api/v1/uisp/devices</code>, <code>PUT/DELETE /api/v1/uisp/links/{device_id}</code> (<code>{"name", "pop_name"}</code>). The environment variables <code>BACKHAUL_PROVIDER=uisp</code>, <code>UISP_BASE_URL</code>, <code>UISP_TOKEN</code> keep working for a controller declared in the file.</p>
 <h3 id="bandwidth-schedules-day-evening-night">Bandwidth schedules (day, evening, night)</h3>
 <p>Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched <strong>automatically</strong>, on time. A <strong>bandwidth schedule</strong> (<em>Schedules</em>, or <code>/api/v1/bandwidth-schedules</code>) is a set of <strong>time slots</strong>, each with the rate that applies during it. <em>Applies to</em> is a segmented control (<em>All</em>, <em>Clients</em>, <em>Sites</em>, <em>Plans</em>); except for <em>All</em>, it opens a <strong>list to tick</strong>, with search and <em>All</em> / <em>None</em>. Each slot is one card: its name, the hours (<em>18:00 → 23:00</em>), the rate with a <strong>% / Mbps / Mode</strong> switch, and the days as round pills (tap to turn a day off). The hours are not typed: <strong>tap</strong> an hour to open a wheel (hours, then minutes by 5), or <strong>drag it up or down</strong> to move it by a quarter of an hour (up = later, down = earlier); the mouse wheel and the arrow keys work too. <strong>Time zone</strong> is a menu that starts on the browser's own time zone and shows the time it is there; the list of schedules shows each schedule's next switch in <strong>your</strong> local time. The rate is either:</p>
 <ul>
@@ -2734,7 +2740,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <h3 id="volumes">Volumes</h3>
 <p>The capacity view also ranks subscribers by <strong>volume</strong> over the period. The top of instantaneous rates names whoever is downloading right now; the volume over a week names whoever weighs on the network. They are almost never the same subscribers.</p>
 <h2 id="9-interface">9. Interface</h2>
-<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation.</p>
+<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -2765,9 +2771,9 @@ curl -s http://127.0.0.1:8000/health/ready
 <td>Discovered tree, editable with the mouse (move, re-parent, merge, hide)</td>
 </tr>
 <tr>
-<td><strong>Subscribers</strong></td>
-<td>Who are the non-PPPoE subscribers?</td>
-<td>Static-IP subscribers, subscribers per VLAN</td>
+<td><strong>Clients</strong></td>
+<td>Who are my clients, and how are they doing?</td>
+<td>Every client (PPPoE, static IP, VLAN), its mode, boost and usage; <em>+ Add a client</em> (Administrator) declares static-IP and VLAN clients and lists them. The former <em>Subscribers</em> tab is merged here.</td>
 </tr>
 <tr>
 <td><strong>Plans</strong></td>
@@ -3950,6 +3956,10 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td>Time-of-day bandwidth schedules: time slots (validated, without overlap), scope and targets, time zone</td>
 </tr>
 <tr>
+<td><code>uisp_controllers</code>, <code>uisp_links</code></td>
+<td>The UISP controller connected from the interface (address, encrypted token, last reading) and the antennas attached to a site</td>
+</tr>
+<tr>
 <td><code>site_locations</code>, <code>client_locations</code></td>
 <td>Position of each site (by name) and client (by login) on the map: latitude, longitude, who placed it</td>
 </tr>
@@ -4056,7 +4066,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <h2 id="appendix-a-interface-reference">Appendix A. Interface reference</h2>
 <p>The explanations below are exactly those the interface shows behind each (i), extracted from the application at build time: they cannot differ from what operators read on screen.</p>
 <h3 id="clients">Clients</h3>
-<p>The daily page of Operators (who also have Modes, Alerts, Activity, Schedules and Map, and no Settings): every client, its connection, its usage against its limit, its bandwidth mode, its boost and its plan, for one client or for a selection. The four cards on top filter the list; search, filters, sort and pages handle hundreds of clients; the list exports to CSV; Traffic charts the selected clients. Clicking a client opens its page (Overview: status, usage now against its limit, limit, latency, usage over 1 hour, 24 hours or 7 days, connection; Plan &amp; mode: change its mode, plan and boost; Activity: its history).</p>
+<p>The daily page of Operators (who also have Modes, Alerts, Activity, Schedules and Map, and no Settings): every client, its connection, its usage against its limit, its bandwidth mode, its boost and its plan, for one client or for a selection. The four cards on top filter the list; search, filters, sort and pages handle hundreds of clients; the list exports to CSV; Traffic charts the selected clients. An Administrator adds a client (static IP, VLAN, ranges) with the + button. Clicking a client opens its page (Overview: status, usage now against its limit, limit, latency, usage over 1 hour, 24 hours or 7 days, connection; Plan &amp; mode: change its mode, plan and boost; Activity: its history).</p>
 <h4 id="client-operations">Client operations</h4>
 <p><strong>What it shows.</strong> The daily page: every client, its connection, its usage, its bandwidth mode and its boost.</p>
 <p><strong>How it is measured.</strong> Operators only see this page and their account. They act on one client or on a selection.</p>
@@ -4214,8 +4224,6 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><strong>What to do.</strong> A rule that seems to have no effect: check “Last applied” and that the router is reachable; new addresses join the list at the next refresh.</p>
 <h3 id="network-tree">Network tree</h3>
 <p>The discovered tree, editable with the mouse: drag a box onto another to re-parent it, correct a role, create or remove a link, merge two boxes that are the same device, hide a box. Each link carries its measured throughput. <em>Forget vanished devices</em> removes boxes not seen for a chosen time; declared routers and hand-made links are never removed.</p>
-<h3 id="subscribers">Subscribers</h3>
-<p>Every subscriber of every PoP, PPPoE and static-IP, filterable by PoP, kind and login: rate against plan, latency, bufferbloat grade, running boost. The <em>Add a client</em> form declares a static-IP client; <em>Declared static-IP clients</em> and <em>Clients by VLAN</em> list the inventory.</p>
 <h3 id="plans">Plans</h3>
 <p>Which rate for whom: the default plan, every client's plan and its source, and the packages pushed through the API.</p>
 <h4 id="default-plan">Default plan</h4>
@@ -4244,7 +4252,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><strong>What it shows.</strong> All subscribers with their limit, current usage, latency and whether the router really holds the cap.</p>
 <p><strong>How to read it.</strong> Click a client to see its plan, its queue on the router and its history. The search box accepts a login, an IP, a MAC or a site.</p>
 <h3 id="devices">Devices</h3>
-<p>Routers and antennas: their health, adding them, and the inventory.</p>
+<p>Routers and antennas: their health, adding them, the Ubiquiti UISP controller (connect it, see every antenna's radio capacity, attach backhauls to their site), and the inventory. One section at a time: the table of contents works as tabs.</p>
 <h4 id="router-health">Router health</h4>
 <p><strong>What it shows.</strong> CPU, memory and uptime of each polled router.</p>
 <p><strong>Scale.</strong></p>
@@ -5175,7 +5183,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 179 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 186 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -6296,6 +6304,53 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>PUT</code></td>
 <td><code>/api/v1/clients/{login}/mode</code></td>
 <td>Put one client in a bandwidth mode</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="ubiquiti">Ubiquiti</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/uisp</code></td>
+<td>The Ubiquiti UISP controller connected, if any</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/uisp</code></td>
+<td>Connect the Ubiquiti UISP controller</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/uisp</code></td>
+<td>Disconnect the Ubiquiti UISP controller</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/uisp/devices</code></td>
+<td>Antennas known to UISP, with their radio capacity</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/uisp/links/{device_id}</code></td>
+<td>Attach a UISP antenna to a site</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/uisp/links/{device_id}</code></td>
+<td>Detach a UISP antenna from its site</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/uisp/test</code></td>
+<td>Test the connection to UISP (stored or given)</td>
 </tr>
 </tbody>
 </table></div>

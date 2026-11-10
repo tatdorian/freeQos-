@@ -23,6 +23,7 @@ from app.collectors.uisp import (
     AirOsTarget,
     BackhaulCapacityProvider,
     DbAirOsProvider,
+    DbUispSource,
     MockBackhaulProvider,
     UispProvider,
 )
@@ -46,6 +47,7 @@ from app.db.site_locations_repo import SiteLocationsRepository
 from app.db.static_clients_repo import StaticClientsRepository, VlanSightingsRepository
 from app.db.topology_repo import TopologyRepository
 from app.db.traffic_rules_repo import TrafficRulesRepository
+from app.db.uisp_repo import UispRepository
 from app.db.users_repo import UsersRepository, UsersStore
 from app.db.writer import MetricsWriter, PgMetricsWriter
 from app.models import Plan
@@ -201,6 +203,7 @@ class Container:
     modes_repo: ModesRepository | None = None
     site_locations_repo: SiteLocationsRepository | None = None
     client_locations_repo: SiteLocationsRepository | None = None
+    uisp_repo: UispRepository | None = None
     activity_repo: ActivityRepository | None = None
     netflow: NetflowService | None = None
     netflow_export: NetflowExportService | None = None
@@ -350,6 +353,8 @@ async def build_container(settings: Settings) -> Container:
     # Qui a change quoi sur quel client : mode, boost, forfait.
     activity_repo = ActivityRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
+    # Le controleur UISP saisi dans l'interface (jeton chiffre).
+    uisp_repo = UispRepository(database.pool, secrets)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
     #
@@ -408,6 +413,7 @@ async def build_container(settings: Settings) -> Container:
         path_prober=path_prober,
         static_clients=static_clients_repo,
         sightings=sightings_repo,
+        uisp_source=DbUispSource(uisp_repo, timeout_s=settings.uisp_timeout_s),
     )
 
     # Amorce le drapeau de la sonde RTT : la base fait foi une fois posee, sinon
@@ -710,6 +716,7 @@ async def build_container(settings: Settings) -> Container:
         modes_repo=modes_repo,
         site_locations_repo=site_locations_repo,
         client_locations_repo=client_locations_repo,
+        uisp_repo=uisp_repo,
         activity_repo=activity_repo,
         netflow=netflow,
         netflow_export=netflow_export,
