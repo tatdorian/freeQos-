@@ -23,6 +23,10 @@ CHAMPS = ("name", "rate_kind", "down_value", "up_value", "disables_boost", "posi
 RATE_FIXED = "fixed"
 RATE_PERCENT = "percent"
 
+#: Sous ce debit (64 kbps), un client n'ouvre meme plus une page : un plafond
+#: plus bas COUPE la connexion en pratique. On le refuse plutot que de l'ecrire.
+MIN_RATE_MBPS = 0.064
+
 
 class ModeNotFoundError(LookupError):
     pass
@@ -45,14 +49,20 @@ def mode_rates(
     "50 % du forfait" ne veut rien dire, et inventer un debit serait pire.
     """
     bas, haut = float(mode["down_value"]), float(mode["up_value"])
-    if mode.get("rate_kind") != RATE_PERCENT:
-        return bas, haut
-    if not plan_down_mbps or not plan_up_mbps:
+    if mode.get("rate_kind") == RATE_PERCENT:
+        if not plan_down_mbps or not plan_up_mbps:
+            raise InvalidModeError(
+                f"'{mode['name']}' is a share of the plan, and this client has no known plan: "
+                "give it a plan first, or choose a mode with a fixed rate"
+            )
+        bas, haut = round(plan_down_mbps * bas / 100, 3), round(plan_up_mbps * haut / 100, 3)
+    if min(bas, haut) < MIN_RATE_MBPS:
         raise InvalidModeError(
-            f"'{mode['name']}' is a share of the plan, and this client has no known plan: "
-            "give it a plan first, or choose a mode with a fixed rate"
+            f"'{mode['name']}' would give this client {min(bas, haut) * 1000:g} kbps, which cuts "
+            f"the connection in practice (minimum {MIN_RATE_MBPS * 1000:g} kbps): check the "
+            "mode's rate, or the client's plan"
         )
-    return round(plan_down_mbps * bas / 100, 3), round(plan_up_mbps * haut / 100, 3)
+    return bas, haut
 
 
 def check_mode(payload: dict[str, Any]) -> dict[str, Any]:
@@ -68,6 +78,11 @@ def check_mode(payload: dict[str, Any]) -> dict[str, Any]:
         valeur = payload.get(champ)
         if valeur is None or float(valeur) <= 0:
             raise InvalidModeError(f"{champ} must be above 0")
+        if genre != RATE_PERCENT and float(valeur) < MIN_RATE_MBPS:
+            raise InvalidModeError(
+                f"{champ}: {float(valeur) * 1000:g} kbps would cut the connection in practice "
+                f"(minimum {MIN_RATE_MBPS * 1000:g} kbps)"
+            )
         if genre == RATE_PERCENT and float(valeur) > 1000:
             raise InvalidModeError(f"{champ}: a share of the plan above 1000 % is a typo")
     return {**payload, "name": nom, "rate_kind": genre}

@@ -62,10 +62,16 @@ LEGENDES = {
 
 #: L'icone d'onglet, la meme que l'interface et le guide de l'API.
 ICONE = (
-    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E"
-    "%3Crect width='16' height='16' rx='4' fill='%230a84ff'/%3E%3Cpath d='M3 11 L6 7 "
-    "L9 9.5 L13 4.5' stroke='%23fff' stroke-width='1.8' stroke-linecap='round' "
-    "stroke-linejoin='round' fill='none'/%3E%3C/svg%3E"
+    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'"
+    "%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offs"
+    "et='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E"
+    "%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3C"
+    "rect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.6"
+    "6A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke"
+    "-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07'"
+    " fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpat"
+    "h d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%"
+    "3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E"
 )
 
 _FIGURE = re.compile(r"^<!-- figure: ([a-z0-9-]+) -->$", re.MULTILINE)
@@ -80,11 +86,14 @@ _GENERE = re.compile(r"^<!-- generated: ([a-z0-9-]+) -->$", re.MULTILINE)
 PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     (
         "Clients",
-        "The daily page of Operators (who also have Alerts, Activity and Management, and no "
-        "Settings): every client, its connection, its usage, its bandwidth mode, its boost "
-        "and its plan, for one client or for a selection. Clicking a client opens its page "
-        "(Overview: usage now and over 1 hour, 24 hours or 7 days, limit applied, latency, "
-        "connection; Plan & mode: change its mode, plan and boost; Activity: its history).",
+        "The daily page of Operators (who also have Modes, Alerts, Activity, Schedules and "
+        "Map, and no Settings): every client, its connection, its usage against its limit, "
+        "its bandwidth mode, its boost and its plan, for one client or for a selection. "
+        "The four cards on top filter the list; search, filters, sort and pages handle "
+        "hundreds of clients; the list exports to CSV; Traffic charts the selected clients. "
+        "Clicking a client opens its page (Overview: status, usage now against its limit, "
+        "limit, latency, usage over 1 hour, 24 hours or 7 days, connection; Plan & mode: "
+        "change its mode, plan and boost; Activity: its history).",
         [
             "client operations",
             "bandwidth mode",
@@ -96,13 +105,21 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     ),
     (
         "Alerts",
-        "What needs someone, grouped by cause.",
+        "What needs someone, grouped by cause, each alert with a stable error code "
+        "(ERR_POP_TIMEOUT, ERR_CLIENT_DISCONNECT...) and what to check. PDF report for "
+        "every site or one site.",
         ["connection health"],
     ),
     (
         "Activity",
         "The log of every change made on clients.",
         ["team activity"],
+    ),
+    (
+        "Map",
+        "The sites on a map, coloured by the share of connected clients. A site opens its "
+        "clients, their traffic and its PDF report; an Administrator places the sites.",
+        [],
     ),
     (
         "Modes",

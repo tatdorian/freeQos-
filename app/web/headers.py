@@ -39,7 +39,9 @@ CSP = "; ".join(
         "default-src 'self'",
         "script-src 'self'",
         "style-src 'self' 'unsafe-inline'",
-        "img-src 'self' data:",
+        # Les tuiles de la carte des sites (OpenStreetMap) : des IMAGES, rien
+        # d'autre. Sans internet, la carte garde ses reperes sur fond uni.
+        "img-src 'self' data: https://tile.openstreetmap.org",
         "font-src 'self' data:",
         "connect-src 'self'",
         "object-src 'none'",

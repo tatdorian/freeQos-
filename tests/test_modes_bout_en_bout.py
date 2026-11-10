@@ -300,3 +300,35 @@ def test_un_profil_horaire_donne_un_mode_a_des_clients_choisis(app_client, route
     assert r.status_code == 400
     liste = app_client.get("/api/v1/bandwidth-schedules", headers=cle).json()["schedules"]
     assert liste[0]["windows"][0]["mode_name"] == "Night"
+
+
+def test_la_carte_place_un_site_et_le_rend(app_client, routeur) -> None:  # noqa: F811
+    """Placer un site (Administrator), le relire, le deplacer, le retirer."""
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.put(
+        "/api/v1/site-locations/PoP Test",
+        headers=cle,
+        json={"latitude": 13.5137, "longitude": 2.1098},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["latitude"] == 13.5137
+    app_client.put(
+        "/api/v1/site-locations/PoP Test", headers=cle, json={"latitude": 13.6, "longitude": 2.2}
+    )
+    lieux = app_client.get("/api/v1/site-locations", headers=cle).json()["locations"]
+    assert [(x["name"], x["latitude"]) for x in lieux] == [("PoP Test", 13.6)]
+    # Hors de la Terre : refuse.
+    r = app_client.put(
+        "/api/v1/site-locations/PoP Test", headers=cle, json={"latitude": 95, "longitude": 2}
+    )
+    assert r.status_code == 422
+    # Une cle en lecture voit la carte, sans pouvoir placer.
+    lire = {"Authorization": f"Bearer {lecture}"}
+    assert app_client.get("/api/v1/site-locations", headers=lire).status_code == 200
+    r = app_client.put(
+        "/api/v1/site-locations/Autre", headers=lire, json={"latitude": 1, "longitude": 1}
+    )
+    assert r.status_code == 403
+    assert app_client.delete("/api/v1/site-locations/PoP Test", headers=cle).status_code == 200
+    assert app_client.get("/api/v1/site-locations", headers=cle).json()["locations"] == []
