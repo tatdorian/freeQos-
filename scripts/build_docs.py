@@ -82,8 +82,9 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
         "Clients",
         "The daily page of Operators (who also have Alerts, Activity and Management, and no "
         "Settings): every client, its connection, its usage, its bandwidth mode, its boost "
-        "and its plan, for one client or for a selection. Clicking a client opens its sheet: "
-        "usage over 1 hour, 24 hours or 7 days, mode, plan, limit applied, recent activity.",
+        "and its plan, for one client or for a selection. Clicking a client opens its page "
+        "(Overview: usage now and over 1 hour, 24 hours or 7 days, limit applied, latency, "
+        "connection; Plan & mode: change its mode, plan and boost; Activity: its history).",
         [
             "client operations",
             "bandwidth mode",
@@ -104,9 +105,16 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
         ["team activity"],
     ),
     (
-        "Management",
-        "The bandwidth modes and the bandwidth schedules, open to Operators.",
-        ["client management", "bandwidth modes", "bandwidth schedules"],
+        "Modes",
+        "Every bandwidth mode, the clients in each one, and creating or editing modes. Open "
+        "to Operators.",
+        ["bandwidth modes"],
+    ),
+    (
+        "Schedules",
+        "The bandwidth schedules: rates that change with the time of day, on their own. Open "
+        "to Operators.",
+        ["client management", "bandwidth schedules"],
     ),
     (
         "Dashboard",
