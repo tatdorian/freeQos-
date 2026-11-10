@@ -9743,50 +9743,72 @@ function schedWindowRow(w) {
   const f = w || { start: '', end: '', days: SCHED_JOURS.map((j) => j[0]), percent: null };
   const jours = new Set(f.days && f.days.length ? f.days : SCHED_JOURS.map((j) => j[0]));
   const pourcent = !(f.down_mbps != null || f.up_mbps != null);
-  return '<tr data-sched-window>' +
-    '<td><button type="button" class="sm" data-sched-remove title="Remove this time slot" ' +
-      'aria-label="Remove this time slot">&times;</button></td>' +
-    '<td><input name="label" maxlength="64" placeholder="evening" style="width:5.5rem" value="' +
-      esc(f.label || '') + '"></td>' +
-    '<td><input name="start" required maxlength="5" placeholder="18:00" style="width:4rem" ' +
-      'pattern="[0-2]?[0-9]:[0-5][0-9]" value="' + esc(f.start || '') + '"></td>' +
-    '<td><input name="end" required maxlength="5" placeholder="23:00" style="width:4rem" ' +
-      'pattern="[0-2]?[0-9]:[0-5][0-9]" title="Before the start time: the slot ends the next ' +
-      'day (22:00 to 06:00). 24:00 = midnight." value="' + esc(f.end || '') + '"></td>' +
-    '<td style="min-width:11rem">' + SCHED_JOURS.map(([cle, nom]) =>
-      '<label class="chk" style="margin-right:.25rem"><input type="checkbox" name="day" value="' +
-        cle + '"' + (jours.has(cle) ? ' checked' : '') + '>' + nom + '</label>').join('') + '</td>' +
-    '<td class="nowrap"><select name="mode" style="width:auto">' +
-      '<option value="percent"' + (pourcent ? ' selected' : '') + '>% of plan</option>' +
-      '<option value="rate"' + (pourcent ? '' : ' selected') + '>fixed rate</option></select> ' +
-      '<span data-mode="percent"' + (pourcent ? '' : ' hidden') + '><input name="percent" ' +
-        'type="number" min="1" max="1000" step="any" style="width:4.5rem" value="' +
-        esc(f.percent == null ? '' : f.percent) + '"> %</span>' +
-      '<span data-mode="rate"' + (pourcent ? ' hidden' : '') + '>&darr; <input name="down" ' +
-        'type="number" min="0" step="any" style="width:5rem" value="' +
-        esc(f.down_mbps == null ? '' : f.down_mbps) + '"> &uarr; <input name="up" type="number" ' +
-        'min="0" step="any" style="width:5rem" value="' + esc(f.up_mbps == null ? '' : f.up_mbps) +
-        '"> Mbps</span></td>' +
-    '</tr>';
+  const heure = (nom, val, ph, titre) => '<input name="' + nom + '" class="slot-time" required ' +
+    'maxlength="5" inputmode="numeric" placeholder="' + ph + '" pattern="[0-2]?[0-9]:[0-5][0-9]"' +
+    (titre ? ' title="' + titre + '"' : '') + ' aria-label="' + (nom === 'start' ? 'From' : 'To') +
+    '" value="' + esc(val || '') + '">';
+  const nombre = (nom, val, extra) => '<input name="' + nom + '" type="number" step="any" ' +
+    'class="slot-num" ' + extra + ' value="' + esc(val == null ? '' : val) + '">';
+  return '<div class="slot" data-sched-window>' +
+    '<div class="slot-top">' +
+      '<input name="label" class="slot-label" maxlength="64" placeholder="Slot name" ' +
+        'aria-label="Slot name" value="' + esc(f.label || '') + '">' +
+      '<button type="button" class="slot-del" data-sched-remove title="Remove this time slot" ' +
+        'aria-label="Remove this time slot">&times;</button>' +
+    '</div>' +
+    '<div class="slot-mid">' +
+      '<span class="slot-hours">' + heure('start', f.start, '18:00') + '<span class="slot-arrow">&rarr;</span>' +
+        heure('end', f.end, '23:00', 'Before the start time: the slot ends the next day ' +
+          '(22:00 to 06:00). 24:00 = midnight.') + '</span>' +
+      '<span class="slot-rate">' +
+        '<input type="hidden" name="mode" value="' + (pourcent ? 'percent' : 'rate') + '">' +
+        '<span data-mode="percent"' + (pourcent ? '' : ' hidden') + '>' +
+          nombre('percent', f.percent, 'min="1" max="1000" placeholder="70" aria-label="Percent of plan"') +
+          '<span class="slot-unit">% of plan</span></span>' +
+        '<span data-mode="rate"' + (pourcent ? ' hidden' : '') + '>&darr;' +
+          nombre('down', f.down_mbps, 'min="0" placeholder="20" aria-label="Download Mbps"') + '&uarr;' +
+          nombre('up', f.up_mbps, 'min="0" placeholder="5" aria-label="Upload Mbps"') +
+          '<span class="slot-unit">Mbps</span></span>' +
+        '<span class="segmented seg-xs" role="group" aria-label="Rate type">' +
+          '<button type="button" data-rate="percent"' + (pourcent ? ' class="active"' : '') + '>%</button>' +
+          '<button type="button" data-rate="rate"' + (pourcent ? '' : ' class="active"') + '>Mbps</button>' +
+        '</span>' +
+      '</span>' +
+    '</div>' +
+    '<div class="day-pills" role="group" aria-label="Days (start)">' + SCHED_JOURS.map(([cle, nom]) =>
+      '<label class="day-pill" title="' + nom + '"><input type="checkbox" name="day" value="' + cle + '"' +
+        (jours.has(cle) ? ' checked' : '') + '><span>' + nom.charAt(0) + '</span></label>').join('') +
+    '</div>' +
+  '</div>';
 }
 
 function schedBindRows() {
-  const corps = document.querySelector('#sched-windows tbody');
-  corps.querySelectorAll('tr[data-sched-window]').forEach((tr) => {
-    if (tr.dataset.lie) return;
-    tr.dataset.lie = '1';
-    tr.querySelector('[data-sched-remove]').addEventListener('click', () => tr.remove());
-    tr.querySelector('select[name="mode"]').addEventListener('change', (e) => {
-      tr.querySelectorAll('[data-mode]').forEach((span) => {
-        span.hidden = span.dataset.mode !== e.target.value;
+  const corps = document.getElementById('sched-windows');
+  corps.querySelectorAll('[data-sched-window]').forEach((ligne) => {
+    if (ligne.dataset.lie) return;
+    ligne.dataset.lie = '1';
+    ligne.querySelector('[data-sched-remove]').addEventListener('click', () => ligne.remove());
+    ligne.querySelectorAll('[data-rate]').forEach((b) => b.addEventListener('click', () => {
+      ligne.querySelector('[name="mode"]').value = b.dataset.rate;
+      ligne.querySelectorAll('[data-rate]').forEach((x) => x.classList.toggle('active', x === b));
+      ligne.querySelectorAll('[data-mode]').forEach((span) => {
+        span.hidden = span.dataset.mode !== b.dataset.rate;
       });
-    });
+    }));
   });
 }
 
 function schedAddRow(w) {
-  document.querySelector('#sched-windows tbody').insertAdjacentHTML('beforeend', schedWindowRow(w));
+  document.getElementById('sched-windows').insertAdjacentHTML('beforeend', schedWindowRow(w));
   schedBindRows();
+}
+
+/** Le controle segmente « Applies to » reflete le select cache. */
+function schedScopeSeg() {
+  const v = document.getElementById('sched-scope').value;
+  document.querySelectorAll('#sched-scope-seg [data-v]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.v === v);
+  });
 }
 
 /** A qui s'applique le profil : une LISTE A COCHER, pas une saisie. Les
@@ -9796,8 +9818,7 @@ function schedTargetsField() {
   const portee = document.getElementById('sched-scope').value;
   document.getElementById('sched-targets-field').hidden = portee === 'all';
   const libelles = { pops: 'Sites', plans: 'Plans (download rate)', subscribers: 'Clients' };
-  document.getElementById('sched-targets-label').textContent =
-    (libelles[portee] || 'Targets') + ' this schedule applies to';
+  document.getElementById('sched-targets-label').textContent = libelles[portee] || 'Targets';
   const rows = CLI.rows || [];
   const compte = (f) => rows.filter(f).length;
   let options = [];
@@ -9841,7 +9862,7 @@ function schedFill(fiche) {
   document.getElementById('sched-scope').value = fiche ? fiche.scope : 'all';
   document.getElementById('sched-targets').value = fiche ? (fiche.targets || []).join(', ') : '';
   document.getElementById('sched-enabled').checked = fiche ? !!fiche.enabled : true;
-  document.querySelector('#sched-windows tbody').innerHTML = '';
+  document.getElementById('sched-windows').innerHTML = '';
   const plages = fiche ? fiche.windows || [] : [
     { label: 'evening', start: '18:00', end: '23:00', percent: 70 },
     { label: 'night', start: '23:00', end: '06:00', percent: 200 },
@@ -9851,11 +9872,12 @@ function schedFill(fiche) {
   document.getElementById('sched-cancel').hidden = !fiche;
   document.getElementById('sched-form-title').textContent = fiche
     ? 'Edit ' + fiche.name : 'New schedule';
+  schedScopeSeg();
   schedTargetsField();
 }
 
 function schedPayload() {
-  const plages = [...document.querySelectorAll('#sched-windows tr[data-sched-window]')].map((tr) => {
+  const plages = [...document.querySelectorAll('#sched-windows [data-sched-window]')].map((tr) => {
     const champ = (nom) => (tr.querySelector('[name="' + nom + '"]').value || '').trim();
     const nombre = (nom) => (champ(nom) === '' ? null : Number(champ(nom)));
     const w = {
@@ -9864,7 +9886,7 @@ function schedPayload() {
       end: champ('end'),
       days: [...tr.querySelectorAll('input[name="day"]:checked')].map((c) => c.value),
     };
-    if (tr.querySelector('select[name="mode"]').value === 'percent') {
+    if (tr.querySelector('[name="mode"]').value === 'percent') {
       w.percent = nombre('percent');
     } else {
       w.down_mbps = nombre('down') || null;
@@ -9935,8 +9957,15 @@ function schedInit() {
     .map((z) => '<option value="' + esc(z) + '">').join('');
   document.getElementById('sched-scope').addEventListener('change', () => {
     document.getElementById('sched-targets').value = '';
+    schedScopeSeg();
     schedTargetsField();
   });
+  document.querySelectorAll('#sched-scope-seg [data-v]').forEach((b) => b.addEventListener('click', () => {
+    const sel = document.getElementById('sched-scope');
+    if (sel.value === b.dataset.v) return;
+    sel.value = b.dataset.v;
+    sel.dispatchEvent(new Event('change'));
+  }));
   document.getElementById('sched-pick-q').addEventListener('input', schedTargetsField);
   document.getElementById('sched-add-window').addEventListener('click', () => schedAddRow(null));
   document.getElementById('sched-cancel').addEventListener('click', () => schedFill(null));
