@@ -10,7 +10,10 @@ pour chacune, le debit qui s'applique pendant la plage :
 
   - un debit ABSOLU (``down_mbps`` / ``up_mbps``) ;
   - ou un POURCENTAGE du forfait (``percent`` : 200 = le double la nuit, 70 =
-    un resserrage en soiree), qui suit chaque forfait sans le recopier.
+    un resserrage en soiree), qui suit chaque forfait sans le recopier ;
+  - ou un MODE de debit (``mode_id`` : « Backup », « Night »...), le meme que
+    l'on donne a un client a la main. Le profil garde la REFERENCE du mode, pas
+    son debit : modifier le mode change aussi les plages qui l'utilisent.
 
 Hors de toute plage, c'est le forfait normal. Un profil s'adresse a TOUS les
 abonnes, a des SITES, a des FORFAITS (par debit descendant souscrit) ou a des
@@ -130,6 +133,11 @@ class Window:
     up_mbps: float | None = None
     percent: float | None = None
     label: str | None = None
+    #: Pourcentage du forfait MONTANT, quand il differe du descendant (un mode
+    #: en pourcentage porte deux valeurs). None : ``percent`` vaut pour les deux.
+    percent_up: float | None = None
+    mode_id: int | None = None
+    mode_name: str | None = None
 
     def minutes(self) -> list[tuple[int, int]]:
         """Les intervalles couverts dans la semaine, en minutes depuis lundi 00:00."""
@@ -150,9 +158,10 @@ class Window:
         """Le debit de la plage pour CE forfait. None : ce sens garde son forfait."""
         if self.percent is not None:
             facteur = self.percent / 100.0
+            facteur_haut = (self.percent_up if self.percent_up is not None else self.percent) / 100
             return (
                 plan_down * facteur if plan_down else None,
-                plan_up * facteur if plan_up else None,
+                plan_up * facteur_haut if plan_up else None,
             )
         return self.down_mbps, self.up_mbps
 
@@ -164,6 +173,20 @@ class Window:
         return f"{self.label + ' ' if self.label else ''}{heures} {jours}"
 
     def to_dict(self) -> dict[str, Any]:
+        if self.mode_id is not None:
+            # Une plage en mode s'enregistre par la REFERENCE du mode : son debit
+            # est relu a chaque chargement, il suit les modifications du mode.
+            return {
+                "label": self.label,
+                "start": format_time(self.start_min),
+                "end": format_time(self.end_min or MINUTES_PAR_JOUR),
+                "days": [DAYS[j] for j in sorted(self.days)],
+                "down_mbps": None,
+                "up_mbps": None,
+                "percent": None,
+                "mode_id": self.mode_id,
+                "mode_name": self.mode_name,
+            }
         return {
             "label": self.label,
             "start": format_time(self.start_min),
@@ -188,7 +211,32 @@ def _taux(value: Any, nom: str, *, maximum: float) -> float | None:
     return nombre
 
 
-def parse_window(raw: dict[str, Any]) -> Window:
+#: Les modes de debit connus, par identifiant : ``{id: {"name", "rate_kind",
+#: "down_value", "up_value"}}``. Le module reste pur : c'est l'appelant qui les lit.
+Modes = dict[int, dict[str, Any]]
+
+
+def _plage_en_mode(raw: dict[str, Any], modes: Modes | None) -> dict[str, Any]:
+    """Le debit d'une plage qui designe un mode, lu dans ce mode."""
+    try:
+        ident = int(raw["mode_id"])
+    except (TypeError, ValueError) as exc:
+        raise InvalidScheduleError(f"mode_id: not a mode id ({raw['mode_id']!r})") from exc
+    if any(raw.get(c) not in (None, "") for c in ("percent", "down_mbps", "up_mbps")):
+        raise InvalidScheduleError(
+            "a time slot sets a mode OR a rate (percentage or Mbps), not both"
+        )
+    mode = (modes or {}).get(ident)
+    if mode is None:
+        raise InvalidScheduleError(f"unknown bandwidth mode {ident}: it was deleted?")
+    bas, haut = float(mode["down_value"]), float(mode["up_value"])
+    commun = {"mode_id": ident, "mode_name": str(mode.get("name") or f"mode {ident}")}
+    if mode.get("rate_kind") == "percent":
+        return {**commun, "percent": bas, "percent_up": haut}
+    return {**commun, "down_mbps": bas, "up_mbps": haut}
+
+
+def parse_window(raw: dict[str, Any], modes: Modes | None = None) -> Window:
     """Une plage saisie -> ``Window``, ou une erreur qui dit quoi corriger."""
     if not isinstance(raw, dict):
         raise InvalidScheduleError("each time slot must be an object")
@@ -201,6 +249,15 @@ def parse_window(raw: dict[str, Any]) -> Window:
             f"time slot {format_time(debut)}-{format_time(fin)} is empty: "
             "use 00:00-24:00 for a whole day"
         )
+    libelle = str(raw.get("label") or "").strip()[:64] or None
+    if raw.get("mode_id") not in (None, ""):
+        return Window(
+            start_min=debut,
+            end_min=fin,
+            days=parse_days(raw.get("days")),
+            label=libelle,
+            **_plage_en_mode(raw, modes),
+        )
     pourcent = _taux(raw.get("percent"), "percent", maximum=MAX_PERCENT)
     bas = _taux(raw.get("down_mbps"), "down_mbps", maximum=MAX_RATE_MBPS)
     haut = _taux(raw.get("up_mbps"), "up_mbps", maximum=MAX_RATE_MBPS)
@@ -210,9 +267,8 @@ def parse_window(raw: dict[str, Any]) -> Window:
         )
     if pourcent is None and bas is None and haut is None:
         raise InvalidScheduleError(
-            "a time slot needs a rate: a percentage of the plan, or down/up Mbps"
+            "a time slot needs a rate: a percentage of the plan, down/up Mbps, or a mode"
         )
-    libelle = str(raw.get("label") or "").strip()[:64] or None
     return Window(
         start_min=debut,
         end_min=fin,
@@ -224,7 +280,7 @@ def parse_window(raw: dict[str, Any]) -> Window:
     )
 
 
-def parse_windows(raws: Sequence[dict[str, Any]]) -> tuple[Window, ...]:
+def parse_windows(raws: Sequence[dict[str, Any]], modes: Modes | None = None) -> tuple[Window, ...]:
     """Toutes les plages d'un profil, sans recouvrement.
 
     DEUX PLAGES QUI SE CHEVAUCHENT SONT REFUSEES. Laquelle gagnerait a 19h si
@@ -235,7 +291,7 @@ def parse_windows(raws: Sequence[dict[str, Any]]) -> tuple[Window, ...]:
         raise InvalidScheduleError("a schedule needs at least one time slot")
     if len(raws) > MAX_WINDOWS:
         raise InvalidScheduleError(f"at most {MAX_WINDOWS} time slots per schedule")
-    plages = tuple(parse_window(raw) for raw in raws)
+    plages = tuple(parse_window(raw, modes) for raw in raws)
     occupation: dict[int, int] = {}
     for index, plage in enumerate(plages):
         for debut, duree in plage.minutes():
@@ -304,13 +360,14 @@ class BandwidthSchedule:
         targets: Iterable[Any] | None = None,
         timezone: str = "UTC",
         enabled: bool = True,
+        modes: Modes | None = None,
     ) -> BandwidthSchedule:
         cibles = normalise_targets(scope, targets)
         sites = frozenset(site_key(c) for c in cibles) if scope == SCOPE_POPS else frozenset()
         return cls(
             id=id,
             name=name,
-            windows=parse_windows(windows),
+            windows=parse_windows(windows, modes),
             scope=scope,
             targets=cibles,
             timezone=validate_timezone(timezone),

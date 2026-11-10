@@ -30,6 +30,7 @@ from app.enforcement.schedules import (
     MAX_WINDOWS,
     BandwidthSchedule,
     InvalidScheduleError,
+    Modes,
     ScheduleBook,
 )
 
@@ -61,6 +62,14 @@ class WindowInput(BaseModel):
         gt=0,
         le=1000,
         description="Percentage of each subscriber's plan (200 = twice the plan).",
+    )
+    mode_id: int | None = Field(
+        default=None,
+        ge=1,
+        description=(
+            "A bandwidth mode (GET /bandwidth-modes) instead of a rate: the slot gives "
+            "the mode's rate, and follows the mode when it is edited."
+        ),
     )
 
 
@@ -105,7 +114,9 @@ def _repo(container: ContainerDep) -> SchedulesRepository:
     return depot  # type: ignore[no-any-return]
 
 
-def _valider(champs: dict[str, Any], *, ident: int = 0) -> dict[str, Any]:
+def _valider(
+    champs: dict[str, Any], modes: Modes | None = None, *, ident: int = 0
+) -> dict[str, Any]:
     """Valide un profil complet et le rend sous sa forme canonique, ou 400."""
     try:
         profil = BandwidthSchedule.build(
@@ -116,6 +127,7 @@ def _valider(champs: dict[str, Any], *, ident: int = 0) -> dict[str, Any]:
             targets=list(champs.get("targets") or []),
             timezone=str(champs.get("timezone") or "UTC"),
             enabled=bool(champs.get("enabled", True)),
+            modes=modes,
         )
     except InvalidScheduleError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -125,7 +137,9 @@ def _valider(champs: dict[str, Any], *, ident: int = 0) -> dict[str, Any]:
     return canonique
 
 
-def _etat(ligne: dict[str, Any], maintenant: datetime) -> dict[str, Any]:
+def _etat(
+    ligne: dict[str, Any], maintenant: datetime, modes: Modes | None = None
+) -> dict[str, Any]:
     """Une ligne de profil, avec ce qui court maintenant et la prochaine bascule."""
     sortie = dict(ligne)
     try:
@@ -137,10 +151,14 @@ def _etat(ligne: dict[str, Any], maintenant: datetime) -> dict[str, Any]:
             targets=list(ligne.get("targets") or []),
             timezone=str(ligne.get("timezone") or "UTC"),
             enabled=bool(ligne.get("enabled", True)),
+            modes=modes,
         )
     except InvalidScheduleError as exc:
         sortie["error"] = str(exc)
         return sortie
+    # Les plages telles qu'elles s'appliquent : le nom d'un mode renomme depuis
+    # est celui d'aujourd'hui.
+    sortie["windows"] = [w.to_dict() for w in profil.windows]
     plage = profil.window_at(maintenant)
     prochaine = profil.next_change(maintenant)
     sortie["local_time"] = profil.local(maintenant).strftime("%a %H:%M")
@@ -165,11 +183,13 @@ async def _appliquer(container: ContainerDep, motif: str) -> dict[str, Any]:
 @router.get("/bandwidth-schedules", summary="Time-of-day bandwidth schedules")
 async def list_schedules(container: ContainerDep) -> dict[str, Any]:
     """Les profils, la plage en cours de chacun et sa prochaine bascule."""
-    lignes = await _repo(container).list_all()
+    depot = _repo(container)
+    lignes = await depot.list_all()
+    modes = await depot.modes()
     maintenant = datetime.now(tz=UTC)
     return {
         "enforcement_enabled": container.shaping.enforcement_enabled,
-        "schedules": [_etat(ligne, maintenant) for ligne in lignes],
+        "schedules": [_etat(ligne, maintenant, modes) for ligne in lignes],
         "last_switch": getattr(container.shaping, "last_schedule_switch", None),
     }
 
@@ -181,13 +201,14 @@ async def list_schedules(container: ContainerDep) -> dict[str, Any]:
 )
 async def create_schedule(payload: ScheduleInput, container: ContainerDep) -> dict[str, Any]:
     depot = _repo(container)
-    canonique = _valider(payload.model_dump())
+    modes = await depot.modes()
+    canonique = _valider(payload.model_dump(), modes)
     try:
         cree = await depot.create(canonique)
     except ScheduleConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     logger.info("Profil horaire '%s' cree", cree["name"])
-    sortie = _etat(cree, datetime.now(tz=UTC))
+    sortie = _etat(cree, datetime.now(tz=UTC), modes)
     sortie["enforcement"] = await _appliquer(container, f"schedule '{cree['name']}' created")
     return sortie
 
@@ -204,14 +225,15 @@ async def update_schedule(
     except ScheduleNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     modifs = payload.model_dump(exclude_unset=True)
-    canonique = _valider({**existant, **modifs}, ident=schedule_id)
+    modes = await depot.modes()
+    canonique = _valider({**existant, **modifs}, modes, ident=schedule_id)
     try:
         modifie = await depot.update(schedule_id, canonique)
     except ScheduleConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ScheduleNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    sortie = _etat(modifie, datetime.now(tz=UTC))
+    sortie = _etat(modifie, datetime.now(tz=UTC), modes)
     sortie["enforcement"] = await _appliquer(container, f"schedule '{modifie['name']}' edited")
     return sortie
 
@@ -255,7 +277,8 @@ async def preview_schedule(
     except ScheduleNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     maintenant = datetime.now(tz=UTC)
-    etat = _etat(ligne, maintenant)
+    modes = await depot.modes()
+    etat = _etat(ligne, maintenant, modes)
     if "error" in etat:
         return {"schedule": etat, "subscribers": [], "overridden": [], "counts": {}}
     profil = BandwidthSchedule.build(
@@ -266,6 +289,7 @@ async def preview_schedule(
         targets=list(ligne.get("targets") or []),
         timezone=str(ligne.get("timezone") or "UTC"),
         enabled=True,
+        modes=modes,
     )
     # Le carnet REEL (les autres profils comptent pour la priorite), ce profil
     # pris tel qu'enregistre meme s'il est suspendu : c'est un apercu.

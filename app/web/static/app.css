@@ -1750,3 +1750,14 @@ body[data-view="client"] .page-head { display: none; }
   .day-pill span { width: 36px; height: 36px; }
   .sched-actions .primary { flex: 1 1 auto; }
 }
+.slot-mode { width: auto; max-width: 15rem; padding: .35rem 1.8rem .35rem .6rem; font-size: .85rem; }
+/* Le choix du type de debit (% / Mbps / Mode) vient avant sa valeur, et passe
+   a la ligne plutot que de deborder de la carte. */
+.slot { min-width: 0; }
+.slot-rate { flex-wrap: wrap; min-width: 0; }
+.slot-rate > .segmented { order: -1; }
+@media (max-width: 760px) {
+  .slot-rate { width: 100%; }
+  .slot-rate > span[data-mode="mode"]:not([hidden]) { flex: 1 1 auto; min-width: 0; }
+  .slot-mode { max-width: none; width: 100%; }
+}
