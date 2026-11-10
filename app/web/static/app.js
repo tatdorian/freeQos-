@@ -10235,6 +10235,13 @@ function roleOptions(choisi) {
 
 const CLI = { rows: [], modes: [], boosts: {}, sel: new Set(), wired: false };
 
+/** 100 -> "100", 2.5 -> "2.5", 0.512 -> "0.512" : un debit en Mbps sans unite
+ *  (l'unite est dans l'en-tete de colonne). */
+function sansUnite(v) {
+  const n = Number(v) || 0;
+  return n >= 100 ? String(Math.round(n)) : String(Math.round(n * 1000) / 1000);
+}
+
 /** Ce qui reste d'un boost : "45 min", "3 h", ou "until stopped". */
 function boostReste(b) {
   const sec = Number(b && b.seconds_left) || 0;
@@ -10297,7 +10304,7 @@ async function loadClients() {
   const sig = sites.join('|');
   if (selPop.dataset.sig !== sig) {
     const v = selPop.value;
-    selPop.innerHTML = '<option value="">All sites</option>' +
+    selPop.innerHTML = '<option value="">Site</option>' +
       sites.map((s) => '<option>' + esc(s) + '</option>').join('');
     selPop.value = sites.includes(v) ? v : '';
     selPop.dataset.sig = sig;
@@ -10306,7 +10313,7 @@ async function loadClients() {
   const sigM = CLI.modes.map((m) => m.id + ':' + m.name).join('|');
   if (selMode.dataset.sig !== sigM) {
     const v = selMode.value;
-    selMode.innerHTML = '<option value="">All modes</option><option value="auto">Automatic</option>' +
+    selMode.innerHTML = '<option value="">Mode</option><option value="auto">Automatic</option>' +
       '<option value="manual">Manual limit</option>' +
       CLI.modes.map((m) => '<option value="' + m.id + '">' + esc(m.name) + '</option>').join('');
     selMode.value = v;
@@ -10317,10 +10324,10 @@ async function loadClients() {
   const enMode = rows.filter((r) => r.mode_id || r.override_down_mbps).length;
   const boostes = rows.filter((r) => CLI.boosts[r.login]).length;
   document.getElementById('cli-stats').innerHTML =
-    statCard('', 'Total clients', String(rows.length), '', sites.length + ' site(s)') +
-    statCard(enLigne ? 'ok' : '', 'Connected', String(enLigne), '', 'measured in the last 90 s') +
-    statCard(enMode ? 'warn' : '', 'Not in Automatic', String(enMode), '', 'in a mode or a manual limit') +
-    statCard('', 'Boosts active', String(boostes), '', 'timed, or until stopped');
+    statCard('', 'Clients', String(rows.length), '', '') +
+    statCard(enLigne ? 'ok' : '', 'Connected', String(enLigne), '', '') +
+    statCard(enMode ? 'warn' : '', 'In a mode', String(enMode), '', '') +
+    statCard('', 'Boosts', String(boostes), '', '');
   document.getElementById('cli-notice').innerHTML = !CLI.modes.length
     ? '<div class="notice">No bandwidth mode is defined yet: only <b>Automatic</b> and boosts are ' +
       'offered. ' + (peut('operator') ? '<a href="#/modes">Define modes in Modes</a>.'
@@ -10338,7 +10345,7 @@ function renderClients() {
     CLI.onlySel = true;
   }
   const lignes = filtrerClients();
-  document.getElementById('cli-count').textContent = lignes.length + ' client(s)';
+  document.getElementById('cli-count').textContent = String(lignes.length);
   const host = document.getElementById('cli-table');
   if (!lignes.length) {
     host.innerHTML = '<div class="empty">' + (CLI.rows.length ? 'No client matches the filters.'
@@ -10349,11 +10356,14 @@ function renderClients() {
   }
   const tous = lignes.every((r) => CLI.sel.has(r.login));
   const ecrire = peut('operator');
-  host.innerHTML = '<table><thead><tr>' +
+  const dis = ecrire ? '' : ' disabled';
+  // EPURE : un client = son nom (pastille de connexion), son mode, ce qu'il
+  // consomme, sa limite, deux boutons. Le site et l'adresse en petit dessous ;
+  // le detail est sur sa page.
+  host.innerHTML = '<table class="cli-list"><thead><tr>' +
     '<th class="chk"><input type="checkbox" id="cli-all" aria-label="Select all shown"' +
       (tous ? ' checked' : '') + '></th>' +
-    '<th>Client</th><th>Site</th><th>Connection</th><th>Bandwidth mode</th>' +
-    '<th>Current usage</th><th class="num" title="Rate applied right now">Limit</th>' +
+    '<th>Client</th><th>Mode</th><th>Usage</th><th class="num cli-lim">Limit (Mbps)</th>' +
     '<th class="sticky-actions"></th></tr></thead><tbody>' +
     lignes.map((r) => {
       const m = modeDuClient(r);
@@ -10362,29 +10372,23 @@ function renderClients() {
       return '<tr class="clickable" data-cli="' + esc(r.login) + '">' +
         '<td class="chk"><input type="checkbox" data-sel="' + esc(r.login) + '"' +
           (CLI.sel.has(r.login) ? ' checked' : '') + ' aria-label="Select ' + esc(r.login) + '"></td>' +
-        '<td><div class="cli-who"><span class="cli-avatar">' + esc(initiales(r.login)) + '</span>' +
-          '<span><span class="cli-name">' + esc(r.login) + '</span>' +
-          '<span class="cli-sub">' + esc(r.last_ip || (r.kind === 'static' ? 'static IP' : '-')) +
-          '</span></span></div></td>' +
-        '<td>' + esc(r.pop_name || '-') + '</td>' +
-        '<td><span class="cli-conn ' + (on ? 'on">Connected' : 'off">' +
-          (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '</span></td>' +
-        '<td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
-          (b ? '<span class="boost-pill cli-boost">boost · ' + esc(boostReste(b)) + '</span>' : '') + '</td>' +
+        '<td class="cli-main"><span class="cli-name"><i class="dot-co ' + (on ? 'on' : 'off') + '" title="' +
+          (on ? 'Connected' : (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '"></i>' + esc(r.login) + '</span>' +
+          '<span class="cli-sub">' + esc([r.pop_name, r.last_ip].filter(Boolean).join(' · ')) + '</span></td>' +
+        '<td class="cli-mode"><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
+          (b ? '<span class="boost-pill cli-boost">&#9889; ' + esc(boostReste(b)) + '</span>' : '') + '</td>' +
         '<td class="cli-usage">' + (on ? '<span class="d">&darr; ' + esc(bpsText(r.tx_bps)) +
-          '</span> &nbsp;<span class="u">&uarr; ' + esc(bpsText(r.rx_bps)) + '</span>'
-          : '<span style="color:var(--faint)">-</span>') + '</td>' +
-        '<td class="num">' + (r.effective_down_mbps ? esc(mbps(r.effective_down_mbps)) + ' / ' +
-          esc(mbps(r.effective_up_mbps || 0)) : '<span style="color:var(--faint)">no limit</span>') + '</td>' +
-
-        '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
-          '<button class="sm" data-cli-mode="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
-            '>Mode</button>' +
-
-          (b ? '<button class="sm" data-cli-stop="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
-              '>Stop boost</button>'
-            : '<button class="sm" data-cli-boost="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
-              '>Boost</button>') +
+          '</span> <span class="u">&uarr; ' + esc(bpsText(r.rx_bps)) + '</span>'
+          : '<span class="cli-off">' + (r.ts ? esc(depuis(r.ts)) : 'not seen') + '</span>') + '</td>' +
+        '<td class="num cli-lim">' + (r.effective_down_mbps ? esc(sansUnite(r.effective_down_mbps) + ' / ' +
+          sansUnite(r.effective_up_mbps || 0)) : '-') + '</td>' +
+        '<td class="sticky-actions"><div class="cli-acts">' +
+          '<button class="icon-btn" data-cli-mode="' + esc(r.login) + '" title="Change mode" aria-label="Change mode"' + dis + '>' +
+            '<svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg></button>' +
+          (b ? '<button class="icon-btn on" data-cli-stop="' + esc(r.login) + '" title="Stop boost" aria-label="Stop boost"' + dis + '>' +
+              '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>'
+            : '<button class="icon-btn" data-cli-boost="' + esc(r.login) + '" title="Boost" aria-label="Boost"' + dis + '>' +
+              '<svg viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></svg></button>') +
         '</div></td></tr>';
     }).join('') + '</tbody></table>';
 
@@ -10413,7 +10417,7 @@ function majSelection() {
   const n = CLI.sel.size;
   const barre = document.getElementById('cli-selbar');
   barre.hidden = n === 0;
-  document.getElementById('cli-selcount').textContent = n + ' client(s) selected';
+  document.getElementById('cli-selcount').textContent = n + ' selected';
   const permis = peut('operator');
   ['cli-sel-mode', 'cli-sel-boost', 'cli-sel-stop'].forEach((id) => {
     document.getElementById(id).disabled = !permis;
@@ -10864,7 +10868,7 @@ async function loadClientPage() {
       kpi('rtt', 'k-rtt', 'Latency', r.rtt_ms ? String(Math.round(r.rtt_ms)) : '-', r.rtt_ms ? 'ms' : '',
         data && data.bufferbloat ? 'under load: grade ' + esc(data.bufferbloat.grade) : '') +
       '</div><div class="cp-grid"><div class="card cp-usage"><div class="cp-card-head"><div><h3>Usage over time</h3>' +
-      '<span class="hint">Download and upload, with totals for this period.</span></div>' +
+      '</div>' +
       '<div class="segmented" id="cp-range">' + [[60, '1 hour'], [1440, '24 hours'], [10080, '7 days']].map(([v, l]) =>
         '<button type="button" data-v="' + v + '"' + (v === FICHE.periode ? ' class="active"' : '') + '>' + l + '</button>').join('') +
       '</div></div><div id="cp-chart"></div><div class="cp-totals">' +
@@ -10897,14 +10901,12 @@ async function loadClientPage() {
         '<span><b>' + esc(nom) + (sel ? ' · current' : '') + '</b><small>' + sous + '</small></span></label>';
     };
     corps = '<div class="cp-grid"><div class="card"><h3>Bandwidth mode</h3>' +
-      '<p class="hint" style="display:block">Pick a mode and apply it. <b>Automatic</b> follows the plan and the ' +
-      'time-of-day schedule; the rate then changes with the hour on its own.</p><div class="mode-cards">' +
+      '<div class="mode-cards">' +
       carte(null, 'Automatic', 'Plan and schedule') +
       CLI.modes.map((x) => carte(x.id, x.name, esc(modeTaux(x)) + (x.disables_boost ? '<br>Stops boosts' : ''))).join('') +
       '</div><div class="actions" style="margin-top:.8rem"><span class="spacer"></span>' +
       '<button class="primary" id="cp-apply-mode"' + dis + '>Apply the mode</button></div><div id="cp-mode-out"></div></div>' +
-      '<div class="cp-side"><div class="card"><h3>Plan</h3><p class="hint" style="display:block">The rate the client ' +
-      'subscribed to. Modes in % and schedules are computed from it.</p>' +
+      '<div class="cp-side"><div class="card"><h3>Plan</h3>' +
       '<div class="field"><label for="cp-down">Download (Mbps)</label><input id="cp-down" type="number" min="0.001" step="any" value="' +
         esc(s.plan_down_mbps || '') + '"' + dis + '></div>' +
       '<div class="field"><label for="cp-up">Upload (Mbps)</label><input id="cp-up" type="number" min="0.001" step="any" value="' +
@@ -11118,13 +11120,13 @@ async function loadModesPage() {
     else if (r.override_down_mbps) manuels.push(r);
     else parMode.auto.push(r);
   });
-  const puces = (liste) => !liste.length ? '<span class="hint">No client.</span>'
+  const puces = (liste) => !liste.length ? ''
     : liste.slice(0, 14).map((r) => '<a class="chip" href="#/client/' + encodeURIComponent(r.login) + '">' +
         esc(r.login) + '</a>').join('') +
       (liste.length > 14 ? '<span class="hint">and ' + (liste.length - 14) + ' more</span>' : '');
   const carte = (titre, sous, liste, cls, extra) => '<div class="card mode-board-card' + (cls ? ' ' + cls : '') + '">' +
     '<div class="cp-card-head"><div><h3>' + esc(titre) + '</h3><span class="hint">' + sous + '</span></div>' +
-    '<span class="badge">' + liste.length + ' client(s)</span></div><div class="chips">' + puces(liste) + '</div>' +
+    '<span class="badge" title="clients">' + liste.length + '</span></div><div class="chips">' + puces(liste) + '</div>' +
     (extra || '') + '</div>';
   document.getElementById('modes-board').innerHTML = '<div class="mode-board">' +
     carte('Automatic', 'Plan and time-of-day schedule', parMode.auto, 'auto') +

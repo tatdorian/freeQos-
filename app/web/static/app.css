@@ -1588,3 +1588,82 @@ body[data-view="client"] .page-head { display: none; }
 .gb-box label { display: inline-flex; align-items: center; gap: .35rem; margin: 0; font-weight: 600; }
 .gb-box label input { width: 7rem; }
 .gb-box .hint { flex-basis: 100%; }
+
+/* ------------------------------------------- liste des clients, epuree */
+.cli-list td { vertical-align: middle; }
+.cli-main .cli-name { display: inline-flex; align-items: center; gap: .45rem; font-weight: 600; white-space: nowrap; }
+.cli-main .cli-sub { font-family: var(--font); font-size: .78rem; color: var(--faint); margin-top: .1rem; }
+.dot-co { width: .55rem; height: .55rem; border-radius: 50%; flex: none; display: inline-block; }
+.dot-co.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+.dot-co.off { background: var(--fill-strong); }
+.cli-off { color: var(--faint); font-size: .85rem; }
+.cli-acts { display: flex; gap: .4rem; justify-content: flex-end; }
+.icon-btn {
+  width: 2.3rem; height: 2.3rem; padding: 0; border-radius: 10px; display: grid; place-items: center;
+  background: var(--fill); border: 0; color: var(--accent);
+}
+.icon-btn svg { width: 1.1rem; height: 1.1rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn:hover:not(:disabled) { background: var(--accent-dim); }
+.icon-btn.on { background: color-mix(in srgb, var(--purple) 16%, transparent); color: var(--purple); }
+.icon-btn:disabled { opacity: .4; }
+
+/* SUR TELEPHONE : chaque client devient une carte -- nom et boutons sur une
+   ligne, mode et consommation sur la suivante. La limite est sur sa page. */
+@media (max-width: 760px) {
+  .grid.stats#cli-stats { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; }
+  #cli-stats .card { padding: .6rem .7rem; }
+  #cli-stats .label { font-size: .72rem; }
+  #cli-stats .value { font-size: 1.35rem; }
+  #cli-stats .sub { display: none; }
+  .cli-filters { padding: .6rem; gap: .4rem; }
+  .cli-filters input[type="search"] { flex-basis: 100%; }
+  .cli-filters select { flex: 1 1 0; min-width: 0; font-size: .85rem; }
+  .cli-filters .mode#cli-count { display: none; }
+  .cli-list thead { display: none; }
+  .cli-list, .cli-list tbody { display: block; width: 100%; }
+  .cli-list tr {
+    display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas: "chk main acts" "chk mode usage";
+    align-items: center; gap: .25rem .6rem; padding: .7rem .8rem; border-bottom: 1px solid var(--border);
+  }
+  .cli-list td { display: block; padding: 0; border: 0; }
+  .cli-list td.chk { grid-area: chk; align-self: start; padding-top: .15rem; }
+  .cli-list td.cli-main { grid-area: main; min-width: 0; }
+  .cli-list td.cli-main .cli-name { white-space: normal; overflow-wrap: anywhere; }
+  .cli-list td.cli-mode { grid-area: mode; }
+  .cli-list td.cli-usage { grid-area: usage; text-align: right; font-size: .82rem; }
+  .cli-list td.cli-lim { display: none; }
+  .cli-list td.sticky-actions { grid-area: acts; position: static; background: none; box-shadow: none; }
+  .cli-selbar { position: sticky; bottom: 0; z-index: 5; }
+  .modal-backdrop { padding: 0; align-items: end; }
+  .modal { border-radius: 18px 18px 0 0; max-height: 92vh; }
+}
+@media (max-width: 760px) {
+  body.role-limited .page-head, body[data-view="client"] .page-head { display: none; }
+  .cli-filters input[type="search"] { flex: 1 1 100%; width: 100%; min-width: 0; }
+  .cli-filters .link-btn#cli-clear { display: none; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+  .card.kpi { padding: .8rem .9rem; }
+  .kpi-val { font-size: 1.5rem; }
+  .kpi-ico { display: none; }
+  .kpi-sub { display: none; }
+  #cp-chart .chart-summary { display: none; }
+  .cp-head { gap: .7rem; }
+  .cp-avatar { width: 3rem; height: 3rem; font-size: 1rem; border-radius: 14px; }
+  .cp-id h2 { font-size: 1.4rem; }
+  .cp-head > button { flex: 1 1 0; }
+  .cp-tabs { gap: 1.1rem; margin: 1rem 0 .9rem; }
+  .cp-totals b { font-size: 1.15rem; }
+}
+.cli-filters input[type="search"] { max-width: none; }
+@media (max-width: 760px) {
+  .cli-filters select#cli-pop, .cli-filters select#cli-status, .cli-filters select#cli-mode { flex: 1 1 0; }
+}
+.mode-board-card .chips:empty { display: none; }
+@media (max-width: 760px) {
+  body.role-limited .page-bar { display: none; }
+  .mode-board { gap: .6rem; }
+  .mode-board-card { padding: .8rem 1rem; }
+  .mode-board-card .cp-card-head { margin-bottom: .3rem; }
+  .mode-board-card h3 { font-size: 1rem; }
+}
