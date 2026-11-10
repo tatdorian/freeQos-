@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="511486953836cc64">
+  <meta name="freeqos-docs-source" content="809711f5876222de">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -176,6 +176,7 @@
     <a class="sub" href="#accounts_1">Accounts</a>
     <a class="sub" href="#api-keys_1">API keys</a>
     <a class="sub" href="#bandwidth-schedules_1">Bandwidth schedules</a>
+    <a class="sub" href="#clients_2">Clients</a>
     <a class="sub" href="#map_1">Map</a>
     <a class="sub" href="#modes_1">Modes</a>
     <a class="sub" href="#ubiquiti">Ubiquiti</a>
@@ -2452,7 +2453,14 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Export</strong>: the list as filtered, every page, in two formats. <strong>Excel (.xlsx)</strong>: a formatted workbook — coloured header, columns at the right width, filters, frozen header row, real numbers and dates, status coloured (green online, red offline, grey never seen), use of the limit coloured, and a second sheet summing up each site. <strong>CSV</strong>: a plain table whose separator follows the browser's language (<code>;</code> and a decimal comma in French, so that Excel opens it in columns). Columns: client, status, last seen, site, kind, IP address, mode, what sets the limit, boost and its end, download and upload now, use of the limit, limit, plan, latency, session.</li>
 <li><strong>+ Add a client</strong> (Administrator): declares a static-IP or VLAN client (address, subnet or range, additional ranges, plan, CPE MAC) and lists the declared clients and the clients by VLAN. It replaces the former <em>Subscribers</em> tab, whose content is now on this page.</li>
 </ul>
-<p><strong>Client page.</strong> <em>Status</em> (online or offline, since when), <em>Usage now</em> (gauge and word against its limit), <em>Limit</em> (and where it comes from), <em>Latency</em> with a word (<em>good</em> under 40 ms, <em>fair</em> under 100 ms, <em>poor</em> above). Then the usage chart, the mode and boost, the connection (IP, site, session) and the recent changes.</p>
+<p><strong>Client page.</strong> <em>Status</em> (online or offline, since when), <em>Usage now</em> (gauge and word against its limit), <em>Limit</em> (and where it comes from), <em>Experience</em> (score out of 100 with a word, the latency and the slowness under load — or the latency alone when no score is measured). Then the usage chart, a <strong>Diagnosis</strong>, the mode and boost, the connection (IP, site, session), <strong>What it uses</strong> and the recent changes.</p>
+<p>The <strong>Diagnosis</strong> answers "why is it slow?" in three lines, each with a coloured dot (green, orange, red; grey when not measured, with the reason):</p>
+<ul>
+<li><strong>Radio signal</strong> of the client's antenna (CPE), found by its MAC (PPPoE caller-id, or the CPE MAC declared for a static client) among the antennas freeQoS reads: <em>Good</em> from −65 dBm, <em>Fair</em> down to −75 dBm, <em>Weak</em> below, with the access point, the SNR and the link quality.</li>
+<li><strong>Its site</strong>: the current load of the site against the radio capacity of its backhaul: <em>OK</em>, <em>Busy</em> from 70 %, <em>Saturated</em> from 90 % — every client of the site is then slowed, not only this one.</li>
+<li><strong>Limit on the router</strong>: whether the cap is really held (<em>Applied</em>), or <em>NOT held</em> and why (FastTrack, a queue hidden or disabled), from the background check of the routers.</li>
+</ul>
+<p><strong>What it uses</strong>: the volume downloaded and uploaded over 24 hours and 30 days, and the five main uses over 7 days (streaming, social networks, web, calls, gaming...) from the traffic flows. All of it comes from one call, <code>GET /api/v1/clients/{login}/health</code>, open to every level.</p>
 <p><strong>Map</strong> (<code>#/map</code>, every level). The sites <strong>and the clients</strong> on an OpenStreetMap map. A site is a pin: its size follows the number of clients, its colour the share connected (green 80 % and more, orange 50–80 %, red below). A client is a dot (green online, red offline, grey never seen): at street zoom (or when its site is selected), each client appears at its own position — a small square, linked to its site — or, without a position, in a ring around its site. Moving is smooth: drag (the map keeps a little momentum when released), pinch with two fingers on a phone, the mouse wheel, the + / − buttons, a double click, or the arrow keys. A search box finds a site or a client (by name or IP). Tap a site: its counts, its clients (offline first), <em>Show its clients</em>, <em>PDF report</em>. Tap a client: its status, site, mode, position, <em>Open the client</em>.</p>
 <p>An <strong>Administrator</strong> gives a position (<em>Position</em> / <em>Place it</em>) in three ways: <strong>type or paste coordinates</strong> (<code>13.5137, 2.1098</code>, or a Google Maps / OpenStreetMap link), <strong>use the GPS</strong> of the phone (on site, over HTTPS), or <strong>tap the map</strong>. <em>Remove from the map</em> takes it off. API: <code>GET /api/v1/site-locations</code>, <code>PUT /api/v1/site-locations/{site}</code> and <code>GET /api/v1/client-locations</code>, <code>PUT /api/v1/client-locations/{login}</code> (<code>{"latitude", "longitude"}</code>), and their <code>DELETE</code>. The map tiles come from <code>tile.openstreetmap.org</code>: without internet, the pins stay usable on a plain background.</p>
 <p><strong>Alerts and error codes.</strong> Every alert carries a stable <strong>code</strong>, the clients concerned and <strong>what to check</strong>:</p>
@@ -5183,7 +5191,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 186 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 187 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -6215,6 +6223,23 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>GET</code></td>
 <td><code>/api/v1/bandwidth-schedules/{schedule_id}/preview</code></td>
 <td>Which subscribers this schedule governs, and their rate right now</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="clients_2">Clients</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/clients/{login}/health</code></td>
+<td>A client's health: experience, radio, site, limit, usage</td>
 </tr>
 </tbody>
 </table></div>

@@ -2146,3 +2146,36 @@ a.btn:hover { text-decoration: none; filter: brightness(1.05); }
 .tab-hidden { display: none !important; }
 .page-toc.as-tabs a.active { background: var(--accent); color: #fff; }
 .mode-picker .mc-list { max-height: 320px; }
+
+/* Fiche client : diagnostic (signal, site, limite) et usages. */
+.dg-card { display: grid; gap: .1rem; }
+.dg-card h3 { margin-bottom: .4rem; }
+.dg-row { display: flex; gap: .7rem; align-items: flex-start; padding: .55rem 0; }
+.dg-row + .dg-row { border-top: .5px solid var(--border); }
+.dg-dot { width: 10px; height: 10px; border-radius: 50%; margin-top: .35rem; flex: 0 0 auto; background: var(--faint); }
+.dg-dot.lv-ok { background: var(--ok); } .dg-dot.lv-warn { background: var(--up); } .dg-dot.lv-crit { background: var(--crit); }
+.dg-dot.lv-unknown { background: var(--fill-strong); }
+.dg-txt { display: grid; gap: .05rem; min-width: 0; }
+.dg-name { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.dg-txt b { font-size: .92rem; font-weight: 600; }
+.dg-txt small { font-size: .78rem; color: var(--muted); }
+.us-card { margin-top: 1rem; }
+.us-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); gap: 1.2rem; align-items: start; }
+.us-vol { display: grid; gap: .8rem; }
+.us-vol > div { display: grid; }
+.us-vol span { font-size: .74rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.us-vol b { font-size: 1.35rem; letter-spacing: -.02em; color: var(--down); }
+.us-vol small { color: var(--up); font-size: .82rem; }
+.us-apps { display: grid; gap: .45rem; }
+.us-app { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr) 3.4rem; gap: .6rem; align-items: center; font-size: .86rem; }
+.us-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.us-bar { height: 8px; border-radius: 99px; background: var(--fill); overflow: hidden; }
+.us-bar i { display: block; height: 100%; background: var(--down); border-radius: inherit; }
+.us-share { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+@media (max-width: 760px) {
+  .us-grid { grid-template-columns: 1fr; }
+  .us-vol { grid-template-columns: 1fr 1fr; }
+  .us-app { grid-template-columns: 6.5rem minmax(0, 1fr) 3rem; }
+}
+.kpi-ico.k-bad { background: color-mix(in srgb, var(--crit) 14%, transparent); color: var(--crit); }
+.cp-grid { align-items: start; }
