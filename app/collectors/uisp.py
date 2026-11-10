@@ -189,6 +189,90 @@ class UispProvider:
         await self._client.aclose()
 
 
+def uisp_device_summary(device: dict[str, Any]) -> dict[str, Any]:
+    """Ce qu'on montre d'une antenne UISP : nom, modele, role, site, etat, radio."""
+    echantillon = parse_uisp_device(device)
+    return {
+        "id": echantillon.device_id,
+        "name": _as_str(_pluck(device, "identification.name", "identification.hostname", "name")),
+        "model": _as_str(
+            _pluck(device, "identification.modelName", "identification.model", "model")
+        ),
+        "type": _as_str(_pluck(device, "identification.type", "type")),
+        "role": _as_str(_pluck(device, "identification.role", "role")),
+        "site": _as_str(_pluck(device, "identification.site.name", "site.name")),
+        "ip": _as_str(
+            _pluck(device, "ipAddress", "identification.ipAddress", "overview.ipAddress")
+        ),
+        "mac": _as_str(_pluck(device, "identification.mac", "mac")),
+        "status": _as_str(_pluck(device, "overview.status", "status")),
+        "online": echantillon.online,
+        "capacity_down_mbps": echantillon.capacity_down_mbps,
+        "capacity_up_mbps": echantillon.capacity_up_mbps,
+        "signal_dbm": echantillon.signal_dbm,
+        "airtime_pct": echantillon.airtime_pct,
+        "frequency_mhz": _as_float(_pluck(device, "overview.frequency", "frequency")),
+    }
+
+
+class DbUispSource:
+    """Le controleur UISP saisi dans l'interface, comme source de capacite.
+
+    Meme contrat que les antennes airOS en base (``backhaul_configs`` +
+    ``get_capacities``) : les antennes RATTACHEES a un site donnent leur
+    capacite au shaping. Le controleur est relu a chaque cycle -- une saisie
+    ou un changement de jeton s'applique sans redemarrage.
+    """
+
+    def __init__(self, repo: Any, *, timeout_s: float = 10.0) -> None:
+        self._repo = repo
+        self._timeout_s = timeout_s
+
+    async def _provider(self) -> UispProvider | None:
+        acces = await self._repo.credentials()
+        if acces is None:
+            return None
+        url, jeton, verifier = acces
+        return UispProvider(url, jeton, verify_tls=verifier, timeout_s=self._timeout_s)
+
+    async def backhaul_configs(self) -> list[BackhaulConfig]:
+        from app.config import BackhaulConfig
+
+        if await self._repo.config() is None:
+            return []
+        return [
+            BackhaulConfig(
+                name=lien["name"], pop_name=lien["pop_name"], uisp_device_id=lien["device_id"]
+            )
+            for lien in await self._repo.links()
+        ]
+
+    async def get_capacities(self, device_ids: Sequence[str]) -> dict[str, BackhaulSample]:
+        provider = await self._provider()
+        if provider is None:
+            return {}
+        try:
+            resultat = await provider.get_capacities(device_ids)
+        except Exception as exc:
+            await self._repo.mark(ok=False, error=f"{type(exc).__name__}: {exc}")
+            raise
+        finally:
+            await provider.aclose()
+        return resultat
+
+    async def raw_devices(self) -> list[dict[str, Any]]:
+        provider = await self._provider()
+        if provider is None:
+            return []
+        try:
+            return await provider.raw_devices()
+        finally:
+            await provider.aclose()
+
+    async def aclose(self) -> None:
+        return None
+
+
 @dataclass(frozen=True)
 class AirOsTarget:
     """Une antenne Ubiquiti interrogee directement sur son API locale.

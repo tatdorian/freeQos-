@@ -2084,3 +2084,64 @@ a.btn:hover { text-decoration: none; filter: brightness(1.05); }
 .map-pos-row input { flex: 1 1 auto; font-variant-numeric: tabular-nums; }
 .map-pos .hint { display: block; }
 .map-card-head .hint { display: inline; font-size: .74rem; }
+.icon-btn[hidden] { display: none !important; }
+.sc-panel { margin-bottom: 1rem; }
+@media (max-width: 760px) {
+  .toolbar.cli-filters input[type="search"] { grid-column: span 3; }
+}
+.exp-choices { display: grid; gap: .6rem; }
+.exp-choice {
+  display: grid; gap: .25rem; text-align: left; padding: .9rem 1rem; border-radius: 14px;
+  background: var(--surface-2); color: var(--text); font-weight: 400;
+}
+.exp-choice b { font-size: .98rem; color: var(--accent); }
+.exp-choice span { font-size: .82rem; color: var(--muted); }
+.exp-choice:hover:not(:disabled) { background: var(--accent-dim); }
+/* Ubiquiti UISP. */
+#uisp-card { display: grid; gap: .9rem; margin-bottom: .8rem; }
+.uisp-head { display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; }
+.uisp-logo {
+  width: 2.4rem; height: 2.4rem; border-radius: 12px; display: grid; place-items: center; flex: 0 0 auto;
+  background: linear-gradient(135deg, #0559c9, #1f8bff); color: #fff; font-weight: 800; font-size: 1.1rem;
+}
+.uisp-form { display: grid; gap: .7rem; border-top: .5px solid var(--border); padding-top: .9rem; }
+.uisp-table select { width: auto; min-width: 9rem; padding: .3rem 1.8rem .3rem .6rem; font-size: .82rem; }
+.lvl-txt-ok { color: var(--ok); }
+
+/* Cartes de chiffres de toutes les pages : icone teintee, halo discret. */
+.card.stat { position: relative; overflow: hidden; --t: var(--accent); --t-dim: var(--accent-dim); }
+.card.stat::after {
+  content: ""; position: absolute; right: -34px; top: -34px; width: 120px; height: 120px; border-radius: 50%;
+  background: radial-gradient(circle, var(--t-dim), transparent 70%); pointer-events: none;
+}
+.stat-ico {
+  width: 2.1rem; height: 2.1rem; border-radius: 10px; display: grid; place-items: center;
+  background: var(--t-dim); color: var(--t); margin-bottom: .6rem;
+}
+.stat-ico svg { width: 1.1rem; height: 1.1rem; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.card.stat.t-blue { --t: var(--down); --t-dim: var(--down-dim); }
+.card.stat.t-orange { --t: var(--up); --t-dim: var(--up-dim); }
+.card.stat.t-green { --t: var(--ok); --t-dim: color-mix(in srgb, var(--ok) 15%, transparent); }
+.card.stat.t-red { --t: var(--crit); --t-dim: color-mix(in srgb, var(--crit) 14%, transparent); }
+.card.stat.t-indigo { --t: #5e5ce6; --t-dim: rgba(94, 92, 230, .14); }
+.card.stat.t-teal { --t: #30b0c7; --t-dim: rgba(48, 176, 199, .15); }
+.card.stat.t-gray { --t: var(--faint); --t-dim: var(--fill); }
+@media (max-width: 760px) {
+  .stat-ico { width: 1.8rem; height: 1.8rem; margin-bottom: .4rem; }
+}
+/* Les clients d'un mode. */
+.mc-bar { display: flex; gap: .5rem; }
+.mc-bar input { flex: 1 1 auto; }
+.mc-bar select { width: auto; }
+.mc-tools { display: flex; align-items: center; gap: .3rem; margin: .5rem 0; }
+.mc-list { max-height: 50vh; overflow-y: auto; border-radius: 12px; background: var(--surface-2); padding: .2rem 0; }
+.mc-site { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: .6rem .9rem .2rem; }
+.mc-row { display: flex; align-items: center; gap: .55rem; padding: .45rem .9rem; cursor: pointer; font-size: .9rem; }
+.mc-row:hover { background: var(--fill); }
+.mc-row input { width: auto; }
+.mc-name { flex: 1 1 auto; font-weight: 500; }
+.mc-row .mode-pill { font-size: .7rem; }
+#modes-form-title button { margin-left: .5rem; vertical-align: middle; }
+/* Pages en onglets (Settings, Devices) : une section a la fois. */
+.tab-hidden { display: none !important; }
+.page-toc.as-tabs a.active { background: var(--accent); color: #fff; }
