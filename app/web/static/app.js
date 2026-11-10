@@ -201,7 +201,7 @@ function startApp(user) {
   document.getElementById('auth-gate').hidden = true;
   document.body.classList.remove('gated');
   document.body.classList.toggle('role-read', user.role === 'read');
-  document.body.classList.toggle('role-limited', user.role === 'user' || user.role === 'supervisor');
+  document.body.classList.toggle('role-limited', user.role === 'operator');
   document.getElementById('readonly-banner').hidden = user.role !== 'read';
   document.getElementById('user-chip').hidden = false;
   document.getElementById('user-email').textContent = user.email;
@@ -10190,21 +10190,17 @@ async function loadInsights() {
 
 /** NIVEAUX D'ACCES. Le serveur fait foi (il refuse ce qui depasse le niveau) ;
  *  l'interface se contente de ne pas proposer un geste qui serait refuse. */
-const ROLE_RANK = { read: 0, user: 1, supervisor: 2, technician: 3, edit: 4 };
-const ROLE_LABEL = {
-  read: 'Viewer', user: 'User', supervisor: 'Supervisor', technician: 'Technician', edit: 'Administrator',
-};
+const ROLE_RANK = { read: 0, operator: 1, edit: 2 };
+const ROLE_LABEL = { read: 'Viewer', operator: 'Operator', edit: 'Administrator' };
 const ROLE_HELP = {
   read: 'sees everything, changes nothing',
-  user: 'manages clients one at a time: mode and boost',
-  supervisor: 'User rights, on several clients at once',
-  technician: 'every technical change: routers, plans, modes, settings, API keys',
-  edit: 'everything, accounts included',
+  operator: 'manages clients, one or several at a time: bandwidth mode, boost and plan',
+  edit: 'everything else too: adds clients, PoPs, routers, antennas and their API (Ubiquiti), modes, settings, API keys, accounts',
 };
 function rangRole() { const r = (AUTH.user || {}).role; return r in ROLE_RANK ? ROLE_RANK[r] : 0; }
 function peut(niveau) { return rangRole() >= ROLE_RANK[niveau]; }
-/** User et Supervisor : une interface centree sur les clients, rien d'autre. */
-function estLimite() { const r = (AUTH.user || {}).role; return r === 'user' || r === 'supervisor'; }
+/** Operator : une interface centree sur les clients, rien d'autre. */
+function estLimite() { return (AUTH.user || {}).role === 'operator'; }
 function roleOptions(choisi) {
   return Object.keys(ROLE_RANK).map((r) => '<option value="' + r + '"' + (r === choisi ? ' selected' : '') +
     ' title="' + esc(ROLE_HELP[r]) + '">' + esc(ROLE_LABEL[r]) + '</option>').join('');
@@ -10296,9 +10292,9 @@ async function loadClients() {
     statCard('', 'Boosts active', String(boostes), '', 'they end on their own');
   document.getElementById('cli-notice').innerHTML = !CLI.modes.length
     ? '<div class="notice">No bandwidth mode is defined yet: only <b>Automatic</b> and boosts are ' +
-      'offered. ' + (peut('technician') ? '<a href="#/plans">Define modes in Plans</a>.'
-        : 'A Technician defines them in Plans.') + '</div>'
-    : (!peut('user') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '');
+      'offered. ' + (peut('edit') ? '<a href="#/plans">Define modes in Plans</a>.'
+        : 'An Administrator defines them in Plans.') + '</div>'
+    : (!peut('operator') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '');
   renderClients();
 }
 
@@ -10314,7 +10310,7 @@ function renderClients() {
     return;
   }
   const tous = lignes.every((r) => CLI.sel.has(r.login));
-  const ecrire = peut('user');
+  const ecrire = peut('operator');
   host.innerHTML = '<table><thead><tr>' +
     '<th class="chk"><input type="checkbox" id="cli-all" aria-label="Select all shown"' +
       (tous ? ' checked' : '') + '></th>' +
@@ -10347,6 +10343,8 @@ function renderClients() {
         '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
           '<button class="sm" data-cli-mode="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
             '>Mode</button>' +
+          '<button class="sm" data-cli-plan="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
+            '>Plan</button>' +
           (b ? '<button class="sm" data-cli-stop="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
               '>Stop boost</button>'
             : '<button class="sm" data-cli-boost="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
@@ -10369,6 +10367,8 @@ function renderClients() {
   }));
   host.querySelectorAll('[data-cli-mode]').forEach((b) =>
     b.addEventListener('click', () => openModeDialog([b.dataset.cliMode])));
+  host.querySelectorAll('[data-cli-plan]').forEach((b) =>
+    b.addEventListener('click', () => openPlanDialog(b.dataset.cliPlan)));
   host.querySelectorAll('[data-cli-boost]').forEach((b) =>
     b.addEventListener('click', () => openGroupBoost([b.dataset.cliBoost])));
   host.querySelectorAll('[data-cli-stop]').forEach((b) =>
@@ -10380,9 +10380,8 @@ function majSelection() {
   const n = CLI.sel.size;
   const barre = document.getElementById('cli-selbar');
   barre.hidden = n === 0;
-  document.getElementById('cli-selcount').textContent = n + ' client(s) selected' +
-    (n > 1 && !peut('supervisor') ? ' · group changes need the Supervisor level' : '');
-  const permis = peut('user') && (n <= 1 || peut('supervisor'));
+  document.getElementById('cli-selcount').textContent = n + ' client(s) selected';
+  const permis = peut('operator');
   ['cli-sel-mode', 'cli-sel-boost', 'cli-sel-stop'].forEach((id) => {
     document.getElementById(id).disabled = !permis;
   });
@@ -10426,12 +10425,12 @@ function sousTitreCibles(logins) {
 }
 
 function refusGroupe(logins) {
-  if (logins.length > 1 && !peut('supervisor')) {
+  if (!peut('operator')) {
     openModal('<div class="modal-head"><div><h3>This action needs permission</h3>' +
-      '<div class="sub">Group actions are available to Supervisors and above.</div></div>' +
+      '<div class="sub">Changing clients needs the Operator level.</div></div>' +
       '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
-      '<div class="modal-body">Select a single client, or ask an Administrator for the ' +
-      'Supervisor level.</div><div class="modal-foot"><button class="primary" data-modal-close>OK</button></div>');
+      '<div class="modal-body">Your account is read-only (Viewer). Ask an Administrator for the ' +
+      'Operator level.</div><div class="modal-foot"><button class="primary" data-modal-close>OK</button></div>');
     return true;
   }
   return false;
@@ -10550,6 +10549,59 @@ function openGroupBoost(logins) {
   });
 }
 
+/** Le forfait d'UN client : son debit souscrit. Le retirer le rend au forfait
+ *  par defaut (ou le laisse sans plafond s'il n'y en a pas). */
+function openPlanDialog(login) {
+  if (refusGroupe([login])) return;
+  const r = CLI.rows.find((x) => x.login === login) || {};
+  const { root, fermer } = openModal(
+    '<div class="modal-head"><div><h3>Plan</h3><div class="sub">' + sousTitreCibles([login]) + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body"><p class="hint" style="display:block;margin-top:0">The rate the client ' +
+    'subscribed to. It applies in <b>Automatic</b> mode, and the bandwidth schedule and the modes in ' +
+    '% are computed from it.' + (r.plan_source ? ' Current source: <b>' + esc(r.plan_source) + '</b>.' : '') +
+    '</p><div class="row-3"><div class="field"><label for="pl-down">Download (Mbps)</label>' +
+    '<input id="pl-down" type="number" min="0.001" step="any" value="' + esc(r.plan_down_mbps || '') + '"></div>' +
+    '<div class="field"><label for="pl-up">Upload (Mbps)</label>' +
+    '<input id="pl-up" type="number" min="0.001" step="any" value="' + esc(r.plan_up_mbps || '') + '"></div></div>' +
+    '<div id="pl-out"></div></div>' +
+    '<div class="modal-foot" id="pl-foot"><button class="danger" id="pl-reset" title="The default plan ' +
+    'applies again">Remove the plan</button><span class="spacer"></span>' +
+    '<button data-modal-close>Cancel</button><button class="primary" id="pl-save">Save and apply</button></div>');
+  const fin = (html) => {
+    root.querySelector('#pl-out').innerHTML = html;
+    root.querySelector('#pl-foot').innerHTML = '<button class="primary" id="pl-done">Close</button>';
+    root.querySelector('#pl-done').addEventListener('click', fermer);
+    refresh();
+  };
+  root.querySelector('#pl-save').addEventListener('click', async (e) => {
+    const bas = Number(root.querySelector('#pl-down').value);
+    const haut = Number(root.querySelector('#pl-up').value);
+    if (!(bas > 0) || !(haut > 0)) {
+      root.querySelector('#pl-out').innerHTML = '<div class="notice warn">Give both rates, above 0.</div>';
+      return;
+    }
+    e.target.disabled = true;
+    try {
+      await api('/plans/' + encodeURIComponent(login), { method: 'PUT',
+        body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
+      fin('<div class="notice ok">Plan saved: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) + '.</div>');
+    } catch (err) {
+      root.querySelector('#pl-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      e.target.disabled = false;
+    }
+  });
+  root.querySelector('#pl-reset').addEventListener('click', async () => {
+    if (!confirm('Remove the plan of ' + login + '? The default plan applies again.')) return;
+    try {
+      await api('/plans/' + encodeURIComponent(login), { method: 'DELETE' });
+      fin('<div class="notice ok">Plan removed: the default plan applies.</div>');
+    } catch (err) {
+      root.querySelector('#pl-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+}
+
 async function stopBoosts(logins) {
   if (!logins.length || refusGroupe(logins)) return;
   if (!confirm('Stop the boost of ' + (logins.length === 1 ? logins[0] : logins.length + ' clients') + '?')) return;
@@ -10571,7 +10623,7 @@ async function loadModesAdmin() {
   cablerModes();
   const data = await api('/bandwidth-modes').catch(() => ({ modes: [] }));
   const modes = data.modes || [];
-  const ecrire = peut('technician');
+  const ecrire = peut('edit');
   document.getElementById('modes-form').hidden = !ecrire;
   document.getElementById('modes-form-title').hidden = !ecrire;
   host.innerHTML = !modes.length
@@ -10755,7 +10807,7 @@ async function refresh() {
 
 function route() {
   if (!AUTH.ready) return;
-  // User et Supervisor n'ont que la page Clients (et leur compte) : un lien
+  // L'Operator n'a que la page Clients (et son compte) : un lien
   // vers une autre page les y ramene plutot que d'ouvrir une page vide.
   let vue = (location.hash || '').replace('#/', '');
   if (estLimite() && vue !== 'clients' && vue !== 'settings') vue = 'clients';
@@ -11263,13 +11315,13 @@ const ECHELLE_BLOAT = [[OK, 'A+ / A: up to +30 ms — imperceptible'], [WARN, 'B
 const AIDE = {
   'client operations': {
     t: 'The daily page: every client, its connection, its usage, its bandwidth mode and its boost.',
-    m: 'Users and Supervisors only see this page and their account. A User acts on one client at a time; a Supervisor on a selection.',
-    r: 'Tick clients to change their mode or boost them together; a group change reports a result per client.',
+    m: 'Operators only see this page and their account. They act on one client or on a selection.',
+    r: 'Tick clients to change their mode or boost them together; a group change reports a result per client. The Plan button sets the rate the client subscribed to.',
   },
   'bandwidth mode': {
     t: 'The named rate the client is in: Automatic, or a mode such as Backup or Night.',
     m: 'Automatic follows the plan and, when there is one, the bandwidth schedule: the rate changes with the hour on its own. A mode stays until the client is put back to Automatic.',
-    r: '“Manual limit” is a rate set by hand by a Technician, outside the modes.',
+    r: '“Manual limit” is a rate set by hand by an Administrator, outside the modes.',
   },
   'connection': 'Connected = a measurement less than 90 s old. Otherwise, when the client was last seen.',
   'current usage': 'Download (↓) and upload (↑) of the client right now, from the last measurement.',
@@ -11277,12 +11329,12 @@ const AIDE = {
   'boosts active': 'Clients with a running boost. A boost ends on its own at its expiry.',
   'bandwidth modes': {
     t: 'Named rates operators give a client in one click: a fixed rate, or a share of the client\'s plan.',
-    m: 'Defining modes needs the Technician level; giving one to a client, the User level. Changing a mode\'s rate applies it at once to every client in it.',
+    m: 'Defining modes needs the Administrator level; giving one to clients, the Operator level. Changing a mode\'s rate applies it at once to every client in it.',
     r: 'A mode that “stops boosts” clears the running boost and refuses new ones: use it for a crisis or non-payment.',
   },
   'access level': {
     t: 'What the account may do. Each level includes the previous ones; the server enforces them.',
-    m: 'Viewer: sees everything. User: mode and boost of one client. Supervisor: the same on a selection. Technician: every technical change (routers, plans, modes, settings, API keys). Administrator: accounts too.',
+    m: 'Viewer: sees everything, changes nothing. Operator: bandwidth mode, boost and plan of clients, one or several at a time. Administrator: everything else, such as adding clients, PoPs, routers, antennas and their API (Ubiquiti), modes, settings, API keys and accounts.',
   },
   // ---------------------------------------------------------- sections
   'network throughput': {

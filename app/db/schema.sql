@@ -606,7 +606,7 @@ CREATE TABLE IF NOT EXISTS app_users (
     id             SERIAL PRIMARY KEY,
     email          TEXT NOT NULL UNIQUE,
     password_hash  TEXT NOT NULL,
-    role           TEXT NOT NULL CHECK (role IN ('read', 'user', 'supervisor', 'technician', 'edit')),
+    role           TEXT NOT NULL CHECK (role IN ('read', 'operator', 'edit')),
     disabled       BOOLEAN NOT NULL DEFAULT FALSE,
     created_by     TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -1291,11 +1291,15 @@ CREATE TABLE IF NOT EXISTS bandwidth_schedules (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- NIVEAUX D'ACCES (Viewer, User, Supervisor, Technician, Administrator). Les bases
--- creees avant n'acceptaient que 'read' et 'edit' : la contrainte est refaite.
+-- NIVEAUX D'ACCES (Viewer, Operator, Administrator). Les bases creees avant
+-- n'acceptaient que 'read' et 'edit' ; une version intermediaire avait cinq
+-- niveaux, ramenes ici aux trois : User/Supervisor -> Operator,
+-- Technician -> Administrator.
 ALTER TABLE app_users DROP CONSTRAINT IF EXISTS app_users_role_check;
+UPDATE app_users SET role = 'operator' WHERE role IN ('user', 'supervisor');
+UPDATE app_users SET role = 'edit' WHERE role = 'technician';
 ALTER TABLE app_users ADD CONSTRAINT app_users_role_check
-    CHECK (role IN ('read', 'user', 'supervisor', 'technician', 'edit'));
+    CHECK (role IN ('read', 'operator', 'edit'));
 
 -- MODES DE DEBIT. Un mode est un debit nomme que l'on donne a un client d'un
 -- geste : "Backup", "Extreme backup", "Day", "Night"... L'exploitant le choisit

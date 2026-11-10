@@ -1080,7 +1080,7 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 - **Editing a mode's rate** re-applies it at once to every client in it. A mode given to clients cannot be deleted (`409`): put them back to Automatic or in another mode first.
 - **Writing:** like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.
 
-**Client actions** (`POST /api/v1/clients/actions`, `{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}`) act on one or several clients. The reply gives a result **per client** (`succeeded`, `failed`, `results[]`): a partial failure never looks like a complete success. More than one client needs the Supervisor level.
+**Client actions** (`POST /api/v1/clients/actions`, `{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}`) act on one or several clients. The reply gives a result **per client** (`succeeded`, `failed`, `results[]`): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.
 
 ### Bandwidth schedules (day, evening, night)
 
@@ -1392,17 +1392,15 @@ freeQoS holds router credentials that can write across the whole network. Securi
 ### Interface accounts
 
 - **First account:** on the first visit, the interface offers to create one. It is an Administrator (`edit`).
-- **Five access levels**, each including the rights of the previous ones, enforced by the **server** (a refused write is a `403` naming the level it needs, whatever the interface shows):
+- **Three access levels**, each including the rights of the previous one, enforced by the **server** (a refused write is a `403` naming the level it needs, whatever the interface shows):
 
 | Level (`role`) | Sees | Can do | Interface |
 | --- | --- | --- | --- |
 | **Viewer** (`read`) | Everything | Nothing | Every page, read-only banner |
-| **User** (`user`) | Clients | On **one** client at a time: change its bandwidth mode, give or stop a boost | **Clients** page and own account only |
-| **Supervisor** (`supervisor`) | Clients | The User's actions on **several** clients at once | **Clients** page and own account only |
-| **Technician** (`technician`) | Everything | Every technical change: routers, plans, bandwidth modes and schedules, declared clients, settings, API keys | Every page |
-| **Administrator** (`edit`) | Everything | Everything, accounts and their levels included | Every page |
+| **Operator** (`operator`) | Clients | On **one or several** clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan | **Clients** page and own account only |
+| **Administrator** (`edit`) | Everything | Everything else: adding clients, PoPs, routers, antennas and their API (Ubiquiti), bandwidth modes and schedules, settings, API keys, accounts | Every page |
 
-  The writes open below Technician form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `POST /api/v1/clients/actions`): a route added later is technical until it is opened on purpose. The "several clients" check is made by `/clients/actions` itself, the only one that knows how many clients are targeted. Every change is recorded with the **account** that made it (the boost or mode's `updated_by`, the enforcement audit's author). An API key keeps its two scopes: `read`, or `write` (Administrator rights except accounts, which no key can manage). The stored values `read` and `edit` are those of the former two roles: existing accounts keep their level without migration.
+  The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it (the boost or mode's `updated_by`, the plan's author, the enforcement audit). An API key keeps its two scopes: `read`, or `write` (Administrator rights except accounts, which no key can manage). The stored values `read` and `edit` are those of the former two roles: existing accounts keep their level without migration.
 - **Passwords:** 12 characters minimum, too-common words are refused. They are hashed with scrypt (N=2^14, r=8, p=1, salted, compared in constant time).
 - **Anti-guessing:** 5 failures in 5 minutes lock the email **and** the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.
 - **Session:** an `HttpOnly`, `SameSite=Strict` cookie, valid 24 h, 30 days at most (`SESSION_TTL_HOURS`, `SESSION_MAX_HOURS`). Writes also check `Origin` and `Sec-Fetch-Site`.

@@ -187,19 +187,17 @@ Sans routeur sous la main, les providers `mock` suffisent à faire tourner toute
 Au premier lancement, la page demande de **créer le premier compte** (email + mot de
 passe) : il est **Administrator**. Ensuite, toute l'interface exige une connexion.
 
-Cinq niveaux d'accès, chacun avec les droits des précédents, **tenus par le serveur**
+Trois niveaux d'accès, chacun avec les droits du précédent, **tenus par le serveur**
 (une modification hors niveau est refusée en 403, quelle que soit la page) :
 
 | Niveau | Ce qu'il peut faire | Interface |
 |---|---|---|
-| **Viewer** | Tout voir, rien modifier | Toutes les pages, en lecture |
-| **User** | Sur **un** client à la fois : changer son **mode de débit**, lui donner ou retirer un **boost** | Page **Clients** et son compte uniquement |
-| **Supervisor** | Les gestes du User sur **plusieurs** clients d'un coup | Page **Clients** et son compte uniquement |
-| **Technician** | Tout le technique : routeurs, forfaits, modes et profils horaires, clients déclarés, réglages, **connexion d'API** (clés) | Toutes les pages |
-| **Administrator** | Tout, y compris les comptes et leurs niveaux (*Settings › Accounts*) | Toutes les pages |
+| **Viewer** | Tout voir, rien modifier (lecture seule) | Toutes les pages, en lecture |
+| **Operator** | Sur **un ou plusieurs** clients : changer le **mode de débit**, donner ou retirer un **boost**, poser ou retirer le **forfait** | Page **Clients** et son compte uniquement |
+| **Administrator** | Tout le reste : ajouter des clients, des PoPs, des routeurs, des antennes et leur **API (Ubiquiti)**, les modes et profils horaires, les réglages, les clés d'API et les comptes (*Settings › Accounts*) | Toutes les pages |
 
 **Les modes de débit.** Un mode est un débit nommé qu'on donne à un client d'un clic depuis
-la page *Clients* : *Backup*, *Extreme backup*, *Night*… Le Technician les définit dans
+la page *Clients* : *Backup*, *Extreme backup*, *Night*… L'Administrator les définit dans
 *Plans › Bandwidth modes* : débit fixe (Mbps) ou part du forfait du client (%), et s'il
 coupe les boosts. **Automatic** = pas de mode : le client suit son forfait et son profil
 horaire, son débit change alors tout seul selon l'heure. Un changement de mode écrit la file

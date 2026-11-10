@@ -80,8 +80,8 @@ _GENERE = re.compile(r"^<!-- generated: ([a-z0-9-]+) -->$", re.MULTILINE)
 PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     (
         "Clients",
-        "The daily page, and the only one Users and Supervisors see (with their account): "
-        "every client, its connection, its usage, its bandwidth mode and its boost, for one "
+        "The daily page, and the only one Operators see (with their account): every client, "
+        "its connection, its usage, its bandwidth mode, its boost and its plan, for one "
         "client or for a selection.",
         [
             "client operations",
