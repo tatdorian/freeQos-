@@ -30,6 +30,7 @@ from app.api import (
     antennas_admin,
     api_keys,
     capacity,
+    client_health,
     health,
     metrics,
     model_v1,
@@ -206,6 +207,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         modes,
         sites_map,
         uisp,
+        client_health,
     ):
         app.include_router(module.router, prefix=settings.api_prefix, dependencies=proteges)
     # API PUBLIQUE. Volontairement HORS du prefixe d'exploitation : son chemin
