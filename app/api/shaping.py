@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.api.deps import ContainerDep, RepositoryDep, acteur, noter
 from app.db.topology_repo import TopologyRepository
+from app.enforcement.planner import effective_rate
 from app.enforcement.routeros import MissingWriteCredentialsError
 from app.models import KIND_STATIC
 from app.services.shaping import (
@@ -1079,6 +1080,53 @@ async def client_connu(container: Any, metrics: Any, login: str) -> dict[str, An
     return abonne
 
 
+def _debit_texte(mbps: float | None) -> str:
+    if not mbps:
+        return "-"
+    return f"{mbps * 1000:g} kbps" if mbps < 1 else f"{mbps:g} Mbps"
+
+
+def debit_sans_boost(
+    container: Any, login: str, abonne: dict[str, Any], politique: dict[str, Any] | None
+) -> tuple[float | None, float | None]:
+    """Le debit EN VIGUEUR de ce client, boost mis a part.
+
+    C'est ce qu'un boost « x1,5 » multiplie : un client en mode Backup (6 Mbps)
+    ou bride a 550 kbps passe a x1,5 de CE debit, pas de son forfait de base.
+    Meme regle de priorite que le planificateur (``effective_rate``) : mode ou
+    limite manuelle, sinon profil horaire en cours, sinon forfait.
+    """
+    pol = politique or {}
+    plan_bas, plan_haut = abonne.get("plan_down_mbps"), abonne.get("plan_up_mbps")
+    horaire = None
+    carnet = getattr(getattr(container, "shaping", None), "schedule_book", None)
+    if carnet is not None:
+        try:
+            horaire = carnet.rate_for(
+                login=login,
+                sites=(abonne.get("pop_name"),),
+                plan_down=plan_bas,
+                plan_up=plan_haut,
+            )
+        except Exception:  # noqa: BLE001 - un profil illisible ne bloque pas le boost
+            horaire = None
+    bas, _ = effective_rate(
+        plan_mbps=plan_bas,
+        override_mbps=pol.get("max_down_mbps"),
+        boost_mbps=None,
+        boost_expires_at=None,
+        schedule_mbps=horaire.down_mbps if horaire else None,
+    )
+    haut, _ = effective_rate(
+        plan_mbps=plan_haut,
+        override_mbps=pol.get("max_up_mbps"),
+        boost_mbps=None,
+        boost_expires_at=None,
+        schedule_mbps=horaire.up_mbps if horaire else None,
+    )
+    return bas, haut
+
+
 async def poser_boost(
     container: Any,
     metrics: Any,
@@ -1123,9 +1171,21 @@ async def poser_boost(
             )
 
     down, up = down_mbps, up_mbps
+    base: tuple[float | None, float | None] = (None, None)
     if multiplier is not None:
-        down = down or (abonne.get("plan_down_mbps") or 0) * multiplier or None
-        up = up or (abonne.get("plan_up_mbps") or 0) * multiplier or None
+        # x N du debit EN VIGUEUR (mode, limite, profil, forfait), pas du
+        # forfait de base : 550 kbps x1,5 = 825 kbps, pas 15 Mbps.
+        base = debit_sans_boost(container, login, abonne, politique_actuelle)
+        down = down or (round(base[0] * multiplier, 4) if base[0] else None)
+        up = up or (round(base[1] * multiplier, 4) if base[1] else None)
+        if down is None and up is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"'{login}' has no rate to multiply (no plan, mode nor limit): "
+                    "give a temporary rate instead"
+                ),
+            )
     if down is None and up is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1165,7 +1225,8 @@ async def poser_boost(
         login=login,
         action="boost",
         detail=(
-            f"x{multiplier:g} of the plan"
+            f"x{multiplier:g} of the current rate ({_debit_texte(base[0])} -> "
+            f"{_debit_texte(down)} down, {_debit_texte(base[1])} -> {_debit_texte(up)} up)"
             if multiplier
             else f"temporary rate {down or 0:g} / {up or 0:g} Mbps"
         )
