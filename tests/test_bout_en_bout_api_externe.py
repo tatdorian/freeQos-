@@ -119,7 +119,7 @@ def app_client(routeur, monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
                 "TRUNCATE routers, pops, subscribers, subscriber_metrics, client_plans, "
                 "shaping_policies, enforcement_audit, static_clients, api_keys, "
                 "app_users, app_sessions, model_services_unplaced, topology_nodes, "
-                "topology_links RESTART IDENTITY CASCADE"
+                "topology_links, bandwidth_modes RESTART IDENTITY CASCADE"
             )
         finally:
             await conn.close()

@@ -35,6 +35,7 @@ from app.db.directory import Directory, PgDirectory
 from app.db.flows_repo import FlowsRepository, NetflowExportersRepository
 from app.db.link_media_repo import LinkMediaRepository, LinkMediaStore
 from app.db.model_repo import ModelRepository
+from app.db.modes_repo import ModesRepository
 from app.db.plans_repo import ClientPlansRepository
 from app.db.repository import MetricsRepository
 from app.db.routers_repo import RoutersRepository
@@ -195,6 +196,7 @@ class Container:
     destinations_repo: DestinationsRepository | None = None
     traffic_rules_repo: TrafficRulesRepository | None = None
     schedules_repo: SchedulesRepository | None = None
+    modes_repo: ModesRepository | None = None
     netflow: NetflowService | None = None
     netflow_export: NetflowExportService | None = None
     intel: IntelService | None = None
@@ -335,6 +337,8 @@ async def build_container(settings: Settings) -> Container:
     traffic_rules_repo = TrafficRulesRepository(database.pool)
     # Les profils de debit horaires (jour / soiree / nuit).
     schedules_repo = SchedulesRepository(database.pool)
+    # Les modes de debit (Backup, Night...) qu'on donne a un client d'un geste.
+    modes_repo = ModesRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
@@ -693,6 +697,7 @@ async def build_container(settings: Settings) -> Container:
         destinations_repo=destinations_repo,
         traffic_rules_repo=traffic_rules_repo,
         schedules_repo=schedules_repo,
+        modes_repo=modes_repo,
         netflow=netflow,
         netflow_export=netflow_export,
         intel=intel,

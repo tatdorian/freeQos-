@@ -1059,11 +1059,24 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 
 **Units.** Every rate field has a **kbps / Mbps / Gbps** selector: a subscriber capped at 512 kbps is typed as such, not as `0.512 Mbps`, and displayed as "512 kbps". Internally everything is converted once, at the input, to Mbit/s. The API accepts `max_down_mbps`, `max_down_kbps` or `max_down_gbps` (same for upload, and `down_*` / `up_*` for a boost); two units for the same direction are refused as ambiguous.
 
-**Which rate wins.** From strongest to weakest: a running **boost**, a permanent **override**, the **bandwidth schedule** in its current time slot (see below), the subscriber's **plan**. A boost goes over the override then disappears; it does not erase it. A schedule never undoes an override: a decision taken on *this* subscriber (capped for non-payment, for instance) is not lifted because the night begins.
+**Which rate wins.** From strongest to weakest: a running **boost**, a permanent **override** (a hand-set rate, or the client's **bandwidth mode**), the **bandwidth schedule** in its current time slot (see below), the subscriber's **plan**. A boost goes over the override then disappears; it does not erase it. A schedule never undoes an override: a decision taken on *this* subscriber (capped for non-payment, for instance) is not lifted because the night begins.
 
 **Boosts.** A duration (1 minute to 7 days), then either a multiplier of the plan (the interface offers ×2, ×3 and ×5; the API accepts more than 1, up to 50) or explicit rates, and a reason. It is written immediately if writing is allowed and **expires by itself**: a job checks expiries every 30 s and brings the queue back to its normal rate — RouterOS knows nothing about the duration. A boost without an expiry is refused: it would be an override in disguise that never goes away.
 
 **A rate set by hand is written at once.** Setting a subscriber's or a link's rate writes the corresponding queue immediately (the full plan of the router, restricted to that queue), and the reply says what was written, on which router, or what prevented it (`apply_now=false` only records the intention).
+
+### Bandwidth modes (Backup, Night…)
+
+A **bandwidth mode** is a named rate given to a client in one click, from the **Clients** page: *Backup* when the backhaul is degraded, *Extreme backup* for a crisis or non-payment, *Night*... The operator picks a name in a list instead of typing rates (*Plans › Bandwidth modes*, or `/api/v1/bandwidth-modes`).
+
+- **Rate:** fixed (`rate_kind=fixed`, Mbps) or a **share of the client's plan** (`percent`: 200 = twice the plan). A share needs the client's plan; a client without a known plan can only get a fixed mode.
+- **Automatic** is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its **bandwidth schedule** — its rate then changes with the hour on its own.
+- **Where it sits:** a client's mode is its permanent override (`shaping_policies.max_down_mbps/max_up_mbps`, with `mode_id` and `mode_name`). It is therefore above the schedule (a client in *Backup* stays in *Backup* when the night begins) and below a running boost. Back to Automatic removes the override and keeps a running boost.
+- **Modes that stop boosts** (`disables_boost`): entering the mode clears the running boost, and a new boost is refused (`409 Boost is unavailable in <mode>. Change the mode first.`).
+- **Editing a mode's rate** re-applies it at once to every client in it. A mode given to clients cannot be deleted (`409`): put them back to Automatic or in another mode first.
+- **Writing:** like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.
+
+**Client actions** (`POST /api/v1/clients/actions`, `{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}`) act on one or several clients. The reply gives a result **per client** (`succeeded`, `failed`, `results[]`): a partial failure never looks like a complete success. More than one client needs the Supervisor level.
 
 ### Bandwidth schedules (day, evening, night)
 
@@ -1355,13 +1368,23 @@ freeQoS holds router credentials that can write across the whole network. Securi
 
 ### Interface accounts
 
-- **First account:** on the first visit, the interface offers to create one. It has the `edit` role.
-- **Two roles:** `read` and `edit`. A `read` account gets a `403` from the **server** on any write, whatever the route. Only an `edit` account manages accounts.
+- **First account:** on the first visit, the interface offers to create one. It is an Administrator (`edit`).
+- **Five access levels**, each including the rights of the previous ones, enforced by the **server** (a refused write is a `403` naming the level it needs, whatever the interface shows):
+
+| Level (`role`) | Sees | Can do | Interface |
+| --- | --- | --- | --- |
+| **Viewer** (`read`) | Everything | Nothing | Every page, read-only banner |
+| **User** (`user`) | Clients | On **one** client at a time: change its bandwidth mode, give or stop a boost | **Clients** page and own account only |
+| **Supervisor** (`supervisor`) | Clients | The User's actions on **several** clients at once | **Clients** page and own account only |
+| **Technician** (`technician`) | Everything | Every technical change: routers, plans, bandwidth modes and schedules, declared clients, settings, API keys | Every page |
+| **Administrator** (`edit`) | Everything | Everything, accounts and their levels included | Every page |
+
+  The writes open below Technician form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `POST /api/v1/clients/actions`): a route added later is technical until it is opened on purpose. The "several clients" check is made by `/clients/actions` itself, the only one that knows how many clients are targeted. Every change is recorded with the **account** that made it (the boost or mode's `updated_by`, the enforcement audit's author). An API key keeps its two scopes: `read`, or `write` (Administrator rights except accounts, which no key can manage). The stored values `read` and `edit` are those of the former two roles: existing accounts keep their level without migration.
 - **Passwords:** 12 characters minimum, too-common words are refused. They are hashed with scrypt (N=2^14, r=8, p=1, salted, compared in constant time).
 - **Anti-guessing:** 5 failures in 5 minutes lock the email **and** the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.
 - **Session:** an `HttpOnly`, `SameSite=Strict` cookie, valid 24 h, 30 days at most (`SESSION_TTL_HOURS`, `SESSION_MAX_HOURS`). Writes also check `Origin` and `Sec-Fetch-Site`.
 - **Log:** every login (successful, refused, locked), logout and account change is recorded with the address and browser. At login, everyone sees the date and origin of their previous login.
-- **Last editor:** at least one active account with edit rights always remains; the last one can be neither deleted, downgraded nor disabled.
+- **Last Administrator:** at least one active Administrator account always remains; the last one can be neither deleted, downgraded nor disabled.
 - **Sessions:** at most 10 open sessions per account; everyone sees their own sessions (browser, address, last activity) and can close them remotely. Changing a password or a role closes the other sessions.
 - **Journal retention:** login events are kept 180 days (*Settings › Accounts › Login journal*) and are also written to the container log (`auth login_failed …`), usable by fail2ban.
 
