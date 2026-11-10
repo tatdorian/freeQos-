@@ -401,3 +401,55 @@ def test_un_boost_multiplie_le_debit_en_vigueur_puis_le_rend(app_client, routeur
     app_client.portal.call(echoir)
     assert _file(routeur, "10.20.0.10")["max-limit"] == "550000/550000"
     assert app_client.get("/api/v1/shaping/boosts", headers=cle).json() == []
+
+
+def test_uisp_se_branche_et_montre_ses_antennes(app_client, routeur, monkeypatch) -> None:  # noqa: F811
+    """Brancher UISP (jeton chiffre, jamais rendu), lister ses antennes,
+    rattacher une antenne a un site."""
+    import app.api.uisp as module
+
+    class FauxUisp:
+        def __init__(self, url: str, jeton: str, **_k: object) -> None:
+            assert jeton == "jeton-secret"
+
+        async def raw_devices(self) -> list[dict]:
+            from tests.test_uisp_interface import APPAREIL
+
+            return [APPAREIL]
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(module, "UispProvider", FauxUisp)
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    lire = {"Authorization": f"Bearer {lecture}"}
+    assert app_client.get("/api/v1/uisp", headers=lire).json()["configured"] is False
+    r = app_client.put(
+        "/api/v1/uisp",
+        headers=lire,
+        json={"base_url": "https://uisp.test", "token": "jeton-secret"},
+    )
+    assert r.status_code == 403
+    r = app_client.put(
+        "/api/v1/uisp",
+        headers=cle,
+        json={"base_url": "https://uisp.test/nms/api/v2.1", "token": "jeton-secret"},
+    )
+    assert r.status_code == 200, r.text
+    etat = app_client.get("/api/v1/uisp", headers=lire).json()
+    assert etat["configured"] is True and etat["base_url"] == "https://uisp.test"
+    assert "jeton-secret" not in str(etat) and "token_enc" not in etat
+    # Un test sans resaisir le jeton : celui qui est garde sert.
+    r = app_client.post("/api/v1/uisp/test", headers=cle, json={})
+    assert r.json() == {"ok": True, "devices": 1, "with_capacity": 1}
+    [antenne] = app_client.get("/api/v1/uisp/devices", headers=lire).json()["devices"]
+    assert antenne["name"] == "BH-Plateau" and antenne["linked_pop"] is None
+    r = app_client.put(
+        "/api/v1/uisp/links/dev-1", headers=cle, json={"name": "BH-Plateau", "pop_name": "Plateau"}
+    )
+    assert r.status_code == 200, r.text
+    [antenne] = app_client.get("/api/v1/uisp/devices", headers=lire).json()["devices"]
+    assert antenne["linked_pop"] == "Plateau"
+    assert app_client.delete("/api/v1/uisp/links/dev-1", headers=cle).status_code == 200
+    assert app_client.delete("/api/v1/uisp", headers=cle).status_code == 200

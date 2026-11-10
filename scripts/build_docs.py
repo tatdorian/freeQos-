@@ -91,6 +91,7 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
         "its bandwidth mode, its boost and its plan, for one client or for a selection. "
         "The four cards on top filter the list; search, filters, sort and pages handle "
         "hundreds of clients; the list exports to CSV; Traffic charts the selected clients. "
+        "An Administrator adds a client (static IP, VLAN, ranges) with the + button. "
         "Clicking a client opens its page (Overview: status, usage now against its limit, "
         "limit, latency, usage over 1 hour, 24 hours or 7 days, connection; Plan & mode: "
         "change its mode, plan and boost; Activity: its history).",
@@ -177,14 +178,6 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
         [],
     ),
     (
-        "Subscribers",
-        "Every subscriber of every PoP, PPPoE and static-IP, filterable by PoP, kind and "
-        "login: rate against plan, latency, bufferbloat grade, running boost. The *Add a "
-        "client* form declares a static-IP client; *Declared static-IP clients* and "
-        "*Clients by VLAN* list the inventory.",
-        [],
-    ),
-    (
         "Plans",
         "Which rate for whom: the default plan, every client's plan and its source, and the "
         "packages pushed through the API.",
@@ -203,7 +196,9 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     ),
     (
         "Devices",
-        "Routers and antennas: their health, adding them, and the inventory.",
+        "Routers and antennas: their health, adding them, the Ubiquiti UISP controller "
+        "(connect it, see every antenna's radio capacity, attach backhauls to their site), "
+        "and the inventory. One section at a time: the table of contents works as tabs.",
         [
             "router health",
             "polled routers",

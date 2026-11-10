@@ -1368,3 +1368,26 @@ CREATE TABLE IF NOT EXISTS client_locations (
     updated_by  TEXT,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- CONTROLEUR UBIQUITI UISP, saisi depuis l'interface : son adresse et son jeton
+-- d'API (CHIFFRE, comme les mots de passe des routeurs). Une seule ligne : un
+-- WISP a un UISP. Les antennes qu'il connait se lisent a la demande ; celles
+-- qu'on rattache a un site (uisp_links) donnent leur capacite au shaping.
+CREATE TABLE IF NOT EXISTS uisp_controllers (
+    id           SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    base_url     TEXT NOT NULL,
+    token_enc    TEXT NOT NULL,
+    verify_tls   BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_by   TEXT,
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_ok_at   TIMESTAMPTZ,
+    last_error   TEXT,
+    device_count INTEGER
+);
+CREATE TABLE IF NOT EXISTS uisp_links (
+    device_id   TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    pop_name    TEXT NOT NULL,
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

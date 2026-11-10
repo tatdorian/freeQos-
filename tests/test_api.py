@@ -725,7 +725,7 @@ def test_historique_et_compteurs(client: TestClient) -> None:
 def test_interface_se_rend(client: TestClient) -> None:
     html = client.get("/").text
     assert "freeQoS" in html
-    for vue in ("#/dashboard", "#/network", "#/subscribers", "#/pops"):
+    for vue in ("#/dashboard", "#/network", "#/clients", "#/pops"):
         assert vue in html
 
 

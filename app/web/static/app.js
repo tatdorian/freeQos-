@@ -1196,8 +1196,38 @@ const state = {
   enforcementReason: null,
 };
 
+/** Les cartes de chiffres de toutes les pages, au dessin des cartes Clients :
+ *  une icone teintee choisie d'apres l'intitule, un grand nombre, du contexte. */
+const STAT_ICONES = [
+  [/download|downstream|down\b/i, 'down', 't-blue'],
+  [/upload|upstream|up\b/i, 'up', 't-orange'],
+  [/latency|rtt|delay/i, 'rtt', 't-green'],
+  [/subscriber|client|online|connected|seen/i, 'users', 't-indigo'],
+  [/capacity|backhaul|link|antenna/i, 'antenna', 't-teal'],
+  [/plan|package|pushed|default|set here/i, 'layers', 't-indigo'],
+  [/risk|alert|poor|error|fail/i, 'alert', 't-red'],
+  [/throughput|traffic|identified|sold|load/i, 'chart', 't-blue'],
+  [/healthy|good|ready/i, 'check', 't-green'],
+];
+const STAT_SVG = {
+  down: '<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>',
+  up: '<path d="M12 20V9"/><path d="M7 14l5-5 5 5"/><path d="M5 4h14"/>',
+  rtt: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9 2h6"/>',
+  users: '<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14c2.4.2 4 1.8 4.6 4.5"/>',
+  antenna: '<path d="M12 12v9"/><path d="M8.5 8.5a5 5 0 0 1 7 0"/><path d="M5.6 5.6a9 9 0 0 1 12.8 0"/><circle cx="12" cy="11" r="1.2"/>',
+  layers: '<path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/>',
+  alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v5"/><path d="M12 18h.01"/>',
+  chart: '<path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-5 3 3 5-6"/>',
+  check: '<circle cx="12" cy="12" r="9"/><path d="M8 12.5l2.6 2.6L16 9.5"/>',
+  dot: '<circle cx="12" cy="12" r="4"/>',
+};
+
 function statCard(cls, label, value, unit, sub) {
-  return '<div class="card stat ' + cls + '"><div class="label">' + esc(label) + '</div>' +
+  const trouve = STAT_ICONES.find(([re]) => re.test(label)) || [null, 'dot', 't-gray'];
+  // La teinte suit l'etat quand la carte en porte un (ok / warn / crit).
+  const teinte = /\bcrit\b/.test(cls) ? 't-red' : /\bwarn\b/.test(cls) ? 't-orange' : /\bok\b/.test(cls) ? 't-green' : trouve[2];
+  return '<div class="card stat ' + cls + ' ' + teinte + '"><span class="stat-ico"><svg viewBox="0 0 24 24">' +
+    STAT_SVG[trouve[1]] + '</svg></span><div class="label">' + esc(label) + '</div>' +
     '<div class="value">' + esc(value) + (unit ? '<span class="unit">' + esc(unit) + '</span>' : '') + '</div>' +
     (sub ? '<div class="sub">' + sub + '</div>' : '') + '</div>';
 }
@@ -4717,6 +4747,7 @@ async function scEnregistrer(event) {
     // Declarer un client le retire de la liste des candidats : les deux
     // tableaux doivent etre relus ensemble, sinon il apparait aux deux endroits.
     await Promise.all([loadStaticClients(), loadVlanClients()]);
+    if (state.view === 'clients') loadClients();
     // La fiche modifiee change le plan : le tableau des abonnes doit suivre.
     await loadSubscribers();
   } catch (err) {
@@ -4737,6 +4768,7 @@ async function scSupprimer(id, fiches) {
     if (scEdition && String(scEdition.id) === String(id)) scRemplirFormulaire(null);
     // Retirer une fiche peut faire REAPPARAITRE son adresse en candidat.
     await Promise.all([loadStaticClients(), loadVlanClients()]);
+    if (state.view === 'clients') loadClients();
     await loadSubscribers();
   } catch (err) {
     scNotice('<span class="badge crit">' + esc(err.message) + '</span>');
@@ -4820,6 +4852,7 @@ function closeDrawer() {
 
 async function loadPops() {
   const pops = await api('/pops');
+  state.pops = pops;
   const host = document.getElementById('pops-table');
   if (!pops.length) {
     host.innerHTML = '<div class="empty">No site. They appear as soon as a ' +
@@ -4883,6 +4916,137 @@ function modeleConnu(nom) {
   const h = (state.routerHealth || {})[nom];
   if (!h || !h.board_name) return '-';
   return h.board_name + (h.version ? ' · ' + h.version : '');
+}
+
+/* ---------------------------------------------------------- Ubiquiti UISP
+ * Relier le controleur UISP (adresse + jeton d'API), voir ses antennes et leur
+ * potentiel radio, et rattacher celles d'un backhaul a leur site. */
+const UISP = { conf: null, devices: null, err: null, edit: false, loadedAt: 0 };
+
+async function loadUisp(force) {
+  const carte = document.getElementById('uisp-card');
+  if (!carte) return;
+  try {
+    UISP.conf = await api('/uisp');
+  } catch (err) {
+    carte.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  renderUisp();
+  // La liste des antennes interroge UISP : pas a chaque rafraichissement.
+  if (UISP.conf.configured && (force || !UISP.devices || Date.now() - UISP.loadedAt > 120000)) {
+    UISP.loadedAt = Date.now();
+    try {
+      UISP.devices = (await api('/uisp/devices')).devices || [];
+      UISP.err = null;
+    } catch (err) {
+      UISP.err = err.message;
+    }
+    renderUisp();
+  }
+}
+
+function renderUisp() {
+  const carte = document.getElementById('uisp-card');
+  const liste = document.getElementById('uisp-devices');
+  const c = UISP.conf || {};
+  const admin = peut('edit');
+  const formulaire = (admin && (!c.configured || UISP.edit)) ? '<form class="uisp-form" id="uisp-form" autocomplete="off">' +
+      '<div class="row-3"><div class="field"><label for="uisp-url">UISP address</label>' +
+        '<input id="uisp-url" required placeholder="uisp.example.net" value="' + esc(c.base_url || '') + '"></div>' +
+      '<div class="field"><label for="uisp-token">API token</label>' +
+        '<input id="uisp-token" type="password" autocomplete="new-password" placeholder="' +
+          (c.configured ? 'stored (leave empty to keep it)' : 'UISP › Settings › Users › API tokens') + '"></div>' +
+      '<div class="field"><label>&nbsp;</label><label class="chk"><input type="checkbox" id="uisp-tls"' +
+        (c.verify_tls === false ? '' : ' checked') + '> Verify the certificate</label></div></div>' +
+      '<div class="actions"><button type="button" id="uisp-test">Test the connection</button>' +
+        '<button type="submit" class="primary">Save</button>' +
+        (c.configured ? '<button type="button" class="link-btn" id="uisp-cancel">Cancel</button>' : '') +
+        '<span class="spacer"></span><span id="uisp-msg"></span></div></form>' : '';
+  carte.innerHTML = c.configured
+    ? '<div class="uisp-head"><span class="uisp-logo">U</span><div><b>' + esc(c.base_url) + '</b>' +
+        '<span class="hint" style="display:block">' + (c.last_error ? '<span class="lvl-txt-crit">' + esc(c.last_error) + '</span>'
+          : c.last_ok_at ? 'Read ' + esc(depuis(c.last_ok_at)) + ' · ' + (c.device_count || 0) + ' device(s)' : 'Not read yet') +
+          ' · ' + (c.links || []).length + ' antenna(s) attached to a site</span></div>' +
+        '<span class="spacer"></span>' +
+        '<button type="button" class="sm" id="uisp-refresh">Refresh</button>' +
+        (admin ? '<button type="button" class="sm" id="uisp-edit">Change</button>' +
+          '<button type="button" class="sm danger" id="uisp-del">Disconnect</button>' : '') + '</div>' + formulaire
+    : '<div class="uisp-head"><span class="uisp-logo">U</span><div><b>No UISP connected</b>' +
+        '<span class="hint" style="display:block">Connect your Ubiquiti UISP to see every airMAX / LTU antenna, its radio capacity ' +
+        'and signal, and to feed the capacity of backhauls to the shaping.' + (admin ? '' : ' An Administrator connects it.') +
+        '</span></div></div>' + formulaire;
+  // Les antennes.
+  if (!c.configured) { liste.innerHTML = ''; } else if (UISP.err) {
+    liste.innerHTML = '<div class="notice err">' + esc(UISP.err) + '</div>';
+  } else if (!UISP.devices) {
+    liste.innerHTML = '<div class="empty">Reading the antennas from UISP…</div>';
+  } else if (!UISP.devices.length) {
+    liste.innerHTML = '<div class="empty">UISP lists no device.</div>';
+  } else {
+    const pops = (state.pops || []).map((p) => p.name);
+    const cap = (v) => (v ? esc(mbps(v)) : '<span class="na">-</span>');
+    liste.innerHTML = '<table class="uisp-table"><thead><tr><th>Antenna</th><th>UISP site</th><th>Status</th>' +
+      '<th class="num">Capacity &darr;</th><th class="num">Capacity &uarr;</th><th class="num">Signal</th>' +
+      '<th class="num">Airtime</th><th>Attached to</th></tr></thead><tbody>' +
+      UISP.devices.map((d) => '<tr><td><b>' + esc(d.name || d.id) + '</b><span class="hint" style="display:block">' +
+          esc([d.model, d.role, d.ip].filter(Boolean).join(' · ')) + '</span></td>' +
+        '<td>' + esc(d.site || '') + '</td>' +
+        '<td><i class="dot-co ' + (d.online ? 'on' : 'off') + '"></i> ' + esc(d.status || (d.online ? 'active' : 'offline')) + '</td>' +
+        '<td class="num">' + cap(d.capacity_down_mbps) + '</td><td class="num">' + cap(d.capacity_up_mbps) + '</td>' +
+        '<td class="num">' + (d.signal_dbm != null ? esc(Math.round(d.signal_dbm)) + ' dBm' : '<span class="na">-</span>') + '</td>' +
+        '<td class="num">' + (d.airtime_pct != null ? esc(Math.round(d.airtime_pct)) + ' %' : '<span class="na">-</span>') + '</td>' +
+        '<td>' + (admin ? '<select class="uisp-link" data-dev="' + esc(d.id) + '" data-name="' + esc(d.name || d.id) + '">' +
+            '<option value="">Not attached</option>' + pops.map((n) => '<option' + (n === d.linked_pop ? ' selected' : '') + '>' +
+            esc(n) + '</option>').join('') + (d.linked_pop && !pops.includes(d.linked_pop) ? '<option selected>' +
+            esc(d.linked_pop) + '</option>' : '') + '</select>'
+          : esc(d.linked_pop || '-')) + '</td></tr>').join('') + '</tbody></table>' +
+      '<p class="hint" style="display:block">Attach the antenna of a site\'s backhaul to that site: its radio capacity becomes the ' +
+      'ceiling of the site\'s queue (read every backhaul cycle).</p>';
+  }
+  const q = (id) => document.getElementById(id);
+  if (q('uisp-refresh')) q('uisp-refresh').onclick = () => { UISP.devices = null; renderUisp(); loadUisp(true); };
+  if (q('uisp-edit')) q('uisp-edit').onclick = () => { UISP.edit = true; renderUisp(); };
+  if (q('uisp-cancel')) q('uisp-cancel').onclick = () => { UISP.edit = false; renderUisp(); };
+  if (q('uisp-del')) q('uisp-del').onclick = async () => {
+    if (!confirm('Disconnect UISP? The attached antennas stop feeding the capacity.')) return;
+    await api('/uisp', { method: 'DELETE' }).catch((e) => alert(e.message));
+    UISP.devices = null;
+    loadUisp(true);
+  };
+  const corps = () => ({ base_url: q('uisp-url').value.trim(), token: q('uisp-token').value.trim() || null,
+    verify_tls: q('uisp-tls').checked });
+  const msg = (html) => { q('uisp-msg').innerHTML = html; };
+  if (q('uisp-test')) q('uisp-test').onclick = async () => {
+    msg('<span class="hint">Testing…</span>');
+    try {
+      const r = await api('/uisp/test', { method: 'POST', body: JSON.stringify(corps()) });
+      msg(r.ok ? '<span class="lvl-txt-ok">&#10003; Connected: ' + r.devices + ' device(s), ' + r.with_capacity +
+        ' with a radio capacity</span>' : '<span class="lvl-txt-crit">&#10007; ' + esc(r.detail) + '</span>');
+    } catch (err) { msg('<span class="lvl-txt-crit">' + esc(err.message) + '</span>'); }
+  };
+  if (q('uisp-form')) q('uisp-form').onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api('/uisp', { method: 'PUT', body: JSON.stringify(corps()) });
+      UISP.edit = false;
+      UISP.devices = null;
+      loadUisp(true);
+    } catch (err) { msg('<span class="lvl-txt-crit">' + esc(err.message) + '</span>'); }
+  };
+  liste.querySelectorAll('.uisp-link').forEach((s) => s.addEventListener('change', async () => {
+    try {
+      if (s.value) {
+        await api('/uisp/links/' + encodeURIComponent(s.dataset.dev), { method: 'PUT',
+          body: JSON.stringify({ name: s.dataset.name, pop_name: s.value }) });
+      } else {
+        await api('/uisp/links/' + encodeURIComponent(s.dataset.dev), { method: 'DELETE' }).catch(() => null);
+      }
+      toast('<b>' + esc(s.dataset.name) + '</b> ' + (s.value ? 'attached to ' + esc(s.value) : 'detached') + '.', 3500);
+      UISP.conf = await api('/uisp');
+      renderUisp();
+    } catch (err) { toast(esc(err.message), 6000); }
+  }));
 }
 
 async function loadRoutersHealth() {
@@ -5026,6 +5190,7 @@ async function loadRadioHealth() {
 
 async function loadRouters() {
   await loadPops();
+  loadUisp();
   await loadAntennas();
   loadRadioHealth();
   // La sante interroge les routeurs un par un : lancee sans attendre, pour ne
@@ -10581,6 +10746,8 @@ function filtrerClients() {
 
 async function loadClients() {
   cablerClients();
+  // Ajouter un client (IP fixe, VLAN) : un geste d'Administrator.
+  document.querySelector('#sc-toggle').hidden = !peut('edit');
   await loadClientsData();
   const rows = CLI.rows;
   // Une selection ne survit qu'aux clients qui existent encore.
@@ -10691,30 +10858,258 @@ function trierClients(lignes) {
   return t;
 }
 
-/** La liste des clients, en CSV (s'ouvre dans un tableur) : ce que montrent
- *  les filtres, toutes pages confondues. */
-function exportClientsCsv() {
-  const cellule = (v) => {
-    const t = v == null ? '' : String(v);
-    return /[",;\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
-  };
-  const tete = ['Client', 'IP address', 'Site', 'Status', 'Last seen', 'Mode', 'Boost',
-    'Download now (Mbps)', 'Upload now (Mbps)', 'Limit down (Mbps)', 'Limit up (Mbps)',
-    'Plan down (Mbps)', 'Plan up (Mbps)'];
-  const n = (v, d) => (v == null || v === '' ? '' : (Number(v) / d).toFixed(3));
-  const lignes = trierClients(filtrerClients()).map((r) => [
-    r.login, r.last_ip || '', r.pop_name || '', clientEnLigne(r) ? 'connected' : 'not connected',
-    r.ts ? new Date(r.ts).toISOString() : '', modeDuClient(r).text, CLI.boosts[r.login] ? 'yes' : '',
-    n(r.tx_bps, 1e6), n(r.rx_bps, 1e6), n(r.effective_down_mbps, 1), n(r.effective_up_mbps, 1),
-    n(r.plan_down_mbps, 1), n(r.plan_up_mbps, 1),
-  ]);
-  const texte = '\ufeff' + [tete, ...lignes].map((l) => l.map(cellule).join(',')).join('\r\n');
+/* ------------------------------------------------------------- exports
+ * La liste des clients, telle que filtree (toutes pages), en deux formats :
+ *  - EXCEL (.xlsx) : en-tete en couleur, colonnes a la bonne largeur, filtres,
+ *    premiere ligne figee, vrais nombres et vraies dates, etat colore, et une
+ *    feuille par site. Ecrit ici, sans bibliotheque (un zip « stocke ») ;
+ *  - CSV : le separateur de la langue du navigateur (« ; » et virgule
+ *    decimale en francais), sinon Excel range tout dans une seule colonne. */
+function lignesExport() {
+  const lignes = trierClients(filtrerClients());
+  return lignes.map((r) => {
+    const on = clientEnLigne(r);
+    const b = CLI.boosts[r.login];
+    const lim = Number(r.effective_down_mbps) || Number(r.plan_down_mbps) || 0;
+    const bas = r.tx_bps != null && on ? Number(r.tx_bps) / 1e6 : null;
+    return {
+      r,
+      client: r.login,
+      etat: on ? 'Online' : r.ts ? 'Offline' : 'Never seen',
+      vu: r.ts ? new Date(r.ts) : null,
+      site: r.pop_name || '',
+      genre: r.kind === 'static' ? 'Static IP' : r.kind === 'vlan' ? 'VLAN' : 'PPPoE',
+      ip: r.last_ip || '',
+      mode: modeDuClient(r).text,
+      source: SOURCE_LIMITE[r.limit_source] || r.limit_source || '',
+      boost: b ? (boostReste(b) || 'running') : '',
+      boostFin: b && (b.boost_expires_at || b.expires_at) && Number(b.seconds_left) < 2 * 365 * 86400
+        ? new Date(b.boost_expires_at || b.expires_at) : null,
+      bas,
+      haut: r.rx_bps != null && on ? Number(r.rx_bps) / 1e6 : null,
+      part: bas != null && lim ? bas / lim : null,
+      limBas: r.effective_down_mbps != null ? Number(r.effective_down_mbps) : null,
+      limHaut: r.effective_up_mbps != null ? Number(r.effective_up_mbps) : null,
+      planBas: r.plan_down_mbps != null ? Number(r.plan_down_mbps) : null,
+      planHaut: r.plan_up_mbps != null ? Number(r.plan_up_mbps) : null,
+      rtt: r.rtt_ms != null ? Math.round(Number(r.rtt_ms)) : null,
+      session: r.session_uptime_s ? uptime(r.session_uptime_s) : '',
+    };
+  });
+}
+
+const COLONNES_EXPORT = [
+  ['Client', 'client', 't', 24], ['Status', 'etat', 's', 12], ['Last seen', 'vu', 'd', 17],
+  ['Site', 'site', 't', 16], ['Kind', 'genre', 't', 10], ['IP address', 'ip', 't', 16],
+  ['Mode', 'mode', 't', 18], ['Limit set by', 'source', 't', 18], ['Boost', 'boost', 't', 14],
+  ['Boost ends', 'boostFin', 'd', 17], ['Download now (Mbps)', 'bas', 'n', 13],
+  ['Upload now (Mbps)', 'haut', 'n', 13], ['Use of limit', 'part', 'p', 11],
+  ['Limit down (Mbps)', 'limBas', 'n', 12], ['Limit up (Mbps)', 'limHaut', 'n', 12],
+  ['Plan down (Mbps)', 'planBas', 'n', 12], ['Plan up (Mbps)', 'planHaut', 'n', 12],
+  ['Latency (ms)', 'rtt', 'i', 10], ['Session', 'session', 't', 12],
+];
+
+function nomFichierExport(ext) {
+  const site = document.getElementById('cli-pop').value;
+  return 'freeqos-clients' + (site ? '-' + site.toLowerCase().replace(/[^a-z0-9]+/g, '-') : '') + '-' +
+    new Date().toISOString().slice(0, 10) + '.' + ext;
+}
+
+function telecharger(contenu, type, nom) {
   const lien = document.createElement('a');
-  lien.href = URL.createObjectURL(new Blob([texte], { type: 'text/csv;charset=utf-8' }));
-  lien.download = 'freeqos-clients-' + new Date().toISOString().slice(0, 10) + '.csv';
+  lien.href = URL.createObjectURL(new Blob([contenu], { type }));
+  lien.download = nom;
   document.body.appendChild(lien);
   lien.click();
-  setTimeout(() => { URL.revokeObjectURL(lien.href); lien.remove(); }, 1000);
+  setTimeout(() => { URL.revokeObjectURL(lien.href); lien.remove(); }, 2000);
+}
+
+function exportClientsCsv() {
+  // Separateur et virgule decimale selon la langue : en francais, Excel attend
+  // « ; » et « 1,5 ».
+  const decimal = (1.5).toLocaleString().includes(',') ? ',' : '.';
+  const sep = decimal === ',' ? ';' : ',';
+  const cellule = (v, t) => {
+    if (v == null || v === '') return '';
+    let txt;
+    if (t === 'd') txt = v.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' });
+    else if (t === 'n') txt = v.toFixed(3).replace('.', decimal);
+    else if (t === 'p') txt = (v * 100).toFixed(0) + ' %';
+    else txt = String(v);
+    return new RegExp('["\\n\\r' + sep + ']').test(txt) ? '"' + txt.replace(/"/g, '""') + '"' : txt;
+  };
+  const lignes = lignesExport();
+  const texte = '﻿' + [COLONNES_EXPORT.map((c) => cellule(c[0], 't')).join(sep),
+    ...lignes.map((l) => COLONNES_EXPORT.map((c) => cellule(l[c[1]], c[2])).join(sep))].join('\r\n');
+  telecharger(texte, 'text/csv;charset=utf-8', nomFichierExport('csv'));
+}
+
+/* --- un zip « stocke » (sans compression) : ce qu'il faut pour un .xlsx --- */
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(octets) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < octets.length; i++) c = CRC_TABLE[(c ^ octets[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function zipStocke(fichiers) {
+  const enc = new TextEncoder();
+  const parts = [];
+  const central = [];
+  let pos = 0;
+  const u16 = (v) => [v & 255, (v >> 8) & 255];
+  const u32 = (v) => [v & 255, (v >> 8) & 255, (v >> 16) & 255, (v >>> 24) & 255];
+  fichiers.forEach(([nom, texte]) => {
+    const n = enc.encode(nom);
+    const d = enc.encode(texte);
+    const crc = crc32(d);
+    const tete = new Uint8Array([...u32(0x04034b50), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0), ...u16(0x21),
+      ...u32(crc), ...u32(d.length), ...u32(d.length), ...u16(n.length), ...u16(0)]);
+    parts.push(tete, n, d);
+    central.push(new Uint8Array([...u32(0x02014b50), ...u16(20), ...u16(20), ...u16(0x0800), ...u16(0), ...u16(0),
+      ...u16(0x21), ...u32(crc), ...u32(d.length), ...u32(d.length), ...u16(n.length), ...u16(0), ...u16(0),
+      ...u16(0), ...u16(0), ...u32(0), ...u32(pos)]), n);
+    pos += tete.length + n.length + d.length;
+  });
+  const tailleCentral = central.reduce((a, x) => a + x.length, 0);
+  const fin = new Uint8Array([...u32(0x06054b50), ...u16(0), ...u16(0), ...u16(fichiers.length), ...u16(fichiers.length),
+    ...u32(tailleCentral), ...u32(pos), ...u16(0)]);
+  return new Blob([...parts, ...central, fin], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+function xmlEsc(t) {
+  return String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+}
+function colXlsx(i) {
+  let s = '';
+  for (let n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
+/** Une feuille : en-tete (style 1), lignes typees, colonnes, filtre, volet fige. */
+function feuilleXlsx(colonnes, lignes, styleLigne) {
+  const serie = (d) => (d.getTime() - d.getTimezoneOffset() * 60000) / 86400000 + 25569;
+  const cell = (ref, v, t, style) => {
+    if (v == null || v === '') return '<c r="' + ref + '" s="' + (style || 0) + '"/>';
+    if (t === 'd') return '<c r="' + ref + '" s="4"><v>' + serie(v).toFixed(6) + '</v></c>';
+    if (t === 'n') return '<c r="' + ref + '" s="2"><v>' + Number(v).toFixed(4) + '</v></c>';
+    if (t === 'i') return '<c r="' + ref + '" s="3"><v>' + Math.round(v) + '</v></c>';
+    if (t === 'p') return '<c r="' + ref + '" s="' + (v >= 0.9 ? 9 : v >= 0.6 ? 10 : 8) + '"><v>' + Number(v).toFixed(4) + '</v></c>';
+    return '<c r="' + ref + '" t="inlineStr" s="' + (style || 0) + '"><is><t xml:space="preserve">' + xmlEsc(v) + '</t></is></c>';
+  };
+  const n = lignes.length + 1;
+  const der = colXlsx(colonnes.length - 1);
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<sheetViews><sheetView workbookViewId="0" zoomScale="110"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>' +
+    '<sheetFormatPr defaultRowHeight="18"/>' +
+    '<cols>' + colonnes.map((c, i) => '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + c[3] + '" customWidth="1"/>').join('') + '</cols>' +
+    '<sheetData><row r="1" ht="24" customHeight="1">' + colonnes.map((c, i) => cell(colXlsx(i) + '1', c[0], 't', 1)).join('') + '</row>' +
+    lignes.map((l, j) => '<row r="' + (j + 2) + '">' + colonnes.map((c, i) =>
+      cell(colXlsx(i) + (j + 2), l[c[1]], c[2], c[2] === 's' ? styleLigne(l) : 0)).join('') + '</row>').join('') +
+    '</sheetData><autoFilter ref="A1:' + der + n + '"/>' +
+    '<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>' +
+    '<pageSetup orientation="landscape" fitToWidth="1" fitToHeight="0"/></worksheet>';
+}
+
+function exportClientsXlsx() {
+  const lignes = lignesExport();
+  const etat = (l) => (l.etat === 'Online' ? 5 : l.etat === 'Offline' ? 6 : 7);
+  // La feuille des sites : chaque site, ses clients, connectes, en mode, boosts.
+  const parSite = {};
+  lignes.forEach((l) => {
+    const s = parSite[l.site || '-'] = parSite[l.site || '-'] || { site: l.site || '-', n: 0, on: 0, mode: 0, boost: 0, bas: 0 };
+    s.n += 1;
+    if (l.etat === 'Online') s.on += 1;
+    if (l.mode !== 'Automatic' && !String(l.mode).startsWith('Automatic')) s.mode += 1;
+    if (l.boost) s.boost += 1;
+    s.bas += l.bas || 0;
+  });
+  const sites = Object.values(parSite).sort((a, b) => a.site.localeCompare(b.site)).map((s) => ({
+    ...s, off: s.n - s.on, part: s.n ? s.on / s.n : 0, etat: s.n && s.on / s.n >= 0.8 ? 'Online' : s.on ? 'Offline' : 'Never seen',
+  }));
+  const colSites = [['Site', 'site', 't', 22], ['Clients', 'n', 'i', 10], ['Connected', 'on', 'i', 11],
+    ['Offline', 'off', 'i', 10], ['Connected share', 'part', 'p', 15], ['In a mode', 'mode', 'i', 11],
+    ['Boosts', 'boost', 'i', 9], ['Download now (Mbps)', 'bas', 'n', 18]];
+  const styles = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
+    '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<numFmts count="2"><numFmt numFmtId="164" formatCode="yyyy-mm-dd hh:mm"/><numFmt numFmtId="165" formatCode="0.000"/></numFmts>' +
+    '<fonts count="5"><font><sz val="11"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><color rgb="FF1E8E3E"/><name val="Calibri"/></font>' +
+      '<font><b/><sz val="11"/><color rgb="FFD93025"/><name val="Calibri"/></font>' +
+      '<font><sz val="11"/><color rgb="FF8E8E93"/><name val="Calibri"/></font></fonts>' +
+    '<fills count="6"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FF1F5FD6"/></patternFill></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFE6F4EA"/></patternFill></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFFEF3E0"/></patternFill></fill>' +
+      '<fill><patternFill patternType="solid"><fgColor rgb="FFFCE8E6"/></patternFill></fill></fills>' +
+    '<borders count="2"><border/><border><bottom style="thin"><color rgb="FFD1D1D6"/></bottom></border></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="11">' +
+      '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+      '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf>' +
+      '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+      '<xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+      '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+      '<xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/>' +
+      '<xf numFmtId="0" fontId="3" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1"/>' +
+      '<xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1"/>' +
+      '<xf numFmtId="9" fontId="0" fillId="3" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>' +
+      '<xf numFmtId="9" fontId="3" fillId="5" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1"/>' +
+      '<xf numFmtId="9" fontId="0" fillId="4" borderId="0" xfId="0" applyNumberFormat="1" applyFill="1"/>' +
+    '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+  const quand = new Date().toISOString();
+  const fichiers = [
+    ['[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '<Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+      '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' +
+      '<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/></Types>'],
+    ['_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/></Relationships>'],
+    ['docProps/core.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" ' +
+      'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">' +
+      '<dc:title>freeQoS clients</dc:title><dc:creator>' + xmlEsc((AUTH.user && AUTH.user.email) || 'freeQoS') + '</dc:creator>' +
+      '<dcterms:created xsi:type="dcterms:W3CDTF">' + quand + '</dcterms:created></cp:coreProperties>'],
+    ['xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
+      'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>' +
+      '<sheet name="Clients" sheetId="1" r:id="rId1"/><sheet name="Sites" sheetId="2" r:id="rId2"/></sheets>' +
+      '<definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">Clients!$A$1:$' + colXlsx(COLONNES_EXPORT.length - 1) + '$' + (lignes.length + 1) + '</definedName></definedNames></workbook>'],
+    ['xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+      '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+      '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>' +
+      '<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
+    ['xl/styles.xml', styles],
+    ['xl/worksheets/sheet1.xml', feuilleXlsx(COLONNES_EXPORT, lignes, etat)],
+    ['xl/worksheets/sheet2.xml', feuilleXlsx(colSites, sites, etat)],
+  ];
+  telecharger(zipStocke(fichiers), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', nomFichierExport('xlsx'));
+}
+
+function openExportDialog() {
+  const n = filtrerClients().length;
+  const m = openModal('<div class="modal-head"><div><h3>Export the clients</h3><div class="sub">' + n +
+    ' client(s), as filtered, every page</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body"><div class="exp-choices">' +
+      '<button type="button" class="exp-choice" id="exp-xlsx"><b>Excel (.xlsx)</b><span>Formatted: coloured header and status, ' +
+        'filters, frozen header row, real numbers and dates. A second sheet sums up each site.</span></button>' +
+      '<button type="button" class="exp-choice" id="exp-csv"><b>CSV</b><span>Plain table for any tool; separator adapted to your ' +
+        'language (“;” and decimal comma in French) so that it opens in columns.</span></button></div>' +
+    '<p class="hint" style="display:block">Columns: client, status, last seen, site, kind, IP address, mode, what sets the limit, boost ' +
+      'and its end, download and upload now, use of the limit, limit, plan, latency, session.</p></div>');
+  m.root.querySelector('#exp-xlsx').addEventListener('click', () => { exportClientsXlsx(); m.fermer(); });
+  m.root.querySelector('#exp-csv').addEventListener('click', () => { exportClientsCsv(); m.fermer(); });
 }
 
 function renderClients() {
@@ -10874,7 +11269,7 @@ function cablerClients() {
   ['cli-search'].forEach((id) => document.getElementById(id).addEventListener('input', auDebut));
   ['cli-pop', 'cli-status', 'cli-mode', 'cli-sort'].forEach((id) =>
     document.getElementById(id).addEventListener('change', auDebut));
-  document.getElementById('cli-csv').addEventListener('click', exportClientsCsv);
+  document.getElementById('cli-csv').addEventListener('click', openExportDialog);
   document.getElementById('cli-clear').addEventListener('click', () => {
     CLI.onlySel = false;
     ['cli-search', 'cli-pop', 'cli-status', 'cli-mode'].forEach((id) => { document.getElementById(id).value = ''; });
@@ -11234,7 +11629,12 @@ async function loadModesAdmin() {
     document.getElementById('mode-up').value = +(m.up_value * f).toFixed(3);
     document.getElementById('mode-position').value = m.position || 0;
     document.getElementById('mode-note').value = m.note || '';
-    document.getElementById('modes-form-title').textContent = 'Edit ' + m.name;
+    document.getElementById('modes-form-title').innerHTML = 'Edit ' + esc(m.name) +
+      ' <button type="button" class="sm" id="mode-edit-clients">Its clients (' + (m.clients || 0) + ')</button>';
+    document.getElementById('mode-edit-clients').addEventListener('click', async () => {
+      if (!CLI.rows.length) await loadClientsData();
+      openModeClients(m.id);
+    });
     document.getElementById('mode-submit').textContent = 'Save and apply to its clients';
     document.getElementById('mode-cancel').hidden = false;
     document.getElementById('mode-name').focus();
@@ -12627,13 +13027,94 @@ async function loadModesPage() {
     '<div class="cp-card-head"><div><h3>' + esc(titre) + '</h3><span class="hint">' + sous + '</span></div>' +
     '<span class="badge" title="clients">' + liste.length + '</span></div><div class="chips">' + puces(liste) + '</div>' +
     (extra || '') + '</div>';
+  const gerer = (m) => peut('operator') ? '<div class="actions" style="margin-top:.6rem">' +
+    '<button type="button" class="sm" data-mode-clients="' + m.id + '">Add or remove clients</button></div>' : '';
   document.getElementById('modes-board').innerHTML = '<div class="mode-board">' +
     carte('Automatic', 'Plan and time-of-day schedule', parMode.auto, 'auto') +
     CLI.modes.map((m) => carte(m.name, esc(modeTaux(m)),
-      parMode[m.id], m.disables_boost ? 'crit' : '')).join('') +
+      parMode[m.id], m.disables_boost ? 'crit' : '', gerer(m))).join('') +
     (manuels.length ? carte('Manual limit', 'Set by hand by an Administrator', manuels, '') : '') +
     '</div>';
+  document.querySelectorAll('[data-mode-clients]').forEach((b) =>
+    b.addEventListener('click', () => openModeClients(Number(b.dataset.modeClients))));
   await loadModesAdmin();
+}
+
+/** Les clients d'un mode : une liste a cocher (recherche, par site). Cocher
+ *  met le client dans ce mode ; decocher le rend a Automatic. */
+function openModeClients(modeId) {
+  const m = CLI.modes.find((x) => x.id === modeId);
+  if (!m) return;
+  const avant = new Set(CLI.rows.filter((r) => r.mode_id === modeId).map((r) => r.login));
+  const choisis = new Set(avant);
+  const { root, fermer } = openModal('<div class="modal-head"><div><h3>Clients in ' + esc(m.name) + '</h3>' +
+    '<div class="sub">' + esc(modeTaux(m)) + '</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body"><div class="mc-bar"><input type="search" id="mc-q" placeholder="Search a client, a site or an IP" autocomplete="off">' +
+      '<select id="mc-site" aria-label="Site"><option value="">All sites</option>' +
+        [...new Set(CLI.rows.map((r) => r.pop_name).filter(Boolean))].sort().map((x) => '<option>' + esc(x) + '</option>').join('') +
+      '</select></div>' +
+    '<div class="mc-tools"><button type="button" class="sm link-btn" id="mc-all">Tick all shown</button>' +
+      '<button type="button" class="sm link-btn" id="mc-none">Untick all shown</button><span class="spacer"></span>' +
+      '<span class="mode" id="mc-count"></span></div>' +
+    '<div class="mc-list" id="mc-list"></div><div id="mc-out"></div></div>' +
+    '<div class="modal-foot"><button data-modal-close>Cancel</button><button class="primary" id="mc-go">Apply</button></div>');
+  m && root.classList.add('modal-wide');
+  const visibles = () => {
+    const q = root.querySelector('#mc-q').value.trim().toLowerCase();
+    const site = root.querySelector('#mc-site').value;
+    return CLI.rows.filter((r) => (!site || r.pop_name === site) &&
+      (!q || [r.login, r.pop_name, r.last_ip].some((v) => String(v || '').toLowerCase().includes(q))))
+      .sort((a, b) => String(a.pop_name || '').localeCompare(String(b.pop_name || '')) || a.login.localeCompare(b.login));
+  };
+  const compte = () => {
+    const ajout = [...choisis].filter((l) => !avant.has(l)).length;
+    const retrait = [...avant].filter((l) => !choisis.has(l)).length;
+    root.querySelector('#mc-count').textContent = choisis.size + ' in ' + m.name +
+      (ajout || retrait ? ' · +' + ajout + ' / −' + retrait : '');
+    root.querySelector('#mc-go').disabled = !ajout && !retrait;
+  };
+  const dessiner = () => {
+    let site = null;
+    root.querySelector('#mc-list').innerHTML = visibles().map((r) => {
+      const entete = r.pop_name !== site ? '<div class="mc-site">' + esc((site = r.pop_name) || 'No site') + '</div>' : '';
+      const actuel = modeDuClient(r);
+      return entete + '<label class="mc-row"><input type="checkbox" data-mc="' + esc(r.login) + '"' +
+        (choisis.has(r.login) ? ' checked' : '') + '><i class="dot-co ' + (clientEnLigne(r) ? 'on' : 'off') + '"></i>' +
+        '<span class="mc-name">' + esc(r.login) + '</span>' +
+        (r.mode_id === modeId ? '' : '<span class="mode-pill ' + actuel.cls + '">' + esc(actuel.text) + '</span>') + '</label>';
+    }).join('') || '<div class="empty">No client found.</div>';
+    root.querySelectorAll('[data-mc]').forEach((c) => c.addEventListener('change', () => {
+      if (c.checked) choisis.add(c.dataset.mc); else choisis.delete(c.dataset.mc);
+      compte();
+    }));
+    compte();
+  };
+  root.querySelector('#mc-q').addEventListener('input', dessiner);
+  root.querySelector('#mc-site').addEventListener('change', dessiner);
+  root.querySelector('#mc-all').addEventListener('click', () => { visibles().forEach((r) => choisis.add(r.login)); dessiner(); });
+  root.querySelector('#mc-none').addEventListener('click', () => { visibles().forEach((r) => choisis.delete(r.login)); dessiner(); });
+  root.querySelector('#mc-go').addEventListener('click', async (e) => {
+    const bouton = e.target;
+    bouton.disabled = true;
+    const ajout = [...choisis].filter((l) => !avant.has(l));
+    const retrait = [...avant].filter((l) => !choisis.has(l));
+    const sortie = root.querySelector('#mc-out');
+    try {
+      const res = [];
+      if (ajout.length) res.push(await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: ajout, action: 'mode', mode_id: modeId }) }));
+      if (retrait.length) res.push(await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: retrait, action: 'mode', mode_id: null }) }));
+      sortie.innerHTML = res.map(rendreResultats).join('') +
+        (retrait.length ? '<p class="hint" style="display:block">Unticked clients are back to Automatic.</p>' : '');
+      await loadModesPage();
+      root.querySelector('.modal-foot').innerHTML = '<button class="primary" data-modal-close>Done</button>';
+      root.querySelector('[data-modal-close]').addEventListener('click', fermer);
+    } catch (err) {
+      sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      bouton.disabled = false;
+    }
+  });
+  dessiner();
+  root.querySelector('#mc-q').focus();
 }
 
 /* ------------------------------------------------- mon compte (operateur) */
@@ -12678,7 +13159,6 @@ const LOADERS = {
   exec: loadExec,
   traffic: loadTraffic,
   network: loadNetwork,
-  subscribers: loadSubscribers,
   plans: loadPlans,
   insights: loadInsights,
   pops: loadRouters,
@@ -12688,6 +13168,7 @@ const LOADERS = {
 
 async function show(view) {
   if (view === 'services') view = 'traffic'; // ancien onglet, fusionne dans Trafic
+  if (view === 'subscribers') view = 'clients'; // ancien onglet Abonnes, remplace par Clients
   if (!LOADERS[view]) view = 'dashboard';
   state.view = view;
   document.body.dataset.view = view;
@@ -13169,33 +13650,72 @@ document.getElementById('refresh-btn').addEventListener('click', () => { if (AUT
 /** Le sommaire de la page : une pastille par section visible, pour y sauter.
  *  Reconstruit apres chaque chargement (une section peut apparaitre avec ses
  *  donnees) ; rien n'est touche si la liste n'a pas change. */
+/* LES LONGUES PAGES DE REGLAGE SE LISENT PAR ONGLET. Settings et Devices
+ * empilaient des dizaines d'ecrans : leurs sections deviennent des onglets, une
+ * seule visible a la fois. Une section = son titre et ce qui le suit jusqu'au
+ * titre suivant (dans le meme parent). */
+const VUES_ONGLETS = new Set(['settings', 'pops']);
+const ONGLET = {};
+
+function blocsDeSection(vue, titres) {
+  const ancre = (h) => (h.parentElement && h.parentElement.classList.contains('chart-head') ? h.parentElement : h);
+  const debuts = new Set(titres.map(ancre));
+  return titres.map((h) => {
+    const bloc = [ancre(h)];
+    for (let n = ancre(h).nextElementSibling; n && !debuts.has(n) && !n.querySelector('h2'); n = n.nextElementSibling) bloc.push(n);
+    return bloc;
+  });
+}
+
+function appliquerOnglets(vue, titres) {
+  vue.querySelectorAll('.tab-hidden').forEach((el) => el.classList.remove('tab-hidden'));
+  if (!VUES_ONGLETS.has(state.view) || titres.length < 3) return;
+  const ids = titres.map((h) => h.id);
+  if (!ids.includes(ONGLET[state.view])) ONGLET[state.view] = ids[0];
+  const blocs = blocsDeSection(vue, titres);
+  titres.forEach((h, i) => {
+    if (h.id !== ONGLET[state.view]) blocs[i].forEach((el) => el.classList.add('tab-hidden'));
+  });
+  document.querySelectorAll('#page-toc [data-toc]').forEach((a) => a.classList.toggle('active', a.dataset.toc === ONGLET[state.view]));
+}
+
 function construireSommaire() {
   const nav = document.getElementById('page-toc');
   const vue = document.getElementById('view-' + state.view);
   if (!nav || !vue) return;
+  vue.querySelectorAll('.tab-hidden').forEach((el) => el.classList.remove('tab-hidden'));
   const titres = [...vue.querySelectorAll('h2')].filter((h) => h.offsetParent !== null &&
     !h.closest('details:not([open]) > :not(summary)') && libelleAide(h, true));
+  titres.forEach((h, i) => { if (!h.id) h.id = 'sec-' + state.view + '-' + i; });
   const signature = state.view + '|' + titres.map((h) => libelleAide(h, true)).join('|');
-  if (nav.dataset.sig === signature) return;
-  nav.dataset.sig = signature;
-  if (titres.length < 3) { nav.innerHTML = ''; return; }
-  nav.innerHTML = titres.map((h, i) => {
-    if (!h.id) h.id = 'sec-' + state.view + '-' + i;
-    return '<a href="#" data-toc="' + h.id + '">' + esc(libelleAide(h, true).split(' — ')[0]) + '</a>';
-  }).join('');
-  suivreSommaire();
+  if (nav.dataset.sig !== signature) {
+    nav.dataset.sig = signature;
+    nav.classList.toggle('as-tabs', VUES_ONGLETS.has(state.view));
+    nav.innerHTML = titres.length < 3 ? '' : titres.map((h) =>
+      '<a href="#" data-toc="' + h.id + '">' + esc(libelleAide(h, true).split(' — ')[0]) + '</a>').join('');
+  }
+  appliquerOnglets(vue, titres);
+  if (!VUES_ONGLETS.has(state.view)) suivreSommaire();
 }
 
 document.getElementById('page-toc').addEventListener('click', (e) => {
   const lien = e.target.closest('[data-toc]');
   if (!lien) return;
   e.preventDefault();
+  if (VUES_ONGLETS.has(state.view)) {
+    // Un onglet : on montre CETTE section, en haut de page.
+    ONGLET[state.view] = lien.dataset.toc;
+    construireSommaire();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    return;
+  }
   const cible = document.getElementById(lien.dataset.toc);
   if (cible) cible.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
 /** La section en cours de lecture est allumee dans le sommaire. */
 function suivreSommaire() {
+  if (VUES_ONGLETS.has(state.view)) return;
   const nav = document.getElementById('page-toc');
   const liens = nav ? [...nav.querySelectorAll('[data-toc]')] : [];
   if (!liens.length) return;

@@ -140,6 +140,7 @@ class CollectionService:
         antennas_provider: AntennasProvider | None = None,
         static_clients: StaticClientsProvider | None = None,
         sightings: VlanSightingsProvider | None = None,
+        uisp_source: AntennasProvider | None = None,
     ) -> None:
         self.settings = settings
         self.collectors = list(collectors)
@@ -147,6 +148,9 @@ class CollectionService:
         # Provider des antennes ajoutees depuis l'interface (airOS en base). Il
         # relit sa liste tout seul a chaque cycle : rien a recharger ici.
         self.antennas_provider = antennas_provider
+        # Le controleur UISP saisi dans l'interface : ses antennes RATTACHEES a
+        # un site donnent leur capacite, comme les antennes airOS en base.
+        self.uisp_source = uisp_source
         self.plan_provider = plan_provider
         # Inventaire des clients a IP fixe. Absent = deploiement 100 % PPPoE,
         # et tout ce qui suit se comporte exactement comme avant.
@@ -875,7 +879,15 @@ class CollectionService:
                 errors.append(f"antennas (database): {exc}")
                 logger.exception("Liste des antennes airOS non lue")
 
-        if not file_backhauls and not db_antennas:
+        uisp_antennas: list[BackhaulConfig] = []
+        if self.uisp_source is not None:
+            try:
+                uisp_antennas = await self.uisp_source.backhaul_configs()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"antennas (UISP): {exc}")
+                logger.exception("Liste des antennes UISP non lue")
+
+        if not file_backhauls and not db_antennas and not uisp_antennas:
             result = RunResult(JOB_BACKHAULS, started_at, self._clock() - monotonic, True, 0)
             await self._finalize(result)
             return result
@@ -884,6 +896,7 @@ class CollectionService:
         for provider, configs in (
             (self.backhaul_provider, file_backhauls),
             (self.antennas_provider, db_antennas),
+            (self.uisp_source, uisp_antennas),
         ):
             if provider is None or not configs:
                 continue
@@ -897,7 +910,7 @@ class CollectionService:
                 logger.exception("Lecture de la capacite backhaul impossible")
 
         rows: list[tuple[int, BackhaulSample]] = []
-        for config in [*file_backhauls, *db_antennas]:
+        for config in [*file_backhauls, *db_antennas, *uisp_antennas]:
             sample = samples.get(config.uisp_device_id or "")
             if sample is None:
                 continue
