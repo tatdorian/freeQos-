@@ -2132,7 +2132,7 @@ a.btn:hover { text-decoration: none; filter: brightness(1.05); }
 /* Les clients d'un mode. */
 .mc-bar { display: flex; gap: .5rem; }
 .mc-bar input { flex: 1 1 auto; }
-.mc-bar select { width: auto; }
+.mc-bar select { width: auto; flex: 0 0 auto; }
 .mc-tools { display: flex; align-items: center; gap: .3rem; margin: .5rem 0; }
 .mc-list { max-height: 50vh; overflow-y: auto; border-radius: 12px; background: var(--surface-2); padding: .2rem 0; }
 .mc-site { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); padding: .6rem .9rem .2rem; }
@@ -2145,3 +2145,4 @@ a.btn:hover { text-decoration: none; filter: brightness(1.05); }
 /* Pages en onglets (Settings, Devices) : une section a la fois. */
 .tab-hidden { display: none !important; }
 .page-toc.as-tabs a.active { background: var(--accent); color: #fff; }
+.mode-picker .mc-list { max-height: 320px; }

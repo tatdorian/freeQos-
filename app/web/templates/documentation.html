@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="2d88a7ec89821485">
+  <meta name="freeqos-docs-source" content="511486953836cc64">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2431,7 +2431,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Automatic</strong> is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its <strong>bandwidth schedule</strong> — its rate then changes with the hour on its own.</li>
 <li><strong>Where it sits:</strong> a client's mode is its permanent override (<code>shaping_policies.max_down_mbps/max_up_mbps</code>, with <code>mode_id</code> and <code>mode_name</code>). It is therefore above the schedule (a client in <em>Backup</em> stays in <em>Backup</em> when the night begins) and below a running boost. Back to Automatic removes the override and keeps a running boost.</li>
 <li><strong>Modes that stop boosts</strong> (<code>disables_boost</code>, API only): entering the mode clears the running boost, and a new boost is refused (<code>409 Boost is unavailable in &lt;mode&gt;. Change the mode first.</code>). The form no longer offers this option: a mode saved from the form has it off.</li>
-<li><strong>Its clients:</strong> on the <em>Modes</em> page, <em>Add or remove clients</em> on a mode (or <em>Its clients</em> while editing it) opens a list to tick, with search and a site filter: ticking puts the client in the mode, unticking puts it back to Automatic.</li>
+<li><strong>Its clients:</strong> the mode form itself has a list of clients to tick (<em>Clients in this mode</em>), with search and a site filter: saving the mode also puts the ticked clients in it and puts the unticked ones back to Automatic — for a new mode as for an existing one. On the <em>Modes</em> board, <em>Add or remove clients</em> on a mode opens the same list.</li>
 <li><strong>Editing a mode's rate</strong> re-applies it at once to every client in it. A mode given to clients cannot be deleted (<code>409</code>): put them back to Automatic or in another mode first.</li>
 <li><strong>Writing:</strong> like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.</li>
 <li><strong>Changing a client's plan keeps its mode and its boost:</strong> only a manual limit (an override without a mode) is lifted, so that the new plan takes effect. A mode expressed as a share of the plan follows the new plan at once.</li>
