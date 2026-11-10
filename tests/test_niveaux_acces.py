@@ -41,8 +41,13 @@ def test_les_trois_niveaux_sont_ordonnes() -> None:
         ("PUT", "/api/v1/plans/dupont", "operator"),
         ("DELETE", "/api/v1/plans/dupont", "operator"),
         ("POST", "/api/v1/plans/refresh", "edit"),
-        ("POST", "/api/v1/bandwidth-modes", "edit"),
-        ("PATCH", "/api/v1/bandwidth-modes/3", "edit"),
+        ("POST", "/api/v1/bandwidth-modes", "operator"),
+        ("PATCH", "/api/v1/bandwidth-modes/3", "operator"),
+        ("DELETE", "/api/v1/bandwidth-modes/3", "operator"),
+        ("POST", "/api/v1/bandwidth-schedules", "operator"),
+        ("PATCH", "/api/v1/bandwidth-schedules/2", "operator"),
+        ("POST", "/api/v1/antennas", "edit"),
+        ("PUT", "/api/v1/settings", "edit"),
         ("POST", "/api/v1/pops/routers", "edit"),
         ("POST", "/api/v1/static-clients", "edit"),
         ("POST", "/api/v1/api-keys", "edit"),
@@ -91,10 +96,13 @@ def test_un_operator_opere_un_ou_plusieurs_clients(app_client: TestClient, users
     assert app_client.post("/api/v1/clients/actions", json=ACTION_GROUPE).status_code != 403
     r = app_client.put("/api/v1/plans/dupont", json={"down_mbps": 20, "up_mbps": 10})
     assert r.status_code != 403
-    # Rien d'autre : ni les modes eux-memes, ni ajouter un client ou un routeur.
+    # La gestion : modes de debit et profils horaires.
     r = app_client.post(
         "/api/v1/bandwidth-modes", json={"name": "Backup", "down_value": 6, "up_value": 6}
     )
+    assert r.status_code != 403
+    # Rien de technique : ni ajouter un client, ni un routeur, ni les comptes.
+    r = app_client.post("/api/v1/pops/routers", json={"name": "x", "host": "192.0.2.1"})
     assert r.status_code == 403
     assert "Administrator" in r.json()["detail"]
     r = app_client.post(

@@ -1326,3 +1326,23 @@ CREATE TABLE IF NOT EXISTS bandwidth_modes (
 -- encore si le mode est renomme entre-temps.
 ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS mode_id   BIGINT;
 ALTER TABLE shaping_policies ADD COLUMN IF NOT EXISTS mode_name TEXT;
+
+-- JOURNAL DES GESTES SUR LES CLIENTS : qui a change quoi, quand, sur quel
+-- client, et si c'est arrive jusqu'au routeur. C'est la reponse a "pourquoi ce
+-- client est-il a 2 Mbps depuis hier ?" -- sans fouiller les journaux.
+CREATE TABLE IF NOT EXISTS client_activity (
+    id          BIGSERIAL PRIMARY KEY,
+    ts          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    actor       TEXT NOT NULL,
+    login       TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    detail      TEXT,
+    -- false : refuse (mode inconnu, boost interdit...). Rien n'a change.
+    ok          BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Etat de la file apres le geste : posee, a poser (ecriture coupee),
+    -- sans routeur... NULL quand rien n'avait a etre ecrit.
+    queue_state TEXT,
+    queue_reason TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_client_activity_ts ON client_activity (ts DESC);
+CREATE INDEX IF NOT EXISTS idx_client_activity_login ON client_activity (login, ts DESC);

@@ -27,6 +27,7 @@ from app.collectors.uisp import (
     UispProvider,
 )
 from app.config import Settings
+from app.db.activity_repo import ActivityRepository
 from app.db.antennas_repo import AntennasRepository
 from app.db.api_keys_repo import ApiKeysRepository
 from app.db.database import Database
@@ -197,6 +198,7 @@ class Container:
     traffic_rules_repo: TrafficRulesRepository | None = None
     schedules_repo: SchedulesRepository | None = None
     modes_repo: ModesRepository | None = None
+    activity_repo: ActivityRepository | None = None
     netflow: NetflowService | None = None
     netflow_export: NetflowExportService | None = None
     intel: IntelService | None = None
@@ -339,6 +341,8 @@ async def build_container(settings: Settings) -> Container:
     schedules_repo = SchedulesRepository(database.pool)
     # Les modes de debit (Backup, Night...) qu'on donne a un client d'un geste.
     modes_repo = ModesRepository(database.pool)
+    # Qui a change quoi sur quel client : mode, boost, forfait.
+    activity_repo = ActivityRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
@@ -698,6 +702,7 @@ async def build_container(settings: Settings) -> Container:
         traffic_rules_repo=traffic_rules_repo,
         schedules_repo=schedules_repo,
         modes_repo=modes_repo,
+        activity_repo=activity_repo,
         netflow=netflow,
         netflow_export=netflow_export,
         intel=intel,

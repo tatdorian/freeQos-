@@ -1446,7 +1446,8 @@ a.button.primary:hover { background: var(--accent-hover); text-decoration: none;
 .mode-pill.crit { background: color-mix(in srgb, var(--crit) 13%, transparent); color: var(--crit); }
 .cli-usage { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cli-usage .d { color: var(--down); } .cli-usage .u { color: var(--up); }
-body.role-limited nav.tabs a:not([data-view="clients"]):not([data-view="settings"]) { display: none; }
+/* L'Operator : ses pages de gestion des clients, rien d'autre (pas de Settings). */
+body.role-limited nav.tabs a:not([data-view="clients"]):not([data-view="alerts"]):not([data-view="activity"]):not([data-view="management"]) { display: none; }
 
 /* --------------------------------------------- Change bandwidth mode */
 .modal-backdrop {
@@ -1485,3 +1486,23 @@ body.role-limited nav.tabs a:not([data-view="clients"]):not([data-view="settings
 .mode-card input[type="radio"] { width: auto; margin: .2rem 0 0; }
 .mode-card > span { min-width: 0; }
 .cli-name { white-space: nowrap; }
+
+.modal.wide { width: min(1080px, 100%); }
+.cs-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 1rem; margin-top: 1rem; }
+.cs-grid .card { margin: 0; }
+table.kv { width: 100%; margin-top: .5rem; }
+table.kv td { padding: .45rem 0; border-bottom: 1px solid var(--border); }
+table.kv td:first-child { color: var(--muted); }
+table.kv td:last-child { text-align: right; }
+@media (max-width: 860px) { .cs-grid { grid-template-columns: 1fr; } }
+
+/* ------------------------------------------------------------ Alerts */
+.alert-row { display: flex; align-items: center; gap: 1rem; padding: 1rem 1.2rem; border-bottom: 1px solid var(--border); }
+.alert-row:last-child { border-bottom: none; }
+.alert-ico { flex: none; width: 2.4rem; height: 2.4rem; border-radius: 12px; display: grid; place-items: center; font-weight: 800; font-size: 1.15rem; font-style: normal; }
+.alert-ico.lvl-crit { background: color-mix(in srgb, var(--crit) 13%, transparent); color: var(--crit); }
+.alert-ico.lvl-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.alert-ico.lvl-info { background: var(--accent-dim); color: var(--accent); }
+.alert-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: .15rem; }
+.alert-txt span { color: var(--muted); }
+.alert-txt small { color: var(--faint); }
