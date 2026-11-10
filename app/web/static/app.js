@@ -9648,13 +9648,16 @@ function renderSchedules() {
             '<span class="hint">' + schedRate(f.active_window) + '</span>'
           : '<span class="na">plan</span>';
       const ligne = '<tr>' +
-        '<td><b>' + esc(f.name) + '</b><span class="hint">' + esc(f.timezone) +
-          (f.local_time ? ' · ' + esc(f.local_time) : '') + '</span></td>' +
+        '<td><b>' + esc(f.name) + '</b><span class="hint">' +
+          (f.timezone === fuseauLocal() ? 'your time zone'
+            : esc(f.timezone) + ' · ' + esc(heureDans(f.timezone)) + ' there') + '</span></td>' +
         '<td>' + cible(f) + '</td>' +
         '<td>' + (f.windows || []).map(schedWindowText).join('<br>') + '</td>' +
         '<td>' + maintenant + '</td>' +
-        '<td>' + (f.next_change_local ? esc(f.next_change_local) : '<span class="na">-</span>') +
-          '</td>' +
+        '<td>' + (f.next_change_at ? esc(new Date(f.next_change_at).toLocaleString([], {
+          weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })) +
+          (f.timezone === fuseauLocal() ? '' : '<span class="hint">your time</span>')
+          : '<span class="na">-</span>') + '</td>' +
         '<td>' + (f.enabled ? sqCell('active', 'ok') : sqCell('suspended', 'warn')) + '</td>' +
         '<td class="nowrap">' +
           '<button class="sm" data-sched-edit="' + esc(f.id) + '">Edit</button> ' +
@@ -9749,10 +9752,11 @@ function schedWindowRow(w) {
   const jours = new Set(f.days && f.days.length ? f.days : SCHED_JOURS.map((j) => j[0]));
   const genre = f.mode_id != null ? 'mode'
     : (f.down_mbps != null || f.up_mbps != null) ? 'rate' : 'percent';
-  const heure = (nom, val, ph, titre) => '<input name="' + nom + '" class="slot-time" required ' +
-    'maxlength="5" inputmode="numeric" placeholder="' + ph + '" pattern="[0-2]?[0-9]:[0-5][0-9]"' +
-    (titre ? ' title="' + titre + '"' : '') + ' aria-label="' + (nom === 'start' ? 'From' : 'To') +
-    '" value="' + esc(val || '') + '">';
+  // L'heure ne se TAPE pas : on la touche (molette) ou on la fait glisser.
+  const heure = (nom, val, ph, titre) => '<input name="' + nom + '" class="slot-time" readonly ' +
+    'inputmode="none" placeholder="' + ph + '"' + (nom === 'end' ? ' data-allow24' : '') +
+    ' title="' + (titre ? titre + ' ' : '') + 'Tap to choose, or drag up / down." aria-label="' +
+    (nom === 'start' ? 'From' : 'To') + '" value="' + esc(val || ph) + '">';
   const nombre = (nom, val, extra) => '<input name="' + nom + '" type="number" step="any" ' +
     'class="slot-num" ' + extra + ' value="' + esc(val == null ? '' : val) + '">';
   return '<div class="slot" data-sched-window>' +
@@ -9809,10 +9813,179 @@ function schedBindRows() {
 }
 
 function schedAddRow(w) {
+  if (!w) {
+    // Une nouvelle plage commence ou finit la precedente, pour deux heures.
+    const fins = [...document.querySelectorAll('#sched-windows [name="end"]')];
+    const debut = fins.length ? hhmmVersMin(fins[fins.length - 1].value) % 1440 : 18 * 60;
+    w = { start: minVersHhmm(debut), end: minVersHhmm((debut + 120) % 1440 || 1440), percent: null };
+  }
   document.getElementById('sched-windows').insertAdjacentHTML('beforeend', schedWindowRow(w));
   schedBindRows();
   const sel = document.querySelector('#sched-windows [data-sched-window]:last-child select[name="mode_id"]');
   if (sel) schedModeOptions(sel);
+}
+
+/* ---------------------------------------------------- choix d'une heure
+ * Comme sur un iPhone : toucher l'heure ouvre une MOLETTE (heures, minutes) ;
+ * la faire glisser vers le haut l'avance, vers le bas la recule (par quart
+ * d'heure) ; la molette de la souris et les fleches du clavier aussi. */
+function hhmmVersMin(v) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(v || '').trim());
+  return m ? Number(m[1]) * 60 + Number(m[2]) : 0;
+}
+
+function minVersHhmm(n) {
+  return String(Math.floor(n / 60)).padStart(2, '0') + ':' + String(n % 60).padStart(2, '0');
+}
+
+const TW = { input: null, pop: null, hauteur: 36 };
+
+function twBorne(input, n) {
+  return Math.max(0, Math.min(input.hasAttribute('data-allow24') ? 1440 : 1435, n));
+}
+
+function twPoser(input, n, anime) {
+  const avant = input.value;
+  input.value = minVersHhmm(twBorne(input, n));
+  if (anime && input.value !== avant) {
+    input.classList.remove('tick');
+    void input.offsetWidth;
+    input.classList.add('tick');
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function twFermer() {
+  if (TW.pop) TW.pop.hidden = true;
+  if (TW.input) TW.input.classList.remove('picking');
+  TW.input = null;
+}
+
+function twColonne(col, valeurs, choisie) {
+  col.innerHTML = '<div class="tw-pad"></div>' + valeurs.map((v) =>
+    '<div class="tw-item" data-v="' + v + '">' + String(v).padStart(2, '0') + '</div>').join('') +
+    '<div class="tw-pad"></div>';
+  const i = Math.max(0, valeurs.indexOf(choisie));
+  col.scrollTop = i * TW.hauteur;
+  twMarquer(col);
+}
+
+function twMarquer(col) {
+  const i = Math.round(col.scrollTop / TW.hauteur);
+  col.querySelectorAll('.tw-item').forEach((el, j) => el.classList.toggle('sel', j === i));
+  const el = col.querySelectorAll('.tw-item')[i];
+  return el ? Number(el.dataset.v) : 0;
+}
+
+function twLire() {
+  if (!TW.input) return;
+  const h = twMarquer(TW.pop.querySelector('[data-col="h"]'));
+  const m = h === 24 ? 0 : twMarquer(TW.pop.querySelector('[data-col="m"]'));
+  twPoser(TW.input, h * 60 + m, false);
+}
+
+function twOuvrir(input) {
+  if (!TW.pop) {
+    TW.pop = document.createElement('div');
+    TW.pop.className = 'tw-pop';
+    TW.pop.hidden = true;
+    TW.pop.innerHTML = '<div class="tw-head"><span class="tw-title"></span>' +
+      '<button type="button" class="tw-done">Done</button></div>' +
+      '<div class="tw-wheels"><div class="tw-band"></div>' +
+      '<div class="tw-col" data-col="h"></div><span class="tw-colon">:</span>' +
+      '<div class="tw-col" data-col="m"></div></div>';
+    document.body.appendChild(TW.pop);
+    TW.pop.querySelector('.tw-done').addEventListener('click', twFermer);
+    TW.pop.querySelectorAll('.tw-col').forEach((col) => {
+      let attente = null;
+      col.addEventListener('scroll', () => {
+        twMarquer(col);
+        clearTimeout(attente);
+        attente = setTimeout(twLire, 90);
+      }, { passive: true });
+      col.addEventListener('click', (e) => {
+        const item = e.target.closest('.tw-item');
+        if (!item) return;
+        const i = [...col.querySelectorAll('.tw-item')].indexOf(item);
+        col.scrollTo({ top: i * TW.hauteur, behavior: 'smooth' });
+      });
+    });
+    document.addEventListener('pointerdown', (e) => {
+      if (TW.input && !TW.pop.contains(e.target) && e.target !== TW.input) twFermer();
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') twFermer(); });
+  }
+  twFermer();
+  TW.input = input;
+  input.classList.add('picking');
+  const n = hhmmVersMin(input.value);
+  const heures = [...Array(input.hasAttribute('data-allow24') ? 25 : 24).keys()];
+  const minutes = [...Array(12).keys()].map((i) => i * 5);
+  TW.pop.querySelector('.tw-title').textContent = input.getAttribute('aria-label') || 'Time';
+  TW.pop.hidden = false;
+  twColonne(TW.pop.querySelector('[data-col="h"]'), heures, Math.floor(n / 60));
+  twColonne(TW.pop.querySelector('[data-col="m"]'), minutes, Math.round((n % 60) / 5) * 5 % 60);
+  if (!window.matchMedia('(max-width: 760px)').matches) {
+    const r = input.getBoundingClientRect();
+    TW.pop.style.left = Math.max(8, Math.min(r.left + window.scrollX - 40,
+      window.scrollX + document.documentElement.clientWidth - 230)) + 'px';
+    TW.pop.style.top = (r.bottom + window.scrollY + 6) + 'px';
+  } else {
+    TW.pop.style.left = '';
+    TW.pop.style.top = '';
+  }
+}
+
+function timePickerInit() {
+  const zone = document.getElementById('sched-windows');
+  if (!zone || zone.dataset.tw) return;
+  zone.dataset.tw = '1';
+  let geste = null;
+  zone.addEventListener('pointerdown', (e) => {
+    const input = e.target.closest('.slot-time');
+    if (!input) return;
+    geste = { input, y: e.clientY, depart: hhmmVersMin(input.value), bouge: false };
+    input.setPointerCapture(e.pointerId);
+  });
+  zone.addEventListener('pointermove', (e) => {
+    if (!geste) return;
+    const pas = Math.trunc((geste.y - e.clientY) / 14);
+    if (Math.abs(geste.y - e.clientY) > 6) {
+      geste.bouge = true;
+      geste.input.classList.add('dragging');
+      if (TW.input) twFermer();
+    }
+    if (geste.bouge) twPoser(geste.input, geste.depart + pas * 15, true);
+  });
+  const fin = () => {
+    if (!geste) return;
+    const { input, bouge } = geste;
+    geste = null;
+    input.classList.remove('dragging');
+    if (!bouge) twOuvrir(input);
+  };
+  zone.addEventListener('pointerup', fin);
+  zone.addEventListener('pointercancel', () => {
+    if (geste) geste.input.classList.remove('dragging');
+    geste = null;
+  });
+  zone.addEventListener('wheel', (e) => {
+    const input = e.target.closest('.slot-time');
+    if (!input) return;
+    e.preventDefault();
+    twPoser(input, hhmmVersMin(input.value) + (e.deltaY < 0 ? 5 : -5), true);
+  }, { passive: false });
+  zone.addEventListener('keydown', (e) => {
+    const input = e.target.closest('.slot-time');
+    if (!input) return;
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      twPoser(input, hhmmVersMin(input.value) + (e.key === 'ArrowUp' ? 15 : -15), true);
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      twOuvrir(input);
+    }
+  });
 }
 
 /** Les modes de debit dans le choix d'une plage, sans perdre le mode choisi. */
@@ -9883,8 +10056,7 @@ function schedTargetsField() {
 function schedFill(fiche) {
   SCHED.editing = fiche || null;
   document.getElementById('sched-name').value = fiche ? fiche.name : '';
-  document.getElementById('sched-tz').value = fiche ? fiche.timezone
-    : (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  schedTzSet(fiche ? fiche.timezone : fuseauLocal());
   document.getElementById('sched-scope').value = fiche ? fiche.scope : 'all';
   document.getElementById('sched-targets').value = fiche ? (fiche.targets || []).join(', ') : '';
   document.getElementById('sched-enabled').checked = fiche ? !!fiche.enabled : true;
@@ -9926,7 +10098,7 @@ function schedPayload() {
   const portee = document.getElementById('sched-scope').value;
   return {
     name: document.getElementById('sched-name').value.trim(),
-    timezone: document.getElementById('sched-tz').value.trim() || 'UTC',
+    timezone: document.getElementById('sched-tz').value || fuseauLocal(),
     scope: portee,
     targets: portee === 'all' ? [] : document.getElementById('sched-targets').value
       .split(',').map((x) => x.trim()).filter(Boolean),
@@ -9979,11 +10151,68 @@ async function schedDelete(fiche) {
   await loadSchedules();
 }
 
+/** Le fuseau du navigateur : celui de la personne devant l'ecran. */
+function fuseauLocal() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch (e) {
+    return 'UTC';
+  }
+}
+
+/** L'heure qu'il est dans un fuseau, ex. « 14:32 ». */
+function heureDans(tz, quand) {
+  try {
+    return new Date(quand || Date.now()).toLocaleTimeString([], {
+      timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+  } catch (e) {
+    return '';
+  }
+}
+
+/** Le menu des fuseaux : le fuseau local en tete, puis par region. */
+function schedTzOptions() {
+  const sel = document.getElementById('sched-tz');
+  const local = fuseauLocal();
+  const tous = typeof Intl.supportedValuesOf === 'function'
+    ? Intl.supportedValuesOf('timeZone') : [local, 'UTC'];
+  const regions = {};
+  tous.forEach((z) => {
+    const r = z.includes('/') ? z.split('/')[0] : 'Other';
+    (regions[r] = regions[r] || []).push(z);
+  });
+  sel.innerHTML = '<option value="' + esc(local) + '">' +
+    esc(local.split('/').pop().replace(/_/g, ' ')) + ' (my time)</option>' + (local !== 'UTC' ? '<option value="UTC">UTC</option>' : '') +
+    Object.keys(regions).sort().map((r) => '<optgroup label="' + esc(r) + '">' +
+      regions[r].map((z) => '<option value="' + esc(z) + '">' +
+        esc(z.slice(z.indexOf('/') + 1).replace(/_/g, ' ').replace(/\//g, ' / ')) + '</option>').join('') +
+      '</optgroup>').join('');
+}
+
+function schedTzSet(tz) {
+  const sel = document.getElementById('sched-tz');
+  if (![...sel.options].some((o) => o.value === tz)) {
+    sel.insertAdjacentHTML('afterbegin', '<option value="' + esc(tz) + '">' + esc(tz) + '</option>');
+  }
+  sel.value = tz;
+  schedTzNow();
+}
+
+/** Sous « Time zone » : l'heure qu'il est la-bas, pour lever tout doute. */
+function schedTzNow() {
+  const sel = document.getElementById('sched-tz');
+  const note = document.getElementById('sched-tz-now');
+  if (!sel || !note) return;
+  const tz = sel.value || fuseauLocal();
+  note.textContent = 'now ' + heureDans(tz) + (tz === fuseauLocal() ? '' : ' there · ' + heureDans() + ' for you');
+}
+
 function schedInit() {
-  const fuseaux = typeof Intl.supportedValuesOf === 'function'
-    ? Intl.supportedValuesOf('timeZone') : [];
-  document.getElementById('sched-tz-list').innerHTML = fuseaux
-    .map((z) => '<option value="' + esc(z) + '">').join('');
+  schedTzOptions();
+  document.getElementById('sched-tz').addEventListener('change', schedTzNow);
+  setInterval(schedTzNow, 30000);
+  timePickerInit();
   document.getElementById('sched-scope').addEventListener('change', () => {
     document.getElementById('sched-targets').value = '';
     schedScopeSeg();
@@ -10291,7 +10520,7 @@ function roleOptions(choisi) {
     ' title="' + esc(ROLE_HELP[r]) + '">' + esc(ROLE_LABEL[r]) + '</option>').join('');
 }
 
-const CLI = { rows: [], modes: [], boosts: {}, sel: new Set(), wired: false };
+const CLI = { rows: [], modes: [], boosts: {}, sel: new Set(), wired: false, page: 0, perPage: 50 };
 
 /** 100 -> "100", 2.5 -> "2.5", 0.512 -> "0.512" : un debit en Mbps sans unite
  *  (l'unite est dans l'en-tete de colonne). */
@@ -10344,7 +10573,8 @@ function filtrerClients() {
     if (etat === 'boost' && !CLI.boosts[r.login]) return false;
     if (mode === 'auto' && (r.mode_id || r.override_down_mbps)) return false;
     if (mode === 'manual' && !(r.override_down_mbps && !r.mode_id)) return false;
-    if (mode && mode !== 'auto' && mode !== 'manual' && String(r.mode_id) !== mode) return false;
+    if (mode === 'any' && !(r.mode_id || r.override_down_mbps)) return false;
+    if (mode && !['auto', 'manual', 'any'].includes(mode) && String(r.mode_id) !== mode) return false;
     return true;
   });
 }
@@ -10367,12 +10597,20 @@ async function loadClients() {
     selPop.value = sites.includes(v) ? v : '';
     selPop.dataset.sig = sig;
   }
+  if (CLI.presetSite != null) {
+    // Venu de la carte : les clients de CE site.
+    ['cli-search', 'cli-status', 'cli-mode'].forEach((id) => { document.getElementById(id).value = ''; });
+    selPop.value = sites.includes(CLI.presetSite) ? CLI.presetSite : '';
+    CLI.presetSite = null;
+    CLI.onlySel = false;
+    CLI.page = 0;
+  }
   const selMode = document.getElementById('cli-mode');
   const sigM = CLI.modes.map((m) => m.id + ':' + m.name).join('|');
   if (selMode.dataset.sig !== sigM) {
     const v = selMode.value;
     selMode.innerHTML = '<option value="">Mode</option><option value="auto">Automatic</option>' +
-      '<option value="manual">Manual limit</option>' +
+      '<option value="any">In a mode or limited</option><option value="manual">Manual limit</option>' +
       CLI.modes.map((m) => '<option value="' + m.id + '">' + esc(m.name) + '</option>').join('');
     selMode.value = v;
     selMode.dataset.sig = sigM;
@@ -10381,17 +10619,102 @@ async function loadClients() {
   const enLigne = rows.filter(clientEnLigne).length;
   const enMode = rows.filter((r) => r.mode_id || r.override_down_mbps).length;
   const boostes = rows.filter((r) => CLI.boosts[r.login]).length;
+  const part = rows.length ? enLigne / rows.length : 0;
+  const nSites = new Set(rows.map((r) => r.pop_name).filter(Boolean)).size;
   document.getElementById('cli-stats').innerHTML =
-    statCard('', 'Clients', String(rows.length), '', '') +
-    statCard(enLigne ? 'ok' : '', 'Connected', String(enLigne), '', '') +
-    statCard(enMode ? 'warn' : '', 'In a mode', String(enMode), '', '') +
-    statCard('', 'Boosts', String(boostes), '', '');
+    qtile('users', 't-indigo', 'Clients', rows.length,
+      nSites ? nSites + ' site' + (nSites > 1 ? 's' : '') : '', null, 'all') +
+    qtile('wifi', !rows.length ? 't-gray' : part >= 0.8 ? 't-green' : part >= 0.5 ? 't-orange' : 't-red',
+      'Connected', enLigne, rows.length ? Math.round(part * 100) + ' % online' : '', part, 'online') +
+    qtile('sliders', enMode ? 't-orange' : 't-gray', 'In a mode', enMode,
+      enMode ? 'not on Automatic' : 'all on Automatic', null, 'inmode') +
+    qtile('bolt', boostes ? 't-purple' : 't-gray', 'Boosts', boostes,
+      boostes ? 'running now' : 'none running', null, 'boost');
+  document.querySelectorAll('#cli-stats [data-tile]').forEach((t) => t.addEventListener('click', () => {
+    const f = t.dataset.tile;
+    ['cli-search', 'cli-pop', 'cli-status', 'cli-mode'].forEach((id) => { document.getElementById(id).value = ''; });
+    if (f === 'online' || f === 'boost') document.getElementById('cli-status').value = f;
+    if (f === 'inmode') document.getElementById('cli-mode').value = 'any';
+    CLI.onlySel = false;
+    CLI.page = 0;
+    renderClients();
+  }));
   document.getElementById('cli-notice').innerHTML = !CLI.modes.length
     ? '<div class="notice">No bandwidth mode is defined yet: only <b>Automatic</b> and boosts are ' +
       'offered. ' + (peut('operator') ? '<a href="#/modes">Define modes in Modes</a>.'
         : 'An Operator defines them in Modes.') + '</div>'
     : (!peut('operator') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '');
   renderClients();
+}
+
+/** Une carte de chiffre : icone teintee, grand nombre, une ligne de contexte,
+ *  et une jauge quand c'est une part. Cliquer filtre la liste. */
+const QT_ICONES = {
+  users: '<svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><circle cx="17" cy="9" r="2.5"/><path d="M16 14c2.4.2 4 1.8 4.6 4.5"/></svg>',
+  wifi: '<svg viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0"/><path d="M5.5 12.5a9.5 9.5 0 0 1 13 0"/><path d="M8.7 16a5 5 0 0 1 6.6 0"/><circle cx="12" cy="19.2" r="1.1"/></svg>',
+  sliders: '<svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24"><path d="M13 3L5 13h6l-1 8 8-10h-6z"/></svg>',
+};
+
+function qtile(icone, teinte, label, valeur, sous, jauge, filtre) {
+  return '<button type="button" class="qtile ' + teinte + '" data-tile="' + esc(filtre) + '" title="Show these clients">' +
+    '<span class="qt-ico">' + QT_ICONES[icone] + '</span>' +
+    '<span class="qt-val">' + esc(String(valeur)) + '</span>' +
+    '<span class="qt-lbl">' + esc(label) + '</span>' +
+    (jauge != null ? '<span class="qt-bar"><i style="width:' + Math.round(jauge * 100) + '%"></i></span>' : '') +
+    (sous ? '<span class="qt-sub">' + esc(sous) + '</span>' : '') + '</button>';
+}
+
+/** L'usage en clair : une jauge du debit sur la limite, et un mot. */
+function usageClair(r) {
+  const bas = (Number(r.tx_bps) || 0) / 1e6;
+  const lim = Number(r.effective_down_mbps) || Number(r.plan_down_mbps) || 0;
+  const part = lim ? Math.min(1, bas / lim) : 0;
+  const [mot, cls] = !lim ? ['', ''] : part >= 0.9 ? ['At its limit', 'lv-crit']
+    : part >= 0.6 ? ['Busy', 'lv-warn'] : part >= 0.1 ? ['Normal', 'lv-ok'] : ['Quiet', 'lv-idle'];
+  return '<div class="use">' +
+    (lim ? '<div class="use-bar ' + cls + '"><i style="width:' + Math.max(2, Math.round(part * 100)) + '%"></i></div>' : '') +
+    '<div class="use-txt"><span class="d">&darr; ' + esc(bpsText(r.tx_bps)) + '</span>' +
+      (lim ? '<span class="use-of">of ' + esc(mbps(lim)) + '</span>' : '') +
+      (mot ? '<span class="use-word ' + cls + '">' + mot + '</span>' : '') + '</div>' +
+    '<div class="use-up">&uarr; ' + esc(bpsText(r.rx_bps)) + ' up</div></div>';
+}
+
+function trierClients(lignes) {
+  const tri = (document.getElementById('cli-sort') || {}).value || 'name';
+  const nom = (a, b) => String(a.login).localeCompare(String(b.login), undefined, { numeric: true });
+  const t = [...lignes];
+  if (tri === 'site') t.sort((a, b) => String(a.pop_name || '~').localeCompare(String(b.pop_name || '~')) || nom(a, b));
+  else if (tri === 'offline') t.sort((a, b) => (clientEnLigne(a) - clientEnLigne(b)) || nom(a, b));
+  else if (tri === 'usage') t.sort((a, b) => ((Number(b.tx_bps) || 0) - (Number(a.tx_bps) || 0)) || nom(a, b));
+  else t.sort(nom);
+  return t;
+}
+
+/** La liste des clients, en CSV (s'ouvre dans un tableur) : ce que montrent
+ *  les filtres, toutes pages confondues. */
+function exportClientsCsv() {
+  const cellule = (v) => {
+    const t = v == null ? '' : String(v);
+    return /[",;\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t;
+  };
+  const tete = ['Client', 'IP address', 'Site', 'Status', 'Last seen', 'Mode', 'Boost',
+    'Download now (Mbps)', 'Upload now (Mbps)', 'Limit down (Mbps)', 'Limit up (Mbps)',
+    'Plan down (Mbps)', 'Plan up (Mbps)'];
+  const n = (v, d) => (v == null || v === '' ? '' : (Number(v) / d).toFixed(3));
+  const lignes = trierClients(filtrerClients()).map((r) => [
+    r.login, r.last_ip || '', r.pop_name || '', clientEnLigne(r) ? 'connected' : 'not connected',
+    r.ts ? new Date(r.ts).toISOString() : '', modeDuClient(r).text, CLI.boosts[r.login] ? 'yes' : '',
+    n(r.tx_bps, 1e6), n(r.rx_bps, 1e6), n(r.effective_down_mbps, 1), n(r.effective_up_mbps, 1),
+    n(r.plan_down_mbps, 1), n(r.plan_up_mbps, 1),
+  ]);
+  const texte = '\ufeff' + [tete, ...lignes].map((l) => l.map(cellule).join(',')).join('\r\n');
+  const lien = document.createElement('a');
+  lien.href = URL.createObjectURL(new Blob([texte], { type: 'text/csv;charset=utf-8' }));
+  lien.download = 'freeqos-clients-' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(lien);
+  lien.click();
+  setTimeout(() => { URL.revokeObjectURL(lien.href); lien.remove(); }, 1000);
 }
 
 function renderClients() {
@@ -10402,8 +10725,23 @@ function renderClients() {
     document.getElementById('cli-search').value = '';
     CLI.onlySel = true;
   }
-  const lignes = filtrerClients();
-  document.getElementById('cli-count').textContent = String(lignes.length);
+  const toutes = trierClients(filtrerClients());
+  document.getElementById('cli-count').textContent = toutes.length + ' client' + (toutes.length > 1 ? 's' : '');
+  // PAGINATION : 400 clients (20 sites de 20) ne tiennent pas sur un ecran.
+  const pages = Math.max(1, Math.ceil(toutes.length / CLI.perPage));
+  CLI.page = Math.min(CLI.page, pages - 1);
+  const lignes = toutes.slice(CLI.page * CLI.perPage, (CLI.page + 1) * CLI.perPage);
+  renderPager(toutes.length, pages);
+  const parSite = (document.getElementById('cli-sort') || {}).value === 'site';
+  const comptes = {};
+  if (parSite) {
+    toutes.forEach((r) => {
+      const c = comptes[r.pop_name || ''] = comptes[r.pop_name || ''] || { n: 0, on: 0 };
+      c.n += 1;
+      if (clientEnLigne(r)) c.on += 1;
+    });
+  }
+  let siteCourant = null;
   const host = document.getElementById('cli-table');
   if (!lignes.length) {
     host.innerHTML = '<div class="empty">' + (CLI.rows.length ? 'No client matches the filters.'
@@ -10412,22 +10750,30 @@ function renderClients() {
     majSelection();
     return;
   }
-  const tous = lignes.every((r) => CLI.sel.has(r.login));
+  const tous = toutes.length > 0 && toutes.every((r) => CLI.sel.has(r.login));
   const ecrire = peut('operator');
   const dis = ecrire ? '' : ' disabled';
   // EPURE : un client = son nom (pastille de connexion), son mode, ce qu'il
   // consomme, sa limite, deux boutons. Le site et l'adresse en petit dessous ;
   // le detail est sur sa page.
   host.innerHTML = '<table class="cli-list"><thead><tr>' +
-    '<th class="chk"><input type="checkbox" id="cli-all" aria-label="Select all shown"' +
+    '<th class="chk"><input type="checkbox" id="cli-all" aria-label="Select all matching clients"' +
       (tous ? ' checked' : '') + '></th>' +
-    '<th>Client</th><th>Mode</th><th>Usage</th><th class="num cli-lim">Limit (Mbps)</th>' +
+    '<th>Client</th><th>Mode</th><th>Usage now</th><th class="num cli-lim">Limit</th>' +
     '<th class="sticky-actions"></th></tr></thead><tbody>' +
     lignes.map((r) => {
       const m = modeDuClient(r);
       const b = CLI.boosts[r.login];
       const on = clientEnLigne(r);
-      return '<tr class="clickable" data-cli="' + esc(r.login) + '">' +
+      let entete = '';
+      if (parSite && (r.pop_name || '') !== siteCourant) {
+        siteCourant = r.pop_name || '';
+        const c = comptes[siteCourant];
+        entete = '<tr class="cli-group"><td colspan="6"><b>' + esc(siteCourant || 'No site') + '</b>' +
+          '<span>' + c.n + ' client' + (c.n > 1 ? 's' : '') + ' · ' + c.on + ' connected</span>' +
+          '<button type="button" class="sm link-btn" data-site-sel="' + esc(siteCourant) + '">Select the site</button></td></tr>';
+      }
+      return entete + '<tr class="clickable" data-cli="' + esc(r.login) + '">' +
         '<td class="chk"><input type="checkbox" data-sel="' + esc(r.login) + '"' +
           (CLI.sel.has(r.login) ? ' checked' : '') + ' aria-label="Select ' + esc(r.login) + '"></td>' +
         '<td class="cli-main"><span class="cli-name"><i class="dot-co ' + (on ? 'on' : 'off') + '" title="' +
@@ -10435,11 +10781,10 @@ function renderClients() {
           '<span class="cli-sub">' + esc(r.pop_name || '') + '</span></td>' +
         '<td class="cli-mode"><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
           (b ? '<span class="boost-pill cli-boost">&#9889; ' + esc(boostReste(b)) + '</span>' : '') + '</td>' +
-        '<td class="cli-usage">' + (on ? '<span class="d">&darr; ' + esc(bpsText(r.tx_bps)) +
-          '</span> <span class="u">&uarr; ' + esc(bpsText(r.rx_bps)) + '</span>'
-          : '<span class="cli-off">' + (r.ts ? esc(depuis(r.ts)) : 'not seen') + '</span>') + '</td>' +
-        '<td class="num cli-lim">' + (r.effective_down_mbps ? esc(sansUnite(r.effective_down_mbps) + ' / ' +
-          sansUnite(r.effective_up_mbps || 0)) : '-') + '</td>' +
+        '<td class="cli-usage">' + (on ? usageClair(r)
+          : '<span class="cli-off">Offline · ' + (r.ts ? 'seen ' + esc(depuis(r.ts)) : 'never seen') + '</span>') + '</td>' +
+        '<td class="num cli-lim">' + (r.effective_down_mbps ? '<span class="lim-d">&darr; ' + esc(mbps(r.effective_down_mbps)) +
+          '</span><span class="lim-u">&uarr; ' + esc(mbps(r.effective_up_mbps || 0)) + '</span>' : '<span class="na">no limit</span>') + '</td>' +
         '<td class="sticky-actions"><div class="cli-acts">' +
           '<button class="icon-btn" data-cli-mode="' + esc(r.login) + '" title="Change mode" aria-label="Change mode"' + dis + '>' +
             '<svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg></button>' +
@@ -10451,9 +10796,14 @@ function renderClients() {
     }).join('') + '</tbody></table>';
 
   host.querySelector('#cli-all').addEventListener('change', (e) => {
-    lignes.forEach((r) => (e.target.checked ? CLI.sel.add(r.login) : CLI.sel.delete(r.login)));
+    // Toutes les lignes qui repondent aux filtres, pas seulement la page.
+    toutes.forEach((r) => (e.target.checked ? CLI.sel.add(r.login) : CLI.sel.delete(r.login)));
     renderClients();
   });
+  host.querySelectorAll('[data-site-sel]').forEach((b) => b.addEventListener('click', () => {
+    toutes.filter((r) => (r.pop_name || '') === b.dataset.siteSel).forEach((r) => CLI.sel.add(r.login));
+    renderClients();
+  }));
   host.querySelectorAll('[data-sel]').forEach((c) => c.addEventListener('change', () => {
     if (c.checked) CLI.sel.add(c.dataset.sel); else CLI.sel.delete(c.dataset.sel);
     majSelection();
@@ -10471,6 +10821,41 @@ function renderClients() {
   majSelection();
 }
 
+function renderPager(total, pages) {
+  const host = document.getElementById('cli-pager');
+  if (!host) return;
+  if (pages <= 1 && total <= 25) { host.innerHTML = ''; return; }
+  const p = CLI.page;
+  const de = p * CLI.perPage + 1;
+  const a = Math.min(total, (p + 1) * CLI.perPage);
+  // Quelques numeros autour de la page courante, plus la premiere et la derniere.
+  const nums = [...new Set([0, p - 1, p, p + 1, pages - 1])].filter((i) => i >= 0 && i < pages).sort((x, y) => x - y);
+  let prec = -1;
+  host.innerHTML = '<span class="pg-info">' + de + '–' + a + ' of ' + total + '</span>' +
+    '<span class="pg-nums"><button type="button" class="pg" data-pg="' + (p - 1) + '"' + (p ? '' : ' disabled') +
+      ' aria-label="Previous page">&lsaquo;</button>' +
+    nums.map((i) => {
+      const trou = i - prec > 1 ? '<span class="pg-gap">…</span>' : '';
+      prec = i;
+      return trou + '<button type="button" class="pg' + (i === p ? ' on' : '') + '" data-pg="' + i + '">' + (i + 1) + '</button>';
+    }).join('') +
+    '<button type="button" class="pg" data-pg="' + (p + 1) + '"' + (p < pages - 1 ? '' : ' disabled') +
+      ' aria-label="Next page">&rsaquo;</button></span>' +
+    '<select class="pg-size" aria-label="Clients per page">' + [25, 50, 100, 200].map((n) =>
+      '<option value="' + n + '"' + (n === CLI.perPage ? ' selected' : '') + '>' + n + ' / page</option>').join('') +
+    '</select>';
+  host.querySelectorAll('[data-pg]').forEach((b) => b.addEventListener('click', () => {
+    CLI.page = Number(b.dataset.pg);
+    renderClients();
+    document.getElementById('cli-table').scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }));
+  host.querySelector('.pg-size').addEventListener('change', (e) => {
+    CLI.perPage = Number(e.target.value);
+    CLI.page = 0;
+    renderClients();
+  });
+}
+
 function majSelection() {
   const n = CLI.sel.size;
   const barre = document.getElementById('cli-selbar');
@@ -10485,9 +10870,11 @@ function majSelection() {
 function cablerClients() {
   if (CLI.wired) return;
   CLI.wired = true;
-  ['cli-search'].forEach((id) => document.getElementById(id).addEventListener('input', renderClients));
-  ['cli-pop', 'cli-status', 'cli-mode'].forEach((id) =>
-    document.getElementById(id).addEventListener('change', renderClients));
+  const auDebut = () => { CLI.page = 0; renderClients(); };
+  ['cli-search'].forEach((id) => document.getElementById(id).addEventListener('input', auDebut));
+  ['cli-pop', 'cli-status', 'cli-mode', 'cli-sort'].forEach((id) =>
+    document.getElementById(id).addEventListener('change', auDebut));
+  document.getElementById('cli-csv').addEventListener('click', exportClientsCsv);
   document.getElementById('cli-clear').addEventListener('click', () => {
     CLI.onlySel = false;
     ['cli-search', 'cli-pop', 'cli-status', 'cli-mode'].forEach((id) => { document.getElementById(id).value = ''; });
@@ -10499,6 +10886,7 @@ function cablerClients() {
   document.getElementById('cli-sel-mode').addEventListener('click', () => openModeDialog([...CLI.sel]));
   document.getElementById('cli-sel-boost').addEventListener('click', () => openGroupBoost([...CLI.sel]));
   document.getElementById('cli-sel-stop').addEventListener('click', () => stopBoosts([...CLI.sel]));
+  document.getElementById('cli-sel-traffic').addEventListener('click', () => openGroupTraffic([...CLI.sel]));
 }
 
 /** Fenetre centree, au-dessus de tout, fermee par Echap ou le fond. */
@@ -10546,6 +10934,84 @@ function rendreResultats(res) {
   return '<div class="notice ' + (res.failed ? 'warn' : 'ok') + '"><b>' + res.succeeded + ' of ' +
     res.requested + ' client(s) done.</b>' + (res.failed ? ' ' + res.failed + ' failed: see below.' : '') +
     '</div><ul class="result-list">' + lignes + '</ul>';
+}
+
+/* --------------------------------------------- trafic des clients choisis
+ * Un clic sur « Traffic » avec des clients coches : le total de la selection
+ * en courbe, puis chaque client, sa petite courbe, son debit et son volume. */
+const GTR = { minutes: 60 };
+
+function courbeSvg(series, l, h, epais) {
+  // series : [{ v: [nombres], cls }] ; une echelle commune.
+  const max = Math.max(1, ...series.flatMap((x) => x.v));
+  const n = Math.max(2, ...series.map((x) => x.v.length));
+  const pt = (v, i) => (i * l / (n - 1)).toFixed(1) + ',' + (h - 2 - (v / max) * (h - 4)).toFixed(1);
+  return '<svg class="gtr-svg" viewBox="0 0 ' + l + ' ' + h + '" preserveAspectRatio="none">' +
+    series.map((x) => {
+      if (!x.v.length) return '';
+      const ligne = x.v.map(pt).join(' ');
+      return (x.aire ? '<polygon class="' + x.cls + '-a" points="0,' + h + ' ' + ligne + ' ' + l + ',' + h + '"/>' : '') +
+        '<polyline class="' + x.cls + '" fill="none" stroke-width="' + (epais || 1.6) + '" points="' + ligne + '"/>';
+    }).join('') + '</svg>';
+}
+
+async function openGroupTraffic(logins) {
+  const liste = logins.slice(0, 40);
+  const m = openModal('<div class="modal-head"><div><h3>Traffic</h3><div class="sub">' + sousTitreCibles(logins) +
+    (logins.length > liste.length ? ' (first ' + liste.length + ' shown)' : '') + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body"><div class="segmented" id="gtr-range">' +
+      [[60, '1 hour'], [1440, '24 hours'], [10080, '7 days']].map(([v, t]) =>
+        '<button type="button" data-v="' + v + '"' + (v === GTR.minutes ? ' class="active"' : '') + '>' + t + '</button>').join('') +
+    '</div><div id="gtr-body"><div class="empty">Loading…</div></div></div>');
+  const dessiner = async () => {
+    const corps = m.root.querySelector('#gtr-body');
+    corps.innerHTML = '<div class="empty">Loading…</div>';
+    const pas = GTR.minutes <= 60 ? 60 : GTR.minutes <= 1440 ? 900 : 3600;
+    const res = await Promise.all(liste.map(async (login) => {
+      const r = CLI.rows.find((x) => x.login === login) || { login };
+      const d = r.subscriber_id ? await api('/subscribers/' + r.subscriber_id + '/metrics?minutes=' + GTR.minutes +
+        '&bucket_seconds=' + pas).catch(() => null) : null;
+      return { r, pts: (d && d.points) || [] };
+    }));
+    // Total de la selection, bucket par bucket.
+    const total = {};
+    res.forEach(({ pts }) => pts.forEach((p) => {
+      const t = total[p.bucket] = total[p.bucket] || { d: 0, u: 0 };
+      t.d += Number(p.tx_bps_avg) || 0;
+      t.u += Number(p.rx_bps_avg) || 0;
+    }));
+    const cles = Object.keys(total).sort();
+    const vol = (pts, cle) => pts.reduce((a, p) => a + (Number(p[cle]) || 0) * pas / 8, 0);
+    const volD = res.reduce((a, x) => a + vol(x.pts, 'tx_bps_avg'), 0);
+    const volU = res.reduce((a, x) => a + vol(x.pts, 'rx_bps_avg'), 0);
+    const pic = Math.max(0, ...cles.map((k) => total[k].d));
+    corps.innerHTML = '<div class="gtr-total card">' +
+        '<div class="gtr-head"><b>All selected clients</b><span class="d">&darr; ' + esc(octetsText(volD)) +
+        '</span><span class="u">&uarr; ' + esc(octetsText(volU)) + '</span><span class="hint">peak ' +
+        esc(bpsText(pic)) + '</span></div>' +
+        (cles.length ? courbeSvg([{ v: cles.map((k) => total[k].d), cls: 'gtr-d', aire: true },
+          { v: cles.map((k) => total[k].u), cls: 'gtr-u' }], 600, 120, 2)
+          : '<div class="empty">No measurement over this period.</div>') + '</div>' +
+      '<div class="gtr-list">' + res.map(({ r, pts }) => {
+        const on = clientEnLigne(r);
+        return '<a class="gtr-row" href="#/client/' + encodeURIComponent(r.login) + '">' +
+          '<span class="gtr-name"><i class="dot-co ' + (on ? 'on' : 'off') + '"></i>' + esc(r.login) +
+            '<small>' + esc(r.pop_name || '') + '</small></span>' +
+          '<span class="gtr-spark">' + (pts.length ? courbeSvg([{ v: pts.map((p) => Number(p.tx_bps_avg) || 0), cls: 'gtr-d', aire: true },
+            { v: pts.map((p) => Number(p.rx_bps_avg) || 0), cls: 'gtr-u' }], 200, 36) : '<span class="na">no data</span>') + '</span>' +
+          '<span class="gtr-now">' + (on ? '&darr; ' + esc(bpsText(r.tx_bps)) : 'offline') + '</span>' +
+          '<span class="gtr-vol">' + esc(octetsText(vol(pts, 'tx_bps_avg'))) + '</span></a>';
+      }).join('') + '</div>';
+    corps.querySelectorAll('.gtr-row').forEach((a) => a.addEventListener('click', () => m.fermer()));
+  };
+  m.root.querySelectorAll('#gtr-range [data-v]').forEach((b) => b.addEventListener('click', () => {
+    GTR.minutes = Number(b.dataset.v);
+    m.root.querySelectorAll('#gtr-range [data-v]').forEach((x) => x.classList.toggle('active', x === b));
+    dessiner();
+  }));
+  m.root.classList.add('modal-wide');
+  dessiner();
 }
 
 function openModeDialog(logins) {
@@ -10721,12 +11187,11 @@ async function loadModesAdmin() {
   document.getElementById('modes-form').hidden = !ecrire;
   document.getElementById('modes-form-title').hidden = !ecrire;
   host.innerHTML = !modes.length
-    ? '<div class="empty">No mode yet. Typical set: Backup (6 Mbps), Extreme backup (2 Mbps, stops boosts), ' +
+    ? '<div class="empty">No mode yet. Typical set: Backup (6 Mbps), Extreme backup (512 kbps), ' +
       'Night (200 % of the plan).</div>'
-    : '<table><thead><tr><th>Mode</th><th>Rate</th><th>Boost</th><th class="num">Clients</th>' +
+    : '<table><thead><tr><th>Mode</th><th>Rate</th><th class="num">Clients</th>' +
       '<th>Note</th><th></th></tr></thead><tbody>' +
       modes.map((m) => '<tr><td><b>' + esc(m.name) + '</b></td><td>' + esc(modeTaux(m)) + '</td>' +
-        '<td>' + (m.disables_boost ? '<span class="badge crit">stopped</span>' : 'allowed') + '</td>' +
         '<td class="num">' + (m.clients || 0) + '</td><td>' + esc(m.note || '') + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' + (ecrire
           ? '<button class="sm" data-mode-edit="' + m.id + '">Edit</button>' +
@@ -10736,13 +11201,14 @@ async function loadModesAdmin() {
     const m = modes.find((x) => String(x.id) === b.dataset.modeEdit);
     MODES.editing = m.id;
     document.getElementById('mode-name').value = m.name;
-    document.getElementById('mode-kind').value = m.rate_kind;
-    document.getElementById('mode-down').value = m.down_value;
-    document.getElementById('mode-up').value = m.up_value;
+    // Un debit fixe sous 1 Mbps se relit en kbps, comme il a ete saisi.
+    const kb = m.rate_kind !== 'percent' && Number(m.down_value) < 1 && Number(m.up_value) < 1;
+    modeUnite(m.rate_kind === 'percent' ? 'percent' : kb ? 'kbps' : 'mbps');
+    const f = kb ? 1000 : 1;
+    document.getElementById('mode-down').value = +(m.down_value * f).toFixed(3);
+    document.getElementById('mode-up').value = +(m.up_value * f).toFixed(3);
     document.getElementById('mode-position').value = m.position || 0;
     document.getElementById('mode-note').value = m.note || '';
-    document.getElementById('mode-noboost').checked = !!m.disables_boost;
-    majUniteMode();
     document.getElementById('modes-form-title').textContent = 'Edit ' + m.name;
     document.getElementById('mode-submit').textContent = 'Save and apply to its clients';
     document.getElementById('mode-cancel').hidden = false;
@@ -10759,8 +11225,16 @@ async function loadModesAdmin() {
   }));
 }
 
+/** L'unite du debit d'un mode : kbps, Mbps, ou % du forfait. */
+function modeUnite(u) {
+  MODES.unite = u;
+  document.getElementById('mode-kind').value = u === 'percent' ? 'percent' : 'fixed';
+  document.querySelectorAll('#mode-unit [data-u]').forEach((b) => b.classList.toggle('active', b.dataset.u === u));
+  majUniteMode();
+}
+
 function majUniteMode() {
-  const u = document.getElementById('mode-kind').value === 'percent' ? '% of the plan' : 'Mbps';
+  const u = { kbps: 'kbps', mbps: 'Mbps', percent: '% of plan' }[MODES.unite || 'mbps'];
   document.getElementById('mode-unit-down').textContent = u;
   document.getElementById('mode-unit-up').textContent = u;
 }
@@ -10771,24 +11245,25 @@ function resetModeForm() {
   document.getElementById('modes-form-title').textContent = 'New mode';
   document.getElementById('mode-submit').textContent = 'Add the mode';
   document.getElementById('mode-cancel').hidden = true;
-  majUniteMode();
+  modeUnite('mbps');
 }
 
 function cablerModes() {
   if (MODES.wired) return;
   MODES.wired = true;
-  document.getElementById('mode-kind').addEventListener('change', majUniteMode);
+  document.querySelectorAll('#mode-unit [data-u]').forEach((b) =>
+    b.addEventListener('click', () => modeUnite(b.dataset.u)));
   document.getElementById('mode-cancel').addEventListener('click', resetModeForm);
   document.getElementById('modes-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const corps = {
       name: document.getElementById('mode-name').value.trim(),
       rate_kind: document.getElementById('mode-kind').value,
-      down_value: Number(document.getElementById('mode-down').value),
-      up_value: Number(document.getElementById('mode-up').value),
+      down_value: Number(document.getElementById('mode-down').value) / (MODES.unite === 'kbps' ? 1000 : 1),
+      up_value: Number(document.getElementById('mode-up').value) / (MODES.unite === 'kbps' ? 1000 : 1),
       position: Number(document.getElementById('mode-position').value) || 0,
       note: document.getElementById('mode-note').value.trim() || null,
-      disables_boost: document.getElementById('mode-noboost').checked,
+      disables_boost: false,
     };
     const sortie = document.getElementById('modes-result');
     try {
@@ -10831,12 +11306,12 @@ const SOURCE_LIMITE = {
 
 function lignesActivite(liste, avecClient) {
   if (!liste.length) return '<div class="empty">No change recorded yet.</div>';
-  return '<table><thead><tr><th>When</th>' + (avecClient ? '<th>Client</th>' : '') +
+  return '<table class="act-table"><thead><tr><th>When</th>' + (avecClient ? '<th>Client</th>' : '') +
     '<th>Change</th><th>Detail</th><th>By</th><th>State</th></tr></thead><tbody>' +
-    liste.map((a) => '<tr><td class="nowrap" title="' + esc(dateLongue(a.ts)) + '">' + esc(depuis(a.ts)) + '</td>' +
-      (avecClient ? '<td><a href="#" data-act-client="' + esc(a.login) + '">' + esc(a.login) + '</a></td>' : '') +
-      '<td><b>' + esc(ACTION_LABEL[a.action] || a.action) + '</b></td>' +
-      '<td>' + esc(a.detail || '') + '</td><td>' + esc(a.actor) + '</td><td>' + etatGeste(a) +
+    liste.map((a) => '<tr><td class="nowrap act-when" title="' + esc(dateLongue(a.ts)) + '">' + esc(depuis(a.ts)) + '</td>' +
+      (avecClient ? '<td class="act-who"><a href="#" data-act-client="' + esc(a.login) + '">' + esc(a.login) + '</a></td>' : '') +
+      '<td class="act-what"><b>' + esc(ACTION_LABEL[a.action] || a.action) + '</b></td>' +
+      '<td class="act-detail">' + esc(a.detail || '') + '</td><td class="act-by">' + esc(a.actor) + '</td><td class="act-state">' + etatGeste(a) +
       (a.queue_reason && !a.written ? '<span class="hint" style="display:block">' + esc(a.queue_reason) + '</span>' : '') +
       '</td></tr>').join('') +
     '</tbody></table>';
@@ -10851,11 +11326,31 @@ function openClientSheet(login) {
 const FICHE = { login: null, onglet: 'overview', periode: 60 };
 
 const ICONES = {
+  wifi: '<svg viewBox="0 0 24 24"><path d="M2.5 9a14 14 0 0 1 19 0"/><path d="M5.5 12.5a9.5 9.5 0 0 1 13 0"/><path d="M8.7 16a5 5 0 0 1 6.6 0"/><circle cx="12" cy="19.2" r="1.1"/></svg>',
   down: '<svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>',
   up: '<svg viewBox="0 0 24 24"><path d="M12 20V9"/><path d="M7 14l5-5 5 5"/><path d="M5 4h14"/></svg>',
   limit: '<svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/></svg>',
   rtt: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9 2h6"/></svg>',
 };
+
+/** Sous « Usage now » : la part de la limite utilisee, en jauge et en mot. */
+function jaugeUsage(r, on) {
+  const lim = Number(r.effective_down_mbps) || Number(r.plan_down_mbps) || 0;
+  if (!lim) return on ? 'no limit to compare with' : 'nothing right now';
+  const part = on ? Math.min(1, (Number(r.tx_bps) || 0) / 1e6 / lim) : 0;
+  const [mot, cls] = part >= 0.9 ? ['at its limit', 'lv-crit'] : part >= 0.6 ? ['busy', 'lv-warn']
+    : part >= 0.1 ? ['normal use', 'lv-ok'] : ['quiet', 'lv-idle'];
+  return '<span class="use-bar ' + cls + '" style="display:block;margin:.35rem 0 .3rem"><i style="width:' +
+    Math.max(2, Math.round(part * 100)) + '%"></i></span>' + Math.round(part * 100) + ' % of ' +
+    esc(mbps(lim)) + ' · <b class="use-word ' + cls + '">' + mot + '</b>';
+}
+
+/** La latence en un mot. */
+function qualiteLatence(ms) {
+  const v = Number(ms);
+  return v < 40 ? '<b class="use-word lv-ok">good</b>' : v < 100 ? '<b class="use-word lv-warn">fair</b>'
+    : '<b class="use-word lv-crit">poor</b>';
+}
 
 function kpi(icone, cls, label, valeur, unite, sous) {
   return '<div class="card kpi"><div class="kpi-txt"><span class="kpi-label">' + esc(label) + '</span>' +
@@ -10919,12 +11414,17 @@ async function loadClientPage() {
     const [vu, uu] = separerUnite(on ? bpsText(r.rx_bps) : '-');
     const octets = (cle) => pts.reduce((a, p) => a + (Number(p[cle]) || 0) * pas / 8, 0);
     corps = '<div class="kpis">' +
-      kpi('down', 'k-down', 'Download now', vd, ud, '') +
-      kpi('up', 'k-up', 'Upload now', vu, uu, '') +
-      kpi('limit', 'k-lim', 'Limit applied', s.effective_down_mbps ? String(Math.round(s.effective_down_mbps * 10) / 10) : '-',
-        s.effective_down_mbps ? 'Mbps down' : '', esc(SOURCE_LIMITE[s.limit_source] || '')) +
+      // EN CLAIR : connecte ou non, ce qu'il consomme PAR RAPPORT a sa limite
+      // (une jauge et un mot), sa limite, et si sa latence est bonne.
+      kpi('wifi', on ? 'k-ok' : 'k-off', 'Status', on ? 'Online' : 'Offline', '',
+        on ? 'measured ' + esc(depuis(r.ts)) : (r.ts ? 'last seen ' + esc(depuis(r.ts)) : 'never seen')) +
+      kpi('down', 'k-down', 'Usage now', on ? vd : '0', on ? ud : 'Mbps', jaugeUsage(r, on)) +
+      kpi('limit', 'k-lim', 'Limit', s.effective_down_mbps ? sansUnite(s.effective_down_mbps) : 'None',
+        s.effective_down_mbps ? 'Mbps' : '', s.effective_down_mbps ? '&uarr; ' + esc(mbps(s.effective_up_mbps || 0)) +
+          ' up · ' + esc(SOURCE_LIMITE[s.limit_source] || '') : 'no limit applied') +
       kpi('rtt', 'k-rtt', 'Latency', r.rtt_ms ? String(Math.round(r.rtt_ms)) : '-', r.rtt_ms ? 'ms' : '',
-        data && data.bufferbloat ? 'under load: grade ' + esc(data.bufferbloat.grade) : '') +
+        r.rtt_ms ? qualiteLatence(r.rtt_ms) + (data && data.bufferbloat ? ' · under load: grade ' +
+          esc(data.bufferbloat.grade) : '') : 'not measured') +
       '</div><div class="cp-grid"><div class="card cp-usage"><div class="cp-card-head"><div><h3>Usage over time</h3>' +
       '</div>' +
       '<div class="segmented" id="cp-range">' + [[60, '1 hour'], [1440, '24 hours'], [10080, '7 days']].map(([v, l]) =>
@@ -10961,7 +11461,7 @@ async function loadClientPage() {
     corps = '<div class="cp-grid"><div class="card"><h3>Bandwidth mode</h3>' +
       '<div class="mode-cards">' +
       carte(null, 'Automatic', 'Plan and schedule') +
-      CLI.modes.map((x) => carte(x.id, x.name, esc(modeTaux(x)) + (x.disables_boost ? '<br>Stops boosts' : ''))).join('') +
+      CLI.modes.map((x) => carte(x.id, x.name, esc(modeTaux(x)))).join('') +
       '</div><div class="actions" style="margin-top:.8rem"><span class="spacer"></span>' +
       '<button class="primary" id="cp-apply-mode"' + dis + '>Apply the mode</button></div><div id="cp-mode-out"></div></div>' +
       '<div class="cp-side"><div class="card"><h3>Plan</h3>' +
@@ -11048,6 +11548,301 @@ function octetsText(n) {
   return Math.round(v / 1e3) + ' kB';
 }
 
+/* ---------------------------------------------------------------- carte
+ * Les sites (PoPs) sur une carte OpenStreetMap, sans bibliotheque : des
+ * tuiles posees a la main (projection de Mercator), des pastilles par site
+ * (taille = nombre de clients, couleur = part connectee). Glisser deplace,
+ * la molette / les boutons / un double clic zooment. */
+const MAP = { z: 3, lat: 20, lon: 10, locs: [], sel: null, placing: null, wired: false, fitted: false };
+const TUILE = 256;
+
+function mercX(lon, z) { return (lon + 180) / 360 * TUILE * 2 ** z; }
+function mercY(lat, z) {
+  const r = Math.max(-85.05, Math.min(85.05, lat)) * Math.PI / 180;
+  return (1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * TUILE * 2 ** z;
+}
+function mercLon(x, z) { return x / (TUILE * 2 ** z) * 360 - 180; }
+function mercLat(y, z) {
+  const n = Math.PI - 2 * Math.PI * y / (TUILE * 2 ** z);
+  return 180 / Math.PI * Math.atan(Math.sinh(n));
+}
+
+function mapSites() {
+  // Un site = un nom de PoP porte par des clients, ou une position posee.
+  const sites = {};
+  (CLI.rows || []).forEach((r) => {
+    const n = r.pop_name || '';
+    if (!n) return;
+    const s = sites[n] = sites[n] || { name: n, n: 0, on: 0, mode: 0, boost: 0, logins: [] };
+    s.n += 1;
+    s.logins.push(r.login);
+    if (clientEnLigne(r)) s.on += 1;
+    if (r.mode_id || r.override_down_mbps) s.mode += 1;
+    if (CLI.boosts[r.login]) s.boost += 1;
+  });
+  MAP.locs.forEach((l) => {
+    const s = sites[l.name] = sites[l.name] || { name: l.name, n: 0, on: 0, mode: 0, boost: 0, logins: [] };
+    s.lat = l.latitude;
+    s.lon = l.longitude;
+  });
+  return Object.values(sites);
+}
+
+function siteTeinte(s) {
+  if (!s.n) return 'gray';
+  const p = s.on / s.n;
+  return p >= 0.8 ? 'green' : p >= 0.5 ? 'orange' : 'red';
+}
+
+async function loadMap() {
+  cablerCarte();
+  const [, locs] = await Promise.all([
+    loadClientsData().catch(() => null),
+    api('/site-locations').catch(() => ({ locations: [] })),
+  ]);
+  MAP.locs = (locs && locs.locations) || [];
+  if (!MAP.fitted) { mapAjuster(); MAP.fitted = true; }
+  dessinerCarte();
+  dessinerCoteCarte();
+}
+
+function mapTaille() {
+  const v = document.getElementById('map-view');
+  return { l: v.clientWidth || 800, h: v.clientHeight || 500 };
+}
+
+/** Cadre toutes les positions connues ; sans position, le monde. */
+function mapAjuster() {
+  const places = mapSites().filter((s) => s.lat != null);
+  if (!places.length) { MAP.z = 2; MAP.lat = 15; MAP.lon = 10; return; }
+  const { l, h } = mapTaille();
+  const lats = places.map((s) => s.lat);
+  const lons = places.map((s) => s.lon);
+  MAP.lat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  MAP.lon = (Math.min(...lons) + Math.max(...lons)) / 2;
+  MAP.z = 15;
+  while (MAP.z > 2) {
+    const dx = mercX(Math.max(...lons), MAP.z) - mercX(Math.min(...lons), MAP.z);
+    const dy = mercY(Math.min(...lats), MAP.z) - mercY(Math.max(...lats), MAP.z);
+    if (dx < l - 120 && dy < h - 120) break;
+    MAP.z -= 1;
+  }
+  if (places.length === 1) MAP.z = 13;
+}
+
+function dessinerCarte() {
+  const tuiles = document.getElementById('map-tiles');
+  const pins = document.getElementById('map-pins');
+  if (!tuiles) return;
+  const { l, h } = mapTaille();
+  const z = MAP.z;
+  const cx = mercX(MAP.lon, z) - l / 2;
+  const cy = mercY(MAP.lat, z) - h / 2;
+  const n = 2 ** z;
+  const x0 = Math.floor(cx / TUILE);
+  const y0 = Math.floor(cy / TUILE);
+  const x1 = Math.floor((cx + l) / TUILE);
+  const y1 = Math.floor((cy + h) / TUILE);
+  const garder = new Set();
+  for (let x = x0; x <= x1; x++) {
+    for (let y = y0; y <= y1; y++) {
+      if (y < 0 || y >= n) continue;
+      const xx = ((x % n) + n) % n;
+      const cle = z + '/' + x + '/' + y;
+      garder.add(cle);
+      let img = tuiles.querySelector('img[data-k="' + cle + '"]');
+      if (!img) {
+        img = document.createElement('img');
+        img.dataset.k = cle;
+        img.alt = '';
+        img.draggable = false;
+        img.referrerPolicy = 'origin';
+        img.onerror = () => img.classList.add('failed');
+        img.src = '//tile.openstreetmap.org/' + z + '/' + xx + '/' + y + '.png';
+        tuiles.appendChild(img);
+      }
+      img.style.transform = 'translate(' + Math.round(x * TUILE - cx) + 'px,' + Math.round(y * TUILE - cy) + 'px)';
+    }
+  }
+  tuiles.querySelectorAll('img').forEach((img) => { if (!garder.has(img.dataset.k)) img.remove(); });
+  const sites = mapSites().filter((s) => s.lat != null);
+  const maxN = Math.max(1, ...sites.map((s) => s.n));
+  pins.innerHTML = sites.map((s) => {
+    const px = mercX(s.lon, z) - cx;
+    const py = mercY(s.lat, z) - cy;
+    const taille = Math.round(30 + 22 * Math.sqrt(s.n / maxN));
+    return '<button type="button" class="map-pin t-' + siteTeinte(s) + (MAP.sel === s.name ? ' sel' : '') +
+      '" data-site="' + esc(s.name) + '" style="left:' + px.toFixed(0) + 'px;top:' + py.toFixed(0) +
+      'px;width:' + taille + 'px;height:' + taille + 'px" title="' + esc(s.name) + '">' +
+      '<b>' + s.n + '</b><span class="map-pin-name">' + esc(s.name) + '</span></button>';
+  }).join('');
+  pins.querySelectorAll('[data-site]').forEach((b) => b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    MAP.sel = b.dataset.site;
+    dessinerCarte();
+    dessinerCoteCarte();
+  }));
+}
+
+function mapZoom(delta, ancre) {
+  const z2 = Math.max(2, Math.min(18, MAP.z + delta));
+  if (z2 === MAP.z) return;
+  if (ancre) {
+    // Le point sous la souris reste sous la souris.
+    const { l, h } = mapTaille();
+    const ax = mercX(MAP.lon, MAP.z) - l / 2 + ancre.x;
+    const ay = mercY(MAP.lat, MAP.z) - h / 2 + ancre.y;
+    const f = 2 ** (z2 - MAP.z);
+    MAP.lon = mercLon(ax * f - ancre.x + l / 2, z2);
+    MAP.lat = mercLat(ay * f - ancre.y + h / 2, z2);
+  }
+  MAP.z = z2;
+  document.getElementById('map-tiles').innerHTML = '';
+  dessinerCarte();
+}
+
+function cablerCarte() {
+  if (MAP.wired) return;
+  MAP.wired = true;
+  const vue = document.getElementById('map-view');
+  let geste = null;
+  vue.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.map-ctrl, .map-pin, .map-attrib')) return;
+    geste = { x: e.clientX, y: e.clientY, lon: MAP.lon, lat: MAP.lat, bouge: false };
+    vue.setPointerCapture(e.pointerId);
+  });
+  vue.addEventListener('pointermove', (e) => {
+    if (!geste) return;
+    const dx = e.clientX - geste.x;
+    const dy = e.clientY - geste.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) geste.bouge = true;
+    if (!geste.bouge) return;
+    MAP.lon = mercLon(mercX(geste.lon, MAP.z) - dx, MAP.z);
+    MAP.lat = mercLat(mercY(geste.lat, MAP.z) - dy, MAP.z);
+    vue.classList.add('dragging');
+    dessinerCarte();
+  });
+  vue.addEventListener('pointerup', async (e) => {
+    const g = geste;
+    geste = null;
+    vue.classList.remove('dragging');
+    if (!g || g.bouge) return;
+    if (MAP.placing) {
+      // Placer un site : la ou l'on vient de cliquer.
+      const r = vue.getBoundingClientRect();
+      const { l, h } = mapTaille();
+      const x = mercX(MAP.lon, MAP.z) - l / 2 + (e.clientX - r.left);
+      const y = mercY(MAP.lat, MAP.z) - h / 2 + (e.clientY - r.top);
+      const nom = MAP.placing;
+      MAP.placing = null;
+      document.getElementById('map-hint').hidden = true;
+      try {
+        await api('/site-locations/' + encodeURIComponent(nom), { method: 'PUT',
+          body: JSON.stringify({ latitude: mercLat(y, MAP.z), longitude: mercLon(x, MAP.z) }) });
+        MAP.sel = nom;
+        toast('<b>' + esc(nom) + '</b> placed on the map.', 4000);
+      } catch (err) {
+        toast(esc(err.message), 6000);
+      }
+      await loadMap();
+    } else if (MAP.sel) {
+      MAP.sel = null;
+      dessinerCarte();
+      dessinerCoteCarte();
+    }
+  });
+  vue.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const r = vue.getBoundingClientRect();
+    mapZoom(e.deltaY < 0 ? 1 : -1, { x: e.clientX - r.left, y: e.clientY - r.top });
+  }, { passive: false });
+  vue.addEventListener('dblclick', (e) => {
+    const r = vue.getBoundingClientRect();
+    mapZoom(1, { x: e.clientX - r.left, y: e.clientY - r.top });
+  });
+  document.getElementById('map-zin').addEventListener('click', () => mapZoom(1));
+  document.getElementById('map-zout').addEventListener('click', () => mapZoom(-1));
+  document.getElementById('map-fit').addEventListener('click', () => {
+    mapAjuster();
+    document.getElementById('map-tiles').innerHTML = '';
+    dessinerCarte();
+  });
+  window.addEventListener('resize', () => { if (state.view === 'map') dessinerCarte(); });
+}
+
+function mapPlacer(nom) {
+  MAP.placing = nom;
+  const hint = document.getElementById('map-hint');
+  hint.hidden = false;
+  hint.innerHTML = 'Tap the map where <b>' + esc(nom) + '</b> is. <button type="button" class="sm link-btn" id="map-cancel">Cancel</button>';
+  document.getElementById('map-cancel').addEventListener('click', (e) => {
+    e.stopPropagation();
+    MAP.placing = null;
+    hint.hidden = true;
+  });
+  if (window.matchMedia('(max-width: 760px)').matches) document.getElementById('map-view').scrollIntoView({ behavior: 'smooth' });
+}
+
+function dessinerCoteCarte() {
+  const cote = document.getElementById('map-side');
+  if (!cote) return;
+  const admin = peut('edit');
+  const sites = mapSites();
+  const places = sites.filter((s) => s.lat != null);
+  const aPlacer = sites.filter((s) => s.lat == null);
+  const s = sites.find((x) => x.name === MAP.sel);
+  const ligne = (x) => '<button type="button" class="map-site" data-goto="' + esc(x.name) + '">' +
+    '<i class="map-dot t-' + siteTeinte(x) + '"></i><span class="map-site-name">' + esc(x.name) + '</span>' +
+    '<span class="map-site-n">' + x.on + ' / ' + x.n + '</span></button>';
+  const fiche = s ? '<div class="map-card">' +
+      '<div class="map-card-head"><i class="map-dot t-' + siteTeinte(s) + '"></i><b>' + esc(s.name) + '</b>' +
+        '<button type="button" class="sm link-btn" data-close aria-label="Close">&times;</button></div>' +
+      '<div class="map-stats"><div><b>' + s.n + '</b><span>clients</span></div>' +
+        '<div><b>' + s.on + '</b><span>connected</span></div>' +
+        '<div><b>' + s.mode + '</b><span>in a mode</span></div>' +
+        '<div><b>' + s.boost + '</b><span>boosts</span></div></div>' +
+      '<div class="actions">' +
+        (s.n ? '<button type="button" class="sm primary" data-show="' + esc(s.name) + '">Show its clients</button>' +
+          '<button type="button" class="sm" data-traffic="' + esc(s.name) + '">Traffic</button>' : '') +
+        '<button type="button" class="sm" data-pdf="' + esc(s.name) + '">PDF report</button>' +
+        (admin ? '<button type="button" class="sm" data-place="' + esc(s.name) + '">' + (s.lat != null ? 'Move' : 'Place') + '</button>' : '') +
+      '</div></div>' : '';
+  // Les sites ou trop de clients sont deconnectes d'abord.
+  const tri = (a, b) => (a.n ? a.on / a.n : 1) - (b.n ? b.on / b.n : 1) || a.name.localeCompare(b.name);
+  cote.innerHTML = fiche +
+    '<div class="map-legend"><span><i class="map-dot t-green"></i>80 %+ connected</span>' +
+      '<span><i class="map-dot t-orange"></i>50–80 %</span><span><i class="map-dot t-red"></i>under 50 %</span></div>' +
+    '<h3>Sites <span class="hint">' + places.length + ' on the map</span></h3>' +
+    '<div class="map-sites">' + (places.length ? places.sort(tri).map(ligne).join('')
+      : '<div class="empty">No site on the map yet.' + (admin ? ' Place them below.' : ' An Administrator places them.') + '</div>') + '</div>' +
+    (aPlacer.length ? '<h3>Not placed <span class="hint">' + aPlacer.length + '</span></h3><div class="map-sites">' +
+      aPlacer.sort(tri).map((x) => '<div class="map-site off"><i class="map-dot t-' + siteTeinte(x) + '"></i>' +
+        '<span class="map-site-name">' + esc(x.name) + '</span><span class="map-site-n">' + x.on + ' / ' + x.n + '</span>' +
+        (admin ? '<button type="button" class="sm" data-place="' + esc(x.name) + '">Place</button>' : '') + '</div>').join('') +
+      '</div>' : '');
+  cote.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => {
+    const x = sites.find((y) => y.name === b.dataset.goto);
+    MAP.sel = x.name;
+    MAP.lat = x.lat;
+    MAP.lon = x.lon;
+    if (MAP.z < 12) { MAP.z = 13; document.getElementById('map-tiles').innerHTML = ''; }
+    dessinerCarte();
+    dessinerCoteCarte();
+  }));
+  cote.querySelectorAll('[data-place]').forEach((b) => b.addEventListener('click', () => mapPlacer(b.dataset.place)));
+  cote.querySelectorAll('[data-pdf]').forEach((b) => b.addEventListener('click', () => rapportPdf(b.dataset.pdf)));
+  cote.querySelectorAll('[data-show]').forEach((b) => b.addEventListener('click', () => {
+    CLI.presetSite = b.dataset.show;
+    location.hash = '#/clients';
+  }));
+  cote.querySelectorAll('[data-traffic]').forEach((b) => b.addEventListener('click', () => {
+    const x = sites.find((y) => y.name === b.dataset.traffic);
+    openGroupTraffic(x.logins);
+  }));
+  const fermer = cote.querySelector('[data-close]');
+  if (fermer) fermer.addEventListener('click', () => { MAP.sel = null; dessinerCarte(); dessinerCoteCarte(); });
+}
+
 /* ------------------------------------------------------------- activite */
 const ACT = { rows: [], wired: false };
 
@@ -11086,62 +11881,352 @@ async function loadActivity() {
 
 /** Ce qui demande quelqu'un, REGROUPE : un site dont plusieurs clients
  *  tombent ensemble est un probleme de site, pas vingt problemes de clients. */
-async function loadAlerts() {
-  await loadClientsData();
-  const rows = CLI.rows;
+/* ---------------------------------------------------------------- alertes
+ * Chaque probleme porte un CODE stable : il se cite au telephone, se cherche
+ * dans la documentation, et dit QUOI VERIFIER. */
+const CODES_ERREUR = {
+  ERR_POP_TIMEOUT: { niveau: 'crit', nom: 'Site unreachable',
+    verifier: 'The shared link of the site: backhaul radio, power, the site router. Its clients come back together once it is fixed.' },
+  ERR_ROUTER_WRITE: { niveau: 'crit', nom: 'Router refused a change',
+    verifier: 'The router could not be reached or refused the queue: check its API access (address, user, password) on the Devices page.' },
+  ERR_CLIENT_DISCONNECT: { niveau: 'warn', nom: 'Client offline',
+    verifier: 'The client side: power, antenna / CPE alignment, cable, PPPoE login. Its site is otherwise up.' },
+  ERR_HIGH_LATENCY: { niveau: 'warn', nom: 'High latency',
+    verifier: 'Radio signal of these clients and the load of their site: a saturated backhaul raises latency for everyone behind it.' },
+  ERR_NO_ROUTER: { niveau: 'warn', nom: 'No router for the client',
+    verifier: 'No router carries this client: its site has no router declared, or it is seen in no session. A change is saved but not applied.' },
+  ERR_QUEUE_CONFLICT: { niveau: 'warn', nom: 'Queue set by hand',
+    verifier: 'A queue created by hand on the router targets the same client: remove it, or let freeQoS manage it.' },
+  ERR_NEVER_SEEN: { niveau: 'info', nom: 'Never measured',
+    verifier: 'Declared but never seen on a router: not connected yet, or a wrong address / login.' },
+  MODE_CRISIS: { niveau: 'info', nom: 'Crisis mode',
+    verifier: 'Their rate is reduced and boosts are refused until they are put back to Automatic.' },
+};
+
+/** Les alertes d'apres les clients et le journal des gestes. */
+function calculerAlertes(rows, journal, site) {
   const alertes = [];
+  const ajouter = (code, titre, texte, logins) => {
+    const c = CODES_ERREUR[code];
+    alertes.push({ code, niveau: c.niveau, quoi: c.nom, verifier: c.verifier, titre, texte, logins });
+  };
+  const vus = site ? rows.filter((r) => (r.pop_name || '') === site) : rows;
   const parSite = {};
-  rows.forEach((r) => { (parSite[r.pop_name || '-'] = parSite[r.pop_name || '-'] || []).push(r); });
-  Object.entries(parSite).forEach(([site, liste]) => {
+  vus.forEach((r) => { (parSite[r.pop_name || '-'] = parSite[r.pop_name || '-'] || []).push(r); });
+  Object.entries(parSite).forEach(([nom, liste]) => {
     const mesures = liste.filter((r) => r.ts);
     const tombes = mesures.filter((r) => !clientEnLigne(r));
     if (tombes.length >= 2 && tombes.length >= mesures.length / 2) {
-      alertes.push({ niveau: 'crit', titre: site + ': connection loss',
-        texte: tombes.length + ' of ' + mesures.length + ' clients of this site are offline together. ' +
-          'Check the shared connection before investigating each client.',
-        quoi: 'Site outage', logins: tombes.map((r) => r.login) });
+      ajouter('ERR_POP_TIMEOUT', nom + ': site unreachable', tombes.length + ' of ' + mesures.length +
+        ' clients of this site went offline together.', tombes.map((r) => r.login));
     } else {
-      tombes.forEach((r) => alertes.push({ niveau: 'warn', titre: r.login + ': offline',
-        texte: 'Last seen ' + depuis(r.ts) + '. Its site is otherwise up: check the client side.',
-        quoi: 'Client offline', logins: [r.login] }));
+      tombes.forEach((r) => ajouter('ERR_CLIENT_DISCONNECT', r.login + ': offline',
+        'Last seen ' + depuis(r.ts) + ' on ' + (r.pop_name || 'an unknown site') + '.', [r.login]));
     }
   });
-  const lents = rows.filter((r) => clientEnLigne(r) && r.rtt_ms >= 150);
+  const lents = vus.filter((r) => clientEnLigne(r) && r.rtt_ms >= 150);
   if (lents.length) {
-    alertes.push({ niveau: 'warn', titre: lents.length + ' client(s) with high latency',
-      texte: 'Latency of 150 ms or more right now: the experience suffers (calls, games, video).',
-      quoi: 'Latency', logins: lents.map((r) => r.login) });
+    ajouter('ERR_HIGH_LATENCY', lents.length + ' client(s) with high latency',
+      'Latency of 150 ms or more right now: calls, games and video suffer.', lents.map((r) => r.login));
   }
-  const crise = rows.filter((r) => {
+  // Le DERNIER geste de chaque client, s'il n'a pas pu etre pose (24 h).
+  const logins = new Set(vus.map((r) => r.login));
+  const dernier = {};
+  (journal || []).forEach((a) => {
+    if (!logins.has(a.login) || Date.now() - new Date(a.ts).getTime() > 86400000) return;
+    if (!dernier[a.login] || new Date(a.ts) > new Date(dernier[a.login].ts)) dernier[a.login] = a;
+  });
+  const parEtat = { erreur: [], 'sans-routeur': [], conflit: [] };
+  Object.values(dernier).forEach((a) => {
+    if (a.ok && !a.written && parEtat[a.queue_state]) parEtat[a.queue_state].push(a.login);
+  });
+  if (parEtat.erreur.length) {
+    ajouter('ERR_ROUTER_WRITE', parEtat.erreur.length + ' change(s) not applied on the router',
+      'The last change of these clients failed on the router.', parEtat.erreur);
+  }
+  if (parEtat['sans-routeur'].length) {
+    ajouter('ERR_NO_ROUTER', parEtat['sans-routeur'].length + ' client(s) without a router',
+      'Their last change is saved, but no router carries them.', parEtat['sans-routeur']);
+  }
+  if (parEtat.conflit.length) {
+    ajouter('ERR_QUEUE_CONFLICT', parEtat.conflit.length + ' queue conflict(s)',
+      'A queue set by hand on the router targets these clients.', parEtat.conflit);
+  }
+  const crise = vus.filter((r) => {
     const m = r.mode_id && CLI.modes.find((x) => x.id === r.mode_id);
     return m && m.disables_boost;
   });
   if (crise.length) {
-    alertes.push({ niveau: 'info', titre: crise.length + ' client(s) in a crisis mode',
-      texte: 'Their rate is reduced and boosts are refused until they are put back to Automatic.',
-      quoi: 'Bandwidth mode', logins: crise.map((r) => r.login) });
+    ajouter('MODE_CRISIS', crise.length + ' client(s) in a crisis mode', 'Rate reduced, boosts refused.',
+      crise.map((r) => r.login));
   }
-  const jamais = rows.filter((r) => !r.ts);
+  const jamais = vus.filter((r) => !r.ts);
   if (jamais.length) {
-    alertes.push({ niveau: 'info', titre: jamais.length + ' client(s) never measured',
-      texte: 'Declared but never seen on a router: not connected yet, or a wrong address.',
-      quoi: 'No data', logins: jamais.map((r) => r.login) });
+    ajouter('ERR_NEVER_SEEN', jamais.length + ' client(s) never measured',
+      'Declared but never seen on a router.', jamais.map((r) => r.login));
   }
+  const rang = { crit: 0, warn: 1, info: 2 };
+  return alertes.sort((x, y) => rang[x.niveau] - rang[y.niveau]);
+}
+
+async function loadAlerts() {
+  const [, journal] = await Promise.all([loadClientsData(),
+    api('/activity?limit=300').catch(() => [])]);
+  ALR.journal = journal || [];
+  const sites = [...new Set(CLI.rows.map((r) => r.pop_name).filter(Boolean))].sort();
+  const choix = document.getElementById('alert-site');
+  const v = ALR.site || '';
+  const alertes = calculerAlertes(CLI.rows, ALR.journal, v);
   const host = document.getElementById('alerts-list');
-  if (!alertes.length) {
-    host.innerHTML = '<div class="notice ok"><b>Nothing needs you right now.</b> Every measured client is connected.</div>';
-    return;
-  }
-  host.innerHTML = '<div class="card cli-card">' + alertes.map((a, i) =>
-    '<div class="alert-row"><span class="alert-ico lvl-' + a.niveau + '">' + (a.niveau === 'crit' ? '!' : a.niveau === 'warn' ? '!' : 'i') + '</span>' +
-    '<div class="alert-txt"><b>' + esc(a.titre) + '</b><span>' + esc(a.texte) + '</span>' +
-    '<small>' + esc(a.quoi) + ' · ' + a.logins.length + ' affected</small></div>' +
-    '<button class="sm" data-alert="' + i + '">View clients</button></div>').join('') + '</div>';
+  const n = (lv) => alertes.filter((a) => a.niveau === lv).length;
+  const barre = '<div class="alert-bar card">' +
+    '<span class="alert-count"><b class="lvl-txt-crit">' + n('crit') + '</b> critical · <b class="lvl-txt-warn">' +
+      n('warn') + '</b> warnings · <b>' + n('info') + '</b> info</span>' +
+    '<select id="alert-site" aria-label="Site"><option value="">All sites</option>' +
+      sites.map((x) => '<option' + (x === v ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select>' +
+    '<button type="button" class="sm primary" id="alert-pdf">' +
+      '<svg viewBox="0 0 24 24" class="btn-ico"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>PDF report</button></div>';
+  void choix;
+  host.innerHTML = barre + (!alertes.length
+    ? '<div class="notice ok"><b>Nothing needs you right now.</b> Every measured client is connected.</div>'
+    : '<div class="card cli-card">' + alertes.map((a, i) =>
+      '<div class="alert-row"><span class="alert-ico lvl-' + a.niveau + '">' + (a.niveau === 'info' ? 'i' : '!') + '</span>' +
+      '<div class="alert-txt"><span class="alert-code lvl-c-' + a.niveau + '">' + esc(a.code) + '</span>' +
+        '<b>' + esc(a.titre) + '</b><span>' + esc(a.texte) + '</span>' +
+        '<span class="alert-check"><b>What to check:</b> ' + esc(a.verifier) + '</span>' +
+        '<small>' + esc(a.quoi) + ' · ' + a.logins.length + ' affected</small></div>' +
+      '<button class="sm" data-alert="' + i + '">View clients</button></div>').join('') + '</div>');
+  document.getElementById('alert-site').addEventListener('change', (e) => { ALR.site = e.target.value; loadAlerts(); });
+  document.getElementById('alert-pdf').addEventListener('click', () => rapportPdf(ALR.site || ''));
   host.querySelectorAll('[data-alert]').forEach((bt) => bt.addEventListener('click', () => {
     CLI.sel = new Set(alertes[Number(bt.dataset.alert)].logins);
     CLI.focus = true;
     location.hash = '#/clients';
   }));
+}
+
+const ALR = { site: '', journal: [] };
+
+/* ------------------------------------------------------------ rapport PDF
+ * Un vrai fichier PDF, ecrit ici sans bibliotheque (polices standard du PDF,
+ * aucune dependance, marche sans internet) : de quoi documenter une panne ou
+ * auditer un site. */
+const HELV = [278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278, 556, 556, 556,
+  556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556, 1015, 667, 667, 722, 722, 667, 611, 778, 722,
+  278, 500, 667, 556, 833, 722, 778, 667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469,
+  556, 333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556, 556, 556, 333, 500, 278,
+  556, 500, 722, 500, 500, 500, 334, 260, 334, 584];
+const WINANSI = { '€': 128, '…': 133, '‘': 145, '’': 146, '“': 147, '”': 148, '•': 149, '–': 150, '—': 151 };
+
+function pdfTexte(t) {
+  // Vers WinAnsi (un octet par caractere) ; ce qui n'y est pas devient '?'.
+  return [...String(t)].map((c) => {
+    const k = c.charCodeAt(0);
+    if (k >= 32 && k <= 126) return c;
+    if (k >= 160 && k <= 255) return c;
+    if (WINANSI[c]) return String.fromCharCode(WINANSI[c]);
+    return c === '↓' ? 'v' : c === '↑' ? '^' : '?';
+  }).join('');
+}
+
+function PdfDoc() {
+  const W = 595.28;
+  const H = 841.89;
+  const M = 42;
+  const pages = [];
+  let flux = null;
+  const doc = { W, H, M, y: 0 };
+  const rgb = (hex) => {
+    const n = parseInt(hex.replace('#', ''), 16);
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255].map((v) => v.toFixed(3)).join(' ');
+  };
+  const echap = (t) => pdfTexte(t).replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  doc.largeur = (t, taille, gras) => [...pdfTexte(t)].reduce((a, c) => {
+    const k = c.charCodeAt(0);
+    return a + (k >= 32 && k <= 126 ? HELV[k - 32] : 556);
+  }, 0) * taille / 1000 * (gras ? 1.06 : 1);
+  doc.page = () => { flux = []; pages.push(flux); doc.y = H - M; };
+  doc.texte = (x, y, t, taille, gras, couleur) => {
+    flux.push('BT /' + (gras ? 'F2' : 'F1') + ' ' + taille + ' Tf ' + rgb(couleur || '#1d1d1f') + ' rg ' +
+      x.toFixed(2) + ' ' + y.toFixed(2) + ' Td (' + echap(t) + ') Tj ET');
+  };
+  doc.rect = (x, y, l, h, couleur) => flux.push(rgb(couleur) + ' rg ' + [x, y, l, h].map((v) => v.toFixed(2)).join(' ') + ' re f');
+  doc.trait = (x1, y1, x2, y2, couleur, ep) => flux.push(rgb(couleur || '#d1d1d6') + ' RG ' + (ep || 0.6) + ' w ' +
+    x1.toFixed(2) + ' ' + y1.toFixed(2) + ' m ' + x2.toFixed(2) + ' ' + y2.toFixed(2) + ' l S');
+  doc.place = (h) => { if (doc.y - h < M + 24) doc.page(); };
+  doc.couper = (t, taille, gras, max) => {
+    const lignes = [];
+    String(t).split('\n').forEach((para) => {
+      let cur = '';
+      para.split(/\s+/).forEach((mot) => {
+        const essai = cur ? cur + ' ' + mot : mot;
+        if (doc.largeur(essai, taille, gras) <= max || !cur) cur = essai;
+        else { lignes.push(cur); cur = mot; }
+      });
+      lignes.push(cur);
+    });
+    return lignes;
+  };
+  doc.para = (t, o) => {
+    const opt = Object.assign({ taille: 10, gras: false, couleur: '#1d1d1f', x: M, max: W - 2 * M, avant: 0, apres: 4 }, o || {});
+    doc.y -= opt.avant;
+    doc.couper(t, opt.taille, opt.gras, opt.max).forEach((l) => {
+      doc.place(opt.taille * 1.35);
+      doc.y -= opt.taille * 1.35;
+      doc.texte(opt.x, doc.y, l, opt.taille, opt.gras, opt.couleur);
+    });
+    doc.y -= opt.apres;
+  };
+  doc.titre = (t) => {
+    doc.place(40);
+    doc.y -= 22;
+    doc.texte(M, doc.y, t, 14, true, '#1d1d1f');
+    doc.y -= 6;
+    doc.trait(M, doc.y, W - M, doc.y, '#0a84ff', 1.2);
+    doc.y -= 6;
+  };
+  doc.tableau = (cols, lignes) => {
+    const total = cols.reduce((a, c) => a + c.l, 0);
+    const f = (W - 2 * M) / total;
+    const entete = () => {
+      doc.place(20);
+      doc.rect(M, doc.y - 16, W - 2 * M, 16, '#f2f2f7');
+      let x = M + 4;
+      cols.forEach((c) => { doc.texte(x, doc.y - 11.5, c.t, 8, true, '#6e6e73'); x += c.l * f; });
+      doc.y -= 16;
+    };
+    entete();
+    lignes.forEach((l) => {
+      if (doc.y - 15 < M + 24) { doc.page(); entete(); }
+      let x = M + 4;
+      l.forEach((v, i) => {
+        let t = String(v == null ? '' : v);
+        while (t.length > 1 && doc.largeur(t, 8.5, false) > cols[i].l * f - 8) t = t.slice(0, -2) + '…';
+        doc.texte(x, doc.y - 11, t, 8.5, false, '#1d1d1f');
+        x += cols[i].l * f;
+      });
+      doc.y -= 15;
+      doc.trait(M, doc.y, W - M, doc.y, '#e5e5ea', 0.4);
+    });
+    doc.y -= 6;
+  };
+  doc.enregistrer = (nom, pied) => {
+    pages.forEach((p, i) => {
+      p.push('BT /F1 7.5 Tf ' + rgb('#8e8e93') + ' rg ' + M + ' 22 Td (' + echap(pied) + ') Tj ET');
+      const num = 'Page ' + (i + 1) + ' / ' + pages.length;
+      p.push('BT /F1 7.5 Tf ' + rgb('#8e8e93') + ' rg ' + (W - M - doc.largeur(num, 7.5)).toFixed(2) + ' 22 Td (' + num + ') Tj ET');
+    });
+    const objets = [];
+    const n = pages.length;
+    objets.push('<< /Type /Catalog /Pages 2 0 R >>');
+    objets.push('<< /Type /Pages /Kids [' + pages.map((_, i) => (5 + 2 * i) + ' 0 R').join(' ') + '] /Count ' + n + ' >>');
+    objets.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>');
+    objets.push('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>');
+    pages.forEach((p, i) => {
+      const contenu = p.join('\n');
+      objets.push('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ' + W + ' ' + H + '] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ' + (6 + 2 * i) + ' 0 R >>');
+      objets.push('<< /Length ' + contenu.length + ' >>\nstream\n' + contenu + '\nendstream');
+    });
+    let sortie = '%PDF-1.4\n%âãÏÓ\n';
+    const pos = [];
+    objets.forEach((o, i) => { pos.push(sortie.length); sortie += (i + 1) + ' 0 obj\n' + o + '\nendobj\n'; });
+    const xref = sortie.length;
+    sortie += 'xref\n0 ' + (objets.length + 1) + '\n0000000000 65535 f \n' +
+      pos.map((p) => String(p).padStart(10, '0') + ' 00000 n \n').join('') +
+      'trailer\n<< /Size ' + (objets.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF';
+    const octets = new Uint8Array(sortie.length);
+    for (let i = 0; i < sortie.length; i++) octets[i] = sortie.charCodeAt(i) & 255;
+    const lien = document.createElement('a');
+    lien.href = URL.createObjectURL(new Blob([octets], { type: 'application/pdf' }));
+    lien.download = nom;
+    document.body.appendChild(lien);
+    lien.click();
+    setTimeout(() => { URL.revokeObjectURL(lien.href); lien.remove(); }, 2000);
+  };
+  doc.page();
+  return doc;
+}
+
+/** Le rapport : un site (audit) ou tout le reseau. */
+async function rapportPdf(site) {
+  if (!CLI.rows.length) await loadClientsData();
+  const journal = ALR.journal.length ? ALR.journal : await api('/activity?limit=300').catch(() => []);
+  const rows = site ? CLI.rows.filter((r) => (r.pop_name || '') === site) : CLI.rows;
+  const alertes = calculerAlertes(CLI.rows, journal, site);
+  const d = PdfDoc();
+  const maintenant = new Date();
+  const quand = maintenant.toLocaleString([], { dateStyle: 'long', timeStyle: 'short' });
+  // Bandeau.
+  d.rect(0, d.H - 96, d.W, 96, '#1f5fd6');
+  d.texte(d.M, d.H - 48, 'freeQoS', 22, true, '#ffffff');
+  d.texte(d.M + d.largeur('freeQoS', 22, true) + 10, d.H - 48, site ? 'Site audit: ' + site : 'Network report', 16, false, '#dce8ff');
+  d.texte(d.M, d.H - 72, quand + ' · ' + fuseauLocal() + ' · by ' + ((AUTH.user && AUTH.user.email) || 'freeQoS'), 9, false, '#dce8ff');
+  d.y = d.H - 120;
+  // Chiffres.
+  const on = rows.filter(clientEnLigne).length;
+  const cases = [['Clients', rows.length, '#1d1d1f'], ['Connected', on, '#28a745'],
+    ['Offline', rows.filter((r) => !clientEnLigne(r)).length, '#e5342a'],
+    ['Alerts', alertes.length, alertes.some((a) => a.niveau === 'crit') ? '#e5342a' : '#d98e04']];
+  const l = (d.W - 2 * d.M - 3 * 10) / 4;
+  cases.forEach(([t, v, c], i) => {
+    const x = d.M + i * (l + 10);
+    d.rect(x, d.y - 58, l, 58, '#f2f2f7');
+    d.texte(x + 12, d.y - 30, String(v), 22, true, c);
+    d.texte(x + 12, d.y - 47, t, 9, false, '#6e6e73');
+  });
+  d.y -= 72;
+  // Alertes.
+  d.titre('Alerts' + (alertes.length ? ' (' + alertes.length + ')' : ''));
+  if (!alertes.length) d.para('Nothing needs attention: every measured client is connected.', { couleur: '#28a745' });
+  const teinte = { crit: '#e5342a', warn: '#f08c00', info: '#8e8e93' };
+  alertes.forEach((a) => {
+    d.place(70);
+    const haut = d.y;
+    d.para(a.code + '  ·  ' + a.titre, { gras: true, taille: 10.5, x: d.M + 10, max: d.W - 2 * d.M - 10, avant: 4, apres: 1 });
+    d.para(a.texte, { taille: 9, x: d.M + 10, max: d.W - 2 * d.M - 10, apres: 1, couleur: '#3a3a3c' });
+    d.para('What to check: ' + a.verifier, { taille: 9, x: d.M + 10, max: d.W - 2 * d.M - 10, apres: 1, couleur: '#3a3a3c' });
+    const noms = a.logins.slice(0, 40).join(', ') + (a.logins.length > 40 ? ' and ' + (a.logins.length - 40) + ' more' : '');
+    d.para('Clients (' + a.logins.length + '): ' + noms, { taille: 8.5, x: d.M + 10, max: d.W - 2 * d.M - 10, apres: 6, couleur: '#6e6e73' });
+    if (d.y < haut) d.rect(d.M, d.y + 4, 3, Math.max(4, haut - d.y - 6), teinte[a.niveau]);
+  });
+  // Sites.
+  if (!site) {
+    const parSite = {};
+    rows.forEach((r) => {
+      const s = parSite[r.pop_name || '-'] = parSite[r.pop_name || '-'] || { n: 0, on: 0, mode: 0, boost: 0 };
+      s.n += 1;
+      if (clientEnLigne(r)) s.on += 1;
+      if (r.mode_id || r.override_down_mbps) s.mode += 1;
+      if (CLI.boosts[r.login]) s.boost += 1;
+    });
+    d.titre('Sites (' + Object.keys(parSite).length + ')');
+    d.tableau([{ t: 'Site', l: 3 }, { t: 'Clients', l: 1 }, { t: 'Connected', l: 1.2 }, { t: 'Offline', l: 1 },
+      { t: 'In a mode', l: 1.2 }, { t: 'Boosts', l: 1 }],
+    Object.entries(parSite).sort((a, b) => a[0].localeCompare(b[0])).map(([n, s]) =>
+      [n, s.n, s.on + ' (' + Math.round(s.n ? s.on / s.n * 100 : 0) + ' %)', s.n - s.on, s.mode, s.boost]));
+  }
+  // Clients.
+  const hors = rows.filter((r) => !clientEnLigne(r));
+  if (hors.length) {
+    d.titre('Offline clients (' + hors.length + ')');
+    d.tableau([{ t: 'Client', l: 2.4 }, { t: 'Site', l: 1.6 }, { t: 'IP address', l: 1.6 }, { t: 'Last seen', l: 2 }],
+      hors.sort((a, b) => String(a.login).localeCompare(String(b.login))).map((r) =>
+        [r.login, r.pop_name || '', r.last_ip || '', r.ts ? new Date(r.ts).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) + ' (' + depuis(r.ts) + ')' : 'never']));
+  }
+  if (site) {
+    d.titre('All clients of the site (' + rows.length + ')');
+    d.tableau([{ t: 'Client', l: 2.2 }, { t: 'IP address', l: 1.5 }, { t: 'Status', l: 1.2 }, { t: 'Mode', l: 1.6 },
+      { t: 'Limit (Mbps)', l: 1.4 }],
+    rows.map((r) => [r.login, r.last_ip || '', clientEnLigne(r) ? 'connected' : 'offline', modeDuClient(r).text,
+      r.effective_down_mbps ? sansUnite(r.effective_down_mbps) + ' / ' + sansUnite(r.effective_up_mbps || 0) : '-']));
+  }
+  // Codes.
+  d.titre('Error codes');
+  Object.entries(CODES_ERREUR).forEach(([code, c]) =>
+    d.para(code + ': ' + c.nom + '. ' + c.verifier, { taille: 8.5, couleur: '#3a3a3c', apres: 2 }));
+  const fichier = 'freeqos-' + (site ? 'site-' + site.toLowerCase().replace(/[^a-z0-9]+/g, '-') : 'report') + '-' +
+    maintenant.toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.pdf';
+  d.enregistrer(fichier, 'freeQoS report · ' + quand);
 }
 
 /** Les donnees de la page Clients, sans la dessiner (alertes, activite). */
@@ -11188,7 +12273,7 @@ async function loadModesPage() {
     (extra || '') + '</div>';
   document.getElementById('modes-board').innerHTML = '<div class="mode-board">' +
     carte('Automatic', 'Plan and time-of-day schedule', parMode.auto, 'auto') +
-    CLI.modes.map((m) => carte(m.name, esc(modeTaux(m)) + (m.disables_boost ? ' · stops boosts' : ''),
+    CLI.modes.map((m) => carte(m.name, esc(modeTaux(m)),
       parMode[m.id], m.disables_boost ? 'crit' : '')).join('') +
     (manuels.length ? carte('Manual limit', 'Set by hand by an Administrator', manuels, '') : '') +
     '</div>';
@@ -11227,6 +12312,7 @@ function openMyAccount() {
 
 const LOADERS = {
   clients: loadClients,
+  map: loadMap,
   alerts: loadAlerts,
   activity: loadActivity,
   modes: loadModesPage,
@@ -11338,7 +12424,7 @@ function route() {
     if (FICHE.login !== login) { FICHE.login = login; FICHE.onglet = 'overview'; }
     vue = 'client';
   }
-  if (estLimite() && !['clients', 'modes', 'alerts', 'activity', 'management', 'client'].includes(vue)) vue = 'clients';
+  if (estLimite() && !['clients', 'modes', 'alerts', 'activity', 'management', 'map', 'client'].includes(vue)) vue = 'clients';
   show(vue || 'dashboard');
 }
 

@@ -114,13 +114,22 @@ def app_client(routeur, monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
 
     async def _vider() -> None:
         conn = await asyncpg.connect(DSN)
+        tables = (
+            "routers, pops, subscribers, subscriber_metrics, client_plans, "
+            "shaping_policies, enforcement_audit, static_clients, api_keys, "
+            "app_users, app_sessions, model_services_unplaced, topology_nodes, "
+            "topology_links, bandwidth_modes, bandwidth_schedules, site_locations"
+        ).split(", ")
         try:
-            await conn.execute(
-                "TRUNCATE routers, pops, subscribers, subscriber_metrics, client_plans, "
-                "shaping_policies, enforcement_audit, static_clients, api_keys, "
-                "app_users, app_sessions, model_services_unplaced, topology_nodes, "
-                "topology_links, bandwidth_modes RESTART IDENTITY CASCADE"
-            )
+            # Seulement les tables deja creees : sur une base neuve (ou apres
+            # l'ajout d'une table), le schema n'est pose qu'au demarrage de l'app.
+            presentes = [
+                t for t in tables if await conn.fetchval("SELECT to_regclass($1)", t) is not None
+            ]
+            if presentes:
+                await conn.execute(
+                    f"TRUNCATE {', '.join(presentes)} RESTART IDENTITY CASCADE"  # noqa: S608
+                )
         finally:
             await conn.close()
 

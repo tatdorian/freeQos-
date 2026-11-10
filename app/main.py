@@ -40,6 +40,7 @@ from app.api import (
     routers_admin,
     schedules,
     shaping,
+    sites_map,
     static_clients,
     traffic_rules,
     usage_v1,
@@ -202,6 +203,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         plans,
         schedules,
         modes,
+        sites_map,
     ):
         app.include_router(module.router, prefix=settings.api_prefix, dependencies=proteges)
     # API PUBLIQUE. Volontairement HORS du prefixe d'exploitation : son chemin

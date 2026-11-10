@@ -1346,3 +1346,15 @@ CREATE TABLE IF NOT EXISTS client_activity (
 );
 CREATE INDEX IF NOT EXISTS idx_client_activity_ts ON client_activity (ts DESC);
 CREATE INDEX IF NOT EXISTS idx_client_activity_login ON client_activity (login, ts DESC);
+
+-- OU SONT LES SITES : la position d'un site (PoP) sur la carte. Rangee a part,
+-- par NOM de site : un site de VLAN, un site de clients declares ou un PoP de
+-- routeur se placent pareil, et la purge des PoPs vides n'emporte pas la
+-- position qu'un administrateur a posee.
+CREATE TABLE IF NOT EXISTS site_locations (
+    name        TEXT PRIMARY KEY,
+    latitude    DOUBLE PRECISION NOT NULL CHECK (latitude BETWEEN -90 AND 90),
+    longitude   DOUBLE PRECISION NOT NULL CHECK (longitude BETWEEN -180 AND 180),
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
