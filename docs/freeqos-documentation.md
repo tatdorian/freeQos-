@@ -1086,8 +1086,9 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 **Boost or temporary plan, from the Clients page.** On one or several selected clients (or from a client's page):
 
 - **Duration:** a quick choice (30 min, 1 h, 4 h, 1 day, 7 days), a **custom** value in minutes, hours or days (up to 365 days), or **until stopped** (`boost_until_stopped: true`): it runs until someone clicks *Stop boost* (`action: "stop_boost"`). Internally it still has an expiry, five years away, so that the expiry check and the planner treat it like any boost; the interface shows it as "until stopped".
-- **Rate:** the plan **multiplied** by any factor above 1 (up to ×50, `boost_multiplier`), or a **temporary plan**: explicit download and upload rates (`boost_down_mbps`, `boost_up_mbps`), higher **or lower** than the plan. At the end of the duration the client goes back to its plan, its schedule or its mode on its own.
-- The log records what and for how long ("x2 of the plan for 4 h", "temporary rate 5 / 2 Mbps for 3 days", "... until stopped").
+- **Rate:** the client's **current rate multiplied** by any factor above 1 (up to ×50, `boost_multiplier`). The current rate is the one in force without the boost, by the same rule as the planner: its mode or manual limit, else its schedule slot, else its plan. A client held at 550 kbps by a mode gets ×1.5 = 825 kbps, not ×1.5 of its base plan. The dialog shows the current rate and the result before applying. Or a **temporary plan**: explicit download and upload rates (`boost_down_mbps`, `boost_up_mbps`), higher **or lower** than the plan. At the end of the duration the client goes back to its plan, its schedule or its mode on its own.
+- **When the boost ends** (stopped, or its time is up), the client goes back to exactly what it had before: its mode, its schedule or its plan. The boost never erases the mode.
+- The log records what and for how long ("x1.5 of the current rate (550 kbps -> 825 kbps down, ...) for 4 h", "temporary rate 5 / 2 Mbps for 3 days", "... until stopped").
 
 ### Clients page, map, alerts and reports
 
@@ -1100,7 +1101,9 @@ Made for **hundreds of clients** (20 sites of 20 clients): search, filters by si
 
 **Client page.** *Status* (online or offline, since when), *Usage now* (gauge and word against its limit), *Limit* (and where it comes from), *Latency* with a word (*good* under 40 ms, *fair* under 100 ms, *poor* above). Then the usage chart, the mode and boost, the connection (IP, site, session) and the recent changes.
 
-**Map** (`#/map`, every level). The sites on an OpenStreetMap map, one pin per site: its size follows the number of clients, its colour the share connected (green 80 % and more, orange 50–80 %, red below). Drag to move, the wheel, the buttons or a double click to zoom. Tap a site: its clients, connected, in a mode, boosts, and *Show its clients*, *Traffic*, *PDF report*. The side list puts the sites with the most disconnected clients first. An **Administrator** places a site (*Place*, then a tap on the map) or moves it (`PUT /api/v1/site-locations/{site}`, `{"latitude", "longitude"}`; read with `GET /api/v1/site-locations`). The map tiles come from `tile.openstreetmap.org`: without internet, the pins stay usable on a plain background.
+**Map** (`#/map`, every level). The sites **and the clients** on an OpenStreetMap map. A site is a pin: its size follows the number of clients, its colour the share connected (green 80 % and more, orange 50–80 %, red below). A client is a dot (green online, red offline, grey never seen): at street zoom (or when its site is selected), each client appears at its own position — a small square, linked to its site — or, without a position, in a ring around its site. Moving is smooth: drag (the map keeps a little momentum when released), pinch with two fingers on a phone, the mouse wheel, the + / − buttons, a double click, or the arrow keys. A search box finds a site or a client (by name or IP). Tap a site: its counts, its clients (offline first), *Show its clients*, *PDF report*. Tap a client: its status, site, mode, position, *Open the client*.
+
+An **Administrator** gives a position (*Position* / *Place it*) in three ways: **type or paste coordinates** (`13.5137, 2.1098`, or a Google Maps / OpenStreetMap link), **use the GPS** of the phone (on site, over HTTPS), or **tap the map**. *Remove from the map* takes it off. API: `GET /api/v1/site-locations`, `PUT /api/v1/site-locations/{site}` and `GET /api/v1/client-locations`, `PUT /api/v1/client-locations/{login}` (`{"latitude", "longitude"}`), and their `DELETE`. The map tiles come from `tile.openstreetmap.org`: without internet, the pins stay usable on a plain background.
 
 **Alerts and error codes.** Every alert carries a stable **code**, the clients concerned and **what to check**:
 
@@ -1779,7 +1782,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 | `runtime_flags`, `runtime_settings` | Live switches (write, probe) and settings changed from the interface, with their history |
 | `traffic_rules` | Restrictions as entered: a criterion, never a frozen address list |
 | `bandwidth_schedules` | Time-of-day bandwidth schedules: time slots (validated, without overlap), scope and targets, time zone |
-| `site_locations` | Position of each site (PoP) on the map, by site name: latitude, longitude, who placed it |
+| `site_locations`, `client_locations` | Position of each site (by name) and client (by login) on the map: latitude, longitude, who placed it |
 | `app_users`, `app_sessions`, `auth_events`, `api_keys` | Accounts, sessions, login journal, API keys (fingerprints only) |
 | `model_accounts`, `model_packages`, `model_sites`, `model_access_points`, `model_services_unplaced` | The Preseem-compatible commercial model |
 | `netflow_exporters` | Exporters and their vantage point and sampling |

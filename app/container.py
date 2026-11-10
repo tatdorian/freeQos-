@@ -200,6 +200,7 @@ class Container:
     schedules_repo: SchedulesRepository | None = None
     modes_repo: ModesRepository | None = None
     site_locations_repo: SiteLocationsRepository | None = None
+    client_locations_repo: SiteLocationsRepository | None = None
     activity_repo: ActivityRepository | None = None
     netflow: NetflowService | None = None
     netflow_export: NetflowExportService | None = None
@@ -345,6 +346,7 @@ async def build_container(settings: Settings) -> Container:
     modes_repo = ModesRepository(database.pool)
     # Ou sont les sites, pour la carte.
     site_locations_repo = SiteLocationsRepository(database.pool)
+    client_locations_repo = SiteLocationsRepository(database.pool, "client_locations")
     # Qui a change quoi sur quel client : mode, boost, forfait.
     activity_repo = ActivityRepository(database.pool)
     antennas_repo = AntennasRepository(database.pool, secrets)
@@ -707,6 +709,7 @@ async def build_container(settings: Settings) -> Container:
         schedules_repo=schedules_repo,
         modes_repo=modes_repo,
         site_locations_repo=site_locations_repo,
+        client_locations_repo=client_locations_repo,
         activity_repo=activity_repo,
         netflow=netflow,
         netflow_export=netflow_export,

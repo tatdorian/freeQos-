@@ -768,8 +768,11 @@
     <section id="view-map">
       <div class="map-wrap">
         <div class="map-view" id="map-view" tabindex="0" aria-label="Map of the sites">
-          <div class="map-tiles" id="map-tiles"></div>
-          <div class="map-pins" id="map-pins"></div>
+          <div class="map-pane" id="map-pane">
+            <div class="map-tiles" id="map-tiles"></div>
+            <svg class="map-links" id="map-links"></svg>
+            <div class="map-pins" id="map-pins"></div>
+          </div>
           <div class="map-ctrl">
             <button type="button" id="map-zin" aria-label="Zoom in">+</button>
             <button type="button" id="map-zout" aria-label="Zoom out">&minus;</button>

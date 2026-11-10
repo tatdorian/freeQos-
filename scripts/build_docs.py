@@ -117,8 +117,9 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     ),
     (
         "Map",
-        "The sites on a map, coloured by the share of connected clients. A site opens its "
-        "clients, their traffic and its PDF report; an Administrator places the sites.",
+        "The sites and the clients on a map, coloured by connection. A site opens its "
+        "clients and its PDF report; an Administrator places sites and clients by "
+        "coordinates, GPS or a tap on the map.",
         [],
     ),
     (
