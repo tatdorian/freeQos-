@@ -457,9 +457,6 @@ th.num { text-align: right; }
 form.stack { display: grid; gap: 1rem; }
 .field { display: grid; gap: .35rem; }
 .field[hidden] { display: none; }
-/* Profils horaires : une plage par ligne, sans debordement de la carte. */
-#sched-windows input:not([type="checkbox"]), #sched-windows select { padding: .4rem .5rem; }
-#sched-windows .chk { font-size: .78rem; }
 .field label { font-size: .8rem; color: var(--muted); font-weight: 500; }
 .field .help { font-size: .75rem; color: var(--faint); }
 input, select, textarea {
@@ -1666,4 +1663,90 @@ body[data-view="client"] .page-head { display: none; }
   .mode-board-card { padding: .8rem 1rem; }
   .mode-board-card .cp-card-head { margin-bottom: .3rem; }
   .mode-board-card h3 { font-size: 1rem; }
+}
+
+/* ====================================== profil horaire, facon Reglages iOS
+   Des groupes arrondis sans cadre, une ligne par reglage separee d'un filet,
+   la valeur a droite ; chaque plage est une ligne du groupe : heures, debit,
+   puis les jours en pastilles. */
+.sched-form { display: grid; gap: .5rem; max-width: 640px; }
+.ios-group {
+  background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.ios-group > * + * { border-top: .5px solid var(--border); }
+.ios-group:empty { display: none; }
+.ios-title {
+  background: transparent; border-radius: 0; padding: .95rem 1.1rem;
+  font-size: 1.15rem; font-weight: 600; letter-spacing: -.01em;
+}
+.ios-title:focus, .ios-val:focus, .slot-label:focus { box-shadow: none; background: var(--fill); }
+.ios-row {
+  display: flex; align-items: center; gap: .75rem; justify-content: space-between;
+  padding: .55rem 1.1rem; min-height: 46px; cursor: default;
+}
+.ios-row[hidden] { display: none; }
+.ios-row.switch { cursor: pointer; }
+.ios-key { font-size: .92rem; color: var(--text); white-space: nowrap; }
+.ios-val {
+  background: transparent; border-radius: 8px; text-align: right; color: var(--muted);
+  padding: .35rem .5rem; max-width: 15rem;
+}
+.ios-sub { flex-direction: column; align-items: stretch; gap: .45rem; padding: .7rem 1.1rem; }
+.ios-sub .ios-key { font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.ios-sub .pick { border: 0; background: transparent; padding: 0; }
+.ios-caption {
+  font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+  margin: 1rem 0 0 1.1rem;
+}
+.ios-foot { font-size: .78rem; color: var(--faint); margin: 0 0 0 1.1rem; }
+.ios-add {
+  justify-self: start; background: transparent; color: var(--accent); font-weight: 500;
+  padding: .45rem 1.1rem;
+}
+.ios-add:hover:not(:disabled) { background: var(--accent-dim); }
+.sched-actions { justify-content: flex-end; margin-top: .6rem; }
+.sched-actions .primary { padding-inline: 1.4rem; }
+
+.slot { display: grid; gap: .55rem; padding: .8rem 1.1rem .9rem; }
+.slot-top { display: flex; align-items: center; gap: .5rem; }
+.slot-label {
+  background: transparent; border-radius: 8px; padding: .2rem .4rem; margin-left: -.4rem;
+  font-weight: 600; font-size: .95rem;
+}
+.slot-del {
+  flex: 0 0 auto; width: 26px; height: 26px; padding: 0; border-radius: 50%;
+  font-size: 1.05rem; line-height: 1; color: var(--faint); background: transparent;
+}
+.slot-del:hover:not(:disabled) { color: var(--crit); background: color-mix(in srgb, var(--crit) 11%, transparent); }
+.slot-mid { display: flex; align-items: center; justify-content: space-between; gap: .6rem 1rem; flex-wrap: wrap; }
+.slot-hours, .slot-rate, .slot-rate > span:not([hidden]) { display: inline-flex; align-items: center; gap: .35rem; }
+.slot-rate [hidden] { display: none; }
+.slot-time {
+  width: 4.4rem; text-align: center; font-variant-numeric: tabular-nums; font-size: 1.05rem;
+  font-weight: 500; padding: .35rem .3rem;
+}
+.slot-arrow { color: var(--faint); }
+.slot-num { width: 4.6rem; text-align: right; padding: .35rem .5rem; font-variant-numeric: tabular-nums; }
+.slot-unit { font-size: .8rem; color: var(--muted); white-space: nowrap; }
+.segmented.seg-xs button { padding: .2rem .6rem; font-size: .76rem; }
+.day-pills { display: flex; gap: .35rem; }
+.day-pill { cursor: pointer; }
+.day-pill input { position: absolute; opacity: 0; pointer-events: none; }
+.day-pill span {
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%;
+  font-size: .8rem; font-weight: 600; color: var(--muted); background: var(--fill);
+  transition: background .15s ease, color .15s ease;
+}
+.day-pill input:checked + span { background: var(--accent); color: #fff; }
+.day-pill input:focus-visible + span { box-shadow: 0 0 0 3px var(--accent-dim); }
+#sched-scope-seg button { padding: .3rem .75rem; }
+
+@media (max-width: 760px) {
+  .sched-form { max-width: none; }
+  .ios-row { padding-inline: .9rem; }
+  #sched-scope-seg button { padding: .3rem .55rem; }
+  .day-pills { justify-content: space-between; }
+  .day-pill span { width: 36px; height: 36px; }
+  .sched-actions .primary { flex: 1 1 auto; }
 }

@@ -638,53 +638,61 @@
       <div class="table-wrap" id="sched-list"></div>
       <div id="sched-result"></div>
       <h3 id="sched-form-title" style="margin:1rem 0 .4rem">New schedule</h3>
-      <form class="stack card" id="sched-form" autocomplete="off">
-        <div class="row-3">
-          <div class="field">
-            <label for="sched-name">Name</label>
-            <input id="sched-name" required maxlength="128" placeholder="Evening and night">
-          </div>
-          <div class="field">
-            <label for="sched-tz" title="IANA time zone of your subscribers: the hours below are local to it, and daylight saving time is handled.">Time zone</label>
-            <input id="sched-tz" required maxlength="64" list="sched-tz-list" placeholder="Europe/Paris">
-            <datalist id="sched-tz-list"></datalist>
-          </div>
-          <div class="field">
-            <label for="sched-scope">Applies to</label>
-            <select id="sched-scope">
+      <!-- Formulaire facon Reglages iOS : des groupes arrondis, une ligne par
+           reglage, des pastilles pour les jours. Les champs (sched-*) restent
+           ceux que lit schedPayload(). -->
+      <form class="sched-form" id="sched-form" autocomplete="off">
+        <div class="ios-group">
+          <input id="sched-name" class="ios-title" required maxlength="128"
+                 placeholder="Schedule name" aria-label="Schedule name">
+          <div class="ios-row">
+            <span class="ios-key">Applies to</span>
+            <select id="sched-scope" hidden>
               <option value="all">All clients</option>
               <option value="pops">Sites</option>
               <option value="plans">Plans (download rate)</option>
               <option value="subscribers">Named clients</option>
             </select>
-          </div>
-        </div>
-        <!-- A QUI S'APPLIQUE LE PROFIL : une liste a cocher (clients, sites ou
-             forfaits), avec recherche. Le champ cache garde la saisie. -->
-        <div class="field" id="sched-targets-field" hidden>
-          <label id="sched-targets-label">Targets</label>
-          <input type="hidden" id="sched-targets">
-          <div class="pick">
-            <div class="pick-bar">
-              <input type="search" id="sched-pick-q" placeholder="Search..." autocomplete="off">
-              <button type="button" class="sm" id="sched-pick-all">Select all shown</button>
-              <button type="button" class="sm link-btn" id="sched-pick-none">Clear</button>
-              <span class="mode" id="sched-pick-count"></span>
+            <div class="segmented" id="sched-scope-seg" role="group" aria-label="Applies to">
+              <button type="button" data-v="all">All</button>
+              <button type="button" data-v="subscribers">Clients</button>
+              <button type="button" data-v="pops">Sites</button>
+              <button type="button" data-v="plans">Plans</button>
             </div>
-            <div class="pick-items" id="sched-pick-items"></div>
           </div>
+          <!-- A QUI S'APPLIQUE LE PROFIL : une liste a cocher, avec recherche.
+               Le champ cache garde la saisie. -->
+          <div class="ios-row ios-sub" id="sched-targets-field" hidden>
+            <span class="ios-key" id="sched-targets-label">Targets</span>
+            <input type="hidden" id="sched-targets">
+            <div class="pick">
+              <div class="pick-bar">
+                <input type="search" id="sched-pick-q" placeholder="Search" autocomplete="off">
+                <button type="button" class="sm link-btn" id="sched-pick-all">All</button>
+                <button type="button" class="sm link-btn" id="sched-pick-none">None</button>
+                <span class="mode" id="sched-pick-count"></span>
+              </div>
+              <div class="pick-items" id="sched-pick-items"></div>
+            </div>
+          </div>
+          <label class="ios-row" for="sched-tz">
+            <span class="ios-key" title="Time zone of your subscribers: the hours below are local to it, and daylight saving time is handled.">Time zone</span>
+            <input id="sched-tz" class="ios-val" required maxlength="64" list="sched-tz-list" placeholder="Europe/Paris">
+            <datalist id="sched-tz-list"></datalist>
+          </label>
+          <label class="ios-row switch">
+            <span class="ios-key">Enabled</span>
+            <input type="checkbox" id="sched-enabled" checked><span class="rail"></span>
+          </label>
         </div>
-        <div class="table-wrap">
-          <table id="sched-windows"><thead><tr>
-            <th></th><th>Slot</th><th>From</th><th>To</th><th>Days (start)</th>
-            <th>Rate</th>
-          </tr></thead><tbody></tbody></table>
-        </div>
-        <div class="actions">
-          <button type="button" class="sm" id="sched-add-window">Add a time slot</button>
-          <label class="chk"><input type="checkbox" id="sched-enabled" checked> Enabled</label>
-          <span class="spacer"></span>
-          <button type="button" class="sm" id="sched-cancel" hidden>Cancel</button>
+
+        <div class="ios-caption">Time slots</div>
+        <div class="ios-group" id="sched-windows"></div>
+        <button type="button" class="ios-add" id="sched-add-window">+ Add a time slot</button>
+        <p class="ios-foot">Outside every slot, the client's plan applies.</p>
+
+        <div class="actions sched-actions">
+          <button type="button" id="sched-cancel" hidden>Cancel</button>
           <button type="submit" class="primary" id="sched-submit">Create and apply</button>
         </div>
       </form>

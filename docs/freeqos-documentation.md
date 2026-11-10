@@ -1091,7 +1091,7 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 
 ### Bandwidth schedules (day, evening, night)
 
-Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it. *Applies to* chooses all clients, or a **list to tick** (with search and "Select all shown") of sites, plans or named clients:
+Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it. *Applies to* is a segmented control (*All*, *Clients*, *Sites*, *Plans*); except for *All*, it opens a **list to tick**, with search and *All* / *None*. Each slot is one card: its name, the hours (*18:00 → 23:00*), the rate with a **% / Mbps** switch, and the days as round pills (tap to turn a day off). The rate is either:
 
 - a **percentage of the plan** (`percent`: 200 = twice the plan at night, 70 = 30 % less in the evening), which follows every subscriber's own plan without copying it; or
 - a **fixed rate** (`down_mbps` / `up_mbps`; a single direction is allowed, the other one keeps its plan).
