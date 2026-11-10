@@ -11601,6 +11601,10 @@ async function loadModesAdmin() {
   const host = document.getElementById('modes-list');
   if (!host) return;
   cablerModes();
+  if (!CLI.rows.length) await loadClientsData().catch(() => null);
+  // La liste des clients du formulaire : creee une fois, jamais redessinee par
+  // le rafraichissement (elle effacerait les cases cochees).
+  if (!MODES.picker) modePicker(null);
   const data = await api('/bandwidth-modes').catch(() => ({ modes: [] }));
   const modes = data.modes || [];
   const ecrire = peut('operator');
@@ -11629,12 +11633,9 @@ async function loadModesAdmin() {
     document.getElementById('mode-up').value = +(m.up_value * f).toFixed(3);
     document.getElementById('mode-position').value = m.position || 0;
     document.getElementById('mode-note').value = m.note || '';
-    document.getElementById('modes-form-title').innerHTML = 'Edit ' + esc(m.name) +
-      ' <button type="button" class="sm" id="mode-edit-clients">Its clients (' + (m.clients || 0) + ')</button>';
-    document.getElementById('mode-edit-clients').addEventListener('click', async () => {
-      if (!CLI.rows.length) await loadClientsData();
-      openModeClients(m.id);
-    });
+    document.getElementById('modes-form-title').textContent = 'Edit ' + m.name;
+    // Ses clients, cochables dans le formulaire meme.
+    modePicker(m.id);
     document.getElementById('mode-submit').textContent = 'Save and apply to its clients';
     document.getElementById('mode-cancel').hidden = false;
     document.getElementById('mode-name').focus();
@@ -11671,6 +11672,14 @@ function resetModeForm() {
   document.getElementById('mode-submit').textContent = 'Add the mode';
   document.getElementById('mode-cancel').hidden = true;
   modeUnite('mbps');
+  modePicker(null);
+}
+
+/** La liste des clients du formulaire de mode (celui qu'on edite, ou aucun). */
+function modePicker(modeId) {
+  const hote = document.getElementById('mode-picker');
+  if (!hote) return;
+  MODES.picker = pickerClientsMode(hote, modeId, () => document.getElementById('mode-name').value.trim());
 }
 
 function cablerModes() {
@@ -11696,7 +11705,12 @@ function cablerModes() {
         ? await api('/bandwidth-modes/' + MODES.editing, { method: 'PATCH', body: JSON.stringify(corps) })
         : await api('/bandwidth-modes', { method: 'POST', body: JSON.stringify(corps) });
       const n = res && res.clients ? res.clients.length : 0;
-      sortie.innerHTML = '<div class="notice ok">Mode saved' + (n ? ', new rate applied to ' + n + ' client(s)' : '') + '.</div>';
+      const idMode = MODES.editing || (res && (res.id || (res.mode && res.mode.id)));
+      // Puis les clients coches / decoches dans le formulaire.
+      const gestes = MODES.picker && idMode ? await MODES.picker.appliquer(idMode) : [];
+      sortie.innerHTML = '<div class="notice ok">Mode saved' + (n ? ', new rate applied to ' + n + ' client(s)' : '') + '.</div>' +
+        gestes.map(rendreResultats).join('');
+      await loadClientsData();
       resetModeForm();
       if (state.view === 'modes') loadModesPage(); else loadModesAdmin();
     } catch (err) {
@@ -13040,71 +13054,96 @@ async function loadModesPage() {
   await loadModesAdmin();
 }
 
-/** Les clients d'un mode : une liste a cocher (recherche, par site). Cocher
- *  met le client dans ce mode ; decocher le rend a Automatic. */
-function openModeClients(modeId) {
-  const m = CLI.modes.find((x) => x.id === modeId);
-  if (!m) return;
-  const avant = new Set(CLI.rows.filter((r) => r.mode_id === modeId).map((r) => r.login));
+/** Une liste a cocher des clients d'un mode (recherche, filtre par site,
+ *  groupee par site). Sert dans la fenetre « Add or remove clients » et dans
+ *  le formulaire du mode. ``modeId`` null = un mode pas encore cree. */
+function pickerClientsMode(host, modeId, nomMode) {
+  const avant = new Set(modeId == null ? [] : CLI.rows.filter((r) => r.mode_id === modeId).map((r) => r.login));
   const choisis = new Set(avant);
-  const { root, fermer } = openModal('<div class="modal-head"><div><h3>Clients in ' + esc(m.name) + '</h3>' +
-    '<div class="sub">' + esc(modeTaux(m)) + '</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
-    '<div class="modal-body"><div class="mc-bar"><input type="search" id="mc-q" placeholder="Search a client, a site or an IP" autocomplete="off">' +
-      '<select id="mc-site" aria-label="Site"><option value="">All sites</option>' +
-        [...new Set(CLI.rows.map((r) => r.pop_name).filter(Boolean))].sort().map((x) => '<option>' + esc(x) + '</option>').join('') +
-      '</select></div>' +
-    '<div class="mc-tools"><button type="button" class="sm link-btn" id="mc-all">Tick all shown</button>' +
-      '<button type="button" class="sm link-btn" id="mc-none">Untick all shown</button><span class="spacer"></span>' +
-      '<span class="mode" id="mc-count"></span></div>' +
-    '<div class="mc-list" id="mc-list"></div><div id="mc-out"></div></div>' +
-    '<div class="modal-foot"><button data-modal-close>Cancel</button><button class="primary" id="mc-go">Apply</button></div>');
-  m && root.classList.add('modal-wide');
+  const sites = [...new Set(CLI.rows.map((r) => r.pop_name).filter(Boolean))].sort();
+  host.innerHTML = '<div class="mc-bar"><input type="search" class="mc-q" placeholder="Search a client, a site or an IP" autocomplete="off">' +
+      '<select class="mc-sel" aria-label="Site"><option value="">All sites</option>' +
+        sites.map((x) => '<option>' + esc(x) + '</option>').join('') + '</select></div>' +
+    '<div class="mc-tools"><button type="button" class="sm link-btn mc-all">Tick all shown</button>' +
+      '<button type="button" class="sm link-btn mc-none">Untick all shown</button><span class="spacer"></span>' +
+      '<span class="mode mc-count"></span></div><div class="mc-list"></div>';
   const visibles = () => {
-    const q = root.querySelector('#mc-q').value.trim().toLowerCase();
-    const site = root.querySelector('#mc-site').value;
+    const q = host.querySelector('.mc-q').value.trim().toLowerCase();
+    const site = host.querySelector('.mc-sel').value;
     return CLI.rows.filter((r) => (!site || r.pop_name === site) &&
       (!q || [r.login, r.pop_name, r.last_ip].some((v) => String(v || '').toLowerCase().includes(q))))
-      .sort((a, b) => String(a.pop_name || '').localeCompare(String(b.pop_name || '')) || a.login.localeCompare(b.login));
+      .sort((x, y) => String(x.pop_name || '').localeCompare(String(y.pop_name || '')) || x.login.localeCompare(y.login));
   };
+  const ajouts = () => [...choisis].filter((l) => !avant.has(l));
+  const retraits = () => [...avant].filter((l) => !choisis.has(l));
   const compte = () => {
-    const ajout = [...choisis].filter((l) => !avant.has(l)).length;
-    const retrait = [...avant].filter((l) => !choisis.has(l)).length;
-    root.querySelector('#mc-count').textContent = choisis.size + ' in ' + m.name +
-      (ajout || retrait ? ' · +' + ajout + ' / −' + retrait : '');
-    root.querySelector('#mc-go').disabled = !ajout && !retrait;
+    const a = ajouts().length;
+    const r = retraits().length;
+    host.querySelector('.mc-count').textContent = choisis.size + ' in ' + (nomMode() || 'this mode') +
+      (a || r ? ' · +' + a + ' / −' + r : '');
+    host.dispatchEvent(new Event('change'));
   };
   const dessiner = () => {
-    let site = null;
-    root.querySelector('#mc-list').innerHTML = visibles().map((r) => {
+    let site;
+    host.querySelector('.mc-list').innerHTML = visibles().map((r) => {
       const entete = r.pop_name !== site ? '<div class="mc-site">' + esc((site = r.pop_name) || 'No site') + '</div>' : '';
       const actuel = modeDuClient(r);
       return entete + '<label class="mc-row"><input type="checkbox" data-mc="' + esc(r.login) + '"' +
         (choisis.has(r.login) ? ' checked' : '') + '><i class="dot-co ' + (clientEnLigne(r) ? 'on' : 'off') + '"></i>' +
         '<span class="mc-name">' + esc(r.login) + '</span>' +
-        (r.mode_id === modeId ? '' : '<span class="mode-pill ' + actuel.cls + '">' + esc(actuel.text) + '</span>') + '</label>';
+        (modeId != null && r.mode_id === modeId ? '' : '<span class="mode-pill ' + actuel.cls + '">' + esc(actuel.text) + '</span>') + '</label>';
     }).join('') || '<div class="empty">No client found.</div>';
-    root.querySelectorAll('[data-mc]').forEach((c) => c.addEventListener('change', () => {
+    host.querySelectorAll('[data-mc]').forEach((c) => c.addEventListener('change', () => {
       if (c.checked) choisis.add(c.dataset.mc); else choisis.delete(c.dataset.mc);
       compte();
     }));
     compte();
   };
-  root.querySelector('#mc-q').addEventListener('input', dessiner);
-  root.querySelector('#mc-site').addEventListener('change', dessiner);
-  root.querySelector('#mc-all').addEventListener('click', () => { visibles().forEach((r) => choisis.add(r.login)); dessiner(); });
-  root.querySelector('#mc-none').addEventListener('click', () => { visibles().forEach((r) => choisis.delete(r.login)); dessiner(); });
-  root.querySelector('#mc-go').addEventListener('click', async (e) => {
-    const bouton = e.target;
-    bouton.disabled = true;
-    const ajout = [...choisis].filter((l) => !avant.has(l));
-    const retrait = [...avant].filter((l) => !choisis.has(l));
-    const sortie = root.querySelector('#mc-out');
-    try {
+  host.querySelector('.mc-q').addEventListener('input', dessiner);
+  // Entree dans la recherche ne doit pas envoyer le formulaire du mode.
+  host.querySelector('.mc-q').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  host.querySelector('.mc-sel').addEventListener('change', (e) => { e.stopPropagation(); dessiner(); });
+  host.querySelector('.mc-all').addEventListener('click', () => { visibles().forEach((r) => choisis.add(r.login)); dessiner(); });
+  host.querySelector('.mc-none').addEventListener('click', () => { visibles().forEach((r) => choisis.delete(r.login)); dessiner(); });
+  dessiner();
+  return {
+    ajouts,
+    retraits,
+    /** Met les clients coches dans le mode, rend les decoches a Automatic. */
+    async appliquer(idMode) {
       const res = [];
-      if (ajout.length) res.push(await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: ajout, action: 'mode', mode_id: modeId }) }));
-      if (retrait.length) res.push(await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: retrait, action: 'mode', mode_id: null }) }));
+      const a = ajouts();
+      const r = retraits();
+      if (a.length) res.push(await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: a, action: 'mode', mode_id: idMode }) }));
+      if (r.length) res.push(await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: r, action: 'mode', mode_id: null }) }));
+      return res;
+    },
+  };
+}
+
+/** Les clients d'un mode, en fenetre (depuis le tableau des modes). */
+function openModeClients(modeId) {
+  const m = CLI.modes.find((x) => x.id === modeId);
+  if (!m) return;
+  const { root, fermer } = openModal('<div class="modal-head"><div><h3>Clients in ' + esc(m.name) + '</h3>' +
+    '<div class="sub">' + esc(modeTaux(m)) + '</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body"><div id="mc-host"></div><div id="mc-out"></div></div>' +
+    '<div class="modal-foot"><button data-modal-close>Cancel</button><button class="primary" id="mc-go">Apply</button></div>');
+  root.classList.add('modal-wide');
+  const hote = root.querySelector('#mc-host');
+  const choix = pickerClientsMode(hote, modeId, () => m.name);
+  const bouton = root.querySelector('#mc-go');
+  const maj = () => { bouton.disabled = !choix.ajouts().length && !choix.retraits().length; };
+  hote.addEventListener('change', maj);
+  maj();
+  bouton.addEventListener('click', async () => {
+    bouton.disabled = true;
+    const sortie = root.querySelector('#mc-out');
+    const retire = choix.retraits().length;
+    try {
+      const res = await choix.appliquer(modeId);
       sortie.innerHTML = res.map(rendreResultats).join('') +
-        (retrait.length ? '<p class="hint" style="display:block">Unticked clients are back to Automatic.</p>' : '');
+        (retire ? '<p class="hint" style="display:block">Unticked clients are back to Automatic.</p>' : '');
       await loadModesPage();
       root.querySelector('.modal-foot').innerHTML = '<button class="primary" data-modal-close>Done</button>';
       root.querySelector('[data-modal-close]').addEventListener('click', fermer);
@@ -13113,8 +13152,7 @@ function openModeClients(modeId) {
       bouton.disabled = false;
     }
   });
-  dessiner();
-  root.querySelector('#mc-q').focus();
+  hote.querySelector('.mc-q').focus();
 }
 
 /* ------------------------------------------------- mon compte (operateur) */
