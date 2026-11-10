@@ -35,6 +35,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["modes"])
 
+#: "Jusqu'a ce qu'on l'arrete" : un boost a toujours une echeance (le
+#: planificateur et la verification d'expiration en dependent), placee ici a
+#: cinq ans. C'est le geste "Stop boost" qui le termine.
+BOOST_JUSQU_A_ARRET = 5 * 365 * 24 * 60
+
 AUTOMATIC = {
     "id": None,
     "name": "Automatic",
@@ -76,9 +81,16 @@ class ClientAction(BaseModel):
     action: Literal["mode", "boost", "stop_boost"]
     mode_id: int | None = Field(default=None, description="For action 'mode'; null = Automatic")
     boost_multiplier: float | None = Field(default=None, gt=1, le=50)
+    #: Debits explicites : un "forfait temporaire", plus haut OU plus bas que
+    #: le forfait, pour la duree choisie. A son terme, le client revient a son
+    #: forfait (ou a son mode) tout seul.
     boost_down_mbps: float | None = Field(default=None, gt=0, le=100_000)
     boost_up_mbps: float | None = Field(default=None, gt=0, le=100_000)
-    boost_minutes: int = Field(default=60, ge=1, le=10_080)
+    boost_minutes: int = Field(default=60, ge=1, le=525_600, description="Up to one year")
+    boost_until_stopped: bool = Field(
+        default=False,
+        description="The boost runs until someone stops it (action 'stop_boost'), not on a timer",
+    )
     reason: str | None = Field(default=None, max_length=300)
 
 
@@ -300,7 +312,11 @@ async def client_actions(
                     down_mbps=payload.boost_down_mbps,
                     up_mbps=payload.boost_up_mbps,
                     multiplier=payload.boost_multiplier,
-                    duration_minutes=payload.boost_minutes,
+                    duration_minutes=(
+                        BOOST_JUSQU_A_ARRET
+                        if payload.boost_until_stopped
+                        else payload.boost_minutes
+                    ),
                     reason=payload.reason,
                     apply_now=True,
                     author=auteur,

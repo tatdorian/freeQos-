@@ -1071,7 +1071,7 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 
 ### Bandwidth modes (Backup, Night…)
 
-A **bandwidth mode** is a named rate given to a client in one click, from the **Clients** page: *Backup* when the backhaul is degraded, *Extreme backup* for a crisis or non-payment, *Night*... The operator picks a name in a list instead of typing rates (*Management › Bandwidth modes*, or `/api/v1/bandwidth-modes`).
+A **bandwidth mode** is a named rate given to a client in one click, from the **Clients** page: *Backup* when the backhaul is degraded, *Extreme backup* for a crisis or non-payment, *Night*... The operator picks a name in a list instead of typing rates (*Modes*, or `/api/v1/bandwidth-modes`).
 
 - **Rate:** fixed (`rate_kind=fixed`, Mbps) or a **share of the client's plan** (`percent`: 200 = twice the plan). A share needs the client's plan; a client without a known plan can only get a fixed mode.
 - **Automatic** is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its **bandwidth schedule** — its rate then changes with the hour on its own.
@@ -1083,9 +1083,15 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 
 **Client actions** (`POST /api/v1/clients/actions`, `{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}`) act on one or several clients. The reply gives a result **per client** (`succeeded`, `failed`, `results[]`): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.
 
+**Boost or temporary plan, from the Clients page.** On one or several selected clients (or from a client's page):
+
+- **Duration:** a quick choice (30 min, 1 h, 4 h, 1 day, 7 days), a **custom** value in minutes, hours or days (up to 365 days), or **until stopped** (`boost_until_stopped: true`): it runs until someone clicks *Stop boost* (`action: "stop_boost"`). Internally it still has an expiry, five years away, so that the expiry check and the planner treat it like any boost; the interface shows it as "until stopped".
+- **Rate:** the plan **multiplied** by any factor above 1 (up to ×50, `boost_multiplier`), or a **temporary plan**: explicit download and upload rates (`boost_down_mbps`, `boost_up_mbps`), higher **or lower** than the plan. At the end of the duration the client goes back to its plan, its schedule or its mode on its own.
+- The log records what and for how long ("x2 of the plan for 4 h", "temporary rate 5 / 2 Mbps for 3 days", "... until stopped").
+
 ### Bandwidth schedules (day, evening, night)
 
-Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Management › Bandwidth schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it:
+Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it. *Applies to* chooses all clients, or a **list to tick** (with search and "Select all shown") of sites, plans or named clients:
 
 - a **percentage of the plan** (`percent`: 200 = twice the plan at night, 70 = 30 % less in the evening), which follows every subscriber's own plan without copying it; or
 - a **fixed rate** (`down_mbps` / `up_mbps`; a single direction is allowed, the other one keeps its plan).
@@ -1398,7 +1404,7 @@ freeQoS holds router credentials that can write across the whole network. Securi
 | Level (`role`) | Sees | Can do | Interface |
 | --- | --- | --- | --- |
 | **Viewer** (`read`) | Everything | Nothing | Every page, read-only banner |
-| **Operator** (`operator`) | Clients | **Client management**, on one or several clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan; define the bandwidth modes and the bandwidth schedules (rates by time of day) | **Clients**, **Alerts**, **Activity**, **Management**; no Settings (password and log out from the account card) |
+| **Operator** (`operator`) | Clients | **Client management**, on one or several clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan; define the bandwidth modes and the bandwidth schedules (rates by time of day) | **Clients**, **Modes**, **Alerts**, **Activity**, **Schedules**; no Settings (password and log out from the account card) |
 | **Administrator** (`edit`) | Everything | Everything else: adding clients, PoPs, routers, antennas and their API (Ubiquiti), settings, API keys, accounts | Every page |
 
   The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`, `POST/PATCH/DELETE /api/v1/bandwidth-modes` and `/api/v1/bandwidth-schedules`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it, in the **activity log** below and in the enforcement audit.

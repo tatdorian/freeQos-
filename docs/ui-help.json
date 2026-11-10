@@ -10,7 +10,7 @@
   "r": "Kept 400 days. Export CSV gives the list shown."
  },
  "client management": {
-  "t": "How clients' rates are managed: the bandwidth modes and the bandwidth schedules (rates by time of day).",
+  "t": "Bandwidth schedules: rates that change with the time of day, on their own (Schedules tab).",
   "m": "Open to Operators: these are commercial decisions about clients. Adding clients, sites, routers, antennas and APIs stays with the Administrator."
  },
  "bandwidth schedules": {

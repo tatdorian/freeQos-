@@ -160,7 +160,12 @@ def test_chaque_onglet_a_sa_section_et_son_chargeur() -> None:
     for vue in ONGLETS:
         assert f'id="view-{vue}"' in HTML, f"l'onglet '{vue}' n'a pas de section"
         assert vue in chargeurs, f"l'onglet '{vue}' n'a pas de chargeur dans LOADERS"
-    assert chargeurs == set(ONGLETS), "un chargeur ne correspond a aucun onglet"
+    # La page d'UN client (#/client/<login>) n'a pas d'onglet : on y entre par un
+    # client. Elle a quand meme sa section.
+    sans_onglet = {"client"}
+    for vue in sans_onglet:
+        assert f'id="view-{vue}"' in HTML, f"la page '{vue}' n'a pas de section"
+    assert chargeurs - sans_onglet == set(ONGLETS), "un chargeur ne correspond a aucun onglet"
 
 
 def test_chaque_lien_de_la_barre_pointe_sur_sa_propre_vue() -> None:

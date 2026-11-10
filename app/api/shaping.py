@@ -1046,6 +1046,17 @@ async def create_boost(
     )
 
 
+def _duree(minutes: int) -> str:
+    """90 -> "1 h 30 min", 4320 -> "3 days" : une duree lisible au journal."""
+    if minutes % 1440 == 0:
+        jours = minutes // 1440
+        return f"{jours} day" + ("s" if jours > 1 else "")
+    if minutes >= 60:
+        heures, reste = divmod(minutes, 60)
+        return f"{heures} h" + (f" {reste} min" if reste else "")
+    return f"{minutes} min"
+
+
 async def client_connu(container: Any, metrics: Any, login: str) -> dict[str, Any] | None:
     """La ligne d'un abonne ou, a defaut, la fiche d'un client a IP fixe."""
     # Recherche ciblee, et MESURE OU NON : un client declare qui n'a encore
@@ -1154,9 +1165,15 @@ async def poser_boost(
         login=login,
         action="boost",
         detail=(
-            f"x{multiplier:g} of the plan" if multiplier else f"{down or 0:g} / {up or 0:g} Mbps"
+            f"x{multiplier:g} of the plan"
+            if multiplier
+            else f"temporary rate {down or 0:g} / {up or 0:g} Mbps"
         )
-        + f" for {duration_minutes} min"
+        + (
+            " until stopped"
+            if duration_minutes > 2 * 365 * 24 * 60
+            else f" for {_duree(duration_minutes)}"
+        )
         + (f" ({reason})" if reason else ""),
         applied=resultat["applied"],
     )

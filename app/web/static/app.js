@@ -9789,31 +9789,48 @@ function schedAddRow(w) {
   schedBindRows();
 }
 
+/** A qui s'applique le profil : une LISTE A COCHER, pas une saisie. Les
+ *  clients, sites et forfaits viennent de la liste des clients (la page Plans,
+ *  reservee a l'Administrator, n'est pas chargee ici). */
 function schedTargetsField() {
   const portee = document.getElementById('sched-scope').value;
   document.getElementById('sched-targets-field').hidden = portee === 'all';
-  const libelles = {
-    pops: 'Sites (comma separated)',
-    plans: 'Plan download rates in Mbps (e.g. 20, 50)',
-    subscribers: 'Clients: logins or static-client references (comma separated)',
-  };
-  document.getElementById('sched-targets-label').textContent = libelles[portee] || 'Targets';
-  const clients = (PLANS.data && PLANS.data.clients) || [];
+  const libelles = { pops: 'Sites', plans: 'Plans (download rate)', subscribers: 'Clients' };
+  document.getElementById('sched-targets-label').textContent =
+    (libelles[portee] || 'Targets') + ' this schedule applies to';
+  const rows = CLI.rows || [];
+  const compte = (f) => rows.filter(f).length;
   let options = [];
-  if (portee === 'pops' && !POPS_CONNUS.length && !schedTargetsField.lu) {
-    // La liste des sites n'est chargee que par l'onglet des abonnes : la lire
-    // une fois ici, puis reproposer.
-    schedTargetsField.lu = true;
-    remplirMenusPop().then(schedTargetsField).catch(() => {});
+  if (portee === 'subscribers') {
+    options = rows.map((r) => ({ v: r.login, l: r.login, s: r.pop_name || '' }))
+      .sort((x, y) => x.v.localeCompare(y.v));
+  } else if (portee === 'pops') {
+    options = [...new Set(rows.map((r) => r.pop_name).filter(Boolean).concat(POPS_CONNUS || []))].sort()
+      .map((p) => ({ v: p, l: p, s: compte((r) => r.pop_name === p) + ' client(s)' }));
+  } else if (portee === 'plans') {
+    options = [...new Set(rows.map((r) => r.plan_down_mbps).filter((v) => v))].sort((x, y) => x - y)
+      .map((d) => ({ v: String(d), l: mbps(d) + ' plan', s: compte((r) => r.plan_down_mbps === d) + ' client(s)' }));
   }
-  if (portee === 'pops') options = POPS_CONNUS.slice();
-  if (portee === 'subscribers') options = clients.map((c) => c.login);
-  if (portee === 'plans') {
-    options = [...new Set(clients.map((c) => c.down_mbps).filter((v) => v))]
-      .sort((a, b) => a - b).map(String);
-  }
-  document.getElementById('sched-targets-list').innerHTML = options.slice(0, 500)
-    .map((o) => '<option value="' + esc(o) + '">').join('');
+  const choisis = new Set(document.getElementById('sched-targets').value.split(',').map((x) => x.trim()).filter(Boolean));
+  // Une cible deja enregistree mais inconnue aujourd'hui reste visible (et cochee).
+  choisis.forEach((v) => { if (!options.some((o) => o.v === v)) options.push({ v, l: v, s: 'not seen now' }); });
+  const q = (document.getElementById('sched-pick-q').value || '').trim().toLowerCase();
+  const vus = options.filter((o) => !q || (o.l + ' ' + o.s).toLowerCase().includes(q));
+  const host = document.getElementById('sched-pick-items');
+  host.innerHTML = !vus.length ? '<div class="hint">Nothing matches.</div>' : vus.slice(0, 1000).map((o) =>
+    '<label class="pick-item"><input type="checkbox" value="' + esc(o.v) + '"' + (choisis.has(o.v) ? ' checked' : '') + '>' +
+    '<span>' + esc(o.l) + '</span><small>' + esc(o.s) + '</small></label>').join('');
+  document.getElementById('sched-pick-count').textContent = choisis.size + ' selected';
+  const ecrire = () => {
+    document.getElementById('sched-targets').value = [...choisis].join(', ');
+    document.getElementById('sched-pick-count').textContent = choisis.size + ' selected';
+  };
+  host.querySelectorAll('input[type="checkbox"]').forEach((c) => c.addEventListener('change', () => {
+    if (c.checked) choisis.add(c.value); else choisis.delete(c.value);
+    ecrire();
+  }));
+  document.getElementById('sched-pick-all').onclick = () => { vus.forEach((o) => choisis.add(o.v)); ecrire(); schedTargetsField(); };
+  document.getElementById('sched-pick-none').onclick = () => { choisis.clear(); ecrire(); schedTargetsField(); };
 }
 
 function schedFill(fiche) {
@@ -9916,7 +9933,11 @@ function schedInit() {
     ? Intl.supportedValuesOf('timeZone') : [];
   document.getElementById('sched-tz-list').innerHTML = fuseaux
     .map((z) => '<option value="' + esc(z) + '">').join('');
-  document.getElementById('sched-scope').addEventListener('change', schedTargetsField);
+  document.getElementById('sched-scope').addEventListener('change', () => {
+    document.getElementById('sched-targets').value = '';
+    schedTargetsField();
+  });
+  document.getElementById('sched-pick-q').addEventListener('input', schedTargetsField);
   document.getElementById('sched-add-window').addEventListener('click', () => schedAddRow(null));
   document.getElementById('sched-cancel').addEventListener('click', () => schedFill(null));
   document.getElementById('sched-form').addEventListener('submit', async (e) => {
@@ -10214,6 +10235,15 @@ function roleOptions(choisi) {
 
 const CLI = { rows: [], modes: [], boosts: {}, sel: new Set(), wired: false };
 
+/** Ce qui reste d'un boost : "45 min", "3 h", ou "until stopped". */
+function boostReste(b) {
+  const sec = Number(b && b.seconds_left) || 0;
+  if (sec > 2 * 365 * 86400) return 'until stopped';
+  if (sec >= 2 * 86400) return Math.round(sec / 86400) + ' days';
+  if (sec >= 5400) return Math.round(sec / 3600) + ' h';
+  return Math.max(0, Math.round(sec / 60)) + ' min';
+}
+
 function modeTaux(m) {
   if (!m) return '';
   return m.rate_kind === 'percent'
@@ -10290,11 +10320,11 @@ async function loadClients() {
     statCard('', 'Total clients', String(rows.length), '', sites.length + ' site(s)') +
     statCard(enLigne ? 'ok' : '', 'Connected', String(enLigne), '', 'measured in the last 90 s') +
     statCard(enMode ? 'warn' : '', 'Not in Automatic', String(enMode), '', 'in a mode or a manual limit') +
-    statCard('', 'Boosts active', String(boostes), '', 'they end on their own');
+    statCard('', 'Boosts active', String(boostes), '', 'timed, or until stopped');
   document.getElementById('cli-notice').innerHTML = !CLI.modes.length
     ? '<div class="notice">No bandwidth mode is defined yet: only <b>Automatic</b> and boosts are ' +
-      'offered. ' + (peut('operator') ? '<a href="#/management">Define modes in Management</a>.'
-        : 'An Operator defines them in Management.') + '</div>'
+      'offered. ' + (peut('operator') ? '<a href="#/modes">Define modes in Modes</a>.'
+        : 'An Operator defines them in Modes.') + '</div>'
     : (!peut('operator') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '');
   renderClients();
 }
@@ -10323,7 +10353,7 @@ function renderClients() {
     '<th class="chk"><input type="checkbox" id="cli-all" aria-label="Select all shown"' +
       (tous ? ' checked' : '') + '></th>' +
     '<th>Client</th><th>Site</th><th>Connection</th><th>Bandwidth mode</th>' +
-    '<th>Current usage</th><th class="num" title="Rate applied right now">Limit</th><th>Boost</th>' +
+    '<th>Current usage</th><th class="num" title="Rate applied right now">Limit</th>' +
     '<th class="sticky-actions"></th></tr></thead><tbody>' +
     lignes.map((r) => {
       const m = modeDuClient(r);
@@ -10339,20 +10369,18 @@ function renderClients() {
         '<td>' + esc(r.pop_name || '-') + '</td>' +
         '<td><span class="cli-conn ' + (on ? 'on">Connected' : 'off">' +
           (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '</span></td>' +
-        '<td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td>' +
+        '<td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
+          (b ? '<span class="boost-pill cli-boost">boost · ' + esc(boostReste(b)) + '</span>' : '') + '</td>' +
         '<td class="cli-usage">' + (on ? '<span class="d">&darr; ' + esc(bpsText(r.tx_bps)) +
           '</span> &nbsp;<span class="u">&uarr; ' + esc(bpsText(r.rx_bps)) + '</span>'
           : '<span style="color:var(--faint)">-</span>') + '</td>' +
         '<td class="num">' + (r.effective_down_mbps ? esc(mbps(r.effective_down_mbps)) + ' / ' +
           esc(mbps(r.effective_up_mbps || 0)) : '<span style="color:var(--faint)">no limit</span>') + '</td>' +
-        '<td>' + (b ? '<span class="boost-pill">' +
-          esc(Math.max(0, Math.round(b.seconds_left / 60))) + ' min</span>'
-          : '<span style="color:var(--faint)">-</span>') + '</td>' +
+
         '<td class="sticky-actions"><div class="actions" style="justify-content:flex-end">' +
           '<button class="sm" data-cli-mode="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
             '>Mode</button>' +
-          '<button class="sm" data-cli-plan="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
-            '>Plan</button>' +
+
           (b ? '<button class="sm" data-cli-stop="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
               '>Stop boost</button>'
             : '<button class="sm" data-cli-boost="' + esc(r.login) + '"' + (ecrire ? '' : ' disabled') +
@@ -10374,8 +10402,6 @@ function renderClients() {
   }));
   host.querySelectorAll('[data-cli-mode]').forEach((b) =>
     b.addEventListener('click', () => openModeDialog([b.dataset.cliMode])));
-  host.querySelectorAll('[data-cli-plan]').forEach((b) =>
-    b.addEventListener('click', () => openPlanDialog(b.dataset.cliPlan)));
   host.querySelectorAll('[data-cli-boost]').forEach((b) =>
     b.addEventListener('click', () => openGroupBoost([b.dataset.cliBoost])));
   host.querySelectorAll('[data-cli-stop]').forEach((b) =>
@@ -10517,97 +10543,93 @@ function openModeDialog(logins) {
   });
 }
 
+/** Boost ou forfait temporaire, sur un ou plusieurs clients.
+ *
+ *  DUREE : un choix rapide, une valeur libre (minutes, heures, jours), ou
+ *  "jusqu'a ce que je l'arrete". DEBIT : le forfait multiplie (x libre), ou un
+ *  debit explicite -- un forfait temporaire, plus haut ou plus bas que le
+ *  forfait, qui s'efface tout seul a son terme. */
 function openGroupBoost(logins) {
   if (!logins.length || refusGroupe(logins)) return;
+  const seul = logins.length === 1 ? CLI.rows.find((x) => x.login === logins[0]) : null;
   let minutes = 60;
-  let facteur = 2;
+  let genre = 'x';
   const { root, fermer } = openModal(
-    '<div class="modal-head"><div><h3>Boost</h3><div class="sub">' + sousTitreCibles(logins) + '</div></div>' +
-    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
-    '<div class="modal-body"><div class="field"><label>Duration</label><div class="choice-row" id="gb-min">' +
-    [[30, '30 min'], [60, '1 h'], [240, '4 h'], [1440, '24 h']].map(([m, l]) =>
+    '<div class="modal-head"><div><h3>Boost or temporary plan</h3><div class="sub">' + sousTitreCibles(logins) +
+    (seul && seul.plan_down_mbps ? ' · plan ' + esc(mbps(seul.plan_down_mbps) + ' / ' + mbps(seul.plan_up_mbps || 0)) : '') +
+    '</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body">' +
+    '<div class="field"><label>Duration</label><div class="choice-row" id="gb-min">' +
+    [[30, '30 min'], [60, '1 h'], [240, '4 h'], [1440, '1 day'], [10080, '7 days'], [-1, 'Custom…'], [0, 'Until I stop it']].map(([m, l]) =>
       '<button type="button" data-v="' + m + '"' + (m === minutes ? ' class="active"' : '') + '>' + l + '</button>').join('') +
-    '</div></div><div class="field" style="margin-top:.8rem"><label>Rate</label><div class="choice-row" id="gb-x">' +
-    [2, 3, 5].map((x) => '<button type="button" data-v="' + x + '"' + (x === facteur ? ' class="active"' : '') +
-      '>&times;' + x + ' the plan</button>').join('') + '</div></div>' +
-    '<div class="field" style="margin-top:.8rem"><label for="gb-reason">Reason</label>' +
-    '<input id="gb-reason" maxlength="300" placeholder="optional: goodwill gesture, troubleshooting..."></div>' +
-    '<p class="hint" style="display:block">The boost ends on its own. It is refused for a client in a mode that stops boosts.</p>' +
+    '</div><div class="gb-custom" id="gb-custom" hidden><input id="gb-n" type="number" min="1" step="1" value="2">' +
+    '<select id="gb-unit"><option value="1">minutes</option><option value="60" selected>hours</option>' +
+    '<option value="1440">days</option></select></div></div>' +
+    '<div class="field" style="margin-top:1rem"><label>Rate</label><div class="segmented" id="gb-kind">' +
+    '<button type="button" data-k="x" class="active">Multiply the plan</button>' +
+    '<button type="button" data-k="rate">Temporary plan</button></div>' +
+    '<div id="gb-x-box" class="gb-box"><span>&times;</span><input id="gb-x" type="number" min="1.1" max="50" step="0.1" value="2">' +
+    '<div class="choice-row">' + [1.5, 2, 3, 5].map((x) => '<button type="button" class="sm" data-x="' + x + '">&times;' + x + '</button>').join('') +
+    '</div></div>' +
+    '<div id="gb-rate-box" class="gb-box" hidden><label>&darr; <input id="gb-down" type="number" min="0.001" step="any" value="' +
+      esc(seul && seul.plan_down_mbps ? seul.plan_down_mbps : '') + '"> Mbps</label>' +
+    '<label>&uarr; <input id="gb-up" type="number" min="0.001" step="any" value="' +
+      esc(seul && seul.plan_up_mbps ? seul.plan_up_mbps : '') + '"> Mbps</label>' +
+    '<span class="hint">Higher or lower than the plan: it applies for the duration, then the client goes back to its plan on its own.</span></div></div>' +
+    '<div class="field" style="margin-top:1rem"><label for="gb-reason">Reason</label>' +
+    '<input id="gb-reason" maxlength="300" placeholder="optional: goodwill gesture, event, troubleshooting..."></div>' +
+    '<p class="hint" style="display:block">It takes precedence over the plan, the schedule and the mode, except in a mode that stops ' +
+    'boosts. “Until I stop it” runs until someone clicks Stop boost.</p>' +
     '<div id="gb-out"></div></div>' +
     '<div class="modal-foot" id="gb-foot"><button data-modal-close>Cancel</button>' +
-    '<button class="primary" id="gb-go">Start the boost on ' + logins.length + ' client(s)</button></div>');
-  const groupe = (id, set) => root.querySelectorAll('#' + id + ' button').forEach((b) => b.addEventListener('click', () => {
-    root.querySelectorAll('#' + id + ' button').forEach((x) => x.classList.toggle('active', x === b));
-    set(Number(b.dataset.v));
+    '<button class="primary" id="gb-go">Apply to ' + logins.length + ' client(s)</button></div>');
+  root.querySelectorAll('#gb-min button').forEach((b) => b.addEventListener('click', () => {
+    root.querySelectorAll('#gb-min button').forEach((x) => x.classList.toggle('active', x === b));
+    minutes = Number(b.dataset.v);
+    root.querySelector('#gb-custom').hidden = minutes !== -1;
   }));
-  groupe('gb-min', (v) => { minutes = v; });
-  groupe('gb-x', (v) => { facteur = v; });
+  root.querySelectorAll('#gb-kind button').forEach((b) => b.addEventListener('click', () => {
+    root.querySelectorAll('#gb-kind button').forEach((x) => x.classList.toggle('active', x === b));
+    genre = b.dataset.k;
+    root.querySelector('#gb-x-box').hidden = genre !== 'x';
+    root.querySelector('#gb-rate-box').hidden = genre !== 'rate';
+  }));
+  root.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', () => {
+    root.querySelector('#gb-x').value = b.dataset.x;
+  }));
   root.querySelector('#gb-go').addEventListener('click', async (e) => {
+    const sortie = root.querySelector('#gb-out');
+    let duree = minutes;
+    if (minutes === -1) {
+      duree = Math.round(Number(root.querySelector('#gb-n').value) * Number(root.querySelector('#gb-unit').value));
+      if (!(duree >= 1) || duree > 525600) {
+        sortie.innerHTML = '<div class="notice warn">Give a duration between 1 minute and 365 days.</div>';
+        return;
+      }
+    }
+    const corps = { logins, action: 'boost', boost_minutes: duree > 0 ? duree : 60,
+      boost_until_stopped: duree === 0, reason: root.querySelector('#gb-reason').value || null };
+    if (genre === 'x') {
+      const x = Number(root.querySelector('#gb-x').value);
+      if (!(x > 1) || x > 50) { sortie.innerHTML = '<div class="notice warn">The multiplier must be above 1 (up to 50).</div>'; return; }
+      corps.boost_multiplier = x;
+    } else {
+      const bas = Number(root.querySelector('#gb-down').value);
+      const haut = Number(root.querySelector('#gb-up').value);
+      if (!(bas > 0) || !(haut > 0)) { sortie.innerHTML = '<div class="notice warn">Give both rates, above 0.</div>'; return; }
+      corps.boost_down_mbps = bas;
+      corps.boost_up_mbps = haut;
+    }
     e.target.disabled = true;
     try {
-      const res = await api('/clients/actions', { method: 'POST', body: JSON.stringify({
-        logins, action: 'boost', boost_multiplier: facteur, boost_minutes: minutes,
-        reason: root.querySelector('#gb-reason').value || null }) });
-      root.querySelector('#gb-out').innerHTML = rendreResultats(res);
+      const res = await api('/clients/actions', { method: 'POST', body: JSON.stringify(corps) });
+      sortie.innerHTML = rendreResultats(res);
       root.querySelector('#gb-foot').innerHTML = '<button class="primary" id="gb-done">Close</button>';
       root.querySelector('#gb-done').addEventListener('click', fermer);
       refresh();
     } catch (err) {
-      root.querySelector('#gb-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
       e.target.disabled = false;
-    }
-  });
-}
-
-/** Le forfait d'UN client : son debit souscrit. Le retirer le rend au forfait
- *  par defaut (ou le laisse sans plafond s'il n'y en a pas). */
-function openPlanDialog(login) {
-  if (refusGroupe([login])) return;
-  const r = CLI.rows.find((x) => x.login === login) || {};
-  const { root, fermer } = openModal(
-    '<div class="modal-head"><div><h3>Plan</h3><div class="sub">' + sousTitreCibles([login]) + '</div></div>' +
-    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
-    '<div class="modal-body"><p class="hint" style="display:block;margin-top:0">The rate the client ' +
-    'subscribed to. It applies in <b>Automatic</b> mode, and the bandwidth schedule and the modes in ' +
-    '% are computed from it.' + (r.plan_source ? ' Current source: <b>' + esc(r.plan_source) + '</b>.' : '') +
-    '</p><div class="row-3"><div class="field"><label for="pl-down">Download (Mbps)</label>' +
-    '<input id="pl-down" type="number" min="0.001" step="any" value="' + esc(r.plan_down_mbps || '') + '"></div>' +
-    '<div class="field"><label for="pl-up">Upload (Mbps)</label>' +
-    '<input id="pl-up" type="number" min="0.001" step="any" value="' + esc(r.plan_up_mbps || '') + '"></div></div>' +
-    '<div id="pl-out"></div></div>' +
-    '<div class="modal-foot" id="pl-foot"><button class="danger" id="pl-reset" title="The default plan ' +
-    'applies again">Remove the plan</button><span class="spacer"></span>' +
-    '<button data-modal-close>Cancel</button><button class="primary" id="pl-save">Save and apply</button></div>');
-  const fin = (html) => {
-    root.querySelector('#pl-out').innerHTML = html;
-    root.querySelector('#pl-foot').innerHTML = '<button class="primary" id="pl-done">Close</button>';
-    root.querySelector('#pl-done').addEventListener('click', fermer);
-    refresh();
-  };
-  root.querySelector('#pl-save').addEventListener('click', async (e) => {
-    const bas = Number(root.querySelector('#pl-down').value);
-    const haut = Number(root.querySelector('#pl-up').value);
-    if (!(bas > 0) || !(haut > 0)) {
-      root.querySelector('#pl-out').innerHTML = '<div class="notice warn">Give both rates, above 0.</div>';
-      return;
-    }
-    e.target.disabled = true;
-    try {
-      await api('/plans/' + encodeURIComponent(login), { method: 'PUT',
-        body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
-      fin('<div class="notice ok">Plan saved: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) + '.</div>');
-    } catch (err) {
-      root.querySelector('#pl-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
-      e.target.disabled = false;
-    }
-  });
-  root.querySelector('#pl-reset').addEventListener('click', async () => {
-    if (!confirm('Remove the plan of ' + login + '? The default plan applies again.')) return;
-    try {
-      await api('/plans/' + encodeURIComponent(login), { method: 'DELETE' });
-      fin('<div class="notice ok">Plan removed: the default plan applies.</div>');
-    } catch (err) {
-      root.querySelector('#pl-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
     }
   });
 }
@@ -10714,7 +10736,7 @@ function cablerModes() {
       const n = res && res.clients ? res.clients.length : 0;
       sortie.innerHTML = '<div class="notice ok">Mode saved' + (n ? ', new rate applied to ' + n + ' client(s)' : '') + '.</div>';
       resetModeForm();
-      loadModesAdmin();
+      if (state.view === 'modes') loadModesPage(); else loadModesAdmin();
     } catch (err) {
       sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
     }
@@ -10758,83 +10780,204 @@ function lignesActivite(liste, avecClient) {
     '</tbody></table>';
 }
 
-/** La fiche d'un client, pensee pour l'operateur : ce qu'il consomme, ou il en
- *  est (mode, limite, boost), son historique, et les gestes a portee de main. */
-async function openClientSheet(login) {
+/** Ouvre la page d'un client. Une vraie page (et pas une fenetre) : on y
+ *  revient par le bouton precedent, et son adresse se partage. */
+function openClientSheet(login) {
+  location.hash = '#/client/' + encodeURIComponent(login);
+}
+
+const FICHE = { login: null, onglet: 'overview', periode: 60 };
+
+const ICONES = {
+  down: '<svg viewBox="0 0 24 24"><path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/></svg>',
+  up: '<svg viewBox="0 0 24 24"><path d="M12 20V9"/><path d="M7 14l5-5 5 5"/><path d="M5 4h14"/></svg>',
+  limit: '<svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/></svg>',
+  rtt: '<svg viewBox="0 0 24 24"><circle cx="12" cy="13" r="8"/><path d="M12 9v4l2.5 2"/><path d="M9 2h6"/></svg>',
+};
+
+function kpi(icone, cls, label, valeur, unite, sous) {
+  return '<div class="card kpi"><div class="kpi-txt"><span class="kpi-label">' + esc(label) + '</span>' +
+    '<span class="kpi-val">' + esc(valeur) + (unite ? '<small>' + esc(unite) + '</small>' : '') + '</span>' +
+    (sous ? '<span class="kpi-sub">' + sous + '</span>' : '') + '</div>' +
+    '<span class="kpi-ico ' + cls + '">' + ICONES[icone] + '</span></div>';
+}
+
+/** "3.8 Mbps" -> ["3.8", "Mbps"] pour les grandes valeurs des cartes. */
+function separerUnite(texte) {
+  const m = String(texte).match(/^([\d.,-]+)\s*(.*)$/);
+  return m ? [m[1], m[2]] : [String(texte), ''];
+}
+
+async function loadClientPage() {
+  const login = FICHE.login;
+  const host = document.getElementById('client-page');
+  // Une saisie en cours (forfait) ne doit pas etre effacee par le rafraichissement.
+  if (host.contains(document.activeElement) && document.activeElement.matches('input, select')) return;
+  await loadClientsData();
   const r = CLI.rows.find((x) => x.login === login);
-  if (!r) return;
-  const { root, fermer } = openModal('<div class="modal-head"><div><h3>' + esc(login) + '</h3><div class="sub">' +
-    esc(r.pop_name || '') + (r.last_ip ? ' · ' + esc(r.last_ip) : '') + ' · ' +
-    (clientEnLigne(r) ? '<span class="cli-conn on">Connected</span>'
-      : '<span class="cli-conn off">' + (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen') + '</span>') +
-    '</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
-    '<div class="modal-body" id="cs-body"><div class="empty">Loading…</div></div>' +
-    '<div class="modal-foot"><button id="cs-plan">Plan</button><button id="cs-boost">' +
-    (CLI.boosts[login] ? 'Stop boost' : 'Boost') + '</button>' +
-    '<button class="primary" id="cs-mode">Change mode</button></div>');
-  root.classList.add('wide');
-  const ecrire = peut('operator');
-  ['cs-plan', 'cs-boost', 'cs-mode'].forEach((id) => { root.querySelector('#' + id).disabled = !ecrire; });
-  root.querySelector('#cs-mode').addEventListener('click', () => { fermer(); openModeDialog([login]); });
-  root.querySelector('#cs-plan').addEventListener('click', () => { fermer(); openPlanDialog(login); });
-  root.querySelector('#cs-boost').addEventListener('click', () => {
-    fermer();
-    if (CLI.boosts[login]) stopBoosts([login]); else openGroupBoost([login]);
-  });
+  const titre = document.getElementById('page-title');
+  if (titre) titre.textContent = login || 'Client';
+  if (!r) {
+    host.innerHTML = '<a class="back-link" href="#/clients">&lsaquo; All clients</a>' +
+      '<div class="empty">Unknown client: ' + esc(login) + '.</div>';
+    return;
+  }
+  const pas = FICHE.periode <= 60 ? 30 : FICHE.periode <= 1440 ? 300 : 3600;
+  const [data, journal] = await Promise.all([
+    r.subscriber_id ? api('/subscribers/' + r.subscriber_id + '/metrics?minutes=' + FICHE.periode +
+      '&bucket_seconds=' + pas).catch(() => null) : Promise.resolve(null),
+    api('/activity?limit=50&login=' + encodeURIComponent(login)).catch(() => []),
+  ]);
+  const s = (data && data.subscriber) || r;
+  const pts = (data && data.points) || [];
+  const on = clientEnLigne(r);
   const m = modeDuClient(r);
   const b = CLI.boosts[login];
-  const corps = root.querySelector('#cs-body');
-  let periode = 60;
-  const dessiner = async () => {
-    const pas = periode <= 60 ? 30 : periode <= 1440 ? 300 : 3600;
-    let data = null;
-    let journal = [];
-    try {
-      [data, journal] = await Promise.all([
-        r.subscriber_id ? api('/subscribers/' + r.subscriber_id + '/metrics?minutes=' + periode + '&bucket_seconds=' + pas)
-          : Promise.resolve(null),
-        api('/activity?limit=8&login=' + encodeURIComponent(login)).catch(() => []),
-      ]);
-    } catch (err) {
-      corps.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
-      return;
-    }
-    const s = (data && data.subscriber) || r;
-    const pts = (data && data.points) || [];
+  const ecrire = peut('operator');
+  const dis = ecrire ? '' : ' disabled';
+  const limite = s.effective_down_mbps
+    ? mbps(s.effective_down_mbps) + ' / ' + mbps(s.effective_up_mbps || 0) : 'no limit';
+
+  const entete = '<a class="back-link" href="#/clients">&lsaquo; All clients</a>' +
+    '<div class="cp-head"><span class="cp-avatar">' + esc(initiales(login)) + '</span>' +
+    '<div class="cp-id"><h2>' + esc(login) + '</h2><div class="cp-meta">' +
+      '<span class="badge">' + esc(r.pop_name || 'no site') + '</span>' +
+      '<span class="cli-conn ' + (on ? 'on">Connected' : 'off">' + (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '</span>' +
+      '<span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
+      (b ? '<span class="boost-pill">boost · ' + esc(boostReste(b)) + '</span>' : '') +
+    '</div></div><span class="spacer"></span>' +
+    '<button id="cp-plan"' + dis + '>Edit plan</button>' +
+    '<button class="primary" id="cp-mode"' + dis + '>Change mode</button></div>' +
+    '<nav class="cp-tabs">' + [['overview', 'Overview'], ['plan', 'Plan & mode'], ['activity', 'Activity']].map(([k, l]) =>
+      '<button type="button" data-tab="' + k + '"' + (FICHE.onglet === k ? ' class="active"' : '') + '>' + l + '</button>').join('') + '</nav>';
+
+  let corps = '';
+  if (FICHE.onglet === 'overview') {
+    const [vd, ud] = separerUnite(on ? bpsText(r.tx_bps) : '-');
+    const [vu, uu] = separerUnite(on ? bpsText(r.rx_bps) : '-');
     const octets = (cle) => pts.reduce((a, p) => a + (Number(p[cle]) || 0) * pas / 8, 0);
-    corps.innerHTML =
-      '<div class="grid stats">' +
-        statCard('', 'Download now', clientEnLigne(r) ? bpsText(r.tx_bps) : '-', '', '') +
-        statCard('', 'Upload now', clientEnLigne(r) ? bpsText(r.rx_bps) : '-', '', '') +
-        statCard('', 'Limit applied', s.effective_down_mbps ? mbps(s.effective_down_mbps) + ' / ' +
-          mbps(s.effective_up_mbps || 0) : 'none', '', esc(SOURCE_LIMITE[s.limit_source] || s.limit_source || '')) +
-        statCard('', 'Latency', r.rtt_ms ? Math.round(r.rtt_ms) + ' ms' : '-', '',
-          data && data.bufferbloat ? 'under load: grade ' + esc(data.bufferbloat.grade) : '') +
-      '</div>' +
-      '<div class="cs-grid"><div class="card"><div class="toolbar" style="margin:0 0 .5rem">' +
-        '<b>Usage over time</b><span class="spacer"></span><div class="choice-row" id="cs-range">' +
-        [[60, '1 hour'], [1440, '24 hours'], [10080, '7 days']].map(([v, l]) =>
-          '<button type="button" class="sm' + (v === periode ? ' active' : '') + '" data-v="' + v + '">' + l + '</button>').join('') +
-        '</div></div><div id="cs-chart"></div>' +
-        '<div class="hint" style="display:block">Downloaded ≈ ' + esc(octetsText(octets('tx_bps_avg'))) +
-        ' · uploaded ≈ ' + esc(octetsText(octets('rx_bps_avg'))) + ' over the period</div></div>' +
-      '<div class="card"><b>Bandwidth &amp; mode</b><table class="kv"><tbody>' +
+    corps = '<div class="kpis">' +
+      kpi('down', 'k-down', 'Download now', vd, ud, '') +
+      kpi('up', 'k-up', 'Upload now', vu, uu, '') +
+      kpi('limit', 'k-lim', 'Limit applied', s.effective_down_mbps ? String(Math.round(s.effective_down_mbps * 10) / 10) : '-',
+        s.effective_down_mbps ? 'Mbps down' : '', esc(SOURCE_LIMITE[s.limit_source] || '')) +
+      kpi('rtt', 'k-rtt', 'Latency', r.rtt_ms ? String(Math.round(r.rtt_ms)) : '-', r.rtt_ms ? 'ms' : '',
+        data && data.bufferbloat ? 'under load: grade ' + esc(data.bufferbloat.grade) : '') +
+      '</div><div class="cp-grid"><div class="card cp-usage"><div class="cp-card-head"><div><h3>Usage over time</h3>' +
+      '<span class="hint">Download and upload, with totals for this period.</span></div>' +
+      '<div class="segmented" id="cp-range">' + [[60, '1 hour'], [1440, '24 hours'], [10080, '7 days']].map(([v, l]) =>
+        '<button type="button" data-v="' + v + '"' + (v === FICHE.periode ? ' class="active"' : '') + '>' + l + '</button>').join('') +
+      '</div></div><div id="cp-chart"></div><div class="cp-totals">' +
+        '<div><span>&darr; Downloaded</span><b>' + esc(octetsText(octets('tx_bps_avg'))) + '</b></div>' +
+        '<div><span>&uarr; Uploaded</span><b>' + esc(octetsText(octets('rx_bps_avg'))) + '</b></div></div></div>' +
+      '<div class="cp-side"><div class="card"><h3>Bandwidth &amp; mode</h3><table class="kv"><tbody>' +
         '<tr><td>Mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
         '<tr><td>Plan</td><td>' + (s.plan_down_mbps ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : 'default plan') + '</td></tr>' +
-        '<tr><td>Applied now</td><td>' + (s.effective_down_mbps ? esc(mbps(s.effective_down_mbps) + ' / ' + mbps(s.effective_up_mbps || 0)) : 'no limit') + '</td></tr>' +
-        '<tr><td>Boost</td><td>' + (b ? '<span class="boost-pill">' + esc(Math.max(0, Math.round(b.seconds_left / 60))) + ' min left</span>' : 'none') + '</td></tr>' +
+        '<tr><td>Applied now</td><td>' + esc(limite) + '</td></tr>' +
+        '<tr><td>Boost</td><td>' + (b ? esc(boostReste(b)) + (boostReste(b) === 'until stopped' ? '' : ' left') : 'none') + '</td></tr>' +
+        '</tbody></table><div class="actions" style="margin-top:.8rem">' +
+        '<button class="sm" id="cp-mode2"' + dis + '>Change mode</button>' +
+        (b ? '<button class="sm" id="cp-stop"' + dis + '>Stop boost</button>'
+          : '<button class="sm primary" id="cp-boost"' + dis + '>Boost</button>') + '</div></div>' +
+      '<div class="card"><h3>Connection at a glance</h3><table class="kv"><tbody>' +
+        '<tr><td>Client IP</td><td><code>' + esc(r.last_ip || '-') + '</code></td></tr>' +
         '<tr><td>Site</td><td>' + esc(r.pop_name || '-') + '</td></tr>' +
-        '<tr><td>Address</td><td><code>' + esc(r.last_ip || '-') + '</code></td></tr>' +
-      '</tbody></table></div></div>' +
-      '<h3 style="margin:1rem 0 .4rem">Recent activity</h3><div class="table-wrap">' + lignesActivite(journal, false) + '</div>';
-    renderThroughput(corps.querySelector('#cs-chart'),
-      pts.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_bps_max, rx_bps: p.rx_bps_max, subscribers: p.samples })));
-    corps.querySelectorAll('#cs-range button').forEach((x) => x.addEventListener('click', () => {
-      periode = Number(x.dataset.v);
-      dessiner();
-    }));
-  };
-  dessiner();
+        '<tr><td>Kind</td><td>' + esc(r.kind === 'static' ? 'static IP' : 'PPPoE') + '</td></tr>' +
+        '<tr><td>Session</td><td>' + (r.session_uptime_s ? esc(uptime(r.session_uptime_s)) : '-') + '</td></tr>' +
+        '<tr><td>Last measurement</td><td>' + (r.ts ? esc(depuis(r.ts)) : 'never') + '</td></tr>' +
+      '</tbody></table></div></div></div>' +
+      '<div class="card" style="margin-top:1rem"><div class="cp-card-head"><h3>Recent activity</h3>' +
+      (journal.length > 5 ? '<button class="sm link-btn" data-tab="activity">See all &rarr;</button>' : '') + '</div>' +
+      '<div class="table-wrap">' + lignesActivite(journal.slice(0, 5), false) + '</div></div>';
+  } else if (FICHE.onglet === 'plan') {
+    const carte = (id, nom, sous) => {
+      const sel = String(r.mode_id || null) === String(id);
+      return '<label class="mode-card' + (id === null ? ' wide' : '') + (sel ? ' sel' : '') + '">' +
+        '<input type="radio" name="cp-mode" value="' + (id === null ? '' : id) + '"' + (sel ? ' checked' : '') + dis + '>' +
+        '<span><b>' + esc(nom) + (sel ? ' · current' : '') + '</b><small>' + sous + '</small></span></label>';
+    };
+    corps = '<div class="cp-grid"><div class="card"><h3>Bandwidth mode</h3>' +
+      '<p class="hint" style="display:block">Pick a mode and apply it. <b>Automatic</b> follows the plan and the ' +
+      'time-of-day schedule; the rate then changes with the hour on its own.</p><div class="mode-cards">' +
+      carte(null, 'Automatic', 'Plan and schedule') +
+      CLI.modes.map((x) => carte(x.id, x.name, esc(modeTaux(x)) + (x.disables_boost ? '<br>Stops boosts' : ''))).join('') +
+      '</div><div class="actions" style="margin-top:.8rem"><span class="spacer"></span>' +
+      '<button class="primary" id="cp-apply-mode"' + dis + '>Apply the mode</button></div><div id="cp-mode-out"></div></div>' +
+      '<div class="cp-side"><div class="card"><h3>Plan</h3><p class="hint" style="display:block">The rate the client ' +
+      'subscribed to. Modes in % and schedules are computed from it.</p>' +
+      '<div class="field"><label for="cp-down">Download (Mbps)</label><input id="cp-down" type="number" min="0.001" step="any" value="' +
+        esc(s.plan_down_mbps || '') + '"' + dis + '></div>' +
+      '<div class="field"><label for="cp-up">Upload (Mbps)</label><input id="cp-up" type="number" min="0.001" step="any" value="' +
+        esc(s.plan_up_mbps || '') + '"' + dis + '></div>' +
+      '<div class="actions" style="margin-top:.6rem"><button class="sm danger" id="cp-plan-reset"' + dis + '>Remove</button>' +
+      '<span class="spacer"></span><button class="primary" id="cp-plan-save"' + dis + '>Save the plan</button></div>' +
+      '<div id="cp-plan-out"></div></div>' +
+      '<div class="card"><h3>Boost</h3><p class="hint" style="display:block">' +
+      (b ? 'A boost is running: ' + esc(boostReste(b)) + (boostReste(b) === 'until stopped' ? '.' : ' left.')
+        : 'Extra rate for a set time, or until you stop it.') +
+      '</p><div class="actions">' + (b ? '<button class="sm" id="cp-stop"' + dis + '>Stop boost</button>'
+        : '<button class="sm primary" id="cp-boost"' + dis + '>Give a boost</button>') + '</div></div></div></div>';
+  } else {
+    corps = '<div class="card"><div class="table-wrap">' + lignesActivite(journal, false) + '</div></div>';
+  }
+  host.innerHTML = entete + corps;
+
+  host.querySelectorAll('[data-tab]').forEach((t) => t.addEventListener('click', () => {
+    FICHE.onglet = t.dataset.tab;
+    loadClientPage();
+  }));
+  host.querySelectorAll('#cp-range button').forEach((x) => x.addEventListener('click', () => {
+    FICHE.periode = Number(x.dataset.v);
+    loadClientPage();
+  }));
+  const clic = (id, f) => { const el = host.querySelector('#' + id); if (el) el.addEventListener('click', f); };
+  clic('cp-mode', () => openModeDialog([login]));
+  clic('cp-mode2', () => openModeDialog([login]));
+  clic('cp-plan', () => { FICHE.onglet = 'plan'; loadClientPage(); });
+  clic('cp-boost', () => openGroupBoost([login]));
+  clic('cp-stop', () => stopBoosts([login]));
+  clic('cp-apply-mode', async (e) => {
+    const choix = host.querySelector('input[name="cp-mode"]:checked');
+    const id = choix && choix.value !== '' ? Number(choix.value) : null;
+    e.target.disabled = true;
+    try {
+      const res = await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: [login], action: 'mode', mode_id: id }) });
+      host.querySelector('#cp-mode-out').innerHTML = rendreResultats(res);
+      setTimeout(loadClientPage, 1200);
+    } catch (err) {
+      host.querySelector('#cp-mode-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      e.target.disabled = false;
+    }
+  });
+  host.querySelectorAll('input[name="cp-mode"]').forEach((i) => i.addEventListener('change', () =>
+    host.querySelectorAll('.mode-card').forEach((c) => c.classList.toggle('sel', c.contains(i)))));
+  clic('cp-plan-save', async () => {
+    const bas = Number(host.querySelector('#cp-down').value);
+    const haut = Number(host.querySelector('#cp-up').value);
+    const out = host.querySelector('#cp-plan-out');
+    if (!(bas > 0) || !(haut > 0)) { out.innerHTML = '<div class="notice warn">Give both rates, above 0.</div>'; return; }
+    try {
+      await api('/plans/' + encodeURIComponent(login), { method: 'PUT', body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
+      out.innerHTML = '<div class="notice ok">Plan saved: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) + '.</div>';
+      document.activeElement.blur();
+      setTimeout(loadClientPage, 1200);
+    } catch (err) {
+      out.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+  clic('cp-plan-reset', async () => {
+    if (!confirm('Remove the plan of ' + login + '? The default plan applies again.')) return;
+    try {
+      await api('/plans/' + encodeURIComponent(login), { method: 'DELETE' });
+      loadClientPage();
+    } catch (err) {
+      host.querySelector('#cp-plan-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  });
+  const graphe = host.querySelector('#cp-chart');
+  if (graphe) {
+    renderThroughput(graphe, pts.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_bps_max, rx_bps: p.rx_bps_max, subscribers: p.samples })));
+  }
 }
 
 function octetsText(n) {
@@ -10956,7 +11099,40 @@ async function loadClientsData() {
 
 /* -------------------------------------------------------------- gestion */
 async function loadManagement() {
-  await Promise.all([loadModesAdmin(), loadSchedules()]);
+  await loadClientsData();
+  await loadSchedules();
+  if (!document.getElementById('sched-targets-field').hidden &&
+      !document.getElementById('sched-pick-items').contains(document.activeElement)) {
+    schedTargetsField();
+  }
+}
+
+/** Onglet Modes : chaque mode, ses clients, et la creation d'un mode. */
+async function loadModesPage() {
+  await loadClientsData();
+  const parMode = { auto: [] };
+  CLI.modes.forEach((m) => { parMode[m.id] = []; });
+  const manuels = [];
+  CLI.rows.forEach((r) => {
+    if (r.mode_id && parMode[r.mode_id]) parMode[r.mode_id].push(r);
+    else if (r.override_down_mbps) manuels.push(r);
+    else parMode.auto.push(r);
+  });
+  const puces = (liste) => !liste.length ? '<span class="hint">No client.</span>'
+    : liste.slice(0, 14).map((r) => '<a class="chip" href="#/client/' + encodeURIComponent(r.login) + '">' +
+        esc(r.login) + '</a>').join('') +
+      (liste.length > 14 ? '<span class="hint">and ' + (liste.length - 14) + ' more</span>' : '');
+  const carte = (titre, sous, liste, cls, extra) => '<div class="card mode-board-card' + (cls ? ' ' + cls : '') + '">' +
+    '<div class="cp-card-head"><div><h3>' + esc(titre) + '</h3><span class="hint">' + sous + '</span></div>' +
+    '<span class="badge">' + liste.length + ' client(s)</span></div><div class="chips">' + puces(liste) + '</div>' +
+    (extra || '') + '</div>';
+  document.getElementById('modes-board').innerHTML = '<div class="mode-board">' +
+    carte('Automatic', 'Plan and time-of-day schedule', parMode.auto, 'auto') +
+    CLI.modes.map((m) => carte(m.name, esc(modeTaux(m)) + (m.disables_boost ? ' · stops boosts' : ''),
+      parMode[m.id], m.disables_boost ? 'crit' : '')).join('') +
+    (manuels.length ? carte('Manual limit', 'Set by hand by an Administrator', manuels, '') : '') +
+    '</div>';
+  await loadModesAdmin();
 }
 
 /* ------------------------------------------------- mon compte (operateur) */
@@ -10993,7 +11169,9 @@ const LOADERS = {
   clients: loadClients,
   alerts: loadAlerts,
   activity: loadActivity,
+  modes: loadModesPage,
   management: loadManagement,
+  client: loadClientPage,
   dashboard: loadDashboard,
   exec: loadExec,
   traffic: loadTraffic,
@@ -11010,10 +11188,13 @@ async function show(view) {
   if (view === 'services') view = 'traffic'; // ancien onglet, fusionne dans Trafic
   if (!LOADERS[view]) view = 'dashboard';
   state.view = view;
+  document.body.dataset.view = view;
   document.querySelectorAll('section').forEach((s) => s.classList.remove('active'));
   document.getElementById('view-' + view).classList.add('active');
+  // La page d'un client garde l'onglet Clients allume : on sait d'ou l'on vient.
+  const onglet = view === 'client' ? 'clients' : view;
   document.querySelectorAll('nav.tabs a').forEach((a) =>
-    a.classList.toggle('active', a.dataset.view === view));
+    a.classList.toggle('active', a.dataset.view === onglet));
   // Le grand titre reprend l'intitule de l'onglet : on sait ou l'on est sans
   // chercher l'onglet allume.
   const lien = document.querySelector('nav.tabs a[data-view="' + view + '"]');
@@ -11091,7 +11272,13 @@ function route() {
   // L'Operator n'a que ses pages (clients, alertes, activite, gestion) : un lien
   // vers une autre page les y ramene plutot que d'ouvrir une page vide.
   let vue = (location.hash || '').replace('#/', '');
-  if (estLimite() && !['clients', 'alerts', 'activity', 'management'].includes(vue)) vue = 'clients';
+  // #/client/<login> : la page d'un client.
+  if (vue.indexOf('client/') === 0) {
+    const login = decodeURIComponent(vue.slice('client/'.length));
+    if (FICHE.login !== login) { FICHE.login = login; FICHE.onglet = 'overview'; }
+    vue = 'client';
+  }
+  if (estLimite() && !['clients', 'modes', 'alerts', 'activity', 'management', 'client'].includes(vue)) vue = 'clients';
   show(vue || 'dashboard');
 }
 
@@ -11605,7 +11792,7 @@ const AIDE = {
     r: 'Kept 400 days. Export CSV gives the list shown.',
   },
   'client management': {
-    t: 'How clients\' rates are managed: the bandwidth modes and the bandwidth schedules (rates by time of day).',
+    t: 'Bandwidth schedules: rates that change with the time of day, on their own (Schedules tab).',
     m: 'Open to Operators: these are commercial decisions about clients. Adding clients, sites, routers, antennas and APIs stays with the Administrator.',
   },
   'bandwidth schedules': {
