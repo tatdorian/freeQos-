@@ -13,7 +13,7 @@ from typing import Any
 
 import asyncpg
 
-from app.enforcement.schedules import BandwidthSchedule, InvalidScheduleError
+from app.enforcement.schedules import BandwidthSchedule, InvalidScheduleError, Modes
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def _decode(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def to_model(row: dict[str, Any]) -> BandwidthSchedule:
+def to_model(row: dict[str, Any], modes: Modes | None = None) -> BandwidthSchedule:
     """Une ligne -> un profil, revalide : la base n'est pas une source de confiance
     absolue (saisie SQL a la main, version anterieure)."""
     return BandwidthSchedule.build(
@@ -55,6 +55,7 @@ def to_model(row: dict[str, Any]) -> BandwidthSchedule:
         targets=list(row.get("targets") or []),
         timezone=str(row.get("timezone") or "UTC"),
         enabled=bool(row.get("enabled", True)),
+        modes=modes,
     )
 
 
@@ -79,15 +80,24 @@ class SchedulesRepository:
             raise ScheduleNotFoundError(f"unknown bandwidth schedule {schedule_id}")
         return _decode(dict(row))
 
+    async def modes(self) -> Modes:
+        """Les modes de debit, pour les plages qui en designent un."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, name, rate_kind, down_value, up_value FROM bandwidth_modes"
+            )
+        return {int(r["id"]): dict(r) for r in rows}
+
     async def load_enabled(self) -> list[BandwidthSchedule]:
         """Les profils a appliquer. Un profil illisible est ECARTE et journalise :
         il ne doit pas empecher les autres de s'appliquer."""
         profils: list[BandwidthSchedule] = []
+        modes = await self.modes()
         for row in await self.list_all():
             if not row.get("enabled", True):
                 continue
             try:
-                profils.append(to_model(row))
+                profils.append(to_model(row, modes))
             except (InvalidScheduleError, KeyError, TypeError, ValueError) as exc:
                 logger.error("Profil horaire '%s' illisible, ignore : %s", row.get("name"), exc)
         return profils
