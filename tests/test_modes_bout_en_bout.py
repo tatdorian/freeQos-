@@ -559,6 +559,7 @@ def test_un_client_declare_a_la_main_est_rejoint_par_la_decouverte(app_client, r
     apres = app_client.get("/api/v1/clients/dupont/profile", headers=lire).json()
     assert apres["discovered"]["ip"] and apres["discovered"]["kind"] == "pppoe"
     assert apres["profile"]["display_name"] == "Pharmacie Dupont"  # rien d'ecrase
+    assert apres["discovered"]["measure"]["source"] in {"queue", "interface"}
 
     # Modifier la fiche : Operator et au-dessus, jamais en lecture seule.
     corps = {
