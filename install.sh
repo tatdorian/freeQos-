@@ -11,7 +11,8 @@
 #   3. ecrit un .env avec des secrets ALEATOIRES (mot de passe PostgreSQL) --
 #      jamais le "changeme" d'exemple sur un serveur de production ;
 #   4. choisit tout seul un miroir si Docker Hub est injoignable ;
-#   5. construit et demarre la pile, attend qu'elle reponde, et donne l'adresse.
+#   5. construit et demarre la pile, attend qu'elle reponde, et donne l'adresse ;
+#   6. cree le premier compte Administrateur (nouvelle installation seulement).
 #
 # Relancer le script = mettre a jour : le code est rafraichi, l'image
 # reconstruite, les donnees et le .env conserves.
@@ -21,6 +22,10 @@
 #   FREEQOS_REPO=<url git>          depot a cloner
 #   FREEQOS_BRANCH=<branche>        branche (defaut : la branche principale du depot)
 #   APP_PORT=8000  NETFLOW_PORT=2055
+#   FREEQOS_ADMIN_EMAIL=noc@exemple.fr
+#       email du premier compte Administrateur (sinon demande, ou
+#       admin@freeqos.local sans terminal). Le mot de passe est tire au hasard
+#       et affiche une seule fois, sauf FREEQOS_ADMIN_PASSWORD=... fourni.
 #   AIROS_USERNAME=... AIROS_PASSWORD=...
 #       identifiants communs des antennes Ubiquiti : avec eux, chaque radio
 #       decouverte est ajoutee et interrogee automatiquement.
@@ -206,6 +211,40 @@ until curl -fs -m 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; do
 done
 ok "freeQoS repond"
 
+# --------------------------------------------- premier compte Administrateur
+# Cree ICI, pas a la premiere visite : sinon le premier venu qui trouve
+# l'adresse du serveur pourrait se declarer administrateur. Sur une mise a
+# jour, les comptes existent deja et rien n'est touche.
+ADMIN_ETAT=""
+ADMIN_EMAIL=""
+ADMIN_MDP=""
+cli() { $SUDO docker compose exec -T app python -m app.cli "$@"; }
+COMPTES="$(cli count-accounts 2>/dev/null || echo '?')"
+if [ "$COMPTES" = "0" ]; then
+  ADMIN_EMAIL="${FREEQOS_ADMIN_EMAIL:-}"
+  if [ -z "$ADMIN_EMAIL" ] && (: </dev/tty) 2>/dev/null; then
+    printf 'Email du compte Administrateur [admin@freeqos.local] : ' >/dev/tty
+    read -r ADMIN_EMAIL </dev/tty || ADMIN_EMAIL=""
+  fi
+  ADMIN_EMAIL="${ADMIN_EMAIL:-admin@freeqos.local}"
+  if [ -n "${FREEQOS_ADMIN_PASSWORD:-}" ]; then
+    if SORTIE="$(printf '%s\n' "$FREEQOS_ADMIN_PASSWORD" | cli create-admin --email "$ADMIN_EMAIL" --password-stdin 2>&1)"; then
+      ADMIN_ETAT="cree"; ADMIN_MDP="(celui de FREEQOS_ADMIN_PASSWORD)"
+    fi
+  elif SORTIE="$(cli create-admin --email "$ADMIN_EMAIL" 2>&1)"; then
+    ADMIN_ETAT="cree"; ADMIN_MDP="$(printf '%s\n' "$SORTIE" | sed -n 's/^password: //p')"
+  fi
+  if [ "$ADMIN_ETAT" = "cree" ]; then
+    ok "Compte Administrateur cree : $ADMIN_EMAIL"
+  else
+    warn "Compte Administrateur non cree : $SORTIE"
+    warn "Il se creera a la premiere visite de l'interface."
+  fi
+elif [ "$COMPTES" != "?" ]; then
+  ADMIN_ETAT="existe"
+  ok "Comptes deja presents : aucun changement"
+fi
+
 # ------------------------------------------------ demarrage avec le serveur
 # Les conteneurs sont en « restart: unless-stopped ». Le service systemd
 # garantit en plus que la pile remonte au demarrage meme apres un
@@ -241,7 +280,19 @@ cat <<EOF
   freeQoS est installe.
 
   Interface  : http://${IP}/   (ou http://${IP}:${PORT}/)
-               (premiere visite : creer le compte administrateur)
+EOF
+case "$ADMIN_ETAT" in
+  cree) cat <<EOF
+  Administrateur : ${ADMIN_EMAIL}
+  Mot de passe   : ${ADMIN_MDP}
+               Affiche UNE seule fois : notez-le, puis changez-le dans le menu
+               du compte. Les autres comptes se creent dans Settings > Accounts.
+EOF
+  ;;
+  existe) printf '%s\n' "  Comptes    : deja crees, connexion avec vos identifiants" ;;
+  *) printf '%s\n' "               (premiere visite : creer le compte administrateur)" ;;
+esac
+cat <<EOF
   HTTPS      : Settings > Domain & HTTPS -- un enregistrement DNS « A » vers
                ${IP} (OVH ou autre), ports 80 et 443 ouverts, et le certificat
                est obtenu tout seul.
