@@ -51,6 +51,13 @@ from app.enforcement.restrictions import (
 )
 from app.services import ipfinder
 from app.services.registry import RouterRegistry
+from app.services.rule_targets import (
+    DomainResolver,
+    InvalidTargetError,
+    expand_addresses,
+    invalid_addresses,
+    normalise_domains,
+)
 from app.services.shaping import MOTIF_ROUTEUR_LECTURE_SEULE, ShapingService, ecriture_autorisee
 
 logger = logging.getLogger(__name__)
@@ -85,12 +92,20 @@ def validate(payload: dict[str, Any]) -> None:
     services = list(payload.get("services") or [])
     categories = list(payload.get("categories") or [])
     prefixes = list(payload.get("prefixes") or [])
-    if not (services or categories or prefixes):
+    domains = list(payload.get("domains") or [])
+    if not (services or categories or prefixes or domains):
         raise InvalidRuleError(
-            "a restriction must target some traffic: choose a service, a "
-            "family, or enter at least one address block. Without a criterion, the "
+            "a restriction must target some traffic: enter at least one IP address, "
+            "block (a.b.c.d/nn), range (a-b) or domain name. Without a target, the "
             "rule would target the whole internet."
         )
+    fautives = invalid_addresses([str(p) for p in prefixes])
+    if fautives:
+        raise InvalidRuleError("; ".join(fautives[:5]))
+    try:
+        normalise_domains([str(d) for d in domains])
+    except InvalidTargetError as exc:
+        raise InvalidRuleError(str(exc)) from exc
     inconnus = [s for s in services if s not in ipfinder.PAR_CLE]
     if inconnus:
         raise InvalidRuleError(f"service(s) inconnu(s) du catalogue : {', '.join(inconnus)}")
@@ -144,6 +159,8 @@ class RestrictionService:
     #: serveurs.
     address_limit: int = 5_000
     last_run: dict[str, Any] = field(default_factory=dict)
+    #: Les noms de domaine des regles, resolus a chaque passage.
+    domain_resolver: DomainResolver | None = None
 
     # ---------------------------------------------------------------- lecture
     async def resolve(self, rule: dict[str, Any]) -> RuleTarget:
@@ -161,7 +178,19 @@ class RestrictionService:
         # les blocs publies de Netflix ou Twitch.
         services |= ipfinder.services_in_categories(categories)
 
-        base = list(rule.get("prefixes") or []) + ipfinder.service_prefixes(services)
+        base = expand_addresses([str(p) for p in rule.get("prefixes") or []])
+        base += ipfinder.service_prefixes(services)
+        # NOMS DE DOMAINE : leurs adresses du moment (et celles vues recemment),
+        # sous-domaines compris. Elles changent : la reconciliation les suit.
+        domaines = [str(d) for d in rule.get("domains") or []]
+        if domaines and self.domain_resolver is not None:
+            try:
+                par_nom = await self.domain_resolver.resolve(domaines)
+            except Exception as exc:  # noqa: BLE001 - un DNS muet ne vide pas la regle
+                logger.warning("Noms de '%s' non resolus : %s", rule.get("name"), exc)
+                par_nom = {}
+            for adresses in par_nom.values():
+                base.extend(adresses)
         decouvertes: list[str] = []
         if self.destinations is not None and (services or categories):
             try:

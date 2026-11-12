@@ -35,6 +35,7 @@ from app.services.restrictions import (
     RestrictionService,
     validate,
 )
+from app.services.rule_targets import InvalidTargetError, normalise_domain, normalise_domains
 
 logger = logging.getLogger(__name__)
 
@@ -61,8 +62,13 @@ class RuleInput(BaseModel):
     categories: list[str] = Field(default_factory=list, max_length=20)
     prefixes: list[str] = Field(
         default_factory=list,
-        max_length=200,
-        description="Hand-entered prefixes, on top of the chosen services",
+        max_length=500,
+        description="IP addresses, blocks (a.b.c.d/nn) or ranges (a.b.c.d-a.b.c.e)",
+    )
+    domains: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="Domain names: every address they (and their subdomains) resolve to",
     )
     protocol: Protocol | None = None
     ports: str | None = Field(
@@ -109,7 +115,8 @@ class RuleUpdate(BaseModel):
     limit_up_mbps: float | None = Field(default=None, ge=0.01, le=100_000)
     services: list[str] | None = Field(default=None, max_length=50)
     categories: list[str] | None = Field(default=None, max_length=20)
-    prefixes: list[str] | None = Field(default=None, max_length=200)
+    prefixes: list[str] | None = Field(default=None, max_length=500)
+    domains: list[str] | None = Field(default=None, max_length=100)
     protocol: Protocol | None = None
     ports: str | None = Field(default=None, max_length=64)
     scope: Scope | None = None
@@ -145,6 +152,11 @@ def _valide(payload: dict[str, Any]) -> None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
         ) from exc
+    # Forme canonique enregistree : https://www.Example.com/ -> www.example.com.
+    if payload.get("domains") is not None:
+        payload["domains"] = normalise_domains([str(d) for d in payload["domains"]])
+    if payload.get("prefixes") is not None:
+        payload["prefixes"] = [str(p).strip() for p in payload["prefixes"] if str(p).strip()]
 
 
 @router.get("/traffic-rules", summary="The saved restrictions")
@@ -156,9 +168,41 @@ async def list_rules(container: ContainerDep) -> dict[str, Any]:
     """
     regles = await _repo(container).list_all()
     service = container.restrictions
+    resolveur = service.domain_resolver if service is not None else None
+    for regle in regles:
+        regle["domain_status"] = (
+            [resolveur.known(str(d)) for d in regle.get("domains") or []] if resolveur else []
+        )
     return {
         "rules": regles,
         "status": service.status() if service is not None else None,
+    }
+
+
+@router.get(
+    "/traffic-rules/domain-check",
+    summary="What a domain name resolves to now (the addresses a rule would block)",
+)
+async def domain_check(
+    container: ContainerDep, name: Annotated[str, Query(min_length=1, max_length=300)]
+) -> dict[str, Any]:
+    try:
+        domaine = normalise_domain(name)
+    except InvalidTargetError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    service = container.restrictions
+    resolveur = service.domain_resolver if service is not None else None
+    if resolveur is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Restriction service unavailable",
+        )
+    adresses = (await resolveur.resolve([domaine])).get(domaine, [])
+    return {
+        "domain": domaine,
+        "addresses": adresses,
+        "count": len(adresses),
+        "error": resolveur.errors.get(domaine),
     }
 
 
@@ -195,7 +239,11 @@ async def update_rule(
     # La validation porte sur la regle TELLE QU'ELLE SERA, pas sur le fragment
     # envoye : retirer le dernier service d'une regle la rendrait sans critere,
     # et une regle sans critere vise tout internet.
-    _valide({**actuelle, **champs})
+    fusion = {**actuelle, **champs}
+    _valide(fusion)
+    for cle in ("domains", "prefixes"):
+        if cle in champs:
+            champs[cle] = fusion[cle]
     try:
         regle = await repo.update(rule_id, champs)
     except RuleNotFoundError as exc:
