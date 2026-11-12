@@ -576,3 +576,109 @@ async def _apply(container: ContainerDep) -> None:
     """Recharge l'inventaire et remet les collecteurs a jour, sans redemarrage."""
     collectors = await container.registry.reload()
     container.collection.set_collectors(collectors)
+
+
+class UninstallInput(BaseModel):
+    #: Retirer aussi la cible NetFlow posee par freeQoS (la page Trafic ne verra
+    #: plus ce routeur).
+    stop_netflow: bool = False
+    confirm: bool = False
+
+
+@router.post(
+    "/pops/routers/uninstall/{name}",
+    summary="Remove from a router everything freeQoS set on it, and stop writing",
+)
+async def uninstall_router(
+    name: str, payload: UninstallInput, container: ContainerDep, user: UserDep
+) -> dict[str, Any]:
+    """LE ROUTEUR COMME AVANT FREEQOS, en un geste.
+
+    1. L'ecriture est COUPEE sur ce routeur d'abord : aucune boucle (files,
+       restrictions, export) ne reposera ce qu'on retire.
+    2. Tout ce qui porte la marque freeQoS part : files simples, types CAKE,
+       lignes des restrictions. Une file posee a la main ou par RADIUS reste.
+    3. Sur demande, la cible NetFlow de freeQoS part aussi.
+
+    Les fiches (modes, regles, forfaits) restent en base : rendre l'ecriture
+    remettra tout en place quand on le voudra.
+    """
+    if not payload.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This removes freeQoS's queues and rules from the router: "
+            "'confirm' must be true.",
+        )
+    collecteur = next((c for c in container.registry.collectors if c.name == name), None)
+    if collecteur is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Router '{name}' is not collected"
+        )
+    repository = _require_repository(container)
+    auteur = _auteur(user)
+    motif = "remove freeQoS from this router"
+    etait = bool(getattr(collecteur.config, "write_enabled", True))
+    if any(r.name == name for r in container.settings.routers):
+        await repository.set_file_router_read_only(name, True, updated_by=auteur, reason=motif)
+    else:
+        ident = await repository.find_id_by_name(name)
+        if ident is not None:
+            await repository.update(ident, {"write_enabled": False}, None)
+    if etait:
+        await _journaliser_interrupteur(
+            container, name, avant=True, apres=False, auteur=auteur, motif=motif
+        )
+    await _apply(container)
+
+    try:
+        rapport = await container.shaping.uninstall(name, author=auteur)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"Writing is now off on {name}, but its freeQoS lines could not be removed: "
+                f"{type(exc).__name__}: {exc}"
+            ),
+        ) from exc
+
+    if payload.stop_netflow and container.netflow_export is not None:
+        rapport["netflow"] = await _retirer_cible_netflow(container, name, auteur)
+    rapport["write_enabled"] = False
+    return rapport
+
+
+async def _retirer_cible_netflow(container: ContainerDep, name: str, auteur: str) -> dict[str, Any]:
+    from app.enforcement.models import Plan, PlanAction
+    from app.services.netflow_export import PATH_TARGET
+
+    export = container.netflow_export
+    collecteur = next((c for c in container.registry.collectors if c.name == name), None)
+    if export is None or collecteur is None:
+        return {"removed": 0, "error": "router not collected"}
+    try:
+        etat = await export.state_of(collecteur)
+        cibles = [c for c in etat.targets if c.get(".id") and export.is_ours(collecteur, c)]
+        plan = Plan(
+            router_name=name,
+            actions=[
+                PlanAction(
+                    verb="remove",
+                    path=PATH_TARGET,
+                    target_id=str(c[".id"]),
+                    name=f"{c.get('dst-address') or ''}:{c.get('port') or ''}",
+                    reason="remove freeQoS from this router",
+                )
+                for c in cibles
+            ],
+        )
+        if plan.is_empty:
+            return {"removed": 0}
+        resultat = await container.shaping.apply(
+            plan, dry_run=False, author=auteur, explicit=True, removal=True
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"removed": 0, "error": f"{type(exc).__name__}: {exc}"}
+    return {
+        "removed": resultat.applied,
+        "errors": [str(o.detail) for o in resultat.outcomes if not o.ok],
+    }
