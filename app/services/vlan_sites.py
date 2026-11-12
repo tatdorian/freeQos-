@@ -229,3 +229,53 @@ def routers_for_site(nom: str, sites: Sequence[VlanSite]) -> list[str]:
         if site.key == cible and site.router_name not in retenus:
             retenus.append(site.router_name)
     return retenus
+
+
+def vlan_parents(
+    sites: list[dict[str, Any]], router_pops: dict[str, str] | None = None
+) -> dict[str, tuple[str, int | None]]:
+    """Site de VLAN -> (PoP qui le porte, numero de VLAN).
+
+    Pour l'EXPLOITANT, une VLAN n'est pas un site : c'est la facon dont un
+    client est raccorde, comme PPPoE. Elle reste un site en interne (le
+    shaping et les profils horaires s'en servent), mais tout ce qui est
+    montre range le client sous son PoP et dit « VLAN 2060 » comme on dit
+    « PPPoE ».
+    """
+    # Le PoP de chaque routeur : l'inventaire d'abord (le site du routeur ne
+    # porte pas toujours son nom de routeur), le referentiel des sites ensuite.
+    pop_du_routeur = dict(router_pops or {})
+    for s in sites:
+        if s.get("kind") != SITE_VLAN and s.get("router_name"):
+            pop_du_routeur.setdefault(str(s["router_name"]), str(s["name"]))
+    parents: dict[str, tuple[str, int | None]] = {}
+    for s in sites:
+        if s.get("kind") != SITE_VLAN:
+            continue
+        parent = pop_du_routeur.get(str(s.get("router_name") or ""))
+        if parent:
+            vlan = s.get("vlan_id")
+            parents[str(s["name"])] = (parent, int(vlan) if vlan is not None else None)
+    return parents
+
+
+def present_site(ligne: dict[str, Any], parents: dict[str, tuple[str, int | None]]) -> None:
+    """Range une ligne de client sous son PoP, la VLAN devenant son raccordement."""
+    site = ligne.get("pop_name")
+    vlan = parents.get(str(site)) if site else None
+    if vlan is not None:
+        ligne["vlan_site"] = site
+        ligne["vlan_id"] = vlan[1]
+        ligne["pop_name"] = vlan[0]
+    if ligne.get("kind") == "static":
+        ligne["connection"] = f"VLAN {vlan[1]}" if vlan and vlan[1] else "Static IP"
+    else:
+        ligne["connection"] = "PPPoE"
+
+
+def router_pops(container: Any) -> dict[str, str]:
+    """Nom de routeur -> nom de son PoP, d'apres l'inventaire actif."""
+    registre = getattr(container, "registry", None)
+    if registre is None:
+        return {}
+    return {c.name: str(c.config.effective_pop_name) for c in registre.collectors}

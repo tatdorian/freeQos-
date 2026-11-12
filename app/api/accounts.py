@@ -296,6 +296,12 @@ OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("PUT", re.compile(r"^/clients/[^/]+/mode$"), ROLE_OPERATOR),
     # La fiche saisie (nom, contact, MAC du CPE) : le geste du support.
     ("PUT", re.compile(r"^/clients/[^/]+/profile$"), ROLE_OPERATOR),
+    # AJOUTER ET RACCORDER DES CLIENTS : PPPoE declare d'avance, IP fixe ou
+    # VLAN. C'est la gestion des clients, pas celle du reseau.
+    ("POST", re.compile(r"^/clients$"), ROLE_OPERATOR),
+    ("POST", re.compile(r"^/static-clients$"), ROLE_OPERATOR),
+    ("PATCH", re.compile(r"^/static-clients/\d+$"), ROLE_OPERATOR),
+    ("DELETE", re.compile(r"^/static-clients/\d+$"), ROLE_OPERATOR),
     ("POST", re.compile(r"^/clients/actions$"), ROLE_OPERATOR),
     ("PUT", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
     ("DELETE", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),

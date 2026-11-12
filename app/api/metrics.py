@@ -160,6 +160,16 @@ async def subscribers_latest(
         order_by=order_by,
         include_unmeasured=include_unmeasured,
     )
+    # Une VLAN est un RACCORDEMENT, pas un site : le client est range sous son
+    # PoP, et sa VLAN est dite comme on dit PPPoE.
+    from app.services.vlan_sites import present_site, router_pops, vlan_parents
+
+    try:
+        parents = vlan_parents(list(await repo.pop_sites()), router_pops(container))
+    except Exception:  # noqa: BLE001 - la liste vaut mieux que rien
+        parents = {}
+    for ligne in lignes:
+        present_site(ligne, parents)
     # La SERIE derriere la latence affichee : mediane, extremes, gigue, perte,
     # age de la mesure. Un chiffre seul ne dit pas s'il est stable.
     collection = getattr(container, "collection", None)
