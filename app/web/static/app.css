@@ -2285,3 +2285,14 @@ body.role-limited .dash-detail { display: none; }
 /* Regles : ce que les noms saisis resolvent. */
 .rule-domain-check { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .4rem; }
 .rule-targets .field { align-content: start; }
+
+/* Trafic : onglets, deux colonnes, lignes cliquables. */
+.trf-tabs { margin: .4rem 0 1rem; flex-wrap: wrap; }
+.trf-pane[hidden] { display: none; }
+.trf-two { display: grid; grid-template-columns: 1fr 1fr; gap: 1.2rem; align-items: start; }
+@media (max-width: 900px) { .trf-two { grid-template-columns: 1fr; } }
+.trf-row { cursor: pointer; }
+.trf-row:hover td { background: var(--hover, rgba(0,0,0,.03)); }
+.trf-showall { margin: .5rem 0 0 .4rem; }
+.trf-more > summary { cursor: pointer; color: var(--muted); font-size: .85rem; }
+.trf-two { margin-top: 1rem; }

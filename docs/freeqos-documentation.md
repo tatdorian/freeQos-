@@ -1016,6 +1016,10 @@ An address without a reverse name is asked again 3 times at most. A name read fr
 
 ### What the Traffic page shows
 
+The page is split into tabs, one question at a time: **Overview** (totals, top clients, top services), **Clients** (who talks to whom, client by client), **Destinations** (map, countries, addresses reached), **Find an IP**, and **Advanced** (service catalogue, NetFlow exporters). Long tables show their first lines only, with *Show all*. The chosen tab is remembered in your browser.
+
+**Who used it.** Click a service (Overview) or an address (Destinations): a window lists every client that reached it over the period, with its site, the volume received and sent, whether it is talking to it right now (*live*), and a link to its page. From there, *Block or cap it…* opens the Rules form prefilled.
+
 | Block | Question it answers | Where it comes from |
 | --- | --- | --- |
 | **Who consumes** | Volume per subscriber over the period | The database |
