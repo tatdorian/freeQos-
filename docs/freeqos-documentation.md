@@ -556,6 +556,30 @@ For a radio operator, a VLAN usually carries a village, a relay or a zone; the r
 
 Each site records the **router that serves it**: this is how shaping still finds the subscribers of a VLAN site on their router.
 
+### Clients in the tree: automatic, and editable
+
+Every client has a place in the *Network tree*, found automatically, and the box shows how it got there (*Placed by*, in the side panel). In order:
+
+| Placed by | Meaning |
+| --- | --- |
+| placed by hand | You dragged it (or its whole group) onto a box, or used *Attach a client under this box*. |
+| a device with its name | A discovered device has the client's name (login, name entered on the client, or label; case, accents and punctuation ignored). That box **is** the client: marked "★ client", no duplicate. A name carried by two devices links nothing. A router never becomes a client. |
+| its own discovered box | The client's own box (static IP, or CPE recognised by MAC or address) hangs under a device: the client hangs under the same one. |
+| its sector | Its radio sector (PPPoE caller-id, or the sector of its record). |
+| the router of its VLAN site | Its site is a VLAN: it hangs under the router carrying it, in a "VLAN …" box. These clients used to vanish from the tree. |
+| its site | The box of its site. |
+| nowhere yet | Nothing above applies: it is kept visible in **Unplaced clients**. |
+
+Clients declared by hand and never seen are in the tree too. Clients are grouped per box ("N client(s)"), click to list them.
+
+What an Administrator can change, all undoable:
+
+- **drag a client, or a whole group, onto any box**: they hang there. *Back to automatic place* on the client undoes it;
+- on a device: **This box is a client** (choose it) links a device to a client; **Not this client** refuses a link found by name, for good;
+- **Attach a client under this box** places a client from its name or login.
+
+API: `GET /api/v1/topology` returns `placements` (login → box and how) and `client_nodes`; `PUT /api/v1/topology/client-places` (`{"logins", "node_key"}`), `DELETE /api/v1/topology/client-places/{login}`, `PUT /api/v1/topology/client-links` (`{"node_key", "login"}`, empty login = not a client), `DELETE /api/v1/topology/client-links/{node_key}`.
+
 ### Static-IP subscribers
 
 A subscriber without PPPoE (fixed IP, routed block, VLAN) is declared in *Static clients*: a name, one or more addresses or networks, a PoP. It is then measured, limited and scored like a PPPoE subscriber.

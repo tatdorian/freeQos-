@@ -344,7 +344,13 @@ async def run_job(
             detail=f"Unknown job: {job_name} (available: {scheduler.job_names()})",
         ) from None
     if result is None:
-        return {"job": job_name, "ok": False, "detail": "The job raised an exception"}
+        # Un job peut ne rien rendre et avoir reussi (la decouverte, par
+        # exemple) : c'est son etat qui le dit, pas l'absence de compte rendu.
+        etat = scheduler.job_state(job_name)
+        if etat is not None and etat.last_ok:
+            return {"job": job_name, "ok": True}
+        erreur = etat.last_error if etat is not None else None
+        return {"job": job_name, "ok": False, "detail": erreur or "The job raised an exception"}
     return {
         "job": result.job,
         "ok": result.ok,

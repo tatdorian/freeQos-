@@ -131,7 +131,7 @@ async def subscribers_latest(
         Literal["pppoe", "static"] | None,
         Query(description="Filter by kind: PPPoE subscriber or static-IP client"),
     ] = None,
-    limit: Annotated[int, Query(ge=1, le=500)] = 50,
+    limit: Annotated[int, Query(ge=1, le=5000)] = 50,
     order_by: Annotated[Literal["total", "down", "up", "login"], Query()] = "total",
     include_unmeasured: Annotated[
         bool,

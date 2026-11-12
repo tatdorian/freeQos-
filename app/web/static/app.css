@@ -2199,3 +2199,6 @@ a.btn:hover { text-decoration: none; filter: brightness(1.05); }
 .ec-sep { margin: .4rem 0 0; font-size: .9rem; }
 #pp-form[hidden], #sc-form[hidden] { display: none; }
 .cp-measure-why { display: block; color: var(--warn); font-size: .78rem; margin-top: .15rem; }
+/* Arbre : choisir un client puis agir, sur une ligne. */
+.row-inline { display: flex; gap: .4rem; align-items: center; }
+.row-inline input { flex: 1; min-width: 0; }

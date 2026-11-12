@@ -620,7 +620,7 @@ console.log(JSON.stringify({
 """,
     )
     assert res["cles"] == ["router:pop", "abos:router:pop"]
-    assert res["nom"] == "2 subscriber(s)"
+    assert res["nom"] == "2 client(s)"
     assert res["deplie"] is False
     assert res["enfants"] == 0
 
@@ -705,7 +705,8 @@ console.log(JSON.stringify({
 
 
 def test_un_abonne_sans_pop_n_est_rattache_nulle_part(harnais: Path) -> None:
-    """On ne devine pas : le poser sous un PoP au hasard serait faux."""
+    """On ne devine pas : le poser sous un PoP au hasard serait faux. Mais on ne
+    le perd pas non plus : il attend dans « Unplaced clients », a sa racine."""
     res = executer(
         harnais,
         ARBRE_ABOS
@@ -715,7 +716,7 @@ const m = A.topoBuildModel(data);
 console.log(JSON.stringify({ cles: cles(m) }));
 """,
     )
-    assert res["cles"] == ["router:pop"]
+    assert res["cles"] == ["router:pop", "unplaced:clients", "abos:unplaced:clients"]
 
 
 # -------------------------------------------------------------------------

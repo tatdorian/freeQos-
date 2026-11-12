@@ -379,7 +379,9 @@ def test_l_arbre_connait_la_case_vlan() -> None:
         bloc = JS[JS.index(table) :]
         assert "vlan:" in bloc[: bloc.index("};")], table
     assert "topoStaticRates" in JS
-    assert "if (fiches.has(s.login)) return;" in JS
+    # Un client que porte un equipement decouvert (meme nom, ou lie a la main)
+    # n'est pas recompte dans un agregat : la case EST ce client.
+    assert "if (p && p.how === 'device') return;" in JS
 
 
 def test_l_executif_montre_la_saturation_et_la_latence_par_segment() -> None:
