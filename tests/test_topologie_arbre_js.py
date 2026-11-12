@@ -769,11 +769,13 @@ const ICONE = { pop: 'POP', core: 'CORE', gateway: 'GW', radio: 'RF' };
 const NODE_W = 176;
 const NODE_H = 48;
 const TOPO_ABOS_MAX = 25;
+const topoAttrs = (n) => (n && typeof n.attributes === 'object' && n.attributes) || {};
 const topo = { data: null, subs: [], model: null, selected: null, rateOnly: false,
   linkMode: false, linkSource: null, abosOuverts: new Set(), replies: new Set(), zoom: 1 };
 """
         + source[debut:fin]
-        + "\nmodule.exports = { topo, boites, renderTopoCanvas, setTopoZoom, topoFit };\n",
+        + "\nmodule.exports = { topo, boites, renderTopoCanvas, setTopoZoom, topoFit,"
+        " topoListeEtat };\n",
         encoding="utf-8",
     )
     return module
@@ -1166,3 +1168,60 @@ console.log(JSON.stringify({
 """,
     )
     assert res == {"mac": "MikroTik · unknown device", "ip": "unknown device", "nom": "AP-Nord"}
+
+
+# -------------------------------------------------------------------------
+# LA VUE LISTE : des centaines de clients, lisibles ligne a ligne
+# -------------------------------------------------------------------------
+
+LISTE = """
+const n = (k, nm, kd) => ({ key: k, name: nm, kind: kd, hidden: false, addresses: [] });
+const l = (key, s, t) => ({ key, source_key: s, target_key: t, interface: 'e',
+  interface_links: 1, tx_bps: 1e6, rx_bps: 2e5, capacity_mbps: 1000,
+  port_capacity_mbps: 1000, attributes: {} });
+const subs = [];
+const placements = {};
+for (let i = 0; i < 120; i++) {
+  const login = 'client-' + String(i).padStart(3, '0');
+  subs.push({ login, last_ip: '10.0.' + Math.floor(i / 200) + '.' + (i % 200),
+              ts: new Date().toISOString(), tx_bps: 1000, rx_bps: 100 });
+  placements[login] = { node: 'router:nas', how: 'site' };
+}
+A.topo.subs = subs;
+A.topo.vue = 'list';
+A.topo.data = { nodes: [n('router:core', 'CORE', 'core'), n('router:nas', 'NAS-CAISSE', 'pop')],
+  links: [l('c1', 'router:core', 'router:nas')], counts: {}, placements, client_nodes: {} };
+const lignes = () => A.boites['topo-list'].innerHTML;
+const compter = (motif) => (lignes().match(motif) || []).length;
+"""
+
+
+def test_la_liste_montre_l_ossature_et_compte_les_clients(harnais_dessin: Path) -> None:
+    res = dessiner(
+        harnais_dessin,
+        LISTE
+        + """
+A.renderTopoCanvas();
+const avant = { svg: A.boites['topo-canvas'].innerHTML.length, html: lignes(),
+  clients: compter(/tl-client/g) };
+A.topoListeEtat().ouverts.add('abos:router:nas');
+A.renderTopoCanvas();
+const ouvert = { clients: compter(/tl-client/g), plus: /Show 50 more \(70 left\)/.test(lignes()) };
+A.topoListeEtat().filtre = 'client-07';
+A.renderTopoCanvas();
+const filtre = { clients: compter(/tl-client/g), html: lignes() };
+console.log(JSON.stringify({ avant, ouvert, filtre }));
+""",
+    )
+    # La liste, pas le diagramme : aucun SVG n'est dessine.
+    assert res["avant"]["svg"] == 0
+    html = res["avant"]["html"]
+    assert "NAS-CAISSE" in html and "CORE" in html
+    assert "120 clients" in html
+    # Ferme par defaut : 120 clients ne noient pas l'ossature.
+    assert res["avant"]["clients"] == 0
+    # Ouvert : une page de 50, et la suite a la demande.
+    assert res["ouvert"]["clients"] == 50 and res["ouvert"]["plus"] is True
+    # Le filtre ne garde que les clients qui correspondent (client-070 a 079).
+    assert res["filtre"]["clients"] == 10
+    assert "client-070" in res["filtre"]["html"] and "client-100" not in res["filtre"]["html"]
