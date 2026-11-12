@@ -18,7 +18,7 @@ import logging
 import os
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -76,6 +76,7 @@ from app.enforcement.models import (
     PlanAction,
     QueueSpec,
     is_ours,
+    managed_comment,
     network_target,
     other_instance,
     slugify,
@@ -83,6 +84,7 @@ from app.enforcement.models import (
 )
 from app.enforcement.planner import (
     SOURCE_SCHEDULE,
+    TARGET_ADDRESS,
     LinkTarget,
     SubscriberTarget,
     build_plan,
@@ -3282,6 +3284,12 @@ class ShapingService:
             for nom in await self._routers_for_site(str(pop)):
                 if nom not in retenus:
                     retenus.append(nom)
+        # Le routeur du HAUT porte aussi un plafond pour chacun de ces clients :
+        # un mode ou un boost doit l'y suivre, pas attendre la reconciliation.
+        if retenus:
+            for collector in self.registry.collectors:
+                if self.is_upstream(collector) and collector.name not in retenus:
+                    retenus.append(collector.name)
         return retenus
 
     async def _sites_of_router(self, router_name: str, pop_name: str) -> set[str]:
@@ -3355,6 +3363,8 @@ class ShapingService:
     ) -> Plan:
         """Calcule ce qu'il faudrait faire. N'ecrit rien."""
         collector = self._collector(router_name)
+        if self.is_upstream(collector):
+            return await self._plan_amont(collector, prune=prune)
         etat = await self._inspect_one(collector)
 
         types, files, ecartes = desired_state(
@@ -3379,6 +3389,77 @@ class ShapingService:
         plan = build_plan(
             router_name,
             desired_types=types,
+            desired_queues=files,
+            actual_types=etat.queue_types,
+            actual_queues=etat.simple_queues,
+            prune=self.settings.shaping_prune if prune is None else prune,
+            adopt=self.settings.shaping_adopt_foreign_queues,
+        )
+        plan.skipped = ecartes
+        return plan
+
+    # ------------------------------------------------------ plafonds en amont
+    def is_upstream(self, collector: Any) -> bool:
+        """Ce routeur recoit-il les plafonds EN AMONT (role coeur ou gateway) ?"""
+        role = str(getattr(getattr(collector, "config", None), "role", "") or "")
+        return bool(self.settings.upstream_caps) and role in ("core", "gateway")
+
+    async def upstream_targets(self, router_name: str) -> list[SubscriberTarget]:
+        """Les clients de TOUS les autres routeurs, pour le routeur du haut.
+
+        Chaque NAS dit qui il sert (sessions, clients a IP fixe) ; le routeur du
+        haut voit passer tout ce trafic. Un NAS illisible est saute : ses
+        clients n'ont simplement pas de plafond en amont ce tour-ci.
+        """
+        vus: dict[str, SubscriberTarget] = {}
+        for autre in self.registry.collectors:
+            if autre.name == router_name or self.is_upstream(autre):
+                continue
+            try:
+                _liens, abonnes = await self.build_targets(autre.name)
+            except Exception as exc:  # noqa: BLE001 - un NAS muet n'arrete pas les autres
+                logger.warning("Clients de %s illisibles pour l'amont : %s", autre.name, exc)
+                continue
+            for abonne in abonnes:
+                vus.setdefault(abonne.login, replace(abonne, parent=None))
+        return list(vus.values())
+
+    async def _plan_amont(self, collector: Any, *, prune: bool | None) -> Plan:
+        """Le plan du routeur du haut : un plafond par client, rien d'autre.
+
+        - cible = l'ADRESSE du client (une interface PPPoE n'existe pas la-haut) ;
+        - debit = forfait (ou mode, boost) x ``upstream_cap_factor`` : le NAS
+          fait le shaping fin, le haut ne coupe que l'exces ;
+        - file LEGERE : le type par defaut du routeur, pas de CAKE -- un coeur
+          qui porte des centaines de files ne doit pas y laisser son CPU ;
+        - aucune file de lien, jamais.
+        """
+        etat = await self._inspect_one(collector)
+        abonnes = await self.upstream_targets(collector.name)
+        _types, files, ecartes = desired_state(
+            links=[],
+            subscribers=abonnes,
+            safety_factor=self.settings.shaping_safety_factor,
+            floor_mbps=self.settings.shaping_floor_mbps,
+            queue_types=[],
+            target_mode=TARGET_ADDRESS,
+            link_queues=False,
+        )
+        facteur = max(1.0, float(self.settings.upstream_cap_factor or 1.0))
+
+        def fois(valeur: float | None) -> float | None:
+            return round(valeur * facteur, 3) if valeur else valeur
+
+        for file in files:
+            file.max_down_mbps = fois(file.max_down_mbps)
+            file.max_up_mbps = fois(file.max_up_mbps)
+            file.queue_up = None
+            file.queue_down = None
+            file.parent = None
+            file.comment = managed_comment("upstream")
+        plan = build_plan(
+            collector.name,
+            desired_types=[],
             desired_queues=files,
             actual_types=etat.queue_types,
             actual_queues=etat.simple_queues,

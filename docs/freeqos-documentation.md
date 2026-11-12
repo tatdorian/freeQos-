@@ -1117,6 +1117,22 @@ This is the only part of freeQoS that writes to the routers. It always follows t
 
 **Link queues are off by default** (`shaping_link_queues`, *Settings › Shaping*, environment `SHAPING_LINK_QUEUES=false`). When turned on, each discovered link (backhaul, sector) gets a parent queue capped at its capacity, and its clients hang under it. That is what makes radio bufferbloat disappear, but a link queue caps **everything** that crosses the link: put on the segment of a point-to-point link, it slowed down the whole link, transit included, and clients complained. Turn it on only once the links that are true client bottlenecks are known, and check the plan (*Devices › Set up* shows it) before allowing writes. With link queues off, each link appears in the plan as skipped: *link queues are off*.
 
+**Caps on the top router (upstream caps).** A stream coming from the internet used to cross the gateway and the core at full speed, and was only cut at the PoP: on its way, it filled the core and slowed everyone down. With `upstream_caps` on (*Settings › Shaping*, environment `UPSTREAM_CAPS`), every router declared with the role **Network core** or **Gateway (egress)** in *Devices* also receives **one queue per client**:
+
+| | On the PoP (NAS) | On the top router |
+| --- | --- | --- |
+| Target | The client's address or PPPoE session | The client's **address** only (its block for a static-IP client) |
+| Rate | Its plan, mode or boost | The same × `upstream_cap_factor` (1.1 by default) |
+| Queue type | CAKE (latency, fairness) | The router's default, light type: no CAKE on the core |
+| Role | Fine shaping, low latency | Cuts the excess **before** it reaches the core and the links |
+
+The factor is slightly above 1 on purpose: in normal use the PoP's CAKE does the shaping and the top queue never fills; it only cuts what goes beyond the plan (a stream pushing harder, a flood towards one client). A mode or a boost set on a client updates both routers at once. No link queue is ever put on the top router.
+
+Worth knowing:
+- the top router must **see the clients' addresses**: if it does the NAT (or no NAT is done), it does; if each NAS does the NAT, the top router only sees the NAS address and these queues match nothing — keep the caps on the NAS then;
+- **FastTrack** on the top router bypasses simple queues: the connections it fast-tracks are not capped (the client page shows *Over its limit* when that happens);
+- these caps protect your core and links from what comes **inside** your network; an attack larger than your internet link itself saturates it before it reaches any of your routers, and only your upstream provider can absorb it.
+
 If a router already carries queues it should not: *Devices › Remove freeQoS* (below) removes everything freeQoS set on it and stops writing there.
 
 ### How shaping works
