@@ -1044,11 +1044,33 @@ Every 5 minutes (`RESTRICTIONS_INTERVAL_S`), the address list of each rule is re
 
 No rule is ever created automatically: throttling a service is a business decision. `GET /api/v1/traffic-rules/{id}/preview` shows what a rule targets today. IPv6 is not installed yet: IPv6 prefixes of a rule are set aside and the plan says so.
 
-**What a rule contains.** A name; an effect (`block`, or `limit` with download and upload caps in kbps, Mbps or Gbps); its targets — catalogue **services**, **categories** (`streaming`, `social networks`, `gaming`, `voice / video`, `cdn`, `cloud`, `updates`, `dns`, `messaging`) and hand-entered **prefixes**; optionally a protocol (`tcp`, `udp`, `icmp`) and service ports (`443`, `6881-6999`); and **for whom**: every client, some sites (PoP or VLAN site), or some clients.
+**What a rule contains.** A name; an effect (`block`, or `limit` with download and upload caps in kbps, Mbps or Gbps); its targets — **IP addresses**, **blocks** and **ranges**, and **domain names**; optionally a protocol (`tcp`, `udp`, `icmp`) and service ports (`443`, `6881-6999`); and **for whom**: every client, some sites (PoP or VLAN site), or some clients.
+
+**Addresses, one per line.**
+
+| You enter | It targets |
+| --- | --- |
+| `203.0.113.7` | that address |
+| `198.51.100.0/24` | the whole block |
+| `192.0.2.10-192.0.2.50` | exactly that range, cut into blocks (`192.0.2.10/31`, `192.0.2.12/30`, ...) |
+
+Anything else is refused when saving, with the faulty line. `0.0.0.0/0` (the whole internet) and IPv6 are refused: router address lists are IPv4.
+
+**Domain names, one per line.** `example.com` targets every address of the name **and of its subdomains** (`www.`, `video.`, `cdn.example.com`...). A pasted URL (`https://www.example.com/page`) or a wildcard (`*.example.com`) is reduced to the name. The addresses come from:
+
+- the server's own DNS resolution of the name and of `www.` + the name;
+- the **DNS cache of the routers**: the addresses your clients actually received for any subdomain (when clients resolve through the router);
+- the addresses already seen for the name, kept for **7 days** after they were last seen: a CDN rotates its addresses, and an address dropped from one DNS answer must not reopen a window.
+
+They are re-resolved at every pass (5 minutes), so new addresses are blocked without touching the rule. While typing, each name shows what it resolves to (*example.com → 6 IP*), or that it does not resolve. In the list, each name shows its current address count. `GET /api/v1/traffic-rules/domain-check?name=example.com` gives the same answer.
+
+**Worth knowing.** A domain served by a shared CDN (Cloudflare, Akamai...) shares addresses with other sites: blocking it by address may block them too. A client using its own DNS resolver (8.8.8.8) or encrypted DNS still reaches the same addresses, so the block holds; only subdomains that nobody resolved through the router or the server are unknown until someone does.
+
+The service catalogue is no longer offered when writing a rule. Existing rules that target services or categories keep working, and *Restrict* on the Traffic page still prefills its service.
 
 **A rule is a criterion, not a snapshot.** Its address set is recomputed at each pass from two sources: the **published blocks** cover servers no client has reached yet, the **discovered addresses** cover what lies outside them (a cache hosted at your premises, a server rented elsewhere). An address already inside a kept block is not added: it would change nothing and lengthen a list the router walks through **for every packet** (`RESTRICTION_ADDRESS_LIMIT`).
 
-**Writing.** Saving an enabled rule, editing it or re-enabling it installs it on the routers **immediately** (still subject to the write switch, the circuit breaker and the audit). **Suspending a rule lifts it** at once; **deleting** it lifts it too. A rule without any criterion (no service, category or prefix) is refused: it would target the whole internet, and on an internet edge would cut the network. The *Last applied* column is what distinguishes a rule **saved** from a rule **installed**. `POST /api/v1/traffic-rules/apply` reinstalls everything (dry run by default).
+**Writing.** Saving an enabled rule, editing it or re-enabling it installs it on the routers **immediately** (still subject to the write switch, the circuit breaker and the audit). **Suspending a rule lifts it** at once; **deleting** it lifts it too. A rule without any target (no address, domain name, service or category) is refused: it would target the whole internet, and on an internet edge would cut the network. The *Last applied* column is what distinguishes a rule **saved** from a rule **installed**. `POST /api/v1/traffic-rules/apply` reinstalls everything (dry run by default).
 
 ## 7. Plans and shaping
 

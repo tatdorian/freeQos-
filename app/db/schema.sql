@@ -1253,6 +1253,9 @@ CREATE TABLE IF NOT EXISTS client_plans (
 -- RESTRICTION PAR SITE : "pour ce PoP seulement". Colonne et valeur de portee
 -- ajoutees aux installations existantes.
 ALTER TABLE traffic_rules ADD COLUMN IF NOT EXISTS pops JSONB NOT NULL DEFAULT '[]'::jsonb;
+-- Noms de domaine vises (example.com couvre aussi ses sous-domaines) : resolus
+-- a chaque reconciliation, jamais figes ici.
+ALTER TABLE traffic_rules ADD COLUMN IF NOT EXISTS domains JSONB NOT NULL DEFAULT '[]'::jsonb;
 ALTER TABLE traffic_rules DROP CONSTRAINT IF EXISTS traffic_rules_scope_check;
 ALTER TABLE traffic_rules ADD CONSTRAINT traffic_rules_scope_check
     CHECK (scope IN ('all', 'subscribers', 'pops'));
