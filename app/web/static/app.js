@@ -10810,6 +10810,21 @@ function modeDuClient(r) {
 
 function clientEnLigne(r) { return mesureFraiche(r); }
 
+/** Le routeur de ce client ne se lit plus : sa derniere mesure est vieille
+ *  parce que freeQoS ne joint plus le routeur, pas parce que le client est parti. */
+function routeurMuet(r) {
+  return !clientEnLigne(r) && r && CLI.lecture ? CLI.lecture[r.pop_name] || null : null;
+}
+
+function texteHorsLigne(r) {
+  const muet = routeurMuet(r);
+  if (muet) {
+    return '<span class="cli-unread" title="' + esc(muet.error || '') + '">Not measured · router ' + esc(muet.router) + ' not answering freeQoS' +
+      (muet.ok_at ? ' (last read ' + esc(depuis(muet.ok_at)) + ')' : '') + '</span>';
+  }
+  return '<span class="cli-off">Offline · ' + (r.ts ? 'seen ' + esc(depuis(r.ts)) : 'never seen') + '</span>';
+}
+
 function filtrerClients() {
   if (CLI.onlySel && CLI.sel.size) return CLI.rows.filter((r) => CLI.sel.has(r.login));
   CLI.onlySel = false;
@@ -11264,7 +11279,7 @@ function renderClients() {
         '<td class="cli-mode"><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
           (b ? '<span class="boost-pill cli-boost">&#9889; ' + esc(boostReste(b)) + '</span>' : '') + '</td>' +
         '<td class="cli-usage">' + (on ? usageClair(r)
-          : '<span class="cli-off">Offline · ' + (r.ts ? 'seen ' + esc(depuis(r.ts)) : 'never seen') + '</span>') + '</td>' +
+          : texteHorsLigne(r)) + '</td>' +
         '<td class="num cli-lim">' + (r.effective_down_mbps ? '<span class="lim-d">&darr; ' + esc(mbps(r.effective_down_mbps)) +
           '</span><span class="lim-u">&uarr; ' + esc(mbps(r.effective_up_mbps || 0)) + '</span>' : '<span class="na">no limit</span>') + '</td>' +
         '<td class="sticky-actions"><div class="cli-acts">' +
@@ -12673,7 +12688,7 @@ function dessinerCoteCarte() {
         '<div class="map-card-head">' + pastille(clientTeinte(r)) + '<b>' + esc(c.login) + '</b><span class="hint">client</span>' +
           '<button type="button" class="sm link-btn" data-close aria-label="Close">&times;</button></div>' +
         '<table class="kv"><tbody>' +
-          '<tr><td>Status</td><td>' + (clientEnLigne(r) ? 'Online' : r.ts ? 'Offline · seen ' + esc(depuis(r.ts)) : 'Never seen') + '</td></tr>' +
+          '<tr><td>Status</td><td>' + (clientEnLigne(r) ? 'Online' : texteHorsLigne(r)) + '</td></tr>' +
           '<tr><td>Site</td><td>' + (c.site ? '<a href="#" data-goto="' + esc(c.site) + '">' + esc(c.site) + '</a>' : '-') + '</td></tr>' +
           '<tr><td>Mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
           '<tr><td>Position</td><td>' + (c.place ? esc(c.lat.toFixed(5) + ', ' + c.lon.toFixed(5)) : 'around its site') + '</td></tr>' +
@@ -13130,12 +13145,21 @@ async function rapportPdf(site) {
 
 /** Les donnees de la page Clients, sans la dessiner (alertes, activite). */
 async function loadClientsData() {
-  const [rows, modes, boosts] = await Promise.all([
+  const [rows, modes, boosts, lectures] = await Promise.all([
     api('/subscribers/latest?limit=500&include_unmeasured=true'),
     api('/bandwidth-modes').catch(() => ({ modes: [] })),
     api('/shaping/boosts').catch(() => []),
+    api('/pops/read-status').catch(() => ({ routers: [] })),
   ]);
   CLI.rows = rows;
+  // Un site dont AUCUN routeur ne se lit plus : ses clients ne sont pas
+  // « hors ligne », ils ne sont plus mesures. Ce n'est pas la meme panne.
+  CLI.lecture = {};
+  const parSite = {};
+  ((lectures && lectures.routers) || []).forEach((l) => { (parSite[l.pop_name] = parSite[l.pop_name] || []).push(l); });
+  Object.entries(parSite).forEach(([site, ls]) => {
+    if (ls.every((l) => l.failing_since)) CLI.lecture[site] = ls[0];
+  });
   CLI.modes = (modes && modes.modes) || [];
   CLI.boosts = {};
   (boosts || []).forEach((b) => { if (b.scope === 'subscriber') CLI.boosts[b.target_key] = b; });
