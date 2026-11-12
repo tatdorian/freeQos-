@@ -219,7 +219,11 @@ def test_le_diagnostic_netflow_mene_au_geste_suivant() -> None:
     meme probleme, et surtout pas la meme personne qui le corrige.
     """
     assert "No router is declared" in JS
-    assert "automatically on each router" in JS
+    # Aucun export pose : la RAISON de chaque routeur (lecture seule, ecriture
+    # coupee, adresse inconnue), le bouton qui pose, et les commandes a coller.
+    assert "read-only in Devices" in JS and "writing to the routers is off" in JS
+    assert "Set up the export now" in JS and "/netflow/export/apply?dry_run=false" in JS
+    assert "/ip traffic-flow target add dst-address=" in JS
     # Le cas "pose mais rien n'arrive" doit nommer le port UDP : c'est le
     # coupable le plus frequent, et il n'a rien a voir avec le routeur.
     assert "udp" in JS
