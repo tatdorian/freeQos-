@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="d4b4e745c6771d3e">
+  <meta name="freeqos-docs-source" content="9a388b284c3f9d3c">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2347,9 +2347,42 @@ curl -s http://127.0.0.1:8000/health/ready
 </table></div>
 <p>Every 5 minutes (<code>RESTRICTIONS_INTERVAL_S</code>), the address list of each rule is recomputed and only the difference is pushed. A new Netflix address seen by NetFlow therefore joins the list by itself.</p>
 <p>No rule is ever created automatically: throttling a service is a business decision. <code>GET /api/v1/traffic-rules/{id}/preview</code> shows what a rule targets today. IPv6 is not installed yet: IPv6 prefixes of a rule are set aside and the plan says so.</p>
-<p><strong>What a rule contains.</strong> A name; an effect (<code>block</code>, or <code>limit</code> with download and upload caps in kbps, Mbps or Gbps); its targets — catalogue <strong>services</strong>, <strong>categories</strong> (<code>streaming</code>, <code>social networks</code>, <code>gaming</code>, <code>voice / video</code>, <code>cdn</code>, <code>cloud</code>, <code>updates</code>, <code>dns</code>, <code>messaging</code>) and hand-entered <strong>prefixes</strong>; optionally a protocol (<code>tcp</code>, <code>udp</code>, <code>icmp</code>) and service ports (<code>443</code>, <code>6881-6999</code>); and <strong>for whom</strong>: every client, some sites (PoP or VLAN site), or some clients.</p>
+<p><strong>What a rule contains.</strong> A name; an effect (<code>block</code>, or <code>limit</code> with download and upload caps in kbps, Mbps or Gbps); its targets — <strong>IP addresses</strong>, <strong>blocks</strong> and <strong>ranges</strong>, and <strong>domain names</strong>; optionally a protocol (<code>tcp</code>, <code>udp</code>, <code>icmp</code>) and service ports (<code>443</code>, <code>6881-6999</code>); and <strong>for whom</strong>: every client, some sites (PoP or VLAN site), or some clients.</p>
+<p><strong>Addresses, one per line.</strong></p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>You enter</th>
+<th>It targets</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>203.0.113.7</code></td>
+<td>that address</td>
+</tr>
+<tr>
+<td><code>198.51.100.0/24</code></td>
+<td>the whole block</td>
+</tr>
+<tr>
+<td><code>192.0.2.10-192.0.2.50</code></td>
+<td>exactly that range, cut into blocks (<code>192.0.2.10/31</code>, <code>192.0.2.12/30</code>, ...)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Anything else is refused when saving, with the faulty line. <code>0.0.0.0/0</code> (the whole internet) and IPv6 are refused: router address lists are IPv4.</p>
+<p><strong>Domain names, one per line.</strong> <code>example.com</code> targets every address of the name <strong>and of its subdomains</strong> (<code>www.</code>, <code>video.</code>, <code>cdn.example.com</code>...). A pasted URL (<code>https://www.example.com/page</code>) or a wildcard (<code>*.example.com</code>) is reduced to the name. The addresses come from:</p>
+<ul>
+<li>the server's own DNS resolution of the name and of <code>www.</code> + the name;</li>
+<li>the <strong>DNS cache of the routers</strong>: the addresses your clients actually received for any subdomain (when clients resolve through the router);</li>
+<li>the addresses already seen for the name, kept for <strong>7 days</strong> after they were last seen: a CDN rotates its addresses, and an address dropped from one DNS answer must not reopen a window.</li>
+</ul>
+<p>They are re-resolved at every pass (5 minutes), so new addresses are blocked without touching the rule. While typing, each name shows what it resolves to (<em>example.com → 6 IP</em>), or that it does not resolve. In the list, each name shows its current address count. <code>GET /api/v1/traffic-rules/domain-check?name=example.com</code> gives the same answer.</p>
+<p><strong>Worth knowing.</strong> A domain served by a shared CDN (Cloudflare, Akamai...) shares addresses with other sites: blocking it by address may block them too. A client using its own DNS resolver (8.8.8.8) or encrypted DNS still reaches the same addresses, so the block holds; only subdomains that nobody resolved through the router or the server are unknown until someone does.</p>
+<p>The service catalogue is no longer offered when writing a rule. Existing rules that target services or categories keep working, and <em>Restrict</em> on the Traffic page still prefills its service.</p>
 <p><strong>A rule is a criterion, not a snapshot.</strong> Its address set is recomputed at each pass from two sources: the <strong>published blocks</strong> cover servers no client has reached yet, the <strong>discovered addresses</strong> cover what lies outside them (a cache hosted at your premises, a server rented elsewhere). An address already inside a kept block is not added: it would change nothing and lengthen a list the router walks through <strong>for every packet</strong> (<code>RESTRICTION_ADDRESS_LIMIT</code>).</p>
-<p><strong>Writing.</strong> Saving an enabled rule, editing it or re-enabling it installs it on the routers <strong>immediately</strong> (still subject to the write switch, the circuit breaker and the audit). <strong>Suspending a rule lifts it</strong> at once; <strong>deleting</strong> it lifts it too. A rule without any criterion (no service, category or prefix) is refused: it would target the whole internet, and on an internet edge would cut the network. The <em>Last applied</em> column is what distinguishes a rule <strong>saved</strong> from a rule <strong>installed</strong>. <code>POST /api/v1/traffic-rules/apply</code> reinstalls everything (dry run by default).</p>
+<p><strong>Writing.</strong> Saving an enabled rule, editing it or re-enabling it installs it on the routers <strong>immediately</strong> (still subject to the write switch, the circuit breaker and the audit). <strong>Suspending a rule lifts it</strong> at once; <strong>deleting</strong> it lifts it too. A rule without any target (no address, domain name, service or category) is refused: it would target the whole internet, and on an internet edge would cut the network. The <em>Last applied</em> column is what distinguishes a rule <strong>saved</strong> from a rule <strong>installed</strong>. <code>POST /api/v1/traffic-rules/apply</code> reinstalls everything (dry run by default).</p>
 <h2 id="7-plans-and-shaping">7. Plans and shaping</h2>
 <p>This is the only part of freeQoS that writes to the routers. It always follows the same path: <strong>compute a plan, show it, apply it</strong>, with several safeguards in between.</p>
 <h3 id="how-shaping-works">How shaping works</h3>
@@ -5442,7 +5475,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 207 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 208 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -6155,6 +6188,11 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>POST</code></td>
 <td><code>/api/v1/traffic-rules/apply</code></td>
 <td>Apply the restrictions on the routers</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/traffic-rules/domain-check</code></td>
+<td>What a domain name resolves to now (the addresses a rule would block)</td>
 </tr>
 <tr>
 <td><code>PATCH</code></td>

@@ -2281,3 +2281,7 @@ body.role-limited .dash-detail { display: none; }
 /* Arbre lisible : recherche d'une case, bandeau de focus. */
 .topo-find { min-width: 14rem; max-width: 100%; padding: .3rem .55rem; font-size: .85rem; }
 .topo-focus-bar { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .6rem; }
+
+/* Regles : ce que les noms saisis resolvent. */
+.rule-domain-check { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .4rem; }
+.rule-targets .field { align-content: start; }

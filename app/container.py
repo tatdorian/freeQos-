@@ -80,6 +80,7 @@ from app.services.public_access import PublicAccessRepository
 from app.services.registry import RouterRegistry
 from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
 from app.services.rtt import PathProber, RttProber
+from app.services.rule_targets import DomainResolver
 from app.services.runtime_config import RuntimeConfig
 from app.services.shaping import ShapingService, discover_with_devices
 from app.services.uisp_traffic import JOB_UISP, UispTraffic
@@ -627,6 +628,7 @@ async def build_container(settings: Settings) -> Container:
         destinations=destinations_repo,
         flows_repo=flows_repo,
         address_limit=settings.restriction_address_limit,
+        domain_resolver=DomainResolver(),
     )
 
     async def flush_netflow() -> None:
@@ -752,6 +754,10 @@ async def build_container(settings: Settings) -> Container:
     # routeurs : NetFlow ne voit que des adresses.
     noms_dns = DnsNames()
     conteneur.dns_names = noms_dns
+    # Un nom de domaine bloque aussi les adresses que les clients ont obtenues
+    # pour ses sous-domaines : le cache DNS des routeurs les connait.
+    if restrictions.domain_resolver is not None:
+        restrictions.domain_resolver.dns_names = noms_dns
 
     async def lire_noms_dns() -> None:
         await noms_dns.refresh(list(registry.collectors))

@@ -375,7 +375,8 @@
     <section id="view-rules">
       <div class="card rules-intro">
         <b>Limit or block what clients reach.</b>
-        <span>A rule targets destinations (a service such as YouTube or Netflix, a category, or IP prefixes you type)
+        <span>A rule targets destinations you enter: IP addresses, blocks (<code>/24</code>), ranges, or
+        <b>domain names</b> (every address of the name and its subdomains, kept up to date)
         and applies to every client, to chosen sites, or to chosen clients. <b>Cap</b> keeps the service usable at a set
         rate; <b>Block</b> stops it. freeQoS writes rules on the routers and removes them when you delete them.</span>
       </div>
@@ -436,21 +437,28 @@
             </div>
           </div>
 
-          <div class="row-3">
+          <!-- QUOI : des adresses ou des noms, saisis. Les services du catalogue
+               ne sont plus proposes ; un service venu de la page Trafic reste
+               possible (liste cachee, rappelee sous les champs). -->
+          <select id="svc-rule-services" multiple hidden></select>
+          <select id="svc-rule-categories" multiple hidden></select>
+          <div class="row-2 rule-targets">
             <div class="field">
-              <label for="svc-rule-services">Target services</label>
-              <select id="svc-rule-services" multiple size="6"></select>
+              <label for="svc-rule-prefixes">IP addresses, blocks or ranges</label>
+              <textarea id="svc-rule-prefixes" rows="6" spellcheck="false"
+                        placeholder="203.0.113.7&#10;198.51.100.0/24&#10;192.0.2.10-192.0.2.50"></textarea>
+              <span class="hint">One per line: an address, a block with <code>/</code>, or a range <code>first-last</code>.</span>
             </div>
             <div class="field">
-              <label for="svc-rule-categories">Target categories</label>
-              <select id="svc-rule-categories" multiple size="6"></select>
-            </div>
-            <div class="field">
-              <label for="svc-rule-prefixes">Hand-entered prefixes</label>
-              <textarea id="svc-rule-prefixes" rows="6"
-                        placeholder="45.57.0.0/17&#10;198.38.96.0/19"></textarea>
+              <label for="svc-rule-domains">Domain names</label>
+              <textarea id="svc-rule-domains" rows="6" spellcheck="false"
+                        placeholder="example.com&#10;video.example.org"></textarea>
+              <span class="hint">One per line. Blocks every address of the name <b>and its subdomains</b>;
+                re-resolved every few minutes, so new addresses are caught.</span>
+              <div id="svc-rule-domain-check"></div>
             </div>
           </div>
+          <div id="svc-rule-from-service"></div>
 
           <div class="row-3" id="svc-rule-limits" hidden>
             <div class="field">

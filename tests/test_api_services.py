@@ -1082,3 +1082,46 @@ def test_un_nom_qui_ne_resout_pas_est_un_404(
     monkeypatch.setattr(routes, "_adresses_du_nom", muet)
     reponse = client.get("/api/v1/netflow/lookup/inexistant.example")
     assert reponse.status_code == 404
+
+
+# ------------------------------------------- adresses et noms de domaine saisis
+
+
+def test_une_regle_sur_des_adresses_et_un_domaine(
+    client: TestClient, restrictions: RestrictionService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEMANDE : des adresses, une plage, un bloc avec /, ou un nom de domaine
+    qui bloque toutes ses adresses -- a la place du trafic predefini."""
+    from app.services import rule_targets
+
+    async def dns(nom: str) -> set[str]:
+        return {"example.com": {"203.0.113.10"}}.get(nom, set())
+
+    monkeypatch.setattr(rule_targets, "_resoudre", dns)
+    restrictions.domain_resolver = rule_targets.DomainResolver()
+    cree = client.post(
+        "/api/v1/traffic-rules",
+        json={
+            "name": "Sites interdits",
+            "prefixes": ["198.51.100.0/24", "192.0.2.10-192.0.2.11"],
+            "domains": ["https://Example.com/"],
+        },
+    )
+    assert cree.status_code == 201, cree.text
+    assert cree.json()["domains"] == ["example.com"]
+    vue = client.get(f"/api/v1/traffic-rules/{cree.json()['id']}/preview").json()
+    assert {"198.51.100.0/24", "192.0.2.10/31", "203.0.113.10"} <= set(vue["addresses"])
+    liste = client.get("/api/v1/traffic-rules").json()["rules"][0]
+    assert liste["domain_status"] == [{"domain": "example.com", "addresses": 1, "error": None}]
+    verif = client.get("/api/v1/traffic-rules/domain-check", params={"name": "example.com"})
+    assert verif.json()["addresses"] == ["203.0.113.10"]
+
+
+def test_une_adresse_ou_un_nom_faux_est_refuse_par_l_api(client: TestClient) -> None:
+    mauvaise = client.post("/api/v1/traffic-rules", json={"name": "a", "prefixes": ["10.0.0.9-1"]})
+    assert mauvaise.status_code == 422
+    nom = client.post("/api/v1/traffic-rules", json={"name": "b", "domains": ["pas un nom"]})
+    assert nom.status_code == 422
+    assert client.get(
+        "/api/v1/traffic-rules/domain-check", params={"name": "203.0.113.7"}
+    ).status_code in (400, 503)

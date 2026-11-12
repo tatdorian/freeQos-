@@ -6834,8 +6834,16 @@ function renderRules(data) {
     '<th>For whom</th><th>State</th><th>Last applied</th><th></th>' +
     '</tr></thead><tbody>' +
     regles.map((r) => {
-      const criteres = [].concat(r.services || [], r.categories || [],
-        (r.prefixes || []).length ? [(r.prefixes || []).length + ' prefix(es)'] : []);
+      const etatNoms = {};
+      (r.domain_status || []).forEach((d) => { etatNoms[d.domain] = d; });
+      const pref = r.prefixes || [];
+      const criteres = [].concat(
+        (r.domains || []).map((d) => {
+          const e = etatNoms[d];
+          return d + (e ? (e.error && !e.addresses ? ' (does not resolve)' : ' (' + e.addresses + ' IP)') : '');
+        }),
+        pref.length <= 3 ? pref : [pref.slice(0, 2).join(', ') + ' +' + (pref.length - 2) + ' more'],
+        r.services || [], r.categories || []);
       return '<tr>' +
         '<td><b>' + esc(r.name) + '</b>' +
           (r.note ? '<br><span class="hint">' + esc(r.note) + '</span>' : '') + '</td>' +
@@ -7013,6 +7021,14 @@ function prefillRule(service, address) {
     const select = document.getElementById('svc-rule-services');
     Array.from(select.options).forEach((o) => { o.selected = (o.value === service); });
     document.getElementById('svc-rule-name').value = 'Restriction ' + service;
+    // Le service vu sur la page Trafic reste vise, en plus de ce qu'on saisit.
+    const rappel = document.getElementById('svc-rule-from-service');
+    rappel.innerHTML = '<div class="notice">Also targets the service <b>' + esc(service) +
+      '</b> (from the Traffic page). <button type="button" class="sm" id="svc-rule-drop-service">Remove</button></div>';
+    rappel.querySelector('#svc-rule-drop-service').addEventListener('click', () => {
+      Array.from(select.options).forEach((o) => { o.selected = false; });
+      rappel.innerHTML = '';
+    });
   }
   if (address) {
     document.getElementById('svc-rule-prefixes').value = address;
@@ -7023,6 +7039,34 @@ function prefillRule(service, address) {
 
 function selectedValues(id) {
   return Array.from(document.getElementById(id).selectedOptions).map((o) => o.value);
+}
+
+/** Une entree par ligne (ou separees par , ;) : une plage « a - b » garde ses espaces. */
+function lignesSaisies(id) {
+  return document.getElementById(id).value
+    .split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** Ce que chaque nom saisi resout A L'INSTANT : on voit avant d'enregistrer
+ *  qu'un nom mal tape ne bloquerait rien. */
+async function verifierDomainesRegle() {
+  const hote = document.getElementById('svc-rule-domain-check');
+  const noms = lignesSaisies('svc-rule-domains').slice(0, 10);
+  if (!noms.length) { hote.innerHTML = ''; return; }
+  hote.innerHTML = '<span class="hint">Resolving…</span>';
+  const lignes = await Promise.all(noms.map(async (nom) => {
+    try {
+      const r = await api('/traffic-rules/domain-check?name=' + encodeURIComponent(nom));
+      return r.count
+        ? '<span class="badge ok">' + esc(r.domain) + ' → ' + esc(r.count) + ' IP</span>'
+        : '<span class="badge warn" title="' + esc(r.error || '') + '">' + esc(r.domain) +
+          ': does not resolve</span>';
+    } catch (err) {
+      return '<span class="badge crit" title="' + esc(err.message) + '">' + esc(nom) + ': ' +
+        esc(err.detail || err.message) + '</span>';
+    }
+  }));
+  hote.innerHTML = '<div class="rule-domain-check">' + lignes.join(' ') + '</div>';
 }
 
 function lignesNonVides(id) {
@@ -7106,7 +7150,8 @@ async function submitRule(event) {
     action,
     services: selectedValues('svc-rule-services'),
     categories: selectedValues('svc-rule-categories'),
-    prefixes: lignesNonVides('svc-rule-prefixes'),
+    prefixes: lignesSaisies('svc-rule-prefixes'),
+    domains: lignesSaisies('svc-rule-domains'),
     scope,
     logins: scope === 'subscribers' ? clients : [],
     pops: scope === 'pops' ? sites : [],
@@ -7123,6 +7168,8 @@ async function submitRule(event) {
     ruleNotice(liftNotice('<b>' + esc(regle.name) + '</b> saved', regle.apply,
       'applied on the routers'));
     document.getElementById('svc-rule-form').reset();
+    document.getElementById('svc-rule-from-service').innerHTML = '';
+    document.getElementById('svc-rule-domain-check').innerHTML = '';
     document.getElementById('svc-rule-limits').hidden = true;
     document.getElementById('svc-rule-target').hidden = true;
     majResumes();
@@ -14551,6 +14598,13 @@ document.getElementById('svc-lookup-form').addEventListener('submit', (e) => {
   lookupIp(document.getElementById('svc-lookup').value);
 });
 document.getElementById('svc-rule-form').addEventListener('submit', submitRule);
+// Verifie PENDANT la saisie (apres une pause), pas a la sortie du champ : sinon
+// le resultat deplace le bouton Save au moment meme ou l'on clique dessus.
+let minuterieDomaines = null;
+document.getElementById('svc-rule-domains').addEventListener('input', () => {
+  clearTimeout(minuterieDomaines);
+  minuterieDomaines = setTimeout(verifierDomainesRegle, 700);
+});
 // Les champs qui n'ont de sens que pour un effet ou une portee donnes restent
 // caches tant qu'ils ne servent pas : un formulaire qui montre tout montre
 // surtout ce qu'il ne faut pas remplir.
