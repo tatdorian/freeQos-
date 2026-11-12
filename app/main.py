@@ -9,6 +9,7 @@ connexions API et base sont fermees proprement.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
@@ -38,6 +39,7 @@ from app.api import (
     netflow,
     plans,
     pop_census,
+    public_access,
     routers_admin,
     schedules,
     shaping,
@@ -162,6 +164,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     container = await build_container(settings)
     app.state.container = container
 
+    # Le domaine HTTPS saisi dans Settings : repousse au proxy (recree ou
+    # redemarre entre-temps). En tache de fond : le proxy peut demarrer apres.
+    from app.services.public_access import reapply_at_startup
+
+    if container.public_access_repo is not None:
+        app.state.public_access_task = asyncio.create_task(
+            reapply_at_startup(container.public_access_repo, settings.proxy_admin_url)
+        )
+
     if settings.scheduler_enabled:
         await container.scheduler.start()
     else:
@@ -208,6 +219,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         sites_map,
         uisp,
         client_health,
+        public_access,
     ):
         app.include_router(module.router, prefix=settings.api_prefix, dependencies=proteges)
     # API PUBLIQUE. Volontairement HORS du prefixe d'exploitation : son chemin

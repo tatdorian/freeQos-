@@ -73,6 +73,7 @@ from app.services.intel import JOB_INTEL, IntelService
 from app.services.netflow_export import JOB_NETFLOW_EXPORT, NetflowExportService
 from app.services.netflow_service import JOB_NETFLOW, NetflowService, identify_exporter
 from app.services.pop_cleanup import JOB_PURGE_POPS, purge_empty_pops, purge_removed_routers
+from app.services.public_access import PublicAccessRepository
 from app.services.registry import RouterRegistry
 from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
 from app.services.rtt import PathProber, RttProber
@@ -204,6 +205,7 @@ class Container:
     site_locations_repo: SiteLocationsRepository | None = None
     client_locations_repo: SiteLocationsRepository | None = None
     uisp_repo: UispRepository | None = None
+    public_access_repo: PublicAccessRepository | None = None
     activity_repo: ActivityRepository | None = None
     netflow: NetflowService | None = None
     netflow_export: NetflowExportService | None = None
@@ -355,6 +357,7 @@ async def build_container(settings: Settings) -> Container:
     antennas_repo = AntennasRepository(database.pool, secrets)
     # Le controleur UISP saisi dans l'interface (jeton chiffre).
     uisp_repo = UispRepository(database.pool, secrets)
+    public_access_repo = PublicAccessRepository(database.pool)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
     #
@@ -717,6 +720,7 @@ async def build_container(settings: Settings) -> Container:
         site_locations_repo=site_locations_repo,
         client_locations_repo=client_locations_repo,
         uisp_repo=uisp_repo,
+        public_access_repo=public_access_repo,
         activity_repo=activity_repo,
         netflow=netflow,
         netflow_export=netflow_export,

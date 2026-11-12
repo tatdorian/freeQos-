@@ -385,6 +385,9 @@ class Settings(BaseSettings):
     # routeur. Sur un controleur multi-interfaces, une valeur saisie a la main
     # serait fausse pour une partie du parc.
     netflow_collector_address: str | None = None
+    # API d'administration du proxy HTTPS (Caddy) de la pile Docker. Vide : pas
+    # de proxy pilote (le domaine se regle alors dans son propre reverse proxy).
+    proxy_admin_url: str | None = None
 
     # --- ipfinder : qui se cache derriere une adresse atteinte ---
     #
