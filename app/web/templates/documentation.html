@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="77614c3c024fb8dc">
+  <meta name="freeqos-docs-source" content="d4b4e745c6771d3e">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -44,6 +44,7 @@
     <a class="sub" href="#who-is-a-subscriber-on-this-pop">Who is a subscriber on this PoP?</a>
     <a class="sub" href="#topology">Topology</a>
     <a class="sub" href="#clients-in-the-tree-automatic-and-editable">Clients in the tree: automatic, and editable</a>
+    <a class="sub" href="#reading-a-large-tree">Reading a large tree</a>
     <a class="sub" href="#static-ip-subscribers">Static-IP subscribers</a>
     <a class="sub" href="#ubiquiti-antennas-and-radio-capacity">Ubiquiti antennas and radio capacity</a>
     <a class="sub" href="#wired-or-radio-the-capacity-of-each-link">Wired or radio: the capacity of each link</a>
@@ -1536,6 +1537,39 @@ curl -s http://127.0.0.1:8000/health/ready
 </tbody>
 </table></div>
 <p>Clients declared by hand and never seen are in the tree too. Clients are grouped per box ("N client(s)"), click to list them.</p>
+<h3 id="reading-a-large-tree">Reading a large tree</h3>
+<p>A router that sees dozens of neighbours (CPEs, switches, other NAS) used to draw them as one endless column. The tree now stays readable whatever its size:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Device groups</strong></td>
+<td>When a box has <strong>6 or more</strong> devices hanging under it with nothing under them, they are folded into a single <strong>"N devices"</strong> box (role <em>GROUP</em>). Its subtitle says how many of them are clients; its link shows their total rate. Click it to open or close it. Boxes with something under them (another router, a sector with clients) stay in the tree as before.</td>
+</tr>
+<tr>
+<td><strong>Columns</strong></td>
+<td>An open group, or an open "N client(s)" list, is laid out in <strong>columns of 10</strong> instead of one long column.</td>
+</tr>
+<tr>
+<td><strong>Readable names</strong></td>
+<td>A device known only by its MAC or IP reads "<em>MikroTik · unknown device</em>"; the MAC moves to the subtitle and the full name stays in the tooltip. A device linked to a client shows the client's name. Named devices are listed before unknown ones.</td>
+</tr>
+<tr>
+<td><strong>Find a device or client</strong></td>
+<td>The search box in the toolbar (with suggestions) finds a box by its name or a client by login or name: the groups and folded branches hiding it open, and it is selected and centred.</td>
+</tr>
+<tr>
+<td><strong>Show only this branch</strong></td>
+<td>In a box's side panel: the tree keeps only that box, the path above it, and everything under it. A banner recalls it; <strong>Show the whole network</strong> brings everything back.</td>
+</tr>
+</tbody>
+</table></div>
+<p>A group is a display aid, not a device: dropping a box on a group hangs it on the group's device, and the side panel of a grouped box shows that device as its parent.</p>
 <p>What an Administrator can change, all undoable:</p>
 <ul>
 <li><strong>drag a client, or a whole group, onto any box</strong>: they hang there. <em>Back to automatic place</em> on the client undoes it;</li>

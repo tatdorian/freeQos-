@@ -572,6 +572,20 @@ Every client has a place in the *Network tree*, found automatically, and the box
 
 Clients declared by hand and never seen are in the tree too. Clients are grouped per box ("N client(s)"), click to list them.
 
+### Reading a large tree
+
+A router that sees dozens of neighbours (CPEs, switches, other NAS) used to draw them as one endless column. The tree now stays readable whatever its size:
+
+| Tool | What it does |
+| --- | --- |
+| **Device groups** | When a box has **6 or more** devices hanging under it with nothing under them, they are folded into a single **"N devices"** box (role *GROUP*). Its subtitle says how many of them are clients; its link shows their total rate. Click it to open or close it. Boxes with something under them (another router, a sector with clients) stay in the tree as before. |
+| **Columns** | An open group, or an open "N client(s)" list, is laid out in **columns of 10** instead of one long column. |
+| **Readable names** | A device known only by its MAC or IP reads "*MikroTik · unknown device*"; the MAC moves to the subtitle and the full name stays in the tooltip. A device linked to a client shows the client's name. Named devices are listed before unknown ones. |
+| **Find a device or client** | The search box in the toolbar (with suggestions) finds a box by its name or a client by login or name: the groups and folded branches hiding it open, and it is selected and centred. |
+| **Show only this branch** | In a box's side panel: the tree keeps only that box, the path above it, and everything under it. A banner recalls it; **Show the whole network** brings everything back. |
+
+A group is a display aid, not a device: dropping a box on a group hangs it on the group's device, and the side panel of a grouped box shows that device as its parent.
+
 What an Administrator can change, all undoable:
 
 - **drag a client, or a whole group, onto any box**: they hang there. *Back to automatic place* on the client undoes it;

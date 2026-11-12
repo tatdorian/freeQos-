@@ -521,6 +521,11 @@
              momentanement invisible ne disparaisse pas. Le revers : ce qui a
              VRAIMENT disparu y reste. Voici le geste qui le retire. -->
         <button id="btn-topo-forget" class="sm">Forget vanished devices</button>
+        <!-- TROUVER une case parmi des centaines : un equipement ou un client,
+             par son nom. L'arbre se deplie jusqu'a elle et la montre. -->
+        <input type="search" id="topo-find" list="topo-find-list" class="topo-find"
+               placeholder="Find a device or client" autocomplete="off" spellcheck="false">
+        <datalist id="topo-find-list"></datalist>
         <span class="spacer"></span>
         <!-- Un arbre d'operateur deborde toujours de l'ecran : l'echelle est ce
              qui permet d'en voir la forme, puis d'y revenir de pres. -->
@@ -535,6 +540,7 @@
       <!-- Construite a partir des cases REELLEMENT dessinees : une legende qui
            annonce des roles absents fait chercher ce qui n'existe pas. -->
       <div class="topo-legend" id="topo-legend"></div>
+      <div id="topo-focus"></div>
       <div id="topo-notice"></div>
       <div class="topo-editor">
         <div id="topo-canvas" class="topo-canvas"></div>
