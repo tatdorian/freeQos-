@@ -49,7 +49,16 @@ def test_les_trois_niveaux_sont_ordonnes() -> None:
         ("POST", "/api/v1/antennas", "edit"),
         ("PUT", "/api/v1/settings", "edit"),
         ("POST", "/api/v1/pops/routers", "edit"),
-        ("POST", "/api/v1/static-clients", "edit"),
+        # Ajouter et raccorder des clients : la gestion des clients (Operator).
+        ("POST", "/api/v1/static-clients", "operator"),
+        ("PATCH", "/api/v1/static-clients/4", "operator"),
+        ("DELETE", "/api/v1/static-clients/4", "operator"),
+        ("POST", "/api/v1/clients", "operator"),
+        ("PUT", "/api/v1/clients/dupont/profile", "operator"),
+        # Le reseau reste a l'Administrator : regles de trafic, arbre, domaine.
+        ("POST", "/api/v1/traffic-rules", "edit"),
+        ("PUT", "/api/v1/topology/client-places", "edit"),
+        ("PUT", "/api/v1/public-access", "edit"),
         ("POST", "/api/v1/api-keys", "edit"),
         ("PUT", "/api/v1/shaping/policies", "edit"),
         # Un autre verbe sur un chemin ouvert reste reserve a l'Administrator.
@@ -101,15 +110,16 @@ def test_un_operator_opere_un_ou_plusieurs_clients(app_client: TestClient, users
         "/api/v1/bandwidth-modes", json={"name": "Backup", "down_value": 6, "up_value": 6}
     )
     assert r.status_code != 403
-    # Rien de technique : ni ajouter un client, ni un routeur, ni les comptes.
-    r = app_client.post("/api/v1/pops/routers", json={"name": "x", "host": "192.0.2.1"})
-    assert r.status_code == 403
-    assert "Administrator" in r.json()["detail"]
+    # AJOUTER un client fait partie de son role (IP fixe, VLAN, PPPoE declare).
     r = app_client.post(
         "/api/v1/static-clients",
         json={"reference": "x", "pop_name": "PoP", "address": "10.0.0.5"},
     )
+    assert r.status_code != 403
+    # Rien du reseau : ni un routeur, ni les comptes, ni les regles de trafic.
+    r = app_client.post("/api/v1/pops/routers", json={"name": "x", "host": "192.0.2.1"})
     assert r.status_code == 403
+    assert "Administrator" in r.json()["detail"]
     r = app_client.post(
         "/api/v1/users", json={"email": "x@exemple.fr", "password": MDP, "role": "read"}
     )

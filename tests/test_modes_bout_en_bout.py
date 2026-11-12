@@ -660,3 +660,33 @@ def test_l_arbre_place_chaque_client_et_se_corrige_a_la_main(app_client, routeur
     )
     assert r.status_code == 200 and r.json()["login"] is None
     assert app_client.delete("/api/v1/topology/client-links/x", headers=cle).json()["removed"]
+
+
+def test_une_vlan_est_un_raccordement_pas_un_site(app_client, routeur) -> None:  # noqa: F811
+    """Pour l'exploitant, la VLAN d'un client se dit comme PPPoE : le client est
+    range sous son PoP, jamais dans un « site » VLAN 2060 a cote des PoP."""
+    routeur.vlan_rows = [{"name": "vlan2060", "vlan-id": "2060", "interface": "ether2"}]
+    routeur.interfaces_rows.append(
+        {"name": "vlan2060", "type": "vlan", "rx-byte": "0", "tx-byte": "0", "running": "true"}
+    )
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    r = app_client.post(
+        "/api/v1/static-clients",
+        headers=cle,
+        json={"reference": "acme", "pop_name": "PoP Test", "address": "10.60.0.2/32", "vlan": 2060},
+    )
+    assert r.status_code == 201, r.text
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    lignes = app_client.get(
+        "/api/v1/subscribers/latest?include_unmeasured=true",
+        headers={"Authorization": f"Bearer {lecture}"},
+    ).json()
+    acme = next(x for x in lignes if x["login"] == "acme")
+    assert acme["pop_name"] == "PoP Test"
+    assert acme["vlan_id"] == 2060 and acme["connection"] == "VLAN 2060"
+    dupont = next(x for x in lignes if x["login"] == "dupont")
+    assert dupont["connection"] == "PPPoE"
+    fiche = app_client.get("/api/v1/clients/acme/profile", headers=cle).json()
+    assert fiche["discovered"]["pop_name"] == "PoP Test"

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="013dbbd9a219548d">
+  <meta name="freeqos-docs-source" content="bca7d25724e7625b">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2882,6 +2882,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <h3 id="volumes">Volumes</h3>
 <p>The capacity view also ranks subscribers by <strong>volume</strong> over the period. The top of instantaneous rates names whoever is downloading right now; the volume over a week names whoever weighs on the network. They are almost never the same subscribers.</p>
 <h2 id="9-interface">9. Interface</h2>
+<p><strong>Errors say what happened and what to do</strong>: a title (<em>Not allowed with your account</em>, <em>Not possible right now</em>, <em>A router or service did not answer</em>, <em>freeQoS cannot be reached</em>...), the server's reason, and the next step. An error from a button shows in a corner without blocking the page; a page that cannot load says so in a banner and retries on its own.</p>
 <p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
 <div class="table-wrap"><table>
 <thead>
@@ -2893,9 +2894,14 @@ curl -s http://127.0.0.1:8000/health/ready
 </thead>
 <tbody>
 <tr>
-<td><strong>Dashboard</strong></td>
-<td>What is happening now?</td>
-<td>Total throughput, traffic per router, top consumers, radio backhauls</td>
+<td><strong>Dashboard</strong> (first page, both roles)</td>
+<td>Is everything all right today?</td>
+<td>A banner: <strong>All good</strong>, or the problems that need you, most urgent first, each one a click away from the clients concerned; clients connected, traffic now, sites, modes and boosts; one card per site. Below, for the Administrator only: <em>Network detail</em> (throughput, traffic per router, top consumers, radio backhauls)</td>
+</tr>
+<tr>
+<td><strong>Rules</strong> (Administrator)</td>
+<td>What may clients reach?</td>
+<td>Rules in force, and the form to write one: block or cap a service (YouTube, Netflix...), a category or IP prefixes, for every client, chosen sites or chosen clients</td>
 </tr>
 <tr>
 <td><strong>Executive</strong></td>
@@ -2905,7 +2911,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <tr>
 <td><strong>Traffic</strong></td>
 <td>Who consumes what, where to?</td>
-<td>Consumers, services, countries, who talks to whom, destinations, IP lookup, restrictions</td>
+<td>Consumers, services, countries, who talks to whom, destinations, IP lookup (restrictions moved to <strong>Rules</strong>)</td>
 </tr>
 <tr>
 <td><strong>Network tree</strong></td>
@@ -2915,10 +2921,10 @@ curl -s http://127.0.0.1:8000/health/ready
 <tr>
 <td><strong>Clients</strong></td>
 <td>Who are my clients, and how are they doing?</td>
-<td>Every client (PPPoE, static IP, VLAN), its mode, boost and usage; <em>+ Add a client</em> (Administrator) declares static-IP and VLAN clients and lists them. The former <em>Subscribers</em> tab is merged here.</td>
+<td>Every client under its <strong>PoP</strong>, with its connection (PPPoE, static IP, or <strong>VLAN 2060</strong>: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; <em>+ Add a client</em> (Operator) declares PPPoE, static-IP and VLAN clients. The map button opens the <strong>Map</strong>.</td>
 </tr>
 <tr>
-<td><strong>Plans</strong></td>
+<td><strong>Plans</strong> (from <em>Settings › Plans &amp; map</em>)</td>
 <td>Which rate for whom?</td>
 <td>Default plan, each subscriber's plan and its source, packages pushed by the API</td>
 </tr>
@@ -3258,18 +3264,18 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <tr>
 <td><strong>Operator</strong> (<code>operator</code>)</td>
 <td>Clients</td>
-<td><strong>Client management</strong>, on one or several clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan; define the bandwidth modes and the bandwidth schedules (rates by time of day)</td>
-<td><strong>Clients</strong>, <strong>Modes</strong>, <strong>Alerts</strong>, <strong>Activity</strong>, <strong>Schedules</strong>, <strong>Map</strong>; no Settings (password and log out from the account card)</td>
+<td><strong>Manages the clients</strong>: adds them (PPPoE login declared ahead, static IP, VLAN), edits their details and connection, changes plan, mode and boost on one or many clients, defines bandwidth modes and schedules; sees at a glance whether there is a problem</td>
+<td><strong>Dashboard</strong> (today's status), <strong>Clients</strong>, <strong>Modes</strong>, <strong>Schedules</strong>, <strong>Alerts</strong>, <strong>Activity</strong>; no network pages, no Settings (password and log out from the account card)</td>
 </tr>
 <tr>
 <td><strong>Administrator</strong> (<code>edit</code>)</td>
 <td>Everything</td>
-<td>Everything else: adding clients, PoPs, routers, antennas and their API (Ubiquiti), settings, API keys, accounts</td>
-<td>Every page</td>
+<td>Everything the Operator does, plus <strong>the network</strong>: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic <strong>Rules</strong>, the network tree, detailed monitoring (Traffic, Insights, Executive, network detail of the Dashboard), API keys, Settings, accounts</td>
+<td>Every page; the network pages are grouped under <em>Network</em> in the sidebar</td>
 </tr>
 </tbody>
 </table></div>
-<p>The writes open to the Operator form a <strong>closed list</strong> (<code>POST/DELETE /api/v1/shaping/boosts</code>, <code>PUT /api/v1/clients/{login}/mode</code>, <code>POST /api/v1/clients/actions</code>, <code>PUT/DELETE /api/v1/plans/{login}</code>, <code>POST/PATCH/DELETE /api/v1/bandwidth-modes</code> and <code>/api/v1/bandwidth-schedules</code>): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the <strong>account</strong> that made it, in the <strong>activity log</strong> below and in the enforcement audit.
+<p>The writes open to the Operator form a <strong>closed list</strong> (<code>POST/DELETE /api/v1/shaping/boosts</code>, <code>PUT /api/v1/clients/{login}/mode</code>, <code>PUT /api/v1/clients/{login}/profile</code>, <code>POST /api/v1/clients</code>, <code>POST/PATCH/DELETE /api/v1/static-clients</code>, <code>POST /api/v1/clients/actions</code>, <code>PUT/DELETE /api/v1/plans/{login}</code>, <code>POST/PATCH/DELETE /api/v1/bandwidth-modes</code> and <code>/api/v1/bandwidth-schedules</code>): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the <strong>account</strong> that made it, in the <strong>activity log</strong> below and in the enforcement audit.
 - <strong>Activity log:</strong> every change made on a client (bandwidth mode, boost, boost stopped, plan, plan removed) is recorded in <code>client_activity</code>: who, when, which client, the detail, and the state of the queue afterwards (written, pending on the router because writing is off, no router, refused). It is read on the <strong>Activity</strong> page (search, CSV export), in each client's sheet, and through <code>GET /api/v1/activity?login=&amp;q=&amp;limit=</code>. Kept 400 days. An API key keeps its two scopes: <code>read</code>, or <code>write</code> (Administrator rights except accounts, which no key can manage). The stored values <code>read</code> and <code>edit</code> are those of the former two roles: existing accounts keep their level without migration.
 - <strong>Passwords:</strong> 12 characters minimum, too-common words are refused. They are hashed with scrypt (N=2^14, r=8, p=1, salted, compared in constant time).
 - <strong>Anti-guessing:</strong> 5 failures in 5 minutes lock the email <strong>and</strong> the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.

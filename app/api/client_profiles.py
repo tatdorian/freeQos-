@@ -113,6 +113,13 @@ async def get_profile(login: LoginPath, container: ContainerDep) -> dict[str, An
     faits = await _faits(container, login)
     if faits is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown client")
+    from app.services.vlan_sites import present_site, router_pops, vlan_parents
+
+    try:
+        sites = list(await container.repository.pop_sites())
+        present_site(faits, vlan_parents(sites, router_pops(container)))
+    except Exception:  # noqa: BLE001
+        pass
     fiche = await _repo(container).get(login)
     # D'ou vient le debit affiche : file, interface, NetFlow -- et pourquoi.
     collection = getattr(container, "collection", None)

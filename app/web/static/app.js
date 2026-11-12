@@ -57,11 +57,17 @@ async function api(path, options) {
 }
 
 async function apiBrut(path, options) {
-  const res = await fetch(API + path, {
-    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    ...options,
-  });
+  let res;
+  try {
+    res = await fetch(API + path, {
+      headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      ...options,
+    });
+  } catch (e) {
+    // Plus de reseau, serveur arrete, proxy qui redemarre : pas de statut.
+    throw erreurClaire(0, '');
+  }
   if (res.status === 204) return null;
   const body = await res.json().catch(() => null);
   // Session expiree ou fermee ailleurs : retour a l'ecran de connexion, plutot
@@ -71,10 +77,70 @@ async function apiBrut(path, options) {
     showAuthGate('login', 'Your session has ended: log in again.');
   }
   if (!res.ok) {
-    const detail = body && body.detail ? body.detail : res.status + ' ' + res.statusText;
-    throw new Error(typeof detail === 'string' ? detail : validationText(detail));
+    const detail = body && body.detail ? body.detail : '';
+    throw erreurClaire(res.status, typeof detail === 'string' ? detail : validationText(detail));
   }
   return body;
+}
+
+/* ---------------------------------------------------- erreurs en clair
+ *
+ *  Une erreur dit TROIS choses : ce qui s'est passe (un titre), le detail
+ *  donne par le serveur, et quoi faire. Le texte brut du serveur seul («
+ *  409 Conflict », une trace de validation) ne disait rien a l'exploitant. */
+const ERREUR_PAR_STATUT = {
+  0: ['freeQoS cannot be reached', 'Check your connection, or that the freeQoS server is running. The page retries on its own.'],
+  400: ['This cannot be done as entered', 'Correct the value below and try again.'],
+  401: ['Your session has ended', 'Log in again.'],
+  403: ['Not allowed with your account', 'Ask an Administrator, or log in with an account that has this right.'],
+  404: ['Not found', 'It may have been deleted or renamed in the meantime: refresh the page.'],
+  409: ['Not possible right now', 'Read the reason below: something must change first.'],
+  413: ['Too large', 'Send less at once.'],
+  422: ['Some information is missing or not valid', 'Check the fields and try again.'],
+  429: ['Too many attempts', 'Wait a moment, then try again.'],
+  500: ['Unexpected error on the server', 'Try again. If it keeps happening, the server log says why: docker compose logs app.'],
+  502: ['A router or service did not answer', 'Check that it is reachable from the freeQoS server, then try again.'],
+  503: ['freeQoS is not ready', 'It is starting, or its database is unavailable. Try again in a minute.'],
+  504: ['No answer in time', 'The router or service is slow or unreachable. Try again.'],
+};
+
+function erreurClaire(statut, detail) {
+  const [titre, conseil] = ERREUR_PAR_STATUT[statut] ||
+    (statut >= 500 ? ERREUR_PAR_STATUT[500] : ERREUR_PAR_STATUT[400]);
+  const e = new Error(detail || titre);
+  e.status = statut;
+  e.title = titre;
+  e.hint = conseil;
+  e.detail = detail;
+  return e;
+}
+
+/** L'erreur en encart : titre, detail, quoi faire. */
+function noticeErreur(err) {
+  const e = err || {};
+  const titre = e.title || 'Something went wrong';
+  const detail = e.detail !== undefined ? e.detail : (e.message || String(err || ''));
+  return '<div class="notice err err-clear"><b>' + esc(titre) + '</b>' +
+    (detail && detail !== titre ? '<span>' + esc(detail) + '</span>' : '') +
+    (e.hint ? '<small>' + esc(e.hint) + '</small>' : '') + '</div>';
+}
+
+/** L'erreur d'un geste (bouton) : une notification qui ne bloque pas la page,
+ *  a la place de la boite « alert » du navigateur. */
+function toastErreur(err) {
+  let pile = document.getElementById('err-toasts');
+  if (!pile) {
+    pile = document.createElement('div');
+    pile.id = 'err-toasts';
+    pile.setAttribute('role', 'alert');
+    document.body.appendChild(pile);
+  }
+  const t = document.createElement('div');
+  t.className = 'err-toast';
+  t.innerHTML = noticeErreur(err) + '<button type="button" class="sm" aria-label="Close">&times;</button>';
+  t.querySelector('button').addEventListener('click', () => t.remove());
+  pile.appendChild(t);
+  setTimeout(() => t.remove(), 9000);
 }
 
 const AUTH = { user: null, ready: false, mode: 'login', started: false, passwordMin: 12 };
@@ -396,7 +462,7 @@ async function renderAccounts() {
   try {
     comptes = await api('/users');
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
   host.innerHTML =
@@ -436,7 +502,7 @@ async function renderAccounts() {
   const resultat = (html) => { document.getElementById('acc-result').innerHTML = html; };
   const faire = async (fn, ok) => {
     try { await fn(); await renderAccounts(); resultat('<div class="notice ok">' + esc(ok) + '</div>'); }
-    catch (err) { resultat('<div class="notice err">' + esc(err.message) + '</div>'); }
+    catch (err) { resultat(noticeErreur(err)); }
   };
   brancherJauges(host.querySelector('#acc-new-form'), () => document.getElementById('acc-new-email').value);
   document.getElementById('acc-new-form').addEventListener('submit', (e) => {
@@ -513,7 +579,7 @@ async function chargerSessions() {
   try {
     sessions = await apiBrut('/auth/sessions');
   } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    hote.innerHTML = noticeErreur(err);
     return;
   }
   const autres = sessions.filter((s) => !s.current).length;
@@ -533,7 +599,7 @@ async function chargerSessions() {
     '</div>';
   hote.querySelectorAll('[data-close-session]').forEach((b) => b.addEventListener('click', async () => {
     try { await api('/auth/sessions/' + b.dataset.closeSession, { method: 'DELETE' }); }
-    catch (err) { toast(esc(err.message), 6000); }
+    catch (err) { toastErreur(err); }
     chargerSessions();
   }));
   const tout = document.getElementById('acc-close-others');
@@ -542,7 +608,7 @@ async function chargerSessions() {
     try {
       const r = await api('/auth/sessions/close-others', { method: 'POST' });
       toast(esc(r.closed + ' session' + (r.closed > 1 ? 's' : '') + ' closed.'), 5000);
-    } catch (err) { toast(esc(err.message), 6000); }
+    } catch (err) { toastErreur(err); }
     chargerSessions();
   });
 }
@@ -558,7 +624,7 @@ async function chargerJournal() {
   try {
     lignes = await apiBrut('/auth/events?limit=300' + (email ? '&email=' + encodeURIComponent(email) : ''));
   } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    hote.innerHTML = noticeErreur(err);
     return;
   }
   const echecs = new Set(['login_failed', 'login_locked', 'password_change_failed']);
@@ -604,7 +670,7 @@ function brancherMonMdp() {
       sortie.innerHTML = '<span class="badge ok">changed — your other sessions are closed</span>';
       chargerSessions();
     } catch (err) {
-      sortie.innerHTML = '<span class="badge crit">' + esc(err.message) + '</span>';
+      sortie.innerHTML = noticeErreur(err);
     }
   });
 }
@@ -1232,7 +1298,95 @@ function statCard(cls, label, value, unit, sub) {
     (sub ? '<div class="sub">' + sub + '</div>' : '') + '</div>';
 }
 
+/** AUJOURD'HUI. Un bandeau : « tout va bien », ou les problemes et ou cliquer.
+ *  Puis cinq chiffres et l'etat de chaque site. Fait pour un coup d'oeil. */
+async function renderToday() {
+  const host = document.getElementById('today');
+  if (!host) return;
+  const [, journal, sante] = await Promise.all([
+    loadClientsData(),
+    api('/activity?limit=300').catch(() => []),
+    fetch('/health/ready').then((r) => r.json()).catch(() => null),
+  ]);
+  const rows = CLI.rows || [];
+  const alertes = calculerAlertes(rows, journal || [], '');
+  const graves = alertes.filter((a) => a.niveau !== 'info');
+  const controleur = sante && sante.status && sante.status !== 'ready'
+    ? [{ niveau: 'warn', code: 'CTRL_DEGRADED', titre: 'Measurement running late',
+      texte: 'Some collection cycles are late or failing' +
+        ((sante.stale_jobs || []).length ? ': ' + sante.stale_jobs.join(', ') : '') + '.',
+      logins: [] }] : [];
+  const problemes = controleur.concat(graves);
+  const en = rows.filter(clientEnLigne);
+  const bas = en.reduce((a, r) => a + (Number(r.tx_bps) || 0), 0);
+  const haut = en.reduce((a, r) => a + (Number(r.rx_bps) || 0), 0);
+  const actifs = rows.filter((r) => r.mode_id || CLI.boosts[r.login]).length;
+
+  // Sites : PoP par PoP (une VLAN n'est pas un site, cf. l'API).
+  const sites = {};
+  rows.forEach((r) => {
+    const k = r.pop_name || 'No site';
+    const x = sites[k] = sites[k] || { n: 0, on: 0, bas: 0, mesures: 0 };
+    x.n += 1;
+    if (r.ts) x.mesures += 1;
+    if (clientEnLigne(r)) { x.on += 1; x.bas += Number(r.tx_bps) || 0; }
+  });
+  const etatSite = (nom, x) => {
+    if (CLI.lecture && CLI.lecture[nom]) return ['crit', 'router not answering'];
+    if (!x.mesures) return ['idle', 'nothing measured yet'];
+    const part = x.on / x.mesures;
+    return part >= 0.8 ? ['ok', 'normal'] : part >= 0.5 ? ['warn', 'several offline'] : ['crit', 'many offline'];
+  };
+  const okSites = Object.entries(sites).filter(([nom, x]) => etatSite(nom, x)[0] === 'ok').length;
+
+  const bandeau = !problemes.length
+    ? '<div class="today-hero ok"><span class="today-ico">&#10003;</span><div><b>All good</b>' +
+      '<span>' + en.length + ' of ' + rows.length + ' clients connected · every router answers · nothing needs you.</span></div></div>'
+    : '<div class="today-hero ' + (problemes.some((a) => a.niveau === 'crit') ? 'crit' : 'warn') + '">' +
+      '<span class="today-ico">!</span><div><b>' + problemes.length + ' problem' + (problemes.length > 1 ? 's' : '') +
+      ' need' + (problemes.length > 1 ? '' : 's') + ' attention</b><span>Most urgent first. Click one to see the clients concerned.</span></div>' +
+      '<a class="sm" href="#/alerts">All alerts</a></div>' +
+      '<div class="card today-list">' + problemes.slice(0, 6).map((a, i) =>
+        '<button type="button" class="today-pb" data-pb="' + i + '"><i class="lvl-' + a.niveau + '"></i>' +
+        '<span><b>' + esc(a.titre) + '</b><small>' + esc(a.texte) + '</small></span>' +
+        (a.logins && a.logins.length ? '<em>' + a.logins.length + ' client' + (a.logins.length > 1 ? 's' : '') + ' &rsaquo;</em>' : '') +
+        '</button>').join('') +
+      (problemes.length > 6 ? '<a class="today-more" href="#/alerts">+ ' + (problemes.length - 6) + ' more in Alerts</a>' : '') + '</div>';
+  const chiffre = (titre, valeur, sous, cls) => '<div class="card today-kpi ' + (cls || '') + '"><span>' + titre +
+    '</span><b>' + valeur + '</b><small>' + sous + '</small></div>';
+  host.innerHTML = bandeau +
+    '<div class="today-kpis">' +
+      chiffre('Clients connected', en.length + '<em>/' + rows.length + '</em>', rows.length - en.length ? (rows.length - en.length) + ' not connected' : 'everyone is online') +
+      chiffre('Traffic now', esc(bpsText(bas)), '&uarr; ' + esc(bpsText(haut)) + ' up') +
+      chiffre('Sites', okSites + '<em>/' + Object.keys(sites).length + '</em>', okSites === Object.keys(sites).length ? 'all normal' : 'see below',
+        okSites === Object.keys(sites).length ? '' : 'warn') +
+      chiffre('Modes & boosts', String(actifs), actifs ? 'clients not on Automatic' : 'everyone on Automatic') +
+    '</div>' +
+    '<h2>Sites</h2><div class="today-sites">' + Object.entries(sites).sort((a, b) => a[0].localeCompare(b[0])).map(([nom, x]) => {
+      const [lv, mot] = etatSite(nom, x);
+      return '<button type="button" class="card today-site" data-site="' + esc(nom) + '"><i class="lvl-' + lv + '"></i>' +
+        '<b>' + esc(nom) + '</b><span>' + x.on + ' / ' + x.n + ' connected · ' + esc(mot) + '</span>' +
+        '<small>&darr; ' + esc(bpsText(x.bas)) + '</small></button>';
+    }).join('') + '</div>';
+  host.querySelectorAll('[data-pb]').forEach((b) => b.addEventListener('click', () => {
+    const a = problemes[Number(b.dataset.pb)];
+    if (!a.logins || !a.logins.length) { location.hash = '#/alerts'; return; }
+    if (a.logins.length === 1) { location.hash = '#/client/' + encodeURIComponent(a.logins[0]); return; }
+    CLI.sel = new Set(a.logins);
+    CLI.onlySel = true;
+    location.hash = '#/clients';
+  }));
+  host.querySelectorAll('[data-site]').forEach((b) => b.addEventListener('click', () => {
+    CLI.presetSite = b.dataset.site;
+    location.hash = '#/clients';
+  }));
+}
+
 async function loadDashboard() {
+  const aujourdhui = renderToday();
+  // L'Operator s'arrete au bandeau, aux chiffres et aux sites : le detail
+  // technique du reseau est celui de l'Administrator.
+  if (estLimite()) { await aujourdhui; return; }
   const courbe = loadThroughput();
   const top = loadTopTalkers();
   const ports = loadPortsLive();
@@ -1259,7 +1413,7 @@ async function loadDashboard() {
   // En parallele : la courbe et le top partent AVANT les chiffres de tete,
   // et chaque bloc s'affiche des que SA donnee arrive.
   renderBackhaulCards(tree);
-  await Promise.all([courbe, top, ports]);
+  await Promise.all([courbe, top, ports, aujourdhui]);
 }
 
 /** PORTS EN DIRECT : tout ce que les routeurs comptent, sessions ou non.
@@ -1280,7 +1434,7 @@ async function loadPortsLive() {
   try {
     data = await api('/ports/live');
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
   const ports = data.ports || [];
@@ -1627,7 +1781,7 @@ async function toggleRtt(enabled) {
   try {
     await api('/rtt', { method: 'PUT', body: JSON.stringify({ enabled: enabled }) });
     await loadExec();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toastErreur(err); }
 }
 
 function selectionExists(sel) {
@@ -2119,7 +2273,7 @@ async function ouvrirMilieu(h) {
       toast(esc((h.name || h.interface) + ': ' + (milieu || 'auto') + '.'), 4000);
       refresh();
     } catch (err) {
-      erreur.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      erreur.innerHTML = noticeErreur(err);
     }
   });
   dlg.showModal();
@@ -3288,7 +3442,7 @@ async function loadFlowPairs() {
     data = paires;
     FLOW.rules = regles.rules || [];
   } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    hote.innerHTML = noticeErreur(err);
     return;
   }
   const facettes = data.facets || {};
@@ -3506,7 +3660,7 @@ function brancherRestrictions(hote) {
     b.disabled = true;
     try {
       await api('/traffic-rules/' + b.dataset.ruleLift, { method: 'DELETE' });
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
     loadFlowPairs();
   }));
   hote.querySelectorAll('[data-restrict-form]').forEach((f) => f.addEventListener('submit', async (e) => {
@@ -3536,7 +3690,7 @@ function brancherRestrictions(hote) {
           ((regle.apply && regle.apply.reason) ? ' (' + regle.apply.reason + ')' : ''));
       }
     } catch (err) {
-      alert(err.message);
+      toastErreur(err);
     }
     FLOW.restricting = null;
     loadFlowPairs();
@@ -3555,7 +3709,7 @@ async function openPairAddress(address) {
     brancherLiensServices(hote);
     hote.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    hote.innerHTML = noticeErreur(err);
   }
 }
 
@@ -3649,7 +3803,7 @@ function renderFlowExporters(rows) {
         await api('/netflow/exporters/' + sel.dataset.expMode, { method: 'PATCH',
           body: JSON.stringify({ vantage: sel.value === 'auto' ? 'unknown' : sel.value }) });
         toast(esc('Vantage saved' + (sel.value === 'auto' ? ': follows the router\'s role.' : '.')), 4000);
-      } catch (err) { toast(esc(err.message), 6000); }
+      } catch (err) { toastErreur(err); }
       await loadTraffic();
     });
   });
@@ -3670,7 +3824,7 @@ function renderFlowExporters(rows) {
       try {
         await api('/netflow/exporters/' + b.dataset.expDel, { method: 'DELETE' });
         await loadTraffic();
-      } catch (err) { alert(err.message); }
+      } catch (err) { toastErreur(err); }
     });
   });
 }
@@ -3691,7 +3845,7 @@ async function declareExporter(event) {
     document.getElementById('exporter-form').reset();
     await loadTraffic();
   } catch (err) {
-    sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    sortie.innerHTML = noticeErreur(err);
   }
 }
 
@@ -3724,7 +3878,7 @@ async function loadApiKeys() {
   try {
     rows = await api('/api-keys');
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
   if (!rows.length) {
@@ -3756,7 +3910,7 @@ async function loadApiKeys() {
           body: JSON.stringify({ enabled: !b.dataset.keyEnabled }),
         });
         await loadApiKeys();
-      } catch (err) { alert(err.message); }
+      } catch (err) { toastErreur(err); }
     });
   });
   host.querySelectorAll('[data-key-del]').forEach((b) => {
@@ -3765,7 +3919,7 @@ async function loadApiKeys() {
       try {
         await api('/api-keys/' + b.dataset.keyDel, { method: 'DELETE' });
         await loadApiKeys();
-      } catch (err) { alert(err.message); }
+      } catch (err) { toastErreur(err); }
     });
   });
 }
@@ -3796,7 +3950,7 @@ async function createApiKey(event) {
     document.getElementById('key-form').reset();
     await loadApiKeys();
   } catch (err) {
-    sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    sortie.innerHTML = noticeErreur(err);
   }
 }
 
@@ -4060,7 +4214,7 @@ async function liveCheck(id) {
   try {
     r = await api('/subscribers/' + id + '/live');
   } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    hote.innerHTML = noticeErreur(err);
     bouton.disabled = false;
     return;
   }
@@ -4323,7 +4477,7 @@ async function deleteSubscriber(r) {
     }
     await loadSubscribers();
   } catch (err) {
-    alert(err.message);
+    toastErreur(err);
   }
 }
 
@@ -4426,7 +4580,9 @@ async function remplirMenusPop() {
       const nom = r.pop_name || r.name;
       if (nom) noms.add(nom);
     });
-    (Array.isArray(pops) ? pops : []).forEach((p) => { if (p.name) noms.add(p.name); });
+    // Une VLAN n'est pas un PoP : c'est le raccordement d'un client, sur le
+    // PoP qui la porte. Elle ne se propose donc jamais comme PoP.
+    (Array.isArray(pops) ? pops : []).forEach((p) => { if (p.name && p.kind !== 'vlan') noms.add(p.name); });
     const liste = [...noms].sort((a, b) => a.localeCompare(b));
     const inchangee = liste.join('\n') === POPS_CONNUS.join('\n');
     POPS_CONNUS = liste;
@@ -4478,7 +4634,7 @@ async function ppDeclarer(e) {
     out.innerHTML = '<div class="notice ok">' + esc(login) + ' added. It shows as never seen until its first session.</div>';
     await loadClients();
   } catch (err) {
-    out.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    out.innerHTML = noticeErreur(err);
   }
 }
 
@@ -4558,7 +4714,7 @@ async function loadVlanClients() {
   try {
     corps = await api('/static-clients/vlans');
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
   const lignes = corps.vlans || [];
@@ -4609,7 +4765,7 @@ async function loadStaticClients() {
   try {
     fiches = await api('/static-clients');
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
 
@@ -4784,7 +4940,7 @@ async function scEnregistrer(event) {
     // La fiche modifiee change le plan : le tableau des abonnes doit suivre.
     await loadSubscribers();
   } catch (err) {
-    scNotice('<span class="badge crit">' + esc(err.message) + '</span>');
+    scNotice(noticeErreur(err));
   } finally {
     bouton.disabled = false;
   }
@@ -4804,7 +4960,7 @@ async function scSupprimer(id, fiches) {
     if (state.view === 'clients') loadClients();
     await loadSubscribers();
   } catch (err) {
-    scNotice('<span class="badge crit">' + esc(err.message) + '</span>');
+    scNotice(noticeErreur(err));
   }
 }
 
@@ -4871,7 +5027,7 @@ async function openSubscriber(id) {
   } catch (err) {
     root.querySelector('.drawer').innerHTML =
       '<div class="drawer-head"><h3>Error</h3><button class="sm" id="drawer-close">Close</button></div>' +
-      '<div class="notice err">' + esc(err.message) + '</div>';
+      noticeErreur(err);
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
   }
 }
@@ -4920,7 +5076,7 @@ async function loadPops() {
     try {
       await api('/pops/orphans/delete?confirm=true', { method: 'POST' });
       await loadRouters();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
   });
 
   host.querySelectorAll('[data-del-pop]').forEach((b) => {
@@ -4934,7 +5090,7 @@ async function loadPops() {
       try {
         await api('/pops/' + pop.id + '?confirm=true', { method: 'DELETE' });
         await loadRouters();
-      } catch (err) { alert(err.message); }
+      } catch (err) { toastErreur(err); }
     });
   });
 }
@@ -4962,7 +5118,7 @@ async function loadUisp(force) {
   try {
     UISP.conf = await api('/uisp');
   } catch (err) {
-    carte.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    carte.innerHTML = noticeErreur(err);
     return;
   }
   renderUisp();
@@ -5078,7 +5234,7 @@ function renderUisp() {
       toast('<b>' + esc(s.dataset.name) + '</b> ' + (s.value ? 'attached to ' + esc(s.value) : 'detached') + '.', 3500);
       UISP.conf = await api('/uisp');
       renderUisp();
-    } catch (err) { toast(esc(err.message), 6000); }
+    } catch (err) { toastErreur(err); }
   }));
 }
 
@@ -5088,7 +5244,7 @@ async function loadRoutersHealth() {
   try {
     data = await api('/pops/health');
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
   const routeurs = data.routers || [];
@@ -5167,7 +5323,7 @@ async function loadRadioHealth() {
   if (!hote) return;
   let data;
   try { data = await api('/radios'); } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    hote.innerHTML = noticeErreur(err);
     return;
   }
   const antennes = data.antennas || [];
@@ -5347,7 +5503,7 @@ async function loadRouters() {
       const sortie = document.getElementById('router-export');
       try {
         await api('/pops/provisioning/' + encodeURIComponent(b.dataset.provision), { method: 'POST' });
-      } catch (err) { sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>'; return; }
+      } catch (err) { sortie.innerHTML = noticeErreur(err); return; }
       sortie.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       followProvisioning(b.dataset.provision, sortie);
     }));
@@ -5448,7 +5604,7 @@ async function toggleRouterWrite(name, active, input) {
         body: JSON.stringify({ write_enabled: active, confirm: true, reason: motif }),
       });
   } catch (err) {
-    alert(err.message);
+    toastErreur(err);
   }
   await loadRouters();
   // Ecriture tout juste autorisee : le serveur met le routeur en service, on
@@ -5481,7 +5637,7 @@ async function cleanRouterQueues(name, bouton) {
       ((r.limits_reset || []).length ? ' Back to Automatic (mode removed): ' + r.limits_reset.map(esc).join(', ') + '.' : '') +
       (errs.length ? '<br>' + errs.map(esc).join('<br>') : '') + '</div>';
   } catch (err) {
-    sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    sortie.innerHTML = noticeErreur(err);
   } finally {
     bouton.disabled = false;
     sortie.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -5512,7 +5668,7 @@ async function showRouterExport(name) {
         ? '<pre class="export-pre">' + esc(r.export) + '</pre>'
         : '');
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
   }
 }
 
@@ -5525,7 +5681,7 @@ async function hideFileRouter(name) {
   try {
     await api('/pops/routers/file/' + encodeURIComponent(name), { method: 'DELETE' });
     await loadRouters();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toastErreur(err); }
 }
 
 /** Analyse la config des equipements et (re)construit l'arbre reseau.
@@ -5552,7 +5708,7 @@ async function buildTreeFromConfig(silencieux) {
     }
     return r;
   } catch (err) {
-    if (notice) notice.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    if (notice) notice.innerHTML = noticeErreur(err);
     return null;
   } finally {
     if (bouton) bouton.disabled = false;
@@ -5610,7 +5766,7 @@ async function testConnection() {
         '<span class="hint">' + esc(result.hint || '') + '</span></div>');
     }
   } catch (err) {
-    showFormResult('<div class="notice err">' + esc(err.message) + '</div>');
+    showFormResult(noticeErreur(err));
   } finally {
     button.disabled = false;
   }
@@ -5635,7 +5791,7 @@ async function saveRouter(event) {
     // Le serveur met le routeur en service tout seul : on suit l'avancement.
     followProvisioning(String(created.name), document.getElementById('provision-out'));
   } catch (err) {
-    showFormResult('<div class="notice err">' + esc(err.message) + '</div>');
+    showFormResult(noticeErreur(err));
   } finally {
     button.disabled = false;
   }
@@ -5650,7 +5806,7 @@ async function probeRouter(id, button) {
       alert('Failed: ' + result.error + '\n\n' + (result.hint || ''));
     }
   } catch (err) {
-    alert(err.message);
+    toastErreur(err);
   } finally {
     button.disabled = false; button.textContent = original;
     await loadRouters();
@@ -5666,7 +5822,7 @@ async function followProvisioning(nom, hote) {
   for (let essai = 0; essai < 150; essai++) {
     let etat;
     try { etat = await api('/pops/provisioning/' + encodeURIComponent(nom)); } catch (err) {
-      hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      hote.innerHTML = noticeErreur(err);
       return;
     }
     hote.innerHTML = renderProvisioning(etat);
@@ -5716,7 +5872,7 @@ async function deleteRouter(id) {
   try {
     await api('/pops/routers/' + id, { method: 'DELETE' });
     await loadRouters();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toastErreur(err); }
 }
 
 async function toggleRouter(id) {
@@ -5727,7 +5883,7 @@ async function toggleRouter(id) {
       method: 'PATCH', body: JSON.stringify({ enabled: !router.enabled }),
     });
     await loadRouters();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toastErreur(err); }
 }
 
 
@@ -5833,6 +5989,18 @@ function svcName(ligne) {
   }
   const source = ligne.source ? ' <span class="hint">' + esc(ligne.source) + '</span>' : '';
   return '<b>' + esc(ligne.service) + '</b>' + source;
+}
+
+/** Page Regles (Administrator) : les restrictions en vigueur, et le formulaire
+ *  pour en ecrire une, ouvert d'emblee. */
+async function loadRules() {
+  if (SVC.catalogue === null) {
+    SVC.catalogue = await api('/netflow/catalogue').catch(() => ({ services: [], categories: [] }));
+    renderCatalogue(SVC.catalogue);
+    fillRuleChoices(SVC.catalogue);
+    fillCategoryFilter(SVC.catalogue);
+  }
+  renderRules(await api('/traffic-rules').catch(() => ({ rules: [] })));
 }
 
 async function loadServices() {
@@ -5987,7 +6155,7 @@ async function openDestination(address) {
     fiche = await api('/netflow/destinations/' + encodeURIComponent(address) +
       '?minutes=' + Math.max(SVC.minutes, 1440));
   } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    hote.innerHTML = noticeErreur(err);
     return;
   }
   SVC.detail = fiche;
@@ -6113,7 +6281,7 @@ function renderDestinationCard(fiche) {
         { method: 'POST' });
       await openDestination(fiche.address);
     } catch (err) {
-      detail.innerHTML += '<div class="notice err">' + esc(err.message) + '</div>';
+      detail.innerHTML += noticeErreur(err);
     }
   });
   document.getElementById('svc-detail-restrict').addEventListener('click', () => {
@@ -6460,7 +6628,7 @@ async function lookupIp(query) {
   try {
     r = await api('/netflow/lookup/' + encodeURIComponent(q) + '?minutes=' + Math.max(SVC.minutes, 1440));
   } catch (err) {
-    hote.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    hote.innerHTML = noticeErreur(err);
     return;
   }
   if (r.internal) {
@@ -6610,7 +6778,7 @@ async function deleteRule(id) {
     applyNotice(liftNotice('deleted', reponse && reponse.lift));
     await loadServices();
   } catch (err) {
-    applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
+    applyNotice(noticeErreur(err));
   }
 }
 
@@ -6624,7 +6792,7 @@ async function toggleRule(id, enabled) {
       : liftNotice('suspended', regle && regle.lift));
     await loadServices();
   } catch (err) {
-    applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
+    applyNotice(noticeErreur(err));
   }
 }
 
@@ -6655,7 +6823,7 @@ async function previewRule(id) {
             esc(vue.address_count - vue.addresses.length) + ' more</span>' : '') +
       '</div></div>');
   } catch (err) {
-    applyNotice('<div class="notice err">' + esc(err.message) + '</div>');
+    applyNotice(noticeErreur(err));
   }
 }
 
@@ -6744,7 +6912,9 @@ async function chargerCiblesRegle() {
     api('/pops').catch(() => []),
     api('/subscribers/latest?limit=500&order_by=login&include_unmeasured=true').catch(() => []),
   ]);
-  CIBLES.sites = Array.isArray(sites) ? sites : (sites.pops || []);
+  // Les PoP seulement : une regle sur un PoP couvre ses clients VLAN, et un
+  // client VLAN precis se choisit a l'etape « Clients ».
+  CIBLES.sites = (Array.isArray(sites) ? sites : (sites.pops || [])).filter((x) => x.kind !== 'vlan');
   CIBLES.clients = (abonnes || []).filter((r) => r.login);
   const deja = new Set(coches('svc-rule-pops'));
   document.getElementById('svc-rule-pops').innerHTML = CIBLES.sites.length
@@ -6763,7 +6933,7 @@ function remplirClientsRegle() {
   const proposes = CIBLES.clients.filter((r) => !sites.size || sites.has(r.pop_name));
   document.getElementById('svc-rule-logins').innerHTML = proposes.length
     ? proposes.map((r) => caseACocher(r.login, r.login,
-        (r.pop_name || '') + (r.kind === 'static' ? ' · static IP' : ''),
+        [r.pop_name, r.connection].filter(Boolean).join(' · '),
         deja.has(r.login))).join('')
     : '<div class="hint">No client on these sites.</div>';
 }
@@ -6818,7 +6988,7 @@ async function submitRule(event) {
     majResumes();
     await loadServices();
   } catch (err) {
-    ruleNotice('<div class="notice err">' + esc(err.message) + '</div>');
+    ruleNotice(noticeErreur(err));
   }
 }
 
@@ -6925,7 +7095,7 @@ async function testAntenna() {
       : '<div class="notice err"><strong>Failed.</strong> <code>' + esc(result.error) + '</code>' +
         '<span class="hint">' + esc(result.hint || '') + '</span></div>');
   } catch (err) {
-    showAntennaResult('<div class="notice err">' + esc(err.message) + '</div>');
+    showAntennaResult(noticeErreur(err));
   } finally {
     button.disabled = false;
   }
@@ -6946,7 +7116,7 @@ async function saveAntenna(event) {
     await loadAntennas();
     await buildTreeFromConfig(false);
   } catch (err) {
-    showAntennaResult('<div class="notice err">' + esc(err.message) + '</div>');
+    showAntennaResult(noticeErreur(err));
   } finally {
     button.disabled = false;
   }
@@ -6959,7 +7129,7 @@ async function probeAntenna(id, button) {
     const result = await api('/pops/antennas/' + id + '/probe', { method: 'POST' });
     if (!result.reachable) alert('Failed: ' + result.error + '\n\n' + (result.hint || ''));
   } catch (err) {
-    alert(err.message);
+    toastErreur(err);
   } finally {
     button.disabled = false; button.textContent = original;
     await loadAntennas();
@@ -6973,7 +7143,7 @@ async function deleteAntenna(id) {
   try {
     await api('/pops/antennas/' + id, { method: 'DELETE' });
     await loadAntennas();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toastErreur(err); }
 }
 
 async function toggleAntenna(id) {
@@ -6984,7 +7154,7 @@ async function toggleAntenna(id) {
       method: 'PATCH', body: JSON.stringify({ enabled: !antenna.enabled }),
     });
     await loadAntennas();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toastErreur(err); }
 }
 
 
@@ -7916,7 +8086,7 @@ function bindTopoEdges(svg) {
             { method: 'PATCH', body: JSON.stringify({ parent_key: null }) });
         }
         await loadNetwork();
-      } catch (err) { alert(err.message); }
+      } catch (err) { toastErreur(err); }
     });
   });
 }
@@ -7955,7 +8125,7 @@ async function topoLinkPick(key) {
       { method: 'PATCH', body: JSON.stringify({ parent_key: source }) });
     await loadNetwork();
     setTopoLinkNotice();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toastErreur(err); }
 }
 
 /** Bandeau d'aide du mode lien. */
@@ -8105,7 +8275,7 @@ function bindTopoDrag(svg, model) {
             }
             renderTopoCanvas();   // redessine les aretes vers la nouvelle position
           }
-        } catch (err) { alert(err.message); await loadNetwork(); }
+        } catch (err) { toastErreur(err); await loadNetwork(); }
       };
 
       window.addEventListener('pointermove', onMove);
@@ -8319,7 +8489,7 @@ function renderTopoPanel() {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '?kind=' + e.target.value,
         { method: 'PATCH' });
       await loadNetwork();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
   });
   document.getElementById('topo-merge').addEventListener('click', async () => {
     const cible = document.getElementById('topo-merge-target').value;
@@ -8329,20 +8499,20 @@ function renderTopoPanel() {
         body: JSON.stringify({ alias_key: node.key, canonical_key: cible }) });
       topo.selected = cible;  // la case fusionnee disparait : on suit la canonique
       await loadNetwork();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
   });
   host.querySelectorAll('[data-unmerge]').forEach((b) => b.addEventListener('click', async () => {
     try {
       await api('/topology/merge/' + encodeURIComponent(b.dataset.unmerge), { method: 'DELETE' });
       await loadNetwork();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
   }));
   host.querySelectorAll('[data-attach]').forEach((b) => b.addEventListener('click', async () => {
     try {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '/parent',
         { method: 'PATCH', body: JSON.stringify({ parent_key: b.dataset.attach }) });
       await loadNetwork();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
   }));
   host.querySelectorAll('[data-merge-into]').forEach((b) => b.addEventListener('click', async () => {
     // On replie l'autre case (alias) dans celle que l'operateur regarde (canonique).
@@ -8350,7 +8520,7 @@ function renderTopoPanel() {
       await api('/topology/merge', { method: 'POST',
         body: JSON.stringify({ alias_key: b.dataset.mergeInto, canonical_key: node.key }) });
       await loadNetwork();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
   }));
   const detach = document.getElementById('topo-detach');
   if (detach) detach.addEventListener('click', async () => {
@@ -8358,7 +8528,7 @@ function renderTopoPanel() {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '/parent',
         { method: 'PATCH', body: JSON.stringify({ parent_key: null }) });
       await loadNetwork();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
   });
   document.getElementById('topo-hide').addEventListener('click', async () => {
     try {
@@ -8366,7 +8536,7 @@ function renderTopoPanel() {
         { method: 'PATCH', body: JSON.stringify({ hidden: true }) });
       topo.selected = null;
       await loadNetwork();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
   });
 }
 
@@ -8414,7 +8584,7 @@ function bindTopoSectionClient(host, node) {
     const s = (topo.subs || []).find((x) => x.login.toLowerCase() === t || (x.display_name || '').toLowerCase() === t);
     return s ? s.login : null;
   };
-  const faire = async (f) => { try { await f(); await loadNetwork(); } catch (err) { alert(err.message); } };
+  const faire = async (f) => { try { await f(); await loadNetwork(); } catch (err) { toastErreur(err); } };
   clic('topo-unlink', () => faire(() => api('/topology/client-links', { method: 'PUT',
     body: JSON.stringify({ node_key: node.key, login: '' }) })));
   clic('topo-link', () => {
@@ -8447,7 +8617,7 @@ function renderTopoPanelClients(host, node) {
     const auto = host.querySelector('#topo-auto');
     if (auto) auto.addEventListener('click', async () => {
       try { await api('/topology/client-places/' + encodeURIComponent(s.login), { method: 'DELETE' }); await loadNetwork(); }
-      catch (err) { alert(err.message); }
+      catch (err) { toastErreur(err); }
     });
     return;
   }
@@ -8486,7 +8656,7 @@ async function resetTopoLayout() {
     // redessiner, sinon l'arbre garde a l'ecran des positions qui n'existent
     // plus en base.
     await refresh();
-  } catch (err) { alert(err.message); }
+  } catch (err) { toastErreur(err); }
 }
 
 /** Retire de l'arbre ce qu'aucune decouverte ne revoit depuis un moment.
@@ -8525,7 +8695,7 @@ async function forgetStaleNodes() {
         ' box(es) and ' + esc(r.forgotten_links) + ' link(s) forgotten.</b>' +
         '<span class="hint">' + esc(r.detail) + '</span></div>');
     }
-  } catch (err) { alert(err.message); }
+  } catch (err) { toastErreur(err); }
 }
 
 /** Debit mesure d'un lien, dans le sens du tableau : la fleche part de la
@@ -8734,7 +8904,7 @@ async function openLink(key, minutes, silencieux) {
   } catch (err) {
     root.querySelector('.drawer').innerHTML =
       '<div class="drawer-head"><h3>Error</h3><button class="sm" id="drawer-close">Close</button></div>' +
-      '<div class="notice err">' + esc(err.message) + '</div>';
+      noticeErreur(err);
     document.getElementById('drawer-close').addEventListener('click', closeDrawer);
   }
 }
@@ -8759,7 +8929,7 @@ async function measureLink(key) {
     state.linkLive = { key: key, html: html };
     host.innerHTML = html;
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
   } finally {
     if (bouton) { bouton.disabled = false; bouton.textContent = 'Mesurer maintenant'; }
   }
@@ -8865,7 +9035,7 @@ async function openBandwidthEditor(scope, cible) {
       await refresh();
     } catch (err) {
       document.getElementById('bw-result').innerHTML =
-        '<div class="notice err">' + esc(err.message) + '</div>';
+        noticeErreur(err);
     }
   });
 
@@ -8874,7 +9044,7 @@ async function openBandwidthEditor(scope, cible) {
       await api('/shaping/policies/' + scope + '/' + encodeURIComponent(cle), { method: 'DELETE' });
       closeDrawer();
       await refresh();
-    } catch (err) { alert(err.message); }
+    } catch (err) { toastErreur(err); }
   });
 }
 
@@ -9006,7 +9176,7 @@ function openBoostEditor(abonne) {
       await refresh();
     } catch (err) {
       document.getElementById('boost-result').innerHTML =
-        '<div class="notice err">' + esc(err.message) + '</div>';
+        noticeErreur(err);
     }
   });
 
@@ -9018,7 +9188,7 @@ function openBoostEditor(abonne) {
       await refresh();
     } catch (err) {
       document.getElementById('boost-result').innerHTML =
-        '<div class="notice err">' + esc(err.message) + '</div>';
+        noticeErreur(err);
     }
   });
 }
@@ -9145,7 +9315,7 @@ async function loadLimits() {
   try {
     data = await api('/shaping/limits' + (routeur ? '?router=' + encodeURIComponent(routeur) : ''));
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
 
@@ -9243,7 +9413,7 @@ async function loadPoints() {
   try {
     data = await api('/shaping/points' + (routeur ? '?router=' + encodeURIComponent(routeur) : ''));
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
   const passe = data.last_reconcile;
@@ -9404,7 +9574,7 @@ async function toggleEnforcement(active) {
       body: JSON.stringify({ enabled: active, confirm: true, reason: motif }),
     });
   } catch (err) {
-    alert(err.message);
+    toastErreur(err);
   } finally {
     toggle.disabled = false;
     await refreshEnforcement();
@@ -9498,7 +9668,7 @@ async function inspectShaping() {
         '</div>';
     }).join('');
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
   }
 }
 
@@ -9676,7 +9846,7 @@ async function applyPlan(routeur, dryRun, bloc) {
       '</div>';
     await loadAudit();
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
   }
 }
 
@@ -9765,7 +9935,7 @@ async function loadDomain(force) {
   try {
     DOM.etat = await api('/public-access');
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
   renderDomain();
@@ -9820,7 +9990,7 @@ function renderDomain() {
   };
   if (q('dm-del')) q('dm-del').onclick = async () => {
     if (!confirm('Stop serving the interface under ' + e.domain + '? It stays reachable on http://<server IP>.')) return;
-    try { await api('/public-access', { method: 'DELETE' }); } catch (err) { alert(err.message); }
+    try { await api('/public-access', { method: 'DELETE' }); } catch (err) { toastErreur(err); }
     DOM.verif = null;
     await loadDomain(true);
   };
@@ -9834,7 +10004,7 @@ function renderDomain() {
       DOM.verif = null;
       await loadDomain(true);
     } catch (err) {
-      q('dm-msg').innerHTML = '<span class="lvl-txt-crit">' + esc(err.message) + '</span>';
+      q('dm-msg').innerHTML = noticeErreur(err);
     }
   };
 }
@@ -9908,7 +10078,7 @@ async function saveSetting(name) {
       esc(String(r.value)) + ' — applied immediately, no restart.</div>');
     await loadSettings();
   } catch (err) {
-    settingNotice('<div class="notice err">' + esc(err.message) + '</div>');
+    settingNotice(noticeErreur(err));
   }
 }
 
@@ -9919,7 +10089,7 @@ async function resetSetting(name) {
       '</code> back to its default (' + esc(String(r.value)) + ').</div>');
     await loadSettings();
   } catch (err) {
-    settingNotice('<div class="notice err">' + esc(err.message) + '</div>');
+    settingNotice(noticeErreur(err));
   }
 }
 
@@ -9996,7 +10166,7 @@ function renderPlanPending() {
     try {
       await api('/plans/' + encodeURIComponent(b.dataset.planForget), { method: 'DELETE' });
     } catch (err) {
-      alert(err.message);
+      toastErreur(err);
     }
     await loadPlans();
   }));
@@ -10037,7 +10207,7 @@ async function loadSchedules() {
     SCHED.data = d;
     SCHED.modes = m.modes || [];
   } catch (err) {
-    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    host.innerHTML = noticeErreur(err);
     return;
   }
   renderSchedules();
@@ -10550,7 +10720,7 @@ async function schedSave(id, corps) {
       schedEnforcement(r.enforcement) + '</div>';
     return true;
   } catch (err) {
-    res.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    res.innerHTML = noticeErreur(err);
     return false;
   } finally {
     await loadSchedules();
@@ -10567,7 +10737,7 @@ async function schedDelete(fiche) {
       '</div>';
     if (SCHED.editing && String(SCHED.editing.id) === String(fiche.id)) schedFill(null);
   } catch (err) {
-    res.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    res.innerHTML = noticeErreur(err);
   }
   await loadSchedules();
 }
@@ -10794,7 +10964,7 @@ async function savePlan(login, corps) {
       (corps ? '' : ' (default plan)') +
       (r.forced_limit_lifted ? ' — forced limit lifted' : '') + '</div>' + poseText(r.enforcement);
   } catch (err) {
-    res.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    res.innerHTML = noticeErreur(err);
   }
   PLANS.editing = null;
   PLANS.focus = login;
@@ -11018,7 +11188,8 @@ function filtrerClients() {
 async function loadClients() {
   cablerClients();
   // Ajouter un client (IP fixe, VLAN) : un geste d'Administrator.
-  document.querySelector('#sc-toggle').hidden = !peut('edit');
+  // Ajouter un client : la gestion des clients, donc l'Operator aussi.
+  document.querySelector('#sc-toggle').hidden = !peut('operator');
   await loadClientsData();
   const rows = CLI.rows;
   // Une selection ne survit qu'aux clients qui existent encore.
@@ -11449,7 +11620,7 @@ function renderClients() {
           (CLI.sel.has(r.login) ? ' checked' : '') + ' aria-label="Select ' + esc(r.login) + '"></td>' +
         '<td class="cli-main"><span class="cli-name"><i class="dot-co ' + (on ? 'on' : 'off') + '" title="' +
           (on ? 'Connected' : (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '"></i>' + esc(r.display_name || r.login) + '</span>' +
-          '<span class="cli-sub">' + esc([r.display_name ? r.login : '', r.pop_name, r.last_ip].filter(Boolean).join(' · ')) + '</span></td>' +
+          '<span class="cli-sub">' + esc([r.display_name ? r.login : '', r.pop_name, r.vlan_id ? 'VLAN ' + r.vlan_id : '', r.last_ip].filter(Boolean).join(' · ')) + '</span></td>' +
         '<td class="cli-mode"><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
           (b ? '<span class="boost-pill cli-boost">&#9889; ' + esc(boostReste(b)) + '</span>' : '') + '</td>' +
         '<td class="cli-usage">' + (on ? usageClair(r)
@@ -11742,7 +11913,7 @@ function openModeDialog(logins) {
         if (!res.failed) CLI.sel.clear();
         refresh();
       } catch (err) {
-        root.querySelector('#mode-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+        root.querySelector('#mode-out').innerHTML = noticeErreur(err);
         e.target.disabled = false;
       }
     });
@@ -11852,7 +12023,7 @@ function openGroupBoost(logins) {
       root.querySelector('#gb-done').addEventListener('click', fermer);
       refresh();
     } catch (err) {
-      sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      sortie.innerHTML = noticeErreur(err);
       e.target.disabled = false;
     }
   });
@@ -11865,7 +12036,7 @@ async function stopBoosts(logins) {
     const res = await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins, action: 'stop_boost' }) });
     toast(res.failed ? res.failed + ' client(s) failed.' : 'Boost stopped.', 5000);
   } catch (err) {
-    toast(esc(err.message), 8000);
+    toastErreur(err);
   }
   refresh();
 }
@@ -11922,7 +12093,7 @@ async function loadModesAdmin() {
       await api('/bandwidth-modes/' + b.dataset.modeDel, { method: 'DELETE' });
       loadModesAdmin();
     } catch (err) {
-      document.getElementById('modes-result').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      document.getElementById('modes-result').innerHTML = noticeErreur(err);
     }
   }));
 }
@@ -11990,7 +12161,7 @@ function cablerModes() {
       resetModeForm();
       if (state.view === 'modes') loadModesPage(); else loadModesAdmin();
     } catch (err) {
-      sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      sortie.innerHTML = noticeErreur(err);
     }
   });
 }
@@ -12191,7 +12362,7 @@ function modifierClient(login, fiche) {
       fermer();
       loadClientPage();
     } catch (err) {
-      out.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      out.innerHTML = noticeErreur(err);
     }
   };
   root.querySelector('#ec-save').addEventListener('click', enregistrer);
@@ -12239,6 +12410,7 @@ async function loadClientPage() {
     '<div class="cp-id"><h2>' + esc(profil.display_name || login) + '</h2><div class="cp-meta">' +
       (profil.display_name ? '<span class="cp-login">' + esc(login) + '</span>' : '') +
       '<span class="badge">' + esc(r.pop_name || 'no site') + '</span>' +
+      (r.vlan_id ? '<span class="badge">VLAN ' + esc(r.vlan_id) + '</span>' : '') +
       (ip ? '<button type="button" class="cp-ip" id="cp-ip" title="Client IP · click to copy">' + esc(ip) + '</button>' : '') +
       '<span class="cli-conn ' + (on ? 'on">Connected' : 'off">' + (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '</span>' +
       '<span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
@@ -12297,7 +12469,7 @@ async function loadClientPage() {
         detailsSaisis(profil) +
         '<tr><td>Site</td><td>' + esc(r.pop_name || '-') + '</td></tr>' +
         ligneMesure(decouvert.measure) +
-        '<tr><td>Kind</td><td>' + esc(r.kind === 'static' ? 'static IP' : 'PPPoE') +
+        '<tr><td>Connection</td><td>' + esc(r.connection || (r.kind === 'static' ? 'Static IP' : 'PPPoE')) +
           (profil.declared ? ' · added by hand' : ' · discovered') + '</td></tr>' +
         '<tr><td>Session</td><td>' + (r.session_uptime_s ? esc(uptime(r.session_uptime_s)) : '-') + '</td></tr>' +
         '<tr><td>Last measurement</td><td>' + (r.ts ? esc(depuis(r.ts)) : 'never') + '</td></tr>' +
@@ -12364,7 +12536,7 @@ async function loadClientPage() {
       host.querySelector('#cp-mode-out').innerHTML = rendreResultats(res);
       setTimeout(loadClientPage, 1200);
     } catch (err) {
-      host.querySelector('#cp-mode-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      host.querySelector('#cp-mode-out').innerHTML = noticeErreur(err);
       e.target.disabled = false;
     }
   });
@@ -12381,7 +12553,7 @@ async function loadClientPage() {
       document.activeElement.blur();
       setTimeout(loadClientPage, 1200);
     } catch (err) {
-      out.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      out.innerHTML = noticeErreur(err);
     }
   });
   clic('cp-plan-reset', async () => {
@@ -12390,7 +12562,7 @@ async function loadClientPage() {
       await api('/plans/' + encodeURIComponent(login), { method: 'DELETE' });
       loadClientPage();
     } catch (err) {
-      host.querySelector('#cp-plan-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      host.querySelector('#cp-plan-out').innerHTML = noticeErreur(err);
     }
   });
   const graphe = host.querySelector('#cp-chart');
@@ -12862,7 +13034,7 @@ async function mapPoser(cible, lat, lon) {
     MAP.edit = false;
     toast('<b>' + esc(cible.name) + '</b> placed on the map.', 4000);
   } catch (err) {
-    toast(esc(err.message), 6000);
+    toastErreur(err);
   }
   await loadMap();
 }
@@ -13075,6 +13247,10 @@ async function loadActivity() {
  * Chaque probleme porte un CODE stable : il se cite au telephone, se cherche
  * dans la documentation, et dit QUOI VERIFIER. */
 const CODES_ERREUR = {
+  ERR_ROUTER_UNREAD: { niveau: 'crit', nom: 'Router not answering freeQoS',
+    verifier: 'Its API from the freeQoS server: service on (/ip service), allowed address, firewall input rule, account and password. Its clients may well be connected: they are just not measured.' },
+  ERR_LIMIT_NOT_HELD: { niveau: 'warn', nom: 'Limit not held',
+    verifier: 'The router does not apply the queue: it is missing (Reset queues on Devices), or bypassed by FastTrack (/ip firewall filter, action=fasttrack-connection).' },
   ERR_POP_TIMEOUT: { niveau: 'crit', nom: 'Site unreachable',
     verifier: 'The shared link of the site: backhaul radio, power, the site router. Its clients come back together once it is fixed.' },
   ERR_ROUTER_WRITE: { niveau: 'crit', nom: 'Router refused a change',
@@ -13103,6 +13279,24 @@ function calculerAlertes(rows, journal, site) {
   const vus = site ? rows.filter((r) => (r.pop_name || '') === site) : rows;
   const parSite = {};
   vus.forEach((r) => { (parSite[r.pop_name || '-'] = parSite[r.pop_name || '-'] || []).push(r); });
+  // UN ROUTEUR MUET D'ABORD : ses clients ne sont pas « hors ligne », ils ne
+  // sont plus mesures. Les compter comme partis donnait une fausse panne.
+  Object.entries(parSite).forEach(([nom, liste]) => {
+    const muet = CLI.lecture && CLI.lecture[nom];
+    if (!muet) return;
+    ajouter('ERR_ROUTER_UNREAD', muet.router + ': not answering freeQoS',
+      (muet.error || 'No answer') + (muet.ok_at ? ' · last read ' + depuis(muet.ok_at) : '') + '.',
+      liste.map((r) => r.login));
+    delete parSite[nom];
+  });
+  const debordent = vus.filter((r) => {
+    const lim = Number(r.effective_down_mbps) || 0;
+    return clientEnLigne(r) && lim > 0 && (Number(r.tx_bps) || 0) / 1e6 >= lim * 1.25;
+  });
+  if (debordent.length) {
+    ajouter('ERR_LIMIT_NOT_HELD', debordent.length + ' client(s) over their limit',
+      'Their download is well above the limit they should have.', debordent.map((r) => r.login));
+  }
   Object.entries(parSite).forEach(([nom, liste]) => {
     const mesures = liste.filter((r) => r.ts);
     const tombes = mesures.filter((r) => !clientEnLigne(r));
@@ -13582,7 +13776,7 @@ function openModeClients(modeId) {
       root.querySelector('.modal-foot').innerHTML = '<button class="primary" data-modal-close>Done</button>';
       root.querySelector('[data-modal-close]').addEventListener('click', fermer);
     } catch (err) {
-      sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      sortie.innerHTML = noticeErreur(err);
       bouton.disabled = false;
     }
   });
@@ -13610,7 +13804,7 @@ function openMyAccount() {
       root.querySelector('#ma-out').innerHTML = '<div class="notice ok">Password changed. Your other sessions are closed.</div>';
       root.querySelector('#ma-form').reset();
     } catch (err) {
-      root.querySelector('#ma-out').innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+      root.querySelector('#ma-out').innerHTML = noticeErreur(err);
     }
   });
   root.querySelector('#ma-logout').addEventListener('click', () => {
@@ -13630,6 +13824,7 @@ const LOADERS = {
   dashboard: loadDashboard,
   exec: loadExec,
   traffic: loadTraffic,
+  rules: loadRules,
   network: loadNetwork,
   plans: loadPlans,
   insights: loadInsights,
@@ -13653,10 +13848,12 @@ async function show(view) {
   // Le grand titre reprend l'intitule de l'onglet : on sait ou l'on est sans
   // chercher l'onglet allume.
   const lien = document.querySelector('nav.tabs a[data-view="' + view + '"]');
+  // Pages sans entree dans la barre (ouvertes depuis une autre) : leur nom.
+  const nomVue = lien ? lien.textContent.trim() : ({ map: 'Map', plans: 'Plans' }[view] || '');
   const titre = document.getElementById('page-title');
-  if (lien && titre) titre.textContent = lien.textContent.trim();
-  document.title = (lien ? lien.textContent.trim() + ' · ' : '') + 'freeQoS';
-  document.getElementById('pb-title').textContent = lien ? lien.textContent.trim() : '';
+  if (nomVue && titre) titre.textContent = nomVue;
+  document.title = (nomVue ? nomVue + ' · ' : '') + 'freeQoS';
+  document.getElementById('pb-title').textContent = nomVue;
   DIRECT.ok = null;
   DIRECT.echec = null;
   majDirect();
@@ -13677,15 +13874,17 @@ async function show(view) {
  *  ses anciennes lignes, et un ecran vide se lit comme "il n'y a rien" alors
  *  qu'il faut lire "je n'ai pas pu savoir". Les deux n'appellent pas le meme
  *  geste, et le second se diagnostique en dix secondes quand il est dit. */
-function appError(message) {
+function appError(err) {
   const banniere = document.getElementById('app-error');
-  if (!message) { banniere.hidden = true; banniere.innerHTML = ''; return; }
+  if (!err) { banniere.hidden = true; banniere.innerHTML = ''; return; }
   banniere.hidden = false;
-  banniere.innerHTML = '<div class="notice err">' +
-    '<strong>This tab could not be loaded.</strong> ' + esc(message) +
-    '<span class="hint">What is shown may be stale. Check ' +
-    '<a href="/health" target="_blank">/health</a> and the Settings tab; if the ' +
-    'problem followed an update, reload the page (Ctrl+Shift+R).</span></div>';
+  const e = typeof err === 'string' ? { message: err } : err;
+  const detail = e.title ? e.detail : e.message;
+  banniere.innerHTML = '<div class="notice err err-clear"><b>This page could not be loaded' +
+    (e.title ? ' · ' + esc(e.title) : '') + '</b>' +
+    (detail ? '<span>' + esc(detail) + '</span>' : '') +
+    '<small>' + esc(e.hint || 'What is shown may be out of date. It retries on its own; if this follows an update, reload the page (Ctrl+Shift+R).') +
+    '</small></div>';
 }
 
 /** Derniere mise a jour reussie et dernier echec de l'onglet affiche. */
@@ -13713,7 +13912,7 @@ async function refresh() {
   } catch (err) {
     console.error('Rafraichissement impossible :', err);
     if (state.view === vue) {
-      appError(err && err.message ? err.message : String(err));
+      appError(err);
       DIRECT.echec = Date.now();
     }
   } finally {
@@ -13733,7 +13932,7 @@ function route() {
     if (FICHE.login !== login) { FICHE.login = login; FICHE.onglet = 'overview'; }
     vue = 'client';
   }
-  if (estLimite() && !['clients', 'modes', 'alerts', 'activity', 'management', 'map', 'client'].includes(vue)) vue = 'clients';
+  if (estLimite() && !['dashboard', 'clients', 'modes', 'alerts', 'activity', 'management', 'map', 'client'].includes(vue)) vue = 'dashboard';
   show(vue || 'dashboard');
 }
 
@@ -13806,7 +14005,7 @@ document.getElementById('plans-default-form').addEventListener('submit', async (
       : '<div class="notice warn">Default plan saved. It reaches the routers at the next cycle ' +
         '(a few minutes).</div>';
   } catch (err) {
-    res.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    res.innerHTML = noticeErreur(err);
   }
   await loadPlans();
 });
@@ -13877,7 +14076,7 @@ document.getElementById('btn-discover').addEventListener('click', async (e) => {
       '</div>';
     await loadNetwork();
   } catch (err) {
-    notice.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    notice.innerHTML = noticeErreur(err);
   } finally {
     e.target.disabled = false;
   }

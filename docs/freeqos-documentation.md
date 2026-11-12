@@ -1369,16 +1369,19 @@ The capacity view also ranks subscribers by **volume** over the period. The top 
 
 ## 9. Interface
 
+**Errors say what happened and what to do**: a title (*Not allowed with your account*, *Not possible right now*, *A router or service did not answer*, *freeQoS cannot be reached*...), the server's reason, and the next step. An error from a button shows in a corner without blocking the page; a page that cannot load says so in a banner and retries on its own.
+
 Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. The two long configuration pages, **Settings** and **Devices**, show one section at a time: their table of contents works as tabs.
 
 | Page | Question it answers | Sections |
 | --- | --- | --- |
-| **Dashboard** | What is happening now? | Total throughput, traffic per router, top consumers, radio backhauls |
+| **Dashboard** (first page, both roles) | Is everything all right today? | A banner: **All good**, or the problems that need you, most urgent first, each one a click away from the clients concerned; clients connected, traffic now, sites, modes and boosts; one card per site. Below, for the Administrator only: *Network detail* (throughput, traffic per router, top consumers, radio backhauls) |
+| **Rules** (Administrator) | What may clients reach? | Rules in force, and the form to write one: block or cap a service (YouTube, Netflix...), a category or IP prefixes, for every client, chosen sites or chosen clients |
 | **Executive** | Where is the risk? | Saturation risks, latency per subscriber, load and queues per node, health over time (QoE heatmap) |
-| **Traffic** | Who consumes what, where to? | Consumers, services, countries, who talks to whom, destinations, IP lookup, restrictions |
+| **Traffic** | Who consumes what, where to? | Consumers, services, countries, who talks to whom, destinations, IP lookup (restrictions moved to **Rules**) |
 | **Network tree** | How is the network wired? | Discovered tree, editable with the mouse (move, re-parent, merge, hide) |
-| **Clients** | Who are my clients, and how are they doing? | Every client (PPPoE, static IP, VLAN), its mode, boost and usage; *+ Add a client* (Administrator) declares static-IP and VLAN clients and lists them. The former *Subscribers* tab is merged here. |
-| **Plans** | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
+| **Clients** | Who are my clients, and how are they doing? | Every client under its **PoP**, with its connection (PPPoE, static IP, or **VLAN 2060**: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; *+ Add a client* (Operator) declares PPPoE, static-IP and VLAN clients. The map button opens the **Map**. |
+| **Plans** (from *Settings › Plans & map*) | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
 | **Insights** | What to do commercially? | Subscribers at risk of leaving, ready for a bigger plan, sites with room to grow |
 | **Devices** | Which equipment? | Router health, adding a router, Ubiquiti antennas, radio health, inventory |
 | **API** | How to integrate? | API keys, links to the API guide and to this documentation |
@@ -1555,10 +1558,10 @@ freeQoS holds router credentials that can write across the whole network. Securi
 | Level (`role`) | Sees | Can do | Interface |
 | --- | --- | --- | --- |
 | **Viewer** (`read`) | Everything | Nothing | Every page, read-only banner |
-| **Operator** (`operator`) | Clients | **Client management**, on one or several clients at once: change the bandwidth mode, give or stop a boost, set or remove the plan; define the bandwidth modes and the bandwidth schedules (rates by time of day) | **Clients**, **Modes**, **Alerts**, **Activity**, **Schedules**, **Map**; no Settings (password and log out from the account card) |
-| **Administrator** (`edit`) | Everything | Everything else: adding clients, PoPs, routers, antennas and their API (Ubiquiti), settings, API keys, accounts | Every page |
+| **Operator** (`operator`) | Clients | **Manages the clients**: adds them (PPPoE login declared ahead, static IP, VLAN), edits their details and connection, changes plan, mode and boost on one or many clients, defines bandwidth modes and schedules; sees at a glance whether there is a problem | **Dashboard** (today's status), **Clients**, **Modes**, **Schedules**, **Alerts**, **Activity**; no network pages, no Settings (password and log out from the account card) |
+| **Administrator** (`edit`) | Everything | Everything the Operator does, plus **the network**: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic **Rules**, the network tree, detailed monitoring (Traffic, Insights, Executive, network detail of the Dashboard), API keys, Settings, accounts | Every page; the network pages are grouped under *Network* in the sidebar |
 
-  The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`, `POST/PATCH/DELETE /api/v1/bandwidth-modes` and `/api/v1/bandwidth-schedules`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it, in the **activity log** below and in the enforcement audit.
+  The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `PUT /api/v1/clients/{login}/profile`, `POST /api/v1/clients`, `POST/PATCH/DELETE /api/v1/static-clients`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`, `POST/PATCH/DELETE /api/v1/bandwidth-modes` and `/api/v1/bandwidth-schedules`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it, in the **activity log** below and in the enforcement audit.
 - **Activity log:** every change made on a client (bandwidth mode, boost, boost stopped, plan, plan removed) is recorded in `client_activity`: who, when, which client, the detail, and the state of the queue afterwards (written, pending on the router because writing is off, no router, refused). It is read on the **Activity** page (search, CSV export), in each client's sheet, and through `GET /api/v1/activity?login=&q=&limit=`. Kept 400 days. An API key keeps its two scopes: `read`, or `write` (Administrator rights except accounts, which no key can manage). The stored values `read` and `edit` are those of the former two roles: existing accounts keep their level without migration.
 - **Passwords:** 12 characters minimum, too-common words are refused. They are hashed with scrypt (N=2^14, r=8, p=1, salted, compared in constant time).
 - **Anti-guessing:** 5 failures in 5 minutes lock the email **and** the client address for 5 minutes. Each repeat doubles the wait, up to 1 h.

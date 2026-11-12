@@ -1453,7 +1453,10 @@ a.button.primary:hover { background: var(--accent-hover); text-decoration: none;
 .cli-usage { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cli-usage .d { color: var(--down); } .cli-usage .u { color: var(--up); }
 /* L'Operator : ses pages de gestion des clients, rien d'autre (pas de Settings). */
-body.role-limited nav.tabs a:not([data-view="clients"]):not([data-view="modes"]):not([data-view="alerts"]):not([data-view="activity"]):not([data-view="management"]):not([data-view="map"]) { display: none; }
+/* L'Operator gere les CLIENTS : les pages du reseau ne sont pas les siennes. */
+body.role-limited .nav-admin { display: none; }
+.nav-sep { display: block; margin: .9rem .75rem .25rem; font-size: .7rem; font-weight: 600; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--faint); }
 
 /* --------------------------------------------- Change bandwidth mode */
 .modal-backdrop {
@@ -2202,3 +2205,66 @@ a.btn:hover { text-decoration: none; filter: brightness(1.05); }
 /* Arbre : choisir un client puis agir, sur une ligne. */
 .row-inline { display: flex; gap: .4rem; align-items: center; }
 .row-inline input { flex: 1; min-width: 0; }
+/* Page Regles : ce qu'elles font, en une phrase, au-dessus. */
+.rules-intro { display: flex; flex-direction: column; gap: .3rem; margin-bottom: 1rem; }
+.rules-intro span { color: var(--muted); font-size: .9rem; }
+.rule-new > summary { font-weight: 600; cursor: pointer; }
+
+/* ------------------------------------------------- tableau de bord du jour */
+.today-hero { display: flex; align-items: center; gap: 1rem; padding: 1.1rem 1.25rem; border-radius: var(--radius);
+  margin-bottom: 1rem; border: 1px solid var(--border); background: var(--surface); }
+.today-hero > div { flex: 1; display: flex; flex-direction: column; gap: .2rem; }
+.today-hero b { font-size: 1.25rem; }
+.today-hero span:not(.today-ico) { color: var(--muted); font-size: .92rem; }
+.today-ico { width: 2.6rem; height: 2.6rem; border-radius: 50%; display: grid; place-items: center; font-weight: 700;
+  font-size: 1.3rem; flex: 0 0 auto; color: #fff; }
+.today-hero.ok { background: color-mix(in srgb, var(--ok) 9%, var(--surface)); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.today-hero.ok .today-ico { background: var(--ok); }
+.today-hero.warn { background: color-mix(in srgb, var(--warn) 10%, var(--surface)); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.today-hero.warn .today-ico { background: var(--warn); }
+.today-hero.crit { background: color-mix(in srgb, var(--crit) 9%, var(--surface)); border-color: color-mix(in srgb, var(--crit) 40%, transparent); }
+.today-hero.crit .today-ico { background: var(--crit); }
+.today-list { padding: .25rem 0; margin-bottom: 1rem; }
+.today-pb { display: flex; align-items: center; gap: .8rem; width: 100%; text-align: left; background: none; border: 0;
+  border-bottom: 1px solid var(--border); border-radius: 0; padding: .7rem 1rem; color: var(--text); min-height: 0; cursor: pointer; }
+.today-pb:last-of-type { border-bottom: 0; }
+.today-pb:hover { background: var(--fill); }
+.today-pb i { width: .65rem; height: .65rem; border-radius: 50%; flex: 0 0 auto; }
+.today-pb span { flex: 1; display: flex; flex-direction: column; gap: .1rem; }
+.today-pb small { color: var(--muted); }
+.today-pb em { font-style: normal; color: var(--accent); font-size: .85rem; white-space: nowrap; }
+.today-more { display: block; padding: .6rem 1rem; font-size: .88rem; }
+i.lvl-crit { background: var(--crit); } i.lvl-warn { background: var(--warn); }
+i.lvl-ok { background: var(--ok); } i.lvl-idle { background: var(--faint); }
+.today-kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1rem; margin-bottom: .5rem; }
+.today-kpi { display: flex; flex-direction: column; gap: .25rem; }
+.today-kpi span { color: var(--muted); font-size: .85rem; }
+.today-kpi b { font-size: 1.8rem; font-weight: 700; }
+.today-kpi b em { font-style: normal; font-size: 1rem; color: var(--muted); font-weight: 500; }
+.today-kpi small { color: var(--muted); font-size: .8rem; }
+.today-kpi.warn b { color: var(--warn); }
+.today-sites { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: .75rem; }
+.today-site { display: grid; grid-template-columns: auto 1fr; column-gap: .55rem; row-gap: .15rem; text-align: left;
+  color: var(--text); cursor: pointer; min-height: 0; }
+.today-site i { width: .65rem; height: .65rem; border-radius: 50%; align-self: center; }
+.today-site span, .today-site small { grid-column: 2; color: var(--muted); font-size: .85rem; }
+.today-site:hover { border-color: var(--accent); }
+.dash-detail { margin-top: 2rem; }
+@media (max-width: 760px) {
+  .today-kpis { grid-template-columns: 1fr 1fr; }
+  .today-kpi b { font-size: 1.4rem; }
+}
+/* L'Operator voit l'etat du jour ; le detail du reseau est pour l'Administrator. */
+body.role-limited .dash-detail { display: none; }
+/* Une grille de champs masquee le reste : [hidden] l'emporte sur display:grid. */
+.row-2[hidden], .row-3[hidden] { display: none; }
+
+/* Erreurs en clair : ce qui s'est passe, le detail, quoi faire. */
+.err-clear { display: flex; flex-direction: column; gap: .2rem; }
+.err-clear b { font-weight: 600; }
+.err-clear small { color: var(--muted); }
+#err-toasts { position: fixed; right: 1rem; bottom: 1rem; z-index: 300; display: flex; flex-direction: column; gap: .5rem;
+  max-width: min(420px, calc(100vw - 2rem)); }
+.err-toast { position: relative; box-shadow: var(--shadow-lift); border-radius: var(--radius-sm); background: var(--surface); }
+.err-toast .notice { margin: 0; padding-right: 2.4rem; }
+.err-toast > button { position: absolute; top: .45rem; right: .45rem; min-height: 0; padding: .1rem .5rem; }
