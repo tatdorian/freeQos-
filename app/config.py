@@ -575,6 +575,13 @@ class Settings(BaseSettings):
     #: constate en production, une file sur le segment d'un PTP bridait tout le
     #: lien. Sans elles, seules les adresses de chaque client sont bridees.
     shaping_link_queues: bool = False
+    #: PLAFONDS EN AMONT : sur le routeur le plus haut (role core ou gateway),
+    #: une file par client, a son forfait x ``upstream_cap_factor``. Le trafic
+    #: venu d'internet est coupe AVANT de remplir le coeur et les liens ; le
+    #: NAS garde le shaping fin (CAKE). Files legeres (type par defaut, pas de
+    #: CAKE), sur l'ADRESSE du client seulement, jamais sur un lien.
+    upstream_caps: bool = False
+    upstream_cap_factor: float = 1.1
     # Sur quoi accrocher la file d'un abonne.
     #
     # "address" (defaut) : target=10.20.0.10/32. L'adresse de la session en
