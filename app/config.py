@@ -388,6 +388,12 @@ class Settings(BaseSettings):
     # API d'administration du proxy HTTPS (Caddy) de la pile Docker. Vide : pas
     # de proxy pilote (le domaine se regle alors dans son propre reverse proxy).
     proxy_admin_url: str | None = None
+    #: Premier compte Administrateur, cree au demarrage quand aucun n'existe :
+    #: son email, et le fichier (0600) ou son mot de passe tire au hasard est
+    #: ecrit. Le fichier disparait quand ce mot de passe est change.
+    first_admin_auto: bool = True
+    freeqos_admin_email: str | None = None
+    first_admin_file: Path | None = Path("data/first-admin.txt")
     #: Threads des appels RouterOS (bloquants). Ils attendent le reseau : en
     #: donner peu fait expirer les lectures quand les sondes les occupent.
     io_threads: int = Field(default=64, ge=8, le=512)

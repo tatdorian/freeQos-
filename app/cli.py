@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import secrets
 import sys
 from collections.abc import Awaitable, Callable
 
@@ -27,28 +26,15 @@ from app.db.users_repo import UsersRepository, UsersStore
 from app.services.accounts import (
     InvalidAccountError,
     check_password,
+    generate_password,
     hash_password,
     normalise_email,
 )
-
-#: Sans 0/O, 1/l/I : un mot de passe lu a l'ecran puis retape.
-_ALPHABET = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 SORTIE_CREE = 0
 SORTIE_BASE = 1
 SORTIE_SAISIE = 2
 SORTIE_EXISTE = 3
-
-
-def generate_password() -> str:
-    """Quatre groupes de cinq, ~114 bits : ``Xk7pQ-m2RtW-...``."""
-    while True:
-        groupes = ["".join(secrets.choice(_ALPHABET) for _ in range(5)) for _ in range(4)]
-        mot = "-".join(groupes)
-        try:
-            return check_password(mot)
-        except InvalidAccountError:  # pragma: no cover - improbable
-            continue
 
 
 async def create_admin(depot: UsersStore, email: str, password: str | None) -> tuple[int, str]:
@@ -67,6 +53,25 @@ async def create_admin(depot: UsersStore, email: str, password: str | None) -> t
     if password:
         return SORTIE_CREE, f"Administrator account created: {email}"
     return SORTIE_CREE, f"Administrator account created: {email}\npassword: {mot}"
+
+
+async def reset_password(depot: UsersStore, email: str) -> tuple[int, str]:
+    """Nouveau mot de passe tire au hasard pour un compte existant (oubli,
+    ou fichier du premier compte perdu)."""
+    try:
+        email = normalise_email(email)
+    except InvalidAccountError as exc:
+        return SORTIE_SAISIE, f"refused: {exc}"
+    fiche = await depot.credentials(email)
+    if fiche is None:
+        return SORTIE_SAISIE, f"no account {email}"
+    mot = generate_password()
+    await depot.update(int(fiche["id"]), password_hash=hash_password(mot), disabled=False)
+    await depot.close_sessions_of(int(fiche["id"]))
+    await depot.record_event(
+        "password_reset", email=email, actor="command line", detail="reset from the server"
+    )
+    return SORTIE_CREE, f"New password for {email}\npassword: {mot}"
 
 
 async def count_accounts(depot: UsersStore) -> tuple[int, str]:
@@ -107,9 +112,16 @@ def main(argv: list[str] | None = None) -> int:
         help="read the password from standard input instead of generating one",
     )
     sous.add_parser("count-accounts", help="print how many accounts exist (0 on a new install)")
+    reset = sous.add_parser("reset-password", help="give an account a new random password")
+    reset.add_argument("--email", required=True)
     args = parser.parse_args(argv)
     if args.commande == "count-accounts":
         action: Action = count_accounts
+    elif args.commande == "reset-password":
+
+        async def action(depot: UsersStore) -> tuple[int, str]:
+            return await reset_password(depot, args.email)
+
     else:
         mot = sys.stdin.readline().rstrip("\r\n") if args.password_stdin else None
 

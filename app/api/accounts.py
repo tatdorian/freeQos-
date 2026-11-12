@@ -583,6 +583,9 @@ async def change_my_password(
     if verify_password(nouveau, fiche.get("password_hash")):
         raise _refus(InvalidAccountError("the new password must differ from the current one"))
     await store.update(int(user["id"]), password_hash=hash_password(nouveau))
+    from app.services.first_admin import forget_file
+
+    forget_file(container.settings.first_admin_file, email)
     forget_cached_sessions()
     jeton = request.cookies.get(COOKIE)
     await store.close_sessions_of(int(user["id"]), keep=token_digest(jeton) if jeton else None)

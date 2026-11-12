@@ -277,7 +277,7 @@ Without asking anything, the script:
 4. switches to `mirror.gcr.io` if Docker Hub is unreachable;
 5. moves the web proxy to 8081 / 8443 if another web server already holds 80 / 443 (written to `.env` as `HTTP_PORT` / `HTTPS_PORT`);
 6. builds, starts, waits for `/health` (3 minutes at most) and prints the address;
-7. on a **new** installation, creates the **first Administrator account** (see step 6). On an update the accounts already exist and nothing is touched;
+7. prints the **first Administrator account**, which the application creates by itself on its first start (see step 6). Nothing is asked: the installation runs unattended;
 8. makes freeQoS **start with the server**: Docker is enabled at boot, every container is `restart: unless-stopped`, and a systemd service `freeqos` runs `docker compose up -d` at boot, even after a `docker compose down`.
 
 `sudo systemctl status freeqos` shows it; `sudo systemctl disable freeqos` turns the automatic start off.
@@ -291,24 +291,22 @@ curl -s http://127.0.0.1:8000/health/ready
 
 The three containers `freeqos-app`, `freeqos-db` and `freeqos-proxy` must be `running`, and `/health/ready` must answer `"status":"ready"`.
 
-**6. The first Administrator account** is created by the installation itself, not on the first visit: otherwise whoever reaches the server's address first could make themselves administrator.
+**6. The first Administrator account** is created by the application itself, on its first start, before it answers anyone. There is no "create the first account" screen left open to whoever reaches the server first.
 
-- The script asks for the email (`admin@freeqos.local` when there is no terminal, for example in an automated deployment), or takes `FREEQOS_ADMIN_EMAIL`.
-- The password is drawn at random (`Xk7pQ-m2RtW-...`, about 114 bits, without look-alike characters) and **printed once** at the end of the installation. Note it, then change it from the account menu. To choose it instead, pass `FREEQOS_ADMIN_PASSWORD=...` (read from standard input, never on a command line).
+- Email: `FREEQOS_ADMIN_EMAIL` (in `.env`, or in front of the install command), `admin@freeqos.local` by default.
+- Password: drawn at random (`Xk7pQ-m2RtW-...`, about 114 bits, without look-alike characters), never written to the log. `install.sh` prints it at the end. It is also kept in `data/first-admin.txt` (readable only by the service), and that file is **deleted as soon as the password is changed**:
+
+```
+sudo docker compose exec app cat data/first-admin.txt
+```
 
 ```
 curl -fsSL .../install.sh | sudo FREEQOS_ADMIN_EMAIL=noc@example.com sh
 ```
 
-Open `http://<freeQoS-IP>/` (or `:8000`) and log in. The other accounts (Viewer, Operator, Administrator) are created in *Settings › Accounts*.
+This works the same with a plain `docker compose up` or on Kubernetes: nothing to run by hand. Open `http://<freeQoS-IP>/` (or `:8000`), log in, change the password from the account menu. The other accounts (Viewer, Operator, Administrator) are created in *Settings › Accounts*.
 
-Deployed without `install.sh` (plain `docker compose up`, Kubernetes)? Create it the same way, before opening the address to anyone:
-
-```
-sudo docker compose exec app python -m app.cli create-admin --email noc@example.com
-```
-
-It answers `an account already exists` (exit code 3) and changes nothing when an account is there. `python -m app.cli count-accounts` prints how many exist. If no account was created, the first visit still offers to create one.
+Command line, in the container: `python -m app.cli count-accounts` prints how many accounts exist, `python -m app.cli reset-password --email ...` gives an account a new random password (and closes its sessions), and `python -m app.cli create-admin --email ...` creates the first account if there is none. `FIRST_ADMIN_AUTO=false` turns the automatic creation off; the first visit then offers to create the account, as before.
 
 **7. Give it a domain name and HTTPS** (recommended), from the interface:
 
@@ -1495,7 +1493,7 @@ freeQoS holds router credentials that can write across the whole network. Securi
 
 ### Interface accounts
 
-- **First account:** created at installation (`install.sh`, or `python -m app.cli create-admin`), as an Administrator (`edit`). Only when none exists does the first visit offer to create it.
+- **First account:** created by the application on its first start, as an Administrator (`edit`), with a random password kept in `data/first-admin.txt` (mode 0600) until it is changed. The first-visit screen only appears if this is turned off (`FIRST_ADMIN_AUTO=false`).
 - **Three access levels**, each including the rights of the previous one, enforced by the **server** (a refused write is a `403` naming the level it needs, whatever the interface shows):
 
 | Level (`role`) | Sees | Can do | Interface |
@@ -1516,11 +1514,10 @@ freeQoS holds router credentials that can write across the whole network. Securi
 
 **Behind an HTTPS reverse proxy** (the included one is already set up), set `FORWARDED_ALLOW_IPS=<proxy address>` so that the application trusts the proxy's `X-Forwarded-Proto`: the session cookie is then sent `Secure`, HSTS is set, and the address recorded for each login is the client's, not the proxy's.
 
-**Locked out of every edit account?** Empty the accounts table, then create a new Administrator; measurements and inventory are untouched:
+**Locked out?** Give the account a new password from the server; measurements and inventory are untouched:
 
 ```
-sudo docker compose exec timescaledb psql -U qos -d qos -c "TRUNCATE app_users CASCADE"
-sudo docker compose exec app python -m app.cli create-admin --email noc@example.com
+sudo docker compose exec app python -m app.cli reset-password --email noc@example.com
 ```
 
 ### HTTP headers
