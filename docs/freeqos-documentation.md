@@ -277,7 +277,8 @@ Without asking anything, the script:
 4. switches to `mirror.gcr.io` if Docker Hub is unreachable;
 5. moves the web proxy to 8081 / 8443 if another web server already holds 80 / 443 (written to `.env` as `HTTP_PORT` / `HTTPS_PORT`);
 6. builds, starts, waits for `/health` (3 minutes at most) and prints the address;
-7. makes freeQoS **start with the server**: Docker is enabled at boot, every container is `restart: unless-stopped`, and a systemd service `freeqos` runs `docker compose up -d` at boot, even after a `docker compose down`.
+7. on a **new** installation, creates the **first Administrator account** (see step 6). On an update the accounts already exist and nothing is touched;
+8. makes freeQoS **start with the server**: Docker is enabled at boot, every container is `restart: unless-stopped`, and a systemd service `freeqos` runs `docker compose up -d` at boot, even after a `docker compose down`.
 
 `sudo systemctl status freeqos` shows it; `sudo systemctl disable freeqos` turns the automatic start off.
 
@@ -290,7 +291,24 @@ curl -s http://127.0.0.1:8000/health/ready
 
 The three containers `freeqos-app`, `freeqos-db` and `freeqos-proxy` must be `running`, and `/health/ready` must answer `"status":"ready"`.
 
-**6. Create the first account.** Open `http://<freeQoS-IP>/` (or `:8000`). The first visit offers to create the administrator account (12 characters minimum).
+**6. The first Administrator account** is created by the installation itself, not on the first visit: otherwise whoever reaches the server's address first could make themselves administrator.
+
+- The script asks for the email (`admin@freeqos.local` when there is no terminal, for example in an automated deployment), or takes `FREEQOS_ADMIN_EMAIL`.
+- The password is drawn at random (`Xk7pQ-m2RtW-...`, about 114 bits, without look-alike characters) and **printed once** at the end of the installation. Note it, then change it from the account menu. To choose it instead, pass `FREEQOS_ADMIN_PASSWORD=...` (read from standard input, never on a command line).
+
+```
+curl -fsSL .../install.sh | sudo FREEQOS_ADMIN_EMAIL=noc@example.com sh
+```
+
+Open `http://<freeQoS-IP>/` (or `:8000`) and log in. The other accounts (Viewer, Operator, Administrator) are created in *Settings › Accounts*.
+
+Deployed without `install.sh` (plain `docker compose up`, Kubernetes)? Create it the same way, before opening the address to anyone:
+
+```
+sudo docker compose exec app python -m app.cli create-admin --email noc@example.com
+```
+
+It answers `an account already exists` (exit code 3) and changes nothing when an account is there. `python -m app.cli count-accounts` prints how many exist. If no account was created, the first visit still offers to create one.
 
 **7. Give it a domain name and HTTPS** (recommended), from the interface:
 
@@ -1460,7 +1478,7 @@ freeQoS holds router credentials that can write across the whole network. Securi
 
 ### Interface accounts
 
-- **First account:** on the first visit, the interface offers to create one. It is an Administrator (`edit`).
+- **First account:** created at installation (`install.sh`, or `python -m app.cli create-admin`), as an Administrator (`edit`). Only when none exists does the first visit offer to create it.
 - **Three access levels**, each including the rights of the previous one, enforced by the **server** (a refused write is a `403` naming the level it needs, whatever the interface shows):
 
 | Level (`role`) | Sees | Can do | Interface |
@@ -1481,10 +1499,11 @@ freeQoS holds router credentials that can write across the whole network. Securi
 
 **Behind an HTTPS reverse proxy** (the included one is already set up), set `FORWARDED_ALLOW_IPS=<proxy address>` so that the application trusts the proxy's `X-Forwarded-Proto`: the session cookie is then sent `Secure`, HSTS is set, and the address recorded for each login is the client's, not the proxy's.
 
-**Locked out of every edit account?** Emptying the accounts table reopens the first-account screen; measurements and inventory are untouched:
+**Locked out of every edit account?** Empty the accounts table, then create a new Administrator; measurements and inventory are untouched:
 
 ```
 sudo docker compose exec timescaledb psql -U qos -d qos -c "TRUNCATE app_users CASCADE"
+sudo docker compose exec app python -m app.cli create-admin --email noc@example.com
 ```
 
 ### HTTP headers
