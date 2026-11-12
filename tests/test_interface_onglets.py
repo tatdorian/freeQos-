@@ -94,8 +94,13 @@ def test_services_et_trafic_ne_font_qu_une_page_sans_doublon() -> None:
     assert 'id="view-services"' not in HTML
     trafic = HTML[HTML.index('id="view-traffic"') :]
     trafic = trafic[: trafic.index("</section>")]
-    for bloc in ("svc-map", "svc-services", "svc-destinations", "svc-lookup", "svc-rules"):
+    for bloc in ("svc-map", "svc-services", "svc-destinations", "svc-lookup"):
         assert f'id="{bloc}"' in trafic
+    # Les REGLES ont leur page (Administrator), et Trafic y renvoie.
+    regles = HTML[HTML.index('id="view-rules"') :]
+    regles = regles[: regles.index("</section>")]
+    assert 'id="svc-rules"' in regles and 'id="svc-rule-form"' in regles
+    assert 'href="#/rules"' in trafic
     for doublon in ("svc-range", "svc-live", "svc-stats"):
         assert f'id="{doublon}"' not in HTML
     assert "loadServices()" in JS and "view === 'services'" in JS
@@ -162,7 +167,9 @@ def test_chaque_onglet_a_sa_section_et_son_chargeur() -> None:
         assert vue in chargeurs, f"l'onglet '{vue}' n'a pas de chargeur dans LOADERS"
     # La page d'UN client (#/client/<login>) n'a pas d'onglet : on y entre par un
     # client. Elle a quand meme sa section.
-    sans_onglet = {"client"}
+    # Carte et Plans non plus : peu servis au quotidien, ils s'ouvrent depuis
+    # Clients (bouton carte) et Settings (« Plans & map »).
+    sans_onglet = {"client", "map", "plans"}
     for vue in sans_onglet:
         assert f'id="view-{vue}"' in HTML, f"la page '{vue}' n'a pas de section"
     assert chargeurs - sans_onglet == set(ONGLETS), "un chargeur ne correspond a aucun onglet"
