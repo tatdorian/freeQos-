@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="809711f5876222de">
+  <meta name="freeqos-docs-source" content="23f6be99b1f20402">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -179,6 +179,7 @@
     <a class="sub" href="#clients_2">Clients</a>
     <a class="sub" href="#map_1">Map</a>
     <a class="sub" href="#modes_1">Modes</a>
+    <a class="sub" href="#public-access">Public access</a>
     <a class="sub" href="#ubiquiti">Ubiquiti</a>
   </nav>
 
@@ -805,7 +806,7 @@
 </tr>
 <tr>
 <td>Optional</td>
-<td>A DNS name and an HTTPS proxy in front of the interface</td>
+<td>A DNS name (an <code>A</code> record at OVH or any registrar) pointing to the server, for HTTPS. The HTTPS proxy is included</td>
 </tr>
 </tbody>
 </table></div>
@@ -884,9 +885,16 @@
 <tr>
 <td>1</td>
 <td>Browser → freeQoS</td>
-<td>TCP 8000 (or 443 behind a proxy)</td>
+<td>TCP 80 and 443 (the included proxy), or 8000 directly</td>
 <td>Interface</td>
 <td>Yes</td>
+</tr>
+<tr>
+<td>1b</td>
+<td>Let's Encrypt → freeQoS</td>
+<td>TCP 80</td>
+<td>Proves the domain is yours, then renews the certificate</td>
+<td>If a domain is set</td>
 </tr>
 <tr>
 <td>2</td>
@@ -994,20 +1002,57 @@
 <li>fetches the code into <code>/opt/freeqos</code> (main branch, or <code>FREEQOS_BRANCH</code>);</li>
 <li>writes <code>.env</code>: random PostgreSQL password, <code>APP_PORT=8000</code>, <code>NETFLOW_PORT=2055</code>;</li>
 <li>switches to <code>mirror.gcr.io</code> if Docker Hub is unreachable;</li>
-<li>builds, starts, waits for <code>/health</code> (3 minutes at most) and prints the address.</li>
+<li>moves the web proxy to 8081 / 8443 if another web server already holds 80 / 443 (written to <code>.env</code> as <code>HTTP_PORT</code> / <code>HTTPS_PORT</code>);</li>
+<li>builds, starts, waits for <code>/health</code> (3 minutes at most) and prints the address;</li>
+<li>makes freeQoS <strong>start with the server</strong>: Docker is enabled at boot, every container is <code>restart: unless-stopped</code>, and a systemd service <code>freeqos</code> runs <code>docker compose up -d</code> at boot, even after a <code>docker compose down</code>.</li>
 </ol>
+<p><code>sudo systemctl status freeqos</code> shows it; <code>sudo systemctl disable freeqos</code> turns the automatic start off.</p>
 <p><strong>5. Check.</strong></p>
 <pre><code>cd /opt/freeqos &amp;&amp; sudo docker compose ps
 curl -s http://127.0.0.1:8000/health/ready
 </code></pre>
-<p>Both containers <code>freeqos-app</code> and <code>freeqos-db</code> must be <code>running</code>, and <code>/health/ready</code> must answer <code>"status":"ready"</code>.</p>
-<p><strong>6. Create the first account.</strong> Open <code>http://&lt;freeQoS-IP&gt;:8000</code>. The first visit offers to create the administrator account (12 characters minimum).</p>
-<p><strong>7. Put the interface behind HTTPS</strong> (recommended): a reverse proxy in front of port 8000. With Caddy, a few lines are enough, and the certificate is obtained automatically:</p>
-<pre><code>&lt;freeqos-dns-name&gt; {
-    reverse_proxy 127.0.0.1:8000
-}
-</code></pre>
-<p>Then close port 8000 to the outside on the firewall.</p>
+<p>The three containers <code>freeqos-app</code>, <code>freeqos-db</code> and <code>freeqos-proxy</code> must be <code>running</code>, and <code>/health/ready</code> must answer <code>"status":"ready"</code>.</p>
+<p><strong>6. Create the first account.</strong> Open <code>http://&lt;freeQoS-IP&gt;/</code> (or <code>:8000</code>). The first visit offers to create the administrator account (12 characters minimum).</p>
+<p><strong>7. Give it a domain name and HTTPS</strong> (recommended), from the interface:</p>
+<ol>
+<li>At OVH (or any registrar), in the DNS zone of your domain, add an <code>A</code> record: a sub-domain such as <code>qos</code> pointing to the server's public IP. It takes from a few minutes to a few hours to spread.</li>
+<li>Open TCP <strong>80</strong> and <strong>443</strong> to the server from the internet. Port 80 must stay open: it is how Let's Encrypt checks the domain, first and at each renewal.</li>
+<li><em>Settings › Domain &amp; HTTPS</em>: type the name (<code>qos.example.com</code>), optionally an email for certificate expiry notices, then <em>Save and apply</em>.</li>
+</ol>
+<p>The included proxy (Caddy, container <code>freeqos-proxy</code>) obtains the certificate within a minute and renews it on its own. <code>http://</code> on that name then redirects to <code>https://</code>. The server's IP keeps answering in plain HTTP: it is the way back in if the DNS is broken. <em>Check now</em> tells whether the name points to this server and whether HTTPS answers; the last error from the proxy is shown in plain words. <em>Remove</em> goes back to HTTP only.</p>
+<p>Once HTTPS works, close port 8000 to the outside (or set <code>APP_BIND=127.0.0.1</code> in <code>.env</code>). API: <code>GET /api/v1/public-access</code>, <code>PUT /api/v1/public-access</code> (<code>{"domain", "email"}</code>, Administrator), <code>DELETE /api/v1/public-access</code>, <code>POST /api/v1/public-access/check</code>.</p>
+<p>The domain is stored in the database and pushed again to the proxy at each start of freeQoS. The proxy's admin interface (port 2019) is only reachable inside the Docker network, never published. Its certificates live in the <code>caddy_data</code> volume.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th><code>.env</code> variable</th>
+<th>Default</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>HTTP_PORT</code> / <code>HTTPS_PORT</code></td>
+<td><code>80</code> / <code>443</code></td>
+<td>Ports of the proxy on the server. The certificate needs 80 and 443.</td>
+</tr>
+<tr>
+<td><code>APP_PORT</code> / <code>APP_BIND</code></td>
+<td><code>8000</code> / <code>0.0.0.0</code></td>
+<td>Direct access to the application, without the proxy</td>
+</tr>
+<tr>
+<td><code>FREEQOS_SUBNET</code></td>
+<td><code>172.29.84.0/24</code></td>
+<td>Internal Docker network. Change it only if it clashes with one of yours</td>
+</tr>
+<tr>
+<td><code>FORWARDED_ALLOW_IPS</code></td>
+<td>the subnet above</td>
+<td>Who may tell the application the visitor's real address and HTTPS</td>
+</tr>
+</tbody>
+</table></div>
 <p><strong>8. Add the routers.</strong> <em>Devices</em> → <em>Connect a router</em>: name, IP, the account from step 3, role (<code>pop</code>, <code>core</code> or <code>gateway</code>). <em>Test</em> checks the connection without saving anything. After adding, the automatic commissioning described in section 4 runs; follow its report.</p>
 <p><strong>9. Let it run in simulation</strong>, for at least one full cycle. Check the write plan in <em>Settings</em>: planned queues, skipped links and their reason. Then enable writing.</p>
 <p><strong>10. Schedule the backup.</strong> For example, once a night:</p>
@@ -3113,7 +3158,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 - <strong>Last Administrator:</strong> at least one active Administrator account always remains; the last one can be neither deleted, downgraded nor disabled.
 - <strong>Sessions:</strong> at most 10 open sessions per account; everyone sees their own sessions (browser, address, last activity) and can close them remotely. Changing a password or a role closes the other sessions.
 - <strong>Journal retention:</strong> login events are kept 180 days (<em>Settings › Accounts › Login journal</em>) and are also written to the container log (<code>auth login_failed …</code>), usable by fail2ban.</p>
-<p><strong>Behind an HTTPS reverse proxy</strong>, set <code>FORWARDED_ALLOW_IPS=&lt;proxy address&gt;</code> so that the application trusts the proxy's <code>X-Forwarded-Proto</code>: the session cookie is then sent <code>Secure</code>, HSTS is set, and the address recorded for each login is the client's, not the proxy's.</p>
+<p><strong>Behind an HTTPS reverse proxy</strong> (the included one is already set up), set <code>FORWARDED_ALLOW_IPS=&lt;proxy address&gt;</code> so that the application trusts the proxy's <code>X-Forwarded-Proto</code>: the session cookie is then sent <code>Secure</code>, HSTS is set, and the address recorded for each login is the client's, not the proxy's.</p>
 <p><strong>Locked out of every edit account?</strong> Emptying the accounts table reopens the first-account screen; measurements and inventory are untouched:</p>
 <pre><code>sudo docker compose exec timescaledb psql -U qos -d qos -c &quot;TRUNCATE app_users CASCADE&quot;
 </code></pre>
@@ -5191,7 +5236,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 187 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 191 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -6329,6 +6374,38 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>PUT</code></td>
 <td><code>/api/v1/clients/{login}/mode</code></td>
 <td>Put one client in a bandwidth mode</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="public-access">Public access</h3>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Path</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/public-access</code></td>
+<td>Domain name and HTTPS of the interface</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/public-access</code></td>
+<td>Serve the interface under a domain name, in HTTPS</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/public-access</code></td>
+<td>Stop serving the interface under a domain name</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/public-access/check</code></td>
+<td>Check the DNS and the HTTPS of the domain</td>
 </tr>
 </tbody>
 </table></div>

@@ -218,7 +218,7 @@ Watch the routers' CPU load in *Devices* after commissioning.
 | Address | A fixed IP, reachable from the routers (for NetFlow) and able to reach them (for the API) |
 | Internet access during installation | `github.com`, `get.docker.com`, Docker Hub or `mirror.gcr.io`, `pypi.org` |
 | Routers | RouterOS 7, a dedicated account (step 3 below) |
-| Optional | A DNS name and an HTTPS proxy in front of the interface |
+| Optional | A DNS name (an `A` record at OVH or any registrar) pointing to the server, for HTTPS. The HTTPS proxy is included |
 
 ### Network flows
 
@@ -228,7 +228,8 @@ A stateful firewall only needs a rule in the direction the connection is opened:
 
 | # | From → to | Protocol, port | Content | Needed |
 | --- | --- | --- | --- | --- |
-| 1 | Browser → freeQoS | TCP 8000 (or 443 behind a proxy) | Interface | Yes |
+| 1 | Browser → freeQoS | TCP 80 and 443 (the included proxy), or 8000 directly | Interface | Yes |
+| 1b | Let's Encrypt → freeQoS | TCP 80 | Proves the domain is yours, then renews the certificate | If a domain is set |
 | 2 | Billing, CRM → freeQoS | TCP 8000 or 443 | API, with a key | If integrated |
 | 3 | freeQoS → routers | TCP 8728 (clear) or 8729 (TLS) | Reads, queue writes, ping orders | Yes |
 | 4 | Routers → freeQoS | UDP 2055, no reply | NetFlow | For traffic and `/usage/v1` |
@@ -274,7 +275,11 @@ Without asking anything, the script:
 2. fetches the code into `/opt/freeqos` (main branch, or `FREEQOS_BRANCH`);
 3. writes `.env`: random PostgreSQL password, `APP_PORT=8000`, `NETFLOW_PORT=2055`;
 4. switches to `mirror.gcr.io` if Docker Hub is unreachable;
-5. builds, starts, waits for `/health` (3 minutes at most) and prints the address.
+5. moves the web proxy to 8081 / 8443 if another web server already holds 80 / 443 (written to `.env` as `HTTP_PORT` / `HTTPS_PORT`);
+6. builds, starts, waits for `/health` (3 minutes at most) and prints the address;
+7. makes freeQoS **start with the server**: Docker is enabled at boot, every container is `restart: unless-stopped`, and a systemd service `freeqos` runs `docker compose up -d` at boot, even after a `docker compose down`.
+
+`sudo systemctl status freeqos` shows it; `sudo systemctl disable freeqos` turns the automatic start off.
 
 **5. Check.**
 
@@ -283,19 +288,28 @@ cd /opt/freeqos && sudo docker compose ps
 curl -s http://127.0.0.1:8000/health/ready
 ```
 
-Both containers `freeqos-app` and `freeqos-db` must be `running`, and `/health/ready` must answer `"status":"ready"`.
+The three containers `freeqos-app`, `freeqos-db` and `freeqos-proxy` must be `running`, and `/health/ready` must answer `"status":"ready"`.
 
-**6. Create the first account.** Open `http://<freeQoS-IP>:8000`. The first visit offers to create the administrator account (12 characters minimum).
+**6. Create the first account.** Open `http://<freeQoS-IP>/` (or `:8000`). The first visit offers to create the administrator account (12 characters minimum).
 
-**7. Put the interface behind HTTPS** (recommended): a reverse proxy in front of port 8000. With Caddy, a few lines are enough, and the certificate is obtained automatically:
+**7. Give it a domain name and HTTPS** (recommended), from the interface:
 
-```
-<freeqos-dns-name> {
-    reverse_proxy 127.0.0.1:8000
-}
-```
+1. At OVH (or any registrar), in the DNS zone of your domain, add an `A` record: a sub-domain such as `qos` pointing to the server's public IP. It takes from a few minutes to a few hours to spread.
+2. Open TCP **80** and **443** to the server from the internet. Port 80 must stay open: it is how Let's Encrypt checks the domain, first and at each renewal.
+3. *Settings › Domain & HTTPS*: type the name (`qos.example.com`), optionally an email for certificate expiry notices, then *Save and apply*.
 
-Then close port 8000 to the outside on the firewall.
+The included proxy (Caddy, container `freeqos-proxy`) obtains the certificate within a minute and renews it on its own. `http://` on that name then redirects to `https://`. The server's IP keeps answering in plain HTTP: it is the way back in if the DNS is broken. *Check now* tells whether the name points to this server and whether HTTPS answers; the last error from the proxy is shown in plain words. *Remove* goes back to HTTP only.
+
+Once HTTPS works, close port 8000 to the outside (or set `APP_BIND=127.0.0.1` in `.env`). API: `GET /api/v1/public-access`, `PUT /api/v1/public-access` (`{"domain", "email"}`, Administrator), `DELETE /api/v1/public-access`, `POST /api/v1/public-access/check`.
+
+The domain is stored in the database and pushed again to the proxy at each start of freeQoS. The proxy's admin interface (port 2019) is only reachable inside the Docker network, never published. Its certificates live in the `caddy_data` volume.
+
+| `.env` variable | Default | Role |
+| --- | --- | --- |
+| `HTTP_PORT` / `HTTPS_PORT` | `80` / `443` | Ports of the proxy on the server. The certificate needs 80 and 443. |
+| `APP_PORT` / `APP_BIND` | `8000` / `0.0.0.0` | Direct access to the application, without the proxy |
+| `FREEQOS_SUBNET` | `172.29.84.0/24` | Internal Docker network. Change it only if it clashes with one of yours |
+| `FORWARDED_ALLOW_IPS` | the subnet above | Who may tell the application the visitor's real address and HTTPS |
 
 **8. Add the routers.** *Devices* → *Connect a router*: name, IP, the account from step 3, role (`pop`, `core` or `gateway`). *Test* checks the connection without saving anything. After adding, the automatic commissioning described in section 4 runs; follow its report.
 
@@ -1465,7 +1479,7 @@ freeQoS holds router credentials that can write across the whole network. Securi
 - **Sessions:** at most 10 open sessions per account; everyone sees their own sessions (browser, address, last activity) and can close them remotely. Changing a password or a role closes the other sessions.
 - **Journal retention:** login events are kept 180 days (*Settings › Accounts › Login journal*) and are also written to the container log (`auth login_failed …`), usable by fail2ban.
 
-**Behind an HTTPS reverse proxy**, set `FORWARDED_ALLOW_IPS=<proxy address>` so that the application trusts the proxy's `X-Forwarded-Proto`: the session cookie is then sent `Secure`, HSTS is set, and the address recorded for each login is the client's, not the proxy's.
+**Behind an HTTPS reverse proxy** (the included one is already set up), set `FORWARDED_ALLOW_IPS=<proxy address>` so that the application trusts the proxy's `X-Forwarded-Proto`: the session cookie is then sent `Secure`, HSTS is set, and the address recorded for each login is the client's, not the proxy's.
 
 **Locked out of every edit account?** Emptying the accounts table reopens the first-account screen; measurements and inventory are untouched:
 

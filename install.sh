@@ -69,6 +69,8 @@ if ! $SUDO docker compose version >/dev/null 2>&1; then
   fi
 fi
 ok "$($SUDO docker compose version | head -1)"
+# Docker demarre avec le serveur, qu'il ait ete installe ici ou avant.
+$SUDO systemctl enable --now docker >/dev/null 2>&1 || true
 
 # ------------------------------------------------------------------- code
 if [ -f docker-compose.yml ] && [ -f Dockerfile ] && [ -d app ]; then
@@ -145,6 +147,30 @@ else
   fi
 fi
 
+# ------------------------------------------- ports web du proxy HTTPS
+# Le proxy (Caddy) sert l'interface sur 80 / 443 et obtient le certificat du
+# domaine saisi dans Settings. Un serveur web deja present sur ces ports
+# l'empecherait de demarrer : on le deplace alors, et on le dit.
+port_pris() {
+  # Notre propre proxy deja lance (mise a jour) n'est pas un conflit.
+  if $SUDO docker ps --format '{{.Names}}' 2>/dev/null | grep -qx freeqos-proxy; then
+    return 1
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnH "sport = :$1" 2>/dev/null | grep -q .
+  else
+    return 1
+  fi
+}
+if ! grep -q '^HTTP_PORT=' .env && port_pris 80; then
+  warn "Port 80 deja utilise sur ce serveur : le proxy ecoute sur 8081 (pas de certificat automatique)"
+  printf 'HTTP_PORT=8081\n' >> .env
+fi
+if ! grep -q '^HTTPS_PORT=' .env && port_pris 443; then
+  warn "Port 443 deja utilise sur ce serveur : le proxy ecoute sur 8443"
+  printf 'HTTPS_PORT=8443\n' >> .env
+fi
+
 # -------------------------------------------------- acces a Docker Hub
 if ! grep -q '^PYTHON_IMAGE=' .env; then
   if ! curl -s -m 8 -o /dev/null -I https://registry-1.docker.io/v2/ 2>/dev/null; then
@@ -180,6 +206,33 @@ until curl -fs -m 3 "http://127.0.0.1:${PORT}/health" >/dev/null 2>&1; do
 done
 ok "freeQoS repond"
 
+# ------------------------------------------------ demarrage avec le serveur
+# Les conteneurs sont en « restart: unless-stopped ». Le service systemd
+# garantit en plus que la pile remonte au demarrage meme apres un
+# « docker compose down » ou une mise a jour.
+if command -v systemctl >/dev/null 2>&1 && [ -d /etc/systemd/system ]; then
+  DOCKER_BIN="$(command -v docker)"
+  printf '%s\n' \
+    '[Unit]' \
+    'Description=freeQoS (Docker Compose)' \
+    'Requires=docker.service' \
+    'After=docker.service network-online.target' \
+    'Wants=network-online.target' \
+    '' \
+    '[Service]' \
+    'Type=oneshot' \
+    'RemainAfterExit=yes' \
+    "WorkingDirectory=$(pwd)" \
+    "ExecStart=${DOCKER_BIN} compose up -d" \
+    "ExecStop=${DOCKER_BIN} compose stop" \
+    'TimeoutStartSec=0' \
+    '' \
+    '[Install]' \
+    'WantedBy=multi-user.target' | $SUDO tee /etc/systemd/system/freeqos.service >/dev/null
+  $SUDO systemctl daemon-reload || true
+  $SUDO systemctl enable freeqos.service >/dev/null 2>&1 && ok "Demarrage automatique active (service freeqos)"
+fi
+
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 IP="${IP:-<adresse-du-serveur>}"
 NF="$(grep '^NETFLOW_PORT=' .env | cut -d= -f2)"
@@ -187,8 +240,12 @@ cat <<EOF
 
   freeQoS est installe.
 
-  Interface  : http://${IP}:${PORT}/
+  Interface  : http://${IP}/   (ou http://${IP}:${PORT}/)
                (premiere visite : creer le compte administrateur)
+  HTTPS      : Settings > Domain & HTTPS -- un enregistrement DNS « A » vers
+               ${IP} (OVH ou autre), ports 80 et 443 ouverts, et le certificat
+               est obtenu tout seul.
+  Demarrage  : automatique avec le serveur (service freeqos)
   NetFlow    : UDP ${NF:-2055} -- pose tout seul sur les routeurs ajoutes
   Dossier    : $(pwd)
 

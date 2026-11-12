@@ -9584,8 +9584,95 @@ function settingRow(r) {
     '</td></tr>';
 }
 
+/* --------------------------------------------------- domaine et HTTPS
+ * Trois etapes, dans l'ordre ou on les fait : le DNS chez le registraire,
+ * les ports du serveur, puis le domaine ici -- le certificat suit seul. */
+const DOM = { etat: null, verif: null, edit: false };
+
+async function loadDomain(force) {
+  const host = document.getElementById('settings-domain');
+  if (!host) return;
+  if (host.contains(document.activeElement) && !force) return;
+  try {
+    DOM.etat = await api('/public-access');
+  } catch (err) {
+    host.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    return;
+  }
+  renderDomain();
+}
+
+function renderDomain() {
+  const host = document.getElementById('settings-domain');
+  const e = DOM.etat || {};
+  const admin = peut('edit');
+  const ipNavigateur = /^\d{1,3}(\.\d{1,3}){3}$/.test(location.hostname) ? location.hostname : null;
+  const ip = ipNavigateur || 'the public IP of this server';
+  const dnsOk = e.domain && ipNavigateur ? (e.dns || []).includes(ipNavigateur) : null;
+  const v = DOM.verif;
+  const etat = !e.proxy
+    ? '<div class="notice">No HTTPS proxy is managed by freeQoS on this installation (PROXY_ADMIN_URL empty): ' +
+      'serve it under a domain from your own reverse proxy.</div>'
+    : e.domain
+      ? '<div class="dm-now"><i class="dg-dot lv-' + (e.last_error ? 'crit' : v && v.https ? 'ok' : e.applied_at ? 'ok' : 'warn') + '"></i>' +
+        '<div><b><a href="' + esc(e.url) + '" target="_blank" rel="noopener">' + esc(e.url.replace(/\/$/, '')) + '</a></b>' +
+        '<small>' + (e.last_error ? esc(e.last_error) : v ? esc(v.https ? 'Certificate valid, the interface answers in HTTPS.' : v.detail)
+          : e.applied_at ? 'Applied ' + esc(depuis(e.applied_at)) + '. The certificate is obtained within a minute once the DNS points here.'
+            : 'Saved, not applied yet.') + '</small>' +
+        '<small>DNS: ' + ((e.dns || []).length ? esc(e.dns.join(', ')) + (dnsOk === true ? ' ✓ points to this server' : dnsOk === false ? ' ✗ not this server (' + esc(ipNavigateur) + ')' : '')
+          : 'does not resolve yet') + '</small></div></div>'
+      : '<div class="dm-now"><i class="dg-dot lv-unknown"></i><div><b>No domain</b><small>The interface answers on http://' +
+        esc(location.host) + (e.proxy_reachable ? '' : ' · <span class="lvl-txt-crit">the HTTPS proxy does not answer</span>') + '</small></div></div>';
+  const etapes = '<ol class="dm-steps">' +
+    '<li><b>At OVH (or your registrar)</b>, in the DNS zone of your domain, create an <b>A</b> record: name <code>qos</code> ' +
+      '(for <code>qos.your-domain.com</code>) → target ' + (ipNavigateur ? '<code>' + esc(ip) + '</code>' : esc(ip)) + '. It can take a few minutes to spread.</li>' +
+    '<li><b>On the server</b>, open TCP <b>80</b> and <b>443</b> to everyone: Let\'s Encrypt checks the domain on port 80.</li>' +
+    '<li><b>Here</b>, give the domain and save: the certificate is obtained and renewed on its own.</li></ol>';
+  const formulaire = admin && e.proxy && (!e.domain || DOM.edit) ? '<form class="dm-form" id="dm-form" autocomplete="off">' +
+      '<div class="row-3"><div class="field" style="grid-column: span 2"><label for="dm-domain">Domain name</label>' +
+        '<input id="dm-domain" required placeholder="qos.your-domain.com" value="' + esc(e.domain || '') + '"></div>' +
+      '<div class="field"><label for="dm-email">Email (optional)</label>' +
+        '<input id="dm-email" type="email" placeholder="for the certificate expiry" value="' + esc(e.email || '') + '"></div></div>' +
+      '<div class="actions"><button type="submit" class="primary">Save and apply</button>' +
+        (e.domain ? '<button type="button" class="link-btn" id="dm-cancel">Cancel</button>' : '') +
+        '<span class="spacer"></span><span id="dm-msg"></span></div></form>' : '';
+  host.innerHTML = etat + (e.proxy && (!e.domain || DOM.edit) ? etapes : '') + formulaire +
+    (admin && e.domain && !DOM.edit ? '<div class="actions" style="margin-top:.8rem">' +
+      '<button type="button" class="sm" id="dm-check">Check now</button>' +
+      '<button type="button" class="sm" id="dm-edit">Change</button>' +
+      '<button type="button" class="sm danger" id="dm-del">Remove the domain</button></div>' : '');
+  const q = (id) => document.getElementById(id);
+  if (q('dm-edit')) q('dm-edit').onclick = () => { DOM.edit = true; renderDomain(); };
+  if (q('dm-cancel')) q('dm-cancel').onclick = () => { DOM.edit = false; renderDomain(); };
+  if (q('dm-check')) q('dm-check').onclick = async () => {
+    q('dm-check').disabled = true;
+    try { DOM.verif = await api('/public-access/check', { method: 'POST' }); } catch (err) { DOM.verif = { https: false, detail: err.message }; }
+    await loadDomain(true);
+  };
+  if (q('dm-del')) q('dm-del').onclick = async () => {
+    if (!confirm('Stop serving the interface under ' + e.domain + '? It stays reachable on http://<server IP>.')) return;
+    try { await api('/public-access', { method: 'DELETE' }); } catch (err) { alert(err.message); }
+    DOM.verif = null;
+    await loadDomain(true);
+  };
+  if (q('dm-form')) q('dm-form').onsubmit = async (ev) => {
+    ev.preventDefault();
+    q('dm-msg').innerHTML = '<span class="hint">Applying…</span>';
+    try {
+      await api('/public-access', { method: 'PUT', body: JSON.stringify({
+        domain: q('dm-domain').value.trim(), email: q('dm-email').value.trim() || null }) });
+      DOM.edit = false;
+      DOM.verif = null;
+      await loadDomain(true);
+    } catch (err) {
+      q('dm-msg').innerHTML = '<span class="lvl-txt-crit">' + esc(err.message) + '</span>';
+    }
+  };
+}
+
 async function loadSettings() {
   renderAccounts();
+  loadDomain();
   const body = await api('/settings');
   const host = document.getElementById('settings-groups');
   const compte = document.getElementById('settings-count');
