@@ -4450,8 +4450,38 @@ function choisirPop(select, valeur) {
   select.value = valeur || (noms.length === 1 ? noms[0] : '');
 }
 
+/** « Add a client » : un login PPPoE (rejoint par la decouverte) ou une IP fixe. */
+function choisirAjout(kind) {
+  document.querySelectorAll('#add-kind [data-kind]').forEach((b) => b.classList.toggle('active', b.dataset.kind === kind));
+  document.getElementById('pp-form').hidden = kind !== 'pppoe';
+  document.getElementById('sc-form').hidden = kind !== 'static';
+}
+
+async function ppDeclarer(e) {
+  e.preventDefault();
+  const out = document.getElementById('pp-out');
+  const val = (id) => document.getElementById(id).value.trim();
+  const login = val('pp-login');
+  const bas = Number(val('pp-down'));
+  const haut = Number(val('pp-up'));
+  if ((bas > 0) !== (haut > 0)) { out.innerHTML = '<div class="notice warn">Give both plan rates, or neither.</div>'; return; }
+  try {
+    await api('/clients', { method: 'POST', body: JSON.stringify({
+      login, pop_name: val('pp-pop'), display_name: val('pp-name') || null, cpe_mac: val('pp-mac') || null }) });
+    if (bas > 0) {
+      await api('/plans/' + encodeURIComponent(login), { method: 'PUT', body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
+    }
+    document.getElementById('pp-form').reset();
+    out.innerHTML = '<div class="notice ok">' + esc(login) + ' added. It shows as never seen until its first session.</div>';
+    await loadClients();
+  } catch (err) {
+    out.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+  }
+}
+
 function scRemplirFormulaire(fiche) {
   scEdition = fiche;
+  if (fiche) choisirAjout('static');
   const v = (id, valeur) => { document.getElementById(id).value = valeur === null || valeur === undefined ? '' : valeur; };
   v('sc-reference', fiche ? fiche.reference : '');
   v('sc-label', fiche ? fiche.label : '');
@@ -10833,7 +10863,7 @@ function filtrerClients() {
   const etat = document.getElementById('cli-status').value;
   const mode = document.getElementById('cli-mode').value;
   return CLI.rows.filter((r) => {
-    if (q && ![r.login, r.last_ip, r.pop_name].some((v) => String(v || '').toLowerCase().includes(q))) return false;
+    if (q && ![r.login, r.display_name, r.last_ip, r.pop_name].some((v) => String(v || '').toLowerCase().includes(q))) return false;
     if (site && r.pop_name !== site) return false;
     if (etat === 'online' && !clientEnLigne(r)) return false;
     if (etat === 'offline' && clientEnLigne(r)) return false;
@@ -11274,8 +11304,8 @@ function renderClients() {
         '<td class="chk"><input type="checkbox" data-sel="' + esc(r.login) + '"' +
           (CLI.sel.has(r.login) ? ' checked' : '') + ' aria-label="Select ' + esc(r.login) + '"></td>' +
         '<td class="cli-main"><span class="cli-name"><i class="dot-co ' + (on ? 'on' : 'off') + '" title="' +
-          (on ? 'Connected' : (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '"></i>' + esc(r.login) + '</span>' +
-          '<span class="cli-sub">' + esc(r.pop_name || '') + '</span></td>' +
+          (on ? 'Connected' : (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '"></i>' + esc(r.display_name || r.login) + '</span>' +
+          '<span class="cli-sub">' + esc([r.display_name ? r.login : '', r.pop_name, r.last_ip].filter(Boolean).join(' · ')) + '</span></td>' +
         '<td class="cli-mode"><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
           (b ? '<span class="boost-pill cli-boost">&#9889; ' + esc(boostReste(b)) + '</span>' : '') + '</td>' +
         '<td class="cli-usage">' + (on ? usageClair(r)
@@ -11941,6 +11971,80 @@ function separerUnite(texte) {
   return m ? [m[1], m[2]] : [String(texte), ''];
 }
 
+/** Les lignes saisies a la main de la fiche (vides : absentes). */
+function detailsSaisis(p) {
+  const lignes = [['Name', p.display_name], ['Phone', p.phone], ['Email', p.email], ['Address', p.postal_address],
+    ['CPE MAC', p.cpe_mac ? '<code>' + esc(p.cpe_mac) + '</code>' : null, true], ['Note', p.note]];
+  return lignes.filter(([, v]) => v).map(([k, v, brut]) =>
+    '<tr><td>' + k + '</td><td>' + (brut ? v : esc(v)) + '</td></tr>').join('');
+}
+
+/** Modifier un client : sa fiche (tout client), et pour un client a IP fixe,
+ *  son adresse, son VLAN et son site (Administrator). Ce qui vient de la
+ *  decouverte (session PPPoE, adresse attribuee) n'est pas modifiable ici :
+ *  le prochain cycle le reecrirait. */
+function modifierClient(login, fiche) {
+  if (refusGroupe([login])) return;
+  const p = (fiche && fiche.profile) || {};
+  const d = (fiche && fiche.discovered) || {};
+  const fixe = d.static;
+  const admin = peut('edit');
+  const champ = (id, label, valeur, attrs) => '<div class="field"><label for="' + id + '">' + label + '</label>' +
+    '<input id="' + id + '" value="' + esc(valeur || '') + '" ' + (attrs || '') + '></div>';
+  const { root, fermer } = openModal('<div class="modal-head"><div><h3>Edit client</h3>' +
+    '<div class="sub">' + esc(login) + (d.pop_name ? ' · ' + esc(d.pop_name) : '') + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<form class="modal-body stack" id="ec-form" autocomplete="off">' +
+    '<div class="row-2">' + champ('ec-name', 'Name', p.display_name, 'maxlength="128" placeholder="Pharmacie du Plateau"') +
+      champ('ec-phone', 'Phone', p.phone, 'maxlength="40" inputmode="tel"') + '</div>' +
+    '<div class="row-2">' + champ('ec-email', 'Email', p.email, 'maxlength="254" type="email"') +
+      champ('ec-mac', 'CPE MAC', p.cpe_mac, 'maxlength="32" placeholder="24:5A:4C:12:34:56"') + '</div>' +
+    champ('ec-addr', 'Address', p.postal_address, 'maxlength="256"') +
+    '<div class="field"><label for="ec-note">Note</label><textarea id="ec-note" maxlength="1000" rows="2">' + esc(p.note || '') + '</textarea></div>' +
+    (fixe && admin ? '<h4 class="ec-sep">Network (static IP)</h4><div class="row-3">' +
+      champ('ec-ip', 'IP or subnet', fixe.prefix && fixe.prefix < 32 ? fixe.ip + '/' + fixe.prefix : fixe.ip, 'maxlength="2000"') +
+      champ('ec-vlan', 'VLAN', fixe.vlan, 'type="number" min="1" max="4094"') +
+      '<div class="field"><label for="ec-pop">Site</label><select id="ec-pop" data-pop-select></select></div></div>' : '') +
+    '<p class="hint" style="display:block">' + (fixe && admin ? 'Traffic and measurements keep coming from the router.'
+      : 'IP, site and session come from the network and stay automatic; these details are kept alongside them.') + '</p>' +
+    '<div id="ec-out"></div></form>' +
+    '<div class="modal-foot"><button data-modal-close>Cancel</button><button class="primary" id="ec-save">Save</button></div>');
+  if (fixe && admin) {
+    const sel = root.querySelector('#ec-pop');
+    const sites = [...new Set(CLI.rows.map((x) => x.pop_name).filter(Boolean))].sort();
+    if (fixe.pop_name && !sites.includes(fixe.pop_name)) sites.unshift(fixe.pop_name);
+    sel.innerHTML = sites.map((x) => '<option' + (x === fixe.pop_name ? ' selected' : '') + '>' + esc(x) + '</option>').join('');
+  }
+  const enregistrer = async () => {
+    const v = (id) => { const el = root.querySelector('#' + id); return el ? el.value.trim() : ''; };
+    const out = root.querySelector('#ec-out');
+    try {
+      await api('/clients/' + encodeURIComponent(login) + '/profile', { method: 'PUT', body: JSON.stringify({
+        display_name: v('ec-name') || null, phone: v('ec-phone') || null, email: v('ec-email') || null,
+        cpe_mac: v('ec-mac') || null, postal_address: v('ec-addr') || null, note: v('ec-note') || null }) });
+      if (fixe && admin) {
+        const reseau = {};
+        const adresse = v('ec-ip');
+        const ancienne = fixe.prefix && fixe.prefix < 32 ? fixe.ip + '/' + fixe.prefix : fixe.ip;
+        if (adresse && adresse !== ancienne) reseau.address = adresse;
+        const vlan = v('ec-vlan');
+        if (vlan && Number(vlan) !== fixe.vlan) reseau.vlan = Number(vlan);
+        if (v('ec-pop') && v('ec-pop') !== fixe.pop_name) reseau.pop_name = v('ec-pop');
+        if (Object.keys(reseau).length) {
+          await api('/static-clients/' + fixe.id, { method: 'PATCH', body: JSON.stringify(reseau) });
+        }
+      }
+      fermer();
+      loadClientPage();
+    } catch (err) {
+      out.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
+    }
+  };
+  root.querySelector('#ec-save').addEventListener('click', enregistrer);
+  root.querySelector('#ec-form').addEventListener('submit', (e) => { e.preventDefault(); enregistrer(); });
+  root.querySelector('#ec-name').focus();
+}
+
 async function loadClientPage() {
   const login = FICHE.login;
   const host = document.getElementById('client-page');
@@ -11949,19 +12053,23 @@ async function loadClientPage() {
   await loadClientsData();
   const r = CLI.rows.find((x) => x.login === login);
   const titre = document.getElementById('page-title');
-  if (titre) titre.textContent = login || 'Client';
+  if (titre) titre.textContent = (r && r.display_name) || login || 'Client';
   if (!r) {
     host.innerHTML = '<a class="back-link" href="#/clients">&lsaquo; All clients</a>' +
       '<div class="empty">Unknown client: ' + esc(login) + '.</div>';
     return;
   }
   const pas = FICHE.periode <= 60 ? 30 : FICHE.periode <= 1440 ? 300 : 3600;
-  const [data, journal, sante] = await Promise.all([
+  const [data, journal, sante, fiche] = await Promise.all([
     r.subscriber_id ? api('/subscribers/' + r.subscriber_id + '/metrics?minutes=' + FICHE.periode +
       '&bucket_seconds=' + pas).catch(() => null) : Promise.resolve(null),
     api('/activity?limit=50&login=' + encodeURIComponent(login)).catch(() => []),
     FICHE.onglet === 'overview' ? api('/clients/' + encodeURIComponent(login) + '/health').catch(() => null) : Promise.resolve(null),
+    api('/clients/' + encodeURIComponent(login) + '/profile').catch(() => null),
   ]);
+  const profil = (fiche && fiche.profile) || {};
+  const decouvert = (fiche && fiche.discovered) || {};
+  const ip = r.last_ip || decouvert.ip || '';
   const s = (data && data.subscriber) || r;
   const pts = (data && data.points) || [];
   const on = clientEnLigne(r);
@@ -11973,13 +12081,16 @@ async function loadClientPage() {
     ? mbps(s.effective_down_mbps) + ' / ' + mbps(s.effective_up_mbps || 0) : 'no limit';
 
   const entete = '<a class="back-link" href="#/clients">&lsaquo; All clients</a>' +
-    '<div class="cp-head"><span class="cp-avatar">' + esc(initiales(login)) + '</span>' +
-    '<div class="cp-id"><h2>' + esc(login) + '</h2><div class="cp-meta">' +
+    '<div class="cp-head"><span class="cp-avatar">' + esc(initiales(profil.display_name || login)) + '</span>' +
+    '<div class="cp-id"><h2>' + esc(profil.display_name || login) + '</h2><div class="cp-meta">' +
+      (profil.display_name ? '<span class="cp-login">' + esc(login) + '</span>' : '') +
       '<span class="badge">' + esc(r.pop_name || 'no site') + '</span>' +
+      (ip ? '<button type="button" class="cp-ip" id="cp-ip" title="Client IP · click to copy">' + esc(ip) + '</button>' : '') +
       '<span class="cli-conn ' + (on ? 'on">Connected' : 'off">' + (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '</span>' +
       '<span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
       (b ? '<span class="boost-pill">boost · ' + esc(boostReste(b)) + '</span>' : '') +
     '</div></div><span class="spacer"></span>' +
+    '<button id="cp-edit"' + dis + '>Edit client</button>' +
     '<button id="cp-plan"' + dis + '>Edit plan</button>' +
     '<button class="primary" id="cp-mode"' + dis + '>Change mode</button></div>' +
     '<nav class="cp-tabs">' + [['overview', 'Overview'], ['plan', 'Plan & mode'], ['activity', 'Activity']].map(([k, l]) =>
@@ -12024,10 +12135,15 @@ async function loadClientPage() {
         '<button class="sm" id="cp-mode2"' + dis + '>Change mode</button>' +
         (b ? '<button class="sm" id="cp-stop"' + dis + '>Stop boost</button>'
           : '<button class="sm primary" id="cp-boost"' + dis + '>Boost</button>') + '</div></div>' +
-      '<div class="card"><h3>Connection at a glance</h3><table class="kv"><tbody>' +
-        '<tr><td>Client IP</td><td><code>' + esc(r.last_ip || '-') + '</code></td></tr>' +
+      '<div class="card"><div class="cp-card-head"><h3>Client details</h3>' +
+        (ecrire ? '<button class="sm link-btn" id="cp-edit2">Edit</button>' : '') + '</div><table class="kv"><tbody>' +
+        '<tr><td>Client IP</td><td><code>' + esc(ip || '-') + '</code>' +
+          (decouvert.static && decouvert.static.vlan ? ' · VLAN ' + esc(decouvert.static.vlan) : '') + '</td></tr>' +
+        '<tr><td>Login</td><td>' + esc(login) + '</td></tr>' +
+        detailsSaisis(profil) +
         '<tr><td>Site</td><td>' + esc(r.pop_name || '-') + '</td></tr>' +
-        '<tr><td>Kind</td><td>' + esc(r.kind === 'static' ? 'static IP' : 'PPPoE') + '</td></tr>' +
+        '<tr><td>Kind</td><td>' + esc(r.kind === 'static' ? 'static IP' : 'PPPoE') +
+          (profil.declared ? ' · added by hand' : ' · discovered') + '</td></tr>' +
         '<tr><td>Session</td><td>' + (r.session_uptime_s ? esc(uptime(r.session_uptime_s)) : '-') + '</td></tr>' +
         '<tr><td>Last measurement</td><td>' + (r.ts ? esc(depuis(r.ts)) : 'never') + '</td></tr>' +
       '</tbody></table></div></div></div>' + carteUsages(sante) +
@@ -12075,6 +12191,11 @@ async function loadClientPage() {
   }));
   const clic = (id, f) => { const el = host.querySelector('#' + id); if (el) el.addEventListener('click', f); };
   clic('cp-mode', () => openModeDialog([login]));
+  clic('cp-edit', () => modifierClient(login, fiche));
+  clic('cp-edit2', () => modifierClient(login, fiche));
+  clic('cp-ip', async (e) => {
+    try { await navigator.clipboard.writeText(ip); e.target.classList.add('copied'); setTimeout(() => e.target.classList.remove('copied'), 1200); } catch (_) { /* pas de presse-papiers */ }
+  });
   clic('cp-mode2', () => openModeDialog([login]));
   clic('cp-plan', () => { FICHE.onglet = 'plan'; loadClientPage(); });
   clic('cp-boost', () => openGroupBoost([login]));
@@ -13145,12 +13266,17 @@ async function rapportPdf(site) {
 
 /** Les donnees de la page Clients, sans la dessiner (alertes, activite). */
 async function loadClientsData() {
-  const [rows, modes, boosts, lectures] = await Promise.all([
+  const [rows, modes, boosts, lectures, fiches] = await Promise.all([
     api('/subscribers/latest?limit=500&include_unmeasured=true'),
     api('/bandwidth-modes').catch(() => ({ modes: [] })),
     api('/shaping/boosts').catch(() => []),
     api('/pops/read-status').catch(() => ({ routers: [] })),
+    api('/client-profiles').catch(() => ({ profiles: {} })),
   ]);
+  // La fiche SAISIE (nom, contact, MAC du CPE) a cote de ce que la decouverte
+  // trouve : portee sur chaque ligne, sans jamais remplacer ses faits.
+  const profils = (fiches && fiches.profiles) || {};
+  rows.forEach((r) => { r.profile = profils[r.login] || null; r.display_name = r.profile && r.profile.display_name; });
   CLI.rows = rows;
   // Un site dont AUCUN routeur ne se lit plus : ses clients ne sont pas
   // « hors ligne », ils ne sont plus mesures. Ce n'est pas la meme panne.
@@ -13705,9 +13831,10 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
   panneau.hidden = !panneau.hidden;
   if (panneau.hidden) return;
   scRemplirFormulaire(null);
+  choisirAjout('pppoe');
   // Le bouton annonce « Ajouter un client » : le curseur doit etre dans le
   // premier champ, pas quelque part au-dessus d'un panneau a parcourir.
-  const reference = document.getElementById('sc-reference');
+  const reference = document.getElementById('pp-login');
   if (reference) {
     reference.focus();
     reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -13715,6 +13842,8 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
   await Promise.all([loadStaticClients(), loadVlanClients()]);
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
+document.getElementById('pp-form').addEventListener('submit', ppDeclarer);
+document.querySelectorAll('#add-kind [data-kind]').forEach((b) => b.addEventListener('click', () => choisirAjout(b.dataset.kind)));
 document.getElementById('sc-cancel').addEventListener('click', () => scRemplirFormulaire(null));
 // La liste se relit quand on ouvre le menu : un routeur ou un PoP ajoute
 // depuis un autre onglet y apparait sans recharger la page.

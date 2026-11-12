@@ -824,7 +824,49 @@
              defiler pour trouver ou le faire. Ce qu'on vient faire est en haut ;
              ce qui existe deja se lit juste en dessous. -->
         <h3 id="sc-form-title" style="margin:.2rem 0 .6rem">Add a client</h3>
-        <form class="stack card" id="sc-form" autocomplete="off">
+        <!-- DEUX FACONS D'AJOUTER, a cote de la decouverte automatique : un
+             client PPPoE declare avant sa premiere session (la decouverte le
+             rejoint par son login), ou un client a IP fixe / VLAN. -->
+        <div class="segmented add-kind" id="add-kind" role="tablist">
+          <button type="button" data-kind="pppoe" class="active">PPPoE login</button>
+          <button type="button" data-kind="static">Fixed IP / VLAN</button>
+        </div>
+        <form class="stack card" id="pp-form" autocomplete="off">
+          <p class="hint" style="display:block;margin:0">Declare a PPPoE client before it connects. Discovery joins it by its login at its first session; what you enter here is kept.</p>
+          <div class="row-3">
+            <div class="field">
+              <label for="pp-login">PPPoE login</label>
+              <input id="pp-login" required maxlength="64" placeholder="dupont">
+            </div>
+            <div class="field">
+              <label for="pp-pop">Site</label>
+              <select id="pp-pop" required data-pop-select>
+                <option value="">Choose a site</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="pp-name">Name (optional)</label>
+              <input id="pp-name" maxlength="128" placeholder="Pharmacie du Plateau">
+            </div>
+          </div>
+          <div class="row-3">
+            <div class="field">
+              <label for="pp-down">Plan down, Mbps (optional)</label>
+              <input id="pp-down" type="number" min="0.064" step="any" placeholder="10">
+            </div>
+            <div class="field">
+              <label for="pp-up">Plan up, Mbps (optional)</label>
+              <input id="pp-up" type="number" min="0.064" step="any" placeholder="5">
+            </div>
+            <div class="field">
+              <label for="pp-mac">CPE MAC (optional)</label>
+              <input id="pp-mac" maxlength="32" placeholder="24:5A:4C:12:34:56">
+            </div>
+          </div>
+          <div class="actions"><span class="spacer"></span><button class="primary" type="submit">Add the client</button></div>
+          <div id="pp-out"></div>
+        </form>
+        <form class="stack card" id="sc-form" autocomplete="off" hidden>
           <!-- PoP et adresse des la premiere ligne : ce sont, avec la
                reference, les trois seules valeurs sans lesquelles un client a
                IP fixe n'existe pas. Le reste se remplit quand on l'a. -->

@@ -33,6 +33,7 @@ from app.api import (
     api_keys,
     capacity,
     client_health,
+    client_profiles,
     health,
     metrics,
     model_v1,
@@ -242,6 +243,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         sites_map,
         uisp,
         client_health,
+        client_profiles,
         public_access,
     ):
         app.include_router(module.router, prefix=settings.api_prefix, dependencies=proteges)

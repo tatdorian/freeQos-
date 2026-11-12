@@ -294,6 +294,8 @@ OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("POST", re.compile(r"^/shaping/boosts$"), ROLE_OPERATOR),
     ("DELETE", re.compile(r"^/shaping/boosts/[^/]+$"), ROLE_OPERATOR),
     ("PUT", re.compile(r"^/clients/[^/]+/mode$"), ROLE_OPERATOR),
+    # La fiche saisie (nom, contact, MAC du CPE) : le geste du support.
+    ("PUT", re.compile(r"^/clients/[^/]+/profile$"), ROLE_OPERATOR),
     ("POST", re.compile(r"^/clients/actions$"), ROLE_OPERATOR),
     ("PUT", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
     ("DELETE", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),

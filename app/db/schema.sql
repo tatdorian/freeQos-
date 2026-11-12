@@ -1403,3 +1403,27 @@ CREATE TABLE IF NOT EXISTS public_access (
     applied_at  TIMESTAMPTZ,
     last_error  TEXT
 );
+
+-- -----------------------------------------------------------------------------
+-- Fiche SAISIE d'un client, a cote de ce que la decouverte trouve.
+--
+-- La decouverte (sessions PPPoE, inventaire statique) dit le login, l'adresse
+-- IP, le site : des faits du reseau, rafraichis a chaque cycle. Ce qu'aucun
+-- routeur ne sait -- le nom du client, son telephone, sa MAC de CPE quand le
+-- caller-id manque, une note -- se saisit ici et n'est JAMAIS ecrase par la
+-- decouverte. Cle : le login, qui survit aux changements d'adresse.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS client_profiles (
+    login           TEXT PRIMARY KEY,
+    display_name    TEXT,
+    cpe_mac         TEXT,
+    phone           TEXT,
+    email           TEXT,
+    postal_address  TEXT,
+    note            TEXT,
+    -- Declare a la main avant toute session (pre-provisionnement) : le client
+    -- apparait des maintenant, et la decouverte le rejoint par son login.
+    declared        BOOLEAN NOT NULL DEFAULT FALSE,
+    updated_by      TEXT,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
