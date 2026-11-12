@@ -195,6 +195,7 @@ def _redessiner_l_arbre(container: ContainerDep) -> None:
                     (
                         getattr(container, "backhaul_provider", None),
                         getattr(collection, "antennas_provider", None),
+                        getattr(collection, "uisp_source", None),
                     ),
                 )
             except Exception:  # noqa: BLE001 - le passage periodique rattrapera

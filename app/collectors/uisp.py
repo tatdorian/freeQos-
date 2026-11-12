@@ -185,6 +185,22 @@ class UispProvider:
             payload = payload.get("items") or payload.get("devices") or []
         return [d for d in payload if isinstance(d, dict)]
 
+    async def _liste(self, chemin: str) -> list[dict[str, Any]]:
+        response = await self._client.get(chemin)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            payload = payload.get("items") or payload.get("stations") or payload.get("data") or []
+        return [d for d in payload if isinstance(d, dict)]
+
+    async def device_interfaces(self, device_id: str) -> list[dict[str, Any]]:
+        """Les ports d'un equipement et leur debit courant (``statistics``)."""
+        return await self._liste(f"/devices/{device_id}/interfaces")
+
+    async def device_stations(self, device_id: str) -> list[dict[str, Any]]:
+        """Les CPE accroches a une AP, avec leur signal et leur debit."""
+        return await self._liste(f"/devices/{device_id}/stations")
+
     async def aclose(self) -> None:
         await self._client.aclose()
 

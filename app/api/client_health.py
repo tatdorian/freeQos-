@@ -114,6 +114,10 @@ async def client_health(
         fournisseur = getattr(collection, "antennas_provider", None)
         lecteur = getattr(fournisseur, "radio_snapshot", None)
         antennes = lecteur() if callable(lecteur) else []
+        # Les AP UISP et leurs stations : la MAC (ou l'IP) du client y est cherchee aussi.
+        trafic_uisp = getattr(container, "uisp_traffic", None)
+        if trafic_uisp is not None:
+            antennes = list(antennes) + trafic_uisp.radio_antennas()
         if container.antennas_repo is not None:
             noms = {
                 str(f.get("device_key") or f.get("name")): f.get("name")

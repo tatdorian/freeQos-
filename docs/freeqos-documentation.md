@@ -1222,6 +1222,35 @@ Every change is written to the client's *Activity*. API: `GET /api/v1/clients/{l
 
 The section then lists the antennas UISP knows: model, role, IP, UISP site, status, **radio capacity** down and up, **signal** and **airtime** — the potential of each link. **Attach** a backhaul antenna to its site: its capacity is read every backhaul cycle and becomes the ceiling of the site's queue, like an antenna added by its own address (*Add an antenna*). API: `GET/PUT/DELETE /api/v1/uisp`, `POST /api/v1/uisp/test`, `GET /api/v1/uisp/devices`, `PUT/DELETE /api/v1/uisp/links/{device_id}` (`{"name", "pop_name"}`). The environment variables `BACKHAUL_PROVIDER=uisp`, `UISP_BASE_URL`, `UISP_TOKEN` keep working for a controller declared in the file.
 
+#### UISP traffic, in the network
+
+Once UISP is connected, freeQoS reads **every minute**, for each device UISP manages: the throughput of its radio port (or of its busiest port), its radio capacity, its signal, whether it is online, and, for an access point, the **stations** (CPEs) hanging on it with their MAC, IP, signal and traffic. The last reading is shown in the table (*Traffic now*: towards the clients, what an AP sends and what a station receives); each row is kept 7 days (`uisp_device_metrics`, `GET /api/v1/uisp/devices/{id}/history?minutes=`).
+
+It goes into what freeQoS already shows:
+
+- **Network tree.** Every UISP device is a box of the tree, and each station hangs on its access point. Where no router port measures the link to a UISP device, the link shows the throughput UISP reads (`uisp_rates` in `GET /api/v1/topology`).
+- **Place it by hand.** *Place* (in the table, Administrator) says under which box a device is connected, and whether it is a client's CPE. Dragging the box in the tree does the same. The automatic placement stays for everything else, and the choice is undone with *Automatic*.
+- **Clients.** A station whose MAC or IP is a client's gives that client's *Radio signal* diagnosis. The list of stations of an AP names the client of each CPE.
+- **Email alerts.** An access point, or a device attached to a site, that UISP reports offline is a problem that can be emailed (*Settings › Email alerts*).
+
+API: `GET /api/v1/uisp/traffic` (the reading, with each device's box, place set by hand, client and stations).
+
+### Email alerts
+
+*Settings › Email alerts* (Administrator) takes the **SMTP account** freeQoS sends from: server, port and security (STARTTLS 587, SSL/TLS 465, or none for a local relay), user name and password (stored **encrypted**, never returned), sender and recipients. *Send a test email* checks it at once; a failure says why in plain words (login refused, wrong port, host unknown, certificate...). Gmail and Microsoft 365 need an **app password**.
+
+Every minute the server looks for failures, whether or not anyone has the interface open:
+
+| Problem | When |
+| --- | --- |
+| Router not answering freeQoS | Its sessions could not be read for more than a minute |
+| Site down | At least 2 clients, and half of those seen today, dropped together (not counted when the router itself does not answer) |
+| Measurement failing | A collection cycle has failed for three of its periods |
+| UISP device offline | An access point, or a device attached to a site, is reported offline by UISP |
+| Limit not held | (off by default) |
+
+A problem is emailed **once**, when it has lasted the chosen delay (3 minutes by default), and once more when it is **resolved**; the problems of a minute go in one email. The section lists the recent problems and whether they were emailed. API: `GET/PUT/DELETE /api/v1/notifications/smtp`, `POST /api/v1/notifications/test`, `GET /api/v1/notifications/history`.
+
 ### Bandwidth schedules (day, evening, night)
 
 Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it. *Applies to* is a segmented control (*All*, *Clients*, *Sites*, *Plans*); except for *All*, it opens a **list to tick**, with search and *All* / *None*. Each slot is one card: its name, the hours (*18:00 → 23:00*), the rate with a **% / Mbps / Mode** switch, and the days as round pills (tap to turn a day off). The hours are not typed: **tap** an hour to open a wheel (hours, then minutes by 5), or **drag it up or down** to move it by a quarter of an hour (up = later, down = earlier); the mouse wheel and the arrow keys work too. **Time zone** is a menu that starts on the browser's own time zone and shows the time it is there; the list of schedules shows each schedule's next switch in **your** local time. The rate is either:
