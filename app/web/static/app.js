@@ -11971,6 +11971,15 @@ function separerUnite(texte) {
   return m ? [m[1], m[2]] : [String(texte), ''];
 }
 
+/** D'ou vient le debit affiche. Une file aveugle (FastTrack) est dite. */
+function ligneMesure(m) {
+  if (!m || !m.source) return '';
+  const nom = { queue: 'its queue on the router', interface: 'router interface counters',
+    netflow: 'NetFlow', none: 'no counter yet' }[m.source] || m.source;
+  return '<tr><td>Measured by</td><td>' + esc(nom) +
+    (m.detail ? '<small class="cp-measure-why">' + esc(m.detail) + '</small>' : '') + '</td></tr>';
+}
+
 /** Les lignes saisies a la main de la fiche (vides : absentes). */
 function detailsSaisis(p) {
   const lignes = [['Name', p.display_name], ['Phone', p.phone], ['Email', p.email], ['Address', p.postal_address],
@@ -12142,6 +12151,7 @@ async function loadClientPage() {
         '<tr><td>Login</td><td>' + esc(login) + '</td></tr>' +
         detailsSaisis(profil) +
         '<tr><td>Site</td><td>' + esc(r.pop_name || '-') + '</td></tr>' +
+        ligneMesure(decouvert.measure) +
         '<tr><td>Kind</td><td>' + esc(r.kind === 'static' ? 'static IP' : 'PPPoE') +
           (profil.declared ? ' · added by hand' : ' · discovered') + '</td></tr>' +
         '<tr><td>Session</td><td>' + (r.session_uptime_s ? esc(uptime(r.session_uptime_s)) : '-') + '</td></tr>' +

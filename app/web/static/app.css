@@ -2198,3 +2198,4 @@ a.btn:hover { text-decoration: none; filter: brightness(1.05); }
 .add-kind { margin: 0 0 .7rem; }
 .ec-sep { margin: .4rem 0 0; font-size: .9rem; }
 #pp-form[hidden], #sc-form[hidden] { display: none; }
+.cp-measure-why { display: block; color: var(--warn); font-size: .78rem; margin-top: .15rem; }
