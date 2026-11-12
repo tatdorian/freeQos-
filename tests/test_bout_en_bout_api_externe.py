@@ -120,7 +120,7 @@ def app_client(routeur, monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
             "app_users, app_sessions, model_services_unplaced, topology_nodes, "
             "topology_links, bandwidth_modes, bandwidth_schedules, site_locations, "
             "client_locations, uisp_controllers, uisp_links, public_access, airos_antennas, "
-            "client_profiles, client_activity"
+            "client_profiles, client_activity, tree_client_places, tree_client_links"
         ).split(", ")
         try:
             # Seulement les tables deja creees : sur une base neuve (ou apres

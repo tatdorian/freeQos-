@@ -627,3 +627,36 @@ def test_reset_des_files_rend_automatic_a_tous_les_clients_du_routeur(app_client
     assert modes["dupont"] is None and modes["acme"] is None
     journal = app_client.get("/api/v1/activity?login=acme", headers=cle).json()
     assert any("queues reset on nas-test" in (e["detail"] or "") for e in journal)
+
+
+def test_l_arbre_place_chaque_client_et_se_corrige_a_la_main(app_client, routeur) -> None:  # noqa: F811
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    lire = {"Authorization": f"Bearer {lecture}"}
+    _brancher(app_client, cle)
+    r = app_client.post("/api/v1/jobs/discover_topology/run", headers=cle)
+    assert r.json()["ok"] is True, r.text  # plus de fausse « exception »
+    arbre = app_client.get("/api/v1/topology", headers=lire).json()
+    assert arbre["placements"]["dupont"]["how"] == "site"
+    case = arbre["placements"]["dupont"]["node"]
+
+    # Lecture seule : ne place rien.
+    corps = {"logins": ["dupont"], "node_key": case}
+    assert (
+        app_client.put("/api/v1/topology/client-places", headers=lire, json=corps).status_code
+        == 403
+    )
+    assert (
+        app_client.put("/api/v1/topology/client-places", headers=cle, json=corps).status_code == 200
+    )
+    arbre = app_client.get("/api/v1/topology", headers=lire).json()
+    assert arbre["placements"]["dupont"] == {"node": case, "how": "manual"}
+    assert app_client.delete("/api/v1/topology/client-places/dupont", headers=cle).json()["removed"]
+    arbre = app_client.get("/api/v1/topology", headers=lire).json()
+    assert arbre["placements"]["dupont"]["how"] == "site"
+
+    r = app_client.put(
+        "/api/v1/topology/client-links", headers=cle, json={"node_key": "x", "login": ""}
+    )
+    assert r.status_code == 200 and r.json()["login"] is None
+    assert app_client.delete("/api/v1/topology/client-links/x", headers=cle).json()["removed"]

@@ -48,6 +48,7 @@ from app.db.site_locations_repo import SiteLocationsRepository
 from app.db.static_clients_repo import StaticClientsRepository, VlanSightingsRepository
 from app.db.topology_repo import TopologyRepository
 from app.db.traffic_rules_repo import TrafficRulesRepository
+from app.db.tree_repo import TreeRepository
 from app.db.uisp_repo import UispRepository
 from app.db.users_repo import UsersRepository, UsersStore
 from app.db.writer import MetricsWriter, PgMetricsWriter
@@ -208,6 +209,7 @@ class Container:
     uisp_repo: UispRepository | None = None
     public_access_repo: PublicAccessRepository | None = None
     client_profiles_repo: ClientProfilesRepository | None = None
+    tree_repo: TreeRepository | None = None
     activity_repo: ActivityRepository | None = None
     netflow: NetflowService | None = None
     netflow_export: NetflowExportService | None = None
@@ -361,6 +363,7 @@ async def build_container(settings: Settings) -> Container:
     uisp_repo = UispRepository(database.pool, secrets)
     public_access_repo = PublicAccessRepository(database.pool)
     client_profiles_repo = ClientProfilesRepository(database.pool)
+    tree_repo = TreeRepository(database.pool)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
     #
@@ -725,6 +728,7 @@ async def build_container(settings: Settings) -> Container:
         uisp_repo=uisp_repo,
         public_access_repo=public_access_repo,
         client_profiles_repo=client_profiles_repo,
+        tree_repo=tree_repo,
         activity_repo=activity_repo,
         netflow=netflow,
         netflow_export=netflow_export,

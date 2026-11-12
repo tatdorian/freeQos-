@@ -126,6 +126,10 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
         for n in noeuds
         if n.get("kind") == KIND_STATIC or _attributs(n).get("subscriber_cpe")
     }
+    # Avant de les retirer : ces cases disent OU pend leur client (sous quel
+    # secteur, quelle antenne). C'est ce qui le replace dans l'arbre.
+    caches = [n for n in noeuds if n["key"] in abonnes_du_graphe]
+    tous_les_liens = list(liens)
     if abonnes_du_graphe:
         noeuds = [n for n in noeuds if n["key"] not in abonnes_du_graphe]
         liens = [
@@ -144,6 +148,9 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
     # calcules a l'affichage. Sans cette carte, elles reviendraient a leur place
     # automatique au premier rechargement -- ce qui revient a ne pas pouvoir les
     # deplacer du tout.
+    from app.api.tree import placements_for
+
+    places = await placements_for(container, noeuds, caches, tous_les_liens)
     try:
         layout = await repo.node_layout()
     except Exception:  # noqa: BLE001 - un arbre sans positions vaut mieux que pas d'arbre
@@ -153,6 +160,10 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
         "nodes": noeuds,
         "links": liens,
         "layout": layout,
+        # OU PEND CHAQUE CLIENT, et comment on l'a trouve (manuel, equipement de
+        # meme nom, sa case, son secteur, son site de VLAN, son site).
+        "placements": places["placements"],
+        "client_nodes": places["client_nodes"],
         # Le compte des liens est celui des CABLES, pas des observations : un
         # cable vu par ses deux bouts a deux lignes, dont l'une est marquee
         # miroir. Les compter toutes annoncait plus de liens que le reseau n'en
