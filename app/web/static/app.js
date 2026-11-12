@@ -4193,8 +4193,15 @@ async function loadNetwork() {
     compte.textContent = n.noeuds + ' device(s), ' + n.liens + ' link(s)';
   }
   renderDecouverte(data);
-  renderTopoCanvas();
-  topoAjusterUneFois();
+  if (!topo.vue) {
+    let memo = null;
+    try { memo = localStorage.getItem('freeqos.topoView'); } catch (e) { memo = null; }
+    // La LISTE d'abord : elle se lit a toute echelle. Le diagramme reste a un clic.
+    topoChoisirVue(memo || 'list');
+  } else {
+    renderTopoCanvas();
+  }
+  if (topo.vue === 'diagram') topoAjusterUneFois();
   renderTopoPanel();
   // Le tableau des liens, replie juste dessous : meme donnee, lue en lignes.
   await loadTopology();
@@ -7796,7 +7803,8 @@ function topoLinkConfident(l) {
  *  autorise les segments partages pour ne laisser personne orphelin -- ces
  *  rattachements-la sont marques incertains (trait pointille).
  */
-function topoBuildModel(data) {
+function topoBuildModel(data, options) {
+  const sansGroupes = !!(options && options.sansGroupes);
   const nodes = new Map();
   data.nodes.forEach((n) => {
     if (n.hidden) return;
@@ -8089,7 +8097,7 @@ function topoBuildModel(data) {
     if (cands.length) n.unsureParents = cands;
   });
 
-  topoGrouperFeuilles(nodes);
+  if (!sansGroupes) topoGrouperFeuilles(nodes);
   let roots = [...nodes.values()].filter((n) => !n.parentKey);
   // FOCUS : une seule branche (ses ancetres, elle, et tout ce qui pend dessous).
   if (topo.focus && nodes.has(topo.focus)) {
@@ -8316,6 +8324,20 @@ function renderTopoCanvas() {
     // au milieu d'une zone vide de 700 px.
     host.style.height = '';
     host.innerHTML = '<div class="empty">No device discovered.</div>';
+    return;
+  }
+  if (topo.vue === 'list') {
+    // La liste lit les clients dans l'agregat (``members``) : aucun n'est
+    // deplie en cases, et rien n'est range en groupe -- elle les montre tous.
+    const ouverts = topo.abosOuverts;
+    topo.abosOuverts = new Set();
+    const modele = topoBuildModel(data, { sansGroupes: true });
+    topo.abosOuverts = ouverts;
+    topoAutoLayout(modele);
+    topo.model = modele;
+    topoFocusBandeau();
+    topoRemplirRecherche();
+    renderTopoList();
     return;
   }
   const model = topoBuildModel(data);
@@ -8868,6 +8890,225 @@ function topoMontrer(texte) {
   if (el) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
   n = topo.model.nodesByKey.get(cle);
   return !!n;
+}
+
+/* ------------------------------------------------ l'arbre en LISTE
+ *
+ *  Comme un explorateur de fichiers : une ligne par equipement, indentee sous
+ *  son parent, avec ce qu'on cherche d'un coup d'oeil -- combien de clients
+ *  pendent dessous, combien sont en ligne, le debit. Les branches s'ouvrent au
+ *  clic ; les clients se listent par pages ; la recherche filtre. Elle tient
+ *  des milliers de clients la ou le diagramme sature. */
+const TOPO_LISTE_PAGE = 50;
+const TOPO_LISTE_INCONNUS = 8;
+
+function estAbos(n) {
+  return String((n && n.key) || '').startsWith('abos:');
+}
+
+function topoListeEtat() {
+  if (!topo.liste) topo.liste = { ouverts: new Set(), fermes: new Set(), pages: new Map(), filtre: '' };
+  return topo.liste;
+}
+
+/** Clients sous chaque case (toute la branche), et combien sont en ligne. */
+function topoListeComptes(model, parLogin) {
+  const memo = new Map();
+  const calc = (n) => {
+    if (memo.has(n.key)) return memo.get(n.key);
+    memo.set(n.key, { total: 0, enLigne: 0 });
+    let total = 0;
+    let enLigne = 0;
+    const compter = (login) => {
+      total += 1;
+      const s = parLogin.get(login);
+      if (s && mesureFraiche(s)) enLigne += 1;
+    };
+    if (estAbos(n)) (n.members || []).forEach(compter);
+    if (n.clientLogin) compter(n.clientLogin);
+    n.children.forEach((c) => { const r = calc(c); total += r.total; enLigne += r.enLigne; });
+    const r = { total, enLigne };
+    memo.set(n.key, r);
+    return r;
+  };
+  model.nodesByKey.forEach(calc);
+  return memo;
+}
+
+function topoListeOuvert(n, etat) {
+  if (etat.filtre) return true;
+  if (etat.fermes.has(n.key)) return false;
+  if (etat.ouverts.has(n.key)) return true;
+  // Par defaut : l'ossature ouverte (coeur, PoP, VLAN), le reste ferme.
+  return !estAbos(n) && (TOPO_INFRA.has(n.kind) || !n.parentKey);
+}
+
+function topoListeTexte(n) {
+  return [topoTitre(n), n.name, (n.addresses || []).join(' '), n.address, n.platform,
+    n.client && n.client.display_name, n.clientLogin].filter(Boolean).join(' ').toLowerCase();
+}
+
+function clientCorrespond(s, q) {
+  return [s.login, s.display_name, s.last_ip, s.pop_name].filter(Boolean)
+    .join(' ').toLowerCase().includes(q);
+}
+
+function renderTopoList() {
+  const host = document.getElementById('topo-list');
+  const model = topo.model;
+  if (!host || !model) return;
+  const etat = topoListeEtat();
+  const parLogin = new Map((topo.subs || []).map((x) => [x.login, x]));
+  const comptes = topoListeComptes(model, parLogin);
+  const q = etat.filtre.trim().toLowerCase();
+
+  // FILTRE : une case reste si elle correspond, si un de ses clients
+  // correspond, ou si quelque chose dessous correspond (le chemin reste lisible).
+  const garde = new Map();
+  const garder = (n) => {
+    if (garde.has(n.key)) return garde.get(n.key);
+    garde.set(n.key, false);
+    let ok = !q || (!estAbos(n) && topoListeTexte(n).includes(q)) ||
+      (estAbos(n) && (n.members || []).some((l) => clientCorrespond(parLogin.get(l) || { login: l }, q)));
+    n.children.forEach((c) => { if (garder(c)) ok = true; });
+    garde.set(n.key, ok);
+    return ok;
+  };
+  model.roots.forEach(garder);
+
+  const debitDe = (n) => topoEdgeRates(n.edge) || topoUispRates(n) || n.synthRates || null;
+  const debitTxt = (r) => (r && (r.down || r.up)
+    ? '<span class="tl-rate"><span class="d">&darr; ' + esc(bpsShort(r.down)) + '</span> <span class="u">&uarr; ' +
+      esc(bpsShort(r.up)) + '</span></span>'
+    : '<span class="tl-rate hint">-</span>');
+  const lignes = [];
+  const caret = (cle, ouvert) => '<button type="button" class="tl-caret" data-tl-toggle="' + esc(cle) +
+    '" aria-label="' + (ouvert ? 'Fold' : 'Unfold') + '">' + (ouvert ? '&#9662;' : '&#9656;') + '</button>';
+  const vide = '<span class="tl-caret"></span>';
+
+  const ligneClient = (s, prof) => {
+    const vu = mesureFraiche(s);
+    const r = vu && (s.tx_bps || s.rx_bps) ? { down: Number(s.tx_bps) || 0, up: Number(s.rx_bps) || 0 } : null;
+    lignes.push('<div class="tl-row tl-client" style="--d:' + prof + '">' + vide +
+      '<span class="tl-dot ' + (vu ? 'ok' : 'off') + '" title="' + (vu ? 'online' : 'offline') + '"></span>' +
+      '<a class="tl-name" href="#/client/' + esc(encodeURIComponent(s.login)) + '">' + esc(s.display_name || s.login) + '</a>' +
+      '<span class="tl-meta">' + esc(s.last_ip || '') + '</span>' +
+      '<span class="tl-count"></span>' + debitTxt(r) + '</div>');
+  };
+
+  const ligneCase = (n, prof) => {
+    if (!garde.get(n.key)) return;
+    const c = comptes.get(n.key) || { total: 0, enLigne: 0 };
+    const sel = topo.selected === n.key ? ' selected' : '';
+    if (estAbos(n)) {
+      // L'agregat de clients : « 37 clients », et la liste par pages.
+      const membres = n.members.map((l) => parLogin.get(l) || { login: l })
+        .filter((x) => !q || clientCorrespond(x, q))
+        .sort((a, b) => Number(mesureFraiche(b)) - Number(mesureFraiche(a)) ||
+          String(a.display_name || a.login).localeCompare(String(b.display_name || b.login)));
+      const ouvert = topoListeOuvert(n, etat);
+      lignes.push('<div class="tl-row tl-group' + sel + '" data-tl-key="' + esc(n.key) + '" style="--d:' + prof + '">' +
+        caret(n.key, ouvert) + '<span class="tl-kind" style="color:var(--accent)">ABO</span>' +
+        '<span class="tl-name"><b>' + membres.length + ' client' + (membres.length > 1 ? 's' : '') + '</b></span>' +
+        '<span class="tl-meta"></span>' +
+        '<span class="tl-count">' + membres.filter(mesureFraiche).length + ' online</span>' +
+        debitTxt(n.synthRates) + '</div>');
+      if (!ouvert) return;
+      const montres = etat.pages.get(n.key) || TOPO_LISTE_PAGE;
+      membres.slice(0, montres).forEach((x) => ligneClient(x, prof + 1));
+      if (membres.length > montres) {
+        lignes.push('<div class="tl-row tl-more" style="--d:' + (prof + 1) + '">' + vide +
+          '<button type="button" class="sm ghost" data-tl-more="' + esc(n.key) + '">Show ' +
+          Math.min(TOPO_LISTE_PAGE, membres.length - montres) + ' more (' + (membres.length - montres) + ' left)</button></div>');
+      }
+      return;
+    }
+    const enfants = n.children.filter((x) => garde.get(x.key)).slice().sort((a, b) => {
+      // Les clients d'abord, puis l'ossature, puis les equipements.
+      if (estAbos(a) !== estAbos(b)) return estAbos(a) ? -1 : 1;
+      return topoOrdreFratrie(a, b);
+    });
+    const ouvert = topoListeOuvert(n, etat);
+    const couleur = KIND_COLOR[n.kind] || 'var(--faint)';
+    const attrs = topoAttrs(n);
+    const etatCase = attrs.unreachable ? 'crit' : n.fresh === false ? 'off' : 'ok';
+    lignes.push('<div class="tl-row' + sel + (n.fresh === false ? ' stale' : '') + '" data-tl-key="' + esc(n.key) +
+      '" style="--d:' + prof + '">' +
+      (enfants.length ? caret(n.key, ouvert) : vide) +
+      '<span class="tl-kind" style="color:' + couleur + '">' + esc(ICONE[n.kind] || '?') + '</span>' +
+      '<span class="tl-name"><span class="tl-dot ' + etatCase + '"></span>' + esc(topoTitre(n)) +
+        (n.clientLogin ? ' <span class="badge">client</span>' : '') + '</span>' +
+      '<span class="tl-meta">' + esc(topoTitre(n) !== n.name ? n.name
+        : ((n.addresses || [])[0] || n.address || '')) + '</span>' +
+      '<span class="tl-count">' + (c.total ? c.total + ' client' + (c.total > 1 ? 's' : '') +
+        ' · ' + c.enLigne + ' online' : '') + '</span>' +
+      debitTxt(debitDe(n)) + '</div>');
+    if (!ouvert) return;
+    // Les equipements connus par leur seule MAC : au-dela de quelques-uns, ils
+    // se replient en une ligne pour ne pas noyer les autres.
+    const inconnus = enfants.filter((x) => !estAbos(x) && !x.children.length && topoTitre(x) !== x.name);
+    const replierInconnus = !q && inconnus.length > TOPO_LISTE_INCONNUS;
+    enfants.forEach((x) => { if (!(replierInconnus && inconnus.includes(x))) ligneCase(x, prof + 1); });
+    if (replierInconnus) {
+      const cle = 'unk:' + n.key;
+      const ouv = etat.ouverts.has(cle);
+      lignes.push('<div class="tl-row tl-group" style="--d:' + (prof + 1) + '">' + caret(cle, ouv) +
+        '<span class="tl-kind">?</span><span class="tl-name">' + inconnus.length +
+        ' unknown devices</span><span class="tl-meta">known by MAC or IP only</span>' +
+        '<span class="tl-count"></span><span class="tl-rate"></span></div>');
+      if (ouv) inconnus.forEach((x) => ligneCase(x, prof + 2));
+    }
+  };
+
+  model.roots.slice().sort(topoOrdreFratrie).forEach((r) => ligneCase(r, 0));
+  host.innerHTML = lignes.length
+    ? '<div class="tl-head"><span>Device / client</span><span></span><span>Clients</span><span>Rate</span></div>' +
+      lignes.join('')
+    : '<div class="empty">' + (q ? 'Nothing matches "' + esc(etat.filtre) + '".' : 'No device discovered.') + '</div>';
+
+  if (!topo.listeBranchee && host.addEventListener) {
+    topo.listeBranchee = true;
+    host.addEventListener('click', (e) => {
+      const e2 = topoListeEtat();
+      const bascule = e.target.closest('[data-tl-toggle]');
+      if (bascule) {
+        const cle = bascule.dataset.tlToggle;
+        const n = topo.model && topo.model.nodesByKey.get(cle);
+        const ouvert = n ? topoListeOuvert(n, e2) : e2.ouverts.has(cle);
+        if (ouvert) { e2.ouverts.delete(cle); e2.fermes.add(cle); } else { e2.fermes.delete(cle); e2.ouverts.add(cle); }
+        renderTopoList();
+        return;
+      }
+      const plus = e.target.closest('[data-tl-more]');
+      if (plus) {
+        const cle = plus.dataset.tlMore;
+        e2.pages.set(cle, (e2.pages.get(cle) || TOPO_LISTE_PAGE) + TOPO_LISTE_PAGE);
+        renderTopoList();
+        return;
+      }
+      if (e.target.closest('a')) return;
+      const ligne = e.target.closest('[data-tl-key]');
+      if (ligne) {
+        topo.selected = ligne.dataset.tlKey;
+        renderTopoList();
+        renderTopoPanel();
+      }
+    });
+  }
+}
+
+/** Bascule Liste / Diagramme, retenue dans le navigateur. */
+function topoChoisirVue(vue) {
+  topo.vue = vue === 'diagram' ? 'diagram' : 'list';
+  try { localStorage.setItem('freeqos.topoView', topo.vue); } catch (e) { /* stockage indisponible */ }
+  const section = document.getElementById('view-network');
+  if (section) section.classList.toggle('topo-mode-list', topo.vue === 'list');
+  document.querySelectorAll('#topo-view [data-topo-view]').forEach((b) =>
+    b.classList.toggle('active', b.dataset.topoView === topo.vue));
+  const champ = document.getElementById('topo-find');
+  if (champ) champ.placeholder = topo.vue === 'list' ? 'Filter devices and clients' : 'Find a device or client';
+  if (topo.data) { renderTopoCanvas(); renderTopoPanel(); }
+  if (topo.vue === 'diagram') { topo.ajuste = false; topoAjusterUneFois(); }
 }
 
 function topoSelect(key) {
@@ -14786,7 +15027,16 @@ document.getElementById('btn-topo-zoom-out').addEventListener('click',
   () => setTopoZoom((topo.zoom || 1) - 0.1));
 document.getElementById('btn-topo-fit').addEventListener('click', topoFit);
 document.getElementById('btn-topo-forget').addEventListener('click', forgetStaleNodes);
+let minuterieListe = null;
+document.getElementById('topo-find').addEventListener('input', (e) => {
+  if (topo.vue !== 'list') return;
+  clearTimeout(minuterieListe);
+  minuterieListe = setTimeout(() => { topoListeEtat().filtre = e.target.value; renderTopoList(); }, 200);
+});
+document.querySelectorAll('#topo-view [data-topo-view]').forEach((b) =>
+  b.addEventListener('click', () => topoChoisirVue(b.dataset.topoView)));
 document.getElementById('topo-find').addEventListener('change', (e) => {
+  if (topo.vue === 'list') return;
   const texte = e.target.value.trim();
   if (!texte) return;
   // Vide apres usage : sinon la case perdant le focus redeclencherait la
