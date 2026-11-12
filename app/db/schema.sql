@@ -1427,3 +1427,23 @@ CREATE TABLE IF NOT EXISTS client_profiles (
     updated_by      TEXT,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- -----------------------------------------------------------------------------
+-- Arbre reseau MODULAIRE : ce que l'exploitant corrige dans le placement
+-- automatique des clients. Le reste se calcule a chaque affichage.
+-- -----------------------------------------------------------------------------
+-- Un client pose a la main sous une case (glisser-deposer, « Attach here »).
+CREATE TABLE IF NOT EXISTS tree_client_places (
+    login       TEXT PRIMARY KEY,
+    node_key    TEXT NOT NULL,
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Une case decouverte declaree comme ETANT un client (« this box is X »), ou
+-- login vide : « ce n'est pas un client », pour refuser un lien par le nom.
+CREATE TABLE IF NOT EXISTS tree_client_links (
+    node_key    TEXT PRIMARY KEY,
+    login       TEXT NOT NULL DEFAULT '',
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -3825,11 +3825,14 @@ function topoCompte(data) {
  *  editable et le tableau des liens, qui vivent tous deux dans l'onglet
  *  Arbre reseau. */
 async function fetchTopo() {
-  const [data, subs] = await Promise.all([
+  const [data, subs, fiches] = await Promise.all([
     api('/topology'),
-    // Les abonnes, pour les rattacher a leur PoP dans l'arbre.
-    api('/subscribers/latest?limit=500&order_by=login').catch(() => []),
+    // Les clients, y compris ceux declares et jamais vus : chacun a sa place.
+    api('/subscribers/latest?limit=5000&order_by=login&include_unmeasured=true').catch(() => []),
+    api('/client-profiles').catch(() => ({ profiles: {} })),
   ]);
+  const profils = (fiches && fiches.profiles) || {};
+  (subs || []).forEach((s) => { s.display_name = (profils[s.login] || {}).display_name || null; });
   topo.data = data;
   topo.subs = subs || [];
   return data;
@@ -7392,84 +7395,113 @@ function topoBuildModel(data) {
     aPlacer = restants();
   }
 
-  // Rattache les abonnes a leur PoP : un noeud agrege par PoP plutot que 500
-  // cases. Le debit de l'arete est la somme du trafic des abonnes.
+  // LES CLIENTS, CHACUN A SA PLACE. Le serveur dit ou pend chaque client, et
+  // comment il l'a trouve : a la main, l'equipement qui porte son nom, sa
+  // propre case decouverte, son secteur, le routeur de son site de VLAN, son
+  // site. Rattacher par le seul nom du site faisait disparaitre les clients
+  // d'un site de VLAN, et mettait a plat ceux d'un secteur radio.
   //
-  // L'AGREGAT SE DEPLIE. Il s'annoncait "repliable" sans que rien ne le deplie :
-  // on lisait un compte, jamais QUI. Or c'est la question qu'on se pose devant
-  // un PoP qui sature. Un clic ouvre donc la liste, et un second la referme.
-  // Le repli reste le defaut, parce qu'un PoP d'operateur porte des centaines
-  // d'abonnes et qu'aucun arbre ne se lit avec des centaines de cases.
-  const parPop = new Map();
-  // Un client a IP fixe a DEJA sa propre case dans le graphe : le compter
-  // aussi dans l'agregat de son site le montrait deux fois.
-  const fiches = new Set();
-  nodes.forEach((n) => {
-    if (n.kind !== 'static') return;
-    let a = n.attributes;
-    if (typeof a === 'string') { try { a = JSON.parse(a); } catch (e) { a = null; } }
-    fiches.add((a && a.reference) || n.name);
+  // L'AGREGAT SE DEPLIE. Un clic ouvre la liste, un second la referme. Le
+  // repli reste le defaut : un site d'operateur porte des centaines de
+  // clients, et aucun arbre ne se lit avec des centaines de cases.
+  const places = data.placements || {};
+  const casesClient = data.client_nodes || {};
+  Object.entries(casesClient).forEach(([cle, v]) => {
+    const n = nodes.get(cle);
+    if (!n) return;
+    n.clientLogin = v.login;
+    n.clientHow = v.how;
+    n.client = (topo.subs || []).find((x) => x.login === v.login) || null;
   });
+  const parNomDeSite = new Map();
+  nodes.forEach((n) => { if (!n.synthetic && n.name && !parNomDeSite.has(n.name)) parNomDeSite.set(n.name, n.key); });
+  const parCase = new Map();
+  const sitesVlan = new Map();
+  const nonPlaces = [];
   (topo.subs || []).forEach((s) => {
-    if (!s.pop_name) return;
-    if (fiches.has(s.login)) return;
-    if (!parPop.has(s.pop_name)) parPop.set(s.pop_name, []);
-    parPop.get(s.pop_name).push(s);
-  });
-  if (parPop.size) {
-    [...nodes.values()].forEach((n) => {
-      const abonnes = parPop.get(n.name);
-      if (!abonnes || !abonnes.length) return;
-      // Seules les mesures ACTUELLES s'additionnent : une valeur vieille d'une
-      // heure n'est pas le debit de ce PoP maintenant.
-      const frais = abonnes.filter(mesureFraiche);
-      const tx = frais.reduce((a, s) => a + (Number(s.tx_bps) || 0), 0);
-      const rx = frais.reduce((a, s) => a + (Number(s.rx_bps) || 0), 0);
-      const cle = 'abos:' + n.key;
-      const ouvert = topo.abosOuverts.has(cle);
-      const synth = {
-        key: cle,
-        name: ouvert ? 'Subscribers of ' + n.name : abonnes.length + ' subscriber(s)',
-        kind: 'subscriber',
-        synthetic: true, parentKey: n.key, children: [], edge: null,
-        synthRates: (tx || rx) ? { down: tx, up: rx, cap: 0 } : null,
-        count: abonnes.length, addresses: [], fresh: true,
-        expandable: true, expanded: ouvert,
-      };
-      nodes.set(synth.key, synth);
-      n.children.push(synth);
-      if (!ouvert) return;
-
-      // Deplie : une case par abonne, sous l'agregat. BORNE, parce qu'un PoP
-      // charge en compte des centaines et qu'un arbre illisible ne renseigne
-      // sur rien. Le reste se lit dans l'onglet Abonnes, qui est fait pour ca.
-      const montres = abonnes.slice(0, TOPO_ABOS_MAX);
-      montres.forEach((s) => {
-        const feuille = {
-          key: cle + '|' + s.login,
-          name: s.login,
-          kind: s.kind === 'static' ? 'static' : 'cpe',
-          synthetic: true, parentKey: synth.key, children: [], edge: null,
-          subscriber: s,
-          synthRates: mesureFraiche(s) && (s.tx_bps || s.rx_bps)
-            ? { down: Number(s.tx_bps) || 0, up: Number(s.rx_bps) || 0, cap: 0 } : null,
-          addresses: s.last_ip ? [String(s.last_ip)] : [], fresh: true,
-        };
-        nodes.set(feuille.key, feuille);
-        synth.children.push(feuille);
-      });
-      if (abonnes.length > montres.length) {
-        const reste = {
-          key: cle + '|…',
-          name: '+ ' + (abonnes.length - montres.length) + ' more',
-          kind: 'subscriber', synthetic: true, parentKey: synth.key,
-          children: [], edge: null, synthRates: null, addresses: [], fresh: true,
-        };
-        nodes.set(reste.key, reste);
-        synth.children.push(reste);
+    const p = places[s.login];
+    s.placedHow = p ? p.how : 'site';
+    if (p && p.how === 'device') return;   // la case decouverte EST ce client
+    let cle = null;
+    if (p && p.node && nodes.has(p.node)) {
+      cle = p.node;
+      if (p.how === 'vlan-site' && p.site) {
+        cle = 'vlan:' + p.node + '|' + p.site;
+        if (!sitesVlan.has(cle)) sitesVlan.set(cle, { parent: p.node, site: p.site });
       }
-    });
+    } else if (!p && s.pop_name && parNomDeSite.has(s.pop_name)) {
+      cle = parNomDeSite.get(s.pop_name);
+    }
+    if (!cle) { nonPlaces.push(s); return; }
+    if (!parCase.has(cle)) parCase.set(cle, []);
+    parCase.get(cle).push(s);
+  });
+  // Une case par site de VLAN, sous le routeur qui la porte.
+  sitesVlan.forEach((v, cle) => {
+    const synth = { key: cle, name: v.site, kind: 'vlan', synthetic: true, parentKey: v.parent,
+      children: [], edge: null, synthRates: null, addresses: [], fresh: true, vlanSite: true };
+    nodes.set(cle, synth);
+    nodes.get(v.parent).children.push(synth);
+  });
+  // Rien n'est jamais perdu : les clients sans place restent visibles.
+  if (nonPlaces.length) {
+    const cle = 'unplaced:clients';
+    nodes.set(cle, { key: cle, name: 'Unplaced clients', kind: 'unknown', synthetic: true, parentKey: null,
+      children: [], edge: null, synthRates: null, addresses: [], fresh: true, unplacedRoot: true });
+    parCase.set(cle, nonPlaces);
   }
+  parCase.forEach((abonnes, cleParent) => {
+    const n = nodes.get(cleParent);
+    if (!n || !abonnes.length) return;
+    // Seules les mesures ACTUELLES s'additionnent : une valeur vieille d'une
+    // heure n'est pas le debit de ce site maintenant.
+    const frais = abonnes.filter(mesureFraiche);
+    const tx = frais.reduce((a, s) => a + (Number(s.tx_bps) || 0), 0);
+    const rx = frais.reduce((a, s) => a + (Number(s.rx_bps) || 0), 0);
+    const cle = 'abos:' + n.key;
+    const ouvert = topo.abosOuverts.has(cle);
+    const synth = {
+      key: cle,
+      name: ouvert ? 'Clients of ' + n.name : abonnes.length + ' client(s)',
+      kind: 'subscriber',
+      synthetic: true, parentKey: n.key, children: [], edge: null,
+      synthRates: (tx || rx) ? { down: tx, up: rx, cap: 0 } : null,
+      count: abonnes.length, addresses: [], fresh: true,
+      expandable: true, expanded: ouvert,
+      members: abonnes.map((s) => s.login),
+    };
+    nodes.set(synth.key, synth);
+    n.children.push(synth);
+    if (!ouvert) return;
+
+    // Deplie : une case par client, sous l'agregat. BORNE, parce qu'un site
+    // charge en compte des centaines : le reste se lit dans Clients.
+    const montres = abonnes.slice(0, TOPO_ABOS_MAX);
+    montres.forEach((s) => {
+      const feuille = {
+        key: cle + '|' + s.login,
+        name: s.display_name || s.login,
+        kind: s.kind === 'static' ? 'static' : 'cpe',
+        synthetic: true, parentKey: synth.key, children: [], edge: null,
+        subscriber: s,
+        synthRates: mesureFraiche(s) && (s.tx_bps || s.rx_bps)
+          ? { down: Number(s.tx_bps) || 0, up: Number(s.rx_bps) || 0, cap: 0 } : null,
+        addresses: s.last_ip ? [String(s.last_ip)] : [], fresh: true,
+      };
+      nodes.set(feuille.key, feuille);
+      synth.children.push(feuille);
+    });
+    if (abonnes.length > montres.length) {
+      const reste = {
+        key: cle + '|…',
+        name: '+ ' + (abonnes.length - montres.length) + ' more',
+        kind: 'subscriber', synthetic: true, parentKey: synth.key,
+        children: [], edge: null, synthRates: null, addresses: [], fresh: true,
+      };
+      nodes.set(reste.key, reste);
+      synth.children.push(reste);
+    }
+  });
 
   // Pour un noeud reste SANS parent, on liste ses voisins connus : le panneau
   // proposera de le rattacher a la main, plutot que de le laisser orphelin sans
@@ -7733,7 +7765,9 @@ function renderTopoCanvas() {
     // Rassemble toutes les adresses de l'equipement plutot que d'en montrer une.
     // Une case d'abonne montre son adresse ET son debit : c'est ce qu'on
     // cherche quand on ouvre la liste d'un PoP qui sature.
-    const meta = n.subscriber
+    const meta = n.clientLogin
+      ? '\u2605 client ' + ((n.client && n.client.display_name) || n.clientLogin)
+      : n.subscriber
       ? [n.addresses.join(', '),
          n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : '']
         .filter(Boolean).join(' · ')
@@ -7960,6 +7994,10 @@ function bindTopoDrag(svg, model) {
       // est exactement ce qu'on veut pouvoir faire : un arbre ou chacun met ses
       // clients la ou il les a sur le terrain se lit d'un coup d'oeil.
       const libre = !!node.synthetic;
+      // ... SAUF un client ou un groupe de clients : deposes sur une case, ils
+      // y pendent desormais (placement manuel, qui se defait).
+      const clientsTraines = node.subscriber ? [node.subscriber.login]
+        : (node.members && node.members.length ? node.members : null);
 
       // L'agregat d'abonnes se DEPLIE au clic : c'est la seule facon de savoir
       // QUI est derriere un compte, sans imposer des centaines de cases par
@@ -8003,7 +8041,7 @@ function bindTopoDrag(svg, model) {
         // Une case libre ne se rattache pas : inutile de chercher une cible,
         // et surtout de la souligner comme si le depot allait faire quelque
         // chose.
-        if (libre) return;
+        if (libre && !clientsTraines) return;
 
         // Cible de rattachement : la case survolee par le CENTRE de celle qu'on
         // traine, hors elle-meme et hors ses descendants (cela ferait un cycle).
@@ -8012,6 +8050,7 @@ function bindTopoDrag(svg, model) {
         let cible = null;
         model.nodesByKey.forEach((other) => {
           if (other.key === key || descendants.has(other.key)) return;
+          if (clientsTraines && other.synthetic) return;   // un client pend a un equipement
           if (cx >= other.x && cx <= other.x + NODE_W && cy >= other.y && cy <= other.y + NODE_H) {
             cible = other.key;
           }
@@ -8039,6 +8078,13 @@ function bindTopoDrag(svg, model) {
           return;
         }
         try {
+          if (clientsTraines && dropTarget) {
+            if (!peut('edit')) { await loadNetwork(); return; }
+            await api('/topology/client-places', { method: 'PUT',
+              body: JSON.stringify({ logins: clientsTraines, node_key: dropTarget }) });
+            await loadNetwork();
+            return;
+          }
           if (dropTarget && dropTarget !== node.parentKey) {
             await api('/topology/nodes/' + encodeURIComponent(key) + '/parent',
               { method: 'PATCH', body: JSON.stringify({ parent_key: dropTarget }) });
@@ -8144,6 +8190,7 @@ function renderTopoPanel() {
     host.innerHTML = '<div class="muted">No box selected.</div>';
     return;
   }
+  if (node.synthetic) { renderTopoPanelClients(host, node); return; }
   const parent = node.parentKey ? topo.model.nodesByKey.get(node.parentKey) : null;
   const attrs = topoAttrs(node);
   const dups = topoDuplicateSuggestions(node);
@@ -8240,6 +8287,7 @@ function renderTopoPanel() {
           esc(topoTrim(c.name, 18)) + '</button>').join(' ') +
         '<span class="hint">Click to attach by hand.</span></div>'
       : '') +
+    topoSectionClient(node) +
     '<div class="stack field"><label>Role</label>' +
       '<select id="topo-kind">' + KIND_ORDER.map((k) =>
         '<option value="' + k + '"' + (k === node.kind ? ' selected' : '') + '>' +
@@ -8265,6 +8313,7 @@ function renderTopoPanel() {
       '<button class="sm" id="topo-hide">Masquer</button>' +
     '</div>';
 
+  bindTopoSectionClient(host, node);
   document.getElementById('topo-kind').addEventListener('change', async (e) => {
     try {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '?kind=' + e.target.value,
@@ -8319,6 +8368,96 @@ function renderTopoPanel() {
       await loadNetwork();
     } catch (err) { alert(err.message); }
   });
+}
+
+/* ------------------------------------------- arbre modulaire : les clients */
+const PLACE_HOW = {
+  manual: 'placed by hand', device: 'a device with its name', graph: 'its own discovered box',
+  sector: 'its sector', 'vlan-site': 'the router of its VLAN site', site: 'its site', unplaced: 'nowhere yet',
+};
+
+function topoNomClient(s) { return (s && (s.display_name || s.login)) || ''; }
+
+/** Choisir un client : une liste filtrable, les noms saisis compris. */
+function topoChoixClient(id) {
+  return '<input id="' + id + '" list="' + id + '-l" placeholder="Name or login" autocomplete="off">' +
+    '<datalist id="' + id + '-l">' + (topo.subs || []).map((s) =>
+      '<option value="' + esc(s.login) + '">' + esc(s.display_name ? s.display_name + ' · ' + s.pop_name : (s.pop_name || '')) + '</option>').join('') +
+    '</datalist>';
+}
+
+/** Section « client » d'un equipement : ce qu'il est, et ce qui pend dessous. */
+function topoSectionClient(node) {
+  const admin = peut('edit');
+  const ici = (topo.subs || []).filter((s) => {
+    const p = (topo.data.placements || {})[s.login];
+    return p && p.node === node.key && p.how !== 'device';
+  }).length;
+  const lie = node.clientLogin
+    ? '<div class="notice ok" style="margin:.5rem 0"><b>This box is client ' + esc(topoNomClient(node.client) || node.clientLogin) + '</b> · ' +
+      (node.clientHow === 'manual' ? 'set by hand' : 'same name') +
+      '<div class="actions" style="margin-top:.4rem"><a class="sm" href="#/client/' + esc(encodeURIComponent(node.clientLogin)) + '">Open the client</a>' +
+      (admin ? '<button class="sm" id="topo-unlink">Not this client</button>' : '') + '</div></div>'
+    : (admin ? '<div class="stack field"><label>This box is a client</label><div class="row-inline">' +
+      topoChoixClient('topo-link-client') + '<button class="sm" id="topo-link">Link</button></div></div>' : '');
+  return '<div class="kv"><span>Clients here</span><span>' + ici + '</span></div>' + lie +
+    (admin ? '<div class="stack field"><label>Attach a client under this box</label><div class="row-inline">' +
+      topoChoixClient('topo-place-client') + '<button class="sm" id="topo-place">Attach</button></div>' +
+      '<span class="hint">Or drag a client (or a whole group) onto any box.</span></div>' : '');
+}
+
+function bindTopoSectionClient(host, node) {
+  const clic = (id, f) => { const el = host.querySelector('#' + id); if (el) el.addEventListener('click', f); };
+  const choisi = (id) => {
+    const v = (host.querySelector('#' + id) || {}).value || '';
+    const t = v.trim().toLowerCase();
+    const s = (topo.subs || []).find((x) => x.login.toLowerCase() === t || (x.display_name || '').toLowerCase() === t);
+    return s ? s.login : null;
+  };
+  const faire = async (f) => { try { await f(); await loadNetwork(); } catch (err) { alert(err.message); } };
+  clic('topo-unlink', () => faire(() => api('/topology/client-links', { method: 'PUT',
+    body: JSON.stringify({ node_key: node.key, login: '' }) })));
+  clic('topo-link', () => {
+    const login = choisi('topo-link-client');
+    if (!login) { alert('Choose a client from the list.'); return; }
+    faire(() => api('/topology/client-links', { method: 'PUT', body: JSON.stringify({ node_key: node.key, login }) }));
+  });
+  clic('topo-place', () => {
+    const login = choisi('topo-place-client');
+    if (!login) { alert('Choose a client from the list.'); return; }
+    faire(() => api('/topology/client-places', { method: 'PUT', body: JSON.stringify({ logins: [login], node_key: node.key }) }));
+  });
+}
+
+/** Panneau d'une case de clients : un client, un groupe, un site de VLAN. */
+function renderTopoPanelClients(host, node) {
+  const admin = peut('edit');
+  const s = node.subscriber;
+  if (s) {
+    const p = (topo.data.placements || {})[s.login] || {};
+    host.innerHTML = '<h4>' + esc(topoNomClient(s)) + '</h4>' +
+      (s.display_name ? '<div class="kv"><span>Login</span><span>' + esc(s.login) + '</span></div>' : '') +
+      '<div class="kv"><span>IP</span><span><code>' + esc(s.last_ip || '-') + '</code></span></div>' +
+      '<div class="kv"><span>Site</span><span>' + esc(s.pop_name || '-') + '</span></div>' +
+      '<div class="kv"><span>Status</span><span>' + (mesureFraiche(s) ? 'online' : (s.ts ? 'seen ' + esc(depuis(s.ts)) : 'never seen')) + '</span></div>' +
+      '<div class="kv"><span>Placed by</span><span>' + esc(PLACE_HOW[p.how] || 'its site') + '</span></div>' +
+      '<div class="actions" style="margin-top:.7rem"><a class="sm primary" href="#/client/' + esc(encodeURIComponent(s.login)) + '">Open the client</a>' +
+      (admin && p.how === 'manual' ? '<button class="sm" id="topo-auto">Back to automatic place</button>' : '') + '</div>' +
+      (admin ? '<p class="hint" style="display:block">Drag it onto any box to hang it there.</p>' : '');
+    const auto = host.querySelector('#topo-auto');
+    if (auto) auto.addEventListener('click', async () => {
+      try { await api('/topology/client-places/' + encodeURIComponent(s.login), { method: 'DELETE' }); await loadNetwork(); }
+      catch (err) { alert(err.message); }
+    });
+    return;
+  }
+  const n = (node.members || []).length;
+  host.innerHTML = '<h4>' + esc(node.name) + '</h4>' +
+    (node.vlanSite ? '<p class="hint" style="display:block">VLAN site carried by this router: its clients hang here automatically.</p>' : '') +
+    (node.unplacedRoot ? '<p class="hint" style="display:block">Clients for which nothing gives a place yet (no device, sector or site in the tree). Drag them onto the right box.</p>' : '') +
+    (n ? '<div class="kv"><span>Clients</span><span>' + n + '</span></div>' +
+      '<p class="hint" style="display:block">Click to ' + (node.expanded ? 'fold' : 'list') + ' them' +
+      (admin ? '; drag the group onto a box to move them all there' : '') + '.</p>' : '');
 }
 
 /** Remet toute la disposition en automatique : efface positions ET

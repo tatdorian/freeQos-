@@ -163,6 +163,9 @@ class Scheduler:
     def job_names(self) -> list[str]:
         return list(self._jobs)
 
+    def job_state(self, name: str) -> JobState | None:
+        return self._jobs.get(name)
+
     async def run_once(self, name: str) -> RunResult | None:
         """Declenche un job hors cadence (utile pour l'API d'admin et les tests)."""
         job = self._jobs.get(name)
