@@ -1339,6 +1339,23 @@ Two banners can appear at the top of the interface:
 - **Other instance detected:** another freeQoS installation creates queues on the same routers. Its objects are not touched; one of them must be stopped.
 - **Frozen lines:** anti-oscillation has frozen one or more queues. The banner says which and why.
 
+### Offline, or not measured?
+
+A client is **Offline** when its router answered but the client was not in its sessions (`/ppp/active`) for 90 seconds: the client really left (CPE off, line down, PPPoE session closed by the router or RADIUS). freeQoS never closes a PPPoE session itself: it only writes queues, firewall rules and the NetFlow export.
+
+A client is **Not measured · router X not answering freeQoS** when freeQoS could not read the sessions of its router. The client may be connected; it is freeQoS that no longer reaches the router. Hover the text for the reason:
+
+| Reason shown | What to check on the router or the network |
+| --- | --- |
+| connection refused: the API service is off or restricted to another address | `/ip service print`: `api` (8728) or `api-ssl` (8729) enabled, and its `address=` contains the address freeQoS comes from **as the router sees it** (after NAT or through a tunnel it may not be the server's public IP) |
+| no answer in time | Firewall `input` chain (TCP 8728/8729 from freeQoS), the route back to freeQoS, CPU of the router (*Devices › Health*) |
+| login refused | The API account and its password (`/user print`, `/log print where topics~"account"`) |
+| no route to the router | Routing between the freeQoS server and the router |
+
+`GET /api/v1/pops/read-status` gives, for each router, the time of the last successful read, since when it fails and why. The container log says the same: `sudo docker compose logs app | grep "Collecte impossible"`.
+
+RouterOS calls are blocking and run in threads: `IO_THREADS` (default 64) sets how many. A small pool (the Python default is the number of CPUs + 4) let latency probes and configuration exports hold every thread, and session reads ran out of time on routers that were fine.
+
 ### Empty latency
 
 When a subscriber has no latency, the cell does not stay silent: it says whether the subscriber has never answered, whether the measurement is too old, or whether the probe has not run yet. *Find the cause* runs the diagnostic described in section 5.

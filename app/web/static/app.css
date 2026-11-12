@@ -1603,6 +1603,7 @@ body[data-view="client"] .page-head { display: none; }
 .dot-co.on { background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
 .dot-co.off { background: var(--fill-strong); }
 .cli-off { color: var(--faint); font-size: .85rem; }
+.cli-unread { color: var(--warn, #b7791f); font-size: .85rem; cursor: help; }
 .cli-acts { display: flex; gap: .4rem; justify-content: flex-end; }
 .icon-btn {
   width: 2.3rem; height: 2.3rem; padding: 0; border-radius: 10px; display: grid; place-items: center;

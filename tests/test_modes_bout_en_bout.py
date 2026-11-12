@@ -492,3 +492,32 @@ def test_le_domaine_se_lit_et_refuse_sans_proxy(app_client, routeur) -> None:  #
         json={"domain": "qos.example.com"},
     )
     assert r.status_code == 403
+
+
+def test_un_routeur_muet_ne_fait_pas_passer_ses_clients_hors_ligne(
+    app_client, routeur, monkeypatch
+) -> None:  # noqa: F811
+    """Quand freeQoS ne lit plus un routeur, l'interface le dit (routeur muet,
+    raison en clair) au lieu de declarer ses clients « hors ligne »."""
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    lire = {"Authorization": f"Bearer {lecture}"}
+    _brancher(app_client, cle)
+    [etat] = app_client.get("/api/v1/pops/read-status", headers=lire).json()["routers"]
+    assert etat["router"] == "nas-test" and etat["pop_name"] == "PoP Test"
+    assert etat["ok_at"] and etat["failing_since"] is None and etat["error"] is None
+
+    def refuser() -> list:
+        raise ConnectionRefusedError(111, "Connection refused")
+
+    monkeypatch.setattr(routeur, "ppp_active", refuser)
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    corps = app_client.get("/api/v1/pops/read-status", headers=lire).json()
+    [etat] = corps["routers"]
+    assert corps["failing"] == 1 and etat["failing_since"] and etat["ok_at"]
+    assert "restricted to another address" in etat["error"]
+
+    monkeypatch.undo()
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    [etat] = app_client.get("/api/v1/pops/read-status", headers=lire).json()["routers"]
+    assert etat["failing_since"] is None and etat["error"] is None
