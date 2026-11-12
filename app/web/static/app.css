@@ -2274,3 +2274,6 @@ body.role-limited .dash-detail { display: none; }
 .uisp-sta-row > td { background: var(--fill); padding: .4rem .6rem .8rem; }
 .uisp-sta { width: 100%; font-size: .85rem; }
 .uisp-sta th { font-size: .75rem; }
+.nf-why ul { margin: .4rem 0; padding-left: 1.1rem; }
+.nf-why details { margin-top: .5rem; }
+.nf-cmd { white-space: pre-wrap; font-family: var(--mono); font-size: .8rem; background: var(--surface); padding: .5rem .7rem; border-radius: var(--radius-sm); margin: 0; }
