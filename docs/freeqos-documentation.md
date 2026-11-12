@@ -572,6 +572,25 @@ Every client has a place in the *Network tree*, found automatically, and the box
 
 Clients declared by hand and never seen are in the tree too. Clients are grouped per box ("N client(s)"), click to list them.
 
+### The tree as a list (default)
+
+The *Network tree* opens as a **List**, like a file explorer; **Diagram** shows the same network as boxes (the choice is remembered in your browser).
+
+| Column | What it shows |
+| --- | --- |
+| Device / client | The box, indented under its parent: role (POP, CORE, VLAN, RF...), a dot (green: seen; red: unreachable router; grey: vanished), its name. A device known only by its MAC reads *unknown device*. |
+| Detail | Its address, or the raw name behind a readable one. |
+| Clients | How many clients hang **anywhere below** it, and how many are online now. |
+| Rate | The rate measured on the link that leads to it (router port, or UISP). |
+
+- The backbone (core, PoPs, VLAN sites) is open; everything else is folded. Click the arrow to open or fold a branch.
+- Each box's clients are one line, **"N clients"**; opened, they are listed by page of 50 (online first), each with its address, rate and a link to its page.
+- More than 8 devices known only by their MAC under one box fold into **"N unknown devices"**.
+- The search box **filters** the list as you type: devices and clients matching the text (name, login, address), with the path above them.
+- Click a line to open its side panel (role, parent, *This box is a client*, *Show only this branch*...), exactly as in the diagram.
+
+The list holds thousands of clients where the diagram saturates. Placing by drag and drop, creating a link and the layout stay in **Diagram**.
+
 ### Reading a large tree
 
 A router that sees dozens of neighbours (CPEs, switches, other NAS) used to draw them as one endless column. The tree now stays readable whatever its size:
