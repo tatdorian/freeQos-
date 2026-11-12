@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 
 QUEUE_TYPE_UP = f"{PREFIX}cake-up"
 QUEUE_TYPE_DOWN = f"{PREFIX}cake-down"
+#: Motif d'un lien sans file quand les files de lien sont coupees (le defaut).
+LINK_QUEUES_OFF = (
+    "link queues are off: freeQoS only caps each client's own addresses, never a "
+    "link (Settings › Shaping › shaping_link_queues)"
+)
 
 # Sur quoi une file abonne est accrochee.
 #
@@ -342,6 +347,7 @@ def desired_state(
     now: datetime | None = None,
     target_mode: str = TARGET_ADDRESS,
     queue_unmeasured_links: bool = True,
+    link_queues: bool = True,
 ) -> tuple[list[QueueTypeSpec], list[QueueSpec], list[PlanSkip]]:
     """Construit l'etat desire complet pour un routeur.
 
@@ -399,6 +405,13 @@ def desired_state(
             continue
         if link.skip_reason:
             ecartes.append(PlanSkip(link.name, link.skip_reason))
+            continue
+        if not link_queues:
+            # PAR DEFAUT, AUCUNE FILE DE LIEN. CONSTATE EN PRODUCTION (plainte de
+            # clients) : une file posee sur le segment d'un PTP bridait tout le
+            # trafic du lien, transit compris. freeQoS ne bride que les adresses
+            # de chaque client ; plafonner un lien se demande dans Reglages.
+            ecartes.append(PlanSkip(link.name, LINK_QUEUES_OFF))
             continue
         if not link.enabled:
             ecartes.append(PlanSkip(link.name, "shaping disabled for this link"))

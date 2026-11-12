@@ -1723,6 +1723,7 @@ class ShapingService:
             floor_mbps=self.settings.shaping_floor_mbps,
             target_mode=self.settings.subscriber_queue_target,
             queue_unmeasured_links=self.settings.shaping_queue_for_detected_links,
+            link_queues=self.settings.shaping_link_queues,
         )
         plan = build_plan(
             router_name,
@@ -2186,6 +2187,7 @@ class ShapingService:
             floor_mbps=self.settings.shaping_floor_mbps,
             target_mode=self.settings.subscriber_queue_target,
             queue_unmeasured_links=self.settings.shaping_queue_for_detected_links,
+            link_queues=self.settings.shaping_link_queues,
         )
         rapport = audit_router(
             router_name=router_name,
@@ -3372,6 +3374,7 @@ class ShapingService:
             ),
             target_mode=self.settings.subscriber_queue_target,
             queue_unmeasured_links=self.settings.shaping_queue_for_detected_links,
+            link_queues=self.settings.shaping_link_queues,
         )
         plan = build_plan(
             router_name,
