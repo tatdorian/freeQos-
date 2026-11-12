@@ -25,7 +25,7 @@ APP_JS = Path(__file__).resolve().parents[1] / "app" / "web" / "static" / "app.j
 # la disposition. Si ces reperes bougent, le test echoue franchement plutot que
 # de tester du vide.
 DEBUT = "const TOPO_RANG = {"
-FIN = "function topoEdgeRates("
+FIN = "function topoStaticRates("
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="Node absent : logique d'arbre JS non verifiable"
@@ -49,7 +49,7 @@ def harnais(tmp_path_factory: pytest.TempPathFactory) -> Path:
         "const topo = { subs: [], abosOuverts: new Set(), replies: new Set() };\n"
         "const TOPO_ABOS_MAX = 25;\n"
         + source[debut:fin]
-        + "\nmodule.exports = { topo, topoBuildModel, topoAutoLayout };\n",
+        + "\nmodule.exports = { topo, topoBuildModel, topoAutoLayout, topoTitre };\n",
         encoding="utf-8",
     )
     return module
@@ -1039,3 +1039,130 @@ console.log(JSON.stringify({ rates: agregat.synthRates, compte: agregat.count })
     )
     assert res["compte"] == 1
     assert res["rates"] is None
+
+
+# -------------------------------------------------------------------------
+# LISIBILITE A GRANDE ECHELLE : des dizaines d'equipements sous un routeur
+#
+# Une colonne de 60 cases sous NAS-CAISSE ne se lit pas. Les feuilles d'un meme
+# parent se rangent dans UNE case « N devices » ; ouverte, elle s'ecrit en
+# colonnes de 10. On peut aussi n'afficher qu'une branche.
+# -------------------------------------------------------------------------
+
+FOULE = """
+const n = (k, nm, kd, extra) => ({ key: k, name: nm, kind: kd, hidden: false,
+  addresses: [], ...(extra || {}) });
+const l = (key, s, t) => ({ key, source_key: s, target_key: t, interface: 'e',
+  interface_links: 1, tx_bps: 1e6, rx_bps: 2e5, capacity_mbps: 1000,
+  port_capacity_mbps: 1000, attributes: {} });
+const foule = (combien) => {
+  const nodes = [n('router:core', 'CORE', 'core'), n('router:nas', 'NAS-CAISSE', 'pop'),
+                 n('router:office', 'NAS-OFFICE', 'pop')];
+  const links = [l('c1', 'router:core', 'router:nas'), l('c2', 'router:core', 'router:office')];
+  for (let i = 0; i < combien; i++) {
+    const mac = 'AA:BB:CC:00:00:' + String(i).padStart(2, '0');
+    nodes.push(n('mac:' + mac, mac, 'unknown', { platform: 'MikroTik RouterOS' }));
+    links.push(l('m' + i, 'router:nas', 'mac:' + mac));
+  }
+  return { nodes, links, counts: {} };
+};
+"""
+
+
+def test_les_feuilles_nombreuses_se_rangent_dans_une_case(harnais: Path) -> None:
+    res = executer(
+        harnais,
+        FOULE
+        + """
+A.topo.abosOuverts.clear();
+const m = A.topoBuildModel(foule(40));
+A.topoAutoLayout(m);
+const g = m.nodesByKey.get('grp:router:nas');
+const visibles = [...m.nodesByKey.values()].filter((x) => !x.replie).length;
+console.log(JSON.stringify({
+  existe: !!g, nom: g && g.name, parent: g && g.parentKey, enfants: g && g.children.length,
+  sousNas: m.nodesByKey.get('router:nas').children.map((c) => c.key),
+  feuilleCachee: m.nodesByKey.get('mac:AA:BB:CC:00:00:07').replie,
+  visibles,
+}));
+""",
+    )
+    assert res["existe"] and res["nom"] == "40 devices"
+    assert res["parent"] == "router:nas" and res["enfants"] == 40
+    assert res["sousNas"] == ["grp:router:nas"]
+    # Fermee : ses 40 feuilles ne prennent plus de place.
+    assert res["feuilleCachee"] is True
+    assert res["visibles"] == 4  # coeur, deux NAS, la case de groupe
+
+
+def test_peu_de_feuilles_restent_visibles(harnais: Path) -> None:
+    res = executer(
+        harnais,
+        FOULE
+        + """
+A.topo.abosOuverts.clear();
+const m = A.topoBuildModel(foule(5));
+console.log(JSON.stringify({ groupe: m.nodesByKey.has('grp:router:nas'),
+  sousNas: m.nodesByKey.get('router:nas').children.length }));
+""",
+    )
+    assert res == {"groupe": False, "sousNas": 5}
+
+
+def test_un_groupe_ouvert_s_ecrit_en_colonnes(harnais: Path) -> None:
+    res = executer(
+        harnais,
+        FOULE
+        + """
+A.topo.abosOuverts.clear();
+A.topo.abosOuverts.add('grp:router:nas');
+const m = A.topoBuildModel(foule(25));
+A.topoAutoLayout(m);
+const feuilles = m.nodesByKey.get('grp:router:nas').children;
+const xs = new Set(feuilles.map((f) => f.x));
+const ys = new Set(feuilles.map((f) => f.y));
+const places = new Set(feuilles.map((f) => f.x + ',' + f.y));
+const office = m.nodesByKey.get('router:office');
+const basGroupe = Math.max(...feuilles.map((f) => f.y));
+const hautGroupe = Math.min(...feuilles.map((f) => f.y));
+console.log(JSON.stringify({ colonnes: xs.size, lignes: ys.size, distinctes: places.size,
+  visibles: feuilles.every((f) => !f.replie),
+  officeEnDessous: office.y > basGroupe || office.y < hautGroupe }));
+""",
+    )
+    # 25 feuilles : 3 colonnes de 10 au plus, aucune case sur une autre.
+    assert res["colonnes"] == 3 and res["lignes"] == 10
+    assert res["distinctes"] == 25 and res["visibles"] is True
+    assert res["officeEnDessous"] is True
+
+
+def test_focus_ne_garde_qu_une_branche(harnais: Path) -> None:
+    res = executer(
+        harnais,
+        FOULE
+        + """
+A.topo.abosOuverts.clear();
+A.topo.focus = 'router:office';
+const m = A.topoBuildModel(foule(12));
+A.topo.focus = null;
+console.log(JSON.stringify({ cles: [...m.nodesByKey.keys()].sort(),
+  racines: m.roots.map((r) => r.key) }));
+""",
+    )
+    # Ses ancetres (pour savoir ou l'on est) et elle ; pas NAS-CAISSE ni ses 12 equipements.
+    assert res["cles"] == ["router:core", "router:office"]
+    assert res["racines"] == ["router:core"]
+
+
+def test_un_nom_qui_n_est_qu_une_mac_se_lit(harnais: Path) -> None:
+    res = executer(
+        harnais,
+        """
+console.log(JSON.stringify({
+  mac: A.topoTitre({ name: 'AA:BB:CC:00:00:01', platform: 'MikroTik RouterOS' }),
+  ip: A.topoTitre({ name: '10.0.0.9' }),
+  nom: A.topoTitre({ name: 'AP-Nord' }),
+}));
+""",
+    )
+    assert res == {"mac": "MikroTik · unknown device", "ip": "unknown device", "nom": "AP-Nord"}

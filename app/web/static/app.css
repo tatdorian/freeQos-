@@ -2277,3 +2277,7 @@ body.role-limited .dash-detail { display: none; }
 .nf-why ul { margin: .4rem 0; padding-left: 1.1rem; }
 .nf-why details { margin-top: .5rem; }
 .nf-cmd { white-space: pre-wrap; font-family: var(--mono); font-size: .8rem; background: var(--surface); padding: .5rem .7rem; border-radius: var(--radius-sm); margin: 0; }
+
+/* Arbre lisible : recherche d'une case, bandeau de focus. */
+.topo-find { min-width: 14rem; max-width: 100%; padding: .3rem .55rem; font-size: .85rem; }
+.topo-focus-bar { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-bottom: .6rem; }
