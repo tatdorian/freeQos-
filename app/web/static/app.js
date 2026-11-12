@@ -5464,7 +5464,7 @@ async function toggleRouterWrite(name, active, input) {
  *  sur de bonnes bases. Les files posees a la main ne sont jamais touchees. */
 async function cleanRouterQueues(name, bouton) {
   if (!confirm('Delete ALL freeQoS queues on ' + name + ' and rebuild them from scratch?\n\n' +
-    'Every client of this router goes back to its plan: limits forced in Subscribers (Rate) are lifted.\n' +
+    'Every client of this router (its sites and VLANs included) goes back to Automatic: modes, boosts and forced limits are removed, each client is back on its plan.\n' +
     'Queues you created by hand are kept. Clients are briefly unshaped while the queues are rebuilt.')) return;
   const sortie = document.getElementById('router-export');
   bouton.disabled = true;
@@ -5475,7 +5475,7 @@ async function cleanRouterQueues(name, bouton) {
     sortie.innerHTML = '<div class="notice ' + (errs.length ? 'err' : 'ok') + '">' +
       esc(name) + ': ' + r.removed + ' queue(s) deleted, ' + r.recreated + ' recreated' +
       (r.kept_foreign ? ', ' + r.kept_foreign + ' other queue(s) left untouched' : '') + '.' +
-      ((r.limits_reset || []).length ? ' Back to their plan: ' + r.limits_reset.map(esc).join(', ') + '.' : '') +
+      ((r.limits_reset || []).length ? ' Back to Automatic (mode removed): ' + r.limits_reset.map(esc).join(', ') + '.' : '') +
       (errs.length ? '<br>' + errs.map(esc).join('<br>') : '') + '</div>';
   } catch (err) {
     sortie.innerHTML = '<div class="notice err">' + esc(err.message) + '</div>';
@@ -10969,13 +10969,18 @@ function usageClair(r) {
   const bas = (Number(r.tx_bps) || 0) / 1e6;
   const lim = Number(r.effective_down_mbps) || Number(r.plan_down_mbps) || 0;
   const part = lim ? Math.min(1, bas / lim) : 0;
-  const [mot, cls] = !lim ? ['', ''] : part >= 0.9 ? ['At its limit', 'lv-crit']
+  // NETTEMENT AU-DESSUS de sa limite : ce n'est pas « a sa limite », c'est une
+  // limite que le routeur ne tient pas (file absente ou contournee).
+  const [mot, cls] = !lim ? ['', ''] : bas >= lim * 1.25 ? ['Over its limit', 'lv-crit']
+    : part >= 0.9 ? ['At its limit', 'lv-crit']
     : part >= 0.6 ? ['Busy', 'lv-warn'] : part >= 0.1 ? ['Normal', 'lv-ok'] : ['Quiet', 'lv-idle'];
   return '<div class="use">' +
     (lim ? '<div class="use-bar ' + cls + '"><i style="width:' + Math.max(2, Math.round(part * 100)) + '%"></i></div>' : '') +
     '<div class="use-txt"><span class="d">&darr; ' + esc(bpsText(r.tx_bps)) + '</span>' +
       (lim ? '<span class="use-of">of ' + esc(mbps(lim)) + '</span>' : '') +
-      (mot ? '<span class="use-word ' + cls + '">' + mot + '</span>' : '') + '</div>' +
+      (mot ? '<span class="use-word ' + cls + '"' + (mot === 'Over its limit'
+        ? ' title="The router is not holding this limit: its queue is missing or bypassed (FastTrack). Reset queues, or check the router."' : '') +
+        '>' + mot + '</span>' : '') + '</div>' +
     '<div class="use-up">&uarr; ' + esc(bpsText(r.rx_bps)) + ' up</div></div>';
 }
 
@@ -11908,11 +11913,12 @@ const ICONES = {
 function jaugeUsage(r, on) {
   const lim = Number(r.effective_down_mbps) || Number(r.plan_down_mbps) || 0;
   if (!lim) return on ? 'no limit to compare with' : 'nothing right now';
-  const part = on ? Math.min(1, (Number(r.tx_bps) || 0) / 1e6 / lim) : 0;
-  const [mot, cls] = part >= 0.9 ? ['at its limit', 'lv-crit'] : part >= 0.6 ? ['busy', 'lv-warn']
+  const brut = on ? (Number(r.tx_bps) || 0) / 1e6 / lim : 0;
+  const part = Math.min(1, brut);
+  const [mot, cls] = brut >= 1.25 ? ['over its limit: not held on the router', 'lv-crit'] : part >= 0.9 ? ['at its limit', 'lv-crit'] : part >= 0.6 ? ['busy', 'lv-warn']
     : part >= 0.1 ? ['normal use', 'lv-ok'] : ['quiet', 'lv-idle'];
   return '<span class="use-bar ' + cls + '" style="display:block;margin:.35rem 0 .3rem"><i style="width:' +
-    Math.max(2, Math.round(part * 100)) + '%"></i></span>' + Math.round(part * 100) + ' % of ' +
+    Math.max(2, Math.round(part * 100)) + '%"></i></span>' + Math.round(brut * 100) + ' % of ' +
     esc(mbps(lim)) + ' · <b class="use-word ' + cls + '">' + mot + '</b>';
 }
 
