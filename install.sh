@@ -12,7 +12,7 @@
 #      jamais le "changeme" d'exemple sur un serveur de production ;
 #   4. choisit tout seul un miroir si Docker Hub est injoignable ;
 #   5. construit et demarre la pile, attend qu'elle reponde, et donne l'adresse ;
-#   6. cree le premier compte Administrateur (nouvelle installation seulement).
+#   6. affiche le premier compte Administrateur, cree seul au premier demarrage.
 #
 # Relancer le script = mettre a jour : le code est rafraichi, l'image
 # reconstruite, les donnees et le .env conserves.
@@ -23,9 +23,10 @@
 #   FREEQOS_BRANCH=<branche>        branche (defaut : la branche principale du depot)
 #   APP_PORT=8000  NETFLOW_PORT=2055
 #   FREEQOS_ADMIN_EMAIL=noc@exemple.fr
-#       email du premier compte Administrateur (sinon demande, ou
-#       admin@freeqos.local sans terminal). Le mot de passe est tire au hasard
-#       et affiche une seule fois, sauf FREEQOS_ADMIN_PASSWORD=... fourni.
+#       email du premier compte Administrateur (defaut admin@freeqos.local).
+#       L'application le cree seule au premier demarrage, avec un mot de passe
+#       tire au hasard, affiche a la fin et garde dans data/first-admin.txt
+#       jusqu'a ce qu'il soit change.
 #   AIROS_USERNAME=... AIROS_PASSWORD=...
 #       identifiants communs des antennes Ubiquiti : avec eux, chaque radio
 #       decouverte est ajoutee et interrogee automatiquement.
@@ -151,6 +152,10 @@ else
     ok "Identifiants airOS ajoutes a .env"
   fi
 fi
+# Email du premier Administrateur, lu par l'application a son premier demarrage.
+if [ -n "${FREEQOS_ADMIN_EMAIL:-}" ] && ! grep -q '^FREEQOS_ADMIN_EMAIL=' .env; then
+  printf 'FREEQOS_ADMIN_EMAIL=%s\n' "$FREEQOS_ADMIN_EMAIL" >> .env
+fi
 
 # ------------------------------------------- ports web du proxy HTTPS
 # Le proxy (Caddy) sert l'interface sur 80 / 443 et obtient le certificat du
@@ -212,37 +217,20 @@ done
 ok "freeQoS repond"
 
 # --------------------------------------------- premier compte Administrateur
-# Cree ICI, pas a la premiere visite : sinon le premier venu qui trouve
-# l'adresse du serveur pourrait se declarer administrateur. Sur une mise a
-# jour, les comptes existent deja et rien n'est touche.
-ADMIN_ETAT=""
+# L'application le cree ELLE-MEME au premier demarrage (aucun compte), avant de
+# repondre : personne ne peut se declarer administrateur depuis le navigateur.
+# Son mot de passe reste dans data/first-admin.txt jusqu'a ce qu'il soit change.
+ADMIN_ETAT="existe"
 ADMIN_EMAIL=""
 ADMIN_MDP=""
-cli() { $SUDO docker compose exec -T app python -m app.cli "$@"; }
-COMPTES="$(cli count-accounts 2>/dev/null || echo '?')"
-if [ "$COMPTES" = "0" ]; then
-  ADMIN_EMAIL="${FREEQOS_ADMIN_EMAIL:-}"
-  if [ -z "$ADMIN_EMAIL" ] && (: </dev/tty) 2>/dev/null; then
-    printf 'Email du compte Administrateur [admin@freeqos.local] : ' >/dev/tty
-    read -r ADMIN_EMAIL </dev/tty || ADMIN_EMAIL=""
+FICHE="$($SUDO docker compose exec -T app cat data/first-admin.txt 2>/dev/null || true)"
+if [ -n "$FICHE" ]; then
+  ADMIN_EMAIL="$(printf '%s\n' "$FICHE" | sed -n 's/^email: //p')"
+  ADMIN_MDP="$(printf '%s\n' "$FICHE" | sed -n 's/^password: //p')"
+  if [ -n "$ADMIN_MDP" ]; then
+    ADMIN_ETAT="cree"
+    ok "Compte Administrateur : $ADMIN_EMAIL"
   fi
-  ADMIN_EMAIL="${ADMIN_EMAIL:-admin@freeqos.local}"
-  if [ -n "${FREEQOS_ADMIN_PASSWORD:-}" ]; then
-    if SORTIE="$(printf '%s\n' "$FREEQOS_ADMIN_PASSWORD" | cli create-admin --email "$ADMIN_EMAIL" --password-stdin 2>&1)"; then
-      ADMIN_ETAT="cree"; ADMIN_MDP="(celui de FREEQOS_ADMIN_PASSWORD)"
-    fi
-  elif SORTIE="$(cli create-admin --email "$ADMIN_EMAIL" 2>&1)"; then
-    ADMIN_ETAT="cree"; ADMIN_MDP="$(printf '%s\n' "$SORTIE" | sed -n 's/^password: //p')"
-  fi
-  if [ "$ADMIN_ETAT" = "cree" ]; then
-    ok "Compte Administrateur cree : $ADMIN_EMAIL"
-  else
-    warn "Compte Administrateur non cree : $SORTIE"
-    warn "Il se creera a la premiere visite de l'interface."
-  fi
-elif [ "$COMPTES" != "?" ]; then
-  ADMIN_ETAT="existe"
-  ok "Comptes deja presents : aucun changement"
 fi
 
 # ------------------------------------------------ demarrage avec le serveur
@@ -285,12 +273,12 @@ case "$ADMIN_ETAT" in
   cree) cat <<EOF
   Administrateur : ${ADMIN_EMAIL}
   Mot de passe   : ${ADMIN_MDP}
-               Affiche UNE seule fois : notez-le, puis changez-le dans le menu
-               du compte. Les autres comptes se creent dans Settings > Accounts.
+               A changer a la premiere connexion (menu du compte). D'ici la, il
+               reste dans : docker compose exec app cat data/first-admin.txt
+               Les autres comptes se creent dans Settings > Accounts.
 EOF
   ;;
   existe) printf '%s\n' "  Comptes    : deja crees, connexion avec vos identifiants" ;;
-  *) printf '%s\n' "               (premiere visite : creer le compte administrateur)" ;;
 esac
 cat <<EOF
   HTTPS      : Settings > Domain & HTTPS -- un enregistrement DNS « A » vers

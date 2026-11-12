@@ -16,6 +16,9 @@ import pytest
 # La suite historique teste les routes SANS session : l'authentification y est
 # coupee. Les tests de connexion (test_comptes.py) la rallument explicitement.
 os.environ.setdefault("AUTH_ENABLED", "false")
+# Le premier Administrateur cree au demarrage fausserait les tests de comptes :
+# seuls ceux qui le testent l'activent.
+os.environ.setdefault("FIRST_ADMIN_AUTO", "false")
 
 from app.collectors.mikrotik import MikrotikCollector
 from app.config import BackhaulConfig, RouterConfig, Settings
