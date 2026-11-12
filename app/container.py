@@ -39,6 +39,7 @@ from app.db.flows_repo import FlowsRepository, NetflowExportersRepository
 from app.db.link_media_repo import LinkMediaRepository, LinkMediaStore
 from app.db.model_repo import ModelRepository
 from app.db.modes_repo import ModesRepository
+from app.db.notifications_repo import NotificationsRepository
 from app.db.plans_repo import ClientPlansRepository
 from app.db.repository import MetricsRepository
 from app.db.routers_repo import RoutersRepository
@@ -81,6 +82,7 @@ from app.services.restrictions import JOB_RESTRICTIONS, RestrictionService
 from app.services.rtt import PathProber, RttProber
 from app.services.runtime_config import RuntimeConfig
 from app.services.shaping import ShapingService, discover_with_devices
+from app.services.uisp_traffic import JOB_UISP, UispTraffic
 from app.services.unplaced import JOB_PLACE_SERVICES, place_unplaced
 
 logger = logging.getLogger(__name__)
@@ -210,6 +212,10 @@ class Container:
     public_access_repo: PublicAccessRepository | None = None
     client_profiles_repo: ClientProfilesRepository | None = None
     tree_repo: TreeRepository | None = None
+    notifications_repo: NotificationsRepository | None = None
+    uisp_traffic: UispTraffic | None = None
+    #: Sources de problemes en plus (UISP...) pour la surveillance par email.
+    watch_sources: list[Any] = field(default_factory=list)
     activity_repo: ActivityRepository | None = None
     netflow: NetflowService | None = None
     netflow_export: NetflowExportService | None = None
@@ -364,6 +370,8 @@ async def build_container(settings: Settings) -> Container:
     public_access_repo = PublicAccessRepository(database.pool)
     client_profiles_repo = ClientProfilesRepository(database.pool)
     tree_repo = TreeRepository(database.pool)
+    notifications_repo = NotificationsRepository(database.pool, secrets)
+    uisp_traffic = UispTraffic(uisp_repo, database.pool, timeout_s=settings.uisp_timeout_s)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
     #
@@ -445,7 +453,9 @@ async def build_container(settings: Settings) -> Container:
         Le planificateur execute chaque job une premiere fois immediatement :
         l'arbre est donc peuple des le demarrage, sans geste de l'exploitant.
         """
-        await discover_with_devices(shaping, (backhaul_provider, collection.antennas_provider))
+        await discover_with_devices(
+            shaping, (backhaul_provider, collection.antennas_provider, collection.uisp_source)
+        )
         await enroll_antennas()
 
     async def enroll_antennas() -> None:
@@ -729,6 +739,8 @@ async def build_container(settings: Settings) -> Container:
         public_access_repo=public_access_repo,
         client_profiles_repo=client_profiles_repo,
         tree_repo=tree_repo,
+        notifications_repo=notifications_repo,
+        uisp_traffic=uisp_traffic,
         activity_repo=activity_repo,
         netflow=netflow,
         netflow_export=netflow_export,
@@ -797,6 +809,23 @@ async def build_container(settings: Settings) -> Container:
         await purge_empty_pops(conteneur)
 
     scheduler.add_job(JOB_PURGE_POPS, 600.0, purge_pops)
+
+    # SURVEILLANCE ET EMAILS : chaque minute, les defaillances du moment ; un
+    # email quand l'une dure, un autre quand elle est resolue.
+    from app.services.health_watch import JOB_WATCH, run_cycle
+
+    async def surveiller() -> None:
+        await run_cycle(conteneur)
+
+    scheduler.add_job(JOB_WATCH, 60.0, surveiller)
+
+    # LE TRAFIC UISP : chaque minute, debit, capacite, signal et stations de
+    # chaque equipement du controleur saisi dans l'interface.
+    async def releve_uisp() -> None:
+        await uisp_traffic.collect()
+
+    scheduler.add_job(JOB_UISP, 60.0, releve_uisp)
+    conteneur.watch_sources.append(uisp_traffic.problems)
     # Des le demarrage, et pas dix minutes plus tard : un routeur retire (et les
     # anciens PoPs de demonstration) ne doit plus s'afficher nulle part.
     try:

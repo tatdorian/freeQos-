@@ -70,6 +70,29 @@ def _miroir(lien: dict[str, Any]) -> bool:
 
 
 # --------------------------------------------------------------- topologie
+def _debits_uisp(container: Any, noeuds: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    trafic = getattr(container, "uisp_traffic", None)
+    if trafic is None or not trafic.devices:
+        return {}
+    sortie: dict[str, dict[str, Any]] = {}
+    for noeud in noeuds:
+        ident = noeud.get("uisp_device_id")
+        d = trafic.devices.get(str(ident)) if ident else None
+        if d is None:
+            continue
+        sortie[str(noeud["key"])] = {
+            "rx_bps": d.get("rx_bps"),
+            "tx_bps": d.get("tx_bps"),
+            "capacity_down_mbps": d.get("capacity_down_mbps"),
+            "capacity_up_mbps": d.get("capacity_up_mbps"),
+            "signal_dbm": d.get("signal_dbm"),
+            "online": d.get("online"),
+            "name": d.get("name"),
+            "ts": d.get("ts"),
+        }
+    return sortie
+
+
 @router.get("/topology", summary="Network graph as the controller understands it")
 async def topology(container: ContainerDep) -> dict[str, Any]:
     repo = _require_topology(container)
@@ -163,6 +186,9 @@ async def topology(container: ContainerDep) -> dict[str, Any]:
         # OU PEND CHAQUE CLIENT, et comment on l'a trouve (manuel, equipement de
         # meme nom, sa case, son secteur, son site de VLAN, son site).
         "placements": places["placements"],
+        # Le debit UISP de chaque case qui est un equipement UISP : il donne au
+        # lien qui y mene la mesure qu'aucun port de routeur ne porte.
+        "uisp_rates": _debits_uisp(container, noeuds),
         "client_nodes": places["client_nodes"],
         # Le compte des liens est celui des CABLES, pas des observations : un
         # cable vu par ses deux bouts a deux lignes, dont l'une est marquee
@@ -230,7 +256,13 @@ async def discover(container: ContainerDep) -> dict[str, Any]:
     # arbre different de celui que le planificateur construit tout seul.
     snapshot = await discover_with_devices(
         container.shaping,
-        (container.backhaul_provider, container.collection.antennas_provider),
+        (
+            container.backhaul_provider,
+            container.collection.antennas_provider,
+            # Le controleur UISP saisi dans l'interface : ses antennes et ses
+            # stations entrent dans l'arbre comme les autres radios.
+            getattr(container.collection, "uisp_source", None),
+        ),
     )
     return {
         "nodes": len(snapshot.nodes),

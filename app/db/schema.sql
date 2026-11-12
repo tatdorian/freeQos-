@@ -1447,3 +1447,53 @@ CREATE TABLE IF NOT EXISTS tree_client_links (
     updated_by  TEXT,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- -----------------------------------------------------------------------------
+-- Notifications par email : le compte SMTP (mot de passe CHIFFRE, comme les
+-- routeurs) et l'etat des problemes surveilles. Un probleme est signale une
+-- fois quand il dure, puis une fois quand il est resolu -- jamais a chaque
+-- minute.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS smtp_config (
+    id            INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    host          TEXT NOT NULL,
+    port          INTEGER NOT NULL,
+    security      TEXT NOT NULL DEFAULT 'starttls' CHECK (security IN ('starttls', 'ssl', 'none')),
+    username      TEXT,
+    password_enc  TEXT,
+    from_addr     TEXT NOT NULL,
+    recipients    TEXT[] NOT NULL DEFAULT '{}',
+    events        TEXT[] NOT NULL DEFAULT '{router,site,measurement,uisp}',
+    grace_minutes INTEGER NOT NULL DEFAULT 3,
+    enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+    updated_by    TEXT,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_sent_at  TIMESTAMPTZ,
+    last_error    TEXT
+);
+CREATE TABLE IF NOT EXISTS alert_events (
+    key                TEXT PRIMARY KEY,
+    category           TEXT NOT NULL,
+    level              TEXT NOT NULL,
+    title              TEXT NOT NULL,
+    detail             TEXT,
+    first_seen         TIMESTAMPTZ NOT NULL,
+    last_seen          TIMESTAMPTZ NOT NULL,
+    notified_at        TIMESTAMPTZ,
+    resolved_at        TIMESTAMPTZ,
+    resolved_notified  BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Debit, capacite et signal de chaque equipement UISP, releves chaque minute
+-- (7 jours). Le dernier etat vit en memoire ; ceci sert les courbes.
+CREATE TABLE IF NOT EXISTS uisp_device_metrics (
+    ts                  TIMESTAMPTZ NOT NULL,
+    device_id           TEXT NOT NULL,
+    rx_bps              DOUBLE PRECISION,
+    tx_bps              DOUBLE PRECISION,
+    capacity_down_mbps  DOUBLE PRECISION,
+    capacity_up_mbps    DOUBLE PRECISION,
+    signal_dbm          DOUBLE PRECISION,
+    online              BOOLEAN
+);
+CREATE INDEX IF NOT EXISTS idx_uisp_device_metrics ON uisp_device_metrics (device_id, ts DESC);
