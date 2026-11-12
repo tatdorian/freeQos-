@@ -2456,7 +2456,7 @@ function rttDetailText(d) {
 /** UN CLIENT PAR VLAN : LA VLAN EST UN CLIENT DU ROUTEUR QUI LA PORTE.
  *
  *  Un site VLAN n'est pas un PoP : il s'affichait au meme niveau que les
- *  routeurs, et le noeud NAS-FRANCOPHONIE ne montrait pas son client nestle,
+ *  routeurs, et un noeud NAS ne montrait pas son client,
  *  pourtant porte par lui. Chaque site VLAN est fusionne dans le noeud de son
  *  routeur : ses clients y figurent (marques de leur VLAN), ses debits et
  *  limites s'y ajoutent -- une seule fois, puisque le noeud VLAN disparait.
@@ -3349,7 +3349,7 @@ async function loadFlowPairs() {
       '<td><a href="#" data-pair-ip="' + esc(r.address) + '"><code>' +
         esc(r.address) + '</code></a>' +
         // Le nom DEMANDE par le client (cache DNS du routeur) passe avant tout :
-        // c'est "syit.fr", pas "cluster100.hosting.ovh.net".
+        // c'est "example.com", pas "web42.hosting.example.net".
         (r.domain || domaine(r.hostname)
           ? '<br><b style="font-size:.75rem"' + (r.domain ? ' title="Name the client asked for (router DNS cache)"' : '') +
             '>' + esc(r.domain || domaine(r.hostname)) + '</b>' : '') +

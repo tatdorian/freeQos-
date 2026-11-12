@@ -17,7 +17,7 @@ from app.api.shaping import clean_router_queues
 class Topo:
     def __init__(self) -> None:
         self.lignes = [
-            {"target_key": "nestle", "max_down_mbps": 0.3, "max_up_mbps": 0.75, "enabled": True},
+            {"target_key": "acme", "max_down_mbps": 0.3, "max_up_mbps": 0.75, "enabled": True},
             # Boost seul (sans plafond permanent) : ce n'est pas une limite forcee.
             {"target_key": "boost", "max_down_mbps": None, "max_up_mbps": None, "enabled": True},
         ]
@@ -35,13 +35,13 @@ class Topo:
 
 async def test_la_page_plans_voit_la_limite_forcee() -> None:
     conteneur = SimpleNamespace(topology_repo=Topo())
-    assert await _limites_forcees(conteneur) == {"nestle": (0.3, 0.75)}
+    assert await _limites_forcees(conteneur) == {"acme": (0.3, 0.75)}
 
 
 async def test_choisir_un_plan_leve_la_limite_forcee() -> None:
     topo = Topo()
     conteneur = SimpleNamespace(topology_repo=topo)
-    assert await _lever_limite_forcee(conteneur, "nestle") is True
+    assert await _lever_limite_forcee(conteneur, "acme") is True
     assert await _limites_forcees(conteneur) == {}
     # Rien a lever : pas d'erreur, juste « non ».
     assert await _lever_limite_forcee(conteneur, "inconnu") is False
@@ -52,16 +52,16 @@ async def test_le_reset_des_files_ramene_les_clients_a_leur_plan() -> None:
 
     class Shaping:
         async def build_targets(self, router: str) -> tuple[list[Any], list[Any]]:
-            return [], [SimpleNamespace(login="nestle"), SimpleNamespace(login="test-fp")]
+            return [], [SimpleNamespace(login="acme"), SimpleNamespace(login="test-fp")]
 
         async def clean_queues(self, router: str, *, author: str) -> dict[str, Any]:
             # Les limites sont levees AVANT la reconstruction : celle-ci pose les plans.
-            assert "nestle" in topo.supprimes
+            assert "acme" in topo.supprimes
             return {"router": router, "removed": 2, "recreated": 2, "kept_foreign": 0, "errors": []}
 
     conteneur = SimpleNamespace(topology_repo=topo, shaping=Shaping(), restrictions=None)
     rapport = await clean_router_queues("NAS-FRANCOPHONIE", conteneur, reset_limits=True)
-    assert rapport["limits_reset"] == ["nestle"]
+    assert rapport["limits_reset"] == ["acme"]
 
     topo2 = Topo()
     conteneur2 = SimpleNamespace(topology_repo=topo2, shaping=Shaping(), restrictions=None)

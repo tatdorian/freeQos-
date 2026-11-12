@@ -25,7 +25,7 @@ class Shaping:
                 "name": "VLAN 2060",
                 "kind": "vlan",
                 "router_name": "nas-f",
-                "vlan_interface": "vlan2060-nestle-siege",
+                "vlan_interface": "vlan2060-acme-siege",
                 "vlan_id": 2060,
             },
         ]
@@ -47,7 +47,7 @@ async def test_un_pop_de_routeur_vise_tout_son_trafic() -> None:
 async def test_un_site_de_vlan_ne_vise_que_sa_vlan() -> None:
     mikrotik._RESEAUX_CONNECTES.clear()
     mikrotik._RESEAUX_CONNECTES["nas-f"] = [
-        (ipaddress.ip_network("100.100.105.240/30"), "vlan2060-nestle-siege"),
+        (ipaddress.ip_network("100.100.105.240/30"), "vlan2060-acme-siege"),
         (ipaddress.ip_network("10.9.0.0/24"), "vlan2070"),
     ]
     cibles = await _service().site_targets({"pops": ["VLAN 2060"]})

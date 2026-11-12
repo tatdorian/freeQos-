@@ -806,7 +806,7 @@ async def test_les_sites_d_un_routeur_sont_son_pop_et_ses_vlan() -> None:
         async def list_pops(self) -> list[dict[str, Any]]:
             return [
                 {"id": 1, "name": "Francophonie", "router_name": None},
-                {"id": 2, "name": "2060-Nestle-Siege", "router_name": "NAS-FRANCOPHONIE"},
+                {"id": 2, "name": "2060-Acme-Siege", "router_name": "NAS-FRANCOPHONIE"},
                 {"id": 3, "name": "Altair", "router_name": None},
             ]
 
