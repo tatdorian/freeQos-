@@ -451,4 +451,7 @@ def settings(router_config: RouterConfig) -> Settings:
         enforcement_enabled=False,
         subscriber_interval_s=10,
         min_rate_interval_s=1.0,
+        # Les tests du shaping de LIEN l'activent : en production il est coupe
+        # par defaut (test_files_de_lien_coupees.py le verrouille).
+        shaping_link_queues=True,
     )
