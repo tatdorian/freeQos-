@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="11a6aff6560bde29">
+  <meta name="freeqos-docs-source" content="24968620c0d9e784">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2438,6 +2438,43 @@ curl -s http://127.0.0.1:8000/health/ready
 <h3 id="what-freeqos-caps-and-what-it-never-caps">What freeQoS caps, and what it never caps</h3>
 <p><strong>By default, freeQoS only caps each client's own addresses</strong>: one queue per client, whose target is the client's address (PPPoE session) or its declared block (static IP), at the rate of its plan or mode. Nothing else on the router is limited: no link, no interface, no point-to-point or transit traffic.</p>
 <p><strong>Link queues are off by default</strong> (<code>shaping_link_queues</code>, <em>Settings › Shaping</em>, environment <code>SHAPING_LINK_QUEUES=false</code>). When turned on, each discovered link (backhaul, sector) gets a parent queue capped at its capacity, and its clients hang under it. That is what makes radio bufferbloat disappear, but a link queue caps <strong>everything</strong> that crosses the link: put on the segment of a point-to-point link, it slowed down the whole link, transit included, and clients complained. Turn it on only once the links that are true client bottlenecks are known, and check the plan (<em>Devices › Set up</em> shows it) before allowing writes. With link queues off, each link appears in the plan as skipped: <em>link queues are off</em>.</p>
+<p><strong>Caps on the top router (upstream caps).</strong> A stream coming from the internet used to cross the gateway and the core at full speed, and was only cut at the PoP: on its way, it filled the core and slowed everyone down. With <code>upstream_caps</code> on (<em>Settings › Shaping</em>, environment <code>UPSTREAM_CAPS</code>), every router declared with the role <strong>Network core</strong> or <strong>Gateway (egress)</strong> in <em>Devices</em> also receives <strong>one queue per client</strong>:</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>On the PoP (NAS)</th>
+<th>On the top router</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Target</td>
+<td>The client's address or PPPoE session</td>
+<td>The client's <strong>address</strong> only (its block for a static-IP client)</td>
+</tr>
+<tr>
+<td>Rate</td>
+<td>Its plan, mode or boost</td>
+<td>The same × <code>upstream_cap_factor</code> (1.1 by default)</td>
+</tr>
+<tr>
+<td>Queue type</td>
+<td>CAKE (latency, fairness)</td>
+<td>The router's default, light type: no CAKE on the core</td>
+</tr>
+<tr>
+<td>Role</td>
+<td>Fine shaping, low latency</td>
+<td>Cuts the excess <strong>before</strong> it reaches the core and the links</td>
+</tr>
+</tbody>
+</table></div>
+<p>The factor is slightly above 1 on purpose: in normal use the PoP's CAKE does the shaping and the top queue never fills; it only cuts what goes beyond the plan (a stream pushing harder, a flood towards one client). A mode or a boost set on a client updates both routers at once. No link queue is ever put on the top router.</p>
+<p>Worth knowing:
+- the top router must <strong>see the clients' addresses</strong>: if it does the NAT (or no NAT is done), it does; if each NAS does the NAT, the top router only sees the NAS address and these queues match nothing — keep the caps on the NAS then;
+- <strong>FastTrack</strong> on the top router bypasses simple queues: the connections it fast-tracks are not capped (the client page shows <em>Over its limit</em> when that happens);
+- these caps protect your core and links from what comes <strong>inside</strong> your network; an attack larger than your internet link itself saturates it before it reaches any of your routers, and only your upstream provider can absorb it.</p>
 <p>If a router already carries queues it should not: <em>Devices › Remove freeQoS</em> (below) removes everything freeQoS set on it and stops writing there.</p>
 <h3 id="how-shaping-works">How shaping works</h3>
 <p><strong>The queue always forms at the bottleneck.</strong> When a device receives faster than it can transmit, it stores the excess in a queue. That queue appears at the slowest point of the path: often a sector's radio or the subscriber's CPE. Their buffers are large and sort nothing: a video call waits there behind a download. This is the bufferbloat of section 5.</p>
