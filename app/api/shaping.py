@@ -843,6 +843,32 @@ async def apply_shaping(
     return {"plan": plan.to_dict(), "result": resultat.to_dict()}
 
 
+async def _clients_du_routeur(container: Any, router_name: str) -> set[str]:
+    """Les clients que ce routeur mesure, ou rattaches a l'un de ses sites."""
+    metrics = getattr(container, "repository", None)
+    if metrics is None:
+        return set()
+    try:
+        collecteur = next((c for c in container.registry.collectors if c.name == router_name), None)
+        sites = {router_name.casefold()}
+        if collecteur is not None:
+            sites.add(str(collecteur.config.effective_pop_name).casefold())
+        if hasattr(metrics, "pop_sites"):
+            for site in await metrics.pop_sites():
+                if str(site.get("router_name") or "") == router_name:
+                    sites.add(str(site["name"]).casefold())
+        lignes = await metrics.subscriber_latest(limit=5000, order_by="login")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Clients de %s illisibles : %s", router_name, exc)
+        return set()
+    return {
+        str(ligne["login"])
+        for ligne in lignes
+        if str(ligne.get("router_name") or "") == router_name
+        or str(ligne.get("pop_name") or "").casefold() in sites
+    }
+
+
 @router.post(
     "/shaping/routers/{router_name}/clean-queues",
     summary="Delete every freeQoS queue of a router, then lay them down again",
@@ -875,15 +901,35 @@ async def clean_router_queues(
         )
     levees: list[str] = []
     if reset_limits and container.topology_repo is not None:
+        # QUI EST SUR CE ROUTEUR : l'etat desire (PPPoE en session, clients a
+        # IP fixe rattaches), PLUS chaque client que ce routeur mesure ou dont
+        # le site (VLAN comprise) est le sien. L'etat desire seul en oubliait :
+        # un client VLAN gardait son mode « Backup » apres le reset, affiche
+        # a 200 kbps quand plus rien ne le bridait.
+        logins: set[str] = set()
         try:
             _liens, abonnes = await container.shaping.build_targets(router_name)
-            for abonne in abonnes:
-                if await container.topology_repo.delete_policy("subscriber", abonne.login):
-                    levees.append(abonne.login)
+            logins.update(abonne.login for abonne in abonnes)
         except KeyError:
             pass  # routeur inconnu : clean_queues le dira
         except Exception as exc:  # noqa: BLE001 - le reset des files passe avant
-            logger.warning("Limites forcees non levees sur %s : %s", router_name, exc)
+            logger.warning("Etat desire illisible sur %s : %s", router_name, exc)
+        logins.update(await _clients_du_routeur(container, router_name))
+        for login in sorted(logins):
+            try:
+                if await container.topology_repo.delete_policy("subscriber", login):
+                    levees.append(login)
+                    await noter(
+                        container,
+                        None,
+                        actor="ui:clean-queues",
+                        login=login,
+                        action="mode",
+                        detail=f"Automatic: queues reset on {router_name}, mode and forced "
+                        "limit removed, back to its plan",
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Limite de %s non levee : %s", login, exc)
     try:
         rapport = await container.shaping.clean_queues(router_name, author="ui:clean-queues")
     except EnforcementDisabledError as exc:

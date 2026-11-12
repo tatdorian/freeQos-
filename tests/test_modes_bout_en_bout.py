@@ -587,3 +587,43 @@ def test_un_client_declare_a_la_main_est_rejoint_par_la_decouverte(app_client, r
     # Le diagnostic radio prend la MAC saisie.
     sante = app_client.get("/api/v1/clients/dupont/health", headers=lire).json()
     assert "No CPE MAC known" not in sante["radio"]["detail"]
+
+
+def test_reset_des_files_rend_automatic_a_tous_les_clients_du_routeur(app_client, routeur) -> None:  # noqa: F811
+    """Constate : apres « Reset queues » sur un PoP, un client VLAN gardait son
+    mode « Backup » (200 kbps affiches) alors que plus rien ne le bridait.
+    Le reset rend Automatic a TOUS les clients du routeur, sites et VLAN
+    compris, et chacun le voit dans son activite."""
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    r = app_client.post(
+        "/api/v1/static-clients",
+        headers=cle,
+        json={"reference": "acme", "pop_name": "PoP Test", "address": "10.20.0.50/32"},
+    )
+    assert r.status_code == 201, r.text
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    backup = app_client.post(
+        "/api/v1/bandwidth-modes",
+        headers=cle,
+        json={"name": "Backup", "down_value": 0.2, "up_value": 0.2},
+    ).json()
+    for login in ("dupont", "acme"):
+        r = app_client.put(
+            f"/api/v1/clients/{login}/mode", headers=cle, json={"mode_id": backup["id"]}
+        )
+        assert r.status_code == 200, r.text
+
+    r = app_client.post("/api/v1/shaping/routers/nas-test/clean-queues", headers=cle)
+    assert r.status_code == 200, r.text
+    assert set(r.json()["limits_reset"]) == {"dupont", "acme"}
+
+    lignes = app_client.get(
+        "/api/v1/subscribers/latest?include_unmeasured=true",
+        headers={"Authorization": f"Bearer {lecture}"},
+    ).json()
+    modes = {x["login"]: x.get("mode_name") for x in lignes}
+    assert modes["dupont"] is None and modes["acme"] is None
+    journal = app_client.get("/api/v1/activity?login=acme", headers=cle).json()
+    assert any("queues reset on nas-test" in (e["detail"] or "") for e in journal)
