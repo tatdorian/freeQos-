@@ -3253,7 +3253,142 @@ function flowDiagnostic(etat, exportEtat) {
   return '';
 }
 
+/* ------------------------------------------------ Trafic : onglets et « qui »
+ *
+ *  La page empilait dix blocs. Un onglet a la fois, des tableaux courts (« Show
+ *  all » pour le reste), et un service ou une adresse s'ouvre sur QUI l'a
+ *  consulte -- c'est la question qu'on se pose devant un flux. */
+function ongletTrafic(nom) {
+  const valides = ['overview', 'clients', 'destinations', 'lookup', 'advanced'];
+  FLOW.tab = valides.includes(nom) ? nom : 'overview';
+  try { localStorage.setItem('freeqos.trafficTab', FLOW.tab); } catch (e) { /* stockage indisponible */ }
+  document.querySelectorAll('#trf-tabs [data-trf-tab]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.trfTab === FLOW.tab);
+    b.setAttribute('aria-selected', b.dataset.trfTab === FLOW.tab ? 'true' : 'false');
+  });
+  document.querySelectorAll('#view-traffic [data-trf-pane]').forEach((p) => {
+    p.hidden = p.dataset.trfPane !== FLOW.tab;
+  });
+  // La carte se dessine a la taille de son cadre : cachee, elle n'en a pas.
+  if (FLOW.tab === 'destinations' && SVC.locations) {
+    renderTrafficMap(document.getElementById('svc-map'), SVC.locations);
+  }
+}
+
+/** Ne montre que les ``n`` premieres lignes d'un tableau ; un bouton deplie le
+ *  reste. Le choix tient d'un rafraichissement a l'autre. */
+function limiterLignes(hote, n, libelle) {
+  if (!hote) return;
+  const lignes = Array.from(hote.querySelectorAll('tbody > tr'));
+  const deplie = FLOW.deplies && FLOW.deplies.has(hote.id);
+  if (lignes.length <= n) return;
+  lignes.forEach((tr, i) => { tr.hidden = !deplie && i >= n; });
+  const bouton = document.createElement('button');
+  bouton.type = 'button';
+  bouton.className = 'sm ghost trf-showall';
+  bouton.textContent = deplie ? 'Show less' : libelle + ' (' + lignes.length + ')';
+  bouton.addEventListener('click', () => {
+    if (!FLOW.deplies) FLOW.deplies = new Set();
+    const ouvrir = !FLOW.deplies.has(hote.id);
+    if (ouvrir) FLOW.deplies.add(hote.id); else FLOW.deplies.delete(hote.id);
+    lignes.forEach((tr, i) => { tr.hidden = !ouvrir && i >= n; });
+    bouton.textContent = ouvrir ? 'Show less' : libelle + ' (' + lignes.length + ')';
+  });
+  hote.appendChild(bouton);
+}
+
+/** QUI a consulte un service ou une adresse, sur la periode choisie : un client
+ *  par ligne, son volume, et son lien vers sa fiche. */
+async function quiAConsulte({ service, address }) {
+  const titre = service ? esc(service) : '<code>' + esc(address) + '</code>';
+  const modale = openModal('<div class="modal-head"><div><h3>Who used ' + titre + '</h3>' +
+    '<div class="sub">Over the last ' + esc(periodeTexte(FLOW.minutes)) + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body" id="trf-who"><span class="hint">Reading…</span></div>');
+  const hote = modale.root.querySelector('#trf-who');
+  let data;
+  try {
+    data = await api('/netflow/pairs?minutes=' + FLOW.minutes + '&limit=500' +
+      (service ? '&service=' + encodeURIComponent(service) : '&q=' + encodeURIComponent(address)));
+  } catch (err) {
+    hote.innerHTML = noticeErreur(err);
+    return;
+  }
+  const lignes = (data.pairs || []).filter((r) => !address || r.address === address);
+  const vivants = new Set((data.live || []).map((c) => c[0]));
+  const parClient = new Map();
+  lignes.forEach((r) => {
+    const cle = String(r.client);
+    if (!parClient.has(cle)) parClient.set(cle, { r, down: 0, up: 0, adresses: new Set(), noms: new Set() });
+    const c = parClient.get(cle);
+    c.down += Number(r.down_bytes || 0);
+    c.up += Number(r.up_bytes || 0);
+    c.adresses.add(r.address);
+    const nom = r.domain || domaine(r.hostname);
+    if (nom) c.noms.add(nom);
+  });
+  const clients = [...parClient.values()].sort((a, b) => (b.down + b.up) - (a.down + a.up));
+  if (!clients.length) {
+    hote.innerHTML = '<div class="empty">No client reached it over this period.</div>';
+    return;
+  }
+  const premier = lignes[0] || {};
+  const entete = address
+    ? '<div class="kv"><span>Service</span><span>' + esc(premier.service || 'unidentified') + '</span></div>' +
+      (premier.domain || premier.hostname
+        ? '<div class="kv"><span>Name</span><span>' + esc(premier.domain || premier.hostname) + '</span></div>' : '') +
+      (lieu(premier) ? '<div class="kv"><span>Location</span><span>' + lieu(premier) + '</span></div>' : '')
+    : '';
+  hote.innerHTML = entete +
+    '<p class="hint" style="display:block;margin:.4rem 0">' + clients.length + ' client(s)' +
+      (service ? ' · ' + lignes.length + ' address(es)' : '') + '</p>' +
+    '<div class="table-wrap"><table><thead><tr><th>Client</th><th>Site</th>' +
+      '<th class="num">&darr; Received</th><th class="num">&uarr; Sent</th>' +
+      (service ? '<th>Reached</th>' : '') + '</tr></thead><tbody>' +
+    clients.map((c) => '<tr><td>' + clientCell(c.r) +
+        (vivants.has(String(c.r.client)) ? ' <span class="badge ok">live</span>' : '') + '</td>' +
+      '<td class="hint nowrap">' + esc(c.r.pop_name || '-') + '</td>' +
+      '<td class="num">' + bytesText(c.down) + '</td>' +
+      '<td class="num">' + bytesText(c.up) + '</td>' +
+      (service ? '<td class="hint">' + esc([...c.noms].slice(0, 2).join(', ') ||
+        (c.adresses.size + ' address(es)')) + '</td>' : '') +
+      '</tr>').join('') + '</tbody></table></div>' +
+    '<div class="actions" style="margin-top:.8rem">' +
+      (address ? '<button class="sm" id="trf-who-detail">Full details of this address</button>' : '') +
+      (peut('edit') ? '<a class="sm" href="#/rules" id="trf-who-rule">Block or cap it…</a>' : '') +
+    '</div>';
+  hote.querySelectorAll('[data-svc-sub]').forEach((a) => {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      modale.fermer();
+      openSubscriber(Number(a.dataset.svcSub));
+    });
+  });
+  const detail = hote.querySelector('#trf-who-detail');
+  if (detail) detail.addEventListener('click', () => { modale.fermer(); openDestination(address); });
+  const regle = hote.querySelector('#trf-who-rule');
+  if (regle) regle.addEventListener('click', () => {
+    modale.fermer();
+    setTimeout(() => {
+      if (service) prefillRule(service);
+      else prefillRule(null, address);
+    }, 300);
+  });
+}
+
+function periodeTexte(minutes) {
+  const m = Number(minutes) || 60;
+  if (m % 1440 === 0) return (m / 1440 === 1 ? '24 hours' : (m / 1440) + ' days');
+  if (m % 60 === 0) return (m / 60 === 1 ? 'hour' : (m / 60) + ' hours');
+  return m + ' minutes';
+}
+
 async function loadTraffic() {
+  if (!FLOW.tab) {
+    let memo = null;
+    try { memo = localStorage.getItem('freeqos.trafficTab'); } catch (e) { memo = null; }
+    ongletTrafic(memo || 'overview');
+  }
   FLOW.minutes = Number(document.getElementById('flow-range').value) || 60;
   FLOW.vantage = document.getElementById('flow-vantage').value || '';
 
@@ -3405,21 +3540,16 @@ function renderFlowTop(top) {
     host.innerHTML = '<div class="empty">No volume measured over this period.</div>';
     return;
   }
-  host.innerHTML = '<table><thead><tr><th>Subscriber</th><th>PoP</th><th>Kind</th>' +
-    '<th class="num">Down</th><th class="num">Up</th>' +
-    '<th class="num">Plan</th><th class="num">Flows</th><th>Seen</th></tr></thead><tbody>' +
+  host.innerHTML = '<table><thead><tr><th>Client</th><th>Site</th>' +
+    '<th class="num">&darr; Down</th><th class="num">&uarr; Up</th></tr></thead><tbody>' +
     lignes.map((r) =>
       '<tr><td><a href="#" data-flow-sub="' + esc(r.subscriber_id) + '">' +
         esc(r.login) + '</a></td>' +
-      '<td class="nowrap">' + esc(r.pop_name || '-') + '</td>' +
-      '<td>' + kindBadge(r.kind) + '</td>' +
+      '<td class="nowrap hint">' + esc(r.pop_name || '-') + '</td>' +
       '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
-      '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
-      '<td class="num">' + (r.plan_down_mbps
-        ? esc(r.plan_down_mbps) + '/' + esc(r.plan_up_mbps || '?') + ' Mbps' : '-') + '</td>' +
-      '<td class="num">' + esc(r.flows) + '</td>' +
-      '<td>' + esc(depuis(r.last_ts)) + '</td></tr>').join('') +
+      '<td class="num">' + bytesText(r.up_bytes) + '</td></tr>').join('') +
     '</tbody></table>';
+  limiterLignes(host, 8, 'Show all clients');
   host.querySelectorAll('[data-flow-sub]').forEach((a) => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
@@ -3604,6 +3734,25 @@ async function loadFlowPairs() {
       '</tbody></table></div></details>';
   }).join('');
 
+  // 15 clients d'abord : le reste a la demande.
+  const blocs = Array.from(hote.querySelectorAll('details.flow-client'));
+  if (blocs.length > 15) {
+    const tous = FLOW.deplies && FLOW.deplies.has('flow-pairs');
+    blocs.forEach((d, i) => { d.hidden = !tous && i >= 15; });
+    if (!tous) {
+      const plus = document.createElement('button');
+      plus.type = 'button';
+      plus.className = 'sm ghost trf-showall';
+      plus.textContent = 'Show all clients (' + blocs.length + ')';
+      plus.addEventListener('click', () => {
+        if (!FLOW.deplies) FLOW.deplies = new Set();
+        FLOW.deplies.add('flow-pairs');
+        blocs.forEach((d) => { d.hidden = false; });
+        plus.remove();
+      });
+      hote.appendChild(plus);
+    }
+  }
   // Les blocs ouverts le restent quand la liste se recharge (filtre, periode).
   hote.querySelectorAll('[data-flow-client]').forEach((d) => {
     d.addEventListener('toggle', () => {
@@ -3758,6 +3907,7 @@ async function openPairAddress(address) {
 // Ouvre le bloc avance replie, puis y descend.
 document.addEventListener('click', (e) => {
   if (!(e.target.closest && e.target.closest('[data-open-exporters]'))) return;
+  ongletTrafic('advanced');
   const bloc = document.getElementById('flow-exporters-block');
   if (bloc) { bloc.open = true; bloc.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 });
@@ -6221,24 +6371,27 @@ function renderServiceTable(services) {
     return;
   }
   const total = services.reduce((s, r) => s + Number(r.down_bytes || 0) + Number(r.up_bytes || 0), 0);
-  hote.innerHTML = '<table><thead><tr><th>Service</th><th>Category</th>' +
-    '<th class="num">Addresses</th><th class="num">Clients</th>' +
-    '<th class="num">Down</th><th class="num">Up</th><th>Share</th>' +
-    '<th></th></tr></thead><tbody>' +
+  hote.innerHTML = '<table><thead><tr><th>Service</th>' +
+    '<th class="num">Clients</th><th class="num">Volume</th><th>Share</th>' +
+    '</tr></thead><tbody>' +
     services.map((r) => {
       const somme = Number(r.down_bytes || 0) + Number(r.up_bytes || 0);
-      return '<tr>' +
-        '<td><b>' + esc(r.service || 'unidentified') + '</b></td>' +
-        '<td>' + svcBadge(r.category) + '</td>' +
-        '<td class="num">' + esc(r.addresses) + '</td>' +
-        '<td class="num">' + esc(r.clients) + '</td>' +
-        '<td class="num">' + bytesText(r.down_bytes) + '</td>' +
-        '<td class="num">' + bytesText(r.up_bytes) + '</td>' +
-        '<td style="min-width:140px">' + meter(somme, total || 1, '') + '</td>' +
-        '<td>' + (r.service
-          ? '<button class="sm" data-svc-restrict="' + esc(r.service) + '">Restrict</button>'
-          : '') + '</td></tr>';
+      return '<tr' + (r.service ? ' class="trf-row" data-svc-who="' + esc(r.service) + '"' : '') + '>' +
+        '<td><b>' + esc(r.service || 'unidentified') + '</b> ' + svcBadge(r.category) + '</td>' +
+        '<td class="num">' + (r.service
+          ? '<a href="#" data-svc-who="' + esc(r.service) + '">' + esc(r.clients) + '</a>'
+          : esc(r.clients)) + '</td>' +
+        '<td class="num">' + bytesText(somme) + '</td>' +
+        '<td style="min-width:110px">' + meter(somme, total || 1, '') + '</td></tr>';
     }).join('') + '</tbody></table>';
+  limiterLignes(hote, 8, 'Show all services');
+  hote.querySelectorAll('[data-svc-who]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      quiAConsulte({ service: el.dataset.svcWho });
+    });
+  });
   hote.querySelectorAll('[data-svc-restrict]').forEach((b) => {
     b.addEventListener('click', () => prefillRule(b.dataset.svcRestrict));
   });
@@ -6250,24 +6403,28 @@ function renderDestinations(lignes) {
     hote.innerHTML = '<div class="empty">No destination reached.</div>';
     return;
   }
-  hote.innerHTML = '<table><thead><tr><th>Address</th><th>Reverse name</th>' +
-    '<th>Location</th>' +
-    '<th>Service</th><th>Category</th><th class="num">Clients</th>' +
-    '<th class="num">Down</th><th class="num">Up</th><th>Seen</th>' +
+  hote.innerHTML = '<table><thead><tr><th>Address</th><th>Service</th>' +
+    '<th>Location</th><th class="num">Clients</th><th class="num">Volume</th>' +
     '</tr></thead><tbody>' +
     lignes.map((d) =>
-      '<tr><td><a href="#" data-svc-ip="' + esc(d.address) + '"><code>' +
-        esc(d.address) + '</code></a></td>' +
-      '<td class="login">' + (d.domain ? '<b>' + esc(d.domain) + '</b><br>' : '') + (d.hostname
-        ? '<span class="hint">' + esc(d.hostname) + '</span>' : (d.domain ? '' : '<span class="hint">-</span>')) + '</td>' +
-      '<td class="nowrap">' + (lieu(d) || '<span class="na">-</span>') + '</td>' +
+      '<tr class="trf-row" data-ip-who="' + esc(d.address) + '"><td><code>' + esc(d.address) + '</code>' +
+        (d.domain || d.hostname
+          ? '<br><span class="hint">' + esc(d.domain || domaine(d.hostname) || d.hostname) + '</span>' : '') +
+        '</td>' +
       '<td>' + svcName(d) + '</td>' +
-      '<td>' + svcBadge(d.category) + '</td>' +
-      '<td class="num">' + esc(d.clients) + '</td>' +
-      '<td class="num">' + bytesText(d.down_bytes) + '</td>' +
-      '<td class="num">' + bytesText(d.up_bytes) + '</td>' +
-      '<td>' + esc(depuis(d.last_seen)) + '</td></tr>').join('') +
+      '<td class="nowrap">' + (lieu(d) || '<span class="na">-</span>') + '</td>' +
+      '<td class="num"><a href="#" data-ip-who="' + esc(d.address) + '">' + esc(d.clients) + '</a></td>' +
+      '<td class="num">' + bytesText(Number(d.down_bytes || 0) + Number(d.up_bytes || 0)) + '</td></tr>').join('') +
     '</tbody></table>';
+  limiterLignes(hote, 15, 'Show all addresses');
+  hote.querySelectorAll('[data-ip-who]').forEach((el) => {
+    el.addEventListener('click', (e) => {
+      if (e.target.closest('[data-svc-sub]')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      quiAConsulte({ address: el.dataset.ipWho });
+    });
+  });
   brancherLiensServices(hote);
 }
 
@@ -14462,6 +14619,9 @@ document.getElementById('btn-test').addEventListener('click', testConnection);
 
 /* ------------------------------------------------------- trafic et API */
 document.getElementById('flow-range').addEventListener('change', loadTraffic);
+document.querySelectorAll('#trf-tabs [data-trf-tab]').forEach((b) => {
+  b.addEventListener('click', () => ongletTrafic(b.dataset.trfTab));
+});
 document.getElementById('exec-lat-search').addEventListener('input', renderLatencyClients);
 document.getElementById('plans-search').addEventListener('input', renderPlanClients);
 schedInit();

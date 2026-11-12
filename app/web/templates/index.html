@@ -252,33 +252,32 @@
       <div id="flow-notice"></div>
       <div id="svc-notice"></div>
       <div id="flow-vantages"></div>
-      <div class="grid stats" id="flow-stats"></div>
 
-      <h2>Who consumes</h2>
-      <div class="table-wrap" id="flow-top"></div>
-
-      <h2>Which services the traffic comes from</h2>
-      <div class="table-wrap" id="svc-services"></div>
-
-
-      <div class="toolbar"><span class="hint" style="display:inline">Filter the map and the destinations:</span>
-        <select id="svc-category" style="width:auto">
-          <option value="">All categories</option>
-        </select>
-        <input id="svc-search" placeholder="Address, name or organisation"
-               maxlength="128" style="flex:0 1 300px;width:300px;max-width:100%;min-width:0">
-        <span class="spacer"></span>
-        <span class="mode" id="svc-count"></span>
+      <!-- UNE CHOSE A LA FOIS : la page empilait dix blocs. Chaque onglet en
+           montre un ; un service ou une adresse s'ouvre sur QUI l'a consulte. -->
+      <div class="segmented trf-tabs" id="trf-tabs" role="tablist" aria-label="Traffic views">
+        <button type="button" data-trf-tab="overview" class="active">Overview</button>
+        <button type="button" data-trf-tab="clients">Clients</button>
+        <button type="button" data-trf-tab="destinations">Destinations</button>
+        <button type="button" data-trf-tab="lookup">Find an IP</button>
+        <button type="button" data-trf-tab="advanced">Advanced</button>
       </div>
 
-      <h2>Where the traffic goes</h2>
-      <div class="card map-card">
-        <div id="svc-map"></div>
-        <div id="svc-map-place"></div>
+      <div class="trf-pane" data-trf-pane="overview">
+        <div class="grid stats" id="flow-stats"></div>
+        <div class="trf-two">
+          <div>
+            <h2>Top clients</h2>
+            <div class="table-wrap" id="flow-top"></div>
+          </div>
+          <div>
+            <h2>Top services <span class="pct-hint">click one to see who used it</span></h2>
+            <div class="table-wrap" id="svc-services"></div>
+          </div>
+        </div>
       </div>
-      <div class="table-wrap" id="svc-countries" style="margin-top:1rem"></div>
 
-      <h2>Who talks to whom, client by client</h2>
+      <div class="trf-pane" data-trf-pane="clients" hidden>
       <div class="toolbar">
         <input id="flow-pairs-search" placeholder="Client, login, address, name"
                maxlength="128" style="max-width:260px">
@@ -290,12 +289,30 @@
       </div>
       <div id="flow-pairs"></div>
       <div id="flow-pair-detail"></div>
+      </div>
 
-      <h2>Destinations reached</h2>
-      <div class="table-wrap" id="svc-destinations"></div>
-      <div id="svc-detail"></div>
+      <div class="trf-pane" data-trf-pane="destinations" hidden>
+      <div class="toolbar"><select id="svc-category" style="width:auto">
+          <option value="">All categories</option>
+        </select>
+        <input id="svc-search" placeholder="Address, name or organisation"
+               maxlength="128" style="flex:0 1 300px;width:300px;max-width:100%;min-width:0">
+        <span class="spacer"></span>
+        <span class="mode" id="svc-count"></span>
+      </div>
+      <div class="card map-card">
+        <div id="svc-map"></div>
+        <div id="svc-map-place"></div>
+      </div>
+      <details class="trf-more" style="margin-top:.8rem"><summary>By country</summary>
+        <div class="table-wrap" id="svc-countries"></div>
+      </details>
+        <h2>Addresses reached <span class="pct-hint">click one to see who reached it</span></h2>
+        <div class="table-wrap" id="svc-destinations"></div>
+        <div id="svc-detail"></div>
+      </div>
 
-      <h2>Find an IP</h2>
+      <div class="trf-pane" data-trf-pane="lookup" hidden>
       <div class="card">
         <form class="lookup-form" id="svc-lookup-form">
           <input id="svc-lookup" placeholder="IP address or domain name (8.8.8.8, netflix.com)"
@@ -304,14 +321,14 @@
         </form>
         <div id="svc-lookup-result"></div>
       </div>
+      </div>
 
-      <p class="hint" style="display:block">Restrictions on destinations (block or cap a service for some clients) have their own page: <a href="#/rules">Rules</a>.</p>
-
+      <div class="trf-pane" data-trf-pane="advanced" hidden>
+        <p class="hint" style="display:block">Blocking or capping destinations: <a href="#/rules">Rules</a>.</p>
       <details id="svc-catalogue-block" style="margin-top:1rem">
         <summary>Service catalogue</summary>
         <div class="table-wrap" id="svc-catalogue"></div>
       </details>
-
       <!-- AVANCE, REPLIE. freeQoS reconnait ses routeurs et choisit seul ou
            compter : personne n'a a venir declarer qui est qui. Ce bloc ne
            sert qu'a un exporteur qui n'est pas un routeur de l'inventaire. -->
@@ -366,6 +383,7 @@
       </form>
       <div id="exporter-result"></div>
       </details>
+      </div>
     </section>
 
     <!-- ------------------------------------------------------- regles
