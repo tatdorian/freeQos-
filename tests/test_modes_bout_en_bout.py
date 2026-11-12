@@ -521,3 +521,68 @@ def test_un_routeur_muet_ne_fait_pas_passer_ses_clients_hors_ligne(
     assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
     [etat] = app_client.get("/api/v1/pops/read-status", headers=lire).json()["routers"]
     assert etat["failing_since"] is None and etat["error"] is None
+
+
+def test_un_client_declare_a_la_main_est_rejoint_par_la_decouverte(app_client, routeur) -> None:  # noqa: F811
+    """Ajout manuel et decouverte coexistent : le client declare avant sa
+    session garde sa fiche quand la decouverte le trouve, et gagne son IP."""
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    lire = {"Authorization": f"Bearer {lecture}"}
+    r = app_client.post(
+        "/api/v1/clients",
+        headers=cle,
+        json={
+            "login": "dupont",
+            "pop_name": "PoP Test",
+            "display_name": "Pharmacie Dupont",
+            "cpe_mac": "245a4c123456",
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["profile"]["cpe_mac"] == "24:5A:4C:12:34:56"
+    assert (
+        app_client.post(
+            "/api/v1/clients", headers=cle, json={"login": "dupont", "pop_name": "PoP Test"}
+        ).status_code
+        == 409
+    )
+    avant = app_client.get("/api/v1/clients/dupont/profile", headers=lire).json()
+    assert avant["discovered"]["ip"] is None and avant["profile"]["declared"] is True
+    # Visible dans la liste des clients des maintenant, « jamais vu ».
+    liste = app_client.get(
+        "/api/v1/subscribers/latest?include_unmeasured=true", headers=lire
+    ).json()
+    assert [r["login"] for r in liste] == ["dupont"]
+
+    _brancher(app_client, cle)  # la decouverte trouve la session de dupont
+    apres = app_client.get("/api/v1/clients/dupont/profile", headers=lire).json()
+    assert apres["discovered"]["ip"] and apres["discovered"]["kind"] == "pppoe"
+    assert apres["profile"]["display_name"] == "Pharmacie Dupont"  # rien d'ecrase
+
+    # Modifier la fiche : Operator et au-dessus, jamais en lecture seule.
+    corps = {
+        "display_name": "Pharmacie Dupont SARL",
+        "phone": "+227 90 00 00 00",
+        "cpe_mac": "24:5A:4C:12:34:56",
+    }
+    assert (
+        app_client.put("/api/v1/clients/dupont/profile", headers=lire, json=corps).status_code
+        == 403
+    )
+    r = app_client.put("/api/v1/clients/dupont/profile", headers=cle, json=corps)
+    assert r.status_code == 200, r.text
+    assert r.json()["profile"]["phone"] == "+227 90 00 00 00"
+    mauvais = app_client.put("/api/v1/clients/dupont/profile", headers=cle, json={"cpe_mac": "zz"})
+    assert mauvais.status_code == 400
+    assert (
+        app_client.put("/api/v1/clients/inconnu/profile", headers=cle, json={}).status_code == 404
+    )
+    fiches = app_client.get("/api/v1/client-profiles", headers=lire).json()["profiles"]
+    assert fiches["dupont"]["display_name"] == "Pharmacie Dupont SARL"
+    journal = app_client.get("/api/v1/activity?login=dupont", headers=lire).json()
+    assert any(e["action"] == "details" and "phone" in (e["detail"] or "") for e in journal)
+    assert any(e["action"] == "declared" for e in journal)
+    # Le diagnostic radio prend la MAC saisie.
+    sante = app_client.get("/api/v1/clients/dupont/health", headers=lire).json()
+    assert "No CPE MAC known" not in sante["radio"]["detail"]

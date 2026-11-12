@@ -870,7 +870,7 @@ tbody tr.clickable:hover td.sticky-actions { background: var(--surface-2); }
   .topo-panel { flex: 1 1 auto; width: 100%; position: static; max-height: none; }
 }
 @media (max-width: 760px) {
-  .row-2, .row-3, #sc-form .row-3 { grid-template-columns: 1fr; }
+  .row-2, .row-3, #sc-form .row-3, #pp-form .row-3 { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
   .card { padding: 1rem; }
   .stat .value { font-size: 1.6rem; }
@@ -2189,3 +2189,12 @@ a.btn:hover { text-decoration: none; filter: brightness(1.05); }
 .dm-steps { margin: 0; padding-left: 1.2rem; display: grid; gap: .5rem; font-size: .88rem; color: var(--text); }
 .dm-steps li::marker { color: var(--accent); font-weight: 700; }
 .dm-form { display: grid; gap: .7rem; border-top: .5px solid var(--border); padding-top: .9rem; }
+
+/* Fiche client : identifiant, adresse IP copiable, separation reseau. */
+.cp-login { color: var(--muted); font-size: .85rem; }
+.cp-ip { font: inherit; font-family: var(--mono, ui-monospace, monospace); font-size: .82rem; padding: .15rem .55rem;
+  border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: copy; min-height: 0; }
+.cp-ip.copied::after { content: " ✓ copied"; color: var(--ok, #16a34a); }
+.add-kind { margin: 0 0 .7rem; }
+.ec-sep { margin: .4rem 0 0; font-size: .9rem; }
+#pp-form[hidden], #sc-form[hidden] { display: none; }
