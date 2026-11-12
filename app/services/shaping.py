@@ -2636,6 +2636,139 @@ class ShapingService:
             return f"{MOTIF_ROUTEUR_LECTURE_SEULE}: computed, nothing is sent to this router"
         return actif if self._enforcement_enabled else coupe
 
+    async def uninstall(self, router_name: str, *, author: str | None = None) -> dict[str, Any]:
+        """Retire du routeur TOUT ce que freeQoS y a pose, et rien d'autre.
+
+        Files simples, types CAKE, et lignes des restrictions (filtre, mangle,
+        queue tree, listes d'adresses). Seules les lignes portant NOTRE marque
+        partent : une file posee a la main, par RADIUS ou par une autre instance
+        reste. Rien n'est repose : l'appelant coupe l'ecriture sur ce routeur
+        avant, pour qu'aucune boucle ne remette ce qu'on enleve.
+
+        La cible NetFlow n'est pas traitee ici (``NetflowExportService``).
+        """
+        from app.enforcement.planner import QUEUE_TYPE_DOWN, QUEUE_TYPE_UP
+        from app.enforcement.restrictions import (
+            PATH_ADDRESS_LIST,
+            PATH_FILTER,
+            PATH_MANGLE,
+            PATH_QUEUE_TREE,
+            parse_tag,
+        )
+
+        collecteur = self._collector(router_name)
+        client = collecteur._client  # noqa: SLF001
+        self.unfreeze(router_name)
+
+        def lire() -> dict[str, list[dict[str, Any]]]:
+            tables: dict[str, list[dict[str, Any]]] = {}
+            for cle, methode in (
+                ("filter", "firewall_filters"),
+                ("mangle", "firewall_mangle"),
+                ("tree", "queue_trees"),
+                ("address", "firewall_address_list"),
+                ("simple", "simple_queues"),
+                ("type", "queue_types"),
+            ):
+                lecture = getattr(client, methode, None)
+                tables[cle] = list(lecture() or []) if lecture is not None else []
+            return tables
+
+        tables = await asyncio.wait_for(
+            asyncio.to_thread(lire), timeout=max(collecteur.config.timeout_s * 6, 20.0)
+        )
+
+        def marquee(row: dict[str, Any]) -> bool:
+            return bool(row.get(".id")) and (
+                is_ours(row) or parse_tag(row.get("comment")) is not None
+            )
+
+        actions: list[PlanAction] = []
+        compte: dict[str, int] = {}
+
+        def retirer(chemin: str, genre: str, rows: list[dict[str, Any]], nom: Any) -> None:
+            for row in rows:
+                actions.append(
+                    PlanAction(
+                        verb="remove",
+                        path=chemin,
+                        target_id=str(row[".id"]),
+                        name=str(nom(row)),
+                        reason="remove freeQoS from this router",
+                    )
+                )
+                compte[genre] = compte.get(genre, 0) + 1
+
+        # L'ordre de la pose, a l'envers : ce qui bloque d'abord, puis les files
+        # (enfants avant parents), puis les types qu'elles utilisaient.
+        retirer(
+            PATH_FILTER,
+            "firewall rules",
+            [r for r in tables["filter"] if marquee(r)],
+            lambda r: r.get("comment") or "filter",
+        )
+        retirer(
+            PATH_MANGLE,
+            "mangle rules",
+            [r for r in tables["mangle"] if marquee(r)],
+            lambda r: r.get("comment") or "mangle",
+        )
+        retirer(
+            PATH_QUEUE_TREE,
+            "queue tree",
+            [r for r in tables["tree"] if marquee(r)],
+            lambda r: r.get("name") or "queue tree",
+        )
+        retirer(
+            PATH_ADDRESS_LIST,
+            "address lists",
+            [r for r in tables["address"] if marquee(r)],
+            lambda r: f"{r.get('list') or ''} {r.get('address') or ''}".strip(),
+        )
+        files = [q for q in tables["simple"] if q.get(".id") and is_ours(q)]
+        parents = {str(q.get("name") or ""): str(q.get("parent") or "") for q in files}
+
+        def profondeur(nom: str) -> int:
+            vus: set[str] = set()
+            n = 0
+            while nom in parents and nom not in vus:
+                vus.add(nom)
+                nom = parents[nom]
+                n += 1
+            return n
+
+        files.sort(key=lambda q: profondeur(str(q.get("name") or "")), reverse=True)
+        retirer("/queue/simple", "simple queues", files, lambda r: r.get("name") or "queue")
+        types = [
+            t
+            for t in tables["type"]
+            if t.get(".id") and str(t.get("name") or "") in (QUEUE_TYPE_UP, QUEUE_TYPE_DOWN)
+        ]
+        retirer("/queue/type", "queue types", types, lambda r: r.get("name"))
+
+        retirees = 0
+        erreurs: list[str] = []
+        taille = max(1, self.settings.enforcement_max_actions)
+        for debut in range(0, len(actions), taille):
+            plan = Plan(router_name=router_name, actions=actions[debut : debut + taille])
+            resultat = await self.apply(
+                plan, dry_run=False, author=author, explicit=True, removal=True
+            )
+            retirees += resultat.applied
+            erreurs += [
+                f"{o.action.name or o.action.target_id}: {o.detail}"
+                for o in resultat.outcomes
+                if not o.ok
+            ]
+        self.invalidate_limit_audit()
+        return {
+            "router": router_name,
+            "found": len(actions),
+            "removed": retirees,
+            "by_kind": compte,
+            "errors": erreurs,
+        }
+
     async def clean_queues(self, router_name: str, *, author: str | None = None) -> dict[str, Any]:
         """Supprime TOUTES les files freeQoS d'un routeur, puis les repose.
 
@@ -3260,6 +3393,7 @@ class ShapingService:
         dry_run: bool = True,
         author: str | None = None,
         explicit: bool = False,
+        removal: bool = False,
     ) -> ApplyResult:
         """Execute un plan.
 
@@ -3280,13 +3414,19 @@ class ShapingService:
         ROUTEUR (Appareils). Il ne connait aucune exception, pas meme le geste
         explicite : un routeur en lecture seule ne recoit RIEN.
         """
-        if not dry_run and not self.router_write_enabled(plan.router_name):
+        # RETIRER CE QUE FREEQOS A POSE (bouton « Remove freeQoS ») : un plan
+        # fait UNIQUEMENT de suppressions passe les verrous -- c'est le sens sur,
+        # et l'interrupteur vient justement d'etre coupe pour qu'aucune boucle
+        # ne repose rien.
+        retrait = removal and all(a.verb == "remove" for a in plan.actions)
+        if not dry_run and not retrait and not self.router_write_enabled(plan.router_name):
             raise RouterWriteDisabledError(
                 f"{plan.router_name}: {MOTIF_ROUTEUR_LECTURE_SEULE}. Nothing was sent: "
                 "allow writing on this router in Devices to apply the plan."
             )
         if (
             not dry_run
+            and not retrait
             and not self._enforcement_enabled
             and (not explicit or self.enforcement_forced_off or _auteur_automatique(author))
         ):
@@ -3309,6 +3449,9 @@ class ShapingService:
             client,  # type: ignore[arg-type]
             dry_run=dry_run,
             max_actions=self.settings.enforcement_max_actions,
+            # Un retrait qui echoue n'empeche pas les suivants : chacun est
+            # independant, et tout ce qui part soulage les clients.
+            stop_on_error=not retrait,
         )
 
         if not dry_run:

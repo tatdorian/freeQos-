@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="62e985d958906715">
+  <meta name="freeqos-docs-source" content="1950b4f55538af06">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -52,6 +52,7 @@
     <a href="#5-measurements-throughput-latency-qoe">5. Measurements: throughput, latency, QoE</a>
     <a class="sub" href="#throughput">Throughput</a>
     <a class="sub" href="#reset-queues-every-client-back-to-automatic">Reset queues: every client back to Automatic</a>
+    <a class="sub" href="#remove-freeqos-the-router-as-it-was-before">Remove freeQoS: the router as it was before</a>
     <a class="sub" href="#when-the-queue-does-not-see-the-traffic">When the queue does not see the traffic</a>
     <a class="sub" href="#latency-the-probe">Latency: the probe</a>
     <a class="sub" href="#when-latency-stays-empty">When latency stays empty</a>
@@ -1733,6 +1734,15 @@ curl -s http://127.0.0.1:8000/health/ready
 <p><strong>Two time scales.</strong> History comes from collection (every 10 s). For "how much is going through <em>now</em>", the live measure calls <code>/interface/monitor-traffic</code> on the router, a read-only command; if it fails (version, rights, virtual port), the last collected value is returned with the reason.</p>
 <h3 id="reset-queues-every-client-back-to-automatic">Reset queues: every client back to Automatic</h3>
 <p><em>Devices › Reset queues</em> deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to <strong>Automatic</strong>: its mode, boost and forced limit are removed, it is back on its plan, and its <em>Activity</em> says so (<code>queues reset on &lt;router&gt;</code>). A bandwidth schedule that targets the client applies again at its next window.</p>
+<h3 id="remove-freeqos-the-router-as-it-was-before">Remove freeQoS: the router as it was before</h3>
+<p><em>Devices › Remove freeQoS</em> leaves a router as it was before freeQoS, in one gesture (Administrator, confirmed in a window):</p>
+<ol>
+<li><strong>writing is turned off</strong> on that router first (it becomes <em>read-only</em>), so no reconciliation, restriction pass or setup puts anything back;</li>
+<li><strong>everything carrying the freeQoS mark is removed</strong>: subscriber queues (children before parents), the <code>freeqos-cake-up</code> / <code>freeqos-cake-down</code> queue types, and the restriction lines (firewall filter, mangle, queue tree, address lists);</li>
+<li>optionally, the <strong>NetFlow export target</strong> freeQoS added (unticked by default: the Traffic page keeps seeing the router).</li>
+</ol>
+<p>Only lines with the <code>freeqos:managed</code> mark of this instance go: queues made by hand, by RADIUS (<code>&lt;pppoe-...&gt;</code>) or by another tool stay, and so do FastTrack and every other rule. Each removal is independent: one that fails does not stop the others, and the result lists what failed. Modes, plans and rules stay saved in freeQoS: allowing writing again (and <em>Set up</em>) puts everything back. API: <code>POST /api/v1/pops/routers/uninstall/{name}</code> with <code>{"confirm": true, "stop_netflow": false}</code>.</p>
+<p>Removing is the safe direction, so it is the one exception to the read-only switch: a plan made <strong>only of removals</strong> is sent to a read-only router; anything that adds or changes a line is still refused.</p>
 <p>A client whose usage stays well <strong>over</strong> its limit (25 % and more) is shown <strong>Over its limit</strong>, not "at its limit": the router is not holding that limit (queue missing, removed by hand on the router, or bypassed by FastTrack). <em>Reset queues</em> lays it down again.</p>
 <h3 id="when-the-queue-does-not-see-the-traffic">When the queue does not see the traffic</h3>
 <p>A client's throughput is read, in this order, from <strong>its queue</strong> (what passed, after the cap, both ways), from <strong>its interface</strong> (the PPPoE interface, or the VLAN when it is alone on it), and from <strong>NetFlow</strong>. Both router counters are read at every cycle and compared:</p>
@@ -2578,7 +2588,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 <tr>
 <td><strong>Read-only router</strong></td>
-<td>A router whose <em>writing allowed</em> switch is off in <em>Devices</em> receives <strong>nothing</strong>, whatever the global switch says and even for a gesture made by hand (rate entered, <em>Reset queues</em>). Its plan is still computed and shown. A router added from the interface starts read-only.</td>
+<td>A router whose <em>writing allowed</em> switch is off in <em>Devices</em> receives <strong>nothing</strong>, whatever the global switch says and even for a gesture made by hand (rate entered, <em>Reset queues</em>) — except the removals of <em>Remove freeQoS</em>. Its plan is still computed and shown. A router added from the interface starts read-only.</td>
 </tr>
 <tr>
 <td><strong>Ownership</strong></td>
@@ -5477,7 +5487,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 208 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 209 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -5601,6 +5611,11 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>POST</code></td>
 <td><code>/api/v1/pops/routers/test</code></td>
 <td>Test a connection without saving it</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/pops/routers/uninstall/{name}</code></td>
+<td>Remove from a router everything freeQoS set on it, and stop writing</td>
 </tr>
 <tr>
 <td><code>PATCH</code></td>
