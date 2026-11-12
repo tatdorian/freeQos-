@@ -728,7 +728,7 @@ async def build_container(settings: Settings) -> Container:
         restrictions=restrictions,
     )
 
-    # Le nom que les clients ont DEMANDE (syit.fr), lu dans le cache DNS des
+    # Le nom que les clients ont DEMANDE (example.com), lu dans le cache DNS des
     # routeurs : NetFlow ne voit que des adresses.
     noms_dns = DnsNames()
     conteneur.dns_names = noms_dns

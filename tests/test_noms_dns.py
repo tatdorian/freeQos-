@@ -1,6 +1,6 @@
 """Le nom DEMANDE par le client, et la resolution qui n'est pas une destination.
 
-Constate chez l'exploitant : un "ping syit.fr" s'affichait comme deux
+Constate chez l'exploitant : un "ping example.com" s'affichait comme deux
 conversations -- 8.8.8.8 (dns.google, la question) et 5.135.23.164 sous le
 nom de l'hebergeur (cluster100.hosting.ovh.net). Le nom tape n'apparaissait
 nulle part.
@@ -18,19 +18,19 @@ from app.services.flows import RESEAUX_CLIENTS_PAR_DEFAUT, FlowAggregator, Prefi
 
 def test_routeros_7_les_cname_remontent_jusqu_au_nom_tape() -> None:
     rows = [
-        {"name": "syit.fr", "type": "A", "data": "5.135.23.164", "ttl": "1h"},
+        {"name": "example.com", "type": "A", "data": "5.135.23.164", "ttl": "1h"},
         {"name": "www.netflix.com", "type": "CNAME", "data": "www.dradis.netflix.com"},
         {"name": "www.dradis.netflix.com", "type": "CNAME", "data": "ipv4-c001.oca.nflxvideo.net"},
         {"name": "ipv4-c001.oca.nflxvideo.net", "type": "A", "data": "45.57.40.1"},
     ]
     noms = names_from_cache(rows)
-    assert noms["5.135.23.164"] == "syit.fr"
+    assert noms["5.135.23.164"] == "example.com"
     assert noms["45.57.40.1"] == "www.netflix.com"
 
 
 def test_routeros_6_sans_type_ni_data() -> None:
-    assert names_from_cache([{"name": "syit.fr.", "address": "5.135.23.164"}]) == {
-        "5.135.23.164": "syit.fr"
+    assert names_from_cache([{"name": "example.com.", "address": "5.135.23.164"}]) == {
+        "5.135.23.164": "example.com"
     }
 
 
@@ -46,7 +46,7 @@ def test_une_boucle_de_cname_ne_bloque_pas() -> None:
 async def test_le_cache_de_chaque_routeur_est_relu_et_annote_les_lignes() -> None:
     class Client:
         def dns_cache(self) -> list[dict[str, Any]]:
-            return [{"name": "syit.fr", "type": "A", "data": "5.135.23.164"}]
+            return [{"name": "example.com", "type": "A", "data": "5.135.23.164"}]
 
     class Muet:
         def dns_cache(self) -> list[dict[str, Any]]:
@@ -67,12 +67,12 @@ async def test_le_cache_de_chaque_routeur_est_relu_et_annote_les_lignes() -> Non
             {"address": "5.135.23.164", "internal": True},
         ]
     )
-    assert lignes[0]["domain"] == "syit.fr"
+    assert lignes[0]["domain"] == "example.com"
     assert "domain" not in lignes[1] and "domain" not in lignes[2]
 
 
 def test_une_requete_dns_n_est_pas_une_destination() -> None:
-    """Demander l'adresse de syit.fr a 8.8.8.8 n'est pas aller sur 8.8.8.8."""
+    """Demander l'adresse de example.com a 8.8.8.8 n'est pas aller sur 8.8.8.8."""
     a = FlowAggregator(
         index=PrefixIndex.build([("100.64.1.11/32", 7)]),
         customer_networks=FlowAggregator.parse_networks(list(RESEAUX_CLIENTS_PAR_DEFAUT)),

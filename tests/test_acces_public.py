@@ -29,7 +29,7 @@ def test_un_domaine_se_normalise(saisie: str, attendu: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "saisie", ["154.66.0.2", "localhost", "qos", "-qos.example.com", "a b.com"]
+    "saisie", ["198.51.100.2", "localhost", "qos", "-qos.example.com", "a b.com"]
 )
 def test_ce_qui_n_est_pas_un_domaine_est_refuse(saisie: str) -> None:
     with pytest.raises(acces.InvalidDomainError):

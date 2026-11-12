@@ -637,7 +637,7 @@ async def test_la_sonde_ping_part_du_loopback() -> None:
     config = RouterConfig(name="pop-altair", host="192.0.2.11", password="x")
     collector = MikrotikCollector(config, client=client)
 
-    assert await collector.ping("154.66.223.217") == pytest.approx(3.0)
+    assert await collector.ping("203.0.113.217") == pytest.approx(3.0)
     assert client.ping_sources == ["10.255.0.7"]
 
 
@@ -656,5 +656,5 @@ async def test_un_loopback_refuse_ne_fait_pas_perdre_la_mesure() -> None:
     config = RouterConfig(name="pop-altair", host="192.0.2.11", password="x", loopback="10.9.9.9")
     collector = MikrotikCollector(config, client=client)
 
-    assert await collector.ping("154.66.223.217") == pytest.approx(5.0)
+    assert await collector.ping("203.0.113.217") == pytest.approx(5.0)
     assert client.ping_sources == ["10.9.9.9", None]

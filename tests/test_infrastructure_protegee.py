@@ -55,7 +55,7 @@ def test_un_routeur_vu_comme_client_n_est_pas_bride() -> None:
         _client("ds-ccr", "11.11.11.1"),  # loopback d'un de nos routeurs
         _client("passerelle", "100.100.101.113"),
         _client("bloc", "11.11.11.0/24"),  # couvre des loopbacks
-        _client("nestle", "10.20.0.0/29"),  # contient la passerelle du VLAN : normal
+        _client("acme", "10.20.0.0/29"),  # contient la passerelle du VLAN : normal
         _client("vrai", "10.20.0.10"),
     ]
     protect_infrastructure("NAS", [], clients)

@@ -1,8 +1,8 @@
 """Le nom que le client a DEMANDE, lu dans le cache DNS des routeurs.
 
-NetFlow ne transporte que des adresses. "cluster100.hosting.ovh.net" (le nom
+NetFlow ne transporte que des adresses. "web42.hosting.example.net" (le nom
 inverse) ou "ovh.net" (l'hebergeur) disent OU est le serveur, pas CE QUE le
-client a voulu joindre -- syit.fr, en l'occurrence. Ce nom n'existe que dans
+client a voulu joindre -- example.com, en l'occurrence. Ce nom n'existe que dans
 la requete DNS, qu'aucun outil hors-bande ne voit passer.
 
 Sauf le routeur : quand les clients resolvent par lui (profil PPP ou DHCP qui

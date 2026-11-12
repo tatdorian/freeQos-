@@ -369,7 +369,7 @@ async def test_la_collecte_retient_tous_les_reseaux_de_la_vlan(settings: Setting
     client = routeur_vlan(rx=1_000, tx=10_000)
     service, _writer, _ = build_service(settings, client, InventaireMemoire([fiche_vlan()]))
     await service.collect_subscribers()
-    assert service.sole_vlan_networks == {"nestle": "10.60.0.0/29,10.61.0.0/24"}
+    assert service.sole_vlan_networks == {"acme": "10.60.0.0/29,10.61.0.0/24"}
 
 
 async def test_la_file_en_liste_est_retrouvee_par_n_importe_quel_reseau(

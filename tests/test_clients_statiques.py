@@ -763,7 +763,7 @@ def routeur_vlan(*, rx: int, tx: int, pppoe: bool = False) -> FakeRouterOsClient
 
 
 def fiche_vlan(**kwargs) -> StaticClient:
-    return fiche(reference="nestle", address="10.60.0.2/32", vlan=2060, **kwargs)
+    return fiche(reference="acme", address="10.60.0.2/32", vlan=2060, **kwargs)
 
 
 async def test_sans_file_le_client_seul_sur_son_vlan_est_mesure_par_l_interface(
@@ -835,7 +835,7 @@ def test_le_client_vlan_pend_sous_son_vlan_relie_par_un_lien_mesure() -> None:
         snapshot,
         [fiche_vlan()],
         pop_keys={"PoP Test": "router:pop-test"},
-        vlan_sites={"nestle": ("pop-test", "vlan2060", 2060)},
+        vlan_sites={"acme": ("pop-test", "vlan2060", 2060)},
     )
 
     cle_vlan = vlan_node_key("pop-test", 2060)
@@ -849,11 +849,11 @@ def test_le_client_vlan_pend_sous_son_vlan_relie_par_un_lien_mesure() -> None:
     parents = [
         lk.source_key
         for lk in snapshot.links.values()
-        if lk.target_key == static_client_node_key("nestle")
+        if lk.target_key == static_client_node_key("acme")
     ]
     assert parents == [cle_vlan]
     # Pas un secteur : le VLAN n'entre pas dans les rattachements radio.
-    assert "nestle" not in snapshot.subscriber_sectors
+    assert "acme" not in snapshot.subscriber_sectors
 
 
 def test_un_secteur_declare_reste_prioritaire_sur_le_vlan() -> None:
@@ -864,7 +864,7 @@ def test_un_secteur_declare_reste_prioritaire_sur_le_vlan() -> None:
     attach_static_clients(
         snapshot,
         [fiche_vlan(sector_key="uisp:ap-1")],
-        vlan_sites={"nestle": ("pop-test", "vlan2060", 2060)},
+        vlan_sites={"acme": ("pop-test", "vlan2060", 2060)},
     )
 
     assert not any(n.kind == "vlan" for n in snapshot.nodes.values())
@@ -884,7 +884,7 @@ def test_l_interface_du_vlan_vient_de_la_configuration_du_routeur(settings: Sett
         }
     }
     sites = static_vlan_sites([fiche_vlan(), fiche(reference="ambigu", vlan=70)], collectors, piles)
-    assert sites == {"nestle": ("pop-test", "vlan2060", 2060)}
+    assert sites == {"acme": ("pop-test", "vlan2060", 2060)}
 
 
 def _reseau_vlan() -> None:

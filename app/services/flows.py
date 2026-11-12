@@ -128,7 +128,7 @@ AUTRE = "autre"
 #: SSH et telnet n'y sont PAS. Un client a parfaitement le droit de s'en
 #: servir, et les ecarter masquerait son trafic.
 #: RESOLUTION DE NOMS (DNS, DNS sur TLS, mDNS). Demander a 8.8.8.8 l'adresse de
-#: syit.fr n'est pas "aller sur 8.8.8.8" : la vraie destination est l'adresse
+#: example.com n'est pas "aller sur 8.8.8.8" : la vraie destination est l'adresse
 #: obtenue, que le client joint juste apres. Afficher le resolveur noyait la
 #: liste des conversations d'une ligne par client. Les volumes, eux, restent
 #: comptes.

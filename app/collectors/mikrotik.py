@@ -417,7 +417,7 @@ class LibrouterosReadClient:
     def dns_cache(self) -> list[dict[str, Any]]:
         """Cache DNS du routeur : le NOM que les clients ont demande.
 
-        NetFlow ne voit que des adresses ; le nom tape (syit.fr) n'existe que
+        NetFlow ne voit que des adresses ; le nom tape (example.com) n'existe que
         dans la requete DNS. Quand les clients resolvent par le routeur, c'est
         lui qui le garde. ``cache/all`` (RouterOS 7) porte aussi les CNAME, qui
         relient le nom demande a l'adresse du CDN ; RouterOS 6 n'a que ``cache``.
@@ -663,7 +663,7 @@ def client_tables_from_routes(rows: list[dict[str, Any]]) -> list[dict[str, Any]
     Le client vit dans la table qui porte la meilleure route vers lui : route
     CONNECTEE pour une session PPPoE ou une VLAN, mais aussi route STATIQUE
     pour un bloc public route vers le routeur d'un client entreprise
-    (constate : 154.66.223.217 de Nestle). Les routes par defaut ne disent pas
+    (constate : 203.0.113.17, un client). Les routes par defaut ne disent pas
     ou vit un client : ignorees.
     """
     sortie: list[dict[str, Any]] = []
@@ -698,7 +698,7 @@ def best_client_route(
     Ordre : la plus precise ; a egalite, une route connectee (le client est
     derriere ce routeur) ; puis une route qui ne renvoie PAS vers la passerelle
     amont (une route de meme longueur dans main qui repart vers le coeur est
-    un detour : c'est ce qui donnait 955 ms et un TTL de 60 pour Nestle) ;
+    un detour : c'est ce qui donnait 955 ms et un TTL de 60 pour ce client) ;
     puis une VRF plutot que main.
     """
     try:
