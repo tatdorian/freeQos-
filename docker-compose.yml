@@ -2,7 +2,9 @@
 #
 #     docker compose up -d --build
 #
-# puis ouvrir http://<serveur>:8000 et creer le premier compte. Pas de .env a
+# puis ouvrir http://<serveur> (ou http://<serveur>:8000) et creer le premier
+# compte. Tout redemarre seul apres un redemarrage du serveur (restart:
+# unless-stopped, et le service systemd « freeqos » pose par install.sh). Pas de .env a
 # ecrire (il reste possible pour surcharger un reglage), pas de fichier
 # d'inventaire : les routeurs s'ajoutent depuis l'interface, la cle de
 # chiffrement est generee au premier demarrage, l'adresse NetFlow annoncee aux
@@ -47,8 +49,13 @@ services:
         required: false
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-qos}:${POSTGRES_PASSWORD:-changeme}@timescaledb:5432/${POSTGRES_DB:-qos}
+      # Le proxy HTTPS (service « proxy ») est le seul a qui l'on fait confiance
+      # pour X-Forwarded-For / -Proto : son reseau, fixe ci-dessous. Un client
+      # qui joint directement le port 8000 garde sa vraie adresse.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-172.29.84.0/24}
+      PROXY_ADMIN_URL: ${PROXY_ADMIN_URL:-http://proxy:2019}
     ports:
-      - "${APP_PORT:-8000}:8000"
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8000}:8000"
       # Ecoute NetFlow (v5, v9, IPFIX). EN UDP, et c'est le piege classique :
       # sans le suffixe /udp, Docker publie du TCP et les datagrammes exportes
       # par les routeurs n'atteignent jamais le collecteur -- sans la moindre
@@ -61,6 +68,38 @@ services:
       # enregistres depuis l'interface.
       - qosdata:/app/data
 
+  # NOM DE DOMAINE ET HTTPS. Caddy recoit le trafic web (80 / 443) et le passe
+  # a l'application. Sans domaine : http://<adresse du serveur>. Avec un
+  # domaine saisi dans Settings (enregistrement DNS « A » chez OVH ou ailleurs
+  # vers ce serveur) : https://<domaine>, certificat Let's Encrypt obtenu et
+  # renouvele tout seul. Son API d'administration n'est joignable que sur le
+  # reseau interne (jamais publiee) ; --resume reprend la derniere config.
+  proxy:
+    image: ${CADDY_IMAGE:-caddy:2.8}
+    container_name: freeqos-proxy
+    restart: unless-stopped
+    depends_on:
+      - app
+    command: ["caddy", "run", "--resume", "--config", "/etc/caddy/initial.json"]
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./deploy/caddy/initial.json:/etc/caddy/initial.json:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+# Reseau interne au sous-reseau FIXE : c'est ce qui permet a l'application de
+# ne croire les en-tetes X-Forwarded-* que du proxy. A changer (FREEQOS_SUBNET
+# et FORWARDED_ALLOW_IPS) seulement s'il recouvre un reseau de l'exploitant.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: ${FREEQOS_SUBNET:-172.29.84.0/24}
+
 volumes:
   pgdata:
   qosdata:
+  caddy_data:
+  caddy_config:

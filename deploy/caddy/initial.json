@@ -1,0 +1,26 @@
+{
+  "admin": {
+    "listen": "0.0.0.0:2019",
+    "origins": ["proxy:2019"]
+  },
+  "apps": {
+    "http": {
+      "servers": {
+        "freeqos_http": {
+          "listen": [":80"],
+          "routes": [
+            {
+              "handle": [
+                {
+                  "handler": "reverse_proxy",
+                  "upstreams": [{"dial": "app:8000"}]
+                }
+              ]
+            }
+          ],
+          "automatic_https": {"disable": true}
+        }
+      }
+    }
+  }
+}

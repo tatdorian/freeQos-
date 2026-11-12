@@ -1391,3 +1391,15 @@ CREATE TABLE IF NOT EXISTS uisp_links (
     updated_by  TEXT,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- ACCES PUBLIC : le nom de domaine sous lequel l'interface est servie en HTTPS
+-- (proxy Caddy de la pile Docker). Une seule ligne. Sans ligne : http://<IP>.
+CREATE TABLE IF NOT EXISTS public_access (
+    id          SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    domain      TEXT NOT NULL,
+    email       TEXT,
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    applied_at  TIMESTAMPTZ,
+    last_error  TEXT
+);

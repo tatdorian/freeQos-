@@ -471,3 +471,24 @@ def test_la_sante_d_un_client_se_lit_meme_sans_mesure(app_client, routeur) -> No
     assert corps["radio"]["level"] == "unknown"
     assert corps["site"]["site"] == "PoP Test"
     assert app_client.get("/api/v1/clients/inconnu/health", headers=cle).status_code == 404
+
+
+def test_le_domaine_se_lit_et_refuse_sans_proxy(app_client, routeur) -> None:  # noqa: F811
+    """Sans conteneur proxy (lancement hors Compose), l'ecran le dit au lieu
+    d'enregistrer un domaine qui ne servirait a rien."""
+    ecriture, lecture = _cles(app_client)
+    r = app_client.get("/api/v1/public-access", headers={"Authorization": f"Bearer {lecture}"})
+    assert r.status_code == 200, r.text
+    assert r.json()["proxy"] is False and r.json()["domain"] is None and r.json()["url"] is None
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.put("/api/v1/public-access", headers=cle, json={"domain": "qos.example.com"})
+    assert r.status_code == 409, r.text
+    r = app_client.put("/api/v1/public-access", headers=cle, json={"domain": "10.0.0.1"})
+    assert r.status_code == 400 and "not a domain" in r.text
+    # La lecture seule ne change pas le domaine.
+    r = app_client.put(
+        "/api/v1/public-access",
+        headers={"Authorization": f"Bearer {lecture}"},
+        json={"domain": "qos.example.com"},
+    )
+    assert r.status_code == 403
