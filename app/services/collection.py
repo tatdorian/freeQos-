@@ -39,7 +39,7 @@ from app.models import (
     VlanSighting,
 )
 from app.services.pop_match import resolve_pop
-from app.services.rates import RateTracker
+from app.services.rates import RateResult, RateTracker
 from app.services.rtt import PathProber, RttProber
 from app.services.vlan_sites import SITE_VLAN, VlanSite, sites_from
 
@@ -173,6 +173,9 @@ class CollectionService:
         # faisait passer tous ses clients pour « hors ligne » : on ne savait
         # pas si le client etait parti ou si c'etait la lecture qui manquait.
         self.router_reads: dict[str, dict[str, Any]] = {}
+        # D'OU VIENT LE DEBIT AFFICHE de chaque client : file, interface ou
+        # NetFlow, et pourquoi on a quitte la file quand c'est le cas.
+        self.measure_sources: dict[str, dict[str, Any]] = {}
 
         self.rates = RateTracker(
             max_plausible_bps=settings.max_plausible_bps,
@@ -287,22 +290,21 @@ class CollectionService:
                     continue
                 self._known_logins.add(session.login)
 
-                rx_octets, tx_octets = session.rx_bytes, session.tx_bytes
                 par_file = _counters_for_address(
                     files_par_routeur.get(collector.name, {}), session.address
                 )
-                if par_file != (None, None):
-                    # Cle distincte : passer d'un compteur a l'autre sous la
-                    # meme cle ferait un delta absurde.
-                    rx_octets, tx_octets = par_file
-                    key = f"{key}@queue"
-                active_keys.add(key)
-                rate = self.rates.update(
-                    key,
-                    ts=monotonic,
-                    rx_bytes=rx_octets,
-                    tx_bytes=tx_octets,
+                # Cles distinctes : passer d'un compteur a l'autre sous la
+                # meme cle ferait un delta absurde.
+                rate, _octets = self._choose_rate(
+                    session.login,
+                    queue=par_file,
+                    queue_key=f"{key}@queue",
+                    iface=(session.rx_bytes, session.tx_bytes),
+                    iface_key=key,
+                    iface_label="the PPPoE interface",
+                    monotonic=monotonic,
                     uptime_s=session.uptime_s,
+                    active_keys=active_keys,
                 )
                 rows.append(
                     (
@@ -369,6 +371,69 @@ class CollectionService:
         )
         await self._finalize(result)
         return result
+
+    def _note_source(self, login: str, source: str, detail: str | None = None) -> None:
+        avant = self.measure_sources.get(login, {})
+        if detail and (avant.get("source"), avant.get("detail")) != (source, detail):
+            logger.warning("Mesure de %s par %s : %s", login, source, detail)
+        self.measure_sources[login] = {"source": source, "detail": detail}
+
+    def _choose_rate(
+        self,
+        login: str,
+        *,
+        queue: tuple[int | None, int | None],
+        queue_key: str,
+        iface: tuple[int | None, int | None],
+        iface_key: str,
+        iface_label: str,
+        monotonic: float,
+        active_keys: set[str],
+        uptime_s: int | None = None,
+    ) -> tuple[RateResult, tuple[int | None, int | None]]:
+        """Le debit d'un client, de la FILE de preference, de l'interface sinon.
+
+        La file compte ce qui est passe apres le plafond, dans les deux sens :
+        c'est la meilleure mesure... quand le trafic la traverse. Avec FastTrack
+        (ou une file qui n'est pas sur le chemin), ses compteurs restent a zero
+        pendant que le client emet : on affichait alors 0 bps. Les deux
+        compteurs sont donc suivis a chaque cycle, et une file a plat face a une
+        interface qui porte du trafic cede la place, en le disant.
+        """
+        par_file = None
+        par_iface = None
+        if queue != (None, None):
+            active_keys.add(queue_key)
+            par_file = self.rates.update(
+                queue_key, ts=monotonic, rx_bytes=queue[0], tx_bytes=queue[1], uptime_s=uptime_s
+            )
+        if iface != (None, None):
+            active_keys.add(iface_key)
+            par_iface = self.rates.update(
+                iface_key, ts=monotonic, rx_bytes=iface[0], tx_bytes=iface[1], uptime_s=uptime_s
+            )
+        if par_file is not None:
+            t_file = _total_bps(par_file.rx_bps, par_file.tx_bps)
+            t_iface = _total_bps(par_iface.rx_bps, par_iface.tx_bps) if par_iface else 0.0
+            if (
+                par_iface is not None
+                and t_iface >= TRAFFIC_BPS
+                and t_file < max(FLAT_BPS, BLIND_QUEUE_SHARE * t_iface)
+            ):
+                self._note_source(
+                    login,
+                    "interface",
+                    f"its queue counters stay flat while {iface_label} carries traffic "
+                    "(FastTrack on the router, or the queue is not on the traffic's path)",
+                )
+                return par_iface, iface
+            self._note_source(login, "queue")
+            return par_file, queue
+        if par_iface is not None:
+            self._note_source(login, "interface")
+            return par_iface, iface
+        self._note_source(login, "none")
+        return RateResult(rx_bps=None, tx_bps=None, reason="no counter"), (None, None)
 
     @staticmethod
     async def _queue_counters_for(
@@ -523,6 +588,9 @@ class CollectionService:
             # celle d'une session PPPoE, qui est '<routeur>/<login>'.
             key = f"static/{client.reference}"
             octets: tuple[int | None, int | None] = (None, None)
+            par_interface: tuple[int | None, int | None] = (None, None)
+            cle_interface = key
+            libelle_interface = "the interface"
             vlan = None
             if collector is not None and client.vlan is not None:
                 # SEUL CLIENT DE SA VLAN (et pas de PPPoE dessus) : l'interface
@@ -561,9 +629,13 @@ class CollectionService:
                 octets = trouve if trouve is not None else _counters_for(files, client)
                 if octets == (None, None):
                     octets = _counters_covering(files, client.address, within=reseau)
-                if octets != (None, None):
-                    key = f"static/{client.reference}@queue"
-                else:
+                # Le compteur de la VLAN est TOUJOURS lu : si la file reste a
+                # plat pendant que la VLAN porte du trafic, c'est la file qui
+                # est aveugle (FastTrack, ou trafic qui ne la traverse pas).
+                par_interface = (vlan.rx_bytes, vlan.tx_bytes)
+                cle_interface = f"static/{client.reference}@{vlan.interface}"
+                libelle_interface = f"VLAN interface {vlan.interface}"
+                if octets == (None, None):
                     # DERNIER RECOURS, ET IL MENT SUR L'UPLOAD : le rx de la
                     # VLAN compte ce que le client EMET, y compris ce que sa
                     # file jette (385 affiche pour un plafond tenu a 200).
@@ -579,30 +651,41 @@ class CollectionService:
                         vlan.interface,
                         sorted(files)[:30],
                     )
-                    octets = (vlan.rx_bytes, vlan.tx_bytes)
-                    key = f"static/{client.reference}@{vlan.interface}"
             else:
                 self.sole_vlan_interfaces.pop(client.reference, None)
                 self.sole_vlan_networks.pop(client.reference, None)
                 octets = _counters_for(
                     compteurs.get(collector.name, {}) if collector else {}, client
                 )
-            active_keys.add(key)
-            rate = self.rates.update(
-                key,
-                ts=monotonic,
-                rx_bytes=octets[0],
-                tx_bytes=octets[1],
+            rate, octets = self._choose_rate(
+                client.reference,
+                queue=octets,
+                queue_key=f"static/{client.reference}@queue",
+                iface=par_interface,
+                iface_key=cle_interface,
+                iface_label=libelle_interface,
+                monotonic=monotonic,
+                active_keys=active_keys,
             )
             rx_bps, tx_bps = rate.rx_bps, rate.tx_bps
-            if rx_bps is None and tx_bps is None and octets == (None, None):
-                # AUCUNE FILE NE LE COMPTE (pas encore posee, ecriture coupee,
-                # ou son trafic ne traverse pas le routeur de son PoP) : NetFlow
-                # l'a peut-etre vu passer. Mieux vaut ce debit, a la minute pres,
-                # que rien du tout pour un client qu'on vient d'ajouter.
-                netflow = self.netflow
-                if netflow is not None and netflow.measuring:
-                    rx_bps, tx_bps = netflow.rate_for(subscriber_id)
+            # AUCUN COMPTEUR NE BOUGE (pas de file posee, ecriture coupee, file
+            # aveugle sans VLAN pour la relayer, ou trafic qui ne traverse pas
+            # le routeur de son PoP) : NetFlow l'a peut-etre vu passer. Mieux
+            # vaut ce debit, a la minute pres, que zero pour un client qui emet.
+            netflow = self.netflow
+            if netflow is not None and netflow.measuring and _total_bps(rx_bps, tx_bps) < FLAT_BPS:
+                nf_rx, nf_tx = netflow.rate_for(subscriber_id)
+                if octets == (None, None) or _total_bps(nf_rx, nf_tx) >= TRAFFIC_BPS:
+                    if octets != (None, None):
+                        self._note_source(
+                            client.reference,
+                            "netflow",
+                            "router counters do not move while NetFlow sees this client's "
+                            "traffic (FastTrack, or the traffic does not cross this router)",
+                        )
+                    else:
+                        self._note_source(client.reference, "netflow", "no counter for this client")
+                    rx_bps, tx_bps = nf_rx, nf_tx
             rows.append(
                 (
                     subscriber_id,
@@ -1252,3 +1335,16 @@ def describe_read_error(exc: BaseException) -> str:
     if "unreachable" in bas or "no route" in bas:
         return "no route to the router from freeQoS"
     return texte[:200]
+
+
+#: Au-dessus : un client qui consomme vraiment. En dessous de FLAT : un
+#: compteur qui ne bouge pas (quelques keepalives au plus).
+TRAFFIC_BPS = 64_000.0
+FLAT_BPS = 2_000.0
+#: Une file qui voit moins de 5 % de ce que porte l'interface ne voit pas le
+#: trafic : ce n'est pas un plafond qui jette, c'est un compteur aveugle.
+BLIND_QUEUE_SHARE = 0.05
+
+
+def _total_bps(rx: float | None, tx: float | None) -> float:
+    return float(rx or 0.0) + float(tx or 0.0)

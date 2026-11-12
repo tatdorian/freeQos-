@@ -651,6 +651,15 @@ A link's throughput comes from the counters of the **port** that carries it, wit
 
 **Two time scales.** History comes from collection (every 10 s). For "how much is going through *now*", the live measure calls `/interface/monitor-traffic` on the router, a read-only command; if it fails (version, rights, virtual port), the last collected value is returned with the reason.
 
+### When the queue does not see the traffic
+
+A client's throughput is read, in this order, from **its queue** (what passed, after the cap, both ways), from **its interface** (the PPPoE interface, or the VLAN when it is alone on it), and from **NetFlow**. Both router counters are read at every cycle and compared:
+
+- a queue that stays **flat** (under 2 kb/s, or under 5 % of the interface) while the interface carries traffic (over 64 kb/s) is **blind**, not capping: the interface takes over;
+- when no router counter moves but NetFlow sees the client's traffic, NetFlow gives the throughput.
+
+The usual cause of a blind queue is **FastTrack** on the router (`/ip firewall filter` with `action=fasttrack-connection`): fasttracked packets skip simple queues, so the queue neither counts nor caps them. Another cause is traffic that does not cross the queue's router. The client's page shows it in *Client details › Measured by*, with the reason, and the container log says `Mesure de <client> par interface : ...`. To have the cap applied too, exclude the clients' traffic from FastTrack, or disable FastTrack.
+
 ### Latency: the probe
 
 A subscriber's latency is the round-trip time measured **from its PoP** to its address. It goes neither through the core nor through freeQoS: the router does the pinging.

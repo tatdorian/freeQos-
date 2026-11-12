@@ -1014,3 +1014,91 @@ async def test_pppoe_sans_file_reste_mesure_par_son_interface(settings: Settings
     ligne = writer.subscriber_rows[-1][1]
     assert ligne.rx_bps == pytest.approx(100_000)
     assert ligne.tx_bps == pytest.approx(200_000)
+
+
+# =========================================================================
+# Une file AVEUGLE (FastTrack, file hors du chemin) ne fait plus afficher 0
+# =========================================================================
+
+
+async def test_une_file_a_plat_cede_a_la_vlan_qui_porte_le_trafic(settings: Settings) -> None:
+    """Constate : client VLAN declare a la main, du trafic emis, « 0 bps »
+    affiche alors que NetFlow le voyait. Sa file existait mais ses compteurs ne
+    bougeaient pas (FastTrack). La VLAN, elle, compte tout : elle prend le
+    relais, et la fiche dit pourquoi."""
+    _reseau_vlan()
+    clock = Clock()
+    client = routeur_vlan(rx=1_000, tx=10_000)
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.0/29", "bytes": "0/0"}]
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "1001000", "tx-byte": "5010000"})
+    await service.collect_subscribers()  # la file reste a 0/0
+
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(800_000)
+    assert ligne.tx_bps == pytest.approx(4_000_000)
+    source = service.measure_sources["acme"]
+    assert source["source"] == "interface" and "FastTrack" in source["detail"]
+
+
+async def test_une_file_qui_tient_le_plafond_reste_la_mesure(settings: Settings) -> None:
+    """Une file qui JETTE (plafond tenu) n'est pas aveugle : elle voit encore
+    une part reelle du trafic, et reste la mesure."""
+    _reseau_vlan()
+    clock = Clock()
+    client = routeur_vlan(rx=0, tx=0)
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.0/29", "bytes": "0/0"}]
+    service, writer, _ = build_service(
+        settings, client, InventaireMemoire([fiche_vlan()]), clock=clock
+    )
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.interfaces_rows[-1].update({"rx-byte": "2000000", "tx-byte": "250000"})
+    client.simple_queue_rows = [{"name": "q", "target": "10.60.0.0/29", "bytes": "250000/250000"}]
+    await service.collect_subscribers()
+    assert service.measure_sources["acme"]["source"] == "queue"
+    assert writer.subscriber_rows[-1][1].rx_bps == pytest.approx(200_000)
+
+
+async def test_sans_compteur_qui_bouge_netflow_donne_le_debit(settings: Settings) -> None:
+    """Client a IP fixe sans VLAN, file a plat, NetFlow voit son trafic :
+    on affiche NetFlow plutot que 0."""
+    clock = Clock()
+    client = FakeRouterOsClient()
+    client.simple_queue_rows = [{"name": "q", "target": "10.0.0.5/32", "bytes": "0/0"}]
+    service, writer, _ = build_service(settings, client, InventaireMemoire([fiche()]), clock=clock)
+
+    class FauxNetflow:
+        measuring = True
+
+        def rate_for(self, _sid: int) -> tuple[float, float]:
+            return (300_000.0, 2_000_000.0)
+
+    service.netflow = FauxNetflow()
+    await service.collect_subscribers()
+    clock.advance(10)
+    await service.collect_subscribers()
+    ligne = writer.subscriber_rows[-1][1]
+    assert (ligne.rx_bps, ligne.tx_bps) == (300_000.0, 2_000_000.0)
+    source = service.measure_sources["mairie-vitre"]
+    assert source["source"] == "netflow" and "NetFlow sees" in source["detail"]
+
+
+async def test_pppoe_une_file_aveugle_cede_a_l_interface(settings: Settings) -> None:
+    clock = Clock()
+    client = FakeRouterOsClient()
+    client.add_session("dupont", address="10.20.0.10", rx_byte=0, tx_byte=0)
+    client.simple_queue_rows = [{"name": "q", "target": "10.20.0.10/32", "bytes": "0/0"}]
+    service, writer, _ = build_service(settings, client, InventaireMemoire([]), clock=clock)
+    await service.collect_subscribers()
+    clock.advance(10)
+    client.advance("dupont", rx_delta=500_000, tx_delta=2_500_000)
+    await service.collect_subscribers()
+    ligne = writer.subscriber_rows[-1][1]
+    assert ligne.rx_bps == pytest.approx(400_000)
+    assert ligne.tx_bps == pytest.approx(2_000_000)
+    assert service.measure_sources["dupont"]["source"] == "interface"

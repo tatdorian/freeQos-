@@ -114,6 +114,10 @@ async def get_profile(login: LoginPath, container: ContainerDep) -> dict[str, An
     if faits is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown client")
     fiche = await _repo(container).get(login)
+    # D'ou vient le debit affiche : file, interface, NetFlow -- et pourquoi.
+    collection = getattr(container, "collection", None)
+    sources = getattr(collection, "measure_sources", {}) if collection is not None else {}
+    faits["measure"] = sources.get(login)
     return {"login": login, "discovered": faits, "profile": fiche}
 
 

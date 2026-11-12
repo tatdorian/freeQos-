@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="03761cf7bb3afa2c">
+  <meta name="freeqos-docs-source" content="cbd43916b0a39995">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -49,6 +49,7 @@
     <a class="sub" href="#empty-sites-and-services-waiting-for-an-address">Empty sites and services waiting for an address</a>
     <a href="#5-measurements-throughput-latency-qoe">5. Measurements: throughput, latency, QoE</a>
     <a class="sub" href="#throughput">Throughput</a>
+    <a class="sub" href="#when-the-queue-does-not-see-the-traffic">When the queue does not see the traffic</a>
     <a class="sub" href="#latency-the-probe">Latency: the probe</a>
     <a class="sub" href="#when-latency-stays-empty">When latency stays empty</a>
     <a class="sub" href="#latency-by-segment">Latency by segment</a>
@@ -1643,6 +1644,13 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>A link's throughput comes from the counters of the <strong>port</strong> that carries it, with the same safeguards as subscribers. <strong>RouterOS counts per interface, not per adjacency</strong>: when a switch sits between the router and several devices, <code>/ip/neighbor</code> sees several neighbours on the same port, and giving the counter to each would multiply the total. Measurements are therefore stored per <em>(router, interface)</em>; a link inherits its port's throughput, and the interface shows a <em>shared</em> badge when several adjacencies share the port. A link declared by UISP, without a local port, has no counter and says so.</p>
 <p><strong>Direction.</strong> <code>rx</code> and <code>tx</code> stay those of the router: what it sends to the device opposite, and what it receives from it. Depending on whether the neighbour is upstream (gateway) or downstream (sector), the same <code>tx</code> is upload or download. The link table shows both directions without guessing; the network tree orients them towards the child (↓ = download).</p>
 <p><strong>Two time scales.</strong> History comes from collection (every 10 s). For "how much is going through <em>now</em>", the live measure calls <code>/interface/monitor-traffic</code> on the router, a read-only command; if it fails (version, rights, virtual port), the last collected value is returned with the reason.</p>
+<h3 id="when-the-queue-does-not-see-the-traffic">When the queue does not see the traffic</h3>
+<p>A client's throughput is read, in this order, from <strong>its queue</strong> (what passed, after the cap, both ways), from <strong>its interface</strong> (the PPPoE interface, or the VLAN when it is alone on it), and from <strong>NetFlow</strong>. Both router counters are read at every cycle and compared:</p>
+<ul>
+<li>a queue that stays <strong>flat</strong> (under 2 kb/s, or under 5 % of the interface) while the interface carries traffic (over 64 kb/s) is <strong>blind</strong>, not capping: the interface takes over;</li>
+<li>when no router counter moves but NetFlow sees the client's traffic, NetFlow gives the throughput.</li>
+</ul>
+<p>The usual cause of a blind queue is <strong>FastTrack</strong> on the router (<code>/ip firewall filter</code> with <code>action=fasttrack-connection</code>): fasttracked packets skip simple queues, so the queue neither counts nor caps them. Another cause is traffic that does not cross the queue's router. The client's page shows it in <em>Client details › Measured by</em>, with the reason, and the container log says <code>Mesure de &lt;client&gt; par interface : ...</code>. To have the cap applied too, exclude the clients' traffic from FastTrack, or disable FastTrack.</p>
 <h3 id="latency-the-probe">Latency: the probe</h3>
 <p>A subscriber's latency is the round-trip time measured <strong>from its PoP</strong> to its address. It goes neither through the core nor through freeQoS: the router does the pinging.</p>
 <h4 id="how-a-ping-measures-latency">How a ping measures latency</h4>
