@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app import cli
 from app.db.users_repo import InMemoryUsersRepository
-from app.services.accounts import check_password, role_at_least, verify_password
+from app.services.accounts import check_password, hash_password, role_at_least, verify_password
 
 RACINE = Path(__file__).resolve().parents[1]
 
@@ -48,11 +48,55 @@ async def test_une_saisie_refusee_ne_cree_rien() -> None:
     assert await depot.count() == 0
 
 
-def test_install_cree_l_administrateur_seulement_sur_une_installation_neuve() -> None:
+def test_install_affiche_le_compte_cree_par_l_application_sans_rien_demander() -> None:
     script = (RACINE / "install.sh").read_text()
-    assert "python -m app.cli" in script and "cli count-accounts" in script
-    assert 'if [ "$COMPTES" = "0" ]' in script
-    assert "create-admin --email" in script
-    # Le mot de passe fourni passe par l'entree standard, jamais en argument
-    # (visible dans `ps`).
-    assert "--password-stdin" in script and 'FREEQOS_ADMIN_PASSWORD" |' in script
+    assert "cat data/first-admin.txt" in script
+    assert "/dev/tty" not in script and "read -r" not in script
+    assert "FREEQOS_ADMIN_EMAIL=%s" in script  # transmis a l'application par .env
+
+
+async def test_le_premier_demarrage_cree_l_administrateur_et_son_fichier(tmp_path) -> None:
+    from app.services.first_admin import ensure_first_admin, forget_file, read_file
+
+    depot = InMemoryUsersRepository()
+    fichier = tmp_path / "data" / "first-admin.txt"
+    fiche = await ensure_first_admin(depot, fichier, "noc@example.com")
+    assert fiche is not None and fiche["email"] == "noc@example.com"
+    assert "password_hash" not in fiche
+    assert role_at_least(fiche["role"], "edit")
+    assert fichier.stat().st_mode & 0o777 == 0o600
+    champs = read_file(fichier)
+    stocke = await depot.credentials("noc@example.com")
+    assert stocke is not None and verify_password(champs["password"], stocke["password_hash"])
+
+    # Redemarrage : rien ne change, le fichier reste tant que le mot de passe vaut.
+    assert await ensure_first_admin(depot, fichier, "autre@example.com") is None
+    assert await depot.count() == 1 and fichier.exists()
+
+    # Le mot de passe change : le fichier part (au geste, ou au demarrage suivant).
+    forget_file(fichier, "noc@example.com")
+    assert not fichier.exists()
+
+
+async def test_un_fichier_perime_part_au_demarrage(tmp_path) -> None:
+    from app.services.first_admin import ensure_first_admin
+
+    depot = InMemoryUsersRepository()
+    fichier = tmp_path / "first-admin.txt"
+    await ensure_first_admin(depot, fichier, None)
+    stocke = await depot.credentials("admin@freeqos.local")
+    assert stocke is not None
+    await depot.update(int(stocke["id"]), password_hash=hash_password("Nouveau-Baobab-2026!"))
+    await ensure_first_admin(depot, fichier, None)
+    assert not fichier.exists()
+
+
+async def test_reinitialiser_un_mot_de_passe_en_ligne_de_commande() -> None:
+    depot = InMemoryUsersRepository()
+    await cli.create_admin(depot, "noc@example.com", "Baobab-Sahel-Niamey-27")
+    code, message = await cli.reset_password(depot, "noc@example.com")
+    assert code == cli.SORTIE_CREE
+    mot = message.split("password: ", 1)[1].strip()
+    stocke = await depot.credentials("noc@example.com")
+    assert stocke is not None and verify_password(mot, stocke["password_hash"])
+    assert (await cli.reset_password(depot, "inconnu@example.com"))[0] == cli.SORTIE_SAISIE

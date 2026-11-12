@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="455a04ba5661ba7a">
+  <meta name="freeqos-docs-source" content="6f923da109f61014">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -1005,7 +1005,7 @@
 <li>switches to <code>mirror.gcr.io</code> if Docker Hub is unreachable;</li>
 <li>moves the web proxy to 8081 / 8443 if another web server already holds 80 / 443 (written to <code>.env</code> as <code>HTTP_PORT</code> / <code>HTTPS_PORT</code>);</li>
 <li>builds, starts, waits for <code>/health</code> (3 minutes at most) and prints the address;</li>
-<li>on a <strong>new</strong> installation, creates the <strong>first Administrator account</strong> (see step 6). On an update the accounts already exist and nothing is touched;</li>
+<li>prints the <strong>first Administrator account</strong>, which the application creates by itself on its first start (see step 6). Nothing is asked: the installation runs unattended;</li>
 <li>makes freeQoS <strong>start with the server</strong>: Docker is enabled at boot, every container is <code>restart: unless-stopped</code>, and a systemd service <code>freeqos</code> runs <code>docker compose up -d</code> at boot, even after a <code>docker compose down</code>.</li>
 </ol>
 <p><code>sudo systemctl status freeqos</code> shows it; <code>sudo systemctl disable freeqos</code> turns the automatic start off.</p>
@@ -1014,18 +1014,17 @@
 curl -s http://127.0.0.1:8000/health/ready
 </code></pre>
 <p>The three containers <code>freeqos-app</code>, <code>freeqos-db</code> and <code>freeqos-proxy</code> must be <code>running</code>, and <code>/health/ready</code> must answer <code>"status":"ready"</code>.</p>
-<p><strong>6. The first Administrator account</strong> is created by the installation itself, not on the first visit: otherwise whoever reaches the server's address first could make themselves administrator.</p>
+<p><strong>6. The first Administrator account</strong> is created by the application itself, on its first start, before it answers anyone. There is no "create the first account" screen left open to whoever reaches the server first.</p>
 <ul>
-<li>The script asks for the email (<code>admin@freeqos.local</code> when there is no terminal, for example in an automated deployment), or takes <code>FREEQOS_ADMIN_EMAIL</code>.</li>
-<li>The password is drawn at random (<code>Xk7pQ-m2RtW-...</code>, about 114 bits, without look-alike characters) and <strong>printed once</strong> at the end of the installation. Note it, then change it from the account menu. To choose it instead, pass <code>FREEQOS_ADMIN_PASSWORD=...</code> (read from standard input, never on a command line).</li>
+<li>Email: <code>FREEQOS_ADMIN_EMAIL</code> (in <code>.env</code>, or in front of the install command), <code>admin@freeqos.local</code> by default.</li>
+<li>Password: drawn at random (<code>Xk7pQ-m2RtW-...</code>, about 114 bits, without look-alike characters), never written to the log. <code>install.sh</code> prints it at the end. It is also kept in <code>data/first-admin.txt</code> (readable only by the service), and that file is <strong>deleted as soon as the password is changed</strong>:</li>
 </ul>
+<pre><code>sudo docker compose exec app cat data/first-admin.txt
+</code></pre>
 <pre><code>curl -fsSL .../install.sh | sudo FREEQOS_ADMIN_EMAIL=noc@example.com sh
 </code></pre>
-<p>Open <code>http://&lt;freeQoS-IP&gt;/</code> (or <code>:8000</code>) and log in. The other accounts (Viewer, Operator, Administrator) are created in <em>Settings › Accounts</em>.</p>
-<p>Deployed without <code>install.sh</code> (plain <code>docker compose up</code>, Kubernetes)? Create it the same way, before opening the address to anyone:</p>
-<pre><code>sudo docker compose exec app python -m app.cli create-admin --email noc@example.com
-</code></pre>
-<p>It answers <code>an account already exists</code> (exit code 3) and changes nothing when an account is there. <code>python -m app.cli count-accounts</code> prints how many exist. If no account was created, the first visit still offers to create one.</p>
+<p>This works the same with a plain <code>docker compose up</code> or on Kubernetes: nothing to run by hand. Open <code>http://&lt;freeQoS-IP&gt;/</code> (or <code>:8000</code>), log in, change the password from the account menu. The other accounts (Viewer, Operator, Administrator) are created in <em>Settings › Accounts</em>.</p>
+<p>Command line, in the container: <code>python -m app.cli count-accounts</code> prints how many accounts exist, <code>python -m app.cli reset-password --email ...</code> gives an account a new random password (and closes its sessions), and <code>python -m app.cli create-admin --email ...</code> creates the first account if there is none. <code>FIRST_ADMIN_AUTO=false</code> turns the automatic creation off; the first visit then offers to create the account, as before.</p>
 <p><strong>7. Give it a domain name and HTTPS</strong> (recommended), from the interface:</p>
 <ol>
 <li>At OVH (or any registrar), in the DNS zone of your domain, add an <code>A</code> record: a sub-domain such as <code>qos</code> pointing to the server's public IP. It takes from a few minutes to a few hours to spread.</li>
@@ -3160,7 +3159,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <p>freeQoS holds router credentials that can write across the whole network. Security follows a simple principle: <strong>what writes is rare, explicit and logged</strong>.</p>
 <h3 id="interface-accounts">Interface accounts</h3>
 <ul>
-<li><strong>First account:</strong> created at installation (<code>install.sh</code>, or <code>python -m app.cli create-admin</code>), as an Administrator (<code>edit</code>). Only when none exists does the first visit offer to create it.</li>
+<li><strong>First account:</strong> created by the application on its first start, as an Administrator (<code>edit</code>), with a random password kept in <code>data/first-admin.txt</code> (mode 0600) until it is changed. The first-visit screen only appears if this is turned off (<code>FIRST_ADMIN_AUTO=false</code>).</li>
 <li><strong>Three access levels</strong>, each including the rights of the previous one, enforced by the <strong>server</strong> (a refused write is a <code>403</code> naming the level it needs, whatever the interface shows):</li>
 </ul>
 <div class="table-wrap"><table>
@@ -3203,9 +3202,8 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 - <strong>Sessions:</strong> at most 10 open sessions per account; everyone sees their own sessions (browser, address, last activity) and can close them remotely. Changing a password or a role closes the other sessions.
 - <strong>Journal retention:</strong> login events are kept 180 days (<em>Settings › Accounts › Login journal</em>) and are also written to the container log (<code>auth login_failed …</code>), usable by fail2ban.</p>
 <p><strong>Behind an HTTPS reverse proxy</strong> (the included one is already set up), set <code>FORWARDED_ALLOW_IPS=&lt;proxy address&gt;</code> so that the application trusts the proxy's <code>X-Forwarded-Proto</code>: the session cookie is then sent <code>Secure</code>, HSTS is set, and the address recorded for each login is the client's, not the proxy's.</p>
-<p><strong>Locked out of every edit account?</strong> Empty the accounts table, then create a new Administrator; measurements and inventory are untouched:</p>
-<pre><code>sudo docker compose exec timescaledb psql -U qos -d qos -c &quot;TRUNCATE app_users CASCADE&quot;
-sudo docker compose exec app python -m app.cli create-admin --email noc@example.com
+<p><strong>Locked out?</strong> Give the account a new password from the server; measurements and inventory are untouched:</p>
+<pre><code>sudo docker compose exec app python -m app.cli reset-password --email noc@example.com
 </code></pre>
 <h3 id="http-headers">HTTP headers</h3>
 <div class="table-wrap"><table>

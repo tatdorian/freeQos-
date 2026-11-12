@@ -177,6 +177,21 @@ def _b64(octets: bytes) -> str:
     return base64.b64encode(octets).decode("ascii")
 
 
+#: Sans 0/O, 1/l/I : un mot de passe lu a l'ecran puis retape.
+_ALPHABET_LISIBLE = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def generate_password() -> str:
+    """Quatre groupes de cinq, ~114 bits : ``Xk7pQ-m2RtW-...``."""
+    while True:
+        groupes = ["".join(secrets.choice(_ALPHABET_LISIBLE) for _ in range(5)) for _ in range(4)]
+        mot = "-".join(groupes)
+        try:
+            return check_password(mot)
+        except InvalidAccountError:  # pragma: no cover - improbable
+            continue
+
+
 def verify_password(password: str, stored: str | None) -> bool:
     if not stored or not password:
         return False

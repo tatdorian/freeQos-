@@ -176,6 +176,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     container = await build_container(settings)
     app.state.container = container
 
+    # Le premier Administrateur, cree ici plutot qu'a la premiere visite.
+    if settings.auth_enabled and settings.first_admin_auto and container.users_repo is not None:
+        from app.services.first_admin import ensure_first_admin
+
+        try:
+            await ensure_first_admin(
+                container.users_repo, settings.first_admin_file, settings.freeqos_admin_email
+            )
+        except Exception:  # noqa: BLE001 - l'ecran de premiere visite reste le secours
+            logger.exception("Premier compte Administrateur non cree")
+
     # Le domaine HTTPS saisi dans Settings : repousse au proxy (recree ou
     # redemarre entre-temps). En tache de fond : le proxy peut demarrer apres.
     from app.services.public_access import reapply_at_startup
