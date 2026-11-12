@@ -168,6 +168,11 @@ class CollectionService:
         # compteurs, jamais les enregistrements (qui portent un horodatage UTC).
         # L'injecter rend les tests de debit deterministes sans toucher au module time.
         self._clock = clock
+        # DERNIERE LECTURE DES SESSIONS, PAR ROUTEUR. Sans elle, un routeur que
+        # freeQoS ne joint plus (API coupee, filtrage, mot de passe change)
+        # faisait passer tous ses clients pour « hors ligne » : on ne savait
+        # pas si le client etait parti ou si c'etait la lecture qui manquait.
+        self.router_reads: dict[str, dict[str, Any]] = {}
 
         self.rates = RateTracker(
             max_plausible_bps=settings.max_plausible_bps,
@@ -228,11 +233,15 @@ class CollectionService:
 
         sessions_by_router: list[tuple[MikrotikCollector, list[PppoeSession]]] = []
         for collector, outcome in zip(self.collectors, gathered, strict=True):
+            lecture = self.router_reads.setdefault(collector.name, {"ok_at": None})
             if isinstance(outcome, BaseException):
                 message = f"{collector.name}: {type(outcome).__name__}: {outcome}"
                 errors.append(message)
                 logger.error("Collecte impossible sur %s : %s", collector.name, outcome)
+                lecture["error"] = describe_read_error(outcome)
+                lecture["failing_since"] = lecture.get("failing_since") or started_at
                 continue
+            lecture.update(ok_at=started_at, error=None, failing_since=None, sessions=len(outcome))
             sessions_by_router.append((collector, outcome))
 
         # Compteurs des FILES, lus une fois par routeur et par cycle. C'est la
@@ -1228,3 +1237,18 @@ def _counters_covering(
 
 def _utcnow() -> datetime:
     return datetime.now(tz=UTC)
+
+
+def describe_read_error(exc: BaseException) -> str:
+    """L'echec de lecture d'un routeur, dit pour l'exploitant."""
+    texte = f"{type(exc).__name__}: {exc}".strip().rstrip(":")
+    bas = texte.lower()
+    if isinstance(exc, TimeoutError) or "timeout" in bas or "timed out" in bas:
+        return "no answer in time (router busy, link down, or API filtered)"
+    if "refused" in bas:
+        return "connection refused: the API service is off or restricted to another address"
+    if "invalid user" in bas or "cannot log in" in bas or "password" in bas:
+        return "login refused: check the account and password of the router"
+    if "unreachable" in bas or "no route" in bas:
+        return "no route to the router from freeQoS"
+    return texte[:200]

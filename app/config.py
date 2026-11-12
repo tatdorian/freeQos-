@@ -388,6 +388,9 @@ class Settings(BaseSettings):
     # API d'administration du proxy HTTPS (Caddy) de la pile Docker. Vide : pas
     # de proxy pilote (le domaine se regle alors dans son propre reverse proxy).
     proxy_admin_url: str | None = None
+    #: Threads des appels RouterOS (bloquants). Ils attendent le reseau : en
+    #: donner peu fait expirer les lectures quand les sondes les occupent.
+    io_threads: int = Field(default=64, ge=8, le=512)
 
     # --- ipfinder : qui se cache derriere une adresse atteinte ---
     #

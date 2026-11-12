@@ -196,6 +196,30 @@ async def routers_health(container: ContainerDep) -> dict[str, Any]:
     }
 
 
+@router.get("/pops/read-status", summary="Last successful read of each router's sessions")
+async def routers_read_status(container: ContainerDep) -> dict[str, Any]:
+    """Quand freeQoS a lu les sessions de chaque routeur pour la derniere fois.
+
+    Distingue « le client est parti » de « freeQoS ne joint plus son routeur » :
+    sans cela, un routeur muet faisait passer tous ses clients hors ligne.
+    """
+    lectures = container.collection.router_reads
+    routeurs = []
+    for collecteur in container.registry.collectors:
+        lecture = lectures.get(collecteur.name, {})
+        routeurs.append(
+            {
+                "router": collecteur.name,
+                "pop_name": collecteur.config.effective_pop_name,
+                "ok_at": lecture.get("ok_at"),
+                "sessions": lecture.get("sessions"),
+                "failing_since": lecture.get("failing_since"),
+                "error": lecture.get("error"),
+            }
+        )
+    return {"routers": routeurs, "failing": sum(1 for r in routeurs if r["failing_since"])}
+
+
 @router.get("/pops/routers", summary="Router inventory (file + database)")
 async def list_routers(container: ContainerDep) -> dict[str, Any]:
     stored: list[dict[str, Any]] = []

@@ -13,6 +13,7 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -160,6 +161,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         json_output=settings.app_env.lower() in {"prod", "production"},
     )
     logger.info("Demarrage de %s %s (env=%s)", settings.app_name, __version__, settings.app_env)
+
+    # Les lectures et ecritures RouterOS (librouteros est synchrone) passent
+    # par des threads. Le pool par defaut d'asyncio est de cpu+4 : 6 threads
+    # sur une VM a 2 vCPU, que trois sondes de latence (une seconde par ping)
+    # et un export de configuration occupent entierement. Les lectures de
+    # sessions attendaient alors leur tour, depassaient leur delai, et des
+    # routeurs bien vivants passaient « hors ligne ». Ces threads attendent le
+    # reseau, pas le processeur : on en donne largement.
+    asyncio.get_running_loop().set_default_executor(
+        ThreadPoolExecutor(max_workers=settings.io_threads, thread_name_prefix="routeros")
+    )
 
     container = await build_container(settings)
     app.state.container = container
