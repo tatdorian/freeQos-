@@ -464,7 +464,13 @@ def test_lien_station_vers_ap_depuis_uisp() -> None:
     )
     liens_radio = [lk for lk in snapshot.links.values() if lk.kind == "radio"]
     assert len(liens_radio) == 1
-    assert liens_radio[0].source_key == "uisp:ap-1"
+    # Le lien vise la CASE de l'AP : connue par sa MAC, elle s'appelle
+    # « mac:... ». Viser « uisp:ap-1 », case qui n'existe pas, le laissait
+    # accroche a rien (le shaping, lui, resolvait deja par l'identifiant UISP).
+    assert liens_radio[0].source_key == "mac:11:22:33:44:55:66"
+    assert (
+        liens_radio[0].source_key in snapshot.nodes and liens_radio[0].target_key in snapshot.nodes
+    )
 
 
 # ------------------------------------- LA jointure : abonne -> secteur radio

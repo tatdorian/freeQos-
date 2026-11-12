@@ -2268,3 +2268,9 @@ body.role-limited .dash-detail { display: none; }
 .err-toast { position: relative; box-shadow: var(--shadow-lift); border-radius: var(--radius-sm); background: var(--surface); }
 .err-toast .notice { margin: 0; padding-right: 2.4rem; }
 .err-toast > button { position: absolute; top: .45rem; right: .45rem; min-height: 0; padding: .1rem .5rem; }
+.nt-events { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem 1rem; }
+@media (max-width: 760px) { .nt-events { grid-template-columns: 1fr; } }
+/* Stations d'une AP UISP, depliees sous sa ligne. */
+.uisp-sta-row > td { background: var(--fill); padding: .4rem .6rem .8rem; }
+.uisp-sta { width: 100%; font-size: .85rem; }
+.uisp-sta th { font-size: .75rem; }

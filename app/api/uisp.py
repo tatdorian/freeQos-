@@ -15,7 +15,7 @@ import logging
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Path, Request, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import ContainerDep, acteur
@@ -185,3 +185,51 @@ async def delete_link(
     if not await _repo(container).delete_link(device_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not attached")
     return {"deleted": device_id}
+
+
+@router.get("/uisp/traffic", summary="Every UISP device: throughput, capacity, signal, its place")
+async def uisp_traffic(container: ContainerDep) -> dict[str, Any]:
+    """Le releve de la minute (pas d'appel a UISP ici), et ou chaque equipement
+    se trouve : sa case dans l'arbre, le site auquel il est rattache, le client
+    qu'il est."""
+    trafic = getattr(container, "uisp_traffic", None)
+    if trafic is None:
+        return {"devices": [], "collected_at": None, "error": None}
+    liens = {lien["device_id"]: lien for lien in await _repo(container).links()}
+    cases: dict[str, dict[str, Any]] = {}
+    clients: dict[str, str] = {}
+    topo = getattr(container, "topology_repo", None)
+    if topo is not None:
+        for noeud in await topo.nodes():
+            if noeud.get("uisp_device_id"):
+                cases[str(noeud["uisp_device_id"])] = noeud
+    arbre = getattr(container, "tree_repo", None)
+    if arbre is not None:
+        clients = {k: v for k, v in (await arbre.links()).items() if v}
+    sortie = []
+    for ident, d in trafic.devices.items():
+        case = cases.get(ident)
+        lien = liens.get(ident)
+        sortie.append(
+            {
+                **d,
+                "linked_pop": lien["pop_name"] if lien else None,
+                "node_key": case["key"] if case else None,
+                "parent_key": (case.get("parent_override") if case else None),
+                "client": clients.get(str(case["key"])) if case else None,
+                "stations": trafic.stations.get(ident, []),
+            }
+        )
+    sortie.sort(key=lambda r: (r.get("site") or "~", r.get("name") or ""))
+    return {"devices": sortie, "collected_at": trafic.collected_at, "error": trafic.error}
+
+
+@router.get("/uisp/devices/{device_id}/history", summary="Throughput of one UISP device over time")
+async def uisp_history(
+    container: ContainerDep,
+    device_id: Annotated[str, Path(min_length=1, max_length=128)],
+    minutes: Annotated[int, Query(ge=5, le=10080)] = 60,
+) -> dict[str, Any]:
+    trafic = getattr(container, "uisp_traffic", None)
+    points = await trafic.history(device_id, minutes) if trafic is not None else []
+    return {"device_id": device_id, "points": points}

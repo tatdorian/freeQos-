@@ -1388,6 +1388,21 @@ def attach_uisp_devices(snapshot: TopologySnapshot, devices: list[dict[str, Any]
         if node.mac:
             par_mac[node.mac] = node
 
+    # La CLE de chaque device dans le graphe (« mac:... » s'il a une MAC). Le
+    # lien station -> AP visait toujours « uisp:<id> » : des que l'AP etait
+    # connue par sa MAC, le lien ne s'accrochait a rien.
+    cle_du_device: dict[str, str] = {}
+    for device in devices:
+        ident = device.get("identification") or {}
+        if ident.get("id"):
+            mac_d = normalize_mac(ident.get("mac"))
+            existant_d = par_mac.get(mac_d) if mac_d else None
+            cle_du_device[str(ident["id"])] = (
+                existant_d.key
+                if existant_d is not None
+                else (f"mac:{mac_d}" if mac_d else f"uisp:{ident['id']}")
+            )
+
     for device in devices:
         identification = device.get("identification") or {}
         mac = normalize_mac(identification.get("mac"))
@@ -1423,8 +1438,8 @@ def attach_uisp_devices(snapshot: TopologySnapshot, devices: list[dict[str, Any]
         if parent_id and device_id:
             snapshot.add_link(
                 TopologyLink(
-                    source_key=f"uisp:{parent_id}",
-                    target_key=cle,
+                    source_key=cle_du_device.get(str(parent_id), f"uisp:{parent_id}"),
+                    target_key=cle_du_device.get(str(device_id), cle),
                     kind=LINK_RADIO,
                     discovered_by="uisp",
                     attributes={"ap_name": parent.get("name")},

@@ -6,6 +6,8 @@ Ignore sans ``TEST_DATABASE_URL`` (cf. test_bout_en_bout_api_externe).
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 from tests.test_bout_en_bout_api_externe import (  # noqa: F401 - fixtures
     _attendre,
     _cles,
@@ -690,3 +692,114 @@ def test_une_vlan_est_un_raccordement_pas_un_site(app_client, routeur) -> None: 
     assert dupont["connection"] == "PPPoE"
     fiche = app_client.get("/api/v1/clients/acme/profile", headers=cle).json()
     assert fiche["discovered"]["pop_name"] == "PoP Test"
+
+
+def test_les_alertes_partent_par_email_une_fois_puis_a_la_resolution(
+    app_client, routeur, monkeypatch
+) -> None:  # noqa: F811
+
+    from app.services.health_watch import run_cycle
+    from tests.test_alertes_email import FauxSmtp
+
+    FauxSmtp.envoyes = []
+    FauxSmtp.connexions = []
+    FauxSmtp.refuser_login = False
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP", FauxSmtp)
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    lire = {"Authorization": f"Bearer {lecture}"}
+    corps = {
+        "host": "smtp.example.com",
+        "port": 587,
+        "security": "starttls",
+        "username": "qos",
+        "password": "mot-de-passe-smtp",
+        "from_addr": "qos@example.com",
+        "recipients": ["noc@example.com"],
+        "grace_minutes": 0,
+    }
+    assert app_client.put("/api/v1/notifications/smtp", headers=lire, json=corps).status_code == 403
+    r = app_client.put("/api/v1/notifications/smtp", headers=cle, json=corps)
+    assert r.status_code == 200, r.text
+    config = app_client.get("/api/v1/notifications/smtp", headers=lire).json()["config"]
+    assert config["has_password"] is True and "mot-de-passe-smtp" not in str(config)
+    assert app_client.post("/api/v1/notifications/test", headers=cle).json()["sent"] is True
+    assert FauxSmtp.envoyes[-1]["Subject"] == "[freeQoS] Test email"
+
+    _brancher(app_client, cle)
+    conteneur = app_client.app.state.container
+    conteneur.collection.router_reads["nas-test"] = {
+        "ok_at": None,
+        "error": "connection refused",
+        "failing_since": datetime.now(tz=UTC) - timedelta(minutes=5),
+    }
+    portail = app_client.portal
+    rapport = portail.call(run_cycle, conteneur)
+    assert rapport["sent"] is True and rapport["new"] == 1
+    assert "nas-test not answering" in FauxSmtp.envoyes[-1]["Subject"]
+    n = len(FauxSmtp.envoyes)
+    assert portail.call(run_cycle, conteneur)["sent"] is False  # pas deux fois
+    assert len(FauxSmtp.envoyes) == n
+
+    conteneur.collection.router_reads["nas-test"] = {
+        "ok_at": datetime.now(tz=UTC),
+        "failing_since": None,
+    }
+    rapport = portail.call(run_cycle, conteneur)
+    assert rapport["sent"] is True and rapport["resolved"] == 1
+    assert FauxSmtp.envoyes[-1]["Subject"].startswith("[freeQoS] Resolved")
+    historique = app_client.get("/api/v1/notifications/history", headers=lire).json()["events"]
+    assert historique[0]["resolved_at"] and historique[0]["notified_at"]
+
+
+def test_le_trafic_uisp_entre_dans_l_arbre_et_se_place_a_la_main(
+    app_client, routeur, monkeypatch
+) -> None:  # noqa: F811
+    import app.api.uisp as api_uisp
+    import app.collectors.uisp as collecteur
+    import app.services.uisp_traffic as releve
+    from tests.test_trafic_uisp import FauxUisp
+
+    FauxUisp.hors_ligne = False
+    for mod in (api_uisp, collecteur, releve):
+        monkeypatch.setattr(mod, "UispProvider", FauxUisp)
+    ecriture, lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    lire = {"Authorization": f"Bearer {lecture}"}
+    _brancher(app_client, cle)
+    r = app_client.put(
+        "/api/v1/uisp", headers=cle, json={"base_url": "https://uisp.test", "token": "jeton-uisp"}
+    )
+    assert r.status_code == 200, r.text
+    assert app_client.post("/api/v1/jobs/collect_uisp/run", headers=cle).json()["ok"] is True
+    assert app_client.post("/api/v1/topology/discover", headers=cle).status_code == 200
+
+    trafic = app_client.get("/api/v1/uisp/traffic", headers=lire).json()
+    ap = next(d for d in trafic["devices"] if d["id"] == "ap-1")
+    assert ap["tx_bps"] == 12_000_000 and ap["node_key"] and len(ap["stations"]) == 1
+    arbre = app_client.get("/api/v1/topology", headers=lire).json()
+    assert arbre["uisp_rates"][ap["node_key"]]["tx_bps"] == 12_000_000
+
+    # Placer l'AP sous le routeur, et dire que la station est le CPE de dupont.
+    station = next(d for d in trafic["devices"] if d["id"] == "st-1")
+    routeur_cle = arbre["placements"]["dupont"]["node"]
+    r = app_client.patch(
+        f"/api/v1/topology/nodes/{ap['node_key']}/parent",
+        headers=cle,
+        json={"parent_key": routeur_cle},
+    )
+    assert r.status_code == 200, r.text
+    r = app_client.put(
+        "/api/v1/topology/client-links",
+        headers=cle,
+        json={"node_key": station["node_key"], "login": "dupont"},
+    )
+    assert r.status_code == 200
+    trafic = app_client.get("/api/v1/uisp/traffic", headers=lire).json()
+    ap = next(d for d in trafic["devices"] if d["id"] == "ap-1")
+    station = next(d for d in trafic["devices"] if d["id"] == "st-1")
+    assert ap["parent_key"] == routeur_cle and station["client"] == "dupont"
+    historique = app_client.get("/api/v1/uisp/devices/ap-1/history?minutes=60", headers=lire).json()
+    assert historique["points"] and historique["points"][-1]["tx_bps"] == 12_000_000

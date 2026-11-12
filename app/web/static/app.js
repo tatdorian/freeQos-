@@ -5126,13 +5126,82 @@ async function loadUisp(force) {
   if (UISP.conf.configured && (force || !UISP.devices || Date.now() - UISP.loadedAt > 120000)) {
     UISP.loadedAt = Date.now();
     try {
-      UISP.devices = (await api('/uisp/devices')).devices || [];
+      // LE RELEVE DE LA MINUTE d'abord (debit, stations, place dans l'arbre) ;
+      // UISP en direct seulement s'il n'a encore rien donne.
+      const releve = await api('/uisp/traffic').catch(() => null);
+      // Les clients, pour dire quel CPE est a qui dans la liste des stations.
+      if (!(CLI.rows || []).length) await loadClientsData().catch(() => null);
+      UISP.collectedAt = releve && releve.collected_at;
+      UISP.devices = releve && (releve.devices || []).length ? releve.devices
+        : (await api('/uisp/devices')).devices || [];
       UISP.err = null;
     } catch (err) {
       UISP.err = err.message;
     }
     renderUisp();
   }
+}
+
+/** Vers les clients : ce qu'une AP emet, ce qu'une station recoit. */
+function uispDebit(d) {
+  if (d.rx_bps == null && d.tx_bps == null) return '<span class="na">-</span>';
+  const ap = /^(ap|accesspoint)$/i.test(d.role || '');
+  const bas = ap ? d.tx_bps : d.rx_bps;
+  const haut = ap ? d.rx_bps : d.tx_bps;
+  return '<span title="Measured by UISP on ' + esc(d.port || 'its main port') + '">&darr; ' + esc(bpsText(bas || 0)) +
+    '<br><small class="muted">&uarr; ' + esc(bpsText(haut || 0)) + '</small></span>';
+}
+
+/** Placer un equipement UISP : sous quelle case de l'arbre il pend, et s'il
+ *  EST un client (un CPE). L'arbre reste automatique ; ceci le corrige. */
+async function placerUisp(d) {
+  const topoData = await api('/topology').catch(() => null);
+  const cases = ((topoData && topoData.nodes) || []).filter((n) => n.key !== d.node_key)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const clients = (await api('/subscribers/latest?limit=5000&order_by=login&include_unmeasured=true').catch(() => [])) || [];
+  const { root, fermer } = openModal('<div class="modal-head"><div><h3>Place ' + esc(d.name || d.id) + '</h3>' +
+    '<div class="sub">' + esc([d.model, d.role, d.site].filter(Boolean).join(' · ')) + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body stack">' +
+    (d.node_key ? '' : '<div class="notice">This device is not in the tree yet: it appears after the next discovery. ' +
+      '<button type="button" class="sm" id="pu-disc">Run discovery now</button></div>') +
+    '<div class="field"><label for="pu-parent">Connected under</label><select id="pu-parent"' + (d.node_key ? '' : ' disabled') + '>' +
+      '<option value="">Automatic (as discovered)</option>' + cases.map((n) => '<option value="' + esc(n.key) + '"' +
+        (n.key === d.parent_key ? ' selected' : '') + '>' + esc(n.name) + ' · ' + esc(KIND_LABEL[n.kind_override || n.kind] || n.kind || '') + '</option>').join('') +
+    '</select><span class="hint">Its throughput then shows on the link from that box, in the tree and the traffic views.</span></div>' +
+    '<div class="field"><label for="pu-client">This device is the CPE of client</label>' +
+      '<input id="pu-client" list="pu-clients" value="' + esc(d.client || '') + '" placeholder="Name or login (empty: none)"' + (d.node_key ? '' : ' disabled') + '>' +
+      '<datalist id="pu-clients">' + clients.map((c) => '<option value="' + esc(c.login) + '">' + esc(c.pop_name || '') + '</option>').join('') + '</datalist></div>' +
+    '<div id="pu-out"></div></div>' +
+    '<div class="modal-foot"><button data-modal-close>Cancel</button><button class="primary" id="pu-save"' + (d.node_key ? '' : ' disabled') + '>Save</button></div>');
+  const out = root.querySelector('#pu-out');
+  const disc = root.querySelector('#pu-disc');
+  if (disc) disc.addEventListener('click', async () => {
+    disc.disabled = true;
+    try { await api('/topology/discover', { method: 'POST' }); fermer(); UISP.devices = null; loadUisp(true); }
+    catch (err) { out.innerHTML = noticeErreur(err); disc.disabled = false; }
+  });
+  root.querySelector('#pu-save').addEventListener('click', async () => {
+    try {
+      const parent = root.querySelector('#pu-parent').value || null;
+      if (parent !== (d.parent_key || null)) {
+        await api('/topology/nodes/' + encodeURIComponent(d.node_key) + '/parent',
+          { method: 'PATCH', body: JSON.stringify({ parent_key: parent }) });
+      }
+      const login = root.querySelector('#pu-client').value.trim();
+      if (login !== (d.client || '')) {
+        if (login) {
+          if (!clients.some((c) => c.login === login)) throw erreurClaire(400, 'No client "' + login + '": choose one from the list.');
+          await api('/topology/client-links', { method: 'PUT', body: JSON.stringify({ node_key: d.node_key, login }) });
+        } else {
+          await api('/topology/client-links/' + encodeURIComponent(d.node_key), { method: 'DELETE' });
+        }
+      }
+      fermer();
+      UISP.devices = null;
+      loadUisp(true);
+    } catch (err) { out.innerHTML = noticeErreur(err); }
+  });
 }
 
 function renderUisp() {
@@ -5175,23 +5244,44 @@ function renderUisp() {
   } else {
     const pops = (state.pops || []).map((p) => p.name);
     const cap = (v) => (v ? esc(mbps(v)) : '<span class="na">-</span>');
-    liste.innerHTML = '<table class="uisp-table"><thead><tr><th>Antenna</th><th>UISP site</th><th>Status</th>' +
-      '<th class="num">Capacity &darr;</th><th class="num">Capacity &uarr;</th><th class="num">Signal</th>' +
-      '<th class="num">Airtime</th><th>Attached to</th></tr></thead><tbody>' +
+    UISP.ouverts = UISP.ouverts || new Set();
+    const stationsDe = (d) => !UISP.ouverts.has(d.id) || !(d.stations || []).length ? '' :
+      '<tr class="uisp-sta-row"><td colspan="10"><table class="uisp-sta"><thead><tr><th>Station (CPE)</th><th>MAC / IP</th>' +
+      '<th class="num">Signal</th><th class="num">Traffic</th><th>Client</th></tr></thead><tbody>' +
+      d.stations.map((st) => {
+        const cli = (CLI.rows || []).find((r) => (st.ip && r.last_ip === st.ip) ||
+          (st.mac && r.profile && r.profile.cpe_mac && r.profile.cpe_mac.toLowerCase() === String(st.mac).toLowerCase()));
+        return '<tr><td>' + esc(st.name || '-') + '<small class="muted" style="display:block">' + esc(st.model || '') + '</small></td>' +
+          '<td><code>' + esc(st.mac || '') + '</code><small style="display:block">' + esc(st.ip || '') + '</small></td>' +
+          '<td class="num">' + (st.signal_dbm != null ? esc(Math.round(st.signal_dbm)) + ' dBm' : '-') + '</td>' +
+          '<td class="num">' + (st.rx_bps != null || st.tx_bps != null ? '&darr; ' + esc(bpsText(st.rx_bps || 0)) + ' &uarr; ' + esc(bpsText(st.tx_bps || 0)) : '-') + '</td>' +
+          '<td>' + (cli ? '<a href="#/client/' + esc(encodeURIComponent(cli.login)) + '">' + esc(cli.display_name || cli.login) + '</a>' : '<span class="na">-</span>') + '</td></tr>';
+      }).join('') + '</tbody></table></td></tr>';
+    liste.innerHTML = (UISP.collectedAt ? '<p class="hint" style="display:block">Traffic read by UISP ' + esc(depuis(UISP.collectedAt)) + ', every minute.</p>' : '') +
+      '<table class="uisp-table"><thead><tr><th>Device</th><th>UISP site</th><th>Status</th>' +
+      '<th class="num">Traffic now</th><th class="num">Capacity &darr; / &uarr;</th><th class="num">Signal</th>' +
+      '<th class="num">Stations</th><th>Site (capacity)</th><th>In the network</th></tr></thead><tbody>' +
       UISP.devices.map((d) => '<tr><td><b>' + esc(d.name || d.id) + '</b><span class="hint" style="display:block">' +
           esc([d.model, d.role, d.ip].filter(Boolean).join(' · ')) + '</span></td>' +
         '<td>' + esc(d.site || '') + '</td>' +
         '<td><i class="dot-co ' + (d.online ? 'on' : 'off') + '"></i> ' + esc(d.status || (d.online ? 'active' : 'offline')) + '</td>' +
-        '<td class="num">' + cap(d.capacity_down_mbps) + '</td><td class="num">' + cap(d.capacity_up_mbps) + '</td>' +
+        '<td class="num">' + uispDebit(d) + '</td>' +
+        '<td class="num">' + cap(d.capacity_down_mbps) + ' / ' + cap(d.capacity_up_mbps) + '</td>' +
         '<td class="num">' + (d.signal_dbm != null ? esc(Math.round(d.signal_dbm)) + ' dBm' : '<span class="na">-</span>') + '</td>' +
-        '<td class="num">' + (d.airtime_pct != null ? esc(Math.round(d.airtime_pct)) + ' %' : '<span class="na">-</span>') + '</td>' +
+        '<td class="num">' + ((d.stations || []).length ? '<button type="button" class="sm link-btn" data-sta="' + esc(d.id) + '">' +
+          d.stations.length + (UISP.ouverts.has(d.id) ? ' &#9662;' : ' &#9656;') + '</button>' : '<span class="na">-</span>') + '</td>' +
         '<td>' + (admin ? '<select class="uisp-link" data-dev="' + esc(d.id) + '" data-name="' + esc(d.name || d.id) + '">' +
             '<option value="">Not attached</option>' + pops.map((n) => '<option' + (n === d.linked_pop ? ' selected' : '') + '>' +
             esc(n) + '</option>').join('') + (d.linked_pop && !pops.includes(d.linked_pop) ? '<option selected>' +
             esc(d.linked_pop) + '</option>' : '') + '</select>'
-          : esc(d.linked_pop || '-')) + '</td></tr>').join('') + '</tbody></table>' +
-      '<p class="hint" style="display:block">Attach the antenna of a site\'s backhaul to that site: its radio capacity becomes the ' +
-      'ceiling of the site\'s queue (read every backhaul cycle).</p>';
+          : esc(d.linked_pop || '-')) + '</td>' +
+        '<td>' + (d.node_key ? (d.client ? '&#9733; client <a href="#/client/' + esc(encodeURIComponent(d.client)) + '">' + esc(d.client) + '</a>'
+            : (d.parent_key ? 'placed by hand' : 'in the tree')) : '<span class="na">not in the tree yet</span>') +
+          (admin ? ' <button type="button" class="sm" data-place="' + esc(d.id) + '">Place</button>' : '') + '</td></tr>' +
+        stationsDe(d)).join('') + '</tbody></table>' +
+      '<p class="hint" style="display:block"><b>Site (capacity)</b>: attach the antenna of a site\'s backhaul to that site, its radio capacity ' +
+      'becomes the ceiling of the site\'s queue. <b>In the network</b>: every UISP device is in the network tree; <b>Place</b> says under ' +
+      'which box it is connected and whether it is a client\'s CPE &mdash; its throughput then shows on that link.</p>';
   }
   const q = (id) => document.getElementById(id);
   if (q('uisp-refresh')) q('uisp-refresh').onclick = () => { UISP.devices = null; renderUisp(); loadUisp(true); };
@@ -5223,6 +5313,15 @@ function renderUisp() {
       loadUisp(true);
     } catch (err) { msg('<span class="lvl-txt-crit">' + esc(err.message) + '</span>'); }
   };
+  liste.querySelectorAll('[data-sta]').forEach((b) => b.addEventListener('click', () => {
+    const id = b.dataset.sta;
+    if (UISP.ouverts.has(id)) UISP.ouverts.delete(id); else UISP.ouverts.add(id);
+    renderUisp();
+  }));
+  liste.querySelectorAll('[data-place]').forEach((b) => b.addEventListener('click', () => {
+    const d = UISP.devices.find((x) => x.id === b.dataset.place);
+    if (d) placerUisp(d);
+  }));
   liste.querySelectorAll('.uisp-link').forEach((s) => s.addEventListener('change', async () => {
     try {
       if (s.value) {
@@ -7803,6 +7902,22 @@ function topoEdgeRates(edge) {
  *  Son rattachement est declare : aucun port ne le compte. Mais la collecte
  *  le mesure (file, interface VLAN s'il y est seul, ou NetFlow) : c'est ce
  *  debit-la que le trait affiche, plutot qu'un trait muet. */
+/** Le debit qu'UISP releve sur un equipement, quand aucun port de routeur ne
+ *  mesure le lien qui y mene. Vers les clients : ce qu'une AP (ou le maitre
+ *  d'un lien) EMET ; ce qu'une station RECOIT. */
+function topoUispRates(n) {
+  const u = n && topo.data && (topo.data.uisp_rates || {})[n.key];
+  if (!u || (u.rx_bps == null && u.tx_bps == null)) return null;
+  const versClients = n.kind === 'sector';
+  const cap = (Math.min(u.capacity_down_mbps || Infinity, u.capacity_up_mbps || Infinity) || 0) * 1e6;
+  return {
+    down: Number(versClients ? u.tx_bps : u.rx_bps) || 0,
+    up: Number(versClients ? u.rx_bps : u.tx_bps) || 0,
+    cap: isFinite(cap) ? cap : 0,
+    source: 'UISP',
+  };
+}
+
 function topoStaticRates(n) {
   if (!n || n.kind !== 'static') return null;
   let a = n.attributes;
@@ -7865,7 +7980,7 @@ function renderTopoCanvas() {
     if (n.replie || !n.parentKey) return;
     const p = model.nodesByKey.get(n.parentKey);
     if (!p) return;
-    const rates = n.synthRates || topoEdgeRates(n.edge) || topoStaticRates(n);
+    const rates = n.synthRates || topoEdgeRates(n.edge) || topoStaticRates(n) || topoUispRates(n);
     // Un client a IP fixe est une DECLARATION : son trait se dessine toujours,
     // comme celui d'un abonne -- sinon sa case flotte sous son VLAN sans rien
     // qui dise de qui elle depend.
@@ -9928,6 +10043,121 @@ function settingRow(r) {
  * les ports du serveur, puis le domaine ici -- le certificat suit seul. */
 const DOM = { etat: null, verif: null, edit: false };
 
+/* ---------------------------------------------------- alertes par email */
+const NOTIF = { data: null, history: [], edit: false };
+const NOTIF_EVENTS = {
+  router: 'A router stops answering freeQoS',
+  site: 'A site goes down (its clients drop together)',
+  measurement: 'Measurement failing (a collection cycle keeps failing)',
+  uisp: 'A UISP device placed in the network goes offline',
+  limit: 'A client stays well over its limit (limit not held)',
+};
+
+async function loadNotif() {
+  const host = document.getElementById('settings-notif');
+  if (!host) return;
+  if (host.contains(document.activeElement) && document.activeElement.matches('input, select, textarea')) return;
+  const [d, h] = await Promise.all([
+    api('/notifications/smtp').catch(() => null),
+    api('/notifications/history').catch(() => ({ events: [] })),
+  ]);
+  NOTIF.data = d;
+  NOTIF.history = (h && h.events) || [];
+  renderNotif();
+}
+
+function renderNotif() {
+  const host = document.getElementById('settings-notif');
+  const c = NOTIF.data && NOTIF.data.config;
+  const admin = peut('edit');
+  const historique = NOTIF.history.length
+    ? '<h4 style="margin:1rem 0 .4rem">Recent problems</h4><div class="table-wrap"><table><thead><tr><th>Problem</th><th>Since</th><th>State</th><th>Email</th></tr></thead><tbody>' +
+      NOTIF.history.slice(0, 12).map((e) => '<tr><td><b>' + esc(e.title) + '</b><br><small class="muted">' + esc(e.detail || '') + '</small></td>' +
+        '<td>' + esc(depuis(e.first_seen)) + '</td>' +
+        '<td>' + (e.resolved_at ? '<span class="badge ok">resolved ' + esc(depuis(e.resolved_at)) + '</span>' : '<span class="badge crit">ongoing</span>') + '</td>' +
+        '<td>' + (e.notified_at ? 'sent' : '-') + '</td></tr>').join('') + '</tbody></table></div>'
+    : '';
+  if (c && !NOTIF.edit) {
+    host.innerHTML = '<div class="dm-now"><i class="dg-dot lv-' + (c.last_error ? 'crit' : c.enabled ? 'ok' : 'warn') + '"></i><div>' +
+      '<b>' + (c.enabled ? 'Alerts sent to ' : 'Alerts paused · ') + esc((c.recipients || []).join(', ')) + '</b>' +
+      '<small>Through ' + esc(c.host) + ':' + esc(c.port) + ' (' + esc(c.security) + ') from ' + esc(c.from_addr) +
+        ' · after ' + esc(c.grace_minutes) + ' min · ' + esc((c.events || []).length) + ' kind(s) of problem</small>' +
+      (c.last_error ? '<small class="lvl-txt-crit">Last send failed: ' + esc(c.last_error) + '</small>'
+        : (c.last_sent_at ? '<small>Last email ' + esc(depuis(c.last_sent_at)) + '</small>' : '')) +
+      '</div></div>' +
+      (admin ? '<div class="actions" style="margin-top:.8rem"><button class="sm primary" id="nt-test">Send a test email</button>' +
+        '<button class="sm" id="nt-edit">Change</button><button class="sm danger" id="nt-del">Remove</button></div>' : '') +
+      '<div id="nt-out"></div>' + historique;
+    const clic = (id, f) => { const el = host.querySelector('#' + id); if (el) el.addEventListener('click', f); };
+    clic('nt-edit', () => { NOTIF.edit = true; renderNotif(); });
+    clic('nt-test', async () => {
+      const out = host.querySelector('#nt-out');
+      out.innerHTML = '<div class="muted">Sending…</div>';
+      try {
+        const r = await api('/notifications/test', { method: 'POST' });
+        out.innerHTML = '<div class="notice ok">Test email sent to ' + esc(r.recipients.join(', ')) + '. Check the inbox (and the spam folder).</div>';
+      } catch (err) { out.innerHTML = noticeErreur(err); }
+      loadNotif();
+    });
+    clic('nt-del', async () => {
+      if (!confirm('Remove the SMTP account? No alert email will be sent any more.')) return;
+      try { await api('/notifications/smtp', { method: 'DELETE' }); await loadNotif(); } catch (err) { toastErreur(err); }
+    });
+    return;
+  }
+  if (!admin) {
+    host.innerHTML = '<div class="muted">No email alerts configured. An Administrator sets them up here.</div>' + historique;
+    return;
+  }
+  const v = c || { port: 587, security: 'starttls', events: ['router', 'site', 'measurement', 'uisp'], grace_minutes: 3, enabled: true, recipients: [] };
+  const champ = (id, label, valeur, attrs) => '<div class="field"><label for="' + id + '">' + label + '</label>' +
+    '<input id="' + id + '" value="' + esc(valeur == null ? '' : valeur) + '" ' + (attrs || '') + '></div>';
+  host.innerHTML = '<p class="hint" style="display:block;margin-top:0">freeQoS emails you when a problem lasts more than a few minutes, then again when it is resolved. ' +
+    'Use the SMTP account of your mail provider (Gmail and Microsoft 365 need an app password).</p>' +
+    '<form class="stack" id="nt-form" autocomplete="off">' +
+    '<div class="row-3">' + champ('nt-host', 'SMTP server', v.host, 'required placeholder="smtp.example.com"') +
+      champ('nt-port', 'Port', v.port, 'type="number" min="1" max="65535" required') +
+      '<div class="field"><label for="nt-sec">Security</label><select id="nt-sec">' +
+        [['starttls', 'STARTTLS (port 587)'], ['ssl', 'SSL/TLS (port 465)'], ['none', 'None (port 25, local relay)']].map(([k, l]) =>
+          '<option value="' + k + '"' + (v.security === k ? ' selected' : '') + '>' + l + '</option>').join('') + '</select></div></div>' +
+    '<div class="row-3">' + champ('nt-user', 'User name', v.username, 'placeholder="alerts@example.com" autocomplete="off"') +
+      champ('nt-pass', 'Password', '', 'type="password" autocomplete="new-password" placeholder="' + (c && c.has_password ? 'saved — leave empty to keep' : 'password or app password') + '"') +
+      champ('nt-from', 'Sender address', v.from_addr, 'required placeholder="freeqos@example.com"') + '</div>' +
+    champ('nt-to', 'Send to (comma-separated)', (v.recipients || []).join(', '), 'required placeholder="noc@example.com, boss@example.com"') +
+    '<div class="field"><label>Email me when</label><div class="nt-events">' +
+      Object.entries(NOTIF_EVENTS).map(([k, l]) => '<label class="chk"><input type="checkbox" value="' + k + '"' +
+        ((v.events || []).includes(k) ? ' checked' : '') + '> ' + esc(l) + '</label>').join('') + '</div></div>' +
+    '<div class="row-3">' + champ('nt-grace', 'Wait before emailing (minutes)', v.grace_minutes, 'type="number" min="0" max="120"') +
+      '<div class="field"><label class="chk" style="margin-top:1.8rem"><input type="checkbox" id="nt-on"' + (v.enabled ? ' checked' : '') + '> Alerts on</label></div></div>' +
+    '<div class="actions">' + (c ? '<button type="button" class="sm" id="nt-cancel">Cancel</button>' : '') +
+      '<span class="spacer"></span><button class="primary" type="submit">Save</button></div><div id="nt-out"></div></form>' + historique;
+  const sec = host.querySelector('#nt-sec');
+  sec.addEventListener('change', () => {
+    const port = host.querySelector('#nt-port');
+    port.value = { starttls: 587, ssl: 465, none: 25 }[sec.value];
+  });
+  const annuler = host.querySelector('#nt-cancel');
+  if (annuler) annuler.addEventListener('click', () => { NOTIF.edit = false; renderNotif(); });
+  host.querySelector('#nt-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const val = (id) => host.querySelector('#' + id).value.trim();
+    const corps = {
+      host: val('nt-host'), port: Number(val('nt-port')), security: sec.value,
+      username: val('nt-user') || null, from_addr: val('nt-from'),
+      recipients: val('nt-to').split(/[,;\s]+/).filter(Boolean),
+      events: [...host.querySelectorAll('.nt-events input:checked')].map((x) => x.value),
+      grace_minutes: Number(val('nt-grace') || 0), enabled: host.querySelector('#nt-on').checked,
+    };
+    const mdp = host.querySelector('#nt-pass').value;
+    if (mdp) corps.password = mdp;
+    try {
+      await api('/notifications/smtp', { method: 'PUT', body: JSON.stringify(corps) });
+      NOTIF.edit = false;
+      await loadNotif();
+    } catch (err) { host.querySelector('#nt-out').innerHTML = noticeErreur(err); }
+  });
+}
+
 async function loadDomain(force) {
   const host = document.getElementById('settings-domain');
   if (!host) return;
@@ -10012,6 +10242,7 @@ function renderDomain() {
 async function loadSettings() {
   renderAccounts();
   loadDomain();
+  loadNotif();
   const body = await api('/settings');
   const host = document.getElementById('settings-groups');
   const compte = document.getElementById('settings-count');
