@@ -5775,6 +5775,9 @@ async function loadRouters() {
               ? ' disabled title="Read-only router: allow writing on it first"'
               : ' title="Delete every freeQoS queue of this router, then lay them down again"') +
             '>Reset queues</button>' +
+          '<button class="sm danger" data-uninstall="' + esc(r.name) + '" title="Remove every queue, ' +
+            'CAKE type and rule freeQoS set on this router, and stop writing on it: the router is left as before freeQoS">' +
+            'Remove freeQoS</button>' +
           (r.editable
             ? '<button class="sm" data-probe="' + r.id + '">Test</button>' +
               '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button>' +
@@ -5799,6 +5802,8 @@ async function loadRouters() {
     }));
   host.querySelectorAll('[data-clean-queues]').forEach((b) =>
     b.addEventListener('click', () => cleanRouterQueues(b.dataset.cleanQueues, b)));
+  host.querySelectorAll('[data-uninstall]').forEach((b) =>
+    b.addEventListener('click', () => retirerFreeqos(b.dataset.uninstall)));
   host.querySelectorAll('[data-probe]').forEach((b) =>
     b.addEventListener('click', () => probeRouter(b.dataset.probe, b)));
   host.querySelectorAll('[data-del]').forEach((b) =>
@@ -5911,6 +5916,57 @@ async function toggleRouterWrite(name, active, input) {
 
 /** Supprime toutes les files freeQoS d'un routeur puis les repose : repartir
  *  sur de bonnes bases. Les files posees a la main ne sont jamais touchees. */
+/** LE ROUTEUR COMME AVANT FREEQOS : l'ecriture coupee d'abord (rien ne sera
+ *  repose), puis tout ce qui porte la marque freeQoS retire. */
+function retirerFreeqos(name) {
+  const modale = openModal('<div class="modal-head"><div><h3>Remove freeQoS from ' + esc(name) + '</h3>' +
+    '<div class="sub">Leave the router as it was before freeQoS</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body">' +
+      '<p style="margin-top:0">freeQoS will:</p>' +
+      '<ol style="margin:.2rem 0 .8rem 1.1rem;padding:0;line-height:1.6">' +
+        '<li><b>stop writing</b> on this router (read-only), so nothing is put back;</li>' +
+        '<li><b>remove</b> every subscriber queue, CAKE queue type and restriction rule ' +
+          '(firewall, mangle, queue tree, address lists) it created.</li>' +
+      '</ol>' +
+      '<p class="hint" style="display:block">Only what carries the freeQoS mark is removed: queues made by hand, ' +
+        'by RADIUS or by another tool stay. Clients are no longer shaped by freeQoS on this router. ' +
+        'Modes, plans and rules stay saved in freeQoS: allowing writing again puts everything back.</p>' +
+      '<label class="pick-item" style="margin:.6rem 0"><input type="checkbox" id="uninst-netflow"> ' +
+        '<span>Also remove the NetFlow export target <span class="hint">(the Traffic page will no longer see this router)</span></span></label>' +
+      '<div id="uninst-out"></div>' +
+      '<div class="actions" style="margin-top:.8rem">' +
+        '<button class="danger" id="uninst-go">Remove freeQoS from ' + esc(name) + '</button>' +
+        '<button data-modal-close>Cancel</button></div>' +
+    '</div>');
+  const sortie = modale.root.querySelector('#uninst-out');
+  const go = modale.root.querySelector('#uninst-go');
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    sortie.innerHTML = '<div class="muted">Removing… this can take a minute on a large router.</div>';
+    try {
+      const r = await api('/pops/routers/uninstall/' + encodeURIComponent(name), {
+        method: 'POST',
+        body: JSON.stringify({ confirm: true, stop_netflow: modale.root.querySelector('#uninst-netflow').checked }),
+      });
+      const parType = Object.entries(r.by_kind || {}).map(([k, v]) => v + ' ' + k).join(', ');
+      const errs = (r.errors || []).concat(((r.netflow || {}).errors) || [],
+        (r.netflow && r.netflow.error) ? [r.netflow.error] : []);
+      sortie.innerHTML = '<div class="notice ' + (errs.length ? 'warn' : 'ok') + '"><b>' + esc(name) +
+        ' is read-only for freeQoS now.</b> ' +
+        (r.found ? r.removed + ' of ' + r.found + ' freeQoS line(s) removed' + (parType ? ' (' + esc(parType) + ')' : '') + '.'
+          : 'Nothing of freeQoS was left on it.') +
+        (r.netflow ? ' NetFlow target(s) removed: ' + esc(r.netflow.removed || 0) + '.' : '') +
+        (errs.length ? '<br>' + errs.slice(0, 8).map(esc).join('<br>') : '') + '</div>';
+      go.textContent = 'Done';
+      await loadRouters().catch(() => {});
+    } catch (err) {
+      sortie.innerHTML = noticeErreur(err);
+      go.disabled = false;
+    }
+  });
+}
+
 async function cleanRouterQueues(name, bouton) {
   if (!confirm('Delete ALL freeQoS queues on ' + name + ' and rebuild them from scratch?\n\n' +
     'Every client of this router (its sites and VLANs included) goes back to Automatic: modes, boosts and forced limits are removed, each client is back on its plan.\n' +

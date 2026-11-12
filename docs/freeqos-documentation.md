@@ -693,6 +693,18 @@ A link's throughput comes from the counters of the **port** that carries it, wit
 
 *Devices › Reset queues* deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to **Automatic**: its mode, boost and forced limit are removed, it is back on its plan, and its *Activity* says so (`queues reset on <router>`). A bandwidth schedule that targets the client applies again at its next window.
 
+### Remove freeQoS: the router as it was before
+
+*Devices › Remove freeQoS* leaves a router as it was before freeQoS, in one gesture (Administrator, confirmed in a window):
+
+1. **writing is turned off** on that router first (it becomes *read-only*), so no reconciliation, restriction pass or setup puts anything back;
+2. **everything carrying the freeQoS mark is removed**: subscriber queues (children before parents), the `freeqos-cake-up` / `freeqos-cake-down` queue types, and the restriction lines (firewall filter, mangle, queue tree, address lists);
+3. optionally, the **NetFlow export target** freeQoS added (unticked by default: the Traffic page keeps seeing the router).
+
+Only lines with the `freeqos:managed` mark of this instance go: queues made by hand, by RADIUS (`<pppoe-...>`) or by another tool stay, and so do FastTrack and every other rule. Each removal is independent: one that fails does not stop the others, and the result lists what failed. Modes, plans and rules stay saved in freeQoS: allowing writing again (and *Set up*) puts everything back. API: `POST /api/v1/pops/routers/uninstall/{name}` with `{"confirm": true, "stop_netflow": false}`.
+
+Removing is the safe direction, so it is the one exception to the read-only switch: a plan made **only of removals** is sent to a read-only router; anything that adds or changes a line is still refused.
+
 A client whose usage stays well **over** its limit (25 % and more) is shown **Over its limit**, not "at its limit": the router is not holding that limit (queue missing, removed by hand on the router, or bypassed by FastTrack). *Reset queues* lays it down again.
 
 ### When the queue does not see the traffic
@@ -1156,7 +1168,7 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 | Safeguard | Effect |
 | --- | --- |
 | **Simulation by default** | `ENFORCEMENT_ENABLED=false` at startup. Plans are computed and displayed, nothing is written. Writing is enabled in the interface, after reading the plan. If the variable is `false` in the environment, enabling is locked. |
-| **Read-only router** | A router whose *writing allowed* switch is off in *Devices* receives **nothing**, whatever the global switch says and even for a gesture made by hand (rate entered, *Reset queues*). Its plan is still computed and shown. A router added from the interface starts read-only. |
+| **Read-only router** | A router whose *writing allowed* switch is off in *Devices* receives **nothing**, whatever the global switch says and even for a gesture made by hand (rate entered, *Reset queues*) — except the removals of *Remove freeQoS*. Its plan is still computed and shown. A router added from the interface starts read-only. |
 | **Ownership** | Only objects marked by **this** instance are modified or deleted. A queue from another instance or created by hand is never touched, nor set to 0/0. |
 | **Transit links** | No parent queue on a routing link, towards a managed router, towards the gateway or the core, or on the uplink. The reason is shown (`skip_reason`). |
 | **Duplicate targets** | Two queues that would target the same address: neither is written and a planning error is reported. |
