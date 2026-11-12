@@ -160,6 +160,15 @@ REGLAGES: tuple[Reglage, ...] = (
         "throttled; the others are observed, never capped at a rate nobody sold.",
     ),
     Reglage(
+        "shaping_link_queues",
+        "shaping",
+        "bool",
+        "Also put a queue on LINKS (backhauls, sectors), capped at their capacity. Off "
+        "(default): freeQoS only caps each client's own addresses and never a link -- a "
+        "queue on a link caps everything crossing it, point-to-point and transit traffic "
+        "included.",
+    ),
+    Reglage(
         "shaping_prune",
         "shaping",
         "bool",

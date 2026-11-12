@@ -1092,6 +1092,14 @@ The service catalogue is no longer offered when writing a rule. Existing rules t
 
 This is the only part of freeQoS that writes to the routers. It always follows the same path: **compute a plan, show it, apply it**, with several safeguards in between.
 
+### What freeQoS caps, and what it never caps
+
+**By default, freeQoS only caps each client's own addresses**: one queue per client, whose target is the client's address (PPPoE session) or its declared block (static IP), at the rate of its plan or mode. Nothing else on the router is limited: no link, no interface, no point-to-point or transit traffic.
+
+**Link queues are off by default** (`shaping_link_queues`, *Settings › Shaping*, environment `SHAPING_LINK_QUEUES=false`). When turned on, each discovered link (backhaul, sector) gets a parent queue capped at its capacity, and its clients hang under it. That is what makes radio bufferbloat disappear, but a link queue caps **everything** that crosses the link: put on the segment of a point-to-point link, it slowed down the whole link, transit included, and clients complained. Turn it on only once the links that are true client bottlenecks are known, and check the plan (*Devices › Set up* shows it) before allowing writes. With link queues off, each link appears in the plan as skipped: *link queues are off*.
+
+If a router already carries queues it should not: *Devices › Remove freeQoS* (below) removes everything freeQoS set on it and stops writing there.
+
 ### How shaping works
 
 **The queue always forms at the bottleneck.** When a device receives faster than it can transmit, it stores the excess in a queue. That queue appears at the slowest point of the path: often a sector's radio or the subscriber's CPE. Their buffers are large and sort nothing: a video call waits there behind a download. This is the bufferbloat of section 5.

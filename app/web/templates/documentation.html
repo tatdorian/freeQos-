@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="1950b4f55538af06">
+  <meta name="freeqos-docs-source" content="7acfe1726b3097d0">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -69,6 +69,7 @@
     <a class="sub" href="#what-the-traffic-page-shows">What the Traffic page shows</a>
     <a class="sub" href="#traffic-restrictions">Traffic restrictions</a>
     <a href="#7-plans-and-shaping">7. Plans and shaping</a>
+    <a class="sub" href="#what-freeqos-caps-and-what-it-never-caps">What freeQoS caps, and what it never caps</a>
     <a class="sub" href="#how-shaping-works">How shaping works</a>
     <a class="sub" href="#what-cake-does">What CAKE does</a>
     <a class="sub" href="#how-queues-nest">How queues nest</a>
@@ -2397,6 +2398,10 @@ curl -s http://127.0.0.1:8000/health/ready
 <p><strong>Writing.</strong> Saving an enabled rule, editing it or re-enabling it installs it on the routers <strong>immediately</strong> (still subject to the write switch, the circuit breaker and the audit). <strong>Suspending a rule lifts it</strong> at once; <strong>deleting</strong> it lifts it too. A rule without any target (no address, domain name, service or category) is refused: it would target the whole internet, and on an internet edge would cut the network. The <em>Last applied</em> column is what distinguishes a rule <strong>saved</strong> from a rule <strong>installed</strong>. <code>POST /api/v1/traffic-rules/apply</code> reinstalls everything (dry run by default).</p>
 <h2 id="7-plans-and-shaping">7. Plans and shaping</h2>
 <p>This is the only part of freeQoS that writes to the routers. It always follows the same path: <strong>compute a plan, show it, apply it</strong>, with several safeguards in between.</p>
+<h3 id="what-freeqos-caps-and-what-it-never-caps">What freeQoS caps, and what it never caps</h3>
+<p><strong>By default, freeQoS only caps each client's own addresses</strong>: one queue per client, whose target is the client's address (PPPoE session) or its declared block (static IP), at the rate of its plan or mode. Nothing else on the router is limited: no link, no interface, no point-to-point or transit traffic.</p>
+<p><strong>Link queues are off by default</strong> (<code>shaping_link_queues</code>, <em>Settings › Shaping</em>, environment <code>SHAPING_LINK_QUEUES=false</code>). When turned on, each discovered link (backhaul, sector) gets a parent queue capped at its capacity, and its clients hang under it. That is what makes radio bufferbloat disappear, but a link queue caps <strong>everything</strong> that crosses the link: put on the segment of a point-to-point link, it slowed down the whole link, transit included, and clients complained. Turn it on only once the links that are true client bottlenecks are known, and check the plan (<em>Devices › Set up</em> shows it) before allowing writes. With link queues off, each link appears in the plan as skipped: <em>link queues are off</em>.</p>
+<p>If a router already carries queues it should not: <em>Devices › Remove freeQoS</em> (below) removes everything freeQoS set on it and stops writing there.</p>
 <h3 id="how-shaping-works">How shaping works</h3>
 <p><strong>The queue always forms at the bottleneck.</strong> When a device receives faster than it can transmit, it stores the excess in a queue. That queue appears at the slowest point of the path: often a sector's radio or the subscriber's CPE. Their buffers are large and sort nothing: a video call waits there behind a download. This is the bufferbloat of section 5.</p>
 <p><strong>The idea of shaping.</strong> Traffic is deliberately limited <strong>slightly below</strong> the bottleneck capacity, at a place we control: the PoP router. The PoP then becomes the slowest point. The queue forms there, in a CAKE queue that keeps it short and shares it fairly. The radio's buffer stays empty. About 10% of throughput is given up (<code>SHAPING_SAFETY_FACTOR=0.90</code>), and latency stays low even when the sector is full.</p>
