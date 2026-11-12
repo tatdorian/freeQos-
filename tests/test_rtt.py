@@ -326,13 +326,13 @@ async def test_routeur_qui_refuse_vrf_essaie_routing_table() -> None:
 
 
 async def test_un_bloc_public_route_dans_une_vrf_y_est_pingue() -> None:
-    """Constate : Nestle (154.66.223.217) est route en STATIQUE vers son
+    """Constate : Acme (203.0.113.217) est route en STATIQUE vers son
     routeur dans la VRF, pas connecte -- le ping partait par main (TTL 60)."""
     client = FakeRouterOsClient()
     client.route_rows = [
         *ROUTES_VRF,
         {
-            "dst-address": "154.66.223.216/29",
+            "dst-address": "203.0.113.216/29",
             "routing-table": "CUST-INET",
             "gateway": "10.60.0.2",
             "static": "true",
@@ -340,7 +340,7 @@ async def test_un_bloc_public_route_dans_une_vrf_y_est_pingue() -> None:
         },
     ]
     collecteur = make_collector(client)
-    await collecteur.ping_stats("154.66.223.217", 5, interval_ms=200)
+    await collecteur.ping_stats("203.0.113.217", 5, interval_ms=200)
     assert client.ping_tables[-1] == ("CUST-INET", "vrf")
 
 
@@ -384,7 +384,7 @@ async def test_un_routeur_qui_refuse_dscp_sonde_sans_marquage() -> None:
 
 
 async def test_a_egalite_une_route_main_vers_le_coeur_est_un_detour(monkeypatch) -> None:  # type: ignore[no-untyped-def]
-    """Le bloc public de Nestle a AUSSI une route dans main, meme longueur,
+    """Le bloc public de Acme a AUSSI une route dans main, meme longueur,
     vers la passerelle amont (le reste du reseau doit le joindre) : c'est un
     detour, le client vit dans la VRF."""
     import app.collectors.mikrotik as mk
@@ -392,12 +392,12 @@ async def test_a_egalite_une_route_main_vers_le_coeur_est_un_detour(monkeypatch)
     monkeypatch.setattr(mk, "_AMONTS", {"pop": ("100.100.101.113", "ether1")})
     client = FakeRouterOsClient()
     client.route_rows = [
-        {"dst-address": "154.66.223.216/29", "routing-table": "main", "gateway": "100.100.101.113"},
-        {"dst-address": "154.66.223.216/29", "routing-table": "CUST-INET", "gateway": "10.60.0.2"},
+        {"dst-address": "203.0.113.216/29", "routing-table": "main", "gateway": "100.100.101.113"},
+        {"dst-address": "203.0.113.216/29", "routing-table": "CUST-INET", "gateway": "10.60.0.2"},
     ]
     collecteur = make_collector(client, name="pop")
-    assert await collecteur.client_routing_table("154.66.223.217") == "CUST-INET"
-    candidats = await collecteur.client_route_candidates("154.66.223.217")
+    assert await collecteur.client_routing_table("203.0.113.217") == "CUST-INET"
+    candidats = await collecteur.client_route_candidates("203.0.113.217")
     assert {c["table"] for c in candidats} == {"main", "CUST-INET"}
 
 
@@ -405,19 +405,19 @@ async def test_a_egalite_la_route_connectee_l_emporte() -> None:
     client = FakeRouterOsClient()
     client.route_rows = [
         {
-            "dst-address": "154.66.223.216/29",
+            "dst-address": "203.0.113.216/29",
             "routing-table": "CUST-INET",
             "gateway": "10.255.255.1",
         },
         {
-            "dst-address": "154.66.223.216/29",
+            "dst-address": "203.0.113.216/29",
             "routing-table": "CUST-INET-2",
             "gateway": "vlan2060@CUST-INET-2",
             "connect": "true",
         },
     ]
     collecteur = make_collector(client)
-    assert await collecteur.client_routing_table("154.66.223.217") == "CUST-INET-2"
+    assert await collecteur.client_routing_table("203.0.113.217") == "CUST-INET-2"
 
 
 async def test_un_client_qui_n_a_jamais_repondu_est_signale_comme_tel() -> None:

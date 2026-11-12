@@ -684,8 +684,8 @@ def test_un_lien_sur_interface_ne_porte_pas_les_abonnes() -> None:
     s'il correspond aussi au parent ; une file d'interface ne voit que le
     descendant. L'upload du client ne traversait donc jamais sa file : ni
     plafonne (896 kbps pour 100 vendus), ni compte (0 bps affiche)."""
-    vlan = lien("2060-Nestle-Siege", interface="vlan2060-nestle-siege", subnet=None)
-    client = abonne("nestle", down=0.1, up=0.1, parent=vlan.queue_name, address="11.11.11.2")
+    vlan = lien("2060-Acme-Siege", interface="vlan2060-acme-siege", subnet=None)
+    client = abonne("acme", down=0.1, up=0.1, parent=vlan.queue_name, address="11.11.11.2")
 
     _, files, _ = desired_state(links=[vlan], subscribers=[client])
 

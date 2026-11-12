@@ -52,9 +52,9 @@ def test_un_drop_pose_trop_bas_est_remonte() -> None:
 def test_pour_un_client_seul_sur_sa_vlan_tout_son_reseau_est_vise() -> None:
     mikrotik._RESEAUX_CONNECTES.clear()
     mikrotik._RESEAUX_CONNECTES["nas"] = [
-        (ipaddress.ip_network("100.100.105.240/30"), "vlan2060-nestle-siege")
+        (ipaddress.ip_network("100.100.105.240/30"), "vlan2060-acme-siege")
     ]
-    shaping = SimpleNamespace(sole_vlan_interfaces={"nestle": "vlan2060-nestle-siege"})
-    assert vlan_networks_for(shaping, ["nestle"]) == ["100.100.105.240/30"]
+    shaping = SimpleNamespace(sole_vlan_interfaces={"acme": "vlan2060-acme-siege"})
+    assert vlan_networks_for(shaping, ["acme"]) == ["100.100.105.240/30"]
     assert vlan_networks_for(shaping, ["autre"]) == []
     mikrotik._RESEAUX_CONNECTES.clear()

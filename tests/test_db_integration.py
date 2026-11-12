@@ -1059,16 +1059,16 @@ async def test_debit_filtre_par_client_ou_par_sites(database: Database, now: dat
 
 
 async def _client_au_plafond(database: Database, now: datetime) -> MetricsRepository:
-    """Nestle a 100 % de sa limite la moitie du temps : 150 ms au plafond, 8 au repos."""
+    """Acme a 100 % de sa limite la moitie du temps : 150 ms au plafond, 8 au repos."""
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
     repo = MetricsRepository(database.pool)
     pop = await directory.ensure_pop("VLAN 2060")
-    nestle = await directory.ensure_subscriber("nestle", pop_id=pop)
+    acme = await directory.ensure_subscriber("acme", pop_id=pop)
     async with database.pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO shaping_policies (scope, target_key, max_down_mbps, max_up_mbps) "
-            "VALUES ('subscriber', 'nestle', 0.3, 0.75)"
+            "VALUES ('subscriber', 'acme', 0.3, 0.75)"
         )
     lignes = []
     for i in range(6):
@@ -1076,10 +1076,10 @@ async def _client_au_plafond(database: Database, now: datetime) -> MetricsReposi
         plein = i < 3  # trois mesures au plafond (300k/750k), trois au repos
         lignes.append(
             (
-                nestle,
+                acme,
                 SubscriberSample(
                     ts=ts,
-                    login="nestle",
+                    login="acme",
                     router_name="r",
                     pop_name="p",
                     tx_bps=300e3 if plein else 1e3,
@@ -2154,20 +2154,20 @@ async def test_la_sante_d_un_site_se_mesure_sur_ses_limites_appliquees(
     repo = MetricsRepository(database.pool)
     vlan = await directory.ensure_pop("VLAN 2060")
     altair = await directory.ensure_pop("PoP Altair")
-    nestle = await directory.ensure_subscriber("nestle", pop_id=vlan)
+    acme = await directory.ensure_subscriber("acme", pop_id=vlan)
     gros = await directory.ensure_subscriber("gros", pop_id=altair, plan=Plan(100, 100, "mock"))
     async with database.pool.acquire() as conn:
         await conn.execute(
             "INSERT INTO shaping_policies (scope, target_key, max_down_mbps, max_up_mbps) "
-            "VALUES ('subscriber', 'nestle', 0.1, 0.1)"
+            "VALUES ('subscriber', 'acme', 0.1, 0.1)"
         )
     await writer.write_subscriber_metrics(
         [
             (
-                nestle,
+                acme,
                 SubscriberSample(
                     ts=now,
-                    login="nestle",
+                    login="acme",
                     router_name="r",
                     pop_name="p",
                     tx_bps=96e3,
@@ -2199,7 +2199,7 @@ async def test_la_sante_d_un_site_se_mesure_sur_ses_limites_appliquees(
     # Tout le reseau : 96 kbps sur 100.1 Mbps de limites -- presque rien.
     assert derniere_charge(await repo.heatmap(minutes=15, buckets=15)) < 1
     # Un routeur ET la VLAN qu'il porte : la charge est celle de son client le
-    # PLUS charge (96 % pour nestle), pas 96 kbps noyes dans 100.1 Mbps.
+    # PLUS charge (96 % pour acme), pas 96 kbps noyes dans 100.1 Mbps.
     routeur = await repo.heatmap(minutes=15, buckets=15, pop_names=["PoP Altair", "VLAN 2060"])
     assert derniere_charge(routeur) == pytest.approx(96.0, abs=1)
 
@@ -3872,9 +3872,7 @@ async def test_un_client_passe_sous_son_vlan_perd_son_ancien_rattachement(
     async with database.pool.acquire() as conn:
         await conn.execute("TRUNCATE topology_links, topology_nodes CASCADE")
     repo = TopologyRepository(database.pool)
-    client = StaticClient(
-        reference="nestle", pop_name="PoP Test", address="10.60.0.2/32", vlan=2060
-    )
+    client = StaticClient(reference="acme", pop_name="PoP Test", address="10.60.0.2/32", vlan=2060)
 
     def base() -> TopologySnapshot:
         snap = TopologySnapshot()
@@ -3901,12 +3899,12 @@ async def test_un_client_passe_sous_son_vlan_perd_son_ancien_rattachement(
         apres,
         [client],
         pop_keys={"PoP Test": "router:pop-test"},
-        vlan_sites={"nestle": ("pop-test", "vlan2060", 2060)},
+        vlan_sites={"acme": ("pop-test", "vlan2060", 2060)},
     )
     await repo.save_snapshot(apres)
 
     liens = await repo.links()
-    parents = [lk["source_key"] for lk in liens if lk["target_key"] == "static:nestle"]
+    parents = [lk["source_key"] for lk in liens if lk["target_key"] == "static:acme"]
     assert parents == ["vlan:pop-test:2060"]
     vlan = next(lk for lk in liens if lk["target_key"] == "vlan:pop-test:2060")
     assert vlan["interface"] == "vlan2060" and vlan["discovered_by"] == "pop-test"

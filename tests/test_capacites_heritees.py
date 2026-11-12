@@ -20,9 +20,9 @@ def test_un_bridge_vaut_son_port_le_plus_rapide_et_ses_vlan_aussi() -> None:
         {"bridge": "lan-bridge", "interface": "ether6"},
         {"bridge": "lan-bridge", "interface": "ether7"},
     ]
-    vlans = [{"name": "vlan2060-nestle-siege", "interface": "lan-bridge"}]
+    vlans = [{"name": "vlan2060-acme-siege", "interface": "lan-bridge"}]
     herite = inherited_capacities(capacites, vlans, ports)
-    assert herite == {"lan-bridge": 1000.0, "vlan2060-nestle-siege": 1000.0}
+    assert herite == {"lan-bridge": 1000.0, "vlan2060-acme-siege": 1000.0}
 
 
 def test_rien_d_invente_sans_port_connu() -> None:
