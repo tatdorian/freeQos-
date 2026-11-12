@@ -31,6 +31,7 @@ from app.config import Settings
 from app.db.activity_repo import ActivityRepository
 from app.db.antennas_repo import AntennasRepository
 from app.db.api_keys_repo import ApiKeysRepository
+from app.db.client_profiles_repo import ClientProfilesRepository
 from app.db.database import Database
 from app.db.destinations_repo import DestinationsRepository
 from app.db.directory import Directory, PgDirectory
@@ -206,6 +207,7 @@ class Container:
     client_locations_repo: SiteLocationsRepository | None = None
     uisp_repo: UispRepository | None = None
     public_access_repo: PublicAccessRepository | None = None
+    client_profiles_repo: ClientProfilesRepository | None = None
     activity_repo: ActivityRepository | None = None
     netflow: NetflowService | None = None
     netflow_export: NetflowExportService | None = None
@@ -358,6 +360,7 @@ async def build_container(settings: Settings) -> Container:
     # Le controleur UISP saisi dans l'interface (jeton chiffre).
     uisp_repo = UispRepository(database.pool, secrets)
     public_access_repo = PublicAccessRepository(database.pool)
+    client_profiles_repo = ClientProfilesRepository(database.pool)
     # Provider des antennes ajoutees depuis l'interface : il relit sa liste dans
     # la base a chaque cycle, donc un ajout est collecte sans redemarrage.
     #
@@ -721,6 +724,7 @@ async def build_container(settings: Settings) -> Container:
         client_locations_repo=client_locations_repo,
         uisp_repo=uisp_repo,
         public_access_repo=public_access_repo,
+        client_profiles_repo=client_profiles_repo,
         activity_repo=activity_repo,
         netflow=netflow,
         netflow_export=netflow_export,

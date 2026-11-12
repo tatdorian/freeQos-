@@ -35,6 +35,14 @@ async def _cpe_mac(repo: Any, container: Any, sid: int, login: str) -> str | Non
     pool = getattr(repo, "_pool", None)
     if pool is not None:
         async with pool.acquire() as conn:
+            # La MAC saisie sur la fiche passe avant celle qu'on a deduite :
+            # c'est la correction d'un humain qui a vu le CPE.
+            if await conn.fetchval("SELECT to_regclass('client_profiles')") is not None:
+                mac = await conn.fetchval(
+                    "SELECT cpe_mac FROM client_profiles WHERE login = $1", login
+                )
+                if mac:
+                    return str(mac)
             mac = await conn.fetchval(
                 "SELECT cpe_mac FROM subscriber_attachments WHERE subscriber_id = $1", sid
             )

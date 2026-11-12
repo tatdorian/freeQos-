@@ -1160,6 +1160,23 @@ An **Administrator** gives a position (*Position* / *Place it*) in three ways: *
 
 **PDF report.** *Alerts › PDF report* (all sites, or the site chosen in the list) and *Map › a site › PDF report* (audit of one site) download a PDF made in the browser (no server, no internet needed): the counts, every alert with its code and what to check, the sites, the offline clients with their IP and last contact, for a site all its clients, and the list of codes.
 
+### Editing a client, and adding one by hand
+
+Discovery and hand entry live side by side; neither erases the other.
+
+- **What discovery gives** (PPPoE sessions, the static inventory): login, IP address, site, session, traffic. It is refreshed at every cycle and is not edited by hand for a PPPoE client: the next session would rewrite it.
+- **What only a person knows**, entered with **Edit client** on the client's page (Operator and above): name, phone, email, address, CPE MAC, note. It is kept in its own table (`client_profiles`) and never touched by discovery. The CPE MAC entered here takes precedence for the radio diagnosis, when the PPPoE caller-id does not give one.
+- **A static-IP client** also has its network part editable there by an Administrator: IP or subnet, VLAN, site.
+
+The client's page shows its **IP address** in the header (click to copy) and its details in *Client details*. The list shows the name when one is set, with the login and the IP below it; the search finds a client by its name too.
+
+**Add a client** (Clients, **+** button, Administrator) offers two ways:
+
+- **PPPoE login**: declare a client before it connects: login, site, optionally a name, a plan and the CPE MAC. It shows as *never seen* until its first session; discovery then joins it **by its login** and the details entered are kept.
+- **Fixed IP / VLAN**: a client without a session, measured on its address (as before).
+
+Every change is written to the client's *Activity*. API: `GET /api/v1/clients/{login}/profile` (discovered facts and details), `PUT /api/v1/clients/{login}/profile`, `POST /api/v1/clients` (`{"login", "pop_name", "display_name", "cpe_mac", ...}`), `GET /api/v1/client-profiles`.
+
 ### Ubiquiti UISP (antennas)
 
 *Devices › Ubiquiti UISP* connects the **UISP controller** (formerly UNMS), which knows every airMAX / airFiber / LTU antenna of the network. An **Administrator** gives its address (`https://uisp.example.net`) and an **API token** with read access (UISP › Settings › Users › API tokens), then *Test the connection* and *Save*. The token is stored **encrypted** (same vault as router passwords) and never comes back through the API. Unticking *Verify the certificate* accepts a self-signed UISP.
