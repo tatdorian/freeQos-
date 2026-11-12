@@ -651,6 +651,12 @@ A link's throughput comes from the counters of the **port** that carries it, wit
 
 **Two time scales.** History comes from collection (every 10 s). For "how much is going through *now*", the live measure calls `/interface/monitor-traffic` on the router, a read-only command; if it fails (version, rights, virtual port), the last collected value is returned with the reason.
 
+### Reset queues: every client back to Automatic
+
+*Devices › Reset queues* deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to **Automatic**: its mode, boost and forced limit are removed, it is back on its plan, and its *Activity* says so (`queues reset on <router>`). A bandwidth schedule that targets the client applies again at its next window.
+
+A client whose usage stays well **over** its limit (25 % and more) is shown **Over its limit**, not "at its limit": the router is not holding that limit (queue missing, removed by hand on the router, or bypassed by FastTrack). *Reset queues* lays it down again.
+
 ### When the queue does not see the traffic
 
 A client's throughput is read, in this order, from **its queue** (what passed, after the cap, both ways), from **its interface** (the PPPoE interface, or the VLAN when it is alone on it), and from **NetFlow**. Both router counters are read at every cycle and compared:
