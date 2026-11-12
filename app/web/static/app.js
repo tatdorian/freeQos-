@@ -3170,6 +3170,51 @@ function flowNotice(html) {
  *  un ecran vide les confond toutes. Nommer le fait ne suffit pas : "configurez
  *  l'export ci-dessous" laisse chercher OU et COMMENT. Chaque cas porte donc
  *  son bouton, qui mene exactement au geste suivant. */
+/** POURQUOI AUCUN ROUTEUR N'EXPORTE, routeur par routeur, et quoi faire.
+ *  « Pose au prochain passage » ne suffisait pas : un routeur en lecture seule
+ *  ou l'ecriture coupee ne le pose JAMAIS, et rien ne le disait. */
+function exportPourquoi(etat, exportEtat, routeurs) {
+  const admin = peut('edit');
+  const port = String(etat.bind).split(':').pop();
+  const globalCoupe = exportEtat && exportEtat.enforcement_enabled === false;
+  const autoCoupe = exportEtat && exportEtat.auto === false;
+  const raison = (r) => {
+    if (globalCoupe) return 'writing to the routers is off (Settings): freeQoS writes nothing on any router';
+    if (r.write_enabled === false) return 'read-only in Devices: freeQoS will not write on it';
+    if (!r.collector) return 'freeQoS does not know which of its addresses this router can reach: set NETFLOW_COLLECTOR_ADDRESS in .env';
+    if (autoCoupe) return 'automatic export is turned off: set it up with the button below';
+    return r.reason || 'not set up yet: the export pass runs every 10 minutes';
+  };
+  const commandes = (r) => '/ip traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m inactive-flow-timeout=15s\n' +
+    '/ip traffic-flow target add dst-address=' + (r.collector || '<freeQoS address>') + ' port=' + port + ' version=9';
+  const possible = !globalCoupe && routeurs.some((r) => r.write_enabled !== false && r.collector);
+  return '<div class="notice warn nf-why"><b>No datagram received on ' + esc(etat.bind) + ': no router exports to freeQoS yet.</b>' +
+    '<ul>' + routeurs.map((r) => '<li><b>' + esc(r.router) + '</b> — ' + esc(raison(r)) + '</li>').join('') + '</ul>' +
+    '<div class="actions">' +
+      (admin && possible ? '<button type="button" class="sm primary" data-nf-apply>Set up the export now</button>' : '') +
+      (admin && (globalCoupe || routeurs.some((r) => r.write_enabled === false))
+        ? '<a class="sm" href="' + (globalCoupe ? '#/settings' : '#/pops') + '">' + (globalCoupe ? 'Turn writing on in Settings' : 'Allow writing in Devices') + '</a>' : '') +
+    '</div>' +
+    '<details><summary>Or paste it on the routers yourself (they can stay read-only)</summary>' +
+      routeurs.map((r) => '<p style="margin:.5rem 0 .2rem"><b>' + esc(r.router) + '</b></p><pre class="nf-cmd">' + esc(commandes(r)) + '</pre>').join('') +
+      '<span class="hint">Then UDP ' + esc(port) + ' must reach this server from the routers (provider firewall, router output chain).</span>' +
+    '</details><div class="nf-out"></div></div>';
+}
+
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest && e.target.closest('[data-nf-apply]');
+  if (!b) return;
+  const out = b.closest('.nf-why') && b.closest('.nf-why').querySelector('.nf-out');
+  b.disabled = true;
+  try {
+    const r = await api('/netflow/export/apply?dry_run=false', { method: 'POST' });
+    const lignes = (r.routers || []).map((x) => '<li><b>' + esc(x.router) + '</b> — ' + esc(x.state === 'set' || x.state === 'pose' ? 'export set' : (x.reason || x.state || '')) + '</li>').join('');
+    if (out) out.innerHTML = '<div class="notice ok"><b>Export written.</b> Flows arrive within a minute or two.' + (lignes ? '<ul>' + lignes + '</ul>' : '') + '</div>';
+  } catch (err) {
+    if (out) out.innerHTML = noticeErreur(err); else toastErreur(err);
+  } finally { b.disabled = false; }
+});
+
 function flowDiagnostic(etat, exportEtat) {
   if (!etat.enabled) {
     return '<div class="notice err"><b>NetFlow collector off.</b> ' +
@@ -3187,12 +3232,7 @@ function flowDiagnostic(etat, exportEtat) {
         esc(etat.bind) + '.</b> No router is declared: nothing can ' +
         'export. <a href="#/pops">Devices tab</a></div>';
     }
-    if (!poses) {
-      return '<div class="notice warn"><b>No datagram received on ' +
-        esc(etat.bind) + '.</b> ' + esc(routeurs.length) +
-        ' router(s) declared, none exports yet. The export is set up ' +
-        'automatically on each router at the next pass.</div>';
-    }
+    if (!poses) return exportPourquoi(etat, exportEtat, routeurs);
     // POSE MAIS MUET : le routeur envoie, et rien n'arrive. Le coupable le plus
     // frequent n'est pas le routeur, c'est le chemin -- port UDP non publie par
     // Docker, pare-feu, ou adresse annoncee injoignable depuis le PoP.
@@ -3281,8 +3321,9 @@ function renderVantages(data, top, exporteurs) {
     ? '<div class="notice ok"><b>Traffic measured ' + ou +
       (qui.length ? ' (' + esc(qui.slice(0, 3).join(', ')) + ')' : '') + '.</b> ' +
       'Each client is counted once per direction, whatever the number of routers its traffic crosses.</div>'
-    : '<div class="notice warn"><b>No router sends traffic flows yet.</b> The export is set up ' +
-      'automatically on the routers added in Devices; it shows here within a few minutes.</div>') +
+    // Rien n'arrive : le bandeau du dessus dit deja pourquoi, routeur par
+    // routeur. Le redire ici en moins precis n'apportait rien.
+    : '') +
     sensManquant(point('edge'), compte);
   if (detail) {
     const etat = (v, nom) => {
