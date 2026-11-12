@@ -7829,8 +7829,66 @@ function topoBuildModel(data) {
     if (cands.length) n.unsureParents = cands;
   });
 
-  const roots = [...nodes.values()].filter((n) => !n.parentKey);
+  topoGrouperFeuilles(nodes);
+  let roots = [...nodes.values()].filter((n) => !n.parentKey);
+  // FOCUS : une seule branche (ses ancetres, elle, et tout ce qui pend dessous).
+  if (topo.focus && nodes.has(topo.focus)) {
+    const garder = new Set();
+    for (let k = topo.focus; k; k = (nodes.get(k) || {}).parentKey) garder.add(k);
+    const descendre = (n) => n.children.forEach((c) => { garder.add(c.key); descendre(c); });
+    descendre(nodes.get(topo.focus));
+    [...nodes.keys()].forEach((k) => { if (!garder.has(k)) nodes.delete(k); });
+    nodes.forEach((n) => { n.children = n.children.filter((c) => garder.has(c.key)); });
+    roots = [...nodes.values()].filter((n) => !n.parentKey);
+  }
   return { nodesByKey: nodes, roots };
+}
+
+/** Au-dela de ce nombre de feuilles sous une meme case, elles se rangent dans
+ *  une case « N devices » qui se deplie au clic : un PoP qui voit cinquante
+ *  voisins ne doit pas etirer l'arbre sur cinquante lignes. */
+const TOPO_GROUPE_MIN = 6;
+/** Une liste depliee s'ecrit en colonnes de cette hauteur. */
+const TOPO_GRILLE_LIGNES = 10;
+const TOPO_INFRA = new Set(['gateway', 'core', 'pop', 'vlan']);
+
+function topoGrouperFeuilles(nodes) {
+  [...nodes.values()].forEach((parent) => {
+    if (parent.synthetic) return;
+    const feuilles = parent.children.filter((c) => !c.synthetic && !c.children.length && !TOPO_INFRA.has(c.kind));
+    if (feuilles.length < TOPO_GROUPE_MIN) return;
+    const cle = 'grp:' + parent.key;
+    const ouvert = topo.abosOuverts.has(cle);
+    const clients = feuilles.filter((f) => f.clientLogin).length;
+    const somme = feuilles.reduce((a, f) => {
+      const r = topoEdgeRates(f.edge) || topoUispRates(f);
+      if (r) { a.down += r.down; a.up += r.up; }
+      return a;
+    }, { down: 0, up: 0 });
+    const groupe = {
+      key: cle, name: feuilles.length + ' devices',
+      kind: 'unknown', synthetic: true, groupe: true, parentKey: parent.key, children: feuilles, edge: null,
+      synthRates: (somme.down || somme.up) ? { down: somme.down, up: somme.up, cap: 0 } : null,
+      count: feuilles.length, groupMeta: clients ? clients + ' client(s) among them' : 'neighbours seen by ' + parent.name,
+      addresses: [], fresh: true, expandable: true, expanded: ouvert, grille: true,
+    };
+    feuilles.forEach((f) => { f.parentKey = cle; });
+    parent.children = parent.children.filter((c) => !feuilles.includes(c)).concat([groupe]);
+    nodes.set(cle, groupe);
+  });
+  // Les agregats de clients deplies s'ecrivent eux aussi en colonnes.
+  nodes.forEach((n) => { if (n.expandable && n.expanded) n.grille = true; });
+}
+
+/** Le nom a afficher : un equipement connu par sa seule MAC (ou son IP) se lit
+ *  « Unknown device » avec sa marque, et la MAC passe en sous-titre. */
+function topoTitre(n) {
+  if (n.clientLogin && n.client && n.client.display_name) return n.client.display_name;
+  const nom = String(n.name || '');
+  if (/^([0-9A-F]{2}[:-]){5}[0-9A-F]{2}$/i.test(nom) || /^\d+\.\d+\.\d+\.\d+$/.test(nom)) {
+    return (n.platform ? n.platform.split(' ')[0] + ' · ' : '') + 'unknown device';
+  }
+  return nom;
 }
 
 /** Ordre d'affichage de deux cases soeurs : hierarchie d'abord, puis le nom.
@@ -7839,6 +7897,11 @@ function topoOrdreFratrie(a, b) {
   const ra = TOPO_RANG[a.kind] ?? 5;
   const rb = TOPO_RANG[b.kind] ?? 5;
   if (ra !== rb) return ra - rb;
+  // Les equipements NOMMES d'abord : ceux qu'on ne connait que par leur MAC
+  // passent apres, sinon ils noient les autres.
+  const ia = topoTitre(a) !== a.name;
+  const ib = topoTitre(b) !== b.name;
+  if (ia !== ib) return ia ? 1 : -1;
   return String(a.name || '').localeCompare(String(b.name || ''));
 }
 
@@ -7856,7 +7919,7 @@ function topoAutoLayout(model) {
   let leaf = 0;
   const rowOf = new Map();
 
-  model.nodesByKey.forEach((n) => { n.children.sort(topoOrdreFratrie); n.replie = false; });
+  model.nodesByKey.forEach((n) => { n.children.sort(topoOrdreFratrie); n.replie = false; n.colOffset = 0; });
 
   // Replier une branche cache TOUT ce qui pend dessous : sans cela ses enfants
   // garderaient une ligne (et un trait) alors que le repli dit justement qu'on
@@ -7876,7 +7939,22 @@ function topoAutoLayout(model) {
     node.depth = depth;
     // ``topo.replies`` peut manquer quand la disposition est appelee hors de
     // l'interface (harnais de test) : on ne veut pas que l'arbre en depende.
-    const replie = !!(topo.replies && topo.replies.has(node.key));
+    const replie = !!(topo.replies && topo.replies.has(node.key)) || (node.groupe && !node.expanded);
+    if (node.grille && node.expanded && node.children.length > TOPO_GRILLE_LIGNES &&
+        node.children.every((c) => !c.children.length)) {
+      // EN COLONNES : dix par colonne, cote a cote. Une liste de cinquante
+      // feuilles faisait un arbre de cinquante lignes, lisible nulle part.
+      const debut = leaf;
+      node.children.forEach((c, i) => {
+        c.depth = depth + 1;
+        c.colOffset = Math.floor(i / TOPO_GRILLE_LIGNES);
+        rowOf.set(c.key, debut + (i % TOPO_GRILLE_LIGNES));
+        guard.add(c.key);
+      });
+      leaf = debut + TOPO_GRILLE_LIGNES;
+      rowOf.set(node.key, debut + (TOPO_GRILLE_LIGNES - 1) / 2);
+      return;
+    }
     if (!node.children.length || replie) {
       if (replie) cacher(node, new Set([node.key]));
       rowOf.set(node.key, leaf++);
@@ -7917,7 +7995,7 @@ function topoAutoLayout(model) {
 
   model.nodesByKey.forEach((n) => {
     if (n.replie) return;   // rien a placer pour ce qu'on ne dessine pas
-    const autoX = MX + n.depth * COL;
+    const autoX = MX + n.depth * COL + (n.colOffset || 0) * (COL - 40);
     const autoY = MY + rowOf.get(n.key) * ROWH;
     const libre = libres[n.key];
     const px = n.pos_x != null ? n.pos_x : (libre ? libre.pos_x : null);
@@ -7983,6 +8061,8 @@ function renderTopoCanvas() {
   const model = topoBuildModel(data);
   topoAutoLayout(model);
   topo.model = model;
+  topoFocusBandeau();
+  topoRemplirRecherche();
 
   const etendue = topoEtendue(model);
   // LA TOILE SUIT LE CONTENU.
@@ -8091,8 +8171,10 @@ function renderTopoCanvas() {
     // Rassemble toutes les adresses de l'equipement plutot que d'en montrer une.
     // Une case d'abonne montre son adresse ET son debit : c'est ce qu'on
     // cherche quand on ouvre la liste d'un PoP qui sature.
-    const meta = n.clientLogin
+    const meta = n.groupe ? n.groupMeta
+      : n.clientLogin
       ? '\u2605 client ' + ((n.client && n.client.display_name) || n.clientLogin)
+      : topoTitre(n) !== n.name ? n.name
       : n.subscriber
       ? [n.addresses.join(', '),
          n.synthRates ? bpsText(n.synthRates.down) + ' / ' + bpsText(n.synthRates.up) : '']
@@ -8125,10 +8207,11 @@ function renderTopoCanvas() {
         '<rect class="accent" x="0" y="0" width="5" height="' + NODE_H +
           '" fill="' + color + '"></rect>' +
         '<text class="role" x="13" y="18" fill="' + color + '">' +
-          esc(ICONE[n.kind] || '?') +
+          esc(n.groupe ? 'GROUP' : (ICONE[n.kind] || '?')) +
           // Le chevron dit que la case s'ouvre, et dans quel sens elle va.
           (n.expandable ? (n.expanded ? '  \u25be open' : '  \u25b8 show') : '') + '</text>' +
-        '<text class="title" x="13" y="31">' + esc(topoTrim(n.name, pliable ? 15 : 20)) +
+        '<text class="title" x="13" y="31">' + esc(topoTrim(topoTitre(n), pliable ? 15 : 20)) +
+          '<title>' + esc(n.name) + '</title>' +
           '</text>' +
         (meta ? '<text class="meta" x="13" y="42">' + esc(topoTrim(meta, 26)) + '</text>' : '') +
         pastille +
@@ -8403,6 +8486,12 @@ function bindTopoDrag(svg, model) {
           else topoNodeClick(key);
           return;
         }
+        // Un groupe « N devices » n'est pas un equipement : deposer dessus,
+        // c'est deposer sur l'equipement auquel il appartient.
+        const groupeCible = dropTarget && model.nodesByKey.get(dropTarget);
+        if (groupeCible && groupeCible.groupe) dropTarget = groupeCible.parentKey;
+        const parentActuel = model.nodesByKey.get(node.parentKey);
+        const vraiParent = parentActuel && parentActuel.groupe ? parentActuel.parentKey : node.parentKey;
         try {
           if (clientsTraines && dropTarget) {
             if (!peut('edit')) { await loadNetwork(); return; }
@@ -8411,7 +8500,7 @@ function bindTopoDrag(svg, model) {
             await loadNetwork();
             return;
           }
-          if (dropTarget && dropTarget !== node.parentKey) {
+          if (dropTarget && dropTarget !== vraiParent) {
             await api('/topology/nodes/' + encodeURIComponent(key) + '/parent',
               { method: 'PATCH', body: JSON.stringify({ parent_key: dropTarget }) });
             await api('/topology/nodes/' + encodeURIComponent(key) + '/layout',
@@ -8455,6 +8544,70 @@ function topoDescendants(model, key) {
   };
   walk(key);
   return out;
+}
+
+/* ---------------------------------------- lisibilite : focus et recherche */
+function topoFocusBandeau() {
+  const hote = document.getElementById('topo-focus');
+  if (!hote) return;
+  const n = topo.focus && topo.model && topo.model.nodesByKey.get(topo.focus);
+  if (!n) { topo.focus = null; hote.innerHTML = ''; return; }
+  hote.innerHTML = '<div class="notice topo-focus-bar">Showing only the branch of <b>' + esc(topoTitre(n)) + '</b>.' +
+    ' <button type="button" class="sm" id="topo-focus-off">Show the whole network</button></div>';
+  hote.querySelector('#topo-focus-off').addEventListener('click', () => { topo.focus = null; renderTopoCanvas(); topoFit(); });
+}
+
+function topoRemplirRecherche() {
+  const liste = document.getElementById('topo-find-list');
+  if (!liste || !topo.data) return;
+  const noms = new Set();
+  (topo.data.nodes || []).forEach((n) => { if (n.name) noms.add(n.name); });
+  (topo.subs || []).forEach((s) => { noms.add(s.display_name || s.login); });
+  const sig = [...noms].sort().join('|');
+  if (topo.rechercheSig === sig) return;
+  topo.rechercheSig = sig;
+  liste.innerHTML = [...noms].sort().map((x) => '<option value="' + esc(x) + '">').join('');
+}
+
+/** Montre une case : deplie les groupes et les branches qui la cachent, la
+ *  selectionne et la ramene au centre du cadre. */
+function topoMontrer(texte) {
+  const q = String(texte || '').trim().toLowerCase();
+  if (!q || !topo.data) return false;
+  topo.focus = null;
+  const brut = (topo.data.nodes || []).find((n) => String(n.name || '').toLowerCase() === q);
+  const client = (topo.subs || []).find((s) => s.login.toLowerCase() === q || String(s.display_name || '').toLowerCase() === q);
+  let cle = brut ? brut.key : null;
+  if (!cle && client) {
+    const p = (topo.data.placements || {})[client.login] || {};
+    const caseClient = Object.entries(topo.data.client_nodes || {}).find(([, v]) => v.login === client.login);
+    if (caseClient) cle = caseClient[0];
+    else if (p.node) {
+      const parent = p.how === 'vlan-site' && p.site ? 'vlan:' + p.node + '|' + p.site : p.node;
+      topo.abosOuverts.add('abos:' + parent);
+      cle = 'abos:' + parent + '|' + client.login;
+    } else {
+      topo.abosOuverts.add('abos:unplaced:clients');
+      cle = 'abos:unplaced:clients|' + client.login;
+    }
+  }
+  if (!cle) return false;
+  // Deux passes : la premiere construit le modele, la seconde deplie ce qui
+  // cache la case (groupe de feuilles, branche repliee).
+  renderTopoCanvas();
+  let n = topo.model && topo.model.nodesByKey.get(cle);
+  if (!n) return false;
+  for (let k = n.parentKey; k; k = (topo.model.nodesByKey.get(k) || {}).parentKey) {
+    if (topo.replies) topo.replies.delete(k);
+    const anc = topo.model.nodesByKey.get(k);
+    if (anc && anc.expandable) topo.abosOuverts.add(k);
+  }
+  renderTopoCanvas();
+  topoSelect(cle);
+  const el = document.querySelector('#topo-canvas [data-node="' + cssEsc(cle) + '"]');
+  if (el) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' });
+  n = topo.model.nodesByKey.get(cle);
+  return !!n;
 }
 
 function topoSelect(key) {
@@ -8517,7 +8670,10 @@ function renderTopoPanel() {
     return;
   }
   if (node.synthetic) { renderTopoPanelClients(host, node); return; }
-  const parent = node.parentKey ? topo.model.nodesByKey.get(node.parentKey) : null;
+  let parent = node.parentKey ? topo.model.nodesByKey.get(node.parentKey) : null;
+  // Une case rangee dans un groupe « N devices » pend en realite a l'equipement
+  // du groupe : c'est lui qu'on montre, et lui qu'on confirmerait.
+  if (parent && parent.groupe) parent = topo.model.nodesByKey.get(parent.parentKey) || null;
   const attrs = topoAttrs(node);
   const dups = topoDuplicateSuggestions(node);
   host.innerHTML =
@@ -8633,6 +8789,7 @@ function renderTopoPanel() {
           '">Split ' + esc(topoTrim(a, 16)) + '</button>').join(' ') + '</span></div>'
       : '') +
     '<div class="actions" style="margin-top:.7rem">' +
+      (node.children && node.children.length ? '<button class="sm primary" id="topo-focus-btn">Show only this branch</button>' : '') +
       '<button class="sm" id="topo-merge">Merge</button>' +
       (node.parent_override
         ? '<button class="sm" id="topo-detach">Auto attachment</button>' : '') +
@@ -8640,6 +8797,8 @@ function renderTopoPanel() {
     '</div>';
 
   bindTopoSectionClient(host, node);
+  const focusBtn = document.getElementById('topo-focus-btn');
+  if (focusBtn) focusBtn.addEventListener('click', () => { topo.focus = node.key; renderTopoCanvas(); topoFit(); });
   document.getElementById('topo-kind').addEventListener('change', async (e) => {
     try {
       await api('/topology/nodes/' + encodeURIComponent(node.key) + '?kind=' + e.target.value,
@@ -14364,6 +14523,14 @@ document.getElementById('btn-topo-zoom-out').addEventListener('click',
   () => setTopoZoom((topo.zoom || 1) - 0.1));
 document.getElementById('btn-topo-fit').addEventListener('click', topoFit);
 document.getElementById('btn-topo-forget').addEventListener('click', forgetStaleNodes);
+document.getElementById('topo-find').addEventListener('change', (e) => {
+  const texte = e.target.value.trim();
+  if (!texte) return;
+  // Vide apres usage : sinon la case perdant le focus redeclencherait la
+  // recherche et annulerait le geste suivant (focus, selection).
+  if (topoMontrer(texte)) { e.target.value = ''; e.target.blur(); }
+  else toastErreur(erreurClaire(404, 'Nothing named "' + texte + '" in the tree.'));
+});
 document.getElementById('btn-topo-link').addEventListener('click', (e) => {
   topo.linkMode = !topo.linkMode;
   topo.linkSource = null;
