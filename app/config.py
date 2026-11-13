@@ -570,7 +570,9 @@ class Settings(BaseSettings):
     # files des abonnes qui passent par ce lien, et l'exploitant n'a plus qu'a
     # fixer son debit dans l'interface. A false, un lien sans capacite connue
     # reste sans file.
-    shaping_queue_for_detected_links: bool = True
+    #: Une file 0/0 des la decouverte d'un lien : COUPE par defaut (une file qui
+    #: ne limite rien ne fait que couter du CPU au routeur).
+    shaping_queue_for_detected_links: bool = False
     #: Files de LIEN (parent par backhaul / secteur). COUPEES par defaut :
     #: constate en production, une file sur le segment d'un PTP bridait tout le
     #: lien. Sans elles, seules les adresses de chaque client sont bridees.

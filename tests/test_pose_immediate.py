@@ -330,11 +330,13 @@ async def test_un_client_sans_debit_recoit_la_limite_par_defaut(
     assert files[0].fields["max-limit"] == "20000000/100000000"
 
 
-async def test_sans_limite_par_defaut_la_file_mesure_sans_brider(
+async def test_sans_limite_aucune_file_n_est_ecrite(
     settings_francophonie: Settings, routeur: FakeRouterOsClient, ecriture: FauxClientEcriture
 ) -> None:
-    """Limite par defaut a 0 : la file 0/0 reste, seul compteur de trafic d'un
-    client a IP fixe."""
+    """Sans debit, AUCUNE file -- pas meme une 0/0. CONSTATE EN PRODUCTION : des
+    clients se sont plaints alors qu'aucune limite n'etait posee ; une file qui
+    ne limite rien fait quand meme passer son trafic par le traitement des files.
+    Le trafic de ce client se mesure par son interface ou NetFlow."""
     settings_francophonie.default_plan_down_mbps = 0
     settings_francophonie.default_plan_up_mbps = 0
     service = _service(
@@ -345,10 +347,12 @@ async def test_sans_limite_par_defaut_la_file_mesure_sans_brider(
     )
     await service.registry.reload()
 
-    await service.enforce_static_client(reference="mairie", pop_name="francophonie", author="test")
+    rapport = await service.enforce_static_client(
+        reference="mairie", pop_name="francophonie", author="test"
+    )
 
-    files = [a for a in ecriture.executed if a.path == "/queue/simple"]
-    assert files[0].fields["max-limit"] == "0/0"
+    assert not [a for a in ecriture.executed if a.path == "/queue/simple"]
+    assert "no rate" in str(rapport.get("reason") or rapport)
 
 
 async def test_un_pop_qui_ne_correspond_a_rien_est_dit_tout_de_suite(
