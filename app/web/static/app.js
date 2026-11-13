@@ -8141,6 +8141,7 @@ function topoBuildModel(data, options) {
     if (cands.length) n.unsureParents = cands;
   });
 
+  topo.nonDeclares = topo.montrerNonDeclares ? 0 : topoGarderDeclares(nodes);
   if (!sansGroupes) topoGrouperFeuilles(nodes);
   let roots = [...nodes.values()].filter((n) => !n.parentKey);
   // FOCUS : une seule branche (ses ancetres, elle, et tout ce qui pend dessous).
@@ -8154,6 +8155,32 @@ function topoBuildModel(data, options) {
     roots = [...nodes.values()].filter((n) => !n.parentKey);
   }
   return { nodesByKey: nodes, roots };
+}
+
+/** L'ARBRE NE MONTRE QUE CE QUI EST DECLARE : un routeur de Devices, un
+ *  client (PPPoE, IP fixe, VLAN, ou un equipement relie a un client), et les
+ *  cases qui menent a eux. Un voisin decouvert que personne n'a declare (un
+ *  site client vu en MNDP, un autre NAS hors inventaire, une MAC) n'y est pas :
+ *  une fois declare dans Devices ou Clients, il apparait et ses liens se font.
+ *  Rend le nombre de cases ecartees. */
+function topoGarderDeclares(nodes) {
+  const garde = new Map();
+  const declare = (n) => n.synthetic || String(n.key).startsWith('router:') ||
+    n.kind === 'static' || !!n.clientLogin || !!n.parent_override ||
+    !!(n.edge && n.edge.link && String(n.edge.link.key || '').startsWith('manual:'));
+  const visiter = (n) => {
+    if (garde.has(n.key)) return garde.get(n.key);
+    garde.set(n.key, false);
+    let ok = declare(n);
+    n.children.forEach((c) => { if (visiter(c)) ok = true; });
+    garde.set(n.key, ok);
+    return ok;
+  };
+  nodes.forEach(visiter);
+  let ecartes = 0;
+  [...nodes.keys()].forEach((k) => { if (!garde.get(k)) { nodes.delete(k); ecartes += 1; } });
+  nodes.forEach((n) => { n.children = n.children.filter((c) => nodes.has(c.key)); });
+  return ecartes;
 }
 
 /** Au-dela de ce nombre de feuilles sous une meme case, elles se rangent dans
@@ -8392,6 +8419,7 @@ function renderTopoCanvas() {
     topo.model = modele;
     topoFocusBandeau();
     topoRemplirRecherche();
+    topoMajNonDeclares();
     renderTopoList();
     return;
   }
@@ -8400,6 +8428,7 @@ function renderTopoCanvas() {
   topo.model = model;
   topoFocusBandeau();
   topoRemplirRecherche();
+  topoMajNonDeclares();
 
   const etendue = topoEtendue(model);
   // LA TOILE SUIT LE CONTENU.
@@ -9198,13 +9227,30 @@ function topoClientsEnListe(cle) {
   if (ligne && ligne.scrollIntoView) ligne.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
+/** Le compte des equipements caches, sur la case qui les montre. */
+function topoMajNonDeclares() {
+  const libelle = document.getElementById('topo-undeclared-label');
+  const caseACocher = document.getElementById('topo-undeclared');
+  if (caseACocher) caseACocher.checked = !!topo.montrerNonDeclares;
+  if (!libelle) return;
+  libelle.textContent = topo.montrerNonDeclares
+    ? 'Undeclared devices'
+    : 'Undeclared devices' + (topo.nonDeclares ? ' (' + topo.nonDeclares + ' hidden)' : '');
+}
+
 /** Bascule Liste / Diagramme, retenue dans le navigateur. */
 function topoChoisirVue(vue) {
   topo.vue = vue === 'diagram' ? 'diagram' : 'list';
   try { localStorage.setItem('freeqos.topoView', topo.vue); } catch (e) { /* stockage indisponible */ }
   const section = document.getElementById('view-network');
   if (section) section.classList.toggle('topo-mode-list', topo.vue === 'list');
-  document.querySelectorAll('#topo-view [data-topo-view]').forEach((b) =>
+  try { topo.montrerNonDeclares = localStorage.getItem('freeqos.topoUndeclared') === '1'; } catch (e) { /* stockage indisponible */ }
+document.getElementById('topo-undeclared').addEventListener('change', (e) => {
+  topo.montrerNonDeclares = e.target.checked;
+  try { localStorage.setItem('freeqos.topoUndeclared', e.target.checked ? '1' : '0'); } catch (err) { /* idem */ }
+  if (topo.data) { renderTopoCanvas(); renderTopoPanel(); }
+});
+document.querySelectorAll('#topo-view [data-topo-view]').forEach((b) =>
     b.classList.toggle('active', b.dataset.topoView === topo.vue));
   const champ = document.getElementById('topo-find');
   if (champ) champ.placeholder = topo.vue === 'list' ? 'Filter devices and clients' : 'Find a device or client';

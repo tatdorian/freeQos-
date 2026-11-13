@@ -46,7 +46,8 @@ def harnais(tmp_path_factory: pytest.TempPathFactory) -> Path:
     module.write_text(
         # ``topo`` est l'etat global de l'editeur ; seuls les abonnes, l'etat
         # des agregats deplies et les branches repliees servent ici.
-        "const topo = { subs: [], abosOuverts: new Set(), replies: new Set() };\n"
+        "const topo = { subs: [], abosOuverts: new Set(), replies: new Set(),"
+        " montrerNonDeclares: true };\n"
         "const TOPO_ABOS_MAX = 25;\n"
         + source[debut:fin]
         + "\nmodule.exports = { topo, topoBuildModel, topoAutoLayout, topoTitre };\n",
@@ -771,6 +772,7 @@ const NODE_H = 48;
 const TOPO_ABOS_MAX = 25;
 const topoAttrs = (n) => (n && typeof n.attributes === 'object' && n.attributes) || {};
 const topo = { data: null, subs: [], model: null, selected: null, rateOnly: false,
+  montrerNonDeclares: true,
   linkMode: false, linkSource: null, abosOuverts: new Set(), replies: new Set(), zoom: 1 };
 """
         + source[debut:fin]
@@ -1246,3 +1248,37 @@ console.log(JSON.stringify({ cles: [...m.nodesByKey.keys()].sort() }));
     )
     assert "candidate:pop:10.20.0.77" not in res["cles"]
     assert "static:mairie" in res["cles"]
+
+
+def test_seuls_les_equipements_declares_apparaissent(harnais: Path) -> None:
+    """DEMANDE : un voisin decouvert que personne n'a declare (ni dans Devices,
+    ni dans Clients) n'est pas dans l'arbre ; une fois declare, il y revient.
+    Une case qui MENE a quelque chose de declare reste, pour garder le chemin."""
+    res = executer(
+        harnais,
+        """
+const n = (k, nm, kd) => ({ key: k, name: nm, kind: kd, hidden: false, addresses: [] });
+const l = (key, s, t) => ({ key, source_key: s, target_key: t, interface: 'e',
+  interface_links: 1, attributes: {} });
+const data = {
+  nodes: [n('router:nas', 'NAS-OFFICE', 'pop'), n('mac:01', 'BAGRI SIEGE', 'unknown'),
+          n('mac:02', 'MAIN GATEWAY', 'unknown'), n('mac:03', 'AP-NORD', 'unknown'),
+          n('mac:04', 'CPE DUPONT', 'cpe')],
+  links: [l('a', 'router:nas', 'mac:01'), l('b', 'router:nas', 'mac:02'),
+          l('c', 'router:nas', 'mac:03'), l('d', 'mac:03', 'mac:04')],
+  counts: {}, client_nodes: { 'mac:04': { login: 'dupont', how: 'device' } },
+};
+A.topo.montrerNonDeclares = false;
+const m = A.topoBuildModel(data);
+const caches = A.topo.nonDeclares;
+A.topo.montrerNonDeclares = true;
+const tout = A.topoBuildModel(data);
+console.log(JSON.stringify({ cles: [...m.nodesByKey.keys()].sort(), caches,
+  tout: tout.nodesByKey.size }));
+""",
+    )
+    # Le NAS (Devices), le client relie a sa CPE, et l'AP qui y mene.
+    assert res["cles"] == ["mac:03", "mac:04", "router:nas"]
+    # BAGRI SIEGE et MAIN GATEWAY : declares nulle part, caches.
+    assert res["caches"] == 2
+    assert res["tout"] == 5
