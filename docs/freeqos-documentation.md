@@ -1126,11 +1126,12 @@ The role is chosen in the **Role** column of *Devices* (on the spot, for a route
 | | On the PoP (NAS) | On the top router |
 | --- | --- | --- |
 | Target | The client's address or PPPoE session | The client's **address** only (its block for a static-IP client) |
-| Rate | Its plan, mode or boost | The same × `upstream_cap_factor` (1.1 by default) |
-| Queue type | CAKE (latency, fairness) | The router's default, light type: no CAKE on the core |
-| Role | Fine shaping, low latency | Cuts the excess **before** it reaches the core and the links |
+| Rate | Its plan, mode or boost | **The same** (`upstream_cap_factor` = 1 by default) |
+| Queue type | CAKE (latency, fairness) | **The same** CAKE type (created on the top router if missing) |
 
-The factor is slightly above 1 on purpose: in normal use the PoP's CAKE does the shaping and the top queue never fills; it only cuts what goes beyond the plan (a stream pushing harder, a flood towards one client). A mode or a boost set on a client updates both routers at once. No link queue is ever put on the top router.
+The top router carries **the same queue** as the PoP: traffic coming from the internet is limited to the client's plan as soon as it enters the network, with the same latency handling, and never reaches the core or the links beyond the plan. Since the top queue limits first, the PoP's queue mostly stays idle for downloads; it remains the limit for uploads and the safety net if the top router is bypassed (backup path). A mode or a boost set on a client updates both routers at once. No link queue is ever put on the top router. `upstream_cap_factor` above 1 leaves headroom on the top router if wanted.
+
+**CPU.** One CAKE queue per client on the router that carries all the traffic costs CPU. Roll out on the PoPs first, then on the top router while watching its CPU; *Remove freeQoS* takes everything off at once.
 
 Worth knowing:
 - the top router must **see the clients' addresses**: if it does the NAT (or no NAT is done), it does; if each NAS does the NAT, the top router only sees the NAS address and these queues match nothing — keep the caps on the NAS then;

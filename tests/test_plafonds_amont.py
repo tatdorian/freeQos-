@@ -54,11 +54,9 @@ def _service(settings: Settings) -> tuple[ShapingService, FakeRouterOsClient]:
     return service, coeur
 
 
-async def test_le_coeur_plafonne_chaque_client_au_dessus_de_son_forfait(
-    settings: Settings,
-) -> None:
-    settings.upstream_caps = True
-    settings.upstream_cap_factor = 1.1
+async def test_le_coeur_porte_la_meme_file_que_le_pop(settings: Settings) -> None:
+    """DEMANDE : « la meme queue que pour le pop », pas de +10 %. Meme debit,
+    meme CAKE, sur l'adresse du client."""
     service, _coeur = _service(settings)
     await service.registry.reload()
 
@@ -71,16 +69,29 @@ async def test_le_coeur_plafonne_chaque_client_au_dessus_de_son_forfait(
     assert champs["target"].startswith("10.20.0.10")
     assert champs["parent"] == "none"
     assert "upstream" in champs["comment"]
-    # Pas de CAKE la-haut : une file legere (type par defaut du routeur).
-    assert "queue" not in champs
-    assert not any(a.path == "/queue/type" for a in plan.actions)
-    # Un peu AU-DESSUS du forfait : le NAS shape, le coeur ne coupe que l'exces.
-    # Forfait 100/20 Mbps x 1,1 : 22 Mbps montant / 110 Mbps descendant.
-    assert champs["max-limit"] == "22000000/110000000"
+    # Le meme type que sur le PoP : CAKE, cree sur le coeur s'il manque.
+    assert champs["queue"] == "freeqos-cake-up/freeqos-cake-down"
+    assert {a.name for a in plan.actions if a.path == "/queue/type"} == {
+        "freeqos-cake-up",
+        "freeqos-cake-down",
+    }
+    # Le meme debit que le forfait (100/20 Mbps), sans marge.
+    assert champs["max-limit"] == "20000000/100000000"
 
 
-def test_actif_par_defaut() -> None:
-    assert Settings(_env_file=None, database_url="postgresql://x:x@h/x").upstream_caps is True
+async def test_un_facteur_reste_possible(settings: Settings) -> None:
+    settings.upstream_cap_factor = 1.1
+    service, _coeur = _service(settings)
+    await service.registry.reload()
+    plan = await service.plan_router("core-test")
+    files = [a for a in plan.actions if a.path == "/queue/simple"]
+    assert files[0].fields["max-limit"] == "22000000/110000000"
+
+
+def test_actif_par_defaut_et_sans_marge() -> None:
+    defaut = Settings(_env_file=None, database_url="postgresql://x:x@h/x")
+    assert defaut.upstream_caps is True
+    assert defaut.upstream_cap_factor == 1.0
 
 
 async def test_coupe_le_coeur_ne_recoit_rien(settings: Settings) -> None:

@@ -578,13 +578,12 @@ class Settings(BaseSettings):
     #: lien. Sans elles, seules les adresses de chaque client sont bridees.
     shaping_link_queues: bool = False
     #: PLAFONDS EN AMONT : sur le routeur le plus haut (role core ou gateway),
-    #: une file par client, a son forfait x ``upstream_cap_factor``. Le trafic
-    #: venu d'internet est coupe AVANT de remplir le coeur et les liens ; le
-    #: NAS garde le shaping fin (CAKE). Files legeres (type par defaut, pas de
-    #: CAKE), sur l'ADRESSE du client seulement, jamais sur un lien. ACTIF par
+    #: la MEME file par client que sur son PoP (meme debit, meme CAKE), sur
+    #: l'ADRESSE du client seulement, jamais sur un lien. Le trafic venu
+    #: d'internet est limite AVANT de remplir le coeur et les liens. ACTIF par
     #: defaut : sans routeur de role core/gateway dans Appareils, il ne fait rien.
     upstream_caps: bool = True
-    upstream_cap_factor: float = 1.1
+    upstream_cap_factor: float = 1.0
     # Sur quoi accrocher la file d'un abonne.
     #
     # "address" (defaut) : target=10.20.0.10/32. L'adresse de la session en

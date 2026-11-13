@@ -3428,20 +3428,29 @@ class ShapingService:
         """Le plan du routeur du haut : un plafond par client, rien d'autre.
 
         - cible = l'ADRESSE du client (une interface PPPoE n'existe pas la-haut) ;
-        - debit = forfait (ou mode, boost) x ``upstream_cap_factor`` : le NAS
-          fait le shaping fin, le haut ne coupe que l'exces ;
-        - file LEGERE : le type par defaut du routeur, pas de CAKE -- un coeur
-          qui porte des centaines de files ne doit pas y laisser son CPU ;
+        - LA MEME FILE QUE SUR LE POP (demande explicite) : meme debit -- forfait,
+          mode ou boost, x ``upstream_cap_factor`` qui vaut 1 par defaut -- et
+          meme type CAKE. Le flux venu d'internet est donc limite au forfait des
+          son entree, avec la meme gestion de la latence ;
         - aucune file de lien, jamais.
         """
         etat = await self._inspect_one(collector)
         abonnes = await self.upstream_targets(collector.name)
-        _types, files, ecartes = desired_state(
+        types, files, ecartes = desired_state(
             links=[],
             subscribers=abonnes,
             safety_factor=self.settings.shaping_safety_factor,
             floor_mbps=self.settings.shaping_floor_mbps,
-            queue_types=[],
+            queue_types=desired_queue_types(
+                overhead=self.settings.cake_overhead,
+                rtt_ms=self.settings.cake_rtt_ms,
+                diffserv=self.settings.cake_diffserv,
+                flowmode=self.settings.cake_flowmode,
+                nat=self.settings.cake_nat,
+                ack_filter=self.settings.cake_ack_filter,
+                wash=self.settings.cake_wash,
+                mpu=self.settings.cake_mpu,
+            ),
             target_mode=TARGET_ADDRESS,
             link_queues=False,
         )
@@ -3453,13 +3462,11 @@ class ShapingService:
         for file in files:
             file.max_down_mbps = fois(file.max_down_mbps)
             file.max_up_mbps = fois(file.max_up_mbps)
-            file.queue_up = None
-            file.queue_down = None
             file.parent = None
             file.comment = managed_comment("upstream")
         plan = build_plan(
             collector.name,
-            desired_types=[],
+            desired_types=types if files else [],
             desired_queues=files,
             actual_types=etat.queue_types,
             actual_queues=etat.simple_queues,
