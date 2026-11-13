@@ -2359,3 +2359,9 @@ body.role-limited .dash-detail { display: none; }
 .pg-lead { color: var(--muted); margin: 0 0 .9rem; font-size: .9rem; max-width: 60rem; }
 .pg-goto { cursor: pointer; }
 .pg-goto:hover { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); }
+
+/* Executive : titres de colonnes des lignes de charge et de saturation. */
+.hot-row.hot-head, .lb-row.lb-head { color: var(--muted); font-size: .72rem; padding: .2rem 0 .3rem;
+  border-bottom: 1px solid var(--border); }
+.hot-row.hot-head + .hot-row, .lb-row.lb-head + .lb-row { border-top: 0; }
+@media (max-width: 760px) { .hot-row.hot-head, .lb-row.lb-head { display: none; } }
