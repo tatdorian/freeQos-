@@ -637,6 +637,12 @@ def test_basculer_l_interrupteur_est_journalise_avec_auteur_et_motif(api_routeur
     client.patch(f"/api/v1/pops/routers/{ident}", json={"write_enabled": False})
     assert len(journal.bascules) == nombre
 
+    # Changer le ROLE (PoP -> Gateway) se fait sur place, et n'ecrit rien de
+    # lui-meme : la mise en place reste le geste « Set up ».
+    role = client.patch(f"/api/v1/pops/routers/{ident}", json={"role": "gateway"})
+    assert role.status_code == 200 and role.json()["role"] == "gateway"
+    assert "provisioning" not in role.json()
+
     liste = {r["name"]: r for r in client.get("/api/v1/pops/routers").json()["routers"]}
     assert liste["nas-pilote"]["write_enabled"] is False
 
