@@ -172,17 +172,16 @@ REGLAGES: tuple[Reglage, ...] = (
         "upstream_caps",
         "shaping",
         "bool",
-        "Also cap every client on the TOP router (role core or gateway), at its plan x "
-        "upstream_cap_factor: traffic coming from the internet is cut before it fills the "
-        "core and the links. Light queues on the client's address only; the PoP keeps "
-        "the fine CAKE shaping.",
+        "Also put every client's queue on the TOP router (role core or gateway): the same "
+        "queue as on its PoP (same rate, same CAKE type), on the client's address only. "
+        "Traffic coming from the internet is limited before it fills the core and the links.",
     ),
     Reglage(
         "upstream_cap_factor",
         "shaping",
         "float",
-        "Cap on the top router = plan x this factor. Slightly above 1 so that the PoP's "
-        "CAKE shapes normal traffic, and the top router only cuts the excess.",
+        "Rate on the top router = the PoP's rate x this factor. 1 (default): exactly the "
+        "same queue as on the PoP.",
         minimum=1.0,
         maximum=3.0,
     ),
