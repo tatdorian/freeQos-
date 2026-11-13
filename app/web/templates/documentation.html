@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="47122d5999ed6025">
+  <meta name="freeqos-docs-source" content="0a678a4d1bb95615">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2458,21 +2458,17 @@ curl -s http://127.0.0.1:8000/health/ready
 <tr>
 <td>Rate</td>
 <td>Its plan, mode or boost</td>
-<td>The same × <code>upstream_cap_factor</code> (1.1 by default)</td>
+<td><strong>The same</strong> (<code>upstream_cap_factor</code> = 1 by default)</td>
 </tr>
 <tr>
 <td>Queue type</td>
 <td>CAKE (latency, fairness)</td>
-<td>The router's default, light type: no CAKE on the core</td>
-</tr>
-<tr>
-<td>Role</td>
-<td>Fine shaping, low latency</td>
-<td>Cuts the excess <strong>before</strong> it reaches the core and the links</td>
+<td><strong>The same</strong> CAKE type (created on the top router if missing)</td>
 </tr>
 </tbody>
 </table></div>
-<p>The factor is slightly above 1 on purpose: in normal use the PoP's CAKE does the shaping and the top queue never fills; it only cuts what goes beyond the plan (a stream pushing harder, a flood towards one client). A mode or a boost set on a client updates both routers at once. No link queue is ever put on the top router.</p>
+<p>The top router carries <strong>the same queue</strong> as the PoP: traffic coming from the internet is limited to the client's plan as soon as it enters the network, with the same latency handling, and never reaches the core or the links beyond the plan. Since the top queue limits first, the PoP's queue mostly stays idle for downloads; it remains the limit for uploads and the safety net if the top router is bypassed (backup path). A mode or a boost set on a client updates both routers at once. No link queue is ever put on the top router. <code>upstream_cap_factor</code> above 1 leaves headroom on the top router if wanted.</p>
+<p><strong>CPU.</strong> One CAKE queue per client on the router that carries all the traffic costs CPU. Roll out on the PoPs first, then on the top router while watching its CPU; <em>Remove freeQoS</em> takes everything off at once.</p>
 <p>Worth knowing:
 - the top router must <strong>see the clients' addresses</strong>: if it does the NAT (or no NAT is done), it does; if each NAS does the NAT, the top router only sees the NAS address and these queues match nothing — keep the caps on the NAS then;
 - <strong>FastTrack</strong> on the top router bypasses simple queues: the connections it fast-tracks are not capped (the client page shows <em>Over its limit</em> when that happens);
