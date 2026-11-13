@@ -2365,3 +2365,6 @@ body.role-limited .dash-detail { display: none; }
   border-bottom: 1px solid var(--border); }
 .hot-row.hot-head + .hot-row, .lb-row.lb-head + .lb-row { border-top: 0; }
 @media (max-width: 760px) { .hot-row.hot-head, .lb-row.lb-head { display: none; } }
+.hot-unknown summary { color: var(--text); padding: .3rem 0; }
+.hot-unknown summary .pct-hint { margin-left: .4rem; }
+#hot-unknown-list td, #hot-unknown-list th { padding-top: .35rem; padding-bottom: .35rem; }

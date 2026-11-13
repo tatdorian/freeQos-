@@ -2127,6 +2127,9 @@ function renderExecLoad(host) {
   brancherLiensNoeuds(host);
 }
 
+/** Vers ou va un lien, en mots. */
+const VERS_COTE = { internet: 'the internet', upstream: 'the core', pop: 'clients' };
+
 const HOT_SIDE = {
   internet: 'internet uplink',
   upstream: 'PoP to core',
@@ -2200,23 +2203,40 @@ function renderHotspots(host, data) {
         'discovery: run <a href="#/network">discovery</a> once to split internet side from PoP side.</div>'
       : '') +
     (inconnus.length
-      ? '<details class="hot-unknown"><summary>' + inconnus.length + ' measured link(s) without a known ' +
-        'capacity</summary><div class="hint" style="margin:.4rem 0">Set their capacity with the ' +
-        '<b>Bandwidth</b> button on the link in the <a href="#/network">network tree</a> to track their ' +
-        'saturation.</div>' + inconnus.slice(0, 20).map((h) => '<div class="hot-mini"><b>' + esc(h.name) +
-        '</b> <span class="pct-hint">' + esc(h.router) + ' &middot; ' + esc(h.interface) + ' &middot; ' +
-        esc(HOT_SIDE[h.side] || h.side) + ' <a href="#" class="medium-edit" data-medium-router="' +
-        esc(h.router) + '" data-medium-iface="' + esc(h.interface) + '">wired / radio…</a>' +
-        '</span><span>' +
-        esc(mbps(Math.max(h.now_down_mbps || 0, h.now_up_mbps || 0))) + ' now, peak ' +
-        esc(mbps(Math.max(h.peak_down_mbps || 0, h.peak_up_mbps || 0))) + '</span></div>').join('') +
-        '</details>'
+      ? '<details class="hot-unknown"><summary><b>' + inconnus.length + ' link(s) whose capacity is unknown</b>' +
+        ' <span class="pct-hint">freeQoS sees their traffic, not how much they can carry</span></summary>' +
+        '<p class="pg-lead" style="margin:.6rem 0">Give each link its capacity to know when it fills up: ' +
+        '<b>wired</b> = the speed of the line or port, <b>radio</b> = the antenna it goes through. ' +
+        'Start with the busiest ones, at the top.</p>' +
+        '<div class="table-wrap" id="hot-unknown-list"><table><thead><tr><th>Link</th><th>Router · port</th>' +
+        '<th>Goes towards</th><th class="num">Now</th><th class="num">Busiest</th><th></th></tr></thead><tbody>' +
+        inconnus.slice().sort((x, y) => Math.max(y.peak_down_mbps || 0, y.peak_up_mbps || 0) -
+          Math.max(x.peak_down_mbps || 0, x.peak_up_mbps || 0)).map((h) => {
+          // Un nom qui n'est qu'une MAC, ou le nom du port : le PORT parle mieux.
+          const brut = String(h.name || '');
+          const mac = /^([0-9A-F]{2}[:-]){5}[0-9A-F]{2}$/i.test(brut);
+          const titre = mac || brut === h.interface ? h.interface : brut;
+          return '<tr><td><b>' + esc(titre) + '</b>' + (mac ? '<br><span class="hint">device ' + esc(brut) + '</span>' : '') +
+            '</td><td style="color:var(--muted);font-size:.8rem">' + esc(h.router) + ' · ' + esc(h.interface) + '</td>' +
+            '<td>' + esc(VERS_COTE[h.side] || h.side) + '</td>' +
+            '<td class="num">' + esc(mbps(Math.max(h.now_down_mbps || 0, h.now_up_mbps || 0))) + '</td>' +
+            '<td class="num"><b>' + esc(mbps(Math.max(h.peak_down_mbps || 0, h.peak_up_mbps || 0))) + '</b></td>' +
+            '<td><button type="button" class="sm medium-edit" data-medium-router="' + esc(h.router) +
+              '" data-medium-iface="' + esc(h.interface) + '">Set capacity</button></td></tr>';
+        }).join('') + '</tbody></table></div></details>'
       : '') +
     '<div class="exec-legend"><span><i class="sq ok"></i>fine (under 70% full)</span>' +
       '<span><i class="sq warn"></i>getting busy (70-90%)</span>' +
       '<span><i class="sq crit"></i>almost full (90%+): clients slow down at peak</span>' +
       '<span><i class="hot-peak-key"></i>busiest moment of the period</span>' +
       '<span><b>wired</b>: fixed capacity · <b>radio</b>: capacity read live on the antenna</span></div>';
+  limiterLignes(document.getElementById('hot-unknown-list'), 15, 'Show all links');
+  // Ouverte, la liste le reste au rafraichissement automatique.
+  const repli = host.querySelector('.hot-unknown');
+  if (repli) {
+    if (exec.inconnusOuverts) repli.open = true;
+    repli.addEventListener('toggle', () => { exec.inconnusOuverts = repli.open; });
+  }
   host.querySelectorAll('.medium-edit').forEach((a) => a.addEventListener('click', (e) => {
     e.preventDefault();
     const ligne = lignes.find((h) => h.router === a.dataset.mediumRouter && h.interface === a.dataset.mediumIface);
