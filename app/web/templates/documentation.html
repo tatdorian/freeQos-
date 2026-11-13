@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="0a678a4d1bb95615">
+  <meta name="freeqos-docs-source" content="a55ce8e183633020">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -1573,6 +1573,10 @@ curl -s http://127.0.0.1:8000/health/ready
 <li>Each box's clients are one line, <strong>"N clients"</strong>; opened, they are listed by page of 50 (online first), each with its address, rate and a link to its page.</li>
 <li>More than 8 devices known only by their MAC under one box fold into <strong>"N unknown devices"</strong>.</li>
 <li>The search box <strong>filters</strong> the list as you type: devices and clients matching the text (name, login, address), with the path above them.</li>
+<li>Only <strong>real clients</strong> appear: those seen in a PPPoE session and those declared (static IP / VLAN, or added by hand). An address only seen in the ARP table of a VLAN, that nobody declared, is not shown in the tree; it is offered for declaration in <em>Clients</em>.</li>
+<li>A client without any measurement (no queue, no NetFlow) is shown <strong>not measured</strong> (hollow dot) rather than offline: it may well carry traffic.</li>
+<li>A device whose role is unknown shows <strong>DEV</strong>, or <strong>NAS</strong> / <strong>RTR</strong> when its name says so (<code>NAS-…</code>, gateway, uplink…).</li>
+<li>In the <strong>Diagram</strong>, clicking a <em>N clients</em> box opens it in the List (the group unfolded and selected): hundreds of client boxes are unreadable as a drawing.</li>
 <li>Click a line to open its side panel (role, parent, <em>This box is a client</em>, <em>Show only this branch</em>...), exactly as in the diagram.</li>
 </ul>
 <p>The list holds thousands of clients where the diagram saturates. Placing by drag and drop, creating a link and the layout stay in <strong>Diagram</strong>.</p>

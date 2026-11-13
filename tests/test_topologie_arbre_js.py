@@ -421,11 +421,11 @@ def test_une_case_sans_aucun_lien_reste_affichee(harnais: Path) -> None:
         """
 const nodes = [
   { key: 'router:pop', name: 'PoP Altair', kind: 'pop' },
-  { key: 'candidate:pop:10.20.0.77', name: '10.20.0.77', kind: 'candidate' },
+  { key: 'mac:AA:BB:CC:00:00:77', name: 'CPE-77', kind: 'cpe' },
 ];
 const m = A.topoBuildModel({ nodes, links: [], counts: {} });
 A.topoAutoLayout(m);
-const c = m.nodesByKey.get('candidate:pop:10.20.0.77');
+const c = m.nodesByKey.get('mac:AA:BB:CC:00:00:77');
 console.log(JSON.stringify({
   present: !!c, parent: c ? c.parentKey : 'absent', x: c ? c.x : null, cases: m.nodesByKey.size,
 }));
@@ -1225,3 +1225,24 @@ console.log(JSON.stringify({ avant, ouvert, filtre }));
     # Le filtre ne garde que les clients qui correspondent (client-070 a 079).
     assert res["filtre"]["clients"] == 10
     assert "client-070" in res["filtre"]["html"] and "client-100" not in res["filtre"]["html"]
+
+
+def test_l_arbre_ne_montre_pas_les_adresses_detectees_non_declarees(harnais: Path) -> None:
+    """DEMANDE : « que les clients declares ou trouves via PPPoE ». Une adresse
+    vue dans l'ARP d'un VLAN (candidat) n'est pas un client : pas dans l'arbre."""
+    res = executer(
+        harnais,
+        """
+const nodes = [
+  { key: 'router:pop', name: 'PoP Altair', kind: 'pop' },
+  { key: 'candidate:pop:10.20.0.77', name: '10.20.0.77', kind: 'candidate' },
+  { key: 'static:mairie', name: 'mairie', kind: 'static' },
+];
+const links = [{ key: 'l1', source_key: 'router:pop', target_key: 'candidate:pop:10.20.0.77',
+  interface: 'vlan10', attributes: {} }];
+const m = A.topoBuildModel({ nodes, links, counts: {} });
+console.log(JSON.stringify({ cles: [...m.nodesByKey.keys()].sort() }));
+""",
+    )
+    assert "candidate:pop:10.20.0.77" not in res["cles"]
+    assert "static:mairie" in res["cles"]
