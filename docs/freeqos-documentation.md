@@ -1504,18 +1504,18 @@ The capacity view also ranks subscribers by **volume** over the period. The top 
 
 **Errors say what happened and what to do**: a title (*Not allowed with your account*, *Not possible right now*, *A router or service did not answer*, *freeQoS cannot be reached*...), the server's reason, and the next step. An error from a button shows in a corner without blocking the page; a page that cannot load says so in a banner and retries on its own.
 
-Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. The two long configuration pages, **Settings** and **Devices**, show one section at a time: their table of contents works as tabs.
+Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. **Traffic**, **Executive** and **Insights** are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with *Show all*. The chosen tab is remembered in your browser. The two long configuration pages, **Settings** and **Devices**, show one section at a time: their table of contents works as tabs.
 
 | Page | Question it answers | Sections |
 | --- | --- | --- |
 | **Dashboard** (first page, both roles) | Is everything all right today? | A banner: **All good**, or the problems that need you, most urgent first, each one a click away from the clients concerned; clients connected, traffic now, sites, modes and boosts; one card per site. Below, for the Administrator only: *Network detail* (throughput, traffic per router, top consumers, radio backhauls) |
 | **Rules** (Administrator) | What may clients reach? | Rules in force, and the form to write one: block or cap a service (YouTube, Netflix...), a category or IP prefixes, for every client, chosen sites or chosen clients |
-| **Executive** | Where is the risk? | Saturation risks, latency per subscriber, load and queues per node, health over time (QoE heatmap) |
-| **Traffic** | Who consumes what, where to? | Consumers, services, countries, who talks to whom, destinations, IP lookup (restrictions moved to **Rules**) |
+| **Executive** | Where is the risk? | Four tabs, one question each: **Overview** (verdict, four key figures, saturation risks), **Latency** (per client, where the delay comes from), **Load & queues** (per node; click a row for its details), **History** (health hour by hour) |
+| **Traffic** | Who consumes what, where to? | Tabs: Overview, Clients (who talks to whom), Destinations (map, countries, addresses), Find an IP, Advanced; click a service or an address to see who used it (restrictions moved to **Rules**) |
 | **Network tree** | How is the network wired? | Discovered tree, editable with the mouse (move, re-parent, merge, hide) |
 | **Clients** | Who are my clients, and how are they doing? | Every client under its **PoP**, with its connection (PPPoE, static IP, or **VLAN 2060**: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; *+ Add a client* (Operator) declares PPPoE, static-IP and VLAN clients. The map button opens the **Map**. |
 | **Plans** (from *Settings › Plans & map*) | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
-| **Insights** | What to do commercially? | Subscribers at risk of leaving, ready for a bigger plan, sites with room to grow |
+| **Insights** | What to do commercially? | Tabs: **Overview** (three figures; click one to open its list), **At risk** (who may cancel, and why), **Upgrade** (who lives at their plan's limit with a good experience), **Capacity** (room left per site and access point), **All clients** |
 | **Devices** | Which equipment? | Router health, adding a router, Ubiquiti antennas, radio health, inventory |
 | **API** | How to integrate? | API keys, links to the API guide and to this documentation |
 | **Settings** | How does the tool behave? | Accounts, settings, writing to the routers, caps held or not, command log |

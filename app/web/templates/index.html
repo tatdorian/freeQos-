@@ -172,14 +172,23 @@
       </div>
       <div id="exec-notice"></div>
 
-      <!-- Le verdict d'abord, en une ligne, puis les quatre chiffres qui le
-           justifient. Le detail vient ensuite, pour qui veut creuser. -->
-      <div id="exec-summary"></div>
+      <!-- UNE QUESTION PAR ONGLET, comme Traffic. -->
+      <div class="segmented pg-tabs" role="tablist" aria-label="Executive views">
+        <button type="button" data-pg-tab="overview" class="active">Overview</button>
+        <button type="button" data-pg-tab="latency">Latency</button>
+        <button type="button" data-pg-tab="load">Load &amp; queues</button>
+        <button type="button" data-pg-tab="history">History</button>
+      </div>
 
-      <h2>Saturation risks</h2>
-      <div class="card" id="exec-hotspots"></div>
+      <div class="pg-pane" data-pg-pane="overview">
+        <p class="pg-lead">Is the network fine right now, and where could it saturate?</p>
+        <div id="exec-summary"></div>
+        <h2>Saturation risks</h2>
+        <div class="card" id="exec-hotspots"></div>
+      </div>
 
-      <h2>Latency by client</h2>
+      <div class="pg-pane" data-pg-pane="latency" hidden>
+        <p class="pg-lead">How long each client waits for an answer. Lower is better: under 50 ms is good, over 150 ms is felt.</p>
       <div class="toolbar">
         <input id="exec-lat-search" placeholder="Client or site" style="max-width:260px">
         <select id="exec-lat-filter" style="width:auto">
@@ -197,25 +206,28 @@
         <summary><b>Where the delay comes from</b> (by segment: access, next hop, internet)</summary>
         <div class="table-wrap" id="exec-latency"></div>
       </details>
-
-      <h2>Load by node</h2>
-      <div class="card" id="exec-load"></div>
-
-      <h2>Queues by node</h2>
-      <div class="table-wrap" id="exec-nodes"></div>
-      <div class="exec-legend" id="exec-legend"></div>
-
-      <!-- Trois panneaux facon LibreQoS : etat live, jauge, details, du noeud
-           ou du client selectionne dans le tableau ci-dessus. -->
-      <h2 id="lq-heading">Selection</h2>
-      <div class="lq-panels">
-        <div class="card lq-panel" id="lq-live"></div>
-        <div class="card lq-panel" id="lq-snapshot"></div>
-        <div class="card lq-panel" id="lq-details"></div>
       </div>
 
-      <h2 id="exec-heat-title">Health over time</h2>
-      <div class="card" id="exec-heatmap"></div>
+      <div class="pg-pane" data-pg-pane="load" hidden>
+        <p class="pg-lead">How full each site and link is, and which queues are working. Click a row to see its details below.</p>
+        <h2>Load by node</h2>
+        <div class="card" id="exec-load"></div>
+        <h2>Queues by node</h2>
+        <div class="table-wrap" id="exec-nodes"></div>
+        <div class="exec-legend" id="exec-legend"></div>
+        <h2 id="lq-heading">Selection</h2>
+        <div class="lq-panels">
+          <div class="card lq-panel" id="lq-live"></div>
+          <div class="card lq-panel" id="lq-snapshot"></div>
+          <div class="card lq-panel" id="lq-details"></div>
+        </div>
+      </div>
+
+      <div class="pg-pane" data-pg-pane="history" hidden>
+        <p class="pg-lead">Hour by hour: a red band at the same hour every day is a capacity problem; red at random times is more often radio.</p>
+        <h2 id="exec-heat-title">Health over time</h2>
+        <div class="card" id="exec-heatmap"></div>
+      </div>
     </section>
 
     <!-- --------------------------------------------------------- trafic -->
@@ -670,25 +682,36 @@
         <span class="spacer"></span>
         <span class="mode" id="ins-count"></span>
       </div>
-      <p class="hint" style="display:block">Commercial reading of the measurements: who is
-        likely to cancel (poor experience, usage collapsing, silent line), who is ready to
-        be sold a bigger plan (lives at its ceiling with a good experience), and how many
-        more subscribers each site can take before quality drops. It compares the chosen
-        period with the one before, so it needs history.</p>
       <div id="ins-notice"></div>
-      <div class="grid stats" id="ins-stats"></div>
 
-      <h2>At risk of leaving</h2>
-      <div class="table-wrap" id="ins-risk"></div>
+      <div class="segmented pg-tabs" role="tablist" aria-label="Insights views">
+        <button type="button" data-pg-tab="overview" class="active">Overview</button>
+        <button type="button" data-pg-tab="risk">At risk</button>
+        <button type="button" data-pg-tab="upgrade">Upgrade</button>
+        <button type="button" data-pg-tab="capacity">Capacity</button>
+        <button type="button" data-pg-tab="all">All clients</button>
+      </div>
 
-      <h2>Ready for a bigger plan</h2>
-      <div class="table-wrap" id="ins-upgrade"></div>
-
-      <h2>Sites and access points: room for more subscribers</h2>
-      <div class="table-wrap" id="ins-capacity"></div>
-
-      <h2>Every subscriber: plan, usage, experience</h2>
-      <div class="table-wrap" id="ins-all"></div>
+      <div class="pg-pane" data-pg-pane="overview">
+        <p class="pg-lead">The business side of the measurements, comparing the chosen period with the one before.</p>
+        <div class="grid stats" id="ins-stats"></div>
+      </div>
+      <div class="pg-pane" data-pg-pane="risk" hidden>
+        <p class="pg-lead">Clients who may cancel: poor experience, usage collapsing, or a line gone silent. Call them first.</p>
+        <div class="table-wrap" id="ins-risk"></div>
+      </div>
+      <div class="pg-pane" data-pg-pane="upgrade" hidden>
+        <p class="pg-lead">Clients who live at their plan's limit with a good experience: their plan holds them back, not the network.</p>
+        <div class="table-wrap" id="ins-upgrade"></div>
+      </div>
+      <div class="pg-pane" data-pg-pane="capacity" hidden>
+        <p class="pg-lead">How many more clients each site and access point can take before quality drops.</p>
+        <div class="table-wrap" id="ins-capacity"></div>
+      </div>
+      <div class="pg-pane" data-pg-pane="all" hidden>
+        <p class="pg-lead">Every client: plan, usage and experience, side by side.</p>
+        <div class="table-wrap" id="ins-all"></div>
+      </div>
     </section>
 
     <!-- GESTION : les debits des clients selon l'heure et les modes de debit.
