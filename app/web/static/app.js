@@ -2032,11 +2032,11 @@ function renderExecSummary(host) {
   const b = bps(down);
   const refCapa = capa || limite;
   const partCapa = refCapa ? pct(down, refCapa) : null;
-  const tuile1 = '<div class="card stat down"><div class="label">Traffic now</div>' +
+  const tuile1 = '<div class="card stat down"><div class="label">Download now</div>' +
     '<div class="value">' + esc(b.v) + '<span class="unit">' + esc(b.u) + '</span></div>' +
-    '<div class="sub"><span style="color:var(--up)">&uarr; ' + esc(bpsText(up)) + '</span>' +
-    (partCapa === null ? '' : ' &middot; ' + partCapa.toFixed(0) + '% of ' +
-      (capa ? 'backhaul capacity' : 'the sum of limits')) + '</div>' +
+    '<div class="sub">Upload: <span style="color:var(--up)">' + esc(bpsText(up)) + '</span>' +
+    (partCapa === null ? '' : '<br>uses ' + partCapa.toFixed(0) + '% of ' +
+      (capa ? 'the radio links\' capacity' : 'what the limits allow')) + '</div>' +
     (partCapa === null ? '' : meter(down, refCapa)) + '</div>';
 
   // La part "bonne" se calcule sur les clients NOTES : un client sans mesure
@@ -2054,25 +2054,28 @@ function renderExecSummary(host) {
     '<div class="sub qlegend"><span><i class="sq ok"></i>' + notes.good + ' good</span>' +
       '<span><i class="sq warn"></i>' + notes.fair + ' fair</span>' +
       '<span><i class="sq crit"></i>' + notes.poor + ' poor</span>' +
-      (notes.none ? '<span><i class="sq none"></i>' + notes.none + ' unknown</span>' : '') +
-    '</div></div>';
+      (notes.none ? '<span><i class="sq none"></i>' + notes.none + ' not measured</span>' : '') +
+    '</div>' +
+    (!connues ? '<div class="sub">Judged on each client\'s latency: turn on the RTT probe above to measure it.</div>' : '') +
+    '</div>';
 
   const top = charges[0];
   const tuile3 = '<div class="card stat' + (top && top.u >= 90 ? ' crit' : top && top.u >= 70 ? ' warn' : '') +
     '"><div class="label">Busiest node</div>' +
     (top
       ? '<div class="value">' + top.u.toFixed(0) + '<span class="unit">%</span></div>' +
-        '<div class="sub">' + nodeLink(top.n.name) + ' &middot; ' + esc(bpsText(top.n.tx)) +
-          ' of ' + esc(mbps(top.n.effDown / 1e6)) + '</div>' + meter(top.n.tx, top.n.effDown)
-      : '<div class="value">-</div><div class="sub">no limit known</div>') + '</div>';
+        '<div class="sub">' + nodeLink(top.n.name) + ' carries ' + esc(bpsText(top.n.tx)) +
+          ' of the ' + esc(mbps(top.n.effDown / 1e6)) + ' its clients may use</div>' + meter(top.n.tx, top.n.effDown)
+      : '<div class="value">-</div><div class="sub">No limit set on any site yet: its load cannot be judged.</div>') + '</div>';
 
   const tuile4 = '<div class="card stat"><div class="label">Latency (median)</div>' +
     (rttMed === null
-      ? '<div class="value">-</div><div class="sub">RTT probe off or no reply</div>'
+      ? '<div class="value">-</div><div class="sub">' + ((document.getElementById('rtt-toggle') || {}).checked
+        ? 'No reply from the clients yet.' : 'Turn on the RTT probe above to measure it.') + '</div>'
       : '<div class="value" style="color:' + (rttMed < 30 ? 'var(--ok)' : rttMed < 100 ? 'var(--warn)' : 'var(--crit)') +
         '">' + Math.round(rttMed) + '<span class="unit">ms</span></div>' +
-        '<div class="sub">' + (pireRtt ? 'worst: ' + nodeLink(pireRtt.name) + ' ' +
-          Math.round(pireRtt.rttMax) + ' ms' : '') + '</div>') + '</div>';
+        '<div class="sub">Half the clients answer faster than this.' + (pireRtt ? '<br>Slowest site: ' +
+          nodeLink(pireRtt.name) + ' (' + Math.round(pireRtt.rttMax) + ' ms)' : '') + '</div>') + '</div>';
 
   host.innerHTML = verdict + '<div class="grid stats">' + tuile1 + tuile2 + tuile3 + tuile4 + '</div>';
   brancherLiensNoeuds(host);
@@ -2092,7 +2095,9 @@ function renderExecLoad(host) {
     return;
   }
   const total = nodes.reduce((a, n) => a + n.tx, 0) || 1;
-  host.innerHTML = '<div class="loadbars">' + nodes.slice(0, 20).map((n) => {
+  host.innerHTML = '<div class="loadbars"><div class="lb-row lb-head"><div>Site</div>' +
+    '<div>How full it is (download, against its limit)</div><div>Download now</div><div>Upload now</div></div>' +
+    nodes.slice(0, 20).map((n) => {
     const u = nodeUtil(n);
     const sev = u === null ? 'none' : severity(u);
     const larg = u === null ? pct(n.tx, total) || 0 : Math.min(100, u);
@@ -2109,16 +2114,16 @@ function renderExecLoad(host) {
             esc(mbps(capa / 1e6)) + '"></div>' : '') +
       '</div>' +
       '<div class="lb-val"><b>' + esc(bpsText(n.tx)) + '</b>' +
-        '<span class="hint">' + (u === null ? 'no limit' : u.toFixed(0) + '% of ' +
+        '<span class="hint">' + (u === null ? 'no limit set' : u.toFixed(0) + '% of its ' +
           esc(mbps(n.effDown / 1e6))) + '</span></div>' +
-      '<div class="lb-up"><span style="color:var(--up)">&uarr; ' + esc(bpsText(n.rx)) + '</span></div>' +
+      '<div class="lb-up"><span style="color:var(--up)">' + esc(bpsText(n.rx)) + '</span></div>' +
     '</div>';
   }).join('') + '</div>' +
   (nodes.length > 20 ? '<div class="hint" style="margin-top:.5rem">' + (nodes.length - 20) +
     ' more node(s) in the table below.</div>' : '') +
-  '<div class="exec-legend"><span><i class="sq ok"></i>under 70% of limit</span>' +
-    '<span><i class="sq warn"></i>70-90%</span><span><i class="sq crit"></i>over 90%</span>' +
-    '<span><i class="lb-cap-key"></i>backhaul capacity</span></div>';
+  '<div class="exec-legend"><span><i class="sq ok"></i>fine (under 70% of its limit)</span>' +
+    '<span><i class="sq warn"></i>getting busy (70-90%)</span><span><i class="sq crit"></i>almost full (over 90%)</span>' +
+    '<span><i class="lb-cap-key"></i>what its radio link can actually carry</span></div>';
   brancherLiensNoeuds(host);
 }
 
@@ -2151,7 +2156,9 @@ function renderHotspots(host, data) {
   const groupe = (titre, sous, xs) => {
     if (!xs.length) return '';
     return '<div class="hot-group"><div class="hot-title">' + titre +
-      '<span class="pct-hint">' + sous + '</span></div>' + xs.slice(0, 12).map((h) => {
+      '<span class="pct-hint">' + sous + '</span></div>' +
+      '<div class="hot-row hot-head"><div>Link</div><div>Load now</div><div>Used now</div>' +
+      '<div>Busiest moment</div><div>Still free</div></div>' + xs.slice(0, 12).map((h) => {
         const now = h.now_share === null ? null : Math.min(1.2, h.now_share);
         const pic = h.peak_share === null ? null : Math.min(1.2, h.peak_share);
         const sev = h.state === 'saturated' ? 'crit' : h.state === 'busy' ? 'warn' : 'ok';
@@ -2173,22 +2180,21 @@ function renderHotspots(host, data) {
             '</div>' +
           '</div>' +
           '<div class="hot-val"><b>' + (h.now_share === null ? '-' : Math.round(h.now_share * 100) + '%') +
-            '</b> <span class="pct-hint">now</span>' +
-            '<span class="hint">' + esc(mbps(nowMbps)) + ' of ' + esc(mbps(h.capacity_mbps)) + '</span></div>' +
+            '</b><span class="hint">' + esc(mbps(nowMbps)) + ' of ' + esc(mbps(h.capacity_mbps)) + '</span></div>' +
           '<div class="hot-val"><b class="sev-' + sev + '">' +
-            (h.peak_share === null ? '-' : Math.round(h.peak_share * 100) + '%') +
-            '</b> <span class="pct-hint">peak ' + pkSens + '</span>' +
-            '<span class="hint">' + (pkQuand ? esc(clock(pkQuand)) : '') + '</span></div>' +
+            (h.peak_share === null ? '-' : Math.round(h.peak_share * 100) + '%') + '</b>' +
+            '<span class="hint">' + (pkQuand ? 'at ' + esc(clock(pkQuand)) + ', ' : '') +
+              (pkSens === 'down' ? 'download' : 'upload') + '</span></div>' +
           '<div class="hot-val"><b>' + esc(mbps(Math.max(0, h.headroom_mbps))) + '</b>' +
-            '<span class="hint">headroom</span></div>' +
+            '<span class="hint">before it is full</span></div>' +
         '</div>';
       }).join('') + '</div>';
   };
   const amont = connus.filter((h) => h.side !== 'pop');
   const pop = connus.filter((h) => h.side === 'pop');
   host.innerHTML =
-    groupe('Internet side', 'gateway uplink and PoP-to-core links: a saturation here hits everyone', amont) +
-    groupe('PoP side', 'towards subscribers, VLANs and relays', pop) +
+    groupe('Internet side', 'the gateway\'s uplink and the PoP-to-core links: if one fills up, every client is slowed', amont) +
+    groupe('PoP side', 'links towards clients, VLANs and relays: if one fills up, only the clients behind it are slowed', pop) +
     (!amont.length && (data.upstream_known || []).length === 0
       ? '<div class="notice">Upstream links are identified from each router\'s default route at ' +
         'discovery: run <a href="#/network">discovery</a> once to split internet side from PoP side.</div>'
@@ -2206,10 +2212,11 @@ function renderHotspots(host, data) {
         esc(mbps(Math.max(h.peak_down_mbps || 0, h.peak_up_mbps || 0))) + '</span></div>').join('') +
         '</details>'
       : '') +
-    '<div class="exec-legend"><span><i class="sq ok"></i>under 70%</span><span><i class="sq warn"></i>70-90%</span>' +
-      '<span><i class="sq crit"></i>90%+</span><span><i class="hot-peak-key"></i>peak over the period</span>' +
-      '<span>Capacity: <b>wired</b> = fixed (declared, or port speed) · <b>radio</b> = read live on ' +
-      'its antenna · <b>(auto)</b> = detected by itself</span></div>';
+    '<div class="exec-legend"><span><i class="sq ok"></i>fine (under 70% full)</span>' +
+      '<span><i class="sq warn"></i>getting busy (70-90%)</span>' +
+      '<span><i class="sq crit"></i>almost full (90%+): clients slow down at peak</span>' +
+      '<span><i class="hot-peak-key"></i>busiest moment of the period</span>' +
+      '<span><b>wired</b>: fixed capacity · <b>radio</b>: capacity read live on the antenna</span></div>';
   host.querySelectorAll('.medium-edit').forEach((a) => a.addEventListener('click', (e) => {
     e.preventDefault();
     const ligne = lignes.find((h) => h.router === a.dataset.mediumRouter && h.interface === a.dataset.mediumIface);
@@ -2453,12 +2460,12 @@ function renderLatencySegments(host, data) {
 function renderExecLegend(host) {
   if (!host) return;
   host.innerHTML =
-    '<span><b>Throughput</b> vs capacity (node) or limit (client): <i class="sq ok"></i>&lt;70% <i class="sq warn"></i>70-90% ' +
-      '<i class="sq crit"></i>&gt;90%</span>' +
-    '<span><b>Latency</b>: <i class="sq ok"></i>&lt;30 ms <i class="sq warn"></i>30-100 ms ' +
-      '<i class="sq crit"></i>&gt;100 ms</span>' +
-    '<span><b>Experience</b> (0-100): <i class="sq ok"></i>&ge;80 <i class="sq warn"></i>50-79 ' +
-      '<i class="sq crit"></i>&lt;50</span>';
+    '<span><b>Throughput</b> against the limit: <i class="sq ok"></i>under 70% <i class="sq warn"></i>70-90% ' +
+      '<i class="sq crit"></i>over 90% (almost full)</span>' +
+    '<span><b>Latency</b> (time to answer): <i class="sq ok"></i>under 30 ms <i class="sq warn"></i>30-100 ms ' +
+      '<i class="sq crit"></i>over 100 ms (felt)</span>' +
+    '<span><b>Experience</b> score out of 100: <i class="sq ok"></i>80+ good <i class="sq warn"></i>50-79 fair ' +
+      '<i class="sq crit"></i>under 50 poor</span>';
 }
 
 /** Bandeau d'etat de l'onglet : erreur de chargement, sonde coupee, ou reseau
