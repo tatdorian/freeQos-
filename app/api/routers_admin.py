@@ -502,7 +502,10 @@ async def update_router(
         exclude={"password", "reason", "confirm", "write_enabled"}, exclude_none=True
     )
     seulement_coupee = payload.write_enabled is False and not autres and not password
-    if updated.get("enabled", True) and not seulement_coupee:
+    # Changer le ROLE seul (PoP -> Gateway) ne doit rien ecrire de lui-meme :
+    # la mise en place reste un geste explicite (Set up), plan sous les yeux.
+    seulement_role = set(autres) <= {"role"} and payload.write_enabled is None and not password
+    if updated.get("enabled", True) and not seulement_coupee and not seulement_role:
         updated["provisioning"] = provisioning.start(container, str(updated["name"]))
     return updated
 

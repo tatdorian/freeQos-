@@ -5729,7 +5729,7 @@ async function loadRouters() {
     return;
   }
   host.innerHTML =
-    '<table><thead><tr><th>PoP</th><th>Address</th><th>Account</th><th>Source</th>' +
+    '<table><thead><tr><th>PoP</th><th>Role</th><th>Address</th><th>Account</th><th>Source</th>' +
     '<th>State</th><th>Writing</th><th>Model</th><th></th></tr></thead><tbody>' +
     state.routers.map((r) => {
       let badge = '<span class="badge">never tested</span>';
@@ -5757,6 +5757,7 @@ async function loadRouters() {
       return '<tr>' +
         '<td><strong>' + esc(r.name) + '</strong>' +
           (r.pop_name ? '<br><span style="color:var(--faint);font-size:.75rem">' + esc(r.pop_name) + '</span>' : '') + '</td>' +
+        '<td>' + routerRoleCell(r) + '</td>' +
         '<td class="login">' + esc(r.host) + ':' + esc(r.port) + '</td>' +
         '<td class="login">' + esc(r.username) + '</td>' +
         '<td>' + (r.source === 'file'
@@ -5809,6 +5810,8 @@ async function loadRouters() {
     }));
   host.querySelectorAll('[data-clean-queues]').forEach((b) =>
     b.addEventListener('click', () => cleanRouterQueues(b.dataset.cleanQueues, b)));
+  host.querySelectorAll('[data-router-role]').forEach((sel) =>
+    sel.addEventListener('change', () => changerRoleRouteur(sel)));
   host.querySelectorAll('[data-uninstall]').forEach((b) =>
     b.addEventListener('click', () => retirerFreeqos(b.dataset.uninstall)));
   host.querySelectorAll('[data-probe]').forEach((b) =>
@@ -5923,6 +5926,43 @@ async function toggleRouterWrite(name, active, input) {
 
 /** Supprime toutes les files freeQoS d'un routeur puis les repose : repartir
  *  sur de bonnes bases. Les files posees a la main ne sont jamais touchees. */
+/** LE ROLE D'UN ROUTEUR : PoP (ses clients PPPoE et VLAN), coeur, ou gateway
+ *  (le plus haut : il recoit les plafonds en amont). Modifiable sur place pour
+ *  un routeur saisi dans l'interface ; celui du fichier se change dans le YAML. */
+const ROLE_ROUTEUR = { pop: 'PoP', core: 'Core', gateway: 'Gateway' };
+
+function routerRoleCell(r) {
+  const role = String(r.role || 'pop');
+  if (!r.editable) {
+    return '<span class="badge" title="Set in routers.yml">' + esc(ROLE_ROUTEUR[role] || role) + '</span>';
+  }
+  return '<select class="sm-select" data-router-role="' + esc(r.id) + '" data-was="' + esc(role) +
+    '" aria-label="Role of ' + esc(r.name) + '" title="PoP: its PPPoE and VLAN clients are shaped on it. ' +
+    'Gateway / Core: the top of the network, it receives the upstream caps.">' +
+    Object.entries(ROLE_ROUTEUR).map(([v, t]) =>
+      '<option value="' + v + '"' + (v === role ? ' selected' : '') + '>' + esc(t) + '</option>').join('') +
+    '</select>';
+}
+
+async function changerRoleRouteur(sel) {
+  const avant = sel.dataset.was;
+  sel.disabled = true;
+  try {
+    await api('/pops/routers/' + encodeURIComponent(sel.dataset.routerRole), {
+      method: 'PATCH', body: JSON.stringify({ role: sel.value }),
+    });
+    sel.dataset.was = sel.value;
+    toast(sel.value === 'pop'
+      ? 'Role saved: its PPPoE and VLAN clients are shaped on it.'
+      : 'Role saved. With upstream caps on (Settings › Shaping), it caps every client; nothing is written until Set up.');
+  } catch (err) {
+    sel.value = avant;
+    toastErreur(err);
+  } finally {
+    sel.disabled = false;
+  }
+}
+
 /** LE ROUTEUR COMME AVANT FREEQOS : l'ecriture coupee d'abord (rien ne sera
  *  repose), puis tout ce qui porte la marque freeQoS retire. */
 function retirerFreeqos(name) {
