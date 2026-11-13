@@ -2352,3 +2352,10 @@ body.role-limited .dash-detail { display: none; }
 }
 [data-router-role] { min-width: 7.5rem; }
 .tl-dot.none { background: transparent; box-shadow: inset 0 0 0 1.5px var(--faint, #bbb); }
+
+/* Pages Executive / Insights : onglets, une phrase par onglet. */
+.pg-tabs { margin: .4rem 0 1rem; flex-wrap: wrap; }
+.pg-pane[hidden] { display: none; }
+.pg-lead { color: var(--muted); margin: 0 0 .9rem; font-size: .9rem; max-width: 60rem; }
+.pg-goto { cursor: pointer; }
+.pg-goto:hover { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); }

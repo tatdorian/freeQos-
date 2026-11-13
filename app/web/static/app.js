@@ -1791,6 +1791,7 @@ function selectionExists(sel) {
 }
 
 async function loadExec() {
+  ongletPageInitial('exec');
   const minutes = state.execRange || 60;
   const buckets = minutes <= 15 ? 15 : minutes <= 60 ? 30 : 36;
   // Chaque source est isolee : une seule qui echoue ne doit pas laisser l'onglet
@@ -2316,6 +2317,11 @@ function latCell(st, seuils) {
  *  subit. La mediane est l'habitude, le p95 les moments penibles, la latence
  *  sous charge ce qui fait hacher un appel quand quelqu'un telecharge. */
 function renderLatencyClients() {
+  renderLatencyClientsTable();
+  limiterLignes(document.getElementById('exec-latency-clients'), 15, 'Show all clients');
+}
+
+function renderLatencyClientsTable() {
   const host = document.getElementById('exec-latency-clients');
   if (!host) return;
   const data = exec.latencyClients;
@@ -3381,6 +3387,34 @@ function periodeTexte(minutes) {
   if (m % 1440 === 0) return (m / 1440 === 1 ? '24 hours' : (m / 1440) + ' days');
   if (m % 60 === 0) return (m / 60 === 1 ? 'hour' : (m / 60) + ' hours');
   return m + ' minutes';
+}
+
+/* ------------------------------------------- onglets des pages Executive / Insights
+ *  Meme principe que Trafic : une question par onglet, retenue par le
+ *  navigateur. Changer d'onglet redessine la page : un graphique dessine dans
+ *  un onglet cache n'avait pas de largeur. */
+const PG_ONGLETS = {};
+
+function ongletPage(vue, nom, sansRecharger) {
+  const section = document.getElementById('view-' + vue);
+  if (!section) return;
+  const valides = [...section.querySelectorAll('[data-pg-pane]')].map((p) => p.dataset.pgPane);
+  const choisi = valides.includes(nom) ? nom : valides[0];
+  PG_ONGLETS[vue] = choisi;
+  try { localStorage.setItem('freeqos.tab.' + vue, choisi); } catch (e) { /* stockage indisponible */ }
+  section.querySelectorAll('[data-pg-tab]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.pgTab === choisi);
+    b.setAttribute('aria-selected', b.dataset.pgTab === choisi ? 'true' : 'false');
+  });
+  section.querySelectorAll('[data-pg-pane]').forEach((p) => { p.hidden = p.dataset.pgPane !== choisi; });
+  if (!sansRecharger && LOADERS[vue]) Promise.resolve(LOADERS[vue]()).catch(() => {});
+}
+
+function ongletPageInitial(vue) {
+  if (PG_ONGLETS[vue]) return;
+  let memo = null;
+  try { memo = localStorage.getItem('freeqos.tab.' + vue); } catch (e) { memo = null; }
+  ongletPage(vue, memo, true);
 }
 
 async function loadTraffic() {
@@ -12109,6 +12143,7 @@ function renderInsightsNotice(r, jours) {
 }
 
 async function loadInsights() {
+  ongletPageInitial('insights');
   const jours = Number(document.getElementById('ins-days').value) || 7;
   const [abos, sites] = await Promise.all([
     api('/insights/subscribers?days=' + jours),
@@ -12141,11 +12176,37 @@ async function loadInsights() {
         '<td class="num">' + (r.ceiling_share ? Math.round(r.ceiling_share * 100) + '%' : '-') + '</td>' +
         '<td class="num">' + qoe(r) + '</td><td>' + esc((r.reasons || []).join(' · ')) + '</td></tr>').join('') +
       '</tbody></table>';
-  document.getElementById('ins-risk').innerHTML =
-    table(lignes.filter((r) => r.status === 'at_risk'), 'Nobody shows a sign of leaving.');
-  document.getElementById('ins-upgrade').innerHTML =
-    table(lignes.filter((r) => r.status === 'upgrade'), 'Nobody lives at their plan ceiling.');
+  // Chaque onglet ne montre que les colonnes qui repondent a SA question.
+  const risque = lignes.filter((r) => r.status === 'at_risk');
+  document.getElementById('ins-risk').innerHTML = !risque.length
+    ? '<div class="empty">Nobody shows a sign of leaving.</div>'
+    : '<table><thead><tr><th>Client</th><th>Site</th><th class="num">Experience</th>' +
+      '<th class="num">Avg download</th><th>Why</th></tr></thead><tbody>' +
+      risque.map((r) => '<tr><td>' + lien(r) + '</td><td>' + esc(r.pop_name || '-') + '</td>' +
+        '<td class="num">' + qoe(r) + '</td><td class="num">' + usage(r) + '</td>' +
+        '<td>' + esc((r.reasons || []).join(' · ')) + '</td></tr>').join('') + '</tbody></table>';
+  const montee = lignes.filter((r) => r.status === 'upgrade');
+  document.getElementById('ins-upgrade').innerHTML = !montee.length
+    ? '<div class="empty">Nobody lives at their plan ceiling.</div>'
+    : '<table><thead><tr><th>Client</th><th>Site</th><th class="num">Plan</th>' +
+      '<th class="num">Time at its limit</th><th class="num">Experience</th></tr></thead><tbody>' +
+      montee.map((r) => '<tr><td>' + lien(r) + '</td><td>' + esc(r.pop_name || '-') + '</td>' +
+        '<td class="num">' + plan(r) + '</td>' +
+        '<td class="num">' + (r.ceiling_share ? Math.round(r.ceiling_share * 100) + '%' : '-') + '</td>' +
+        '<td class="num">' + qoe(r) + '</td></tr>').join('') + '</tbody></table>';
   document.getElementById('ins-all').innerHTML = table(lignes, 'No subscriber.');
+  limiterLignes(document.getElementById('ins-risk'), 12, 'Show all');
+  limiterLignes(document.getElementById('ins-upgrade'), 12, 'Show all');
+  limiterLignes(document.getElementById('ins-all'), 20, 'Show all clients');
+  // Les chiffres de la vue d'ensemble menent a leur liste.
+  const cartes = document.querySelectorAll('#ins-stats > *');
+  [['risk', 0], ['upgrade', 1]].forEach(([onglet, i]) => {
+    const carte = cartes[i];
+    if (!carte) return;
+    carte.classList.add('pg-goto');
+    carte.title = 'Open the list';
+    carte.onclick = () => ongletPage('insights', onglet);
+  });
 
   const lesSites = sites.sites || [];
   document.getElementById('ins-capacity').innerHTML = !lesSites.length
@@ -15066,6 +15127,11 @@ document.getElementById('flow-range').addEventListener('change', loadTraffic);
 document.querySelectorAll('#trf-tabs [data-trf-tab]').forEach((b) => {
   b.addEventListener('click', () => ongletTrafic(b.dataset.trfTab));
 });
+['exec', 'insights'].forEach((vue) => {
+  document.querySelectorAll('#view-' + vue + ' [data-pg-tab]').forEach((b) =>
+    b.addEventListener('click', () => ongletPage(vue, b.dataset.pgTab)));
+});
+
 document.getElementById('exec-lat-search').addEventListener('input', renderLatencyClients);
 document.getElementById('plans-search').addEventListener('input', renderPlanClients);
 schedInit();

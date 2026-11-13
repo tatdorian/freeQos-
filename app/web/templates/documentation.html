@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="8f583009829a7ca9">
+  <meta name="freeqos-docs-source" content="1f85b67b769bd2ca">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -3089,7 +3089,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>The capacity view also ranks subscribers by <strong>volume</strong> over the period. The top of instantaneous rates names whoever is downloading right now; the volume over a week names whoever weighs on the network. They are almost never the same subscribers.</p>
 <h2 id="9-interface">9. Interface</h2>
 <p><strong>Errors say what happened and what to do</strong>: a title (<em>Not allowed with your account</em>, <em>Not possible right now</em>, <em>A router or service did not answer</em>, <em>freeQoS cannot be reached</em>...), the server's reason, and the next step. An error from a button shows in a corner without blocking the page; a page that cannot load says so in a banner and retries on its own.</p>
-<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
+<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. <strong>Traffic</strong>, <strong>Executive</strong> and <strong>Insights</strong> are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with <em>Show all</em>. The chosen tab is remembered in your browser. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -3112,12 +3112,12 @@ curl -s http://127.0.0.1:8000/health/ready
 <tr>
 <td><strong>Executive</strong></td>
 <td>Where is the risk?</td>
-<td>Saturation risks, latency per subscriber, load and queues per node, health over time (QoE heatmap)</td>
+<td>Four tabs, one question each: <strong>Overview</strong> (verdict, four key figures, saturation risks), <strong>Latency</strong> (per client, where the delay comes from), <strong>Load &amp; queues</strong> (per node; click a row for its details), <strong>History</strong> (health hour by hour)</td>
 </tr>
 <tr>
 <td><strong>Traffic</strong></td>
 <td>Who consumes what, where to?</td>
-<td>Consumers, services, countries, who talks to whom, destinations, IP lookup (restrictions moved to <strong>Rules</strong>)</td>
+<td>Tabs: Overview, Clients (who talks to whom), Destinations (map, countries, addresses), Find an IP, Advanced; click a service or an address to see who used it (restrictions moved to <strong>Rules</strong>)</td>
 </tr>
 <tr>
 <td><strong>Network tree</strong></td>
@@ -3137,7 +3137,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <tr>
 <td><strong>Insights</strong></td>
 <td>What to do commercially?</td>
-<td>Subscribers at risk of leaving, ready for a bigger plan, sites with room to grow</td>
+<td>Tabs: <strong>Overview</strong> (three figures; click one to open its list), <strong>At risk</strong> (who may cancel, and why), <strong>Upgrade</strong> (who lives at their plan's limit with a good experience), <strong>Capacity</strong> (room left per site and access point), <strong>All clients</strong></td>
 </tr>
 <tr>
 <td><strong>Devices</strong></td>
