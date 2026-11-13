@@ -587,6 +587,10 @@ The *Network tree* opens as a **List**, like a file explorer; **Diagram** shows 
 - Each box's clients are one line, **"N clients"**; opened, they are listed by page of 50 (online first), each with its address, rate and a link to its page.
 - More than 8 devices known only by their MAC under one box fold into **"N unknown devices"**.
 - The search box **filters** the list as you type: devices and clients matching the text (name, login, address), with the path above them.
+- Only **real clients** appear: those seen in a PPPoE session and those declared (static IP / VLAN, or added by hand). An address only seen in the ARP table of a VLAN, that nobody declared, is not shown in the tree; it is offered for declaration in *Clients*.
+- A client without any measurement (no queue, no NetFlow) is shown **not measured** (hollow dot) rather than offline: it may well carry traffic.
+- A device whose role is unknown shows **DEV**, or **NAS** / **RTR** when its name says so (`NAS-…`, gateway, uplink…).
+- In the **Diagram**, clicking a *N clients* box opens it in the List (the group unfolded and selected): hundreds of client boxes are unreadable as a drawing.
 - Click a line to open its side panel (role, parent, *This box is a client*, *Show only this branch*...), exactly as in the diagram.
 
 The list holds thousands of clients where the diagram saturates. Placing by drag and drop, creating a link and the layout stay in **Diagram**.
