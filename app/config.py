@@ -579,8 +579,9 @@ class Settings(BaseSettings):
     #: une file par client, a son forfait x ``upstream_cap_factor``. Le trafic
     #: venu d'internet est coupe AVANT de remplir le coeur et les liens ; le
     #: NAS garde le shaping fin (CAKE). Files legeres (type par defaut, pas de
-    #: CAKE), sur l'ADRESSE du client seulement, jamais sur un lien.
-    upstream_caps: bool = False
+    #: CAKE), sur l'ADRESSE du client seulement, jamais sur un lien. ACTIF par
+    #: defaut : sans routeur de role core/gateway dans Appareils, il ne fait rien.
+    upstream_caps: bool = True
     upstream_cap_factor: float = 1.1
     # Sur quoi accrocher la file d'un abonne.
     #
