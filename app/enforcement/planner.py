@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 
 QUEUE_TYPE_UP = f"{PREFIX}cake-up"
 QUEUE_TYPE_DOWN = f"{PREFIX}cake-down"
+#: Motif d'un client sans debit a appliquer : aucune file, jamais de 0/0.
+NO_RATE_SKIP = (
+    "no rate to apply (neither plan nor mode): no queue is written -- a queue that "
+    "limits nothing only costs router CPU"
+)
 #: Motif d'un lien sans file quand les files de lien sont coupees (le defaut).
 LINK_QUEUES_OFF = (
     "link queues are off: freeQoS only caps each client's own addresses, never a "
@@ -430,7 +435,7 @@ def desired_state(
             override_mbps=link.override_up_mbps,
             trim_factor=link.trim_factor,
         )
-        if down is None and up is None and not queue_unmeasured_links:
+        if not down and not up and not queue_unmeasured_links:
             ecartes.append(
                 PlanSkip(
                     link.name,
@@ -503,11 +508,7 @@ def desired_state(
         # sans debit a appliquer ne prend la place de personne.
         if not subscriber.enabled or subscriber.skip_reason:
             continue
-        if (
-            subscriber.effective_down_at(now) is None
-            and subscriber.effective_up_at(now) is None
-            and subscriber.kind != KIND_STATIC
-        ):
+        if not subscriber.effective_down_at(now) and not subscriber.effective_up_at(now):
             continue
         cible = subscriber.queue_target(target_mode)
         if cible is not None:
@@ -526,15 +527,15 @@ def desired_state(
             continue
         down = subscriber.effective_down_at(now)
         up = subscriber.effective_up_at(now)
-        # UN CLIENT A IP FIXE SANS DEBIT A QUAND MEME SA FILE, ILLIMITEE (0/0).
-        # Son seul compteur de trafic est celui de sa file : sans elle, un client
-        # declare sans plan n'avait aucune bande passante affichee. La file ne
-        # bride rien -- exactement comme celle d'un lien sans capacite connue.
-        # Un abonne PPPoE, lui, a deja le compteur de son interface de session.
-        if down is None and up is None and subscriber.kind != KIND_STATIC:
-            ecartes.append(
-                PlanSkip(subscriber.login, "no rate to apply (neither plan nor override)")
-            )
+        # PAS DE DEBIT, PAS DE FILE -- client a IP fixe compris.
+        #
+        # CONSTATE EN PRODUCTION : des clients se sont plaints alors qu'AUCUNE
+        # limite n'etait posee. Une file 0/0 ne bride rien, mais tout le trafic
+        # qu'elle vise passe par le traitement des files (un coeur CPU, CAKE).
+        # Une file qui ne limite rien n'a qu'un cout : elle n'est plus ecrite.
+        # Le trafic d'un client sans file se mesure par son interface ou NetFlow.
+        if not down and not up:
+            ecartes.append(PlanSkip(subscriber.login, NO_RATE_SKIP))
             continue
 
         cible = subscriber.queue_target(target_mode)
