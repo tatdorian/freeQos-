@@ -79,8 +79,11 @@ async def test_le_coeur_plafonne_chaque_client_au_dessus_de_son_forfait(
     assert champs["max-limit"] == "22000000/110000000"
 
 
-async def test_coupe_par_defaut_le_coeur_ne_recoit_rien(settings: Settings) -> None:
-    assert Settings(_env_file=None, database_url="postgresql://x:x@h/x").upstream_caps is False
+def test_actif_par_defaut() -> None:
+    assert Settings(_env_file=None, database_url="postgresql://x:x@h/x").upstream_caps is True
+
+
+async def test_coupe_le_coeur_ne_recoit_rien(settings: Settings) -> None:
     settings.upstream_caps = False
     service, _coeur = _service(settings)
     await service.registry.reload()
