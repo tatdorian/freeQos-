@@ -2343,3 +2343,4 @@ a.tl-name { color: var(--accent); text-decoration: none; display: block; }
   .tl-row > .tl-meta, .tl-row > .tl-count { display: none; }
   .tl-head { display: none; }
 }
+[data-router-role] { min-width: 7.5rem; }
