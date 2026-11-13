@@ -12437,7 +12437,8 @@ function qtile(icone, teinte, label, valeur, sous, jauge, filtre) {
     '<span class="qt-ico">' + QT_ICONES[icone] + '</span>' +
     '<span class="qt-val">' + esc(String(valeur)) + '</span>' +
     '<span class="qt-lbl">' + esc(label) + '</span>' +
-    (jauge != null ? '<span class="qt-bar"><i style="width:' + Math.round(jauge * 100) + '%"></i></span>' : '') +
+    (jauge != null ? '<span class="qt-bar"><i style="width:' + Math.round(jauge * 100) + '%"></i></span>'
+      : '<span class="qt-bar qt-vide"></span>') +
     (sous ? '<span class="qt-sub">' + esc(sous) + '</span>' : '') + '</button>';
 }
 

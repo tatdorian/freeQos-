@@ -666,11 +666,14 @@ tr.sub-row td { background: color-mix(in srgb, var(--accent) 4%, transparent); f
 .switch-sm .write-state .hint { margin-top: .1rem; }
 
 /* ============================================ editeur d'arbre (topologie) */
-.chk {
+/* Pas sur une cellule de tableau (case de selection) : inline-flex lui faisait
+   perdre sa bordure et son fond de survol, la ligne paraissait decalee. */
+.chk:not(td):not(th) {
   display: inline-flex; align-items: center; gap: .45rem; cursor: pointer;
   font-size: .84rem; color: var(--muted);
 }
-.chk input { width: auto; }
+.chk:not(td):not(th) input { width: auto; }
+td.chk, th.chk { width: 2.4rem; text-align: center; }
 
 .topo-editor { display: flex; gap: 1rem; align-items: stretch; }
 /* LE CADRE SUIT LE DESSIN, ET LE QUADRILLAGE AVEC LUI : le quadrillage est
@@ -817,8 +820,10 @@ tbody tr:hover td { background: color-mix(in srgb, var(--fill) 55%, transparent)
 /* Fond OPAQUE au survol, et plus specifique que ``tr.clickable:hover td`` :
    un fond translucide laissait voir la colonne qui defile dessous (le badge
    Bufferbloat superpose aux boutons Rate / Boost). */
-tbody tr:hover td.sticky-actions,
-tbody tr.clickable:hover td.sticky-actions { background: var(--surface-2); }
+tbody tr:hover td.sticky-actions { background: linear-gradient(color-mix(in srgb, var(--fill) 55%, transparent), color-mix(in srgb, var(--fill) 55%, transparent)), var(--surface); }
+/* La MEME teinte que le reste de la ligne survolee, mais opaque : la couleur
+   de survol posee sur le fond de la carte. */
+tbody tr.clickable:hover td.sticky-actions { background: linear-gradient(var(--fill), var(--fill)), var(--surface); }
 
 * { scrollbar-width: thin; scrollbar-color: var(--fill-strong) transparent; }
 ::-webkit-scrollbar { width: 11px; height: 11px; }
@@ -1835,7 +1840,7 @@ body[data-view="client"] .page-head { display: none; }
 .qtile {
   --t: var(--accent); --t-dim: var(--accent-dim);
   display: grid; grid-template-columns: auto 1fr; grid-template-areas: "ico ico" "val val" "lbl lbl" "bar bar" "sub sub";
-  justify-items: start; text-align: left; gap: .1rem; padding: 1rem 1.1rem 1rem;
+  justify-items: start; align-content: start; text-align: left; gap: .1rem; padding: 1rem 1.1rem 1rem;
   background: var(--surface); color: var(--text); border-radius: var(--radius); box-shadow: var(--shadow);
   position: relative; overflow: hidden; transition: transform .15s ease, box-shadow .15s ease;
 }
@@ -2368,3 +2373,7 @@ body.role-limited .dash-detail { display: none; }
 .hot-unknown summary { color: var(--text); padding: .3rem 0; }
 .hot-unknown summary .pct-hint { margin-left: .4rem; }
 #hot-unknown-list td, #hot-unknown-list th { padding-top: .35rem; padding-bottom: .35rem; }
+
+/* Toutes les tuiles ont la meme structure : une jauge absente garde sa place,
+   les chiffres et les libelles s'alignent d'une tuile a l'autre. */
+.qt-bar.qt-vide { visibility: hidden; }
