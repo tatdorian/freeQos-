@@ -702,7 +702,7 @@ async function globalSearch(q) {
     'sub:' + s.id)));
   groupe('Routers', (r.routers || []).map((x) => gsItem('RTR', x.name, x.host + ' · ' + x.pop_name, 'router:' + x.name)));
   groupe('Sites', (r.sites || []).map((x) => gsItem('POP', x.name, x.subscribers + ' subscriber(s)', 'site:' + x.id)));
-  groupe('Devices', (r.devices || []).map((d) => gsItem((ICONE[d.kind] || '?'), d.name,
+  groupe('Devices', (r.devices || []).map((d) => gsItem(topoIcone(d), d.name,
     [d.address, d.mac, d.platform].filter(Boolean).join(' · '), 'node:' + d.key)));
   groupe('Internet addresses', (r.addresses || []).map((a) => gsItem('WAN', a.address,
     [a.service || a.hostname, a.org, a.city].filter(Boolean).join(' · '), 'ip:' + a.address)));
@@ -4149,8 +4149,8 @@ async function createApiKey(event) {
 
 const ICONE = {
   gateway: 'GW', core: 'CORE', pop: 'POP', radio: 'RF',
-  sector: 'SECT', cpe: 'CPE', client: 'CLI', unknown: '?', subscriber: 'ABO',
-  static: 'FIXE', candidate: '?IP', vlan: 'VLAN',
+  sector: 'SECT', cpe: 'CPE', client: 'CLI', unknown: 'DEV', subscriber: 'ABO',
+  static: 'FIXE', candidate: 'IP', vlan: 'VLAN',
 };
 
 /** Combien d'equipements et de liens porte ce graphe.
@@ -7848,6 +7848,10 @@ function topoBuildModel(data, options) {
   const nodes = new Map();
   data.nodes.forEach((n) => {
     if (n.hidden) return;
+    // L'arbre ne montre que les clients DECLARES ou vus en session PPPoE.
+    // Une adresse vue dans l'ARP d'un VLAN, que personne n'a declaree, n'est
+    // pas un client : elle reste proposee dans Clients, pas ici.
+    if (n.kind === 'candidate') return;
     nodes.set(n.key, { ...n, children: [], parentKey: null, edge: null, depth: 0 });
   });
 
@@ -8188,6 +8192,17 @@ function topoGrouperFeuilles(nodes) {
   nodes.forEach((n) => { if (n.expandable && n.expanded) n.grille = true; });
 }
 
+/** Le sigle d'une case, jamais « ? » : un role inconnu se devine par le nom
+ *  (NAS-xxx, gateway, uplink...), sinon c'est un equipement (DEV). */
+function topoIcone(n) {
+  const kind = n && n.kind;
+  if (kind && kind !== 'unknown' && ICONE[kind]) return ICONE[kind];
+  const nom = String((n && n.name) || '');
+  if (/^nas[-_ ]/i.test(nom)) return 'NAS';
+  if (/gateway|uplink|\bccr\b|core|router/i.test(nom)) return 'RTR';
+  return 'DEV';
+}
+
 /** Le nom a afficher : un equipement connu par sa seule MAC (ou son IP) se lit
  *  « Unknown device » avec sa marque, et la MAC passe en sous-titre. */
 function topoTitre(n) {
@@ -8421,6 +8436,9 @@ function renderTopoCanvas() {
   parts.push('<g class="topo-edges">');
   model.nodesByKey.forEach((n) => {
     if (n.replie || !n.parentKey) return;
+    // Une liste depliee en colonnes : seule la premiere colonne est reliee a
+    // sa case. Les traits vers les suivantes traversaient les cases voisines.
+    if (n.colOffset) return;
     const p = model.nodesByKey.get(n.parentKey);
     if (!p) return;
     const rates = n.synthRates || topoEdgeRates(n.edge) || topoStaticRates(n) || topoUispRates(n);
@@ -8529,9 +8547,10 @@ function renderTopoCanvas() {
         '<rect class="accent" x="0" y="0" width="5" height="' + NODE_H +
           '" fill="' + color + '"></rect>' +
         '<text class="role" x="13" y="18" fill="' + color + '">' +
-          esc(n.groupe ? 'GROUP' : (ICONE[n.kind] || '?')) +
+          esc(n.groupe ? 'GROUP' : topoIcone(n)) +
           // Le chevron dit que la case s'ouvre, et dans quel sens elle va.
-          (n.expandable ? (n.expanded ? '  \u25be open' : '  \u25b8 show') : '') + '</text>' +
+          (n.expandable ? (String(n.key).startsWith('abos:') ? '  \u25b8 list'
+            : n.expanded ? '  \u25be open' : '  \u25b8 show') : '') + '</text>' +
         '<text class="title" x="13" y="31">' + esc(topoTrim(topoTitre(n), pliable ? 15 : 20)) +
           '<title>' + esc(n.name) + '</title>' +
           '</text>' +
@@ -8735,6 +8754,8 @@ function bindTopoDrag(svg, model) {
       // defaut. Il se deplace quand meme -- c'est le MOUVEMENT qui distingue
       // les deux gestes, pas la nature de la case.
       const deplier = () => {
+        // Des CLIENTS : la liste les lit bien mieux que des centaines de cases.
+        if (String(key).startsWith('abos:')) { topoClientsEnListe(key); return; }
         if (topo.abosOuverts.has(key)) topo.abosOuverts.delete(key);
         else topo.abosOuverts.add(key);
         renderTopoCanvas();
@@ -8956,23 +8977,37 @@ function topoListeComptes(model, parLogin) {
   const memo = new Map();
   const calc = (n) => {
     if (memo.has(n.key)) return memo.get(n.key);
-    memo.set(n.key, { total: 0, enLigne: 0 });
+    memo.set(n.key, { total: 0, enLigne: 0, mesures: 0 });
     let total = 0;
     let enLigne = 0;
+    let mesures = 0;
     const compter = (login) => {
       total += 1;
       const s = parLogin.get(login);
+      if (s && s.ts) mesures += 1;
       if (s && mesureFraiche(s)) enLigne += 1;
     };
     if (estAbos(n)) (n.members || []).forEach(compter);
     if (n.clientLogin) compter(n.clientLogin);
-    n.children.forEach((c) => { const r = calc(c); total += r.total; enLigne += r.enLigne; });
-    const r = { total, enLigne };
+    n.children.forEach((c) => {
+      const r = calc(c);
+      total += r.total;
+      enLigne += r.enLigne;
+      mesures += r.mesures;
+    });
+    const r = { total, enLigne, mesures };
     memo.set(n.key, r);
     return r;
   };
   model.nodesByKey.forEach(calc);
   return memo;
+}
+
+/** « 12 online », ou « not measured » quand aucun de ces clients n'a de
+ *  mesure : sans compteur (ni file, ni NetFlow), dire « 0 online » ferait
+ *  croire a une coupure alors que le trafic passe. */
+function topoEnLigneTexte(enLigne, mesures) {
+  return mesures ? enLigne + ' online' : 'not measured';
 }
 
 function topoListeOuvert(n, etat) {
@@ -9029,10 +9064,14 @@ function renderTopoList() {
   const ligneClient = (s, prof) => {
     const vu = mesureFraiche(s);
     const r = vu && (s.tx_bps || s.rx_bps) ? { down: Number(s.tx_bps) || 0, up: Number(s.rx_bps) || 0 } : null;
+    const etatClient = vu ? ['ok', 'online'] : s.ts ? ['off', 'offline'] : ['none', 'not measured'];
     lignes.push('<div class="tl-row tl-client" style="--d:' + prof + '">' + vide +
-      '<span class="tl-dot ' + (vu ? 'ok' : 'off') + '" title="' + (vu ? 'online' : 'offline') + '"></span>' +
-      '<a class="tl-name" href="#/client/' + esc(encodeURIComponent(s.login)) + '">' + esc(s.display_name || s.login) + '</a>' +
-      '<span class="tl-meta">' + esc(s.last_ip || '') + '</span>' +
+      '<span class="tl-dot ' + etatClient[0] + '" title="' + etatClient[1] + '"></span>' +
+      '<span class="tl-name"><a href="#/client/' + esc(encodeURIComponent(s.login)) + '" title="' +
+        esc(s.login) + '">' + esc(s.display_name || s.login) + '</a>' +
+        (s.last_ip ? '<span class="tl-ip">' + esc(s.last_ip) + '</span>' : '') +
+        (s.kind === 'static' ? '<span class="badge">static IP</span>' : '') + '</span>' +
+      '<span class="tl-meta"></span>' +
       '<span class="tl-count"></span>' + debitTxt(r) + '</div>');
   };
 
@@ -9051,7 +9090,8 @@ function renderTopoList() {
         caret(n.key, ouvert) + '<span class="tl-kind" style="color:var(--accent)">ABO</span>' +
         '<span class="tl-name"><b>' + membres.length + ' client' + (membres.length > 1 ? 's' : '') + '</b></span>' +
         '<span class="tl-meta"></span>' +
-        '<span class="tl-count">' + membres.filter(mesureFraiche).length + ' online</span>' +
+        '<span class="tl-count">' + topoEnLigneTexte(membres.filter(mesureFraiche).length,
+          membres.filter((x) => x.ts).length) + '</span>' +
         debitTxt(n.synthRates) + '</div>');
       if (!ouvert) return;
       const montres = etat.pages.get(n.key) || TOPO_LISTE_PAGE;
@@ -9075,13 +9115,13 @@ function renderTopoList() {
     lignes.push('<div class="tl-row' + sel + (n.fresh === false ? ' stale' : '') + '" data-tl-key="' + esc(n.key) +
       '" style="--d:' + prof + '">' +
       (enfants.length ? caret(n.key, ouvert) : vide) +
-      '<span class="tl-kind" style="color:' + couleur + '">' + esc(ICONE[n.kind] || '?') + '</span>' +
+      '<span class="tl-kind" style="color:' + couleur + '">' + esc(topoIcone(n)) + '</span>' +
       '<span class="tl-name"><span class="tl-dot ' + etatCase + '"></span>' + esc(topoTitre(n)) +
         (n.clientLogin ? ' <span class="badge">client</span>' : '') + '</span>' +
       '<span class="tl-meta">' + esc(topoTitre(n) !== n.name ? n.name
         : ((n.addresses || [])[0] || n.address || '')) + '</span>' +
       '<span class="tl-count">' + (c.total ? c.total + ' client' + (c.total > 1 ? 's' : '') +
-        ' · ' + c.enLigne + ' online' : '') + '</span>' +
+        ' · ' + topoEnLigneTexte(c.enLigne, c.mesures) : '') + '</span>' +
       debitTxt(debitDe(n)) + '</div>');
     if (!ouvert) return;
     // Les equipements connus par leur seule MAC : au-dela de quelques-uns, ils
@@ -9093,7 +9133,7 @@ function renderTopoList() {
       const cle = 'unk:' + n.key;
       const ouv = etat.ouverts.has(cle);
       lignes.push('<div class="tl-row tl-group" style="--d:' + (prof + 1) + '">' + caret(cle, ouv) +
-        '<span class="tl-kind">?</span><span class="tl-name">' + inconnus.length +
+        '<span class="tl-kind">DEV</span><span class="tl-name">' + inconnus.length +
         ' unknown devices</span><span class="tl-meta">known by MAC or IP only</span>' +
         '<span class="tl-count"></span><span class="tl-rate"></span></div>');
       if (ouv) inconnus.forEach((x) => ligneCase(x, prof + 2));
@@ -9135,6 +9175,27 @@ function renderTopoList() {
       }
     });
   }
+}
+
+/** Depuis le diagramme, « N clients » s'ouvre dans la LISTE : le groupe
+ *  deplie, ses parents ouverts, la ligne selectionnee et amenee a l'ecran. */
+function topoClientsEnListe(cle) {
+  const etat = topoListeEtat();
+  etat.filtre = '';
+  const champ = document.getElementById('topo-find');
+  if (champ) champ.value = '';
+  etat.fermes.delete(cle);
+  etat.ouverts.add(cle);
+  topo.selected = cle;
+  topoChoisirVue('list');
+  const modele = topo.model;
+  for (let k = modele && (modele.nodesByKey.get(cle) || {}).parentKey; k; k = (modele.nodesByKey.get(k) || {}).parentKey) {
+    etat.fermes.delete(k);
+    etat.ouverts.add(k);
+  }
+  renderTopoList();
+  const ligne = document.querySelector('#topo-list [data-tl-key="' + cssEsc(cle) + '"]');
+  if (ligne && ligne.scrollIntoView) ligne.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 
 /** Bascule Liste / Diagramme, retenue dans le navigateur. */
@@ -9231,7 +9292,7 @@ function renderTopoPanel() {
         '<span class="hint">Same device? Merge. Otherwise (two ends of one link, ' +
         'e.g. CCR\u2194DS), leave it: these are two real routers.</span></div>'
       : '') +
-    '<div class="kv"><span>Role</span><span>' + esc(KIND_LABEL[node.kind] || '?') + '</span></div>' +
+    '<div class="kv"><span>Role</span><span>' + esc(KIND_LABEL[node.kind] || 'Device') + '</span></div>' +
     // Le loopback EST l'identite du routeur : il merite la ligne juste sous le
     // role, et l'origine de la deduction doit etre visible pour que l'operateur
     // sache s'il peut lui faire confiance ou s'il doit la declarer.
@@ -9321,7 +9382,7 @@ function renderTopoPanel() {
       '<select id="topo-merge-target"><option value="">— merge this box into —</option>' +
       topoOtherNodes(node.key).map((o) =>
         '<option value="' + esc(o.key) + '">' + esc(topoTrim(o.name, 24)) +
-        ' · ' + esc(KIND_LABEL[o.kind] || '?') + '</option>').join('') +
+        ' · ' + esc(KIND_LABEL[o.kind] || 'Device') + '</option>').join('') +
       '</select></div>' +
     (node.manual_aliases && node.manual_aliases.length
       ? '<div class="kv"><span>Manual merges</span><span class="topo-unmerge">' +
@@ -9634,7 +9695,7 @@ function renderTopologyLinks(allLinks, allNodes) {
             ' neighbours on this port: the rate is the port\'s, not this one neighbour\'s.">' +
             'shared</span>' : '') + '</td>' +
         '<td>' + esc(l.target_name || l.target_key) +
-          ' <span class="badge">' + esc(KIND_LABEL[l.target_kind] || '?') + '</span>' +
+          ' <span class="badge">' + esc(KIND_LABEL[l.target_kind] || 'Device') + '</span>' +
           // UN CABLE ENTRE DEUX ROUTEURS INTERROGES N'A QU'UNE LIGNE : celle du
           // bout canonique. Sans ce badge, le routeur d'en face n'apparaissait
           // nulle part dans la colonne "Depuis" et semblait ne pas etre lu --
