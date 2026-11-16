@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -596,6 +596,11 @@ def desired_state(
     return types, files, ecartes
 
 
+def queues_without_rate(skipped: Iterable[PlanSkip]) -> set[str]:
+    """Les noms de file des clients ecartes faute de debit (``NO_RATE_SKIP``)."""
+    return {f"{PREFIX}{slugify(s.login)}" for s in skipped if s.reason == NO_RATE_SKIP}
+
+
 def _parent_par_adresse(target: str, reseaux: list[tuple[Any, str]]) -> str | None:
     """File de lien dont le segment contient cette adresse, la plus precise.
 
@@ -748,8 +753,16 @@ def build_plan(
     actual_queues: Sequence[dict[str, Any]],
     prune: bool = True,
     adopt: bool = True,
+    remove_names: Iterable[str] = (),
 ) -> Plan:
     """Compare l'etat desire a l'etat lu sur le routeur.
+
+    ``remove_names`` : nos files a retirer MEME sans purge. Ce sont celles des
+    clients qui n'ont plus AUCUN debit (plage horaire finie, boost echu, mode
+    rendu) : leur file ne doit plus exister, quel que soit leur etat de session.
+    Rien d'autre n'est retire -- la purge generale reste reservee a la
+    reconciliation (une liste de sessions vide le temps d'une coupure ne doit
+    jamais vider un PoP).
 
     Regle de propriete : une ligne qui ne porte pas notre commentaire n'est
     jamais SUPPRIMEE, et son nom reste celui que l'exploitant lui a donne.
@@ -907,13 +920,16 @@ def build_plan(
         else:
             plan.unchanged += 1
 
-    if prune:
+    a_retirer = set(remove_names)
+    if prune or a_retirer:
         # Nos files devenues inutiles (abonne parti, lien retire). On ne touche
         # qu'a ce qui porte notre marque.
         for nom, row in files_existantes.items():
             if nom in noms_desires or not _is_managed(row):
                 continue
             if not nom.startswith(PREFIX):
+                continue
+            if not prune and nom not in a_retirer:
                 continue
             plan.actions.append(
                 PlanAction(
@@ -922,7 +938,11 @@ def build_plan(
                     fields={"name": nom},
                     target_id=str(row.get(".id") or row.get("id") or ""),
                     name=nom,
-                    reason="no longer in the desired state",
+                    reason=(
+                        "no rate any more: a queue that limits nothing is not kept"
+                        if nom in a_retirer
+                        else "no longer in the desired state"
+                    ),
                 )
             )
 
