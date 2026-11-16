@@ -113,6 +113,18 @@ from app.services.vlan_sites import site_key as _cle_site
 logger = logging.getLogger(__name__)
 
 
+def _sens_sur(action: Any) -> bool:
+    """Une action qui ne fait que RETIRER ou COUPER : suppression d'une ligne,
+    ou ``/ip/traffic-flow set enabled=no`` (l'export NetFlow arrete)."""
+    if action.verb == "remove":
+        return True
+    return (
+        action.verb == "set"
+        and action.path == "/ip/traffic-flow"
+        and dict(action.fields or {}) == {"enabled": "no"}
+    )
+
+
 def _auteur_automatique(author: str | None) -> bool:
     """Une boucle ou une integration, pas une personne dans l'interface."""
     auteur = str(author or "")
@@ -3518,7 +3530,7 @@ class ShapingService:
         # fait UNIQUEMENT de suppressions passe les verrous -- c'est le sens sur,
         # et l'interrupteur vient justement d'etre coupe pour qu'aucune boucle
         # ne repose rien.
-        retrait = removal and all(a.verb == "remove" for a in plan.actions)
+        retrait = removal and all(_sens_sur(a) for a in plan.actions)
         if not dry_run and not retrait and not self.router_write_enabled(plan.router_name):
             raise RouterWriteDisabledError(
                 f"{plan.router_name}: {MOTIF_ROUTEUR_LECTURE_SEULE}. Nothing was sent: "

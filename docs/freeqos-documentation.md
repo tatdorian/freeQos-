@@ -981,7 +981,9 @@ At most 2,000 destinations are kept per 60-second window, so that a subscriber r
 
 ### Export set up automatically
 
-freeQoS configures the export on each router itself, every 10 minutes if needed (`NETFLOW_EXPORT_AUTO`, `NETFLOW_EXPORT_INTERVAL_S`):
+freeQoS can configure the export on each router itself, every 10 minutes if needed (`NETFLOW_EXPORT_AUTO`, `NETFLOW_EXPORT_INTERVAL_S`). **It is off by default.** A router that exports NetFlow counts every routed packet in its flow table, and RouterOS turns FastPath off while traffic-flow is enabled: all the traffic then goes through the slower CPU path. Seen in production: with writing allowed and no queue at all, only this export was set, and traffic slowed down. Turn it on (*Settings › Advanced*, `netflow_export_auto`) only once the router's CPU headroom is known; the *Traffic* page needs it. *Remove freeQoS* with *Also stop the NetFlow export* removes the target **and** sets `traffic-flow enabled=no` when no other collector uses it.
+
+When it is on, freeQoS sends:
 
 ```
 /ip/traffic-flow set enabled=yes interfaces=all active-flow-timeout=1m inactive-flow-timeout=15s
@@ -2012,7 +2014,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 | `NETFLOW_ENABLED` / `NETFLOW_PORT` | `true` / 2055 | Collector |
 | `NETFLOW_FLUSH_INTERVAL_S` | 60 | Writing aggregates |
 | `NETFLOW_ACCOUNTING_VANTAGE` ✱ | `auto` | Where usage is read: `auto` (each direction where it is seen best), `edge` or `pop` |
-| `NETFLOW_EXPORT_AUTO` ✱ | `true` | Export set up by freeQoS |
+| `NETFLOW_EXPORT_AUTO` ✱ | `false` | Export set up by freeQoS. Off by default: it costs router CPU and turns FastPath off |
 | `NETFLOW_EXPORT_INTERVAL_S` | 600 | How often the export is checked |
 | `NETFLOW_COLLECTOR_ADDRESS` | auto | Address announced to the routers (required in a container) |
 | `NETFLOW_TRACK_DESTINATIONS` / `NETFLOW_DESTINATION_LIMIT` ✱ | `true` / 2,000 | Destinations kept (7 days) |

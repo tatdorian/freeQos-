@@ -6087,7 +6087,8 @@ function retirerFreeqos(name) {
         'by RADIUS or by another tool stay. Clients are no longer shaped by freeQoS on this router. ' +
         'Modes, plans and rules stay saved in freeQoS: allowing writing again puts everything back.</p>' +
       '<label class="pick-item" style="margin:.6rem 0"><input type="checkbox" id="uninst-netflow"> ' +
-        '<span>Also remove the NetFlow export target <span class="hint">(the Traffic page will no longer see this router)</span></span></label>' +
+        '<span>Also stop the NetFlow export <span class="hint">(its target, and traffic-flow itself when no other collector uses it; ' +
+          'the Traffic page will no longer see this router)</span></span></label>' +
       '<div id="uninst-out"></div>' +
       '<div class="actions" style="margin-top:.8rem">' +
         '<button class="danger" id="uninst-go">Remove freeQoS from ' + esc(name) + '</button>' +
@@ -6110,7 +6111,8 @@ function retirerFreeqos(name) {
         ' is read-only for freeQoS now.</b> ' +
         (r.found ? r.removed + ' of ' + r.found + ' freeQoS line(s) removed' + (parType ? ' (' + esc(parType) + ')' : '') + '.'
           : 'Nothing of freeQoS was left on it.') +
-        (r.netflow ? ' NetFlow target(s) removed: ' + esc(r.netflow.removed || 0) + '.' : '') +
+        (r.netflow ? ' NetFlow target(s) removed: ' + esc(r.netflow.removed || 0) + '.' +
+          (r.netflow.traffic_flow_disabled ? ' Traffic-flow turned off.' : '') : '') +
         (errs.length ? '<br>' + errs.slice(0, 8).map(esc).join('<br>') : '') + '</div>';
       go.textContent = 'Done';
       await loadRouters().catch(() => {});

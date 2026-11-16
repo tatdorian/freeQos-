@@ -378,7 +378,15 @@ class Settings(BaseSettings):
     # sans que rien ne le signale. Le controleur a deja un acces en ecriture
     # gouverne et trace : il pose donc l'export lui-meme, sous les memes
     # garde-fous (ENFORCEMENT_ENABLED, plan affichable, audit).
-    netflow_export_auto: bool = True
+    #
+    # COUPE PAR DEFAUT. CONSTATE EN PRODUCTION : avec l'ecriture autorisee, le
+    # trafic ralentissait alors que freeQoS n'avait pose AUCUNE file -- seulement
+    # les deux types CAKE (qu'aucun paquet ne traverse) et cet export. Un routeur
+    # qui exporte NetFlow compte CHAQUE paquet route dans sa table de flux, et
+    # RouterOS coupe le FastPath tant que traffic-flow est actif : tout le trafic
+    # passe par le chemin lent du CPU. Activer l'export est donc un choix, fait
+    # sciemment, routeur par routeur charge connu (Settings > Advanced).
+    netflow_export_auto: bool = False
     netflow_export_interval_s: float = 600.0
     netflow_export_version: int = 9
     netflow_export_interfaces: str = "all"

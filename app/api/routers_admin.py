@@ -652,15 +652,18 @@ async def uninstall_router(
 
 async def _retirer_cible_netflow(container: ContainerDep, name: str, auteur: str) -> dict[str, Any]:
     from app.enforcement.models import Plan, PlanAction
-    from app.services.netflow_export import PATH_TARGET
+    from app.services.netflow_export import PATH_FLOW, PATH_TARGET, _vrai
 
     export = container.netflow_export
     collecteur = next((c for c in container.registry.collectors if c.name == name), None)
     if export is None or collecteur is None:
         return {"removed": 0, "error": "router not collected"}
     try:
-        etat = await export.state_of(collecteur)
-        cibles = [c for c in etat.targets if c.get(".id") and export.is_ours(collecteur, c)]
+        # Les lignes BRUTES du routeur, avec leur .id. (L'etat d'affichage n'en
+        # a pas : retirer depuis lui ne retirait jamais rien.)
+        reglage, brutes = await export.read_raw(collecteur)
+        cibles = [c for c in brutes if c.get(".id") and export.is_ours(collecteur, c)]
+        autres = [c for c in brutes if not export.is_ours(collecteur, c)]
         plan = Plan(
             router_name=name,
             actions=[
@@ -674,14 +677,31 @@ async def _retirer_cible_netflow(container: ContainerDep, name: str, auteur: str
                 for c in cibles
             ],
         )
+        # LE ROUTEUR COMME AVANT. Retirer la seule cible laissait
+        # /ip traffic-flow ACTIVE : le routeur continuait de compter chaque
+        # paquet (et RouterOS garde le FastPath coupe tant que traffic-flow est
+        # actif). Sans autre collecteur que freeQoS, l'export est coupe aussi.
+        coupe = _vrai(reglage.get("enabled")) and not autres
+        if coupe:
+            plan.actions.append(
+                PlanAction(
+                    verb="set",
+                    path=PATH_FLOW,
+                    fields={"enabled": "no"},
+                    name=f"{name} : traffic-flow",
+                    reason="no other collector uses it: the router stops counting flows",
+                )
+            )
         if plan.is_empty:
-            return {"removed": 0}
+            return {"removed": 0, "traffic_flow_disabled": False}
         resultat = await container.shaping.apply(
             plan, dry_run=False, author=auteur, explicit=True, removal=True
         )
     except Exception as exc:  # noqa: BLE001
         return {"removed": 0, "error": f"{type(exc).__name__}: {exc}"}
+    erreurs = [str(o.detail) for o in resultat.outcomes if not o.ok]
     return {
-        "removed": resultat.applied,
-        "errors": [str(o.detail) for o in resultat.outcomes if not o.ok],
+        "removed": resultat.applied - (1 if coupe and not erreurs else 0),
+        "traffic_flow_disabled": coupe and not erreurs,
+        "errors": erreurs,
     }
