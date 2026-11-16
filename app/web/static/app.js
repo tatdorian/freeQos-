@@ -11098,7 +11098,13 @@ function renderDomain() {
           : e.applied_at ? 'Applied ' + esc(depuis(e.applied_at)) + '. The certificate is obtained within a minute once the DNS points here.'
             : 'Saved, not applied yet.') + '</small>' +
         '<small>DNS: ' + ((e.dns || []).length ? esc(e.dns.join(', ')) + (dnsOk === true ? ' ✓ points to this server' : dnsOk === false ? ' ✗ not this server (' + esc(ipNavigateur) + ')' : '')
-          : 'does not resolve yet') + '</small></div></div>'
+          : 'does not resolve yet') + '</small>' +
+        '<small>' + (e.https_enforced
+          ? '<span class="lvl-txt-ok">&#10003; HTTPS only:</span> plain HTTP (server IP, port 8000) now redirects to ' + esc(e.url.replace(/\/$/, '')) + '.'
+          : e.https_redirect_enabled === false
+            ? 'Plain HTTP stays open (HTTPS_REDIRECT=false).'
+            : 'Open ' + esc(e.url.replace(/\/$/, '')) + ' once: as soon as it answers in HTTPS, plain HTTP (server IP, port 8000) is redirected to it automatically.') +
+        '</small></div></div>'
       : '<div class="dm-now"><i class="dg-dot lv-unknown"></i><div><b>No domain</b><small>The interface answers on http://' +
         esc(location.host) + (e.proxy_reachable ? '' : ' · <span class="lvl-txt-crit">the HTTPS proxy does not answer</span>') + '</small></div></div>';
   const etapes = '<ol class="dm-steps">' +
