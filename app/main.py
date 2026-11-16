@@ -34,6 +34,7 @@ from app.api import (
     capacity,
     client_health,
     client_profiles,
+    docs_ui,
     health,
     metrics,
     model_v1,
@@ -216,6 +217,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     """Monte les routeurs. Extrait de create_app pour que les tests puissent
     monter l'API sur un conteneur factice, sans cycle de vie ni base."""
     app.include_router(health.router)
+    app.include_router(docs_ui.router)
     # Connexion et comptes : ces routes portent leurs propres gardes (ouvrir une
     # session ne peut pas exiger d'en avoir une).
     # Le prefixe sert a la garde d'acces pour lire le chemin d'une ecriture.
@@ -281,8 +283,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         description=DESCRIPTION,
         version=__version__,
         lifespan=lifespan,
-        docs_url="/docs",
+        # La documentation et le schema sont servis par app.api.docs_ui, derriere
+        # la connexion : les routes integrees de FastAPI seraient publiques.
+        docs_url=None,
         redoc_url=None,
+        openapi_url=None,
     )
     app.state.settings = settings
 
@@ -290,7 +295,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # un outil externe doit consommer l'API.
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"] if settings.app_env.lower() == "lab" else [],
+        # Jamais de joker : seules les origines nommees (CORS_ALLOW_ORIGINS).
+        allow_origins=list(settings.cors_allow_origins),
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
