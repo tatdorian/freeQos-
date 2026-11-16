@@ -155,6 +155,9 @@ async def test_une_ip_de_session_pppoe_donne_son_debit_a_la_session(
 async def test_sans_forfait_la_limite_par_defaut_s_applique_a_la_session(
     cadre: Settings, routeur: FakeRouterOsClient
 ) -> None:
+    # Une limite par defaut CHOISIE par l'exploitant (0 par defaut : aucune).
+    cadre.default_plan_down_mbps = 100
+    cadre.default_plan_up_mbps = 20
     routeur.add_session("dupont", address="100.64.1.13")
     abonnes = [{"login": "dupont", "kind": "pppoe", "pop_name": "Alpha", "last_ip": "100.64.1.13"}]
     client = _client_statique(
