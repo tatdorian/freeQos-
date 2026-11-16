@@ -94,7 +94,7 @@ const ERREUR_PAR_STATUT = {
   401: ['Your session has ended', 'Log in again.'],
   403: ['Not allowed with your account', 'Ask an Administrator, or log in with an account that has this right.'],
   404: ['Not found', 'It may have been deleted or renamed in the meantime: refresh the page.'],
-  409: ['Not possible right now', 'Read the reason below: something must change first.'],
+  409: ['Not possible right now', 'Read the reason: something must change first.'],
   413: ['Too large', 'Send less at once.'],
   422: ['Some information is missing or not valid', 'Check the fields and try again.'],
   429: ['Too many attempts', 'Wait a moment, then try again.'],
@@ -103,6 +103,38 @@ const ERREUR_PAR_STATUT = {
   503: ['freeQoS is not ready', 'It is starting, or its database is unavailable. Try again in a minute.'],
   504: ['No answer in time', 'The router or service is slow or unreachable. Try again.'],
 };
+
+/* LE RESULTAT D'UN GESTE DOIT SE VOIR. Un formulaire affiche son message
+ * (« enregistre », « ce nom existe deja »...) au-dessus ou a cote : quand la
+ * personne vient de cliquer le bouton du bas, il tombait hors de l'ecran et
+ * rien ne semblait se passer. Un message qui apparait dans les secondes qui
+ * suivent un clic ou un envoi est donc ramene dans la vue. Les rechargements
+ * automatiques (aucune action de la personne) ne font jamais defiler la page. */
+let derniereAction = 0;
+['click', 'submit'].forEach((nom) => document.addEventListener(nom, () => { derniereAction = Date.now(); }, true));
+
+function voir(el) {
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const barre = document.getElementById('page-bar');
+  const haut = (barre ? barre.getBoundingClientRect().bottom : 0) + 8;
+  if (r.top < haut || r.bottom > window.innerHeight) {
+    window.scrollBy({ top: r.top - haut - 8, behavior: 'smooth' });
+  }
+}
+
+new MutationObserver((mutations) => {
+  if (Date.now() - derniereAction > 12000) return;
+  for (const m of mutations) {
+    for (const n of m.addedNodes) {
+      if (n.nodeType !== 1) continue;
+      if (n.closest('#drawer-root, .modal-backdrop, #err-toasts, .toast')) continue;
+      const msg = n.matches('.notice.err, .notice.ok, .notice.warn')
+        ? n : n.querySelector(':scope .notice.err, :scope .notice.ok, :scope .notice.warn');
+      if (msg) { voir(msg); return; }
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true });
 
 function erreurClaire(statut, detail) {
   const [titre, conseil] = ERREUR_PAR_STATUT[statut] ||
@@ -4122,8 +4154,6 @@ const TUILES = ['https:', '', 'tile.openstreetmap.org', ''].join('/');
 async function loadApi() {
   document.getElementById('api-base').textContent = 'In the examples, ' + BASE_API + ' = the address you open freeQoS with';
   await loadApiKeys();
-  const lignes = document.querySelectorAll('#keys-table tbody tr').length;
-  document.getElementById('api-count').textContent = lignes + ' key(s)';
 }
 
 /* ------------------------------------------------------------ cles d'API */
@@ -4138,6 +4168,9 @@ async function loadApiKeys() {
     host.innerHTML = noticeErreur(err);
     return;
   }
+  // Le compteur suit la liste a chaque rechargement (creation, revocation...).
+  const compteur = document.getElementById('api-count');
+  if (compteur) compteur.textContent = rows.length + (rows.length === 1 ? ' key' : ' keys');
   if (!rows.length) {
     host.innerHTML = '<div class="empty">No key.</div>';
     return;
@@ -12280,8 +12313,8 @@ const ROLE_RANK = { read: 0, operator: 1, edit: 2 };
 const ROLE_LABEL = { read: 'Viewer', operator: 'Operator', edit: 'Administrator' };
 const ROLE_HELP = {
   read: 'sees everything, changes nothing',
-  operator: 'manages clients, one or several at a time: bandwidth mode, boost and plan',
-  edit: 'everything else too: adds clients, PoPs, routers, antennas and their API (Ubiquiti), modes, settings, API keys, accounts',
+  operator: 'manages clients, one or several at a time: adds them, plan, bandwidth mode, boost, and the modes and schedules themselves',
+  edit: 'everything else too: PoPs, routers, antennas and their API (Ubiquiti), rules, settings, API keys, accounts',
 };
 function rangRole() { const r = (AUTH.user || {}).role; return r in ROLE_RANK ? ROLE_RANK[r] : 0; }
 function peut(niveau) { return rangRole() >= ROLE_RANK[niveau]; }
@@ -13353,6 +13386,7 @@ function cablerModes() {
 const ACTION_LABEL = {
   mode: 'Bandwidth mode', boost: 'Boost', stop_boost: 'Boost stopped',
   plan: 'Plan', plan_removed: 'Plan removed',
+  details: 'Client details', declared: 'Client added',
 };
 
 /** Ou en est la file apres le geste : posee, en attente d'ecriture, ou pourquoi pas. */
