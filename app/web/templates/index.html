@@ -1120,16 +1120,16 @@
 
     <!-- --------------------------------------------------- equipements -->
     <section id="view-pops">
+      <div id="pops-notice"></div>
+
+      <h2>Router health</h2>
+      <div class="table-wrap" id="routers-health"></div>
       <div class="toolbar">
         <button id="btn-build-tree" class="primary">Read the configuration and build the tree</button>
         <span class="spacer"></span>
         <span class="mode" id="build-count"></span>
       </div>
       <div id="build-notice"></div>
-      <div id="pops-notice"></div>
-
-      <h2>Router health</h2>
-      <div class="table-wrap" id="routers-health"></div>
 
       <h2>Connect a router (PoP)</h2>
       <div class="card">
@@ -1230,11 +1230,7 @@
       <h2>Ubiquiti antennas (radio capacity)</h2>
       <div id="antennas-notice"></div>
       <div class="table-wrap" id="antennas-table"></div>
-
-      <h2>Radio health: access points and their CPEs</h2>
-      <div id="radio-health"></div>
-
-      <h2>Add an antenna</h2>
+      <h3>Add an antenna</h3>
       <div class="card">
         <form class="stack" id="antenna-form" autocomplete="off">
           <div class="row-3">
@@ -1298,10 +1294,13 @@
         </form>
       </div>
 
+      <h2 data-tab="Radio health">Radio health: access points and their CPEs</h2>
+      <div id="radio-health"></div>
+
       <h2>Inventory</h2>
-      <h2 style="text-transform:none;font-size:.75rem">Known sites</h2>
+      <h3>Known sites</h3>
       <div class="table-wrap" id="pops-table"></div>
-      <h2 style="text-transform:none;font-size:.75rem">Polled routers</h2>
+      <h3>Polled routers</h3>
       <div class="table-wrap" id="routers-table"></div>
     </section>
 
@@ -1396,17 +1395,17 @@
       <div class="card" id="settings-domain"></div>
 
       <div class="chart-head">
-        <h2>Operational settings</h2>
+        <h2 data-tab="Advanced">Operational settings</h2>
         <span class="spacer"></span>
         <span class="mode" id="settings-count"></span>
       </div>
       <div id="settings-notice"></div>
       <div id="settings-groups"></div>
-      <h2>What stays out of reach of the interface</h2>
+      <h2 data-tab="Server only">What stays out of reach of the interface</h2>
       <div class="table-wrap" id="settings-bootstrap"></div>
 
       <!-- --------------------------------------------- shaping et ecriture -->
-      <h2>Shaping and writing to the routers</h2>
+      <h2 data-tab="Router writing">Shaping and writing to the routers</h2>
       <details id="settings-shaping">
         <summary>Write switch, map of caps, command log</summary>
 
@@ -1429,7 +1428,7 @@
            questions differentes : une file peut exister, porter le bon debit,
            et ne rien plafonner (fasttrack, file masquee, file desactivee).
            C'est ce panneau qui repond a la seconde. -->
-      <h2>Are the caps actually held?</h2>
+      <h3>Are the caps actually held?</h3>
       <div id="shaping-limits"></div>
 
       <!-- Le detail technique reste accessible -- toute commande envoyee doit
@@ -1443,7 +1442,7 @@
         </div>
         <div id="shaping-state"></div>
         <div id="shaping-plan"></div>
-        <h2>Log of commands sent</h2>
+        <h3>Log of commands sent</h3>
         <div class="table-wrap" id="shaping-audit"></div>
       </details>
       </details>
