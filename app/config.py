@@ -238,6 +238,10 @@ class Settings(BaseSettings):
     # (CORS). Vide par defaut : l'interface est servie par la meme origine, et
     # curl, n8n ou un script n'en ont pas besoin. Ex. ["https://crm.example.com"].
     cors_allow_origins: list[str] = []
+    # Une fois https://<domaine> confirme (une premiere visite arrivee en HTTPS),
+    # le HTTP simple -- adresse IP, port 8000 -- est redirige vers lui.
+    # false = echappatoire si le certificat ne se renouvelle plus.
+    https_redirect: bool = True
     log_level: str = "INFO"
     api_prefix: str = "/api/v1"
     # Connexion a l'interface (comptes 'read' / 'edit'). Ne se coupe que pour un

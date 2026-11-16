@@ -314,9 +314,11 @@ Command line, in the container: `python -m app.cli count-accounts` prints how ma
 2. Open TCP **80** and **443** to the server from the internet. Port 80 must stay open: it is how Let's Encrypt checks the domain, first and at each renewal.
 3. *Settings › Domain & HTTPS*: type the name (`qos.example.com`), optionally an email for certificate expiry notices, then *Save and apply*.
 
-The included proxy (Caddy, container `freeqos-proxy`) obtains the certificate within a minute and renews it on its own. `http://` on that name then redirects to `https://`. The server's IP keeps answering in plain HTTP: it is the way back in if the DNS is broken. *Check now* tells whether the name points to this server and whether HTTPS answers; the last error from the proxy is shown in plain words. *Remove* goes back to HTTP only.
+The included proxy (Caddy, container `freeqos-proxy`) obtains the certificate within a minute and renews it on its own. `http://` on that name then redirects to `https://`. *Check now* tells whether the name points to this server and whether HTTPS answers; the last error from the proxy is shown in plain words. *Remove* goes back to HTTP only.
 
-Once HTTPS works, close port 8000 to the outside (or set `APP_BIND=127.0.0.1` in `.env`). API: `GET /api/v1/public-access`, `PUT /api/v1/public-access` (`{"domain", "email"}`, Administrator), `DELETE /api/v1/public-access`, `POST /api/v1/public-access/check`.
+**HTTPS only, automatically.** Until HTTPS is proven, the server's IP and port 8000 keep answering in plain HTTP, so you are never locked out while the certificate arrives. The proof is the first real visit to `https://<domain>`: from then on, any plain-HTTP request (`http://<server IP>`, `http://<server IP>:8000`) gets a `308` redirect to `https://<domain>` with the same path. The login page is never served in clear again, and nothing has to be changed in `.env`. The card shows *HTTPS only* once it is active. Not redirected: `/health` (the Docker health check calls `http://127.0.0.1:8000/health`). Changing the domain starts over (the new name must be visited in HTTPS once); removing it reopens HTTP. Way back in if the certificate ever stops renewing: `HTTPS_REDIRECT=false` in `.env`, then `docker compose up -d`.
+
+Closing port 8000 to the outside (`APP_BIND=127.0.0.1` in `.env`) is still a good extra step, but no longer required. API: `GET /api/v1/public-access`, `PUT /api/v1/public-access` (`{"domain", "email"}`, Administrator), `DELETE /api/v1/public-access`, `POST /api/v1/public-access/check`.
 
 The domain is stored in the database and pushed again to the proxy at each start of freeQoS. The proxy's admin interface (port 2019) is only reachable inside the Docker network, never published. Its certificates live in the `caddy_data` volume.
 
@@ -326,6 +328,7 @@ The domain is stored in the database and pushed again to the proxy at each start
 | `APP_PORT` / `APP_BIND` | `8000` / `0.0.0.0` | Direct access to the application, without the proxy |
 | `FREEQOS_SUBNET` | `172.29.84.0/24` | Internal Docker network. Change it only if it clashes with one of yours |
 | `FORWARDED_ALLOW_IPS` | the subnet above | Who may tell the application the visitor's real address and HTTPS |
+| `HTTPS_REDIRECT` | `true` | Redirect plain HTTP to `https://<domain>` once HTTPS is proven. `false` = way back in |
 
 **8. Add the routers.** *Devices* → *Connect a router*: name, IP, the account from step 3, role (`pop`, `core` or `gateway`). *Test* checks the connection without saving anything. After adding, the automatic commissioning described in section 4 runs; follow its report.
 

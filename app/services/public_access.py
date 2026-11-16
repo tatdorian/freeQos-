@@ -21,9 +21,12 @@ import asyncio
 import logging
 import re
 import socket
+import time
 from typing import Any
 
 import httpx
+from starlette.requests import Request
+from starlette.responses import RedirectResponse, Response
 
 logger = logging.getLogger(__name__)
 
@@ -185,8 +188,8 @@ class PublicAccessRepository:
     async def get(self) -> dict[str, Any] | None:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT domain, email, updated_by, updated_at, applied_at, last_error "
-                "FROM public_access WHERE id = 1"
+                "SELECT domain, email, updated_by, updated_at, applied_at, last_error, "
+                "https_confirmed_at FROM public_access WHERE id = 1"
             )
         return dict(row) if row else None
 
@@ -197,7 +200,9 @@ class PublicAccessRepository:
                 INSERT INTO public_access (id, domain, email, updated_by) VALUES (1, $1, $2, $3)
                 ON CONFLICT (id) DO UPDATE SET domain = EXCLUDED.domain, email = EXCLUDED.email,
                     updated_by = EXCLUDED.updated_by, updated_at = now(),
-                    applied_at = NULL, last_error = NULL
+                    applied_at = NULL, last_error = NULL,
+                    https_confirmed_at = CASE WHEN public_access.domain = EXCLUDED.domain
+                        THEN public_access.https_confirmed_at END
                 """,
                 domain,
                 email,
@@ -214,6 +219,14 @@ class PublicAccessRepository:
                 await conn.execute(
                     "UPDATE public_access SET last_error = $1 WHERE id = 1", (error or "")[:500]
                 )
+
+    async def confirm_https(self, domain: str) -> None:
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE public_access SET https_confirmed_at = now() "
+                "WHERE id = 1 AND domain = $1 AND https_confirmed_at IS NULL",
+                domain,
+            )
 
     async def delete(self) -> bool:
         async with self._pool.acquire() as conn:
@@ -246,3 +259,84 @@ async def reapply_at_startup(repo: PublicAccessRepository, admin_url: str | None
             dernier = str(exc)
     logger.warning("Domaine %s non applique au proxy : %s", fiche["domain"], dernier)
     await repo.mark(ok=False, error=dernier)
+
+
+class HttpsRedirect:
+    """LE HTTP SIMPLE EST REDIRIGE DES QUE LE HTTPS A FAIT SES PREUVES.
+
+    Tant que l'interface repond aussi sur ``http://<adresse IP>`` ou sur le port
+    8000, un mot de passe tape la-bas part en clair. Mais couper le HTTP trop
+    tot enfermerait dehors : le certificat met une minute a venir, le DNS peut
+    ne pas pointer encore ici.
+
+    La preuve retenue : une requete REELLE arrivee en ``https://<domaine>``
+    (vue par l'application a travers le proxy). Des la premiere, c'est note en
+    base, et toute requete en HTTP simple -- par l'IP, par le port 8000 --
+    recoit une redirection 308 vers ``https://<domaine>`` avec le meme chemin.
+    Le formulaire de connexion n'est donc plus jamais servi en clair.
+
+    Ne sont pas redirigees : ``/health`` (la sonde Docker interroge
+    ``http://127.0.0.1:8000/health``), et toute requete deja adressee au domaine
+    (garde-fou contre une boucle si le proxy ne transmet pas le schema).
+
+    Changer de domaine remet la preuve a zero ; le retirer coupe la
+    redirection. Echappatoire : ``HTTPS_REDIRECT=false`` et redemarrer.
+    """
+
+    REFRESH_S = 30.0
+    EXEMPT = ("/health",)
+
+    def __init__(self, enabled: bool = True) -> None:
+        self.enabled = enabled
+        self.domain: str | None = None
+        self.confirmed = False
+        self._charge_a = float("-inf")
+
+    def invalidate(self) -> None:
+        self._charge_a = float("-inf")
+
+    @property
+    def active(self) -> bool:
+        return self.enabled and bool(self.domain) and self.confirmed
+
+    async def _refresh(self, repo: PublicAccessRepository) -> None:
+        if time.monotonic() - self._charge_a < self.REFRESH_S:
+            return
+        try:
+            fiche = await repo.get()
+        except Exception:  # noqa: BLE001 - base absente : on garde l'etat connu
+            return
+        self._charge_a = time.monotonic()
+        self.domain = str(fiche["domain"]).lower() if fiche else None
+        self.confirmed = bool(fiche and fiche.get("https_confirmed_at"))
+
+    async def handle(
+        self, request: Request, repo: PublicAccessRepository | None
+    ) -> Response | None:
+        """La redirection a renvoyer, ou None pour laisser passer."""
+        if not self.enabled or repo is None:
+            return None
+        await self._refresh(repo)
+        if not self.domain:
+            return None
+        hote = (request.url.hostname or "").lower()
+        if request.url.scheme == "https":
+            if hote == self.domain and not self.confirmed:
+                try:
+                    await repo.confirm_https(self.domain)
+                except Exception:  # noqa: BLE001
+                    return None
+                self.confirmed = True
+                logger.info("HTTPS confirme sur %s : le HTTP simple sera redirige", self.domain)
+            return None
+        if not self.confirmed or hote == self.domain:
+            return None
+        if request.headers.get("x-forwarded-proto", "").lower() == "https":
+            return None
+        chemin = request.url.path
+        if any(chemin == p or chemin.startswith(p + "/") for p in self.EXEMPT):
+            return None
+        cible = f"https://{self.domain}{chemin}"
+        if request.url.query:
+            cible += f"?{request.url.query}"
+        return RedirectResponse(cible, status_code=308)

@@ -1406,6 +1406,9 @@ CREATE TABLE IF NOT EXISTS public_access (
     applied_at  TIMESTAMPTZ,
     last_error  TEXT
 );
+-- Premiere requete arrivee en https://<domaine> : la preuve que le HTTPS marche
+-- de bout en bout. A partir d'elle, le HTTP simple est redirige.
+ALTER TABLE public_access ADD COLUMN IF NOT EXISTS https_confirmed_at TIMESTAMPTZ;
 
 -- -----------------------------------------------------------------------------
 -- Fiche SAISIE d'un client, a cote de ce que la decouverte trouve.
