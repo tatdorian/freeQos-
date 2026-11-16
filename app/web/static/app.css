@@ -120,6 +120,14 @@
 * { box-sizing: border-box; }
 
 html { -webkit-text-size-adjust: 100%; }
+/* Un formulaire a plat suivi de son resultat / de sa liste : de l'air entre les deux. */
+form.stack + div:not(:empty), form.stack + .table-wrap { margin-top: .9rem; }
+
+/* UN ELEMENT MASQUE LE RESTE. L'attribut hidden ne pose qu'un display:none de
+   faible priorite : toute regle « display: flex / grid » d'une classe le
+   reaffichait (le champ de duree libre du boost restait visible sous « 1 h »).
+   Une seule regle, pour toute l'interface. */
+[hidden] { display: none !important; }
 body {
   margin: 0;
   background: var(--bg);
@@ -1106,7 +1114,7 @@ body.gated header.top, body.gated main { visibility: hidden; }
    passe, mes sessions, journal. Un filet les separe, un titre les nomme. */
 .acc-block + .acc-block { margin-top: 1.4rem; padding-top: 1.2rem; border-top: 1px solid var(--border); }
 .acc-block > h3 { margin: 0 0 .7rem; font-size: 1rem; }
-.acc-block .acc-form:first-of-type { margin-top: 0; }
+.acc-block > h3 + .acc-form { margin-top: 0; }
 .acc-hint { margin: .5rem 0 0; font-size: .78rem; }
 .acc-pwd-row td { background: var(--surface-2); }
 .acc-inline { margin: .2rem 0; }
