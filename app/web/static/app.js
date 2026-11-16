@@ -1646,7 +1646,7 @@ async function loadTopTalkers() {
   }
   host.innerHTML =
     '<table><thead><tr><th>Login</th><th>PoP</th><th class="num">Download</th>' +
-    '<th style="width:150px">vs limit</th><th class="num">Upload</th>' +
+    '<th style="width:120px">vs limit</th><th class="num">Upload</th>' +
     '<th class="num">Latency</th></tr></thead><tbody>' +
     rows.map((r) => {
       const limiteDown = (r.effective_down_mbps || 0) * 1e6;
@@ -5854,7 +5854,7 @@ async function loadRouters() {
       if (r.enabled === false) badge = '<span class="badge">disabled</span>';
 
       return '<tr>' +
-        '<td><strong>' + esc(r.name) + '</strong>' +
+        '<td class="nowrap"><strong>' + esc(r.name) + '</strong>' +
           (r.pop_name ? '<br><span style="color:var(--faint);font-size:.75rem">' + esc(r.pop_name) + '</span>' : '') + '</td>' +
         '<td>' + routerRoleCell(r) + '</td>' +
         '<td class="login">' + esc(r.host) + ':' + esc(r.port) + '</td>' +
@@ -5871,27 +5871,35 @@ async function loadRouters() {
             (r.routeros_version ? ' &middot; ' + esc(r.routeros_version) : '') + '</td>'
           : '<td style="font-size:.76rem;color:var(--muted)" data-model-for="' + esc(r.name) + '">' +
             esc(modeleConnu(r.name)) + '</td>') +
-        '<td><div class="actions" style="justify-content:flex-end">' +
-          '<button class="sm primary" data-provision="' + esc(r.name) +
-            '" title="Create the CAKE types and queues, set up the NetFlow export, rebuild the tree">' +
-            'Set up</button>' +
-          '<button class="sm" data-config="' + esc(r.name) +
-            '" title="See the full config (/export) the controller reads">Config</button>' +
-          '<button class="sm danger" data-clean-queues="' + esc(r.name) + '"' +
-            (r.write_enabled === false
-              ? ' disabled title="Read-only router: allow writing on it first"'
-              : ' title="Delete every freeQoS queue of this router, then lay them down again"') +
-            '>Reset queues</button>' +
-          '<button class="sm danger" data-uninstall="' + esc(r.name) + '" title="Remove every queue, ' +
-            'CAKE type and rule freeQoS set on this router, and stop writing on it: the router is left as before freeQoS">' +
-            'Remove freeQoS</button>' +
-          (r.editable
-            ? '<button class="sm" data-probe="' + r.id + '">Test</button>' +
-              '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button>' +
-              '<button class="sm danger" data-del="' + r.id + '">Remove</button>'
-            : '<span style="font-size:.72rem;color:var(--faint);margin-right:.4rem">routers.yml</span>' +
-              '<button class="sm danger" data-hide-file="' + esc(r.name) +
-              '" title="Drop this file router without editing the YAML">Remove</button>') +
+        // DEUX LIGNES : l'usage courant (installer, voir, tester, couper), puis ce
+        // qui efface (files de freeQoS, routeur de l'inventaire). Le meme geste est
+        // toujours au meme endroit, d'un routeur a l'autre.
+        '<td class="router-actions-cell"><div class="router-actions">' +
+          '<div class="actions">' +
+            '<button class="sm primary" data-provision="' + esc(r.name) +
+              '" title="Create the CAKE types and queues, set up the NetFlow export, rebuild the tree">' +
+              'Set up</button>' +
+            '<button class="sm" data-config="' + esc(r.name) +
+              '" title="See the full config (/export) the controller reads">Config</button>' +
+            (r.editable
+              ? '<button class="sm" data-probe="' + r.id + '">Test</button>' +
+                '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button>'
+              : '<span style="font-size:.72rem;color:var(--faint)">routers.yml</span>') +
+          '</div>' +
+          '<div class="actions">' +
+            '<button class="sm danger" data-clean-queues="' + esc(r.name) + '"' +
+              (r.write_enabled === false
+                ? ' disabled title="Read-only router: allow writing on it first"'
+                : ' title="Delete every freeQoS queue of this router, then lay them down again"') +
+              '>Reset queues</button>' +
+            '<button class="sm danger" data-uninstall="' + esc(r.name) + '" title="Remove every queue, ' +
+              'CAKE type and rule freeQoS set on this router, and stop writing on it: the router is left as before freeQoS">' +
+              'Remove freeQoS</button>' +
+            (r.editable
+              ? '<button class="sm danger" data-del="' + r.id + '">Remove</button>'
+              : '<button class="sm danger" data-hide-file="' + esc(r.name) +
+                '" title="Drop this file router without editing the YAML">Remove</button>') +
+          '</div>' +
         '</div></td></tr>';
     }).join('') + '</tbody></table>' +
     '<div id="router-export"></div>';

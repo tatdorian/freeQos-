@@ -74,3 +74,16 @@ def test_le_compteur_des_cles_suit_la_liste() -> None:
     corps = JS[JS.index("async function loadApiKeys()") :]
     corps = corps[: corps.index("\n}\n")]
     assert "api-count" in corps
+
+
+def test_les_actions_d_un_routeur_sont_rangees_en_deux_groupes() -> None:
+    """Usage courant (Set up, Config, Test, Disable) puis ce qui efface
+    (Reset queues, Remove freeQoS, Remove) : jamais melanges, toujours au meme endroit."""
+    bloc = JS[JS.index('class="router-actions"') :]
+    bloc = bloc[: bloc.index("</td></tr>")]
+    courant, efface = bloc.split("data-clean-queues", 1)
+    for geste in ("data-provision", "data-config", "data-probe", "data-toggle"):
+        assert geste in courant
+    for geste in ("data-uninstall", "data-del"):
+        assert geste in efface
+    assert "data-uninstall" not in courant
