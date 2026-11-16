@@ -91,6 +91,7 @@ from app.enforcement.planner import (
     desired_queue_types,
     desired_state,
     normalise_field,
+    queues_without_rate,
 )
 from app.enforcement.routeros import (
     ApplyResult,
@@ -3394,6 +3395,10 @@ class ShapingService:
             actual_queues=etat.simple_queues,
             prune=self.settings.shaping_prune if prune is None else prune,
             adopt=self.settings.shaping_adopt_foreign_queues,
+            # Un client qui n'a plus aucun debit perd sa file TOUT DE SUITE, meme
+            # dans une application automatique sans purge (bascule horaire, boost
+            # echu) : sinon il restait bride jusqu'a la reconciliation suivante.
+            remove_names=queues_without_rate(ecartes),
         )
         plan.skipped = ecartes
         return plan
@@ -3472,6 +3477,10 @@ class ShapingService:
             actual_queues=etat.simple_queues,
             prune=self.settings.shaping_prune if prune is None else prune,
             adopt=self.settings.shaping_adopt_foreign_queues,
+            # Un client qui n'a plus aucun debit perd sa file TOUT DE SUITE, meme
+            # dans une application automatique sans purge (bascule horaire, boost
+            # echu) : sinon il restait bride jusqu'a la reconciliation suivante.
+            remove_names=queues_without_rate(ecartes),
         )
         plan.skipped = ecartes
         return plan
