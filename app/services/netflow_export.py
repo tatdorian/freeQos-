@@ -334,6 +334,14 @@ class NetflowExportService:
 
         return await asyncio.wait_for(asyncio.to_thread(lire), timeout=timeout)
 
+    async def read_raw(
+        self, collector: MikrotikCollector
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """``/ip/traffic-flow`` et ses cibles TELS QUE LE ROUTEUR LES RENVOIE
+        (avec leur ``.id``) : ce qu'il faut pour en retirer une. L'etat de
+        ``state_of`` est une vue pour l'affichage, sans identifiant."""
+        return await self._read(collector)
+
     async def _nat_fields_missing(self, collector: MikrotikCollector) -> list[str]:
         """Les champs NAT que ce routeur laisse hors de ses enregistrements.
 

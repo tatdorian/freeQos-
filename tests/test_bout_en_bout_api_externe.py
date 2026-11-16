@@ -154,6 +154,9 @@ def app_client(routeur, monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
         app_secret_key_file=tmp_path / "secret.key",
         default_plan_down_mbps=100.0,
         default_plan_up_mbps=20.0,
+        # Ce banc couvre AUSSI l'export NetFlow pose par freeQoS : il l'active
+        # sciemment (il est coupe par defaut).
+        netflow_export_auto=True,
     )
     with TestClient(create_app(reglages)) as client:
         yield client
@@ -357,3 +360,92 @@ def test_un_forfait_pousse_avant_la_premiere_connexion(app_client, routeur) -> N
     assert app_client.delete("/api/v1/plans/martni", headers=cle).status_code == 200
     assert app_client.get("/api/v1/plans", headers=cle).json()["pending"] == []
     assert app_client.delete("/api/v1/plans/personne", headers=cle).status_code == 404
+
+
+def test_remove_freeqos_coupe_aussi_traffic_flow(app_client, routeur) -> None:  # noqa: F811
+    """« Remove freeQoS » + « Also stop the NetFlow export » : la cible part ET
+    traffic-flow est coupe -- sinon le routeur continuait de compter chaque
+    paquet, FastPath coupe. Le routeur revient comme avant freeQoS."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+            "write_enabled": True,
+        },
+    )
+    assert r.status_code == 201, r.text
+    _attendre(
+        lambda: bool(
+            app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle)
+            .json()
+            .get("finished_at")
+        ),
+        20,
+    )
+    app_client.post("/api/v1/jobs/netflow_export/run", headers=cle)
+    if routeur.traffic_flow_row.get("enabled") not in ("yes", "true", True):
+        pytest.skip("export non pose dans ce banc (adresse du collecteur inconnue)")
+    assert routeur.traffic_flow_target_rows
+
+    r = app_client.post(
+        "/api/v1/pops/routers/uninstall/nas-test",
+        headers=cle,
+        json={"confirm": True, "stop_netflow": True},
+    )
+    assert r.status_code == 200, r.text
+    corps = r.json()
+    assert corps["netflow"]["traffic_flow_disabled"] is True, corps
+    assert routeur.traffic_flow_row.get("enabled") == "no"
+    assert routeur.traffic_flow_target_rows == []
+
+
+def test_remove_freeqos_laisse_traffic_flow_a_un_autre_collecteur(app_client, routeur) -> None:  # noqa: F811
+    """Un outil tiers recoit aussi les flux : seule NOTRE cible part, l'export
+    reste actif pour lui."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+            "write_enabled": True,
+        },
+    )
+    assert r.status_code == 201, r.text
+    _attendre(
+        lambda: bool(
+            app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle)
+            .json()
+            .get("finished_at")
+        ),
+        20,
+    )
+    app_client.post("/api/v1/jobs/netflow_export/run", headers=cle)
+    if routeur.traffic_flow_row.get("enabled") not in ("yes", "true", True):
+        pytest.skip("export non pose dans ce banc (adresse du collecteur inconnue)")
+    routeur.traffic_flow_target_rows.append(
+        {".id": "*TIERS", "dst-address": "198.51.100.9", "port": "9995", "version": "9"}
+    )
+    r = app_client.post(
+        "/api/v1/pops/routers/uninstall/nas-test",
+        headers=cle,
+        json={"confirm": True, "stop_netflow": True},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["netflow"]["traffic_flow_disabled"] is False
+    assert routeur.traffic_flow_row.get("enabled") in ("yes", "true", True)
+    assert [c[".id"] for c in routeur.traffic_flow_target_rows] == ["*TIERS"]

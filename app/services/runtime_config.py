@@ -480,7 +480,9 @@ REGLAGES: tuple[Reglage, ...] = (
         "netflow_export_auto",
         "services",
         "bool",
-        "Configure the NetFlow export on the routers automatically. Still subject "
+        "Configure the NetFlow export on the routers automatically (off by default). "
+        "It costs router CPU: RouterOS then counts every routed packet and turns "
+        "FastPath off while traffic-flow is on. Feeds the Traffic page. Still subject "
         "to the write switch.",
     ),
     _cadence(
