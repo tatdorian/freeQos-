@@ -783,6 +783,15 @@ def test_interface_sans_dependance_externe(client: TestClient) -> None:
         assert "https://" not in response.text
 
 
+def test_les_tuiles_de_carte_partent_toujours_en_https(client: TestClient) -> None:
+    """Une adresse « //tile... » suit le schema de la page : ouverte en HTTP (par
+    l'IP), la carte demandait ses tuiles en HTTP, que la politique de contenu
+    bloque. Les tuiles partent donc toujours en HTTPS."""
+    js = client.get("/static/app.js").text
+    assert "'//tile.openstreetmap.org" not in js
+    assert "['https:', '', 'tile.openstreetmap.org', ''].join('/')" in js
+
+
 def test_api_non_initialisee_repond_503(settings: Settings) -> None:
     app = FastAPI()
     app.state.settings = settings
