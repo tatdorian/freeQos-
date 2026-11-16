@@ -234,6 +234,10 @@ class Settings(BaseSettings):
     # --- Application ---
     app_name: str = "freeQoS"
     app_env: str = "lab"
+    # Origines d'AUTRES sites autorisees a appeler l'API depuis un navigateur
+    # (CORS). Vide par defaut : l'interface est servie par la meme origine, et
+    # curl, n8n ou un script n'en ont pas besoin. Ex. ["https://crm.example.com"].
+    cors_allow_origins: list[str] = []
     log_level: str = "INFO"
     api_prefix: str = "/api/v1"
     # Connexion a l'interface (comptes 'read' / 'edit'). Ne se coupe que pour un

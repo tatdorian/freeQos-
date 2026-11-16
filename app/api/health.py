@@ -22,9 +22,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Request, Response, status
 
 from app import __version__
+from app.api.accounts import optional_user
 from app.api.deps import ContainerDep
 
 router = APIRouter(tags=["health"])
@@ -105,7 +106,16 @@ async def health() -> dict[str, object]:
 
 
 @router.get("/health/ready", summary="Readiness (database + data freshness)")
-async def readiness(container: ContainerDep, response: Response) -> dict[str, object]:
+async def readiness(
+    request: Request, container: ContainerDep, response: Response
+) -> dict[str, object]:
+    """Le CODE (200 / 503) repond a tous : c'est lui qu'un superviseur lit.
+
+    Le DETAIL (jobs, erreurs des collecteurs, nombre de routeurs, etat du
+    shaping) decrit l'interieur du reseau : il n'est rendu qu'a une session ou
+    a une cle d'API. Un inconnu qui atteint le port n'apprend rien de plus que
+    « pret » ou « degrade ».
+    """
     db_ok = await container.database.ping()
     settings = container.settings
 
@@ -132,6 +142,11 @@ async def readiness(container: ContainerDep, response: Response) -> dict[str, ob
     ready = db_ok and not degraded_jobs
     if not ready:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    if await optional_user(request, container) is None:
+        return {
+            "status": "ready" if ready else "degraded",
+            "database": "ok" if db_ok else "unreachable",
+        }
 
     return {
         "status": "ready" if ready else "degraded",

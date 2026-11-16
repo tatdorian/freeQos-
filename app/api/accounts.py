@@ -226,6 +226,18 @@ async def current_user(request: Request, container: ContainerDep) -> dict[str, A
 UserDep = Annotated[dict[str, Any], Depends(current_user)]
 
 
+async def optional_user(request: Request, container: ContainerDep) -> dict[str, Any] | None:
+    """Le compte de la session (ou de la cle), None sans connexion valide.
+
+    Pour les pages qui repondent a tous mais n'en DISENT plus qu'a une personne
+    connectee : la sonde de disponibilite, la documentation de l'API.
+    """
+    try:
+        return await current_user(request, container)
+    except HTTPException:
+        return None
+
+
 async def _compte_par_cle(request: Request, container: ContainerDep) -> dict[str, Any] | None:
     """Le "compte" d'une cle d'API presentee, None s'il n'y en a pas.
 
