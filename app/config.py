@@ -550,10 +550,16 @@ class Settings(BaseSettings):
     shaping_safety_factor: float = 0.90
     shaping_floor_mbps: float = 5.0
     # Limite appliquee a un client pousse par l'API (ou saisi) SANS forfait ni
-    # debit : il prend sa place et reste bride, au lieu de passer sans limite.
-    # 0 = pas de limite par defaut.
-    default_plan_down_mbps: float = 100.0
-    default_plan_up_mbps: float = 20.0
+    # debit. 0 (LE DEFAUT) = AUCUNE LIMITE INVENTEE : sans forfait, pas de file.
+    #
+    # CONSTATE : avec l'ancien defaut (100 / 20 Mbit/s), declarer un client a IP
+    # fixe en laissant son forfait vide -- le formulaire dit « optional » --
+    # lui posait une file a 100/20. Un client professionnel au-dessus de
+    # 100 Mbit/s etait bride sans que personne ne l'ait demande. freeQoS ne
+    # limite que ce qu'on lui a dit de limiter ; un exploitant qui veut un
+    # plafond d'office le fixe ici, sciemment.
+    default_plan_down_mbps: float = 0.0
+    default_plan_up_mbps: float = 0.0
     # Appliquer AUSSI cette limite aux clients seulement DETECTES sur un routeur
     # (session PPPoE vue, aucun forfait pousse). Faux par defaut : ajouter un
     # routeur ne bride que les clients dont le forfait a ete pousse par l'API

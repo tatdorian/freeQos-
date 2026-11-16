@@ -310,8 +310,11 @@ async def test_seule_la_file_de_ce_client_est_ecrite(
 async def test_un_client_sans_debit_recoit_la_limite_par_defaut(
     settings_francophonie: Settings, routeur: FakeRouterOsClient, ecriture: FauxClientEcriture
 ) -> None:
-    """DEMANDE EXPLICITE : un client pousse sans forfait prend sa place et
-    recoit la limite par defaut (100/20 Mbps), au lieu de passer sans limite."""
+    """Un exploitant qui FIXE une limite par defaut (ici 100/20 Mbps) la voit
+    appliquee a un client pousse sans forfait. Sans ce reglage (0, le defaut),
+    aucune limite n'est inventee : cf. test_sans_limite_aucune_file_n_est_ecrite."""
+    settings_francophonie.default_plan_down_mbps = 100
+    settings_francophonie.default_plan_up_mbps = 20
     service = _service(
         settings_francophonie,
         routeur,
