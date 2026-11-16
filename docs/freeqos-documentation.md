@@ -1185,7 +1185,7 @@ A subscriber alone on a quiet sector gets its full plan. When everyone pulls at 
 The plan belongs to the subscriber, not to the PoP: a PoP has a capacity, not a plan. It is resolved in this order:
 
 1. **The plan written for this subscriber**, pushed through the API (billing, Preseem integration) or entered on the *Plans* page. The last write wins.
-2. **A subscriber pushed without a rate** gets the default plan (`DEFAULT_PLAN_DOWN_MBPS` / `DEFAULT_PLAN_UP_MBPS`, 100/20).
+2. **A subscriber pushed or declared without a rate** has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (`DEFAULT_PLAN_DOWN_MBPS` / `DEFAULT_PLAN_UP_MBPS`, *Settings › Plans & map*; `0` = none, the default).
 3. **A subscriber that is only detected** has no plan: it is observed, never throttled to a rate nobody sold, unless `DEFAULT_PLAN_FOR_DETECTED_CLIENTS=true`.
 
 Deleting a subscriber's plan removes its queue on the next cycle.
@@ -1982,7 +1982,7 @@ All settings are read from the environment or from `.env`. The variable name is 
 | `ENFORCEMENT_ENABLED` | `false` | Writing to the routers; an explicit `false` = lock |
 | `ENFORCEMENT_MAX_ACTIONS` ✱ | 500 | Circuit breaker per plan |
 | `REQUIRE_SEPARATE_WRITE_ACCOUNT` ✱ | `false` | Distinct write account required |
-| `DEFAULT_PLAN_DOWN_MBPS` / `UP` ✱ | 100 / 20 | Default plan |
+| `DEFAULT_PLAN_DOWN_MBPS` / `UP` ✱ | 0 / 0 | Limit given to a client pushed or declared without a rate. `0` = none: no plan, no queue |
 | `DEFAULT_PLAN_FOR_DETECTED_CLIENTS` ✱ | `false` | Also limit subscribers that are only detected |
 | `SHAPING_SAFETY_FACTOR` ✱ | 0.90 | Share of measured capacity given to the parent queue |
 | `SHAPING_FLOOR_MBPS` ✱ | 5 | Minimum rate of a parent queue |
