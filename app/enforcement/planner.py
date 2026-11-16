@@ -399,11 +399,16 @@ def desired_state(
             continue
         if link.enabled and not link.skip_reason and link.queue_target in doublons:
             autres = [n for n in doublons[link.queue_target] if n != link.name]
+            # Trois noms suffisent a reconnaitre le segment ; la liste entiere
+            # (des dizaines de CPE sur un meme /24) noyait la ligne.
+            cites = ", ".join(autres[:3]) + (
+                f" and {len(autres) - 3} other device(s)" if len(autres) > 3 else ""
+            )
             ecartes.append(
                 PlanSkip(
                     link.name,
                     f"planning error: target {link.queue_target} is also that of "
-                    f"{', '.join(autres)} -- a shared segment is not a bottleneck, "
+                    f"{cites} -- a shared segment is not a bottleneck, "
                     "no queue is written for any of them",
                 )
             )

@@ -1637,8 +1637,8 @@ function renderBackhaulCards(tree) {
   tree.forEach((pop) => (pop.backhauls || []).forEach((b) => links.push({ pop, b })));
   const host = document.getElementById('backhaul-cards');
   if (!links.length) {
-    host.innerHTML = '<div class="card"><div class="empty">No backhaul declared.<br>' +
-      '<code>backhauls</code> section of the inventory.</div></div>';
+    host.innerHTML = '<div class="card"><div class="empty">No radio backhaul yet.<br>' +
+      'Add the antenna in <a href="#/pops">Devices › Ubiquiti antennas</a>, or link UISP.</div></div>';
     return;
   }
   host.innerHTML = links.map(({ pop, b }) => {
@@ -4113,9 +4113,14 @@ async function declareExporter(event) {
 // Pas de schema ecrit en dur : l'interface ne reference aucune adresse externe
 // (cf. test_interface_sans_dependance_externe).
 const BASE_API = '<your-freeqos-url>';
+// Fond de carte : TOUJOURS en HTTPS, meme quand la page est ouverte en HTTP
+// (par l'adresse IP) -- la politique de contenu n'autorise les tuiles qu'en
+// HTTPS, et une adresse « //tile... » suivait le schema de la page et etait
+// bloquee. Sans internet, la carte garde ses reperes sur fond uni.
+const TUILES = ['https:', '', 'tile.openstreetmap.org', ''].join('/');
 
 async function loadApi() {
-  document.getElementById('api-base').textContent = 'Base URL: ' + BASE_API;
+  document.getElementById('api-base').textContent = 'In the examples, ' + BASE_API + ' = the address you open freeQoS with';
   await loadApiKeys();
   const lignes = document.querySelectorAll('#keys-table tbody tr').length;
   document.getElementById('api-count').textContent = lignes + ' key(s)';
@@ -4210,7 +4215,7 @@ async function createApiKey(event) {
 
 const ICONE = {
   gateway: 'GW', core: 'CORE', pop: 'POP', radio: 'RF',
-  sector: 'SECT', cpe: 'CPE', client: 'CLI', unknown: 'DEV', subscriber: 'ABO',
+  sector: 'SECT', cpe: 'CPE', client: 'CLI', unknown: 'DEV', subscriber: 'SUBS',
   static: 'FIXE', candidate: 'IP', vlan: 'VLAN',
 };
 
@@ -5612,7 +5617,7 @@ async function loadRoutersHealth() {
     td.textContent = modeleConnu(td.dataset.modelFor);
   });
   if (!routeurs.length) {
-    host.innerHTML = '<div class="empty">No router collected.</div>';
+    host.innerHTML = '<div class="empty">No router yet: add one in the <b>Connect a router</b> tab.</div>';
     return;
   }
   host.innerHTML =
@@ -5686,7 +5691,7 @@ async function loadRadioHealth() {
   }
   const antennes = data.antennas || [];
   if (!antennes.length) {
-    hote.innerHTML = '<div class="empty">No antenna declared: add one below to read its radio and its CPEs.</div>';
+    hote.innerHTML = '<div class="empty">No antenna declared: add one in the Ubiquiti antennas tab to read its radio and its CPEs.</div>';
     return;
   }
   const v = (x, u, d) => x == null ? '<span class="na">-</span>' : esc(Number(x).toFixed(d || 0)) + (u ? ' ' + u : '');
@@ -9177,7 +9182,7 @@ function renderTopoList() {
           String(a.display_name || a.login).localeCompare(String(b.display_name || b.login)));
       const ouvert = topoListeOuvert(n, etat);
       lignes.push('<div class="tl-row tl-group' + sel + '" data-tl-key="' + esc(n.key) + '" style="--d:' + prof + '">' +
-        caret(n.key, ouvert) + '<span class="tl-kind" style="color:var(--accent)">ABO</span>' +
+        caret(n.key, ouvert) + '<span class="tl-kind" style="color:var(--accent)">SUBS</span>' +
         '<span class="tl-name"><b>' + membres.length + ' client' + (membres.length > 1 ? 's' : '') + '</b></span>' +
         '<span class="tl-meta"></span>' +
         '<span class="tl-count">' + topoEnLigneTexte(membres.filter(mesureFraiche).length,
@@ -10495,7 +10500,7 @@ async function loadPoints() {
     if (!(r.points || []).length) {
       return entete + '<div class="empty">No shaping point on this router.</div>';
     }
-    return entete + '<div class="table-wrap"><table><thead><tr>' +
+    return entete + '<div class="table-wrap" id="pts-' + esc(r.router).replace(/[^\w-]/g, '_') + '"><table><thead><tr>' +
       '<th>Network point</th><th>Target</th><th class="num">Cap</th>' +
       '<th>Where the cap comes from</th><th>State</th>' +
       '</tr></thead><tbody>' +
@@ -10503,7 +10508,10 @@ async function loadPoints() {
       '</tbody></table></div>';
   }).join('');
 
-  host.innerHTML = bandeau + (corps || '<div class="empty">No router collected.</div>');
+  host.innerHTML = bandeau + (corps || '<div class="empty">No router yet: add one in Devices › Connect a router.</div>');
+  // Des centaines de points sur un gros routeur : les 25 premiers, le reste
+  // sur demande.
+  host.querySelectorAll('[id^="pts-"]').forEach((t) => limiterLignes(t, 25, 'Show all points'));
 }
 
 async function refreshEnforcement() {
@@ -11170,7 +11178,7 @@ async function loadSettings() {
   const groupes = Object.keys(body.groups)
     .sort((a, b) => ordre.indexOf(a) - ordre.indexOf(b));
   host.innerHTML = groupes.map((g) =>
-    '<h2>' + esc(GROUPE_TITRE[g] || g) + '</h2>' +
+    '<h3>' + esc(GROUPE_TITRE[g] || g) + '</h3>' +
     '<div class="table-wrap"><table><thead><tr>' +
       '<th>Setting</th><th>Value</th><th>Source</th><th></th>' +
     '</tr></thead><tbody>' +
@@ -13923,7 +13931,7 @@ function dessinerCarte() {
         img.decoding = 'async';
         img.onload = () => img.classList.add('ok');
         img.onerror = () => img.classList.add('failed');
-        img.src = '//tile.openstreetmap.org/' + z + '/' + xx + '/' + y + '.png';
+        img.src = TUILES + z + '/' + xx + '/' + y + '.png';
         tuiles.appendChild(img);
       }
       img.style.transform = 'translate(' + (x * TUILE - ox) + 'px,' + (y * TUILE - oy) + 'px)';
@@ -15542,7 +15550,12 @@ function blocsDeSection(vue, titres) {
   const debuts = new Set(titres.map(ancre));
   return titres.map((h) => {
     const bloc = [ancre(h)];
-    for (let n = ancre(h).nextElementSibling; n && !debuts.has(n) && !n.querySelector('h2'); n = n.nextElementSibling) bloc.push(n);
+    // Un bloc s'arrete au titre de section suivant -- ou a un element qui en
+    // contient un. Un element qui ne contient que des titres INTERNES (un
+    // <details> ferme, par ex.) reste dans la section : sinon il s'afficherait
+    // sous tous les onglets.
+    const contientDebut = (n) => [...n.querySelectorAll('h2')].some((x) => debuts.has(ancre(x)));
+    for (let n = ancre(h).nextElementSibling; n && !debuts.has(n) && !contientDebut(n); n = n.nextElementSibling) bloc.push(n);
     return bloc;
   });
 }
@@ -15554,7 +15567,14 @@ function appliquerOnglets(vue, titres) {
   if (!ids.includes(ONGLET[state.view])) ONGLET[state.view] = ids[0];
   const blocs = blocsDeSection(vue, titres);
   titres.forEach((h, i) => {
-    if (h.id !== ONGLET[state.view]) blocs[i].forEach((el) => el.classList.add('tab-hidden'));
+    if (h.id !== ONGLET[state.view]) {
+      blocs[i].forEach((el) => el.classList.add('tab-hidden'));
+      return;
+    }
+    // Un onglet dont tout le contenu est un bloc repliable : on le deplie (un
+    // onglet qui ne montre qu'une ligne a cliquer n'a rien a faire replie).
+    const contenu = blocs[i].slice(1).filter((el) => !/^(SCRIPT|TEMPLATE)$/.test(el.tagName) && (el.tagName === 'DETAILS' || el.textContent.trim()));
+    if (contenu.length === 1 && contenu[0].tagName === 'DETAILS' && !contenu[0].open) contenu[0].open = true;
   });
   document.querySelectorAll('#page-toc [data-toc]').forEach((a) => a.classList.toggle('active', a.dataset.toc === ONGLET[state.view]));
 }
@@ -15572,7 +15592,7 @@ function construireSommaire() {
     nav.dataset.sig = signature;
     nav.classList.toggle('as-tabs', VUES_ONGLETS.has(state.view));
     nav.innerHTML = titres.length < 3 ? '' : titres.map((h) =>
-      '<a href="#" data-toc="' + h.id + '">' + esc(libelleAide(h, true).split(' — ')[0]) + '</a>').join('');
+      '<a href="#" data-toc="' + h.id + '">' + esc(h.dataset.tab || libelleAide(h, true).split(' — ')[0]) + '</a>').join('');
   }
   appliquerOnglets(vue, titres);
   if (!VUES_ONGLETS.has(state.view)) suivreSommaire();

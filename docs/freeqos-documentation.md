@@ -647,7 +647,7 @@ A static-IP client announces nothing: no session, no RADIUS plan. **The declarat
 
 The capacity of a radio link changes with rain, interference and alignment. freeQoS only knows it by **asking the antenna**, in one of two ways:
 
-- **airOS** (`BACKHAUL_PROVIDER=airos`): each antenna is polled on its local API (`https://<antenna>/status.cgi`), with no UISP needed. Antennas are added in *Devices › Add an antenna*, or **automatically**: when common airOS credentials are given (`AIROS_USERNAME`, `AIROS_PASSWORD`, set by the installer), every Ubiquiti radio discovered as a neighbour, with an address, is added and attached to the PoP of the router that sees it. Nothing is ever removed or changed automatically, and a radio already known (same address, MAC or name) is not duplicated.
+- **airOS** (`BACKHAUL_PROVIDER=airos`): each antenna is polled on its local API (`https://<antenna>/status.cgi`), with no UISP needed. Antennas are added in *Devices › Ubiquiti antennas › Add an antenna*, or **automatically**: when common airOS credentials are given (`AIROS_USERNAME`, `AIROS_PASSWORD`, set by the installer), every Ubiquiti radio discovered as a neighbour, with an address, is added and attached to the PoP of the router that sees it. Nothing is ever removed or changed automatically, and a radio already known (same address, MAC or name) is not duplicated.
 - **UISP** (`BACKHAUL_PROVIDER=uisp`): the UISP controller's API, read-only, which also gives the station → access point attachments used for the sector join.
 
 A declared backhaul is matched to the link that carries it by the **physical identity** of the radio: its UISP device id or its MAC (`uisp_device_id`, compared without case or separators). Without it, the match falls back on equal names, and failing that the parent queue keeps the port's negotiated speed — the ceiling of the ethernet cable, not of the radio. `BACKHAUL_PROVIDER=mock` is a deterministic lab simulator.
@@ -1124,9 +1124,9 @@ This is the only part of freeQoS that writes to the routers. It always follows t
 
 **No queue that limits nothing.** A client with no plan and no mode gets **no queue at all**, whether PPPoE or static IP, and a link with no known capacity gets none either (`shaping_queue_for_detected_links`, off by default). A queue at 0/0 caps nothing, yet all the traffic it targets goes through the router's queue processing (one CPU core, CAKE): clients complained while no limit was set. The traffic of a client without a queue is measured by its interface or NetFlow. The plan lists it as skipped: *no rate to apply*.
 
-**Link queues are off by default** (`shaping_link_queues`, *Settings › Shaping*, environment `SHAPING_LINK_QUEUES=false`). When turned on, each discovered link (backhaul, sector) gets a parent queue capped at its capacity, and its clients hang under it. That is what makes radio bufferbloat disappear, but a link queue caps **everything** that crosses the link: put on the segment of a point-to-point link, it slowed down the whole link, transit included, and clients complained. Turn it on only once the links that are true client bottlenecks are known, and check the plan (*Devices › Set up* shows it) before allowing writes. With link queues off, each link appears in the plan as skipped: *link queues are off*.
+**Link queues are off by default** (`shaping_link_queues`, *Settings › Advanced › Shaping*, environment `SHAPING_LINK_QUEUES=false`). When turned on, each discovered link (backhaul, sector) gets a parent queue capped at its capacity, and its clients hang under it. That is what makes radio bufferbloat disappear, but a link queue caps **everything** that crosses the link: put on the segment of a point-to-point link, it slowed down the whole link, transit included, and clients complained. Turn it on only once the links that are true client bottlenecks are known, and check the plan (*Devices › Set up* shows it) before allowing writes. With link queues off, each link appears in the plan as skipped: *link queues are off*.
 
-**Caps on the top router (upstream caps).** A stream coming from the internet used to cross the gateway and the core at full speed, and was only cut at the PoP: on its way, it filled the core and slowed everyone down. With `upstream_caps` on — **the default** (*Settings › Shaping*, environment `UPSTREAM_CAPS`) — every router declared with the role **Core** or **Gateway** in *Devices* also receives **one queue per client**:
+**Caps on the top router (upstream caps).** A stream coming from the internet used to cross the gateway and the core at full speed, and was only cut at the PoP: on its way, it filled the core and slowed everyone down. With `upstream_caps` on — **the default** (*Settings › Advanced › Shaping*, environment `UPSTREAM_CAPS`) — every router declared with the role **Core** or **Gateway** in *Devices* also receives **one queue per client**:
 
 The role is chosen in the **Role** column of *Devices* (on the spot, for a router entered in the interface; in `routers.yml` for a file router): **PoP** for each NAS (its PPPoE sessions and its VLAN clients are its clients), **Gateway** (or **Core**) for the router at the top. Changing a role writes nothing by itself: the queues are laid down by *Set up* or the next reconciliation, on a router whose writing is allowed. The top router's queues cover the clients of **every** PoP: PPPoE (by their session address) and VLAN / static-IP (by their declared address or block).
 
@@ -1325,7 +1325,7 @@ Every change is written to the client's *Activity*. API: `GET /api/v1/clients/{l
 
 ### Ubiquiti UISP (antennas)
 
-*Devices › Ubiquiti UISP* connects the **UISP controller** (formerly UNMS), which knows every airMAX / airFiber / LTU antenna of the network. An **Administrator** gives its address (`https://uisp.example.net`) and an **API token** with read access (UISP › Settings › Users › API tokens), then *Test the connection* and *Save*. The token is stored **encrypted** (same vault as router passwords) and never comes back through the API. Unticking *Verify the certificate* accepts a self-signed UISP.
+*Devices › Ubiquiti UISP* connects the **UISP controller** (formerly UNMS), which knows every airMAX / airFiber / LTU antenna of the network. An **Administrator** gives its address (`https://uisp.example.net`) and an **API token** with read access (UISP › Settings › Accounts › API tokens), then *Test the connection* and *Save*. The token is stored **encrypted** (same vault as router passwords) and never comes back through the API. Unticking *Verify the certificate* accepts a self-signed UISP.
 
 The section then lists the antennas UISP knows: model, role, IP, UISP site, status, **radio capacity** down and up, **signal** and **airtime** — the potential of each link. **Attach** a backhaul antenna to its site: its capacity is read every backhaul cycle and becomes the ceiling of the site's queue, like an antenna added by its own address (*Add an antenna*). API: `GET/PUT/DELETE /api/v1/uisp`, `POST /api/v1/uisp/test`, `GET /api/v1/uisp/devices`, `PUT/DELETE /api/v1/uisp/links/{device_id}` (`{"name", "pop_name"}`). The environment variables `BACKHAUL_PROVIDER=uisp`, `UISP_BASE_URL`, `UISP_TOKEN` keep working for a controller declared in the file.
 
@@ -1385,7 +1385,7 @@ The subscriber list shows a scheduled rate with a *schedule* badge (the schedule
 
 ### The shaping map
 
-*Settings › Shaping and writing to the routers* shows the **map**, not the commands: where the network is capped, at how much, and where that cap comes from (measured capacity, override, plan, bandwidth schedule, boost, QoE tightening). `GET /api/v1/shaping/points` returns it, read-only.
+*Settings › Router writing* shows the **map**, not the commands: where the network is capped, at how much, and where that cap comes from (measured capacity, override, plan, bandwidth schedule, boost, QoE tightening). `GET /api/v1/shaping/points` returns it, read-only.
 
 | State of a point | Meaning |
 | --- | --- |
@@ -1420,13 +1420,13 @@ Three different questions are often confused: what freeQoS **wants** to install 
 | **Disabled queue** | A perfectly readable rate | `disabled=yes` caps nothing |
 | **Rate mismatch** | Interface and router disagree | Cap changed in the database, never pushed |
 
-A background job checks these four causes **on the routers**, queue by queue, every 3 minutes (`GET /api/v1/shaping/limits` reads the result without waiting for the routers). It feeds *Settings › Are the caps actually held?* and the *Limit* column of the subscribers, where a cap the network does not hold shows **NOT HELD** with its cause. freeQoS **does not touch the firewall**: FastTrack is a performance decision that is not its own. It names it and gives the line to paste (`/ip firewall filter disable [find action=fasttrack-connection]`). It does fix what belongs to it: a queue disabled by hand is **re-enabled** by reconciliation, and a queue hidden by another is reported as a conflict.
+A background job checks these four causes **on the routers**, queue by queue, every 3 minutes (`GET /api/v1/shaping/limits` reads the result without waiting for the routers). It feeds *Settings › Router writing › Are the caps actually held?* and the *Limit* column of the subscribers, where a cap the network does not hold shows **NOT HELD** with its cause. freeQoS **does not touch the firewall**: FastTrack is a performance decision that is not its own. It names it and gives the line to paste (`/ip firewall filter disable [find action=fasttrack-connection]`). It does fix what belongs to it: a queue disabled by hand is **re-enabled** by reconciliation, and a queue hidden by another is reported as a conflict.
 
 ### The write switch and the account's rights
 
 freeQoS writes to a router only when **all three** agree:
 
-1. the **global switch** (*Settings › Shaping and writing to the routers*) is on;
+1. the **global switch** (*Settings › Router writing*) is on;
 2. the router's own **writing allowed** switch (*Devices*, list of polled routers) is on;
 3. the RouterOS **account** has the rights (below).
 
@@ -1441,7 +1441,7 @@ Writing needs the `write` and `api` policies. freeQoS reads the **real rights** 
 The safe way to put freeQoS next to an existing shaper (Preseem, scripts, RADIUS rate limits) is, entirely from the interface:
 
 1. Declare the core and every NAS in *Devices*, leaving *Allow freeQoS to write on this router* unticked. Leave the global switch off.
-2. Observe for as long as needed: tree, subscribers, latency, traffic, and in *Settings › Shaping and writing to the routers* the plan each router would receive, marked read-only.
+2. Observe for as long as needed: tree, subscribers, latency, traffic, and in *Settings › Router writing* the plan each router would receive, marked read-only.
 3. Allow writing on **one** pilot NAS (its switch in *Devices*: the plan is shown, a reason is asked), then turn the global switch on. Only that NAS receives commands.
 4. Then NAS by NAS. Turning a router's switch off puts it back to read-only at once; the global switch stops everything.
 
@@ -1457,7 +1457,7 @@ Every 5 minutes, freeQoS looks at the QoE of each sector over the last 15 minute
 
 A single degraded subscriber points at its last mile (CPE, home Wi-Fi), not at the sector. This is why at least two are needed.
 
-**On and off.** The setting `qoe_loop_enabled` (*Settings › Write safeguards*, live, on by default) turns the loop on or off. Off, the loop reads no score and decides nothing, and every tightening it had applied is released: the planner ignores the tightenings at once, the next reconciliation brings the links back to their normal envelope, and the stored tightenings are reset (`last_action` = `release`) as soon as the setting changes, without waiting for the loop's next pass, so that turning the loop back on starts from scratch rather than re-applying old decisions (turning it back on resets them again, in case some were left over). Like every write, the loop is also subject to the global switch and to each router's switch: on a read-only router, the tightening is decided and the plan computed, nothing is sent.
+**On and off.** The setting `qoe_loop_enabled` (*Settings › Advanced › Write safeguards*, live, on by default) turns the loop on or off. Off, the loop reads no score and decides nothing, and every tightening it had applied is released: the planner ignores the tightenings at once, the next reconciliation brings the links back to their normal envelope, and the stored tightenings are reset (`last_action` = `release`) as soon as the setting changes, without waiting for the loop's next pass, so that turning the loop back on starts from scratch rather than re-applying old decisions (turning it back on resets them again, in case some were left over). Like every write, the loop is also subject to the global switch and to each router's switch: on a read-only router, the tightening is decided and the plan computed, nothing is sent.
 
 ## 8. Capacity and business insights
 
@@ -1541,7 +1541,7 @@ A client is **Not measured · router X not answering freeQoS** when freeQoS coul
 | Reason shown | What to check on the router or the network |
 | --- | --- |
 | connection refused: the API service is off or restricted to another address | `/ip service print`: `api` (8728) or `api-ssl` (8729) enabled, and its `address=` contains the address freeQoS comes from **as the router sees it** (after NAT or through a tunnel it may not be the server's public IP) |
-| no answer in time | Firewall `input` chain (TCP 8728/8729 from freeQoS), the route back to freeQoS, CPU of the router (*Devices › Health*) |
+| no answer in time | Firewall `input` chain (TCP 8728/8729 from freeQoS), the route back to freeQoS, CPU of the router (*Devices › Router health*) |
 | login refused | The API account and its password (`/user print`, `/log print where topics~"account"`) |
 | no route to the router | Routing between the freeQoS server and the router |
 
@@ -2102,7 +2102,7 @@ A row is created in `ip_intel` with no resolution date **as soon as a subscriber
 
 **How do I move freeQoS to another server?** `make backup`, copy the backup **and the instance identifier** to the new server, `make restore`, set the same `FREEQOS_INSTANCE_ID` or copy `data/instance.id` into the volume, then update the routers' NetFlow target if the address changes (freeQoS does it by itself at the next export pass).
 
-**Where are the logs?** `make logs` (or `sudo docker compose logs -f app`). Every command written to a router is also in *Settings › Log of commands sent*.
+**Where are the logs?** `make logs` (or `sudo docker compose logs -f app`). Every command written to a router is also in *Settings › Router writing › Log of commands sent*.
 
 ## Appendix A. Interface reference
 
