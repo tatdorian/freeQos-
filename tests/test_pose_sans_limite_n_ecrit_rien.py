@@ -34,6 +34,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.services.restrictions import JOB_RESTRICTIONS
 from tests.test_bout_en_bout_api_externe import (
     DSN,
     RouteurQuiRetient,
@@ -50,6 +51,8 @@ TABLES_QUI_TOUCHENT_LE_TRAFIC = (
     "firewall_address_list_rows",
 )
 CLIENTS = [f"client-{i:02d}" for i in range(6)]
+#: Chaque commande reellement envoyee a un routeur : (verbe, menu, routeur).
+JOURNAL: list[tuple[str, str, str]] = []
 
 
 def _routeur(identity: str) -> RouteurQuiRetient:
@@ -123,6 +126,7 @@ def banc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[Test
             await conn.close()
 
     asyncio.run(vider())
+    JOURNAL.clear()
     routeurs: dict[str, RouteurQuiRetient] = {}
 
     def lecteur(config: Any, *_a: Any, **_k: Any) -> RouteurQuiRetient:
@@ -134,9 +138,11 @@ def banc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[Test
 
         def __init__(self, config: Any, *_a: Any, **_k: Any) -> None:
             nom = getattr(config, "name", None) or "nas-pop"
+            self._nom = nom
             self._vrai = _ecrivain(routeurs.setdefault(nom, _routeur(nom)))()
 
         def execute(self, action: Any) -> dict[str, Any]:
+            JOURNAL.append((action.verb, action.path, getattr(self, "_nom", "")))
             return self._vrai.execute(action)
 
         def close(self) -> None:
@@ -346,3 +352,65 @@ def test_l_export_netflow_n_ecrit_que_ses_propres_reglages() -> None:
     source = Path(nf.__file__).read_text(encoding="utf-8")
     assert "/queue" not in source
     assert "/ip/firewall" not in source
+
+
+#: Ce que freeQoS a le droit d'envoyer tant qu'aucune limite n'est donnee : la
+#: definition des deux types CAKE (aucune file ne les utilise) et l'export
+#: NetFlow (il compte les paquets, il n'en retient aucun). RIEN d'autre.
+SANS_EFFET_SUR_LE_TRAFIC = {
+    ("add", "/queue/type"),
+    ("set", "/ip/traffic-flow"),
+    ("add", "/ip/traffic-flow/target"),
+    ("set", "/ip/traffic-flow/target"),
+    ("set", "/ip/traffic-flow/ipfix"),
+}
+
+
+def test_aucun_job_automatique_n_envoie_quoi_que_ce_soit_qui_retienne_un_paquet(
+    banc: tuple[TestClient, dict[str, RouteurQuiRetient]],
+) -> None:
+    """Le journal de TOUTES les commandes envoyees, apres « Set up » sur un PoP
+    et une passerelle, puis trois tours de CHAQUE job automatique du
+    controleur (sessions, forfaits, decouverte, files, horaires, boosts,
+    restrictions, boucle QoE, verification des plafonds, NetFlow...)."""
+    client, routeurs = banc
+    ecriture, _ = _cles(client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(client, cle, "nas-pop", "pop")
+    _brancher(client, cle, "main-gw", "gateway")
+
+    jobs = [j["job"] for j in client.app.state.container.scheduler.status()]
+    assert {"reconcile_shaping", "bandwidth_schedules", JOB_RESTRICTIONS} <= set(jobs), jobs
+    for _ in range(3):
+        for job in jobs:
+            r = client.post(f"/api/v1/jobs/{job}/run", headers=cle)
+            assert r.status_code == 200, (job, r.text)
+
+    envoyees = {(verbe, menu) for verbe, menu, _ in JOURNAL}
+    assert envoyees, "rien n'a ete envoye : le test ne prouverait rien"
+    interdites = sorted(envoyees - SANS_EFFET_SUR_LE_TRAFIC)
+    assert not interdites, f"commandes qui touchent le trafic sans limite donnee : {interdites}"
+    # Les types CAKE ne sont crees qu'une fois, et seulement sur le PoP.
+    types = [(v, m, r) for v, m, r in JOURNAL if m == "/queue/type"]
+    assert {r for _, _, r in types} == {"nas-pop"}, types
+    assert len(types) == 2, types
+    for nom in ("nas-pop", "main-gw"):
+        _rien_qui_touche_le_trafic(routeurs[nom])
+
+
+def test_par_defaut_set_up_ne_touche_pas_a_netflow(
+    banc: tuple[TestClient, dict[str, RouteurQuiRetient]],
+) -> None:
+    """CONSTATE EN PRODUCTION : le trafic ralentissait avec SEULEMENT les types
+    CAKE et l'export NetFlow poses. Par defaut, « Set up » n'envoie donc plus
+    aucune commande traffic-flow : le routeur ne compte pas ses paquets et garde
+    son FastPath."""
+    client, routeurs = banc
+    ecriture, _ = _cles(client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(client, cle, "nas-pop", "pop")
+    for _ in range(2):
+        client.post("/api/v1/jobs/netflow_export/run", headers=cle)
+    assert not [x for x in JOURNAL if x[1].startswith("/ip/traffic-flow")], JOURNAL
+    assert routeurs["nas-pop"].traffic_flow_row.get("enabled") in (None, "false", "no", False)
+    assert routeurs["nas-pop"].traffic_flow_target_rows == []
