@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="d077f5fe9c95f06b">
+  <meta name="freeqos-docs-source" content="cc7c11807a7d1ffc">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -1042,8 +1042,9 @@ curl -s http://127.0.0.1:8000/health/ready
 <li>Open TCP <strong>80</strong> and <strong>443</strong> to the server from the internet. Port 80 must stay open: it is how Let's Encrypt checks the domain, first and at each renewal.</li>
 <li><em>Settings › Domain &amp; HTTPS</em>: type the name (<code>qos.example.com</code>), optionally an email for certificate expiry notices, then <em>Save and apply</em>.</li>
 </ol>
-<p>The included proxy (Caddy, container <code>freeqos-proxy</code>) obtains the certificate within a minute and renews it on its own. <code>http://</code> on that name then redirects to <code>https://</code>. The server's IP keeps answering in plain HTTP: it is the way back in if the DNS is broken. <em>Check now</em> tells whether the name points to this server and whether HTTPS answers; the last error from the proxy is shown in plain words. <em>Remove</em> goes back to HTTP only.</p>
-<p>Once HTTPS works, close port 8000 to the outside (or set <code>APP_BIND=127.0.0.1</code> in <code>.env</code>). API: <code>GET /api/v1/public-access</code>, <code>PUT /api/v1/public-access</code> (<code>{"domain", "email"}</code>, Administrator), <code>DELETE /api/v1/public-access</code>, <code>POST /api/v1/public-access/check</code>.</p>
+<p>The included proxy (Caddy, container <code>freeqos-proxy</code>) obtains the certificate within a minute and renews it on its own. <code>http://</code> on that name then redirects to <code>https://</code>. <em>Check now</em> tells whether the name points to this server and whether HTTPS answers; the last error from the proxy is shown in plain words. <em>Remove</em> goes back to HTTP only.</p>
+<p><strong>HTTPS only, automatically.</strong> Until HTTPS is proven, the server's IP and port 8000 keep answering in plain HTTP, so you are never locked out while the certificate arrives. The proof is the first real visit to <code>https://&lt;domain&gt;</code>: from then on, any plain-HTTP request (<code>http://&lt;server IP&gt;</code>, <code>http://&lt;server IP&gt;:8000</code>) gets a <code>308</code> redirect to <code>https://&lt;domain&gt;</code> with the same path. The login page is never served in clear again, and nothing has to be changed in <code>.env</code>. The card shows <em>HTTPS only</em> once it is active. Not redirected: <code>/health</code> (the Docker health check calls <code>http://127.0.0.1:8000/health</code>). Changing the domain starts over (the new name must be visited in HTTPS once); removing it reopens HTTP. Way back in if the certificate ever stops renewing: <code>HTTPS_REDIRECT=false</code> in <code>.env</code>, then <code>docker compose up -d</code>.</p>
+<p>Closing port 8000 to the outside (<code>APP_BIND=127.0.0.1</code> in <code>.env</code>) is still a good extra step, but no longer required. API: <code>GET /api/v1/public-access</code>, <code>PUT /api/v1/public-access</code> (<code>{"domain", "email"}</code>, Administrator), <code>DELETE /api/v1/public-access</code>, <code>POST /api/v1/public-access/check</code>.</p>
 <p>The domain is stored in the database and pushed again to the proxy at each start of freeQoS. The proxy's admin interface (port 2019) is only reachable inside the Docker network, never published. Its certificates live in the <code>caddy_data</code> volume.</p>
 <div class="table-wrap"><table>
 <thead>
@@ -1073,6 +1074,11 @@ curl -s http://127.0.0.1:8000/health/ready
 <td><code>FORWARDED_ALLOW_IPS</code></td>
 <td>the subnet above</td>
 <td>Who may tell the application the visitor's real address and HTTPS</td>
+</tr>
+<tr>
+<td><code>HTTPS_REDIRECT</code></td>
+<td><code>true</code></td>
+<td>Redirect plain HTTP to <code>https://&lt;domain&gt;</code> once HTTPS is proven. <code>false</code> = way back in</td>
 </tr>
 </tbody>
 </table></div>

@@ -318,8 +318,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         return response
 
+    install_https_redirect(app, settings)
     register_routes(app, settings)
     return app
+
+
+def install_https_redirect(app: FastAPI, settings: Settings, repo: Any = None) -> None:
+    """Le HTTP simple renvoye vers https://<domaine> une fois celui-ci confirme
+    (``app.services.public_access.HttpsRedirect``). ``repo`` : pour les tests ;
+    sinon celui du conteneur, une fois l'application demarree."""
+    from app.services.public_access import HttpsRedirect
+
+    garde = HttpsRedirect(enabled=settings.https_redirect)
+    app.state.https_redirect = garde
+
+    @app.middleware("http")
+    async def https_seulement(request: Request, call_next: Any) -> Any:
+        depot = repo
+        if depot is None:
+            conteneur = getattr(request.app.state, "container", None)
+            depot = getattr(conteneur, "public_access_repo", None)
+        redirection = await garde.handle(request, depot)
+        if redirection is not None:
+            return redirection
+        return await call_next(request)
 
 
 app = create_app()

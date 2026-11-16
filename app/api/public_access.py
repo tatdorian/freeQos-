@@ -36,15 +36,29 @@ def _repo(container: ContainerDep) -> acces.PublicAccessRepository:
     return depot  # type: ignore[no-any-return]
 
 
+def _invalider(request: Request) -> None:
+    """Le domaine vient de changer : la redirection relit la base tout de suite."""
+    garde = getattr(request.app.state, "https_redirect", None)
+    if garde is not None:
+        garde.invalidate()
+
+
 def _admin_url(container: ContainerDep) -> str | None:
     return container.settings.proxy_admin_url or None
 
 
 @router.get("/public-access", summary="Domain name and HTTPS of the interface")
-async def get_public_access(container: ContainerDep) -> dict[str, Any]:
+async def get_public_access(request: Request, container: ContainerDep) -> dict[str, Any]:
     url = _admin_url(container)
     fiche = await _repo(container).get()
+    garde = getattr(request.app.state, "https_redirect", None)
     return {
+        "https_confirmed_at": fiche.get("https_confirmed_at") if fiche else None,
+        # Le HTTP simple (IP, port 8000) est-il renvoye vers le domaine ?
+        "https_enforced": bool(
+            fiche and fiche.get("https_confirmed_at") and (garde is None or garde.enabled)
+        ),
+        "https_redirect_enabled": garde.enabled if garde is not None else True,
         "proxy": url is not None,
         "proxy_reachable": await acces.proxy_reachable(url) if url else False,
         "domain": fiche["domain"] if fiche else None,
@@ -80,11 +94,12 @@ async def put_public_access(
         await depot.mark(ok=False, error=str(exc))
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     await depot.mark(ok=True)
+    _invalider(request)
     return {"domain": domaine, "applied": True, "dns": await acces.resolve(domaine)}
 
 
 @router.delete("/public-access", summary="Stop serving the interface under a domain name")
-async def delete_public_access(container: ContainerDep) -> dict[str, Any]:
+async def delete_public_access(request: Request, container: ContainerDep) -> dict[str, Any]:
     url = _admin_url(container)
     if url is not None:
         try:
@@ -92,6 +107,7 @@ async def delete_public_access(container: ContainerDep) -> dict[str, Any]:
         except RuntimeError as exc:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     await _repo(container).delete()
+    _invalider(request)
     return {"deleted": True}
 
 
