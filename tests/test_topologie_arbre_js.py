@@ -1048,7 +1048,7 @@ console.log(JSON.stringify({ rates: agregat.synthRates, compte: agregat.count })
 # -------------------------------------------------------------------------
 # LISIBILITE A GRANDE ECHELLE : des dizaines d'equipements sous un routeur
 #
-# Une colonne de 60 cases sous NAS-CAISSE ne se lit pas. Les feuilles d'un meme
+# Une colonne de 60 cases sous NAS-NORTH ne se lit pas. Les feuilles d'un meme
 # parent se rangent dans UNE case « N devices » ; ouverte, elle s'ecrit en
 # colonnes de 10. On peut aussi n'afficher qu'une branche.
 # -------------------------------------------------------------------------
@@ -1060,9 +1060,9 @@ const l = (key, s, t) => ({ key, source_key: s, target_key: t, interface: 'e',
   interface_links: 1, tx_bps: 1e6, rx_bps: 2e5, capacity_mbps: 1000,
   port_capacity_mbps: 1000, attributes: {} });
 const foule = (combien) => {
-  const nodes = [n('router:core', 'CORE', 'core'), n('router:nas', 'NAS-CAISSE', 'pop'),
-                 n('router:office', 'NAS-OFFICE', 'pop')];
-  const links = [l('c1', 'router:core', 'router:nas'), l('c2', 'router:core', 'router:office')];
+  const nodes = [n('router:core', 'CORE', 'core'), n('router:nas', 'NAS-NORTH', 'pop'),
+                 n('router:south', 'NAS-SOUTH', 'pop')];
+  const links = [l('c1', 'router:core', 'router:nas'), l('c2', 'router:core', 'router:south')];
   for (let i = 0; i < combien; i++) {
     const mac = 'AA:BB:CC:00:00:' + String(i).padStart(2, '0');
     nodes.push(n('mac:' + mac, mac, 'unknown', { platform: 'MikroTik RouterOS' }));
@@ -1126,7 +1126,7 @@ const feuilles = m.nodesByKey.get('grp:router:nas').children;
 const xs = new Set(feuilles.map((f) => f.x));
 const ys = new Set(feuilles.map((f) => f.y));
 const places = new Set(feuilles.map((f) => f.x + ',' + f.y));
-const office = m.nodesByKey.get('router:office');
+const office = m.nodesByKey.get('router:south');
 const basGroupe = Math.max(...feuilles.map((f) => f.y));
 const hautGroupe = Math.min(...feuilles.map((f) => f.y));
 console.log(JSON.stringify({ colonnes: xs.size, lignes: ys.size, distinctes: places.size,
@@ -1146,15 +1146,15 @@ def test_focus_ne_garde_qu_une_branche(harnais: Path) -> None:
         FOULE
         + """
 A.topo.abosOuverts.clear();
-A.topo.focus = 'router:office';
+A.topo.focus = 'router:south';
 const m = A.topoBuildModel(foule(12));
 A.topo.focus = null;
 console.log(JSON.stringify({ cles: [...m.nodesByKey.keys()].sort(),
   racines: m.roots.map((r) => r.key) }));
 """,
     )
-    # Ses ancetres (pour savoir ou l'on est) et elle ; pas NAS-CAISSE ni ses 12 equipements.
-    assert res["cles"] == ["router:core", "router:office"]
+    # Ses ancetres (pour savoir ou l'on est) et elle ; pas NAS-NORTH ni ses 12 equipements.
+    assert res["cles"] == ["router:core", "router:south"]
     assert res["racines"] == ["router:core"]
 
 
@@ -1191,7 +1191,7 @@ for (let i = 0; i < 120; i++) {
 }
 A.topo.subs = subs;
 A.topo.vue = 'list';
-A.topo.data = { nodes: [n('router:core', 'CORE', 'core'), n('router:nas', 'NAS-CAISSE', 'pop')],
+A.topo.data = { nodes: [n('router:core', 'CORE', 'core'), n('router:nas', 'NAS-NORTH', 'pop')],
   links: [l('c1', 'router:core', 'router:nas')], counts: {}, placements, client_nodes: {} };
 const lignes = () => A.boites['topo-list'].innerHTML;
 const compter = (motif) => (lignes().match(motif) || []).length;
@@ -1218,7 +1218,7 @@ console.log(JSON.stringify({ avant, ouvert, filtre }));
     # La liste, pas le diagramme : aucun SVG n'est dessine.
     assert res["avant"]["svg"] == 0
     html = res["avant"]["html"]
-    assert "NAS-CAISSE" in html and "CORE" in html
+    assert "NAS-NORTH" in html and "CORE" in html
     assert "120 clients" in html
     # Ferme par defaut : 120 clients ne noient pas l'ossature.
     assert res["avant"]["clients"] == 0
@@ -1261,7 +1261,7 @@ const n = (k, nm, kd) => ({ key: k, name: nm, kind: kd, hidden: false, addresses
 const l = (key, s, t) => ({ key, source_key: s, target_key: t, interface: 'e',
   interface_links: 1, attributes: {} });
 const data = {
-  nodes: [n('router:nas', 'NAS-OFFICE', 'pop'), n('mac:01', 'BAGRI SIEGE', 'unknown'),
+  nodes: [n('router:nas', 'NAS-SOUTH', 'pop'), n('mac:01', 'BAGRI SIEGE', 'unknown'),
           n('mac:02', 'MAIN GATEWAY', 'unknown'), n('mac:03', 'AP-NORD', 'unknown'),
           n('mac:04', 'CPE DUPONT', 'cpe')],
   links: [l('a', 'router:nas', 'mac:01'), l('b', 'router:nas', 'mac:02'),
@@ -1282,3 +1282,76 @@ console.log(JSON.stringify({ cles: [...m.nodesByKey.keys()].sort(), caches,
     # BAGRI SIEGE et MAIN GATEWAY : declares nulle part, caches.
     assert res["caches"] == 2
     assert res["tout"] == 5
+
+
+# Deux PoPs sur le meme segment, SANS coeur ni passerelle declares (cas reel :
+# deux NAS dans le meme LAN), et l'equipement d'un client vu par les deux.
+DEUX_POPS = """
+const n = (k, nm, kd) => ({ key: k, name: nm, kind: kd, hidden: false, addresses: [] });
+const l = (key, s, t, sur) => ({ key, source_key: s, target_key: t, interface: 'e',
+  interface_links: sur ? 1 : 5, tx_bps: 0, rx_bps: 0,
+  capacity_mbps: 1000, port_capacity_mbps: 1000, attributes: {} });
+const nodes = [
+  n('router:north', 'NAS-NORTH', 'pop'), n('router:south', 'NAS-SOUTH', 'pop'),
+  n('mac:CPE', 'OFFICE-CPE', 'unknown'), n('mac:SW', 'SW-1', 'unknown'),
+];
+const links = [
+  l('k1', 'router:north', 'router:south', true),
+  l('k2', 'router:north', 'mac:CPE', true),
+  l('k3', 'router:south', 'mac:CPE', false),
+  l('k4', 'router:north', 'mac:SW', true),
+];
+const parents = (m) => { const o = {};
+  m.nodesByKey.forEach((x) => { if (!x.synthetic) o[x.key] = x.parentKey; }); return o; };
+"""
+
+
+def test_deux_pops_sans_coeur_sont_freres(harnais: Path) -> None:
+    """Regression : sans coeur declare, un PoP pendait sous l'autre."""
+    res = executer(
+        harnais,
+        DEUX_POPS
+        + """
+const m = A.topoBuildModel({ nodes, links, counts: {} });
+console.log(JSON.stringify({ parents: parents(m), racines: m.roots.map((r) => r.key).sort() }));
+""",
+    )
+    assert res["parents"]["router:south"] is None
+    assert res["parents"]["router:north"] is None
+    assert {"router:north", "router:south"} <= set(res["racines"])
+    # Le reste s'accroche toujours normalement.
+    assert res["parents"]["mac:SW"] == "router:north"
+
+
+def test_un_parent_pose_a_la_main_reste_possible_entre_pops(harnais: Path) -> None:
+    res = executer(
+        harnais,
+        DEUX_POPS
+        + """
+nodes[1].parent_override = 'router:north';
+const m = A.topoBuildModel({ nodes, links, counts: {} });
+console.log(JSON.stringify({ parents: parents(m) }));
+""",
+    )
+    assert res["parents"]["router:south"] == "router:north"
+
+
+def test_l_equipement_du_client_pend_du_routeur_de_sa_session(harnais: Path) -> None:
+    """La case du client etait accrochee au premier PoP atteint (NAS-NORTH),
+    alors que sa session est sur NAS-SOUTH."""
+    res = executer(
+        harnais,
+        DEUX_POPS
+        + """
+A.topo.subs = [{ login: 'acme-office', pop_name: 'NAS-SOUTH' }];
+const data = { nodes, links, counts: {},
+  client_nodes: { 'mac:CPE': { login: 'acme-office', how: 'device' } },
+  placements: { 'acme-office': { how: 'device', node: 'mac:CPE' } } };
+const m = A.topoBuildModel(data);
+const nord = m.nodesByKey.get('router:north');
+console.log(JSON.stringify({ parents: parents(m),
+  enfantsNord: nord.children.map((c) => c.key) }));
+""",
+    )
+    assert res["parents"]["mac:CPE"] == "router:south"
+    assert "mac:CPE" not in res["enfantsNord"]

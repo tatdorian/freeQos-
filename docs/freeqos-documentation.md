@@ -500,7 +500,9 @@ A box gets its parent from, in order of strength:
 2. the parent **proven by the routing table**;
 3. the **shortest path** in the graph, used only where the configuration says nothing (unmanaged devices, discovered neighbours).
 
-Each box is marked "manual", "route" or "inferred", so you know what is established and what is assumed. A **multi-homed** router (two equal default routes) has no single parent: freeQoS refuses to pick one, says so, and falls back on the shortest path. A ring (two PoPs linked to the core *and* to each other) is where guessing goes wrong — both paths have the same length — and where the routing table settles it.
+Each box is marked "manual", "route" or "inferred", so you know what is established and what is assumed.
+
+**Two PoPs are siblings, never parent and child by guess.** Without a declared core or gateway, each PoP is its own root, even when the two see each other on the same segment: a PoP (or core, or gateway) is never hung under a box of the same rank by the shortest path. Only a parent set by hand or proven by the routing table can put one under the other. Likewise, a device box that **is** a client hangs under the router that carries its session, not under the first router that happens to see it. A **multi-homed** router (two equal default routes) has no single parent: freeQoS refuses to pick one, says so, and falls back on the shortest path. A ring (two PoPs linked to the core *and* to each other) is where guessing goes wrong — both paths have the same length — and where the routing table settles it.
 
 On a shared segment (a switch, a management VLAN where MNDP shows everyone), a box without a proven parent gets its **most likely** link, drawn **dashed** and marked *uncertain*, never a mesh. The panel offers to confirm it or correct it in one click.
 
