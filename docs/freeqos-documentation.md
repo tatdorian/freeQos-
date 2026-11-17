@@ -721,6 +721,10 @@ A link's throughput comes from the counters of the **port** that carries it, wit
 
 *Devices › Reset queues* deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to **Automatic**: its mode, boost and forced limit are removed, it is back on its plan, and its *Activity* says so (`queues reset on <router>`). A bandwidth schedule that targets the client applies again at its next window.
 
+### Set by freeQoS: everything freeQoS put on a router
+
+*Devices › Inventory › Polled routers › Set by freeQoS* reads the router live and lists, table by table, **every line carrying the freeQoS mark**: client queues (`/queue/simple`, with target, limit, queue type and parent), the CAKE queue types, the restriction lines (firewall filter, mangle, queue tree) and address lists, plus the NetFlow export (whether `traffic-flow` is on, and which collector targets freeQoS set). Nothing is written. Queues made by hand or by RADIUS are only counted, never listed as freeQoS's. It is exactly what *Remove freeQoS* would take off. API: `GET /api/v1/pops/routers/{name}/freeqos-lines`.
+
 ### Remove freeQoS: the router as it was before
 
 *Devices › Remove freeQoS* leaves a router as it was before freeQoS, in one gesture (Administrator, confirmed in a window):
