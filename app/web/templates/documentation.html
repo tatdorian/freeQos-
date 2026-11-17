@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="e0af3aa74ecaa2b3">
+  <meta name="freeqos-docs-source" content="d5e78de921e5971d">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -1949,7 +1949,13 @@ curl -s http://127.0.0.1:8000/health/ready
 </table></div>
 <p>If the internet segment is much higher than the next hop, the delay is outside your network. <code>GET /api/v1/latency</code> returns the three segments per router; <code>GET /api/v1/latency/clients</code> returns the latency each subscriber lives.</p>
 <h3 id="live-check-of-one-subscriber">Live check of one subscriber</h3>
-<p>On a subscriber's panel, <em>Measure on the router now</em> reads its PPPoE interface and its queue live for two seconds, adds the NetFlow rate and the last recorded sample, and returns a verdict that says <strong>where</strong> throughput is lost, if it is (<code>GET /api/v1/subscribers/{id}/live</code>). It is the quickest way to compare what the interface shows with what the router sees.</p>
+<p>On a client's page, <em>Client details › Check against the router</em> reads its PPPoE interface and its queue live, twice 2 s apart, adds the NetFlow rate and the last sample freeQoS stored, and gives a verdict on <strong>who</strong> is at fault when the usage shows 0 (<code>GET /api/v1/subscribers/{id}/live</code>):</p>
+<ul>
+<li><strong>the router itself counts nothing</strong>: the client is idle, freeQoS shows 0 because there is 0;</li>
+<li><strong>the router counts traffic but freeQoS stored about 0</strong>: the measurement in freeQoS is at fault (check again, then report it with the table);</li>
+<li><strong>the router counts traffic and nothing recent is stored</strong>: the measurement cycle is failing (its error shows at the top of the list);</li>
+<li><strong>NetFlow sees traffic but the PPPoE interface counts none</strong>: the traffic does not go through the session (another path).</li>
+</ul>
 <h3 id="bufferbloat">Bufferbloat</h3>
 <p>Bufferbloat is the latency that load <strong>adds</strong>. freeQoS computes it by crossing the RTT and the rate of the same sample: latency when the link is loaded, minus latency when it is not. No dedicated test is run.</p>
 <h4 id="why-bufferbloat-exists">Why bufferbloat exists</h4>

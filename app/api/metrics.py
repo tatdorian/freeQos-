@@ -397,6 +397,16 @@ def live_verdict(
             "text": "The router counts traffic but nothing recent is stored: the "
             "Subscribers cycle is failing (see its error at the top of the list).",
         }
+    if vu_routeur and stored is not None and not fort(stored.get("tx_bps"), stored.get("rx_bps")):
+        # Le routeur compte du trafic, freeQoS a enregistre ~0 : c'est la
+        # mesure de freeQoS qui est en cause (deux lectures a quelques secondes
+        # d'intervalle peuvent toutefois tomber sur un pic : relancer).
+        return {
+            "level": "crit",
+            "text": "The router counts traffic right now but freeQoS stored about 0: the "
+            "measurement in freeQoS is at fault. Check again; if it stays so, report it "
+            "with this table.",
+        }
     if vu_routeur:
         return {"level": "ok", "text": "The router counts this traffic and it is stored."}
     if vu_netflow:
@@ -406,7 +416,17 @@ def live_verdict(
             "counts none: the traffic does not go through its session (another path, "
             "or fasttrack on a bridge).",
         }
-    return {"level": "ok", "text": "No traffic right now: the session is idle."}
+    if stored is not None and fort(stored.get("tx_bps"), stored.get("rx_bps")):
+        return {
+            "level": "ok",
+            "text": "The router counts no traffic right now, while freeQoS's last sample "
+            "had some: the traffic has just stopped. Check again to compare.",
+        }
+    return {
+        "level": "ok",
+        "text": "The router itself counts no traffic for this client right now: the "
+        "session is idle. freeQoS shows 0 because there is 0.",
+    }
 
 
 @router.get("/subscribers/{subscriber_id}", summary="Record of one subscriber")
