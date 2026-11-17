@@ -8149,6 +8149,15 @@ function topoBuildModel(data, options) {
 
       (voisins.get(cle) || []).slice().sort(ordreVoisins).forEach((v) => {
         if (fige.has(v.key)) return;
+        // DEUX PoPs SONT FRERES, PAS PERE ET FILS. Sans coeur ni passerelle
+        // declares, la racine est un PoP, et le plus court chemin accrochait
+        // l'autre PoP dessous (deux PoPs sur le meme segment se « voient »).
+        // Un equipement d'infrastructure du MEME rang que la racine -- ou plus
+        // haut -- n'est jamais rattache par deduction : il devient sa propre
+        // racine. Seuls un parent pose a la main ou prouve par la route par
+        // defaut (etapes 1 et 1bis) peuvent en faire un enfant.
+        const voisin = nodes.get(v.key);
+        if (voisin && !voisin.synthetic && TOPO_INFRA.has(voisin.kind) && rang(v.key) <= rang(source)) return;
         const d = meilleure + (v.confident ? POIDS_SUR : POIDS_INCERTAIN);
         const connue = dist.has(v.key) ? dist.get(v.key) : Infinity;
         if (d >= connue) return;   // a egalite on garde le premier, deja trie
@@ -8200,6 +8209,23 @@ function topoBuildModel(data, options) {
   });
   const parNomDeSite = new Map();
   nodes.forEach((n) => { if (!n.synthetic && n.name && !parNomDeSite.has(n.name)) parNomDeSite.set(n.name, n.key); });
+
+  // L'EQUIPEMENT D'UN CLIENT PEND DU ROUTEUR DE SA SESSION. Vu par plusieurs
+  // routeurs (meme segment), sa case etait accrochee au premier atteint, pas a
+  // celui qui porte le client : le client « changeait » de PoP dans l'arbre.
+  // Un parent pose a la main ou prouve par la configuration reste le dernier mot.
+  nodes.forEach((n) => {
+    if (!n.client || n.parent_override || n.config_parent) return;
+    const cible = parNomDeSite.get(n.client.router_name) || parNomDeSite.get(n.client.pop_name);
+    if (!cible || cible === n.key || cible === n.parentKey || !nodes.has(cible)) return;
+    if (wouldCycle(n.key, cible)) return;
+    const ancien = n.parentKey ? nodes.get(n.parentKey) : null;
+    if (ancien) ancien.children = ancien.children.filter((c) => c !== n);
+    const via = (voisins.get(cible) || []).find((v) => v.key === n.key);
+    n.parentKey = null;
+    attach(n.key, cible, via ? { parentKey: cible, childKey: n.key, link: via.link,
+      inverted: via.inverted, confident: via.confident } : null);
+  });
   const parCase = new Map();
   const sitesVlan = new Map();
   const nonPlaces = [];

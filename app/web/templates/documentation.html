@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="d5e78de921e5971d">
+  <meta name="freeqos-docs-source" content="18ccc39ea778240b">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -1408,7 +1408,8 @@ curl -s http://127.0.0.1:8000/health/ready
 <li>the parent <strong>proven by the routing table</strong>;</li>
 <li>the <strong>shortest path</strong> in the graph, used only where the configuration says nothing (unmanaged devices, discovered neighbours).</li>
 </ol>
-<p>Each box is marked "manual", "route" or "inferred", so you know what is established and what is assumed. A <strong>multi-homed</strong> router (two equal default routes) has no single parent: freeQoS refuses to pick one, says so, and falls back on the shortest path. A ring (two PoPs linked to the core <em>and</em> to each other) is where guessing goes wrong — both paths have the same length — and where the routing table settles it.</p>
+<p>Each box is marked "manual", "route" or "inferred", so you know what is established and what is assumed.</p>
+<p><strong>Two PoPs are siblings, never parent and child by guess.</strong> Without a declared core or gateway, each PoP is its own root, even when the two see each other on the same segment: a PoP (or core, or gateway) is never hung under a box of the same rank by the shortest path. Only a parent set by hand or proven by the routing table can put one under the other. Likewise, a device box that <strong>is</strong> a client hangs under the router that carries its session, not under the first router that happens to see it. A <strong>multi-homed</strong> router (two equal default routes) has no single parent: freeQoS refuses to pick one, says so, and falls back on the shortest path. A ring (two PoPs linked to the core <em>and</em> to each other) is where guessing goes wrong — both paths have the same length — and where the routing table settles it.</p>
 <p>On a shared segment (a switch, a management VLAN where MNDP shows everyone), a box without a proven parent gets its <strong>most likely</strong> link, drawn <strong>dashed</strong> and marked <em>uncertain</em>, never a mesh. The panel offers to confirm it or correct it in one click.</p>
 <h4 id="one-device-one-box">One device, one box</h4>
 <p>The same router can be seen several times: as a managed router <em>and</em> as a neighbour of the core, under several management addresses, in IPv4 and IPv6. freeQoS reconciles these views into one box using what cannot change:</p>
