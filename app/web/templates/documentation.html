@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="0cbf3c87d657c595">
+  <meta name="freeqos-docs-source" content="b9788a01267559b6">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -4741,8 +4741,6 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <h4 id="collection-cadences">Collection cadences</h4>
 <p><strong>What it shows.</strong> How often each collection runs.</p>
 <p><strong>How to read it.</strong> Shorter = fresher figures, but more load on the routers and the database. A 10 s subscriber poll and a 30 s latency probe suit most networks.</p>
-<h4 id="what-stays-out-of-reach-of-the-interface">What stays out of reach of the interface</h4>
-<p>Settings that can only change in the environment (.env) — the database address, the encryption key… — because the interface itself depends on them.</p>
 <h4 id="shaping-and-writing-to-the-routers">Shaping and writing to the routers</h4>
 <p><strong>What it shows.</strong> Whether freeQoS writes queues by itself.</p>
 <p><strong>How to read it.</strong> On: a reconciliation every 2 min writes any missing or wrong queue. Off: it writes only when you act (Rate, plan change, Reset queues). Either way, only queues marked freeqos:managed are ever modified.</p>
