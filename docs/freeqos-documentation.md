@@ -818,7 +818,12 @@ If the internet segment is much higher than the next hop, the delay is outside y
 
 ### Live check of one subscriber
 
-On a subscriber's panel, *Measure on the router now* reads its PPPoE interface and its queue live for two seconds, adds the NetFlow rate and the last recorded sample, and returns a verdict that says **where** throughput is lost, if it is (`GET /api/v1/subscribers/{id}/live`). It is the quickest way to compare what the interface shows with what the router sees.
+On a client's page, *Client details › Check against the router* reads its PPPoE interface and its queue live, twice 2 s apart, adds the NetFlow rate and the last sample freeQoS stored, and gives a verdict on **who** is at fault when the usage shows 0 (`GET /api/v1/subscribers/{id}/live`):
+
+- **the router itself counts nothing**: the client is idle, freeQoS shows 0 because there is 0;
+- **the router counts traffic but freeQoS stored about 0**: the measurement in freeQoS is at fault (check again, then report it with the table);
+- **the router counts traffic and nothing recent is stored**: the measurement cycle is failing (its error shows at the top of the list);
+- **NetFlow sees traffic but the PPPoE interface counts none**: the traffic does not go through the session (another path).
 
 ### Bufferbloat
 

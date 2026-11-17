@@ -4551,9 +4551,9 @@ function renderLimitsAlert(plafonds) {
 /** CONTROLE EN DIRECT : ce que le routeur compte pour cet abonne, face a ce
  *  que freeQoS affiche. Chaque source sur une ligne, et un verdict qui dit OU
  *  le debit se perd -- plutot que de deviner. */
-async function liveCheck(id) {
-  const hote = document.getElementById('sub-live');
-  const bouton = document.getElementById('sub-live-btn');
+async function liveCheck(id, hoteId, boutonId) {
+  const hote = document.getElementById(hoteId || 'sub-live');
+  const bouton = document.getElementById(boutonId || 'sub-live-btn');
   hote.innerHTML = '<div class="hint">Reading the router twice, 2 s apart...</div>';
   bouton.disabled = true;
   let r;
@@ -4565,6 +4565,9 @@ async function liveCheck(id) {
     return;
   }
   bouton.disabled = false;
+  // La page du client se redessine toutes les 10 s : on reprend l'encart
+  // actuel, et le resultat est garde pour les rendus suivants.
+  const cible = document.getElementById(hoteId || 'sub-live') || hote;
   const l = r.live || {};
   const ligne = (source, down, up, detail) => '<tr><td>' + source + '</td>' +
     '<td class="num" style="color:var(--down)">' + (down == null ? '<span class="na">-</span>' : esc(bpsText(down))) + '</td>' +
@@ -4584,14 +4587,16 @@ async function liveCheck(id) {
   lignes.push(ligne('Stored by freeQoS', r.stored ? r.stored.tx_bps : null, r.stored ? r.stored.rx_bps : null,
     r.stored ? 'sample ' + esc(depuis(r.stored.ts)) : 'no sample'));
   const v = r.verdict || {};
-  hote.innerHTML = '<div class="notice ' + (v.level === 'ok' ? 'ok' : v.level === 'warn' ? 'warn' : 'err') + '">' +
+  cible.innerHTML = '<div class="notice ' + (v.level === 'ok' ? 'ok' : v.level === 'warn' ? 'warn' : 'err') + '">' +
       esc(v.text || '') + '</div>' +
     (sess ? '<div class="hint">Session: ' + esc(sess.address || '-') + ' · up ' + esc(sess.uptime || '-') +
       (sess.caller_id ? ' · ' + esc(sess.caller_id) : '') + '</div>' : '') +
     '<div class="table-wrap" style="margin-top:.5rem"><table><thead><tr><th>Source</th>' +
       '<th class="num">Download</th><th class="num">Upload</th><th></th></tr></thead><tbody>' +
       lignes.join('') + '</tbody></table></div>' +
-    ((r.errors || []).length ? '<div class="notice warn">' + esc(r.errors.join(' ; ')) + '</div>' : '');
+    ((r.errors || []).length ? '<div class="notice warn">' + esc(r.errors.join(' ; ')) + '</div>' : '') +
+    '<div class="hint" style="display:block">Checked ' + new Date().toLocaleTimeString('en-GB') + '</div>';
+  if (hoteId === 'cp-live') FICHE.live = { id, html: cible.innerHTML };
 }
 
 /** L'etat du cycle de mesure des abonnes, en tete de leur liste : un debit
@@ -13828,7 +13833,13 @@ async function loadClientPage() {
           (profil.declared ? ' · added by hand' : ' · discovered') + '</td></tr>' +
         '<tr><td>Session</td><td>' + (r.session_uptime_s ? esc(uptime(r.session_uptime_s)) : '-') + '</td></tr>' +
         '<tr><td>Last measurement</td><td>' + (r.ts ? esc(depuis(r.ts)) : 'never') + '</td></tr>' +
-      '</tbody></table></div></div></div>' + carteUsages(sante) +
+      '</tbody></table>' +
+      // Le debit affiche est-il juste ? Le routeur, lu en direct, tranche.
+      (r.subscriber_id ? '<div class="actions" style="margin-top:.6rem"><button class="sm" id="cp-live-btn" ' +
+        'title="Reads this client\'s counters on the router now, twice 2 s apart, and compares with what freeQoS shows">' +
+        'Check against the router</button></div><div id="cp-live">' +
+        (FICHE.live && FICHE.live.id === r.subscriber_id ? FICHE.live.html : '') + '</div>' : '') +
+      '</div></div></div>' + carteUsages(sante) +
       '<div class="card" style="margin-top:1rem"><div class="cp-card-head"><h3>Recent activity</h3>' +
       (journal.length > 5 ? '<button class="sm link-btn" data-tab="activity">See all &rarr;</button>' : '') + '</div>' +
       '<div class="table-wrap">' + lignesActivite(journal.slice(0, 5), false) + '</div></div>';
@@ -13875,6 +13886,7 @@ async function loadClientPage() {
   clic('cp-mode', () => openModeDialog([login]));
   clic('cp-edit', () => modifierClient(login, fiche));
   clic('cp-edit2', () => modifierClient(login, fiche));
+  clic('cp-live-btn', () => liveCheck(r.subscriber_id, 'cp-live', 'cp-live-btn'));
   clic('cp-ip', async (e) => {
     try { await navigator.clipboard.writeText(ip); e.target.classList.add('copied'); setTimeout(() => e.target.classList.remove('copied'), 1200); } catch (_) { /* pas de presse-papiers */ }
   });
