@@ -22,6 +22,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -300,6 +301,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["*"],
     )
+
+    # COMPRESSION. Le JavaScript de l'interface (850 Ko) et la liste des clients
+    # (environ 750 octets par client : 750 Ko pour mille) partaient tels quels.
+    # Sur une 4G ou un lien lointain, c'etaient des secondes a chaque page. Le
+    # JSON et le JS se compriment d'un facteur 5 a 10.
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
 
     @app.middleware("http")
     async def chronometre(request: Request, call_next: Any) -> Any:

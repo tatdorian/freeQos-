@@ -46,7 +46,50 @@ function marquer(bouton, delta) {
   }
 }
 
+/* PAS DEUX FOIS LA MEME DEMANDE. Une page en ouvre souvent une autre qui lit
+ * les memes donnees (la liste des clients sert a Clients, Modes, Alerts,
+ * Schedules, au tableau de bord...) : chacune la redemandait, parfois deux fois
+ * dans le meme chargement. Une lecture (GET) identique en cours est partagee,
+ * et une reponse de moins de CACHE_GET_MS est reutilisee. Toute ecriture
+ * (POST, PUT, PATCH, DELETE) et le bouton « Rafraichir » vident ce cache : un
+ * geste se voit toujours tout de suite. Le rafraichissement automatique
+ * (toutes les 10 s) passe apres l'expiration : il lit toujours du frais. */
+const CACHE_GET_MS = 5000;
+const CACHE_GET = new Map();
+function viderCacheApi() { CACHE_GET.clear(); }
+function copieApi(valeur) {
+  // Chaque appelant recoit SA copie : un tri sur place ne doit pas modifier
+  // ce que lit une autre page.
+  if (valeur === null || typeof valeur !== 'object') return valeur;
+  try { return structuredClone(valeur); } catch (e) { return JSON.parse(JSON.stringify(valeur)); }
+}
+
 async function api(path, options) {
+  const methode = String((options && options.method) || 'GET').toUpperCase();
+  if (methode !== 'GET') {
+    viderCacheApi();
+    try { return await apiAvecBouton(path, options); } finally { viderCacheApi(); }
+  }
+  if (path.indexOf('/auth/') === 0) return apiAvecBouton(path, options);
+  const deja = CACHE_GET.get(path);
+  if (deja && (deja.enCours || Date.now() - deja.t < CACHE_GET_MS)) {
+    return copieApi(await deja.promesse);
+  }
+  const entree = { t: Date.now(), enCours: true, promesse: null };
+  entree.promesse = apiAvecBouton(path, options);
+  CACHE_GET.set(path, entree);
+  try {
+    const valeur = await entree.promesse;
+    entree.enCours = false;
+    entree.t = Date.now();
+    return copieApi(valeur);
+  } catch (err) {
+    if (CACHE_GET.get(path) === entree) CACHE_GET.delete(path);
+    throw err;
+  }
+}
+
+async function apiAvecBouton(path, options) {
   const bouton = boutonOccupe();
   if (bouton) marquer(bouton, +1);
   try {
@@ -15577,7 +15620,7 @@ function majDirect() {
   if (texte.textContent !== libelle) { texte.textContent = libelle; pastille.title = libelle; }
 }
 setInterval(majDirect, 1000);
-document.getElementById('refresh-btn').addEventListener('click', () => { if (AUTH.ready) refresh(); });
+document.getElementById('refresh-btn').addEventListener('click', () => { if (AUTH.ready) { viderCacheApi(); refresh(); } });
 
 /** Le sommaire de la page : une pastille par section visible, pour y sauter.
  *  Reconstruit apres chaque chargement (une section peut apparaitre avec ses

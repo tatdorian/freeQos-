@@ -94,3 +94,12 @@ def apply_security_headers(request: Request, response: Response) -> None:
         entetes.setdefault("Strict-Transport-Security", "max-age=31536000")
     if chemin.startswith(_SANS_CACHE) or chemin == "/":
         entetes.setdefault("Cache-Control", "no-store")
+    elif chemin.startswith("/static/"):
+        # UN FICHIER EMPREINTE NE CHANGE JAMAIS. La page appelle app.js?v=<empreinte
+        # du contenu> : une nouvelle version a une nouvelle adresse. Le navigateur
+        # garde donc ces fichiers un an sans meme redemander (850 Ko de moins a
+        # chaque ouverture). Sans empreinte, il revalide a chaque fois.
+        if request.query_params.get("v"):
+            entetes.setdefault("Cache-Control", "public, max-age=31536000, immutable")
+        else:
+            entetes.setdefault("Cache-Control", "no-cache")
