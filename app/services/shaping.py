@@ -2659,29 +2659,20 @@ class ShapingService:
             return f"{MOTIF_ROUTEUR_LECTURE_SEULE}: computed, nothing is sent to this router"
         return actif if self._enforcement_enabled else coupe
 
-    async def uninstall(self, router_name: str, *, author: str | None = None) -> dict[str, Any]:
-        """Retire du routeur TOUT ce que freeQoS y a pose, et rien d'autre.
+    async def managed_lines(self, router_name: str) -> dict[str, list[dict[str, Any]]]:
+        """TOUT ce que freeQoS a pose sur ce routeur, lu en direct, sans rien ecrire.
 
-        Files simples, types CAKE, et lignes des restrictions (filtre, mangle,
-        queue tree, listes d'adresses). Seules les lignes portant NOTRE marque
-        partent : une file posee a la main, par RADIUS ou par une autre instance
-        reste. Rien n'est repose : l'appelant coupe l'ecriture sur ce routeur
-        avant, pour qu'aucune boucle ne remette ce qu'on enleve.
-
-        La cible NetFlow n'est pas traitee ici (``NetflowExportService``).
+        Les lignes portant NOTRE marque : files simples, types CAKE, et lignes des
+        restrictions (filtre, mangle, queue tree, listes d'adresses). C'est la
+        meme selection que celle que « Remove freeQoS » retire -- ce qui est
+        montre est exactement ce qui partirait. La cible NetFlow est lue a part
+        (``NetflowExportService``).
         """
         from app.enforcement.planner import QUEUE_TYPE_DOWN, QUEUE_TYPE_UP
-        from app.enforcement.restrictions import (
-            PATH_ADDRESS_LIST,
-            PATH_FILTER,
-            PATH_MANGLE,
-            PATH_QUEUE_TREE,
-            parse_tag,
-        )
+        from app.enforcement.restrictions import parse_tag
 
         collecteur = self._collector(router_name)
         client = collecteur._client  # noqa: SLF001
-        self.unfreeze(router_name)
 
         def lire() -> dict[str, list[dict[str, Any]]]:
             tables: dict[str, list[dict[str, Any]]] = {}
@@ -2706,6 +2697,42 @@ class ShapingService:
                 is_ours(row) or parse_tag(row.get("comment")) is not None
             )
 
+        return {
+            "filter": [r for r in tables["filter"] if marquee(r)],
+            "mangle": [r for r in tables["mangle"] if marquee(r)],
+            "tree": [r for r in tables["tree"] if marquee(r)],
+            "address": [r for r in tables["address"] if marquee(r)],
+            "simple": [q for q in tables["simple"] if q.get(".id") and is_ours(q)],
+            "type": [
+                t
+                for t in tables["type"]
+                if t.get(".id") and str(t.get("name") or "") in (QUEUE_TYPE_UP, QUEUE_TYPE_DOWN)
+            ],
+            # Pour situer : combien de files du routeur ne sont PAS a freeQoS.
+            "_other_simple": [q for q in tables["simple"] if not is_ours(q)],
+        }
+
+    async def uninstall(self, router_name: str, *, author: str | None = None) -> dict[str, Any]:
+        """Retire du routeur TOUT ce que freeQoS y a pose, et rien d'autre.
+
+        Files simples, types CAKE, et lignes des restrictions (filtre, mangle,
+        queue tree, listes d'adresses). Seules les lignes portant NOTRE marque
+        partent : une file posee a la main, par RADIUS ou par une autre instance
+        reste. Rien n'est repose : l'appelant coupe l'ecriture sur ce routeur
+        avant, pour qu'aucune boucle ne remette ce qu'on enleve.
+
+        La cible NetFlow n'est pas traitee ici (``NetflowExportService``).
+        """
+        from app.enforcement.restrictions import (
+            PATH_ADDRESS_LIST,
+            PATH_FILTER,
+            PATH_MANGLE,
+            PATH_QUEUE_TREE,
+        )
+
+        self.unfreeze(router_name)
+        lignes = await self.managed_lines(router_name)
+
         actions: list[PlanAction] = []
         compte: dict[str, int] = {}
 
@@ -2727,28 +2754,28 @@ class ShapingService:
         retirer(
             PATH_FILTER,
             "firewall rules",
-            [r for r in tables["filter"] if marquee(r)],
+            lignes["filter"],
             lambda r: r.get("comment") or "filter",
         )
         retirer(
             PATH_MANGLE,
             "mangle rules",
-            [r for r in tables["mangle"] if marquee(r)],
+            lignes["mangle"],
             lambda r: r.get("comment") or "mangle",
         )
         retirer(
             PATH_QUEUE_TREE,
             "queue tree",
-            [r for r in tables["tree"] if marquee(r)],
+            lignes["tree"],
             lambda r: r.get("name") or "queue tree",
         )
         retirer(
             PATH_ADDRESS_LIST,
             "address lists",
-            [r for r in tables["address"] if marquee(r)],
+            lignes["address"],
             lambda r: f"{r.get('list') or ''} {r.get('address') or ''}".strip(),
         )
-        files = [q for q in tables["simple"] if q.get(".id") and is_ours(q)]
+        files = list(lignes["simple"])
         parents = {str(q.get("name") or ""): str(q.get("parent") or "") for q in files}
 
         def profondeur(nom: str) -> int:
@@ -2762,12 +2789,7 @@ class ShapingService:
 
         files.sort(key=lambda q: profondeur(str(q.get("name") or "")), reverse=True)
         retirer("/queue/simple", "simple queues", files, lambda r: r.get("name") or "queue")
-        types = [
-            t
-            for t in tables["type"]
-            if t.get(".id") and str(t.get("name") or "") in (QUEUE_TYPE_UP, QUEUE_TYPE_DOWN)
-        ]
-        retirer("/queue/type", "queue types", types, lambda r: r.get("name"))
+        retirer("/queue/type", "queue types", lignes["type"], lambda r: r.get("name"))
 
         retirees = 0
         erreurs: list[str] = []
