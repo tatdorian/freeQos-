@@ -1503,3 +1503,12 @@ CREATE TABLE IF NOT EXISTS uisp_device_metrics (
     online              BOOLEAN
 );
 CREATE INDEX IF NOT EXISTS idx_uisp_device_metrics ON uisp_device_metrics (device_id, ts DESC);
+
+-- -----------------------------------------------------------------------------
+-- Clients RETIRES de freeQoS : ignores par le releve et par le shaping, meme
+-- connectes, jusqu'a ce qu'on les retablisse (app/services/exclusions.py).
+CREATE TABLE IF NOT EXISTS excluded_clients (
+    login       TEXT PRIMARY KEY,
+    removed_by  TEXT,
+    removed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

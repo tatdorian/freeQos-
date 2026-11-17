@@ -143,6 +143,8 @@ class CollectionService:
         uisp_source: AntennasProvider | None = None,
     ) -> None:
         self.settings = settings
+        # Clients retires de freeQoS (app/services/exclusions.py), branche par le conteneur.
+        self.exclusions: Any = None
         self.collectors = list(collectors)
         self.backhaul_provider = backhaul_provider
         # Provider des antennes ajoutees depuis l'interface (airOS en base). Il
@@ -245,6 +247,11 @@ class CollectionService:
                 lecture["failing_since"] = lecture.get("failing_since") or started_at
                 continue
             lecture.update(ok_at=started_at, error=None, failing_since=None, sessions=len(outcome))
+            # Les clients RETIRES de freeQoS ne sont ni enregistres ni mesures,
+            # meme connectes (app/services/exclusions.py).
+            retires = getattr(self, "exclusions", None)
+            if retires is not None and retires.logins:
+                outcome = [s for s in outcome if s.login not in retires]
             sessions_by_router.append((collector, outcome))
 
         # Compteurs des FILES, lus une fois par routeur et par cycle. C'est la

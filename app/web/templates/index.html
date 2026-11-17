@@ -1069,6 +1069,8 @@
           <span class="spacer"></span>
           <span class="mode" id="cli-count"></span>
           <button type="button" class="sm link-btn" id="cli-clear">Clear</button>
+          <button type="button" class="sm link-btn" id="cli-removed" hidden
+                  title="Clients removed from freeQoS: bring one back">Removed</button>
           <button type="button" class="icon-btn" id="sc-toggle" title="Add a client" aria-label="Add a client" hidden>
             <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
           <a class="icon-btn" href="#/map" id="cli-map" title="See on the map" aria-label="See on the map">
@@ -1083,6 +1085,8 @@
           <button type="button" class="sm" id="cli-sel-boost">Boost</button>
           <button type="button" class="sm" id="cli-sel-stop">Stop</button>
           <button type="button" class="sm" id="cli-sel-traffic">Traffic</button>
+          <button type="button" class="sm danger" id="cli-sel-remove" hidden
+                  title="Remove from freeQoS only: nothing changes for the client on the router">Remove from freeQoS</button>
           <button type="button" class="sm link-btn" id="cli-sel-none" aria-label="Unselect">&times;</button>
         </div>
         <div class="table-wrap" id="cli-table"></div>
@@ -1398,6 +1402,8 @@
         <h2 data-tab="Advanced">Operational settings</h2>
         <span class="spacer"></span>
         <span class="mode" id="settings-count"></span>
+        <button type="button" class="sm" id="settings-server-errors"
+                title="The last unexpected errors of the server: when, which request, which error">Server errors</button>
       </div>
       <div id="settings-notice"></div>
       <div id="settings-groups"></div>
