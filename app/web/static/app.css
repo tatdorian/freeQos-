@@ -2396,3 +2396,10 @@ body.role-limited .dash-detail { display: none; }
 /* Toutes les tuiles ont la meme structure : une jauge absente garde sa place,
    les chiffres et les libelles s'alignent d'une tuile a l'autre. */
 .qt-bar.qt-vide { visibility: hidden; }
+
+/* Ce que freeQoS a pose sur un routeur : une section repliable par table. */
+.fq-sec { margin: .7rem 0; border: 1px solid var(--border); border-radius: 10px; padding: .5rem .8rem; }
+.fq-sec > summary { cursor: pointer; }
+.fq-sec .table-wrap { margin-top: .5rem; max-height: 22rem; overflow: auto; }
+.fq-sec td code { font-size: .78rem; white-space: nowrap; }
+.fq-sec tr.muted td { opacity: .55; }

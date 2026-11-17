@@ -650,6 +650,121 @@ async def uninstall_router(
     return rapport
 
 
+# Ce qui est montre de chaque ligne : ce qui sert a la reconnaitre et a savoir
+# ce qu'elle fait. Aucun secret n'y figure (ce sont des lignes de configuration).
+SECTIONS_POSEES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
+    (
+        "simple",
+        "Client queues",
+        "/queue/simple",
+        ("name", "target", "max-limit", "queue", "parent", "comment"),
+    ),
+    (
+        "type",
+        "CAKE queue types",
+        "/queue/type",
+        ("name", "kind", "cake-diffserv", "cake-flowmode", "cake-nat", "cake-overhead"),
+    ),
+    (
+        "filter",
+        "Firewall rules (restrictions)",
+        "/ip/firewall/filter",
+        ("chain", "action", "src-address-list", "dst-address-list", "protocol", "comment"),
+    ),
+    (
+        "mangle",
+        "Mangle rules (restrictions)",
+        "/ip/firewall/mangle",
+        ("chain", "action", "new-packet-mark", "src-address-list", "dst-address-list", "comment"),
+    ),
+    (
+        "tree",
+        "Queue tree (restrictions)",
+        "/queue/tree",
+        ("name", "parent", "packet-mark", "max-limit", "queue", "comment"),
+    ),
+    (
+        "address",
+        "Address lists",
+        "/ip/firewall/address-list",
+        ("list", "address", "timeout", "comment"),
+    ),
+)
+
+
+@router.get(
+    "/pops/routers/{name}/freeqos-lines",
+    summary="Everything freeQoS set on a router, read live (nothing is written)",
+)
+async def router_freeqos_lines(name: str, container: ContainerDep) -> dict[str, Any]:
+    """CE QUE FREEQOS A POSE SUR CE ROUTEUR, ligne par ligne, lu en direct.
+
+    Files des clients, types CAKE, lignes des restrictions, listes d'adresses,
+    export NetFlow. Seules les lignes portant la marque freeQoS : c'est
+    exactement ce que « Remove freeQoS » retirerait. Rien n'est ecrit.
+    """
+    from datetime import UTC, datetime
+
+    from app.services.netflow_export import _vrai
+
+    collecteur = next((c for c in container.registry.collectors if c.name == name), None)
+    if collecteur is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Router '{name}' is not collected"
+        )
+    try:
+        lignes = await container.shaping.managed_lines(name)
+    except Exception as exc:  # noqa: BLE001 - le routeur dit pourquoi
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"{name} could not be read: {type(exc).__name__}: {exc}",
+        ) from exc
+
+    def vrai(v: Any) -> bool:
+        return str(v).lower() in ("true", "yes")
+
+    sections = []
+    for cle, titre, chemin, colonnes in SECTIONS_POSEES:
+        rangees = [
+            {
+                **{c: (str(r[c]) if r.get(c) not in (None, "") else None) for c in colonnes},
+                "disabled": vrai(r.get("disabled")),
+            }
+            for r in lignes.get(cle, [])
+        ]
+        sections.append(
+            {"key": cle, "title": titre, "path": chemin, "columns": list(colonnes), "rows": rangees}
+        )
+
+    netflow: dict[str, Any] = {"enabled": None, "targets": [], "error": None}
+    export = getattr(container, "netflow_export", None)
+    if export is not None:
+        try:
+            reglage, brutes = await export.read_raw(collecteur)
+            netflow["enabled"] = _vrai(reglage.get("enabled"))
+            netflow["targets"] = [
+                {
+                    "dst-address": c.get("dst-address"),
+                    "port": c.get("port"),
+                    "version": c.get("version"),
+                    "ours": bool(export.is_ours(collecteur, c)),
+                }
+                for c in brutes
+            ]
+        except Exception as exc:  # noqa: BLE001 - la section NetFlow seule manque
+            netflow["error"] = f"{type(exc).__name__}: {exc}"
+
+    return {
+        "router": name,
+        "read_at": datetime.now(tz=UTC).isoformat(),
+        "write_enabled": getattr(collecteur.config, "write_enabled", None),
+        "total": sum(len(s["rows"]) for s in sections),
+        "sections": sections,
+        "netflow": netflow,
+        "other_simple_queues": len(lignes.get("_other_simple", [])),
+    }
+
+
 async def _retirer_cible_netflow(container: ContainerDep, name: str, auteur: str) -> dict[str, Any]:
     from app.enforcement.models import Plan, PlanAction
     from app.services.netflow_export import PATH_FLOW, PATH_TARGET, _vrai

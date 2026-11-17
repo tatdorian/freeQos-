@@ -5935,6 +5935,9 @@ async function loadRouters() {
               'Set up</button>' +
             '<button class="sm" data-config="' + esc(r.name) +
               '" title="See the full config (/export) the controller reads">Config</button>' +
+            '<button class="sm" data-freeqos-lines="' + esc(r.name) +
+              '" title="Everything freeQoS set on this router: queues, CAKE types, rules, address lists, NetFlow export">' +
+              'Set by freeQoS</button>' +
             (r.editable
               ? '<button class="sm" data-probe="' + r.id + '">Test</button>' +
                 '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button>'
@@ -5960,6 +5963,8 @@ async function loadRouters() {
 
   host.querySelectorAll('[data-config]').forEach((b) =>
     b.addEventListener('click', () => showRouterExport(b.dataset.config)));
+  host.querySelectorAll('[data-freeqos-lines]').forEach((b) =>
+    b.addEventListener('click', () => voirLignesFreeqos(b.dataset.freeqosLines)));
   host.querySelectorAll('[data-provision]').forEach((b) =>
     b.addEventListener('click', async () => {
       const sortie = document.getElementById('router-export');
@@ -13114,6 +13119,60 @@ async function ouvrirRetires() {
       toastErreur(err);
     }
   }));
+}
+
+/* ------------------------------------------- ce que freeQoS a pose
+ * Sur un routeur, TOUT ce qui porte la marque freeQoS, lu en direct : files
+ * des clients, types CAKE, restrictions, listes d'adresses, export NetFlow.
+ * C'est exactement ce que « Remove freeQoS » retirerait. Lecture seule. */
+async function voirLignesFreeqos(routeur) {
+  const m = openModal('<div class="modal-head"><div><h3>Set by freeQoS on ' + esc(routeur) + '</h3>' +
+    '<div class="sub">Read live from the router. Nothing is written.</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body" id="fq-lines"><div class="hint" style="display:block">Reading ' + esc(routeur) +
+    '…</div></div><div class="modal-foot"><button id="fq-lines-again">Read again</button>' +
+    '<button class="primary" data-modal-close>Close</button></div>');
+  m.root.classList.add('wide');
+  const corps = m.root.querySelector('#fq-lines');
+  const lire = async () => {
+    corps.innerHTML = '<div class="hint" style="display:block">Reading ' + esc(routeur) + '…</div>';
+    let d;
+    try {
+      d = await api('/pops/routers/' + encodeURIComponent(routeur) + '/freeqos-lines');
+    } catch (err) { corps.innerHTML = noticeErreur(err); return; }
+    const nf = d.netflow || {};
+    const cibles = nf.targets || [];
+    const resume = d.sections.filter((s) => s.rows.length)
+      .map((s) => '<b>' + s.rows.length + '</b> ' + esc(s.title.replace(/^(Client|Firewall|Mangle|Queue|Address)/, (m) => m.toLowerCase()))).join(' · ');
+    const section = (s) => '<details class="fq-sec"' + (s.rows.length && s.rows.length <= 50 ? ' open' : '') + '>' +
+      '<summary><b>' + esc(s.title) + '</b> <span class="pct-hint">' + s.rows.length + ' · <code>' + esc(s.path) +
+      '</code></span></summary>' + (s.rows.length
+        ? '<div class="table-wrap"><table><thead><tr>' + s.columns.map((c) => '<th>' + esc(c) + '</th>').join('') +
+          '</tr></thead><tbody>' + s.rows.map((r) => '<tr' + (r.disabled ? ' class="muted" title="disabled"' : '') + '>' +
+            s.columns.map((c) => '<td>' + (r[c] == null ? '<span class="na">-</span>'
+              : c === 'max-limit' ? '<span title="' + esc(r[c]) + '">' + maxLimitText(r[c]) + '</span>'
+              : '<code>' + esc(r[c]) + '</code>') + '</td>').join('') + '</tr>').join('') + '</tbody></table></div>'
+        : '<div class="hint" style="display:block">None.</div>') + '</details>';
+    corps.innerHTML =
+      '<div class="notice ' + (d.total ? '' : 'ok') + '">' + (d.total
+        ? '<b>' + d.total + ' line(s) carry the freeQoS mark</b>: ' + resume + '.'
+        : '<b>Nothing carries the freeQoS mark on this router.</b>') +
+        (d.other_simple_queues ? ' The router also has ' + d.other_simple_queues +
+          ' other queue(s) (by hand, RADIUS…): freeQoS never touches them.' : '') + '</div>' +
+      d.sections.map(section).join('') +
+      '<details class="fq-sec" open><summary><b>NetFlow export</b> <span class="pct-hint"><code>/ip/traffic-flow</code></span></summary>' +
+      (nf.error ? '<div class="notice warn">' + esc(nf.error) + '</div>'
+        : '<div class="hint" style="display:block">Traffic-flow is <b>' + (nf.enabled ? 'on' : 'off') + '</b> on this router.</div>' +
+          (cibles.length ? '<div class="table-wrap"><table><thead><tr><th>Collector</th><th>Port</th><th>Version</th>' +
+            '<th>Set by</th></tr></thead><tbody>' + cibles.map((c) => '<tr><td><code>' + esc(c['dst-address'] || '-') +
+            '</code></td><td>' + esc(c.port || '-') + '</td><td>' + esc(c.version || '-') + '</td><td>' +
+            (c.ours ? 'freeQoS' : 'not freeQoS') + '</td></tr>').join('') + '</tbody></table></div>'
+            : '<div class="hint" style="display:block">No export target.</div>')) + '</details>' +
+      '<p class="hint" style="display:block">This is exactly what <b>Remove freeQoS</b> would take off. ' +
+      'Read ' + esc(new Date(d.read_at).toLocaleTimeString('en-GB')) + '.</p>';
+  };
+  m.root.querySelector('#fq-lines-again').addEventListener('click', lire);
+  lire();
 }
 
 /** Fenetre centree, au-dessus de tout, fermee par Echap ou le fond. */
