@@ -298,6 +298,8 @@ class ShapingService:
     ) -> None:
         self.settings = settings
         self.registry = registry
+        # Clients retires de freeQoS (app/services/exclusions.py), branche par le conteneur.
+        self.exclusions: Any = None
         self.repository = repository
         # Depot de metriques : donne les abonnes actifs et leur plan. Optionnel
         # pour que le service reste testable sans base.
@@ -1448,6 +1450,10 @@ class ShapingService:
                 )
             )
 
+        # Un client RETIRE de freeQoS n'a jamais de file, meme connecte.
+        retires = getattr(self, "exclusions", None)
+        if retires is not None and retires.logins:
+            abonnes = [a for a in abonnes if a.login not in retires]
         protect_infrastructure(router_name, liens, abonnes)
         return liens, abonnes
 
@@ -3410,10 +3416,17 @@ class ShapingService:
             # Un client qui n'a plus aucun debit perd sa file TOUT DE SUITE, meme
             # dans une application automatique sans purge (bascule horaire, boost
             # echu) : sinon il restait bride jusqu'a la reconciliation suivante.
-            remove_names=queues_without_rate(ecartes),
+            remove_names=queues_without_rate(ecartes) | self._files_des_retires(),
         )
         plan.skipped = ecartes
         return plan
+
+    def _files_des_retires(self) -> set[str]:
+        """Les noms de file des clients retires de freeQoS : a retirer du routeur."""
+        retires = getattr(self, "exclusions", None)
+        if retires is None:
+            return set()
+        return {f"{PREFIX}{slugify(login)}" for login in retires.logins}
 
     # ------------------------------------------------------ plafonds en amont
     def is_upstream(self, collector: Any) -> bool:
@@ -3492,7 +3505,7 @@ class ShapingService:
             # Un client qui n'a plus aucun debit perd sa file TOUT DE SUITE, meme
             # dans une application automatique sans purge (bascule horaire, boost
             # echu) : sinon il restait bride jusqu'a la reconciliation suivante.
-            remove_names=queues_without_rate(ecartes),
+            remove_names=queues_without_rate(ecartes) | self._files_des_retires(),
         )
         plan.skipped = ecartes
         return plan
