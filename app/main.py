@@ -35,6 +35,7 @@ from app.api import (
     capacity,
     client_health,
     client_profiles,
+    client_removal,
     docs_ui,
     health,
     metrics,
@@ -47,6 +48,7 @@ from app.api import (
     public_access,
     routers_admin,
     schedules,
+    server_errors,
     shaping,
     sites_map,
     static_clients,
@@ -61,6 +63,7 @@ from app.api import (
 from app.config import Settings, get_settings
 from app.container import build_container, shutdown_container
 from app.logging_conf import setup_logging
+from app.services.server_errors import ServerErrors
 from app.web.headers import apply_security_headers
 from app.web.ui import STATIC_DIR
 from app.web.ui import router as ui_router
@@ -249,9 +252,11 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         uisp,
         client_health,
         client_profiles,
+        client_removal,
         public_access,
         tree,
         notifications,
+        server_errors,
     ):
         app.include_router(module.router, prefix=settings.api_prefix, dependencies=proteges)
     # API PUBLIQUE. Volontairement HORS du prefixe d'exploitation : son chemin
@@ -272,6 +277,22 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
                 content={"detail": jsonable_encoder(exc.errors())},
             )
         return await request_validation_exception_handler(request, exc)
+
+    # ERREUR INATTENDUE : retenue (quand, quelle requete, quelle exception) pour
+    # qu'un Administrator la lise dans l'interface, et journalisee avec sa
+    # trace. La reponse donne une reference, jamais la trace elle-meme.
+    app.state.server_errors = ServerErrors()
+
+    @app.exception_handler(Exception)
+    async def erreur_inattendue(request: Request, exc: Exception) -> Any:
+        ref = app.state.server_errors.record(request.method, request.url.path, exc)
+        logging.getLogger("app.errors").error(
+            "Erreur inattendue [%s] %s %s", ref, request.method, request.url.path, exc_info=exc
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"{type(exc).__name__} (ref {ref})"},
+        )
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
     app.include_router(ui_router)

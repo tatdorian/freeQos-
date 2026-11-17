@@ -109,7 +109,9 @@ async function apiBrut(path, options) {
     });
   } catch (e) {
     // Plus de reseau, serveur arrete, proxy qui redemarre : pas de statut.
-    throw erreurClaire(0, '');
+    const hs = erreurClaire(0, '');
+    hs.path = path;
+    throw hs;
   }
   if (res.status === 204) return null;
   const body = await res.json().catch(() => null);
@@ -121,7 +123,11 @@ async function apiBrut(path, options) {
   }
   if (!res.ok) {
     const detail = body && body.detail ? body.detail : '';
-    throw erreurClaire(res.status, typeof detail === 'string' ? detail : validationText(detail));
+    const e = erreurClaire(res.status, typeof detail === 'string' ? detail : validationText(detail));
+    // La requete en cause : une page qui ne charge pas dit LAQUELLE a echoue.
+    e.path = path;
+    e.method = ((options && options.method) || 'GET').toUpperCase();
+    throw e;
   }
   return body;
 }
@@ -141,7 +147,7 @@ const ERREUR_PAR_STATUT = {
   413: ['Too large', 'Send less at once.'],
   422: ['Some information is missing or not valid', 'Check the fields and try again.'],
   429: ['Too many attempts', 'Wait a moment, then try again.'],
-  500: ['Unexpected error on the server', 'Try again. If it keeps happening, the server log says why: docker compose logs app.'],
+  500: ['Unexpected error on the server', 'Try again. If it keeps happening, an Administrator sees the cause in Settings › Advanced › Server errors.'],
   502: ['A router or service did not answer', 'Check that it is reachable from the freeQoS server, then try again.'],
   503: ['freeQoS is not ready', 'It is starting, or its database is unavailable. Try again in a minute.'],
   504: ['No answer in time', 'The router or service is slow or unreachable. Try again.'],
@@ -12452,6 +12458,7 @@ async function loadClients() {
   // Ajouter un client : la gestion des clients, donc l'Operator aussi.
   document.querySelector('#sc-toggle').hidden = !peut('operator');
   await loadClientsData();
+  majRetires();
   const rows = CLI.rows;
   // Une selection ne survit qu'aux clients qui existent encore.
   const connus = new Set(rows.map((r) => r.login));
@@ -12969,6 +12976,8 @@ function majSelection() {
   ['cli-sel-mode', 'cli-sel-boost', 'cli-sel-stop'].forEach((id) => {
     document.getElementById(id).disabled = !permis;
   });
+  // Retirer des clients de freeQoS : un geste d'Administrator.
+  document.getElementById('cli-sel-remove').hidden = !peut('edit');
 }
 
 function cablerClients() {
@@ -12991,6 +13000,89 @@ function cablerClients() {
   document.getElementById('cli-sel-boost').addEventListener('click', () => openGroupBoost([...CLI.sel]));
   document.getElementById('cli-sel-stop').addEventListener('click', () => stopBoosts([...CLI.sel]));
   document.getElementById('cli-sel-traffic').addEventListener('click', () => openGroupTraffic([...CLI.sel]));
+  document.getElementById('cli-sel-remove').addEventListener('click', () => retirerClients([...CLI.sel]));
+  document.getElementById('cli-removed').addEventListener('click', ouvrirRetires);
+}
+
+/* ------------------------------------------- clients retires de freeQoS
+ * Retirer un client de freeQoS, PAS du routeur : son compte PPPoE, sa session
+ * et son adresse restent tels quels. freeQoS l'oublie et ne le reprend plus,
+ * meme connecte ; la seule chose retiree du routeur est la file que freeQoS
+ * avait posee pour lui. On peut le retablir. */
+async function majRetires() {
+  const btn = document.getElementById('cli-removed');
+  if (!btn) return;
+  if (!peut('edit')) { btn.hidden = true; return; }
+  const data = await api('/clients/removed').catch(() => null);
+  const n = data ? data.count || 0 : 0;
+  btn.hidden = n === 0;
+  btn.textContent = 'Removed (' + n + ')';
+}
+
+function retirerClients(logins) {
+  if (!logins.length || !peut('edit')) return;
+  const m = openModal('<div class="modal-head"><div><h3>Remove from freeQoS</h3>' +
+    '<div class="sub">' + sousTitreCibles(logins) + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body"><p><b>Nothing changes for ' + (logins.length === 1 ? 'this client' : 'these clients') +
+    ' on the router</b>: PPPoE account, session and address stay as they are.</p>' +
+    '<p>freeQoS forgets ' + (logins.length === 1 ? 'it' : 'them') + ': history, plan, mode and boost are deleted, ' +
+    'and ' + (logins.length === 1 ? 'it does' : 'they do') + ' not come back, even when connected. ' +
+    'The queue freeQoS had set for ' + (logins.length === 1 ? 'it' : 'them') + ' is taken off at the next write, ' +
+    'so no forgotten limit stays.</p>' +
+    '<p class="hint" style="display:block">You can bring a client back later with “Removed” above the list.</p></div>' +
+    '<div class="modal-foot"><button data-modal-close>Cancel</button>' +
+    '<button class="danger" id="rm-go">Remove ' + (logins.length === 1 ? 'the client' : logins.length + ' clients') +
+    '</button></div>');
+  m.root.querySelector('#rm-go').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try {
+      const res = await api('/clients/remove', { method: 'POST', body: JSON.stringify({ logins, confirm: true }) });
+      const ratees = (res.clients || []).filter((c) => c.error);
+      m.fermer();
+      toast(ratees.length
+        ? ratees.length + ' client(s) not fully removed: ' + esc(ratees.map((c) => c.login).join(', '))
+        : (res.removed === 1 ? 'Client removed from freeQoS.' : res.removed + ' clients removed from freeQoS.'), 6000);
+      logins.forEach((l) => CLI.sel.delete(l));
+    } catch (err) {
+      e.target.disabled = false;
+      toastErreur(err);
+      return;
+    }
+    refresh();
+  });
+}
+
+async function ouvrirRetires() {
+  if (!peut('edit')) return;
+  let data;
+  try { data = await api('/clients/removed'); } catch (err) { toastErreur(err); return; }
+  const lignes = data.clients || [];
+  const m = openModal('<div class="modal-head"><div><h3>Removed from freeQoS</h3>' +
+    '<div class="sub">' + lignes.length + ' client(s). freeQoS ignores them, even when connected.</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body">' + (lignes.length
+      ? '<ul class="result-list" id="rm-list">' + lignes.map((c) =>
+        '<li style="display:flex;align-items:center;gap:.6rem"><b>' + esc(c.login) + '</b>' +
+        '<span class="hint" style="display:inline">' + (c.removed_at ? esc(dateLongue(c.removed_at)) : '') +
+        (c.removed_by ? ' · ' + esc(c.removed_by) : '') + '</span><span class="spacer" style="flex:1"></span>' +
+        '<button class="sm" data-restore="' + esc(c.login) + '">Bring back</button></li>').join('') + '</ul>' +
+        '<p class="hint" style="display:block">Brought back, a client reappears at the next reading, ' +
+        'as a newly found client (no plan, so no queue).</p>'
+      : '<div class="empty">No client removed.</div>') + '</div>' +
+    '<div class="modal-foot"><button class="primary" data-modal-close>Close</button></div>');
+  m.root.querySelectorAll('[data-restore]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      await api('/clients/removed/' + encodeURIComponent(b.dataset.restore), { method: 'DELETE' });
+      b.closest('li').remove();
+      toast(esc(b.dataset.restore) + ' is back in freeQoS.', 4000);
+      majRetires();
+    } catch (err) {
+      b.disabled = false;
+      toastErreur(err);
+    }
+  }));
 }
 
 /** Fenetre centree, au-dessus de tout, fermee par Echap ou le fond. */
@@ -15143,11 +15235,45 @@ function appError(err) {
   banniere.hidden = false;
   const e = typeof err === 'string' ? { message: err } : err;
   const detail = e.title ? e.detail : e.message;
+  const serveur = e.status >= 500;
   banniere.innerHTML = '<div class="notice err err-clear"><b>This page could not be loaded' +
     (e.title ? ' · ' + esc(e.title) : '') + '</b>' +
     (detail ? '<span>' + esc(detail) + '</span>' : '') +
-    '<small>' + esc(e.hint || 'What is shown may be out of date. It retries on its own; if this follows an update, reload the page (Ctrl+Shift+R).') +
-    '</small></div>';
+    (e.path ? '<small>Failed request: <code>' + esc((e.method || 'GET') + ' ' + API + e.path) + '</code></small>' : '') +
+    '<small>' + esc(serveur
+      ? 'It retries on its own.' + (peut('edit') ? '' : ' If it keeps happening, tell an Administrator.')
+      : (e.hint || 'What is shown may be out of date. It retries on its own; if this follows an update, reload the page (Ctrl+Shift+R).')) +
+    '</small>' +
+    (serveur && peut('edit') ? '<div><button type="button" class="sm" data-server-errors>See the server errors</button></div>' : '') +
+    '</div>';
+  const btn = banniere.querySelector('[data-server-errors]');
+  if (btn) btn.addEventListener('click', ouvrirErreursServeur);
+}
+
+/** Les dernieres erreurs inattendues du serveur (Administrator) : quand, quelle
+ *  requete, quelle exception. Ce qu'il fallait aller lire dans le journal. */
+async function ouvrirErreursServeur() {
+  let data;
+  try { data = await api('/status/errors'); } catch (err) { toastErreur(err); return; }
+  const lignes = data.errors || [];
+  const m = openModal('<div class="modal-head"><div><h3>Server errors</h3>' +
+    '<div class="sub">The last ' + lignes.length + ' unexpected error(s) since the server started.</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body">' + (lignes.length
+      ? '<ul class="result-list">' + lignes.map((x) =>
+        '<li><b>' + esc(x.error) + '</b> · ' + esc(dateLongue(x.at)) + ' · ref ' + esc(x.ref) +
+        '<br><code>' + esc(x.method + ' ' + x.path) + '</code>' +
+        (x.message ? '<br><span class="hint" style="display:inline">' + esc(x.message) + '</span>' : '') +
+        '</li>').join('') + '</ul>' +
+        '<p class="hint" style="display:block">The full trace of each one is in the server log, under its ref: ' +
+        '<code>docker compose logs app | grep ref</code>.</p>'
+      : '<div class="empty">No server error since the server started.</div>') + '</div>' +
+    '<div class="modal-foot">' + (lignes.length ? '<button id="se-clear">Clear the list</button>' : '') +
+    '<button class="primary" data-modal-close>Close</button></div>');
+  const vider = m.root.querySelector('#se-clear');
+  if (vider) vider.addEventListener('click', async () => {
+    try { await api('/status/errors', { method: 'DELETE' }); m.fermer(); } catch (err) { toastErreur(err); }
+  });
 }
 
 /** Derniere mise a jour reussie et dernier echec de l'onglet affiche. */
@@ -15166,7 +15292,19 @@ async function refresh() {
   if (refreshing === vue) return;
   refreshing = vue;
   try {
-    await LOADERS[vue]();
+    try {
+      await LOADERS[vue]();
+    } catch (err) {
+      // UNE ERREUR PASSAGERE N'EST PAS UNE PANNE. Serveur occupe, routeur lent,
+      // reseau qui hoquette : une seconde chance, avec des donnees fraiches,
+      // avant d'afficher quoi que ce soit. Une erreur de l'interface (sans
+      // statut HTTP) ou un refus (4xx) se montre tout de suite.
+      if (state.view !== vue || !err || !(err.status === 0 || err.status >= 500)) throw err;
+      await new Promise((ok) => setTimeout(ok, 1500));
+      if (state.view !== vue) return;
+      viderCacheApi();
+      await LOADERS[vue]();
+    }
     if (state.view === vue) {
       appError(null);
       DIRECT.ok = Date.now();
@@ -15175,7 +15313,10 @@ async function refresh() {
   } catch (err) {
     console.error('Rafraichissement impossible :', err);
     if (state.view === vue) {
-      appError(err);
+      // Une page DEJA AFFICHEE garde ses donnees : la pastille dit « Update
+      // failed » et le rafraichissement suivant reessaie. Le grand encart
+      // n'apparait que si la page n'a jamais pu se charger.
+      if (!DIRECT.ok) appError(err);
       DIRECT.echec = Date.now();
     }
   } finally {
@@ -15615,6 +15756,7 @@ function majDirect() {
 }
 setInterval(majDirect, 1000);
 document.getElementById('refresh-btn').addEventListener('click', () => { if (AUTH.ready) { viderCacheApi(); refresh(); } });
+document.getElementById('settings-server-errors').addEventListener('click', ouvrirErreursServeur);
 
 /** Le sommaire de la page : une pastille par section visible, pour y sauter.
  *  Reconstruit apres chaque chargement (une section peut apparaitre avec ses

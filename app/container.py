@@ -211,6 +211,7 @@ class Container:
     client_locations_repo: SiteLocationsRepository | None = None
     uisp_repo: UispRepository | None = None
     public_access_repo: PublicAccessRepository | None = None
+    exclusions: Any = None
     client_profiles_repo: ClientProfilesRepository | None = None
     tree_repo: TreeRepository | None = None
     notifications_repo: NotificationsRepository | None = None
@@ -369,6 +370,11 @@ async def build_container(settings: Settings) -> Container:
     # Le controleur UISP saisi dans l'interface (jeton chiffre).
     uisp_repo = UispRepository(database.pool, secrets)
     public_access_repo = PublicAccessRepository(database.pool)
+    # Les clients retires de freeQoS : ignores, meme connectes.
+    from app.services.exclusions import ExcludedClients
+
+    exclusions = ExcludedClients(database.pool)
+    await exclusions.load()
     client_profiles_repo = ClientProfilesRepository(database.pool)
     tree_repo = TreeRepository(database.pool)
     notifications_repo = NotificationsRepository(database.pool, secrets)
@@ -402,6 +408,7 @@ async def build_container(settings: Settings) -> Container:
     # la bascule suivante le corrigerait -- deux ecritures pour rien.
     shaping.schedules_repo = schedules_repo
     await shaping.load_schedules()
+    shaping.exclusions = exclusions
 
     # Sonde de latence : TOUJOURS instanciee et planifiee. Son execution est
     # gouvernee par un drapeau basculable depuis l'interface (comme l'enforcement),
@@ -433,6 +440,7 @@ async def build_container(settings: Settings) -> Container:
         sightings=sightings_repo,
         uisp_source=DbUispSource(uisp_repo, timeout_s=settings.uisp_timeout_s),
     )
+    collection.exclusions = exclusions
 
     # Amorce le drapeau de la sonde RTT : la base fait foi une fois posee, sinon
     # on l'y ecrit depuis RTT_ENABLED. Ensuite, l'interface le bascule a chaud.
@@ -739,6 +747,7 @@ async def build_container(settings: Settings) -> Container:
         client_locations_repo=client_locations_repo,
         uisp_repo=uisp_repo,
         public_access_repo=public_access_repo,
+        exclusions=exclusions,
         client_profiles_repo=client_profiles_repo,
         tree_repo=tree_repo,
         notifications_repo=notifications_repo,

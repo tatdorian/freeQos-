@@ -1325,6 +1325,18 @@ The client's page shows its **IP address** in the header (click to copy) and its
 
 Every change is written to the client's *Activity*. API: `GET /api/v1/clients/{login}/profile` (discovered facts and details), `PUT /api/v1/clients/{login}/profile`, `POST /api/v1/clients` (`{"login", "pop_name", "display_name", "cpe_mac", ...}`), `GET /api/v1/client-profiles`.
 
+### Removing clients from freeQoS (not from the router)
+
+Keep in freeQoS the clients you want and remove the others: tick them on the *Clients* page, then **Remove from freeQoS** (Administrator, confirmed in a window).
+
+**Nothing about the client changes on the router**: its PPPoE account, its session and its address stay as they are. freeQoS forgets it:
+
+- its record, history, plan, mode, forced limit and boost are deleted from freeQoS;
+- it goes on the list of **removed clients**, so it does **not come back**, even while its session stays connected: the next reading ignores it;
+- the queue **freeQoS** had set for it (`freeqos-<login>`, marked `freeqos:managed`) is taken off at freeQoS's next write (within two minutes when writing is on), so no forgotten limit stays. No other line of the router is concerned.
+
+**Removed (N)**, above the list, shows the removed clients; **Bring back** takes one off the list: it reappears at the next reading as a newly found client (no plan, so no queue). API: `POST /api/v1/clients/remove` with `{"logins": [...], "confirm": true}`, `GET /api/v1/clients/removed`, `DELETE /api/v1/clients/removed/{login}`.
+
 ### Ubiquiti UISP (antennas)
 
 *Devices › Ubiquiti UISP* connects the **UISP controller** (formerly UNMS), which knows every airMAX / airFiber / LTU antenna of the network. An **Administrator** gives its address (`https://uisp.example.net`) and an **API token** with read access (UISP › Settings › Accounts › API tokens), then *Test the connection* and *Save*. The token is stored **encrypted** (same vault as router passwords) and never comes back through the API. Unticking *Verify the certificate* accepts a self-signed UISP.
@@ -1853,6 +1865,14 @@ Two installations must not drive the same routers. If it happens, each only touc
 ## 13. Troubleshooting
 
 All these cases come from the lab or the first deployment. For each: the symptom, the check that settles it, then the action.
+
+### "This page could not be loaded · Unexpected error on the server"
+
+The interface first **retries once** by itself: a passing error (busy server, slow router) shows nothing. A page that has already loaded **keeps its data**; only the live indicator says *Update failed*, and the next refresh tries again. The red notice appears only when a page could never load, and it names the **request that failed**.
+
+- **Check:** *Settings › Advanced › Server errors* (Administrator) lists the last 50 unexpected errors since the server started: when, which request, which error, and a reference. The same list is behind *See the server errors* in the notice. API: `GET /api/v1/status/errors`.
+- **Full trace:** `sudo docker compose logs app | grep <ref>`.
+- **Action:** the request and the error name the cause (a router that does not answer, the database, a bug to report). The response sent to the browser carries the error type and the reference only, never the trace.
 
 ### 700 to 900 ms latency on nearby subscribers
 
