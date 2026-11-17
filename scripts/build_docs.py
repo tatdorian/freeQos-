@@ -227,7 +227,6 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
             "sec|write safeguards",
             "sec|traffic",
             "sec|collection cadences",
-            "what stays out of reach of the interface",
             "shaping and writing to the routers",
             "are the caps actually held",
             "log of commands sent",

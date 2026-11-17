@@ -331,7 +331,6 @@
   "t": "How often each collection runs.",
   "r": "Shorter = fresher figures, but more load on the routers and the database. A 10 s subscriber poll and a 30 s latency probe suit most networks."
  },
- "what stays out of reach of the interface": "Settings that can only change in the environment (.env) — the database address, the encryption key… — because the interface itself depends on them.",
  "who can log in": {
   "t": "The accounts of this interface.",
   "s": [

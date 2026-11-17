@@ -11278,12 +11278,6 @@ async function loadSettings() {
     b.addEventListener('click', () => resetSetting(b.dataset.setReset));
   });
 
-  document.getElementById('settings-bootstrap').innerHTML =
-    '<table><thead><tr><th>Variable</th><th>Why it stays in the environment</th>' +
-    '</tr></thead><tbody>' + body.bootstrap_only.map((e) =>
-      '<tr><td><code>' + esc(e.name) + '</code></td><td>' + esc(e.why) + '</td></tr>')
-      .join('') + '</tbody></table>';
-
   // Le shaping n'a plus d'onglet : il vit ici, replie. On ne lit les routeurs
   // que si l'exploitant ouvre le bloc -- sinon ouvrir les Reglages
   // interrogerait tout le parc pour rien.
@@ -16025,7 +16019,6 @@ const AIDE = {
     t: 'How often each collection runs.',
     r: 'Shorter = fresher figures, but more load on the routers and the database. A 10 s subscriber poll and a 30 s latency probe suit most networks.',
   },
-  'what stays out of reach of the interface': 'Settings that can only change in the environment (.env) — the database address, the encryption key… — because the interface itself depends on them.',
   // ---------------------------------------------------------- comptes
   'who can log in': {
     t: 'The accounts of this interface.',
