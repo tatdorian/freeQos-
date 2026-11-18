@@ -95,8 +95,8 @@
   ],
   "a": "Current capacity far below nominal: alignment, interference or rain fade — check signal and SNR on the antenna page."
  },
- "saturation risks": {
-  "t": "Every link compared with what it can carry, worst first.",
+ "links that could fill up": {
+  "t": "Every link compared with what it can carry, the fullest first.",
   "m": "Traffic of the link ÷ its capacity (the lowest of: rate set by hand, measured radio capacity, port speed). Bar = now; marker = the peak of the selected period.",
   "s": [
    [
@@ -137,21 +137,21 @@
    ]
   ],
   "r": "Samples taken while the client uses 85%+ of its plan are left out: a full line makes its own queue — that is not a network fault. “no reply” on every client of a router means the probe itself is failing, not the clients.",
-  "a": "Many poor clients behind the same node: look at that node’s load and backhaul. A single poor client: its CPE, signal or home Wi-Fi."
+  "a": "Many poor clients behind the same site: look at that site’s load and backhaul. A single poor client: its CPE, signal or home Wi-Fi."
  },
- "load by node": {
-  "t": "Traffic of each node (site) compared with the sum of its clients’ limits.",
+ "how full each site is": {
+  "t": "Traffic of each site right now, compared with the sum of its clients’ limits.",
   "m": "Sum of the clients’ queues every 10 s, divided by the sum of their limits.",
   "r": "This is a share of what was sold, not of the link: 100% means every client is at its cap at once, which practically never happens."
  },
- "queues by node": {
-  "t": "Each node (PoP or router) with its clients: traffic now vs limit, limits applied, plans sold, worst latency and experience.",
+ "sites and their clients": {
+  "t": "Each site with its clients (click + to open them): traffic now against the limit, limits applied, plans sold, worst latency and experience.",
   "m": "Queue counters every 10 s; latency from the probe every 30 s. A VLAN client is listed under the router that carries it.",
   "r": "Click a row to open its detail below. The “Rate” field lets you force a client’s limit by hand — it then overrides its plan until you clear it."
  },
- "selection": "Details of the node or client selected in the table above: link, plans, limits and the clients behind it.",
+ "selection": "Details of the site or client selected in the table above: link, plans, limits and the clients behind it.",
  "sec|node": {
-  "t": "Detail of the selected node: its link (capacity and load), the limits and plans of its clients, and how each client is doing.",
+  "t": "Detail of the selected site: its link (capacity and load), the limits and plans of its clients, and how each client is doing.",
   "r": "Oversubscription = plans sold ÷ link capacity. Some is normal (clients are not all active at once); far above 3× the link will be full at busy hours."
  },
  "sec|client": {
@@ -178,7 +178,7 @@
     "grey: no measurement in that step"
    ]
   ],
-  "r": "For a node: the worst client of the step. For the whole network: all clients together. A red band at the same hour every evening is a capacity problem; a red band at random times is more often radio."
+  "r": "For a site: the worst client of the step. For the whole network: all clients together. A red band at the same hour every evening is a capacity problem; a red band at random times is more often radio."
  },
  "who consumes": {
   "t": "Volume per subscriber over the period.",
@@ -247,7 +247,7 @@
   "r": "A site where 20% or more of the clients already have a poor experience shows no room, whatever the margin on paper."
  },
  "router health": {
-  "t": "CPU, memory and uptime of each polled router.",
+  "t": "CPU (average, busiest core, peak of the last hour), memory and uptime of each polled router. The busiest core is what adds latency.",
   "s": [
    [
     "ok",
@@ -388,11 +388,11 @@
  "acc|detail": "Extra information: new role, why it failed, how long the block lasts…",
  "right now": "Last 10-second measurement.",
  "clients on this link": {
-  "t": "The clients of this node with how much of their limit they use, their latency and score.",
+  "t": "The clients of this site with how much of their limit they use, their latency and score.",
   "r": "Several clients red on latency at the same time as the link is loaded = the link is the bottleneck. Only one client red = look at that client."
  },
  "link": {
-  "t": "What freeQoS knows about this node’s link: capacity, load, limits applied and plans sold behind it.",
+  "t": "What freeQoS knows about this site’s link: capacity, load, limits applied and plans sold behind it.",
   "r": "Capacity unknown: set the rate of the link in the Network tree so load and oversubscription can be judged."
  },
  "plan": {
@@ -771,7 +771,7 @@
  "limits applied": "Sum of the limits really applied to the clients (forced, plan or default).",
  "sold": "Sum of the plans sold to these clients. “no plan” = limited by hand or by default.",
  "limit applied": "The cap written on the router, when it differs from the plan (forced by hand, or a boost).",
- "col|clients": "Number of clients of this node.",
+ "col|clients": "Number of clients of this site.",
  "boost": "Temporary extra rate given to the client; it ends on its own at the time shown.",
  "session": "How long the PPPoE session has been up (static clients have none). A session that keeps restarting points to a CPE or radio problem.",
  "sample": "Age of the last measurement. “stale” = the figures are not current: the collection of this router is late or stopped.",
@@ -889,7 +889,7 @@
   "t": "On a node row: what its uplink (towards the core or the transit) can carry. On a client row: the cap applied to the client.",
   "m": "Wired link: the capacity declared, or the port speed. Radio link: the capacity its antenna announces live (airOS / UISP). Auto: the lowest known.",
   "r": "A node has no plan — its clients do. Its download / upload % is taken against this capacity. Grey “limits” = uplink capacity unknown: the sum of the clients’ limits is shown instead.",
-  "a": "Declare each uplink wired or radio with “wired / radio…” in Saturation risks."
+  "a": "Declare each uplink wired or radio with “wired / radio…” in Links that could fill up (Network health)."
  },
  "col|sold / plan": {
   "t": "On a node row: the plans sold behind it divided by its uplink capacity. On a client row: its plan.",

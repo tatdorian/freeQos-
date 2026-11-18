@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="9b8ca9868edc56fe">
+  <meta name="freeqos-docs-source" content="38b7c529313087e3">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -162,11 +162,11 @@
     <a class="sub" href="#modes">Modes</a>
     <a class="sub" href="#schedules">Schedules</a>
     <a class="sub" href="#dashboard">Dashboard</a>
-    <a class="sub" href="#executive">Executive</a>
+    <a class="sub" href="#network-health">Network health</a>
     <a class="sub" href="#traffic">Traffic</a>
     <a class="sub" href="#network-tree">Network tree</a>
     <a class="sub" href="#plans">Plans</a>
-    <a class="sub" href="#insights">Insights</a>
+    <a class="sub" href="#business-insights">Business insights</a>
     <a class="sub" href="#devices">Devices</a>
     <a class="sub" href="#api">API</a>
     <a class="sub" href="#settings">Settings</a>
@@ -1928,7 +1928,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </table></div>
 <p>The response also contains <code>routing_table</code>, the <code>route_candidates</code> and a control ping to the gateway.</p>
 <h3 id="latency-by-segment">Latency by segment</h3>
-<p><em>Executive › Where the delay comes from</em> splits latency into three segments, measured from the <strong>same</strong> router with the <strong>same</strong> method (a series of pings, median kept with min, max, jitter and loss):</p>
+<p><em>Network health › Latency › Where the delay comes from</em> splits latency into three segments, measured from the <strong>same</strong> router with the <strong>same</strong> method (a series of pings, median kept with min, max, jitter and loss):</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -3094,9 +3094,9 @@ curl -s http://127.0.0.1:8000/health/ready
 <h3 id="when-a-link-saturates">When a link saturates</h3>
 <p>For each link, the <strong>occupancy</strong> is the busy-hour peak divided by its capacity: below 80% <em>free</em>, from 80% <em>loaded</em>, from 95% <em>saturated</em>. It can exceed 100%: the capacity of a port is its negotiated speed, that of a radio a measurement of the moment, and an occupancy above 100% means the capacity retained is underestimated — exactly what needs to be seen.</p>
 <p>A link is flagged <strong>to reinforce</strong> when its <strong>average</strong> occupancy over the period is above 80%, with at least 10 samples. A peak at 100% proves nothing — it is what a well-sized link does on a match night; an average above 80% means the next growth will be paid in latency for everyone.</p>
-<p><strong>Saturation risks</strong> (<em>Executive</em>, <code>GET /api/v1/capacity/hotspots</code>) apply the gauges' thresholds — from 70% a link is to watch, from 90% it no longer holds one more peak — and split links into two sides: the <strong>internet side</strong> (the gateway's uplink and the PoP-to-core links, where a saturation hits every client) and the <strong>PoP side</strong> (links towards subscribers, VLANs and relays, where it only hits what hangs below). A radio link that only carries 70% of its nominal capacity is flagged as degraded.</p>
+<p><strong>Links that could fill up</strong> (<em>Network health</em>, <code>GET /api/v1/capacity/hotspots</code>) apply the gauges' thresholds — from 70% a link is to watch, from 90% it no longer holds one more peak — and split links into two sides: the <strong>internet side</strong> (the gateway's uplink and the PoP-to-core links, where a saturation hits every client) and the <strong>PoP side</strong> (links towards subscribers, VLANs and relays, where it only hits what hangs below). A radio link that only carries 70% of its nominal capacity is flagged as degraded.</p>
 <h3 id="who-is-about-to-leave-who-is-ready-for-more">Who is about to leave, who is ready for more</h3>
-<p><em>Insights</em> (<code>GET /api/v1/insights/subscribers?days=7</code>) compares the chosen period (7, 14 or 30 days) with the one before it, so it needs <strong>twice the period</strong> of history; the page says how many days it has.</p>
+<p><em>Business insights</em> (<code>GET /api/v1/insights/subscribers?days=7</code>) compares the chosen period (7, 14 or 30 days) with the one before it, so it needs <strong>twice the period</strong> of history; the page says how many days it has.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -3122,7 +3122,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>The capacity view also ranks subscribers by <strong>volume</strong> over the period. The top of instantaneous rates names whoever is downloading right now; the volume over a week names whoever weighs on the network. They are almost never the same subscribers.</p>
 <h2 id="9-interface">9. Interface</h2>
 <p><strong>Errors say what happened and what to do</strong>: a title (<em>Not allowed with your account</em>, <em>Not possible right now</em>, <em>A router or service did not answer</em>, <em>freeQoS cannot be reached</em>...), the server's reason, and the next step. An error from a button shows in a corner without blocking the page; a page that cannot load says so in a banner and retries on its own.</p>
-<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. <strong>Traffic</strong>, <strong>Executive</strong> and <strong>Insights</strong> are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with <em>Show all</em>. The chosen tab is remembered in your browser. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
+<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. <strong>Traffic</strong>, <strong>Network health</strong> and <strong>Business insights</strong> are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with <em>Show all</em>. The chosen tab is remembered in your browser. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -3143,9 +3143,9 @@ curl -s http://127.0.0.1:8000/health/ready
 <td>Rules in force, and the form to write one: block or cap a service (YouTube, Netflix...), a category or IP prefixes, for every client, chosen sites or chosen clients</td>
 </tr>
 <tr>
-<td><strong>Executive</strong></td>
-<td>Where is the risk?</td>
-<td>Four tabs, one question each: <strong>Overview</strong> (verdict, four key figures, saturation risks), <strong>Latency</strong> (per client, where the delay comes from), <strong>Load &amp; queues</strong> (per node; click a row for its details), <strong>History</strong> (health hour by hour)</td>
+<td><strong>Network health</strong></td>
+<td>Is the network fine, where could it fill up?</td>
+<td>Four tabs, one question each: <strong>Overview</strong> (verdict, four key figures, links that could fill up), <strong>Latency</strong> (per client, where the delay comes from; tick <em>Measure latency</em> to turn the probe on), <strong>Load per site</strong> (how full each site is, then each site with its clients; click a row for its details), <strong>Over time</strong> (health hour by hour)</td>
 </tr>
 <tr>
 <td><strong>Traffic</strong></td>
@@ -3168,9 +3168,9 @@ curl -s http://127.0.0.1:8000/health/ready
 <td>Default plan, each subscriber's plan and its source, packages pushed by the API</td>
 </tr>
 <tr>
-<td><strong>Insights</strong></td>
-<td>What to do commercially?</td>
-<td>Tabs: <strong>Overview</strong> (three figures; click one to open its list), <strong>At risk</strong> (who may cancel, and why), <strong>Upgrade</strong> (who lives at their plan's limit with a good experience), <strong>Capacity</strong> (room left per site and access point), <strong>All clients</strong></td>
+<td><strong>Business insights</strong></td>
+<td>What to do with your clients?</td>
+<td>Tabs: <strong>Overview</strong> (three figures, each with what to do; click one to open its list), <strong>At risk</strong> (who may cancel, and why: call them first), <strong>Upgrade</strong> (who lives at their plan's limit with a good experience: offer them more), <strong>Capacity</strong> (how many more clients each site can take), <strong>All clients</strong>. What is still missing for complete lists (history, plans, latency) is folded in one line above, with what to do</td>
 </tr>
 <tr>
 <td><strong>Devices</strong></td>
@@ -3509,7 +3509,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <tr>
 <td><strong>Administrator</strong> (<code>edit</code>)</td>
 <td>Everything</td>
-<td>Everything the Operator does, plus <strong>the network</strong>: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic <strong>Rules</strong>, the network tree, detailed monitoring (Traffic, Insights, Executive, network detail of the Dashboard), API keys, Settings, accounts</td>
+<td>Everything the Operator does, plus <strong>the network</strong>: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic <strong>Rules</strong>, the network tree, detailed monitoring (Traffic, Network health, Business insights, network detail of the Dashboard), API keys, Settings, accounts</td>
 <td>Every page; the network pages are grouped under <em>Network</em> in the sidebar</td>
 </tr>
 </tbody>
@@ -4574,10 +4574,10 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <li>Red: over 90%: saturated — latency rises for everyone behind it</li>
 </ul>
 <p><strong>What to do.</strong> Current capacity far below nominal: alignment, interference or rain fade — check signal and SNR on the antenna page.</p>
-<h3 id="executive">Executive</h3>
-<p>Where the risk is: saturation, experience, load and queues per node, health over time. Clicking a node or a client opens the Selection panel.</p>
-<h4 id="saturation-risks">Saturation risks</h4>
-<p><strong>What it shows.</strong> Every link compared with what it can carry, worst first.</p>
+<h3 id="network-health">Network health</h3>
+<p>Is the network fine, and where could it fill up: the verdict, latency per client, load per site, health over time. Clicking a site or a client opens its details.</p>
+<h4 id="links-that-could-fill-up">Links that could fill up</h4>
+<p><strong>What it shows.</strong> Every link compared with what it can carry, the fullest first.</p>
 <p><strong>How it is measured.</strong> Traffic of the link ÷ its capacity (the lowest of: rate set by hand, measured radio capacity, port speed). Bar = now; marker = the peak of the selected period.</p>
 <p><strong>Scale.</strong></p>
 <ul>
@@ -4598,19 +4598,19 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <li>Grey: at plan limit: judged apart (see below)</li>
 </ul>
 <p><strong>How to read it.</strong> Samples taken while the client uses 85%+ of its plan are left out: a full line makes its own queue — that is not a network fault. “no reply” on every client of a router means the probe itself is failing, not the clients.</p>
-<p><strong>What to do.</strong> Many poor clients behind the same node: look at that node’s load and backhaul. A single poor client: its CPE, signal or home Wi-Fi.</p>
-<h4 id="load-by-node">Load by node</h4>
-<p><strong>What it shows.</strong> Traffic of each node (site) compared with the sum of its clients’ limits.</p>
+<p><strong>What to do.</strong> Many poor clients behind the same site: look at that site’s load and backhaul. A single poor client: its CPE, signal or home Wi-Fi.</p>
+<h4 id="how-full-each-site-is">How full each site is</h4>
+<p><strong>What it shows.</strong> Traffic of each site right now, compared with the sum of its clients’ limits.</p>
 <p><strong>How it is measured.</strong> Sum of the clients’ queues every 10 s, divided by the sum of their limits.</p>
 <p><strong>How to read it.</strong> This is a share of what was sold, not of the link: 100% means every client is at its cap at once, which practically never happens.</p>
-<h4 id="queues-by-node">Queues by node</h4>
-<p><strong>What it shows.</strong> Each node (PoP or router) with its clients: traffic now vs limit, limits applied, plans sold, worst latency and experience.</p>
+<h4 id="sites-and-their-clients">Sites and their clients</h4>
+<p><strong>What it shows.</strong> Each site with its clients (click + to open them): traffic now against the limit, limits applied, plans sold, worst latency and experience.</p>
 <p><strong>How it is measured.</strong> Queue counters every 10 s; latency from the probe every 30 s. A VLAN client is listed under the router that carries it.</p>
 <p><strong>How to read it.</strong> Click a row to open its detail below. The “Rate” field lets you force a client’s limit by hand — it then overrides its plan until you clear it.</p>
 <h4 id="selection">Selection</h4>
-<p>Details of the node or client selected in the table above: link, plans, limits and the clients behind it.</p>
+<p>Details of the site or client selected in the table above: link, plans, limits and the clients behind it.</p>
 <h4 id="node">Node</h4>
-<p><strong>What it shows.</strong> Detail of the selected node: its link (capacity and load), the limits and plans of its clients, and how each client is doing.</p>
+<p><strong>What it shows.</strong> Detail of the selected site: its link (capacity and load), the limits and plans of its clients, and how each client is doing.</p>
 <p><strong>How to read it.</strong> Oversubscription = plans sold ÷ link capacity. Some is normal (clients are not all active at once); far above 3× the link will be full at busy hours.</p>
 <h4 id="client">Client</h4>
 <p><strong>What it shows.</strong> Detail of the selected client: its plan and where it comes from, the limit really applied, its usage and its latency at rest and under load.</p>
@@ -4624,7 +4624,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <li>Red: red: poor / saturated</li>
 <li>Grey: grey: no measurement in that step</li>
 </ul>
-<p><strong>How to read it.</strong> For a node: the worst client of the step. For the whole network: all clients together. A red band at the same hour every evening is a capacity problem; a red band at random times is more often radio.</p>
+<p><strong>How to read it.</strong> For a site: the worst client of the step. For the whole network: all clients together. A red band at the same hour every evening is a capacity problem; a red band at random times is more often radio.</p>
 <h3 id="traffic">Traffic</h3>
 <p>Who consumes what, where the traffic goes, and the traffic restrictions.</p>
 <h4 id="who-consumes">Who consumes</h4>
@@ -4665,8 +4665,8 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><strong>How to read it.</strong> Source: pushed by the API (billing / CRM), set by hand here, or the default plan. A limit forced in Subscribers (Rate) overrides all three — it is shown here so you know why the plan is not what is applied.</p>
 <h4 id="packages-pushed-by-the-api">Packages pushed by the API</h4>
 <p>Offers received from your billing system or CRM through the public API (/model/v1/packages). Clients pushed with a package get its rates automatically.</p>
-<h3 id="insights">Insights</h3>
-<p>The commercial reading of the measurements, comparing the chosen period with the one before.</p>
+<h3 id="business-insights">Business insights</h3>
+<p>What to do with your clients: who may leave, who to offer a bigger plan, and how many more clients each site can take, comparing the chosen period with the one before.</p>
 <h4 id="at-risk-of-leaving">At risk of leaving</h4>
 <p><strong>What it shows.</strong> Clients showing the signs that come before a cancellation.</p>
 <p><strong>How it is measured.</strong> Any of: experience score under 50 over the period; usage down more than 70% versus the previous period; no traffic at all for 3 days or more (for a client that used to consume).</p>
@@ -4685,7 +4685,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <h3 id="devices">Devices</h3>
 <p>Routers and antennas: their health, adding them, the Ubiquiti UISP controller (connect it, see every antenna's radio capacity, attach backhauls to their site), and the router settings. One section at a time: the table of contents works as tabs.</p>
 <h4 id="router-health">Router health</h4>
-<p><strong>What it shows.</strong> CPU, memory and uptime of each polled router.</p>
+<p><strong>What it shows.</strong> CPU (average, busiest core, peak of the last hour), memory and uptime of each polled router. The busiest core is what adds latency.</p>
 <p><strong>Scale.</strong></p>
 <ul>
 <li>Green: CPU under 70%: fine</li>
@@ -4788,10 +4788,10 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <h4 id="right-now">Right now</h4>
 <p>Last 10-second measurement.</p>
 <h4 id="clients-on-this-link">Clients on this link</h4>
-<p><strong>What it shows.</strong> The clients of this node with how much of their limit they use, their latency and score.</p>
+<p><strong>What it shows.</strong> The clients of this site with how much of their limit they use, their latency and score.</p>
 <p><strong>How to read it.</strong> Several clients red on latency at the same time as the link is loaded = the link is the bottleneck. Only one client red = look at that client.</p>
 <h4 id="link">Link</h4>
-<p><strong>What it shows.</strong> What freeQoS knows about this node’s link: capacity, load, limits applied and plans sold behind it.</p>
+<p><strong>What it shows.</strong> What freeQoS knows about this site’s link: capacity, load, limits applied and plans sold behind it.</p>
 <p><strong>How to read it.</strong> Capacity unknown: set the rate of the link in the Network tree so load and oversubscription can be judged.</p>
 <h4 id="plan">Plan</h4>
 <p><strong>What it shows.</strong> The plan of this client, where it comes from, and the limit really applied.</p>
@@ -4937,7 +4937,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <tr>
 <td>Clients</td>
 <td>Table column</td>
-<td>Number of clients of this node.</td>
+<td>Number of clients of this site.</td>
 </tr>
 <tr>
 <td>Clients</td>

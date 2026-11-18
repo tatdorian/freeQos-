@@ -2424,3 +2424,8 @@ body.role-limited .dash-detail { display: none; }
 .cpu-core i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--ok); }
 .cpu-core.warn i { background: var(--warn); }
 .cpu-core.crit i { background: var(--crit); }
+
+/* Business insights : ce qui manque encore, replie (une ligne, pas un bandeau). */
+.ins-ready > summary { cursor: pointer; }
+.ins-ready ul { margin: .5rem 0 0; padding-left: 1.2rem; }
+.ins-ready li { margin: .2rem 0; }
