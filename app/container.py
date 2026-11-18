@@ -821,6 +821,15 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_PLACE_SERVICES, 120.0, placer_services)
 
+    # UN SEUL CLIENT : une fiche a IP fixe declaree a la main sur l'IP d'une
+    # session deja connue est fusionnee dans cette session (nom, mode, forfait).
+    from app.services.client_merge import JOB_MERGE, merge_duplicates
+
+    async def fusionner_doublons() -> None:
+        await merge_duplicates(conteneur)
+
+    scheduler.add_job(JOB_MERGE, 60.0, fusionner_doublons)
+
     # PoPs vides que plus rien ne declare (routeur retire, essai jamais relie) :
     # retires pour ne plus encombrer l'arbre et les listes.
     async def purge_pops() -> None:
