@@ -8400,6 +8400,12 @@ function topoBuildModel(data, options) {
     aPlacer = restants();
   }
 
+  // SEULEMENT CE QUI EST DECLARE (le defaut) : les routeurs declares (API ou
+  // interface) et les clients. Les equipements simplement DETECTES -- la box
+  // d'un client comprise -- sont ecartes AVANT de placer les clients : chaque
+  // client se range alors sous le routeur declare qui le porte.
+  const ecartes = topo.montrerNonDeclares ? new Map() : topoEcarterDetectes(nodes);
+
   // LES CLIENTS, CHACUN A SA PLACE. Le serveur dit ou pend chaque client, et
   // comment il l'a trouve : a la main, l'equipement qui porte son nom, sa
   // propre case decouverte, son secteur, le routeur de son site de VLAN, son
@@ -8441,8 +8447,15 @@ function topoBuildModel(data, options) {
   const sitesVlan = new Map();
   const nonPlaces = [];
   (topo.subs || []).forEach((s) => {
-    const p = places[s.login];
+    let p = places[s.login];
     s.placedHow = p ? p.how : 'site';
+    if (p && p.node && ecartes.has(p.node)) {
+      // Sa case detectee est ecartee : sous le routeur de sa session, sinon
+      // sous le plus proche routeur declare au-dessus de cette case.
+      const amont = parNomDeSite.get(s.router_name) || parNomDeSite.get(s.pop_name) || ecartes.get(p.node);
+      p = amont ? { node: amont, how: 'router' } : null;
+      s.placedHow = p ? p.how : 'site';
+    }
     if (p && p.how === 'device') return;   // la case decouverte EST ce client
     let cle = null;
     if (p && p.node && nodes.has(p.node)) {
@@ -8546,7 +8559,7 @@ function topoBuildModel(data, options) {
     if (cands.length) n.unsureParents = cands;
   });
 
-  topo.nonDeclares = topo.montrerNonDeclares ? 0 : topoGarderDeclares(nodes);
+  topo.nonDeclares = topo.montrerNonDeclares ? 0 : ecartes.size + topoGarderDeclares(nodes);
   if (!sansGroupes) topoGrouperFeuilles(nodes);
   let roots = [...nodes.values()].filter((n) => !n.parentKey);
   // FOCUS : une seule branche (ses ancetres, elle, et tout ce qui pend dessous).
@@ -8568,6 +8581,44 @@ function topoBuildModel(data, options) {
  *  site client vu en MNDP, un autre NAS hors inventaire, une MAC) n'y est pas :
  *  une fois declare dans Devices ou Clients, il apparait et ses liens se font.
  *  Rend le nombre de cases ecartees. */
+/** Ecarte les equipements DETECTES (ni routeur declare, ni rattachement pose a
+ *  la main). Ce qui pendait dessous remonte au plus proche declare. Rend
+ *  ``cle ecartee -> plus proche ancetre garde`` (ou null). */
+function topoEcarterDetectes(nodes) {
+  const declare = (n) => n.synthetic || String(n.key).startsWith('router:') ||
+    n.kind === 'static' || !!n.parent_override ||
+    !!(n.edge && n.edge.link && String(n.edge.link.key || '').startsWith('manual:'));
+  const amontGarde = (n) => {
+    const vus = new Set();
+    for (let k = n.parentKey; k && !vus.has(k); k = (nodes.get(k) || {}).parentKey) {
+      vus.add(k);
+      const a = nodes.get(k);
+      if (a && declare(a)) return k;
+    }
+    return null;
+  };
+  const ecartes = new Map();
+  nodes.forEach((n) => { if (!declare(n)) ecartes.set(n.key, amontGarde(n)); });
+  ecartes.forEach((_amont, k) => nodes.delete(k));
+  nodes.forEach((n) => {
+    n.children = n.children.filter((c) => nodes.has(c.key));
+    if (n.parentKey && ecartes.has(n.parentKey)) {
+      // Un routeur declare derriere un equipement detecte : il remonte, sans
+      // le lien (il menait a la case ecartee).
+      const amont = ecartes.get(n.parentKey);
+      n.parentKey = amont && nodes.has(amont) ? amont : null;
+      n.edge = null;
+    }
+  });
+  nodes.forEach((n) => {
+    if (n.parentKey && nodes.has(n.parentKey)) {
+      const p = nodes.get(n.parentKey);
+      if (!p.children.includes(n)) p.children.push(n);
+    }
+  });
+  return ecartes;
+}
+
 function topoGarderDeclares(nodes) {
   const garde = new Map();
   const declare = (n) => n.synthetic || String(n.key).startsWith('router:') ||
