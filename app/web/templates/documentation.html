@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="66d4782f1154d12a">
+  <meta name="freeqos-docs-source" content="71f4210dc35bc95e">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2376,7 +2376,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 <tr>
 <td><strong>Where the traffic goes</strong></td>
-<td>A world map (one circle per place, area = volume; scroll to zoom, click for details) and the volume per country, <strong>including the unlocated share</strong></td>
+<td>A world map that opens framed on the traffic (one circle per place, area = volume). Drag to move, scroll, double-click or pinch to zoom, region buttons above it (<em>All traffic</em>, <em>Europe</em>, <em>Africa</em>… only where there is traffic, and <em>World</em>); a click on a circle centres it and opens its details and the volume per country, <strong>including the unlocated share</strong></td>
 <td>The database. The map background (Natural Earth 1:110m, public domain) is served by freeQoS: no tile is downloaded</td>
 </tr>
 <tr>
@@ -4633,7 +4633,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><strong>How to read it.</strong> “unknown” is traffic to addresses that match no catalogue entry yet; it shrinks as names are resolved.</p>
 <h4 id="where-the-traffic-goes">Where the traffic goes</h4>
 <p><strong>What it shows.</strong> Map of the destinations your clients reach: each country and city sized by the volume exchanged with it.</p>
-<p><strong>How it is measured.</strong> From NetFlow: each remote address is located from its address block (geolocation database). Hover a point for its volume and clients; click it to open the detail of that place.</p>
+<p><strong>How it is measured.</strong> From NetFlow: each remote address is located from its address block (geolocation database). The map opens on the traffic. Drag to move; scroll, double-click or pinch to zoom; the buttons above jump to a region. Hover a point for its volume and clients; click it to centre it and open the detail of that place.</p>
 <p><strong>How to read it.</strong> A location is that of the server’s block, not of the company: a CDN often answers from a nearby city even for a foreign service.</p>
 <h4 id="who-talks-to-whom-client-by-client">Who talks to whom, client by client</h4>
 <p><strong>What it shows.</strong> Each client and the internet addresses it exchanges with: volume, rate while active and live rate.</p>

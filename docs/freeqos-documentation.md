@@ -1075,7 +1075,7 @@ The page is split into tabs, one question at a time: **Overview** (totals, top c
 | --- | --- | --- |
 | **Who consumes** | Volume per subscriber over the period | The database |
 | **Which services the traffic comes from** | "Who is streaming on this sector?" | The database, over the chosen period |
-| **Where the traffic goes** | A world map (one circle per place, area = volume; scroll to zoom, click for details) and the volume per country, **including the unlocated share** | The database. The map background (Natural Earth 1:110m, public domain) is served by freeQoS: no tile is downloaded |
+| **Where the traffic goes** | A world map that opens framed on the traffic (one circle per place, area = volume). Drag to move, scroll, double-click or pinch to zoom, region buttons above it (*All traffic*, *Europe*, *Africa*… only where there is traffic, and *World*); a click on a circle centres it and opens its details and the volume per country, **including the unlocated share** | The database. The map background (Natural Earth 1:110m, public domain) is served by freeQoS: no tile is downloaded |
 | **Who talks to whom, client by client** | One line per conversation *client ↔ destination*: service, port, volume, average rate, and the **live** rate for conversations happening now | The database, plus the collector's in-memory window for the live column |
 | **Destinations reached** | The record of an address: reverse name, service **and on what grounds**, organisation, AS, country, city, and the named list of subscribers reaching it | The database and the catalogue |
 | **Find an IP** | "This address or this domain name: who and where?" — any address, seen on the network or not | An on-demand analysis with the authorised sources only; nothing is written |
