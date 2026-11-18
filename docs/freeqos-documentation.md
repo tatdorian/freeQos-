@@ -622,6 +622,12 @@ What an Administrator can change, all undoable:
 
 API: `GET /api/v1/topology` returns `placements` (login → box and how) and `client_nodes`; `PUT /api/v1/topology/client-places` (`{"logins", "node_key"}`), `DELETE /api/v1/topology/client-places/{login}`, `PUT /api/v1/topology/client-links` (`{"node_key", "login"}`, empty login = not a client), `DELETE /api/v1/topology/client-links/{node_key}`.
 
+### A router that is a client of another router
+
+freeQoS never puts a client queue on an address of the network itself: a router's own address, its loopback, its default gateway. One case is a client all the same: a **router connected in PPPoE to its parent** (an office or site router that dials in). Its session is open on the parent, and its address is its own WAN address. Give it a plan like any client: the queue is written **on the parent**, on that address, and caps everything the child router carries. Seen from the child router itself, the same address stays protected.
+
+When a client has no queue, its page says why in *Diagnosis › Limit on the router*: writing turned off, client offline, an address of the network itself, no rate to apply, router read-only, or "will be written at the next pass".
+
 ### Static-IP subscribers
 
 A subscriber without PPPoE (fixed IP, routed block, VLAN) is declared in *Static clients*: a name, one or more addresses or networks, a PoP. It is then measured, limited and scored like a PPPoE subscriber.

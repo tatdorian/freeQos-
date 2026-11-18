@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="446f17392c985704">
+  <meta name="freeqos-docs-source" content="18a0c5ae858bbabd">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -46,6 +46,7 @@
     <a class="sub" href="#clients-in-the-tree-automatic-and-editable">Clients in the tree: automatic, and editable</a>
     <a class="sub" href="#the-tree-as-a-list-default">The tree as a list (default)</a>
     <a class="sub" href="#reading-a-large-tree">Reading a large tree</a>
+    <a class="sub" href="#a-router-that-is-a-client-of-another-router">A router that is a client of another router</a>
     <a class="sub" href="#static-ip-subscribers">Static-IP subscribers</a>
     <a class="sub" href="#ubiquiti-antennas-and-radio-capacity">Ubiquiti antennas and radio capacity</a>
     <a class="sub" href="#wired-or-radio-the-capacity-of-each-link">Wired or radio: the capacity of each link</a>
@@ -1629,6 +1630,9 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Attach a client under this box</strong> places a client from its name or login.</li>
 </ul>
 <p>API: <code>GET /api/v1/topology</code> returns <code>placements</code> (login → box and how) and <code>client_nodes</code>; <code>PUT /api/v1/topology/client-places</code> (<code>{"logins", "node_key"}</code>), <code>DELETE /api/v1/topology/client-places/{login}</code>, <code>PUT /api/v1/topology/client-links</code> (<code>{"node_key", "login"}</code>, empty login = not a client), <code>DELETE /api/v1/topology/client-links/{node_key}</code>.</p>
+<h3 id="a-router-that-is-a-client-of-another-router">A router that is a client of another router</h3>
+<p>freeQoS never puts a client queue on an address of the network itself: a router's own address, its loopback, its default gateway. One case is a client all the same: a <strong>router connected in PPPoE to its parent</strong> (an office or site router that dials in). Its session is open on the parent, and its address is its own WAN address. Give it a plan like any client: the queue is written <strong>on the parent</strong>, on that address, and caps everything the child router carries. Seen from the child router itself, the same address stays protected.</p>
+<p>When a client has no queue, its page says why in <em>Diagnosis › Limit on the router</em>: writing turned off, client offline, an address of the network itself, no rate to apply, router read-only, or "will be written at the next pass".</p>
 <h3 id="static-ip-subscribers">Static-IP subscribers</h3>
 <p>A subscriber without PPPoE (fixed IP, routed block, VLAN) is declared in <em>Static clients</em>: a name, one or more addresses or networks, a PoP. It is then measured, limited and scored like a PPPoE subscriber.</p>
 <p>A static-IP client announces nothing: no session, no RADIUS plan. <strong>The declaration is the only possible source</strong>, and freeQoS treats it as the truth, like the router inventory. PPPoE and static subscribers live in the same table, distinguished by their <code>kind</code>, and follow exactly the same path for plans, overrides, boosts and audit.</p>
