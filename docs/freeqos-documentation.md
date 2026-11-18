@@ -1517,7 +1517,7 @@ A link is flagged **to reinforce** when its **average** occupancy over the perio
 
 ### Who is about to leave, who is ready for more
 
-*Business insights* (`GET /api/v1/insights/subscribers?days=7`) compares the chosen period (7, 14 or 30 days) with the one before it, so it needs **twice the period** of history; the page says how many days it has.
+These lists are available **through the API only** (the interface page was removed): `GET /api/v1/insights/subscribers?days=7` compares the chosen period (7, 14 or 30 days) with the one before it, so it needs **twice the period** of history; the answer says how many days it has (`readiness`). `GET /api/v1/insights/capacity` gives the room left per site.
 
 | List | Rule |
 | --- | --- |
@@ -1538,7 +1538,7 @@ The capacity view also ranks subscribers by **volume** over the period. The top 
 
 **Errors say what happened and what to do**: a title (*Not allowed with your account*, *Not possible right now*, *A router or service did not answer*, *freeQoS cannot be reached*...), the server's reason, and the next step. An error from a button shows in a corner without blocking the page; a page that cannot load says so in a banner and retries on its own.
 
-Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. **Traffic**, **Network health** and **Business insights** are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with *Show all*. The chosen tab is remembered in your browser. The two long configuration pages, **Settings** and **Devices**, show one section at a time: their table of contents works as tabs.
+Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. **Traffic** and **Network health** are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with *Show all*. The chosen tab is remembered in your browser. The two long configuration pages, **Settings** and **Devices**, show one section at a time: their table of contents works as tabs.
 
 | Page | Question it answers | Sections |
 | --- | --- | --- |
@@ -1549,7 +1549,6 @@ Each page reads in sections, with a table of contents at the top and a tooltip o
 | **Network tree** | How is the network wired? | Discovered tree, editable with the mouse (move, re-parent, merge, hide) |
 | **Clients** | Who are my clients, and how are they doing? | Every client under its **PoP**, with its connection (PPPoE, static IP, or **VLAN 2060**: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; *+ Add a client* (Operator) declares PPPoE, static-IP and VLAN clients. The map button opens the **Map**. |
 | **Plans** (from *Settings › Plans & map*) | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
-| **Business insights** | What to do with your clients? | Tabs: **Overview** (three figures, each with what to do; click one to open its list), **At risk** (who may cancel, and why: call them first), **Upgrade** (who lives at their plan's limit with a good experience: offer them more), **Capacity** (how many more clients each site can take), **All clients**. What is still missing for complete lists (history, plans, latency) is folded in one line above, with what to do |
 | **Devices** | Which equipment? | Router health, connecting a router, router settings (Set up, Set by freeQoS, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health |
 | **API** | How to integrate? | API keys, links to the API guide and to this documentation |
 | **Settings** | How does the tool behave? | Accounts, settings, writing to the routers, caps held or not, command log |
@@ -1726,7 +1725,7 @@ freeQoS holds router credentials that can write across the whole network. Securi
 | --- | --- | --- | --- |
 | **Viewer** (`read`) | Everything | Nothing | Every page, read-only banner |
 | **Operator** (`operator`) | Clients | **Manages the clients**: adds them (PPPoE login declared ahead, static IP, VLAN), edits their details and connection, changes plan, mode and boost on one or many clients, defines bandwidth modes and schedules; sees at a glance whether there is a problem | **Dashboard** (today's status), **Clients**, **Modes**, **Schedules**, **Alerts**, **Activity**; no network pages, no Settings (password and log out from the account card) |
-| **Administrator** (`edit`) | Everything | Everything the Operator does, plus **the network**: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic **Rules**, the network tree, detailed monitoring (Traffic, Network health, Business insights, network detail of the Dashboard), API keys, Settings, accounts | Every page; the network pages are grouped under *Network* in the sidebar |
+| **Administrator** (`edit`) | Everything | Everything the Operator does, plus **the network**: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic **Rules**, the network tree, detailed monitoring (Traffic, Network health, network detail of the Dashboard), API keys, Settings, accounts | Every page; the network pages are grouped under *Network* in the sidebar |
 
   The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `PUT /api/v1/clients/{login}/profile`, `POST /api/v1/clients`, `POST/PATCH/DELETE /api/v1/static-clients`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`, `POST/PATCH/DELETE /api/v1/bandwidth-modes` and `/api/v1/bandwidth-schedules`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it, in the **activity log** below and in the enforcement audit.
 - **Activity log:** every change made on a client (bandwidth mode, boost, boost stopped, plan, plan removed) is recorded in `client_activity`: who, when, which client, the detail, and the state of the queue afterwards (written, pending on the router because writing is off, no router, refused). It is read on the **Activity** page (search, CSV export), in each client's sheet, and through `GET /api/v1/activity?login=&q=&limit=`. Kept 400 days. An API key keeps its two scopes: `read`, or `write` (Administrator rights except accounts, which no key can manage). The stored values `read` and `edit` are those of the former two roles: existing accounts keep their level without migration.

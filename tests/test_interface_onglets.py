@@ -463,10 +463,13 @@ def test_la_fiche_abonne_propose_un_controle_en_direct() -> None:
     assert 'id="sub-cycles"' in HTML and "/collection/cycles" in JS
 
 
-def test_l_onglet_insights_existe_et_est_cable() -> None:
-    assert 'id="view-insights"' in HTML and "insights: loadInsights" in JS
-    for identifiant in ("ins-risk", "ins-upgrade", "ins-capacity", "ins-all"):
-        assert f'id="{identifiant}"' in HTML, identifiant
+def test_la_page_business_insights_est_retiree() -> None:
+    """Jugee inutile : la page est retiree de l'interface (l'API reste)."""
+    assert 'id="view-insights"' not in HTML and "loadInsights" not in JS
+    assert 'href="#/insights"' not in HTML
+
+
+def test_la_recherche_globale_est_cablee() -> None:
     assert 'id="global-search"' in HTML and "/search?q=" in JS
 
 

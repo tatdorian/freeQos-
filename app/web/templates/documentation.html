@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="38b7c529313087e3">
+  <meta name="freeqos-docs-source" content="9b464872ae2c36f1">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -166,7 +166,6 @@
     <a class="sub" href="#traffic">Traffic</a>
     <a class="sub" href="#network-tree">Network tree</a>
     <a class="sub" href="#plans">Plans</a>
-    <a class="sub" href="#business-insights">Business insights</a>
     <a class="sub" href="#devices">Devices</a>
     <a class="sub" href="#api">API</a>
     <a class="sub" href="#settings">Settings</a>
@@ -3096,7 +3095,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>A link is flagged <strong>to reinforce</strong> when its <strong>average</strong> occupancy over the period is above 80%, with at least 10 samples. A peak at 100% proves nothing — it is what a well-sized link does on a match night; an average above 80% means the next growth will be paid in latency for everyone.</p>
 <p><strong>Links that could fill up</strong> (<em>Network health</em>, <code>GET /api/v1/capacity/hotspots</code>) apply the gauges' thresholds — from 70% a link is to watch, from 90% it no longer holds one more peak — and split links into two sides: the <strong>internet side</strong> (the gateway's uplink and the PoP-to-core links, where a saturation hits every client) and the <strong>PoP side</strong> (links towards subscribers, VLANs and relays, where it only hits what hangs below). A radio link that only carries 70% of its nominal capacity is flagged as degraded.</p>
 <h3 id="who-is-about-to-leave-who-is-ready-for-more">Who is about to leave, who is ready for more</h3>
-<p><em>Business insights</em> (<code>GET /api/v1/insights/subscribers?days=7</code>) compares the chosen period (7, 14 or 30 days) with the one before it, so it needs <strong>twice the period</strong> of history; the page says how many days it has.</p>
+<p>These lists are available <strong>through the API only</strong> (the interface page was removed): <code>GET /api/v1/insights/subscribers?days=7</code> compares the chosen period (7, 14 or 30 days) with the one before it, so it needs <strong>twice the period</strong> of history; the answer says how many days it has (<code>readiness</code>). <code>GET /api/v1/insights/capacity</code> gives the room left per site.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -3122,7 +3121,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>The capacity view also ranks subscribers by <strong>volume</strong> over the period. The top of instantaneous rates names whoever is downloading right now; the volume over a week names whoever weighs on the network. They are almost never the same subscribers.</p>
 <h2 id="9-interface">9. Interface</h2>
 <p><strong>Errors say what happened and what to do</strong>: a title (<em>Not allowed with your account</em>, <em>Not possible right now</em>, <em>A router or service did not answer</em>, <em>freeQoS cannot be reached</em>...), the server's reason, and the next step. An error from a button shows in a corner without blocking the page; a page that cannot load says so in a banner and retries on its own.</p>
-<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. <strong>Traffic</strong>, <strong>Network health</strong> and <strong>Business insights</strong> are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with <em>Show all</em>. The chosen tab is remembered in your browser. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
+<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. <strong>Traffic</strong> and <strong>Network health</strong> are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with <em>Show all</em>. The chosen tab is remembered in your browser. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -3166,11 +3165,6 @@ curl -s http://127.0.0.1:8000/health/ready
 <td><strong>Plans</strong> (from <em>Settings › Plans &amp; map</em>)</td>
 <td>Which rate for whom?</td>
 <td>Default plan, each subscriber's plan and its source, packages pushed by the API</td>
-</tr>
-<tr>
-<td><strong>Business insights</strong></td>
-<td>What to do with your clients?</td>
-<td>Tabs: <strong>Overview</strong> (three figures, each with what to do; click one to open its list), <strong>At risk</strong> (who may cancel, and why: call them first), <strong>Upgrade</strong> (who lives at their plan's limit with a good experience: offer them more), <strong>Capacity</strong> (how many more clients each site can take), <strong>All clients</strong>. What is still missing for complete lists (history, plans, latency) is folded in one line above, with what to do</td>
 </tr>
 <tr>
 <td><strong>Devices</strong></td>
@@ -3509,7 +3503,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <tr>
 <td><strong>Administrator</strong> (<code>edit</code>)</td>
 <td>Everything</td>
-<td>Everything the Operator does, plus <strong>the network</strong>: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic <strong>Rules</strong>, the network tree, detailed monitoring (Traffic, Network health, Business insights, network detail of the Dashboard), API keys, Settings, accounts</td>
+<td>Everything the Operator does, plus <strong>the network</strong>: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic <strong>Rules</strong>, the network tree, detailed monitoring (Traffic, Network health, network detail of the Dashboard), API keys, Settings, accounts</td>
 <td>Every page; the network pages are grouped under <em>Network</em> in the sidebar</td>
 </tr>
 </tbody>
@@ -4665,23 +4659,6 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><strong>How to read it.</strong> Source: pushed by the API (billing / CRM), set by hand here, or the default plan. A limit forced in Subscribers (Rate) overrides all three — it is shown here so you know why the plan is not what is applied.</p>
 <h4 id="packages-pushed-by-the-api">Packages pushed by the API</h4>
 <p>Offers received from your billing system or CRM through the public API (/model/v1/packages). Clients pushed with a package get its rates automatically.</p>
-<h3 id="business-insights">Business insights</h3>
-<p>What to do with your clients: who may leave, who to offer a bigger plan, and how many more clients each site can take, comparing the chosen period with the one before.</p>
-<h4 id="at-risk-of-leaving">At risk of leaving</h4>
-<p><strong>What it shows.</strong> Clients showing the signs that come before a cancellation.</p>
-<p><strong>How it is measured.</strong> Any of: experience score under 50 over the period; usage down more than 70% versus the previous period; no traffic at all for 3 days or more (for a client that used to consume).</p>
-<p><strong>What to do.</strong> Call before they do: a CPE swap, a realignment or a plan change is cheaper than a lost client.</p>
-<h4 id="ready-for-a-bigger-plan">Ready for a bigger plan</h4>
-<p><strong>What it shows.</strong> Clients that live at their plan ceiling while their experience stays good — the plan limits them, not the network.</p>
-<p><strong>How it is measured.</strong> At 90%+ of their plan in 15% or more of the samples of the period, with a score of 50 or more.</p>
-<p><strong>How to read it.</strong> A client at its ceiling with poor latency is not here on purpose: selling it more would not fix what is a network problem.</p>
-<h4 id="sites-and-access-points-room-for-more-subscribers">Sites and access points room for more subscribers</h4>
-<p><strong>What it shows.</strong> How many more subscribers each site or access point can take at today’s usage.</p>
-<p><strong>How it is measured.</strong> Busy-hour peak per subscriber, against a target of 80% of the capacity (above that, queues fill and latency rises before the link is full).</p>
-<p><strong>How to read it.</strong> A site where 20% or more of the clients already have a poor experience shows no room, whatever the margin on paper.</p>
-<h4 id="every-subscriber-plan-usage-experience">Every subscriber plan, usage, experience</h4>
-<p><strong>What it shows.</strong> All subscribers with their limit, current usage, latency and whether the router really holds the cap.</p>
-<p><strong>How to read it.</strong> Click a client to see its plan, its queue on the router and its history. The search box accepts a login, an IP, a MAC or a site.</p>
 <h3 id="devices">Devices</h3>
 <p>Routers and antennas: their health, adding them, the Ubiquiti UISP controller (connect it, see every antenna's radio capacity, attach backhauls to their site), and the router settings. One section at a time: the table of contents works as tabs.</p>
 <h4 id="router-health">Router health</h4>
@@ -5023,6 +5000,11 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td>Event</td>
 <td>Accounts</td>
 <td>What happened: login, failed login, block, logout, account change…</td>
+</tr>
+<tr>
+<td>Every subscriber plan, usage, experience</td>
+<td></td>
+<td>All subscribers with their limit, current usage, latency and whether the router really holds the cap. Click a client to see its plan, its queue on the router and its history. The search box accepts a login, an IP, a MAC or a site.</td>
 </tr>
 <tr>
 <td>Experience</td>
