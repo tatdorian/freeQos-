@@ -1774,7 +1774,10 @@ class ShapingService:
         )
         a_ecrire = {a.name for a in plan.actions if a.path == "/queue/simple" and a.name}
         conflits = {c.name: c.detail for c in plan.conflicts}
-        motifs = {e.login: e.reason for e in ecartes}
+        # Un lien et un client peuvent porter le MEME nom (le lien prend celui de
+        # l'equipement d'en face) : motifs et files se lisent par nature.
+        motifs_liens = {e.login: e.reason for e in ecartes if e.kind == "link"}
+        motifs = {e.login: e.reason for e in ecartes if e.kind != "link"}
         specs = {f.name: f for f in files}
 
         points: list[dict[str, Any]] = []
@@ -1784,7 +1787,9 @@ class ShapingService:
                     router_name=router_name,
                     kind=self.POINT_LIEN,
                     label=lien.name,
-                    spec=specs.get(lien.queue_name),
+                    # Un lien ecarte n'a pas de file : celle de meme nom, s'il y en
+                    # a une, est celle du client homonyme.
+                    spec=None if lien.name in motifs_liens else specs.get(lien.queue_name),
                     queue_name=lien.queue_name,
                     detail={
                         "interface": lien.interface,
@@ -1795,7 +1800,7 @@ class ShapingService:
                     },
                     a_ecrire=a_ecrire,
                     conflits=conflits,
-                    motifs=motifs,
+                    motifs=motifs_liens,
                 )
             )
         for abonne in abonnes:
@@ -2452,7 +2457,7 @@ class ShapingService:
             ligne["reason"] = f"{type(exc).__name__}: {exc}"
             return ligne
 
-        ecarte = next((s for s in plan.skipped if s.login == reference), None)
+        ecarte = next((s for s in plan.skipped if s.login == reference and s.kind != "link"), None)
         conflit = next((c for c in plan.conflicts if c.name == queue_name), None)
         restreint = plan.restrict_to(plan.parent_chain(queue_name), keep_types=not removing)
         ligne["actions"] = [action.summary() for action in restreint.actions]
@@ -2629,7 +2634,7 @@ class ShapingService:
         correspond. C'est la seule deduction possible, et elle est exacte parce
         que le planificateur ne produit une action que sur un ECART.
         """
-        ecarte = next((s for s in plan.skipped if s.login == reference), None)
+        ecarte = next((s for s in plan.skipped if s.login == reference and s.kind != "link"), None)
         conflit = next((c for c in plan.conflicts if c.name == queue_name), None)
         actions = [a.summary() for a in plan.actions if (a.name or "") == queue_name]
         if conflit is not None:
@@ -3800,7 +3805,9 @@ class ShapingService:
                 plan = None
             if plan is not None:
                 nom_file = cible.queue_name
-                ecart = next((e for e in plan.skipped if e.login == login), None)
+                ecart = next(
+                    (e for e in plan.skipped if e.login == login and e.kind != "link"), None
+                )
                 if ecart is not None:
                     return {"code": "skipped", "router": nom, "reason": ecart.reason}
                 conflit = next((c for c in plan.conflicts if c.name == nom_file), None)
