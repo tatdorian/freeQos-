@@ -1324,8 +1324,17 @@ class ShapingService:
         # finissait "ecarte". Le debit du service devient donc le plan de la
         # session qui porte cette IP, et aucune file en double n'est creee.
         statiques = await self._static_clients_for(collector)
+        # Une session RETIREE de freeQoS n'existe pas pour lui : elle n'absorbe
+        # pas la fiche a IP fixe qui porte la meme adresse. Constate : la fiche
+        # « ACME OFFICE » (IP fixe, mode 200/200) etait fusionnee dans la
+        # session SESS-0042 -- retiree --, et disparaissait avec elle : aucune
+        # file, nulle part.
+        retires_ici = getattr(self, "exclusions", None)
         login_par_ip = {
-            str(s.address): login for login, s in sessions.items() if getattr(s, "address", None)
+            str(s.address): login
+            for login, s in sessions.items()
+            if getattr(s, "address", None)
+            and not (retires_ici is not None and login in retires_ici)
         }
         # L'IP d'une session de CE routeur suffit : le site pousse par la
         # facturation peut ne correspondre a aucun PoP.
@@ -1373,20 +1382,22 @@ class ShapingService:
             service = services_de_session.get(login)
             if service is not None:
                 plan_bas, plan_haut = self._plan_du_service(service)
+                # Le geste fait sur la FICHE (mode, limite, boost) vaut pour la
+                # session qui porte son IP.
+                surcharge = surcharge or surcharges_abonnes.get(service.reference, {})
+            cible_abo = self._cible_abonne(
+                login,
+                collector=collector,
+                session=session,
+                plan_down=plan_bas,
+                plan_up=plan_haut,
+                surcharge=surcharge,
+                parent=parent_par_noeud.get(secteur) if secteur else None,
+            )
+            if service is not None and service.reference != login:
+                cible_abo.aliases = (service.reference,)
             abonnes.append(
-                self._horaire(
-                    self._cible_abonne(
-                        login,
-                        collector=collector,
-                        session=session,
-                        plan_down=plan_bas,
-                        plan_up=plan_haut,
-                        surcharge=surcharge,
-                        parent=parent_par_noeud.get(secteur) if secteur else None,
-                    ),
-                    site=ligne.get("pop_name"),
-                    maintenant=maintenant,
-                )
+                self._horaire(cible_abo, site=ligne.get("pop_name"), maintenant=maintenant)
             )
 
         # Sessions ouvertes sur CE routeur et pas encore traitees : abonne apparu
@@ -1412,22 +1423,25 @@ class ShapingService:
                 if service is not None
                 else (ligne_connue.get("plan_down_mbps"), ligne_connue.get("plan_up_mbps"))
             )
+            if service is not None:
+                surcharge = surcharge or surcharges_abonnes.get(service.reference, {})
             if not surcharge and service is None and not (plan_bas or plan_haut):
                 continue
             secteur = rattachements.get(login)
+            cible_abo = self._cible_abonne(
+                login,
+                collector=collector,
+                session=session,
+                plan_down=plan_bas,
+                plan_up=plan_haut,
+                surcharge=surcharge,
+                parent=parent_par_noeud.get(secteur) if secteur else None,
+            )
+            if service is not None and service.reference != login:
+                cible_abo.aliases = (service.reference,)
             abonnes.append(
                 self._horaire(
-                    self._cible_abonne(
-                        login,
-                        collector=collector,
-                        session=session,
-                        plan_down=plan_bas,
-                        plan_up=plan_haut,
-                        surcharge=surcharge,
-                        parent=parent_par_noeud.get(secteur) if secteur else None,
-                    ),
-                    site=ligne_connue.get("pop_name") or pop_name,
-                    maintenant=maintenant,
+                    cible_abo, site=ligne_connue.get("pop_name") or pop_name, maintenant=maintenant
                 )
             )
 
@@ -2475,6 +2489,13 @@ class ShapingService:
             ligne["reason"] = f"{type(exc).__name__}: {exc}"
             return ligne
 
+        # La fiche a IP fixe fusionnee dans une session : sa file est celle de la
+        # session. On la retrouve par son alias.
+        porteuse = next((a for a in abonnes if reference in a.aliases), None)
+        if porteuse is not None and not any(a.login == reference for a in abonnes):
+            queue_name = porteuse.queue_name
+            reference = porteuse.login
+            ligne["queue"] = queue_name
         ecarte = next((s for s in plan.skipped if s.login == reference and s.kind != "link"), None)
         conflit = next((c for c in plan.conflicts if c.name == queue_name), None)
         restreint = plan.restrict_to(plan.parent_chain(queue_name), keep_types=not removing)
@@ -3446,10 +3467,10 @@ class ShapingService:
         connus = {c.name for c in routeurs}
         par_site = [nom for nom in routers_for_site(pop_name, sites) if nom in connus]
         # LE SITE D'UN ROUTEUR EST TOUJOURS SERVI PAR CE ROUTEUR. Constate : le
-        # referentiel attribuait le site « NAS-OFFICE » au routeur PARENT (un
-        # VLAN de celui-ci reconnu comme ce site). NAS-OFFICE n'etait alors
+        # referentiel attribuait le site « NAS-SOUTH » au routeur PARENT (un
+        # VLAN de celui-ci reconnu comme ce site). NAS-SOUTH n'etait alors
         # jamais retenu pour son propre site : la file d'un client rattache a
-        # NAS-OFFICE ne partait que vers le parent -- en lecture seule, donc
+        # NAS-SOUTH ne partait que vers le parent -- en lecture seule, donc
         # nulle part. Le routeur dont c'est le PoP passe en premier.
         propres = [c.name for c in routeurs if c.config.effective_pop_name == pop_name]
         if propres or par_site:
