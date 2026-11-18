@@ -184,3 +184,30 @@ def test_la_mac_du_cpe_donne_son_ip_par_arp_ou_dhcp() -> None:
         ]
     )
     assert table == {"AA:BB:CC:00:00:01": "10.20.0.5", "AA:BB:CC:00:00:02": "10.20.0.9"}
+
+
+async def test_le_pop_du_client_porte_aussi_sa_file_quand_le_parent_porte_son_reseau(
+    cadre: Settings, routeur: FakeRouterOsClient
+) -> None:
+    """CONSTATE : le reseau connecte qui contient l'IP du client etait sur le
+    routeur PARENT (en lecture seule dans freeQoS) ; la file n'allait que la,
+    donc nulle part, et jamais sur le PoP du client ou l'exploitant l'attend."""
+    nom = cadre.routers[0].name
+    mikrotik.remember_addresses(
+        "nas-parent", [{"address": "198.51.100.1/24", "interface": "ether5"}]
+    )
+    client = _client_statique(
+        reference="office",
+        pop_name="Alpha",  # le site du routeur de test
+        address="198.51.100.34/32",
+        plan_down_mbps=200.0,
+        plan_up_mbps=200.0,
+    )
+    service, _ecriture = _service(cadre, routeur, [client], [])
+    await service.registry.reload()
+    collecteur = next(c for c in service.registry.collectors if c.name == nom)
+    try:
+        retenus = await service._static_clients_for(collecteur)  # noqa: SLF001
+    finally:
+        mikrotik.remember_addresses("nas-parent", [])
+    assert [c.reference for c in retenus] == ["office"]

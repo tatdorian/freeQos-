@@ -1539,6 +1539,16 @@ class ShapingService:
             if porteur is not None:
                 if porteur[0] == collector.name:
                     retenus.append(client)
+                    continue
+                # LE ROUTEUR DE SON SITE AUSSI. Constate : le reseau connecte qui
+                # contient l'IP etait sur le routeur PARENT (en lecture seule
+                # dans freeQoS), le client sur un autre PoP. La file n'allait
+                # que sur le parent, donc nulle part, et jamais sur le PoP du
+                # client -- celui ou l'exploitant l'attend. Une file de meme
+                # debit sur les deux routeurs ne bride pas deux fois : la plus
+                # basse tient, les deux sont egales.
+                if collector.name in await self._routers_for_site(client.pop_name):
+                    retenus.append(client)
                 continue
             # Passe par le SITE et non par le seul nom de PoP : depuis qu'un
             # VLAN qui porte des clients est un site, une fiche peut tres bien
