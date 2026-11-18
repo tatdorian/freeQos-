@@ -48,7 +48,7 @@ APP_JS = STATIQUE / "app.js"
 TITRE = "freeQoS technical documentation"
 CHAPEAU = (
     "How freeQoS works, from the router to the screen: architecture, installation and "
-    "sizing, network flows, measurements, NetFlow, shaping, capacity and insights, API, "
+    "sizing, network flows, measurements, NetFlow, shaping, capacity, API, "
     "security, operations, troubleshooting, and a reference of every screen and endpoint."
 )
 

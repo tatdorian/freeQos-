@@ -30,7 +30,7 @@ CHAPITRES = (
     "5. Measurements: throughput, latency, QoE",
     "6. NetFlow traffic",
     "7. Plans and shaping",
-    "8. Capacity and business insights",
+    "8. Capacity",
     "9. Interface",
     "10. API",
     "11. Security",
