@@ -1520,30 +1520,33 @@ async function loadPortsLive() {
   }
   const ports = data.ports || [];
 
-  // 1. L'ETAT DES MESURES, en une pastille. Detaille seulement s'il y a un
-  //    probleme : trois lignes vertes n'apprennent rien a chaque visite.
+  // 1. L'ETAT DES MESURES, en une ligne : quand les routeurs ont ete lus.
+  //    Detaille seulement s'il y a un probleme.
   const cycles = Object.entries(data.cycles || {});
   const soucis = cycles.filter(([, c]) => !c || !c.ok || c.age_s > 60);
+  const ages = cycles.map(([, c]) => (c ? Number(c.age_s) : NaN)).filter((x) => isFinite(x));
   const sante = !soucis.length
     ? '<span class="pl-health ok" title="' + esc(cycles.map(([job, c]) =>
         (CYCLE_LABEL[job] || job) + ': ' + Math.round(c.age_s) + ' s ago').join(' · ')) +
-      '"><i class="sq ok"></i>Measurement up to date</span>'
+      '"><i class="sq ok"></i>Read live from the routers' +
+      (ages.length ? ' · ' + Math.round(Math.min(...ages)) + ' s ago' : '') + '</span>'
     : soucis.map(([job, c]) => '<span class="pl-health ' + (!c || !c.ok ? 'crit' : 'warn') + '"' +
         (c && c.errors && c.errors.length ? ' title="' + esc(c.errors.join(' ; ')) + '"' : '') + '>' +
-        '<i class="sq ' + (!c || !c.ok ? 'crit' : 'warn') + '"></i>' + esc(CYCLE_LABEL[job] || job) + ': ' +
+        '<i class="sq ' + (!c || !c.ok ? 'crit' : 'warn') + '"></i>' + esc(CYCLE_LABEL[job] || job) + ' reading: ' +
         (!c ? 'not run yet' : !c.ok ? '<b>failed</b>' + (c.errors && c.errors.length
           ? ' &middot; ' + esc(c.errors[0]) : '') : 'late (' + Math.round(c.age_s) + ' s)') +
         '</span>').join('');
 
-  // Sens UNIFIE, celui des clients : down = vers les clients, up = vers
-  // Internet. Sur l'uplink c'est rx/tx ; sur un port cote clients, l'inverse.
+  // Sens UNIFIE, celui des clients : download = vers les clients, upload =
+  // vers Internet. Sur l'uplink c'est rx/tx ; sur un port cote clients, l'inverse.
   const sens = (p) => p.upstream
     ? { down: p.rx_bps, up: p.tx_bps } : { down: p.tx_bps, up: p.rx_bps };
   const charge = (p) => p.capacity_mbps
     ? Math.max(p.rx_bps || 0, p.tx_bps || 0) / (p.capacity_mbps * 1e6) * 100 : null;
-  const paire = (m) => !m ? '<span class="na">-</span>'
-    : '<span class="nowrap" style="color:var(--down)">&darr; ' + esc(bpsText(m.down_bps)) + '</span> ' +
-      '<span class="nowrap" style="color:var(--up)">&uarr; ' + esc(bpsText(m.up_bps)) + '</span>';
+  // Les deux sens EN TOUTES LETTRES : une fleche seule ne dit pas lequel est lequel.
+  const debits = (m) => '<div class="pl-rates">' +
+    '<span style="color:var(--down)">&darr; Download <b>' + esc(bpsText(m.down_bps)) + '</b></span>' +
+    '<span style="color:var(--up)">&uarr; Upload <b>' + esc(bpsText(m.up_bps)) + '</b></span></div>';
 
   const bilans = new Map((data.summary || []).map((b) => [b.router, b]));
   const routeurs = Array.from(new Set([...(data.routers || []), ...ports.map((p) => p.router_name)]));
@@ -1561,16 +1564,34 @@ async function loadPortsLive() {
     const tombes = siens.filter((p) => p.running === false);
     const actifs = siens.filter((p) => (p.rx_bps || 0) + (p.tx_bps || 0) > 2000);
     const montres = PORTS.all ? siens : actifs;
-    const horsClients = bilan.unaccounted;
-    const ecart = horsClients && (horsClients.down_bps + horsClients.up_bps) > 50000;
+    const autre = bilan.unaccounted;
+    const autreNotable = autre && (autre.down_bps + autre.up_bps) > 50000;
 
-    const alertes = satures.map((p) => '<span class="badge crit">' + esc(p.interface) + ' at ' +
-        Math.round(charge(p)) + '%</span>').join('') +
-      tombes.map((p) => '<span class="badge warn">' + esc(p.interface) + ' down</span>').join('');
+    const alertes = satures.map((p) => '<span class="badge crit">port ' + esc(p.interface) + ' ' +
+        Math.round(charge(p)) + '% full</span>').join('') +
+      tombes.map((p) => '<span class="badge warn">port ' + esc(p.interface) + ' down</span>').join('');
 
-    const chiffre = (titre, valeur, aide, extra) =>
-      '<div class="pl-kpi" title="' + esc(aide) + '"><span>' + titre + '</span>' + valeur +
-        (extra || '') + '</div>';
+    // TROIS TUILES, chacune avec son titre ET une phrase qui dit ce que c'est.
+    const tuile = (titre, phrase, corps, cls) => '<div class="pl-kpi' + (cls ? ' ' + cls : '') + '">' +
+      '<span class="pl-kpi-t">' + titre + '</span>' + corps +
+      '<span class="pl-kpi-d">' + phrase + '</span></div>';
+    const tuileNet = net
+      ? tuile('Internet link', 'Everything this router exchanges with the Internet, on port <code>' +
+          esc(net.interface) + '</code>' + (net.name ? ' (' + esc(net.name) + ')' : '') + '.',
+          debits(net) + (net.capacity_mbps ? meter(Math.max(net.down_bps || 0, net.up_bps || 0),
+            net.capacity_mbps * 1e6) + '<span class="pl-kpi-d">of a ' + esc(mbps(net.capacity_mbps)) +
+            ' port</span>' : ''))
+      : tuile('Internet link', 'Not identified yet: in Devices, click <b>Read the configuration and ' +
+          'build the tree</b> once.', '<div class="pl-rates"><span class="na">-</span></div>');
+    const tuileClients = tuile('Your clients', 'What your clients on this router use right now ' +
+        '(sum of their queues).', bilan.clients ? debits(bilan.clients)
+        : '<div class="pl-rates"><span class="na">-</span></div>');
+    const tuileAutre = tuile('Other traffic', autreNotable
+        ? 'Not from a known client: speed tests between routers, device management, or clients ' +
+          'not declared yet.'
+        : 'Traffic that is not from a known client (tests, device management): none worth noting.',
+      autre ? debits(autre) : '<div class="pl-rates"><span class="na">-</span></div>',
+      autreNotable ? 'pl-kpi-note' : 'pl-kpi-muted');
 
     const lignes = montres.map((p) => {
       const m = sens(p);
@@ -1583,45 +1604,47 @@ async function loadPortsLive() {
         '<td class="num" style="color:var(--down)">' + esc(bpsText(m.down)) + '</td>' +
         '<td class="num" style="color:var(--up)">' + esc(bpsText(m.up)) + '</td>' +
         '<td style="width:170px">' + (c !== null ? meter(Math.max(p.rx_bps || 0, p.tx_bps || 0),
-          p.capacity_mbps * 1e6) + '<span class="hint">' + esc(mbps(p.capacity_mbps)) + ' port</span>'
-          : '<span class="na">speed unknown</span>') + '</td></tr>';
+          p.capacity_mbps * 1e6) + '<span class="hint">of ' + esc(mbps(p.capacity_mbps)) + '</span>'
+          : '<span class="na">port speed unknown</span>') + '</td></tr>';
     }).join('');
 
-    return '<div class="pl-router">' +
-      '<div class="pl-head"><b>' + esc(nom) + '</b>' +
-        (net ? '<span class="hint">uplink <code>' + esc(net.interface) + '</code>' +
-          (net.name ? ' &rarr; ' + esc(net.name) : '') + '</span>' : '') +
-        '<span class="pl-alerts">' + alertes + '</span></div>' +
-      '<div class="pl-kpis">' +
-        chiffre('Internet', paire(net), 'What this router exchanges with the outside, on its uplink port',
-          net && net.capacity_mbps ? meter(Math.max(net.down_bps || 0, net.up_bps || 0),
-            net.capacity_mbps * 1e6) : '') +
-        chiffre('Clients', paire(bilan.clients), 'Sum of the subscribers of this router (their queues)') +
-        chiffre('Not from clients', paire(horsClients),
-          'Internet traffic that belongs to no known client: bandwidth tests, device management, ' +
-          'undeclared clients. Internet minus Clients.',
-          ecart ? '<span class="hint">tests, management or undeclared clients</span>' : '') +
-      '</div>' +
-      (siens.length
-        ? '<div class="table-wrap"><table class="pl-ports"><thead><tr><th>Port</th><th>Towards</th>' +
-          '<th class="num" title="Traffic going towards the clients">&darr; To clients</th>' +
-          '<th class="num" title="Traffic going towards Internet">&uarr; To Internet</th>' +
-          '<th>Load</th></tr></thead><tbody>' +
+    // LE DETAIL DES PORTS est replie : il sert a chercher, pas a lire.
+    const detail = siens.length
+      ? '<details class="pl-ports-d"' + (satures.length || tombes.length ? ' open' : '') + '><summary>' +
+          'Ports of ' + esc(nom) + ' <span class="pct-hint">' + actifs.length + ' with traffic' +
+          (siens.length > actifs.length ? ' · ' + (siens.length - actifs.length) + ' idle' : '') +
+          '</span></summary>' +
+        '<div class="table-wrap"><table class="pl-ports"><thead><tr><th>Port</th><th>Connected to</th>' +
+          '<th class="num" title="Traffic going towards your clients">&darr; Download</th>' +
+          '<th class="num" title="Traffic going towards the Internet">&uarr; Upload</th>' +
+          '<th>Port use</th></tr></thead><tbody>' +
           (lignes || '<tr><td colspan="5" class="hint">No port with traffic right now.</td></tr>') +
           '</tbody></table></div>' +
-          (siens.length > montres.length
-            ? '<div class="hint pl-more">' + (siens.length - montres.length) + ' idle port(s) hidden</div>' : '')
-        : '<div class="hint">No port measured in the last two minutes.</div>') +
-      '</div>';
+          (siens.length > actifs.length
+            ? '<button class="sm link-btn pl-idle" data-ports-toggle>' +
+              (PORTS.all ? 'Hide idle ports' : 'Show the ' + (siens.length - actifs.length) + ' idle port(s)') +
+              '</button>' : '') +
+        '</details>'
+      : '<div class="hint">No port measured in the last two minutes.</div>';
+
+    return '<div class="pl-router">' +
+      '<div class="pl-head"><b>' + esc(nom) + '</b><span class="pl-alerts">' + alertes + '</span></div>' +
+      '<div class="pl-kpis">' + tuileNet + tuileClients + tuileAutre + '</div>' + detail + '</div>';
   }).join('');
 
-  host.innerHTML = '<div class="pl-top">' + sante +
-      '<button class="sm" id="ports-toggle">' + (PORTS.all ? 'Hide idle ports' : 'Show idle ports') +
-      '</button></div>' + cartes;
-  document.getElementById('ports-toggle').addEventListener('click', () => {
+  // Les volets ouverts restent ouverts au rafraichissement (toutes les 10 s).
+  const ouverts = new Set([...host.querySelectorAll('details.pl-ports-d[open]')]
+    .map((d) => d.closest('.pl-router')?.querySelector('.pl-head b')?.textContent));
+  host.innerHTML = '<div class="pl-top">' + sante + '</div>' + cartes;
+  host.querySelectorAll('.pl-router').forEach((r) => {
+    const nom = r.querySelector('.pl-head b')?.textContent;
+    const d = r.querySelector('details.pl-ports-d');
+    if (d && ouverts.has(nom)) d.open = true;
+  });
+  host.querySelectorAll('[data-ports-toggle]').forEach((b) => b.addEventListener('click', () => {
     PORTS.all = !PORTS.all;
     loadPortsLive();
-  });
+  }));
 }
 
 /* Filtres du graphe de debit : par routeur, ou par client. */
@@ -16119,19 +16142,19 @@ const AIDE = {
   'network throughput': {
     t: 'Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.',
     m: 'Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.',
-    r: 'Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Routers — live traffic as “not from clients”. Filter by router or client with the menus.',
+    r: 'Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Live traffic per router as “Other traffic”. Filter by router or client with the menus.',
     a: 'A flat line at 0 while clients are online usually means the collection stopped: check the health dot at the top left and Devices › Polled routers.',
   },
   'routers': {
     t: 'Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.',
     m: 'Uplink port counters and subscriber queues, read every 10 s.',
-    r: 'A large gap (“not from clients”) is traffic of no known client: tests, management, or clients not yet declared.',
+    r: 'A large “Other traffic” is traffic of no known client: tests, management, or clients not yet declared.',
   },
-  'routers — live traffic': {
-    t: 'Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.',
-    m: 'Uplink port counters and subscriber queues, read every 10 s. Router CPU and port load come from the same poll.',
+  'live traffic per router': {
+    t: 'Each router, right now: what goes through its Internet link, what your clients use, and the rest (“Other traffic”).',
+    m: 'Internet link: counters of the router’s uplink port. Your clients: the sum of their queues. Other traffic: Internet link minus your clients. All read every 10 s.',
     s: ECHELLE_CHARGE,
-    r: 'The coloured state line at the top says whether each collection (subscribers, ports, latency) is running. A large “not from clients” share is traffic of no known client.',
+    r: 'Download = towards your clients, upload = towards the Internet. A large “Other traffic” is traffic of no known client: speed tests between routers, device management, or clients not declared yet. The line at the top says when the routers were last read; it turns orange or red when a reading is late or failing.',
     a: 'Red collection state: open Devices › Polled routers and test the connection of that router.',
   },
   'top consumers': {
@@ -16590,10 +16613,10 @@ const AIDE = {
     t: 'For a node: its most loaded client against its own limit. For the whole network: total traffic against the sum of limits.',
     s: ECHELLE_CHARGE,
   },
-  'kpi|internet': 'What this router exchanges with the outside on its uplink port, with the port load.',
-  'kpi|clients': 'Sum of the traffic of this router’s subscribers (their queues).',
-  'kpi|not from clients': {
-    t: 'Internet minus clients: traffic of no known client.',
+  'kpi|internet link': 'What this router exchanges with the Internet on its uplink port, with how full that port is.',
+  'kpi|your clients': 'Sum of the traffic of this router’s clients (their queues).',
+  'kpi|other traffic': {
+    t: 'Internet link minus your clients: traffic of no known client.',
     r: 'Bandwidth tests, device management, routers talking to each other, or clients not declared yet. A large, steady share is worth investigating.',
   },
   'vantage|internet edge': 'NetFlow measured at the internet exit (above the core). In Automatic mode, counted for each direction it sees best: each client once, internet traffic only. Behind NAT, downloads are tied back to the client by the translated address or by matching them with their upload.',
