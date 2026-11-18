@@ -3445,8 +3445,15 @@ class ShapingService:
         ]
         connus = {c.name for c in routeurs}
         par_site = [nom for nom in routers_for_site(pop_name, sites) if nom in connus]
-        if par_site:
-            return par_site
+        # LE SITE D'UN ROUTEUR EST TOUJOURS SERVI PAR CE ROUTEUR. Constate : le
+        # referentiel attribuait le site « NAS-OFFICE » au routeur PARENT (un
+        # VLAN de celui-ci reconnu comme ce site). NAS-OFFICE n'etait alors
+        # jamais retenu pour son propre site : la file d'un client rattache a
+        # NAS-OFFICE ne partait que vers le parent -- en lecture seule, donc
+        # nulle part. Le routeur dont c'est le PoP passe en premier.
+        propres = [c.name for c in routeurs if c.config.effective_pop_name == pop_name]
+        if propres or par_site:
+            return list(dict.fromkeys([*propres, *par_site]))
         return [c.name for c in resolve_pop(pop_name, routeurs).collectors]
 
     # ----------------------------------------------------------------- plan
