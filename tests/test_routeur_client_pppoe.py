@@ -393,3 +393,28 @@ def test_sans_session_a_son_nom_la_file_se_pose_par_son_ip(app_client, routeur) 
     file = _file(routeur, "10.20.0.10")
     assert file is not None, routeur.simple_queue_rows
     assert file["max-limit"] == "5000000/20000000"
+
+
+async def test_le_site_d_un_routeur_est_toujours_servi_par_ce_routeur(settings) -> None:  # noqa: F811
+    """CONSTATE : le referentiel attribuait le site du PoP NAS-OFFICE au routeur
+    PARENT (un de ses VLAN reconnu comme ce site). NAS-OFFICE n'etait jamais
+    retenu pour son propre site : la file de ses clients ne partait que vers le
+    parent, en lecture seule -- donc nulle part."""
+    from tests.conftest import FakeRouterOsClient
+    from tests.test_shaping_service import make_service
+
+    pop = settings.routers[0].effective_pop_name
+    parent = settings.routers[0].model_copy(
+        update={"name": "nas-parent", "pop_name": "Parent", "host": "192.0.2.99"}
+    )
+    settings.routers.append(parent)
+    service = make_service(settings, FakeRouterOsClient())
+    await service.registry.reload()
+
+    async def referentiel() -> list[dict]:
+        return [{"name": pop, "router_name": "nas-parent", "vlan_interface": "vlan9", "vlan_id": 9}]
+
+    service._pop_sites = referentiel  # type: ignore[method-assign]  # noqa: SLF001
+    routeurs = await service._routers_for_site(pop)  # noqa: SLF001
+    assert routeurs[0] == settings.routers[0].name
+    assert "nas-parent" in routeurs
