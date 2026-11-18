@@ -418,3 +418,40 @@ async def test_le_site_d_un_routeur_est_toujours_servi_par_ce_routeur(settings) 
     routeurs = await service._routers_for_site(pop)  # noqa: SLF001
     assert routeurs[0] == settings.routers[0].name
     assert "nas-parent" in routeurs
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_le_diagnostic_d_un_client_dit_tout_routeur_par_routeur(app_client, routeur) -> None:  # noqa: F811
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+        },
+    )
+    assert r.status_code == 201, r.text
+    _attendre(
+        lambda: bool(
+            app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle)
+            .json()
+            .get("finished_at")
+        ),
+        20,
+    )
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    d = app_client.get("/api/v1/shaping/explain/dupont", headers=cle).json()
+    assert d["subscriber"]["kind"] == "pppoe"
+    assert d["ip"] == "10.20.0.10"
+    (r0,) = d["routers"]
+    assert r0["router"] == "nas-test" and r0["client_site_matches"] is True
+    assert r0["session_with_this_login"]["address"] == "10.20.0.10"
+    assert r0["targets_for_this_client"][0]["login"] == "dupont"
+    # Lecture seule : rien n'a ete ecrit.
+    assert _file(routeur, "10.20.0.10") is None

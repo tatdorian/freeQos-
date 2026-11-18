@@ -557,6 +557,15 @@ async def set_node_kind(
 
 
 # ------------------------------------------------------- etat du shaping
+@router.get(
+    "/shaping/explain/{login}",
+    summary="Everything freeQoS knows of one client, router by router (read-only)",
+)
+async def explain_client(login: str, container: ContainerDep) -> dict[str, Any]:
+    """Pourquoi la file de ce client est (ou n'est pas) posee. N'ecrit rien."""
+    return await container.shaping.explain_client(login)
+
+
 @router.get("/shaping/state", summary="What is already configured on the routers")
 async def shaping_state(
     container: ContainerDep,

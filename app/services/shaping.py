@@ -3795,6 +3795,135 @@ class ShapingService:
         return [c.name for c in self.registry.collectors if not ecriture_autorisee(c)]
 
     # ------------------------------------------------------------ interne
+    async def explain_client(self, login: str) -> dict[str, Any]:
+        """TOUT ce que freeQoS sait de ce client, routeur par routeur. N'ecrit rien.
+
+        Pour comprendre, sur le reseau reel, pourquoi une file n'est pas posee :
+        sa fiche, ses fiches IP fixe, et pour chaque routeur -- son site, ses
+        sessions, le reseau qui porte l'IP, et la cible que le planificateur en
+        tire (ou pas).
+        """
+        from app.collectors.mikrotik import own_address, router_serving
+
+        def sur(fonction: Any) -> Any:
+            try:
+                return fonction()
+            except Exception as exc:  # noqa: BLE001 - un diagnostic ne casse pas
+                return f"{type(exc).__name__}: {exc}"
+
+        rapport: dict[str, Any] = {"login": login, "enforcement_enabled": self._enforcement_enabled}
+        ligne: dict[str, Any] = {}
+        if self.metrics is not None:
+            try:
+                for r in await self.metrics.subscriber_latest(
+                    limit=5000, order_by="login", include_unmeasured=True
+                ):
+                    if str(r.get("login")) == login:
+                        ligne = dict(r)
+                        break
+            except Exception as exc:  # noqa: BLE001
+                rapport["subscriber_error"] = f"{type(exc).__name__}: {exc}"
+        ip = str(ligne.get("last_ip") or "").split("/")[0] or None
+        rapport["subscriber"] = {
+            k: (str(v) if v is not None else None)
+            for k, v in ligne.items()
+            if k
+            in (
+                "subscriber_id",
+                "kind",
+                "pop_name",
+                "last_ip",
+                "ts",
+                "last_seen",
+                "plan_down_mbps",
+                "plan_up_mbps",
+                "override_down_mbps",
+                "mode_name",
+            )
+        }
+        try:
+            statiques = await self._static_clients_all()
+        except Exception as exc:  # noqa: BLE001
+            statiques = []
+            rapport["static_error"] = f"{type(exc).__name__}: {exc}"
+        rapport["fixed_ip_records"] = [
+            {"reference": c.reference, "pop_name": c.pop_name, "address": str(c.address)}
+            for c in statiques
+            if c.reference == login or (ip and str(c.address).split("/")[0] == ip)
+        ]
+        rapport["ip"] = ip
+        rapport["ip_owner_router"] = sur(lambda: own_address(ip)) if ip else None
+        rapport["ip_connected_network_of"] = sur(lambda: router_serving(ip)) if ip else None
+        rapport["session_router_last_reading"] = (getattr(self, "session_routers", {}) or {}).get(
+            login
+        )
+        try:
+            rapport["routers_chosen_for_writing"] = await self._routers_for_logins({login})
+        except Exception as exc:  # noqa: BLE001
+            rapport["routers_chosen_for_writing"] = f"{type(exc).__name__}: {exc}"
+        try:
+            rapport["routers_for_its_site"] = await self._routers_for_site(
+                str(ligne.get("pop_name") or "")
+            )
+        except Exception as exc:  # noqa: BLE001
+            rapport["routers_for_its_site"] = f"{type(exc).__name__}: {exc}"
+
+        routeurs = []
+        for collector in self.registry.collectors:
+            nom = collector.name
+            info: dict[str, Any] = {
+                "router": nom,
+                "pop_name": collector.config.effective_pop_name,
+                "write_enabled": ecriture_autorisee(collector),
+            }
+            try:
+                sites = await self._sites_of_router(nom, collector.config.effective_pop_name)
+                info["sites"] = sorted(sites)
+                info["client_site_matches"] = _cle_site(str(ligne.get("pop_name") or "")) in sites
+            except Exception as exc:  # noqa: BLE001
+                info["sites"] = f"{type(exc).__name__}: {exc}"
+            try:
+                sessions = await collector.collect()
+                info["sessions_total"] = len(sessions)
+                info["session_with_this_login"] = next(
+                    (
+                        {"address": s.address, "interface": s.interface}
+                        for s in sessions
+                        if s.login == login
+                    ),
+                    None,
+                )
+                info["sessions_with_this_ip"] = [
+                    s.login for s in sessions if ip and str(s.address or "") == ip
+                ]
+            except Exception as exc:  # noqa: BLE001
+                info["sessions"] = f"{type(exc).__name__}: {exc}"
+            try:
+                info["fixed_ip_records_kept_here"] = [
+                    c.reference
+                    for c in await self._static_clients_for(collector)
+                    if c.reference == login or (ip and str(c.address).split("/")[0] == ip)
+                ]
+            except Exception as exc:  # noqa: BLE001
+                info["fixed_ip_records_kept_here"] = f"{type(exc).__name__}: {exc}"
+            try:
+                _liens, abonnes = await self.build_targets(nom)
+                info["targets_for_this_client"] = [
+                    {
+                        "login": a.login,
+                        "kind": a.kind,
+                        "address": a.address,
+                        "skip_reason": a.skip_reason,
+                    }
+                    for a in abonnes
+                    if a.login == login or (ip and str(a.address or "").split("/")[0] == ip)
+                ]
+            except Exception as exc:  # noqa: BLE001
+                info["targets_for_this_client"] = f"{type(exc).__name__}: {exc}"
+            routeurs.append(info)
+        rapport["routers"] = routeurs
+        return rapport
+
     async def why_no_queue(self, login: str) -> dict[str, Any]:
         """POURQUOI ce client n'a pas de file sur son routeur, en une phrase.
 
