@@ -161,6 +161,10 @@ class SubscriberTarget:
     enabled: bool = True
     # Raison de ne pas brider cette adresse (c'est celle d'un de nos routeurs).
     skip_reason: str | None = None
+    # Autres noms sous lesquels l'exploitant designe CE client : la fiche a IP
+    # fixe fusionnee dans la session qui porte son IP. Un geste fait sur la
+    # fiche (mode, limite, boost) retrouve ainsi la file de la session.
+    aliases: tuple[str, ...] = ()
 
     @property
     def queue_name(self) -> str:

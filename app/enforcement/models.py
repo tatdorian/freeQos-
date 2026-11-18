@@ -366,7 +366,7 @@ class PlanSkip:
     reason: str
     # 'subscriber' ou 'link'. UN LIEN ET UN CLIENT PEUVENT PORTER LE MEME NOM :
     # le lien prend le nom de l'equipement d'en face, qui est souvent celui du
-    # client (« LIPTINFOR OFFICE »). Chercher l'ecart d'un client par son seul
+    # client (« ACME OFFICE »). Chercher l'ecart d'un client par son seul
     # nom trouvait celui du lien -- « link queues are off » -- et sa file
     # n'etait jamais posee.
     kind: str = "subscriber"
