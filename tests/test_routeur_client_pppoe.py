@@ -222,3 +222,80 @@ def test_la_file_va_la_ou_est_la_session_quel_que_soit_le_site(app_client, route
     assert r.status_code == 200, r.text
     file = _file(routeur, "10.20.0.10")
     assert file is not None, routeur.simple_queue_rows
+
+
+def test_un_ecart_de_lien_n_est_pas_celui_du_client_homonyme() -> None:
+    from app.enforcement.planner import LinkTarget
+
+    lien = LinkTarget(
+        name="LIPTINFOR OFFICE",
+        interface="ether3",
+        subnet="10.10.11.0/24",
+        measured_capacity_mbps=100,
+    )
+    client = _client("LIPTINFOR OFFICE", "198.51.100.77")
+    _types, files, ecartes = desired_state(links=[lien], subscribers=[client], link_queues=False)
+    assert [f.target for f in files] == ["198.51.100.77/32"]
+    (ecart,) = ecartes
+    assert ecart.kind == "link" and ecart.login == "LIPTINFOR OFFICE"
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_bout_en_bout_un_lien_homonyme_n_empeche_pas_la_file(app_client, routeur) -> None:  # noqa: F811
+    """CONSTATE : « skipped -- link queues are off » sur le mode d'un client.
+    L'equipement d'en face portait le nom du client : le lien, ecarte, avait le
+    meme nom, et la pose immediate prenait son ecart pour celui du client."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+        },
+    )
+    assert r.status_code == 201, r.text
+    _attendre(
+        lambda: bool(
+            app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle)
+            .json()
+            .get("finished_at")
+        ),
+        20,
+    )
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    depot = app_client.app.state.container.shaping.repository
+    vrais_liens = depot.links
+
+    async def liens_avec_homonyme() -> list[dict]:
+        return [
+            *await vrais_liens(),
+            {
+                "key": "mac:AA:BB:CC:00:00:01",
+                "discovered_by": "nas-test",
+                "interface": "ether2",
+                "target_name": "dupont",
+                "target_key": "mac:AA:BB:CC:00:00:01",
+                "capacity_mbps": 100,
+                "attributes": {},
+            },
+        ]
+
+    depot.links = liens_avec_homonyme
+    try:
+        r = app_client.put(
+            "/api/v1/plans/dupont", headers=cle, json={"down_mbps": 200, "up_mbps": 200}
+        )
+        assert r.status_code == 200, r.text
+        rapport = r.json()["enforcement"]
+        assert rapport["applied"] >= 1, rapport
+        file = _file(routeur, "10.20.0.10")
+        assert file is not None, routeur.simple_queue_rows
+        assert file["max-limit"] == "200000000/200000000"
+    finally:
+        depot.links = vrais_liens

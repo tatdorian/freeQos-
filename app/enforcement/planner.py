@@ -390,7 +390,7 @@ def desired_state(
             # « ether3,lan-bridge » limitait tout le trafic de l'interface au
             # debit d'un seul client.
             ecartes.append(
-                PlanSkip(
+                PlanSkip.for_link(
                     link.name,
                     f"no client network on {link.interface}: a queue on the whole "
                     "interface would cap ALL its traffic to one rate -- nothing is written",
@@ -405,7 +405,7 @@ def desired_state(
                 f" and {len(autres) - 3} other device(s)" if len(autres) > 3 else ""
             )
             ecartes.append(
-                PlanSkip(
+                PlanSkip.for_link(
                     link.name,
                     f"planning error: target {link.queue_target} is also that of "
                     f"{cites} -- a shared segment is not a bottleneck, "
@@ -414,17 +414,17 @@ def desired_state(
             )
             continue
         if link.skip_reason:
-            ecartes.append(PlanSkip(link.name, link.skip_reason))
+            ecartes.append(PlanSkip.for_link(link.name, link.skip_reason))
             continue
         if not link_queues:
             # PAR DEFAUT, AUCUNE FILE DE LIEN. CONSTATE EN PRODUCTION (plainte de
             # clients) : une file posee sur le segment d'un PTP bridait tout le
             # trafic du lien, transit compris. freeQoS ne bride que les adresses
             # de chaque client ; plafonner un lien se demande dans Reglages.
-            ecartes.append(PlanSkip(link.name, LINK_QUEUES_OFF))
+            ecartes.append(PlanSkip.for_link(link.name, LINK_QUEUES_OFF))
             continue
         if not link.enabled:
-            ecartes.append(PlanSkip(link.name, "shaping disabled for this link"))
+            ecartes.append(PlanSkip.for_link(link.name, "shaping disabled for this link"))
             continue
         down = shaped_capacity(
             link.measured_capacity_mbps,
@@ -442,7 +442,7 @@ def desired_state(
         )
         if not down and not up and not queue_unmeasured_links:
             ecartes.append(
-                PlanSkip(
+                PlanSkip.for_link(
                     link.name,
                     "no known capacity, and unmeasured links get no queue "
                     "(setting shaping_queue_for_detected_links)",
@@ -461,7 +461,7 @@ def desired_state(
                 cibles_liens[cible_lien],
             )
             ecartes.append(
-                PlanSkip(
+                PlanSkip.for_link(
                     link.name,
                     f"target {cible_lien} already belongs to '{cibles_liens[cible_lien]}': "
                     "RouterOS would only apply the first queue",

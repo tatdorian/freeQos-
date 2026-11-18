@@ -364,6 +364,16 @@ class PlanSkip:
     # pour ne pas casser les lectures existantes du plan.
     login: str
     reason: str
+    # 'subscriber' ou 'link'. UN LIEN ET UN CLIENT PEUVENT PORTER LE MEME NOM :
+    # le lien prend le nom de l'equipement d'en face, qui est souvent celui du
+    # client (« LIPTINFOR OFFICE »). Chercher l'ecart d'un client par son seul
+    # nom trouvait celui du lien -- « link queues are off » -- et sa file
+    # n'etait jamais posee.
+    kind: str = "subscriber"
+
+    @classmethod
+    def for_link(cls, name: str, reason: str) -> PlanSkip:
+        return cls(name, reason, "link")
 
 
 @dataclass(slots=True)
