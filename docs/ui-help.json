@@ -187,7 +187,7 @@
  },
  "where the traffic goes": {
   "t": "Map of the destinations your clients reach: each country and city sized by the volume exchanged with it.",
-  "m": "From NetFlow: each remote address is located from its address block (geolocation database). Hover a point for its volume and clients; click it to open the detail of that place.",
+  "m": "From NetFlow: each remote address is located from its address block (geolocation database). The map opens on the traffic. Drag to move; scroll, double-click or pinch to zoom; the buttons above jump to a region. Hover a point for its volume and clients; click it to centre it and open the detail of that place.",
   "r": "A location is that of the server’s block, not of the company: a CDN often answers from a nearby city even for a foreign service."
  },
  "which services the traffic comes from": {

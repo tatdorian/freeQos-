@@ -6948,9 +6948,21 @@ async function renderTrafficMap(host, data) {
   const tries = points.slice().sort((a, b) =>
     (Number(b.down_bytes || 0) + Number(b.up_bytes || 0)) - (Number(a.down_bytes || 0) + Number(a.up_bytes || 0)));
 
+  // Les regions proposees : seulement celles ou il y a du trafic.
+  const dansZone = (p, z) => p.longitude >= z.lon[0] && p.longitude <= z.lon[1] &&
+    p.latitude >= z.lat[0] && p.latitude <= z.lat[1];
+  const zones = MAP_ZONES.map((z) => ({ ...z, n: points.filter((p) => dansZone(p, z)).length }))
+    .filter((z) => z.n > 0);
+
   host.innerHTML = entete +
-    '<div class="map-wrap">' +
-      '<svg class="worldmap" viewBox="0 0 ' + MAP_W + ' ' + MAP_H + '" preserveAspectRatio="xMidYMid meet">' +
+    (points.length ? '<div class="tmap-bar" role="toolbar" aria-label="Go to">' +
+      '<button type="button" class="sm chip on" data-go="fit" title="Frame every place with traffic">All traffic</button>' +
+      zones.map((z) => '<button type="button" class="sm chip" data-go="' + z.id + '">' + esc(z.label) +
+        ' <span class="pct-hint">' + z.n + '</span></button>').join('') +
+      '<button type="button" class="sm chip" data-go="world">World</button></div>' : '') +
+    '<div class="tmap-wrap">' +
+      '<svg class="worldmap" tabindex="0" aria-label="Traffic map: drag to move, scroll or double-click to zoom" ' +
+        'viewBox="0 0 ' + MAP_W + ' ' + MAP_H + '" preserveAspectRatio="xMidYMid meet">' +
         mapBackground(world) +
         '<g class="pts">' + tries.map((p, i) => {
           const v = Number(p.down_bytes || 0) + Number(p.up_bytes || 0);
@@ -6963,111 +6975,244 @@ async function renderTrafficMap(host, data) {
             mapY(p.latitude).toFixed(1) + '">' + esc(p.city || countryName(p.country)) + '</text>').join('') +
         '</g>' +
       '</svg>' +
-      '<div class="map-zoom"><button class="sm" data-z="in" title="Zoom in">+</button>' +
-        '<button class="sm" data-z="out" title="Zoom out">&minus;</button>' +
-        '<button class="sm" data-z="reset" title="Whole world">&#8634;</button></div>' +
+      '<div class="map-zoom"><button class="sm" data-z="in" title="Zoom in (+)" aria-label="Zoom in">+</button>' +
+        '<button class="sm" data-z="out" title="Zoom out (−)" aria-label="Zoom out">&minus;</button>' +
+        '<button class="sm" data-z="fit" title="Frame all the traffic (0)" aria-label="Frame all the traffic">&#10530;</button></div>' +
     '</div>' +
     '<div class="map-foot"><span>' + esc(points.length) + ' place(s) &middot; ' +
       bytesText(total) + ' located</span>' +
       (Number(hors.bytes) ? '<span>' + bytesText(hors.bytes) + ' not located (' +
         esc(hors.addresses || 0) + ' address(es))</span>' : '') +
       '<span class="hint" style="display:inline;margin:0">Circle area = volume &middot; ' +
-      'scroll to zoom, drag to move, click a circle for details</span></div>';
+      'drag to move &middot; scroll, double-click or pinch to zoom &middot; click a circle for details</span></div>';
 
   const svg = host.querySelector('svg.worldmap');
-  // Le cadrage survit au rafraichissement : zoomer sur l'Europe puis la voir
-  // revenir au monde entier toutes les dix secondes rendrait la carte inutile.
-  let vb = SVC.mapView || { x: 0, y: 0, w: MAP_W, h: MAP_H };
+  const boite = () => {
+    const r = svg.getBoundingClientRect();
+    return { w: Math.max(1, r.width), h: Math.max(1, r.height), left: r.left, top: r.top };
+  };
+  // LE CADRE EST UN CENTRE ET UNE LARGEUR ; la hauteur suit la forme de la
+  // carte a l'ecran, si bien que le dessin remplit toujours tout le cadre.
+  const ratio = () => { const b = boite(); return b.h / b.w; };
+  const largeurMax = () => Math.min(MAP_W, MAP_H / ratio());
+  const borne = (v) => {
+    const w = Math.max(MAP_W / 80, Math.min(largeurMax(), v.w));
+    const h = w * ratio();
+    return {
+      w,
+      cx: Math.max(w / 2, Math.min(MAP_W - w / 2, v.cx)),
+      cy: h >= MAP_H ? MAP_H / 2 : Math.max(h / 2, Math.min(MAP_H - h / 2, v.cy)),
+    };
+  };
+  // Le cadre qui montre tout le trafic, avec une marge.
+  const cadreDe = (pts) => {
+    if (!pts.length) return { cx: MAP_W / 2, cy: MAP_H / 2, w: MAP_W };
+    const xs = pts.map((p) => mapX(p.longitude));
+    const ys = pts.map((p) => mapY(p.latitude));
+    const x0 = Math.min(...xs); const x1 = Math.max(...xs);
+    const y0 = Math.min(...ys); const y1 = Math.max(...ys);
+    const w = Math.max(MAP_W / 14, (x1 - x0) * 1.3, ((y1 - y0) * 1.3) / ratio());
+    return borne({ cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w });
+  };
+  const cadreZone = (z) => borne({ cx: mapX((z.lon[0] + z.lon[1]) / 2), cy: mapY((z.lat[0] + z.lat[1]) / 2),
+    w: Math.max((z.lon[1] - z.lon[0]) * 10, ((z.lat[1] - z.lat[0]) * 10) / ratio()) });
+
+  // Le cadrage survit au rafraichissement (toutes les 10 s) ; a la premiere
+  // ouverture, la carte montre le trafic, pas le monde entier.
+  //
+  // La carte peut etre dessinee DANS UN ONGLET CACHE (taille nulle) : rien ne
+  // se calcule ni ne se retient tant qu'elle n'a pas de taille, et le premier
+  // cadrage se fait quand elle apparait (ResizeObserver).
+  const dejaCadree = !!(SVC.mapView && SVC.mapView.cx !== undefined);
+  let vue = dejaCadree ? { ...SVC.mapView } : { cx: MAP_W / 2, cy: MAP_H / 2, w: MAP_W };
+  let cadrageAuto = !dejaCadree;
   const applique = () => {
-    SVC.mapView = vb;
-    svg.setAttribute('viewBox', vb.x + ' ' + vb.y + ' ' + vb.w + ' ' + vb.h);
-    // Taille constante a l'ecran : le rayon suit l'echelle du cadre.
-    const k = vb.w / MAP_W;
-    svg.querySelectorAll('circle.pt').forEach((c) => c.setAttribute('r', (Number(c.dataset.r) * 3 * k).toFixed(2)));
-    // Les noms ne se chevauchent pas : Paris, Londres, Amsterdam et Francfort
-    // tiennent dans un pouce au zoom monde. Le plus gros lieu garde son nom,
-    // les suivants ne l'affichent que s'il reste de la place.
+    if (svg.getBoundingClientRect().width < 2) return;
+    if (cadrageAuto) { cadrageAuto = false; vue = cadreDe(points); }
+    vue = borne(vue);
+    SVC.mapView = vue;
+    const b = boite();
+    const h = vue.w * (b.h / b.w);
+    svg.setAttribute('viewBox', (vue.cx - vue.w / 2) + ' ' + (vue.cy - h / 2) + ' ' + vue.w + ' ' + h);
+    // Taille constante A L'ECRAN : un pixel vaut ``px`` unites de carte.
+    const px = vue.w / b.w;
+    svg.querySelectorAll('circle.pt').forEach((c) => c.setAttribute('r', (Number(c.dataset.r) * px).toFixed(2)));
+    // Les noms ne se chevauchent pas : le plus gros lieu garde son nom, les
+    // suivants ne l'affichent que s'il reste de la place.
     const poses = [];
     svg.querySelectorAll('text.pt-label').forEach((t) => {
-      const fs = 13 * 3 * k;
-      const bx = Number(t.dataset.x) + 14 * 3 * k;
-      const by = Number(t.dataset.y) + 5 * 3 * k;
-      const boite = { x0: bx, x1: bx + t.textContent.length * fs * 0.6, y0: by - fs, y1: by + fs * 0.25 };
-      const libre = !poses.some((o) => boite.x0 < o.x1 && boite.x1 > o.x0 && boite.y0 < o.y1 && boite.y1 > o.y0);
+      const fs = 12.5 * px;
+      const bx = Number(t.dataset.x) + 13 * px;
+      const by = Number(t.dataset.y) + 4.5 * px;
+      const bt = { x0: bx, x1: bx + t.textContent.length * fs * 0.6, y0: by - fs, y1: by + fs * 0.25 };
+      const libre = !poses.some((o) => bt.x0 < o.x1 && bt.x1 > o.x0 && bt.y0 < o.y1 && bt.y1 > o.y0);
       t.setAttribute('x', bx);
       t.setAttribute('y', by);
       t.setAttribute('font-size', fs.toFixed(2));
       t.style.display = libre ? '' : 'none';
-      if (libre) poses.push(boite);
+      if (libre) poses.push(bt);
     });
-    svg.style.setProperty('--sw', (1.2 * 3 * k).toFixed(2));
+    svg.style.setProperty('--sw', (1.1 * px).toFixed(3));
   };
-  const borne = () => {
-    vb.w = Math.max(MAP_W / 40, Math.min(MAP_W, vb.w));
-    vb.h = vb.w * MAP_H / MAP_W;
-    vb.x = Math.max(0, Math.min(MAP_W - vb.w, vb.x));
-    vb.y = Math.max(0, Math.min(MAP_H - vb.h, vb.y));
+  // Les deplacements des boutons et des clics sont ANIMES : on voit d'ou l'on
+  // part et ou l'on arrive, au lieu d'un saut qui desoriente.
+  let anim = null;
+  const allerA = (cible, ms) => {
+    if (anim) cancelAnimationFrame(anim);
+    const de = { ...vue };
+    const vers = borne(cible);
+    const t0 = performance.now();
+    const duree = ms === undefined ? 380 : ms;
+    const pas = (t) => {
+      const a = Math.min(1, (t - t0) / duree);
+      const e = 1 - Math.pow(1 - a, 3);
+      // La largeur interpolee en logarithme : un zoom x10 se fait a vitesse reguliere.
+      vue = { cx: de.cx + (vers.cx - de.cx) * e, cy: de.cy + (vers.cy - de.cy) * e,
+        w: Math.exp(Math.log(de.w) + (Math.log(vers.w) - Math.log(de.w)) * e) };
+      applique();
+      anim = a < 1 ? requestAnimationFrame(pas) : null;
+    };
+    anim = requestAnimationFrame(pas);
   };
-  const zoom = (f, cx, cy) => {
-    const px = cx === undefined ? vb.x + vb.w / 2 : cx;
-    const py = cy === undefined ? vb.y + vb.h / 2 : cy;
-    vb.x = px - (px - vb.x) * f;
-    vb.y = py - (py - vb.y) * f;
-    vb.w *= f;
-    borne();
-    applique();
+  const versCarte = (x, y) => {
+    const b = boite();
+    const h = vue.w * (b.h / b.w);
+    return { x: vue.cx - vue.w / 2 + ((x - b.left) / b.w) * vue.w, y: vue.cy - h / 2 + ((y - b.top) / b.h) * h };
   };
-  const versCarte = (ev) => {
-    const r = svg.getBoundingClientRect();
-    // preserveAspectRatio meet : le dessin peut ne pas remplir la boite.
-    const echelle = Math.min(r.width / vb.w, r.height / vb.h);
-    const ox = (r.width - vb.w * echelle) / 2;
-    const oy = (r.height - vb.h * echelle) / 2;
-    return { x: vb.x + (ev.clientX - r.left - ox) / echelle, y: vb.y + (ev.clientY - r.top - oy) / echelle, echelle };
+  // Zoom autour d'un point : ce point reste sous le curseur (ou le doigt).
+  const zoomAutour = (f, x, y, anime) => {
+    const m = x === undefined ? { x: vue.cx, y: vue.cy } : versCarte(x, y);
+    const w = Math.max(MAP_W / 80, Math.min(largeurMax(), vue.w * f));
+    const k = w / vue.w;
+    const cible = { w, cx: m.x + (vue.cx - m.x) * k, cy: m.y + (vue.cy - m.y) * k };
+    if (anime) allerA(cible, 260); else { vue = cible; applique(); }
   };
   applique();
+  if (SVC.mapRO) SVC.mapRO.disconnect();
+  if (window.ResizeObserver) { SVC.mapRO = new ResizeObserver(() => applique()); SVC.mapRO.observe(svg); }
 
   svg.addEventListener('wheel', (ev) => {
     ev.preventDefault();
-    const m = versCarte(ev);
-    zoom(ev.deltaY < 0 ? 0.8 : 1.25, m.x, m.y);
+    if (anim) { cancelAnimationFrame(anim); anim = null; }
+    // Pas proportionnel au geste : une molette cran par cran comme un pave
+    // tactile qui defile en continu donnent un zoom regulier.
+    const f = Math.exp(Math.max(-0.5, Math.min(0.5, ev.deltaY * (ev.ctrlKey ? 0.01 : 0.0022))));
+    zoomAutour(f, ev.clientX, ev.clientY, false);
   }, { passive: false });
-  let glisse = null;
-  svg.addEventListener('mousedown', (ev) => {
-    if (ev.target.closest('circle.pt')) return;
-    glisse = { x: ev.clientX, y: ev.clientY, vx: vb.x, vy: vb.y, e: versCarte(ev).echelle };
-    SVC.mapDragging = true;
-    svg.classList.add('dragging');
+  svg.addEventListener('dblclick', (ev) => {
+    ev.preventDefault();
+    zoomAutour(ev.shiftKey ? 2 : 0.5, ev.clientX, ev.clientY, true);
   });
-  const lache = () => { glisse = null; SVC.mapDragging = false; svg.classList.remove('dragging'); };
-  svg.addEventListener('mouseup', lache);
-  svg.addEventListener('mouseleave', lache);
-  svg.addEventListener('mousemove', (ev) => {
-    if (!glisse) return;
-    vb.x = glisse.vx - (ev.clientX - glisse.x) / glisse.e;
-    vb.y = glisse.vy - (ev.clientY - glisse.y) / glisse.e;
-    borne();
+
+  // GLISSER ET PINCER, a la souris comme au doigt (Pointer Events). Un geste
+  // qui bouge de plus de 4 px est un deplacement : il n'ouvre pas le lieu
+  // sous le doigt.
+  const doigts = new Map();
+  let geste = null;
+  let aBouge = false;
+  svg.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== undefined && ev.button !== 0) return;
+    if (anim) { cancelAnimationFrame(anim); anim = null; }
+    doigts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    aBouge = false;
+    geste = { vue: { ...vue }, pts: new Map(doigts) };
+    SVC.mapDragging = true;
+  });
+  svg.addEventListener('pointermove', (ev) => {
+    if (!doigts.has(ev.pointerId) || !geste) return;
+    doigts.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    const b = boite();
+    const avant = [...geste.pts.values()];
+    const apres = [...doigts.values()];
+    const centre = (l) => ({ x: l.reduce((a, p) => a + p.x, 0) / l.length, y: l.reduce((a, p) => a + p.y, 0) / l.length });
+    if (avant.length !== apres.length) { geste = { vue: { ...vue }, pts: new Map(doigts) }; return; }
+    const c0 = centre(avant);
+    const c1 = centre(apres);
+    if (Math.hypot(c1.x - c0.x, c1.y - c0.y) > 4 || apres.length > 1) aBouge = true;
+    if (!aBouge) return;
+    // Capture SEULEMENT une fois le deplacement commence : capturer des
+    // l'appui ferait arriver le clic sur la carte, plus sur le cercle.
+    doigts.forEach((_, id) => { try { if (!svg.hasPointerCapture(id)) svg.setPointerCapture(id); } catch (e) { /* relache */ } });
+    svg.classList.add('dragging');
+    let w = geste.vue.w;
+    if (apres.length >= 2) {
+      const d0 = Math.hypot(avant[0].x - avant[1].x, avant[0].y - avant[1].y) || 1;
+      const d1 = Math.hypot(apres[0].x - apres[1].x, apres[0].y - apres[1].y) || 1;
+      w = Math.max(MAP_W / 80, Math.min(largeurMax(), geste.vue.w * (d0 / d1)));
+    }
+    const px = w / b.w;
+    const px0 = geste.vue.w / b.w;
+    // Le point de carte sous le centre du geste reste sous les doigts.
+    const mx = geste.vue.cx + (c0.x - b.left - b.w / 2) * px0;
+    const my = geste.vue.cy + (c0.y - b.top - b.h / 2) * px0;
+    vue = { w, cx: mx - (c1.x - b.left - b.w / 2) * px, cy: my - (c1.y - b.top - b.h / 2) * px };
     applique();
   });
+  const lache = (ev) => {
+    doigts.delete(ev.pointerId);
+    geste = doigts.size ? { vue: { ...vue }, pts: new Map(doigts) } : null;
+    if (!doigts.size) { SVC.mapDragging = false; svg.classList.remove('dragging'); }
+  };
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((n) => svg.addEventListener(n, lache));
+  svg.addEventListener('pointerleave', (ev) => { if (!svg.hasPointerCapture(ev.pointerId)) lache(ev); });
+
+  // Au clavier : fleches pour se deplacer, + et - pour zoomer, 0 pour tout voir.
+  svg.addEventListener('keydown', (ev) => {
+    const b = boite();
+    const pasX = vue.w * 0.2;
+    const pasY = vue.w * (b.h / b.w) * 0.2;
+    const k = { ArrowLeft: [-pasX, 0], ArrowRight: [pasX, 0], ArrowUp: [0, -pasY], ArrowDown: [0, pasY] }[ev.key];
+    if (k) { ev.preventDefault(); allerA({ ...vue, cx: vue.cx + k[0], cy: vue.cy + k[1] }, 200); return; }
+    if (ev.key === '+' || ev.key === '=') { ev.preventDefault(); zoomAutour(0.6, undefined, undefined, true); }
+    else if (ev.key === '-' || ev.key === '_') { ev.preventDefault(); zoomAutour(1 / 0.6, undefined, undefined, true); }
+    else if (ev.key === '0') { ev.preventDefault(); allerA(cadreDe(points)); }
+  });
+
+  const allumer = (go) => host.querySelectorAll('[data-go]').forEach((b) => b.classList.toggle('on', b.dataset.go === go));
   host.querySelectorAll('[data-z]').forEach((b) => b.addEventListener('click', () => {
-    if (b.dataset.z === 'reset') { vb = { x: 0, y: 0, w: MAP_W, h: MAP_H }; applique(); return; }
-    zoom(b.dataset.z === 'in' ? 0.6 : 1 / 0.6);
+    if (b.dataset.z === 'fit') { allumer('fit'); allerA(cadreDe(points)); return; }
+    allumer(null);
+    zoomAutour(b.dataset.z === 'in' ? 0.55 : 1 / 0.55, undefined, undefined, true);
+  }));
+  host.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => {
+    allumer(b.dataset.go);
+    if (b.dataset.go === 'fit') allerA(cadreDe(points));
+    else if (b.dataset.go === 'world') allerA({ cx: MAP_W / 2, cy: MAP_H / 2, w: MAP_W });
+    else {
+      const z = MAP_ZONES.find((x) => x.id === b.dataset.go);
+      if (z) allerA(cadreZone(z), 450);
+    }
   }));
 
   const cle = (p) => p.latitude + ',' + p.longitude;
   svg.querySelectorAll('circle.pt').forEach((c) => {
     const p = points[Number(c.dataset.i)];
     if (SVC.mapPlace && SVC.mapPlace === cle(p)) c.classList.add('on');
-    c.addEventListener('mousemove', (ev) => showMapTip(ev, p));
+    c.addEventListener('mousemove', (ev) => { if (!SVC.mapDragging) showMapTip(ev, p); });
     c.addEventListener('mouseleave', hideTooltip);
     c.addEventListener('click', () => {
+      if (aBouge) return;
       svg.querySelectorAll('circle.pt.on').forEach((o) => o.classList.remove('on'));
       c.classList.add('on');
       SVC.mapPlace = cle(p);
       renderMapPlace(place, p);
+      // Le lieu choisi vient au centre ; vu de tres loin, on s'en approche.
+      allumer(null);
+      allerA({ cx: mapX(p.longitude), cy: mapY(p.latitude), w: Math.min(vue.w, MAP_W / 5) });
     });
   });
 }
+
+/** Les regions proposees au-dessus de la carte (longitudes, latitudes). */
+const MAP_ZONES = [
+  { id: 'europe', label: 'Europe', lon: [-12, 35], lat: [34, 62] },
+  { id: 'africa', label: 'Africa', lon: [-20, 52], lat: [-36, 38] },
+  { id: 'mideast', label: 'Middle East', lon: [34, 63], lat: [12, 42] },
+  { id: 'namerica', label: 'North America', lon: [-130, -60], lat: [14, 56] },
+  { id: 'samerica', label: 'South America', lon: [-82, -34], lat: [-56, 13] },
+  { id: 'asia', label: 'Asia', lon: [63, 150], lat: [-11, 55] },
+  { id: 'oceania', label: 'Oceania', lon: [110, 180], lat: [-48, -10] },
+];
 
 function showMapTip(event, p) {
   if (!tooltipEl) {
@@ -16140,7 +16285,7 @@ const AIDE = {
   },
   'where the traffic goes': {
     t: 'Map of the destinations your clients reach: each country and city sized by the volume exchanged with it.',
-    m: 'From NetFlow: each remote address is located from its address block (geolocation database). Hover a point for its volume and clients; click it to open the detail of that place.',
+    m: 'From NetFlow: each remote address is located from its address block (geolocation database). The map opens on the traffic. Drag to move; scroll, double-click or pinch to zoom; the buttons above jump to a region. Hover a point for its volume and clients; click it to centre it and open the detail of that place.',
     r: 'A location is that of the server’s block, not of the company: a CDN often answers from a nearby city even for a foreign service.',
   },
   'which services the traffic comes from': {
