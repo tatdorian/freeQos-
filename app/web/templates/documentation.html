@@ -5580,7 +5580,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 213 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 214 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -5813,6 +5813,11 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>PUT</code></td>
 <td><code>/api/v1/shaping/enforcement</code></td>
 <td>Allow or stop writing to the routers</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/shaping/explain/{login}</code></td>
+<td>Everything freeQoS knows of one client, router by router (read-only)</td>
 </tr>
 <tr>
 <td><code>GET</code></td>
