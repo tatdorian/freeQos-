@@ -140,11 +140,23 @@ def site(nom: str | None, pop: dict[str, Any] | None) -> dict[str, Any]:
     )
 
 
-def limite(file: dict[str, Any] | None, audit_fait: bool) -> dict[str, Any]:
+def limite(
+    file: dict[str, Any] | None, audit_fait: bool, pourquoi: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """La file du client lue sur le routeur : le plafond tient-il vraiment ?"""
     if file is None:
         if not audit_fait:
             return reponse(UNKNOWN, "Not checked yet", "The routers are checked every few minutes.")
+        # Sans file, on dit POURQUOI : « No queue » seul ne disait pas quoi faire.
+        if pourquoi and pourquoi.get("reason"):
+            code = str(pourquoi.get("code") or "")
+            niveau = OK if code == "no_rate" else UNKNOWN if code == "pending" else WARN
+            titre = {
+                "no_rate": "No limit to hold",
+                "pending": "Not written yet",
+                "offline": "No queue · offline",
+            }.get(code, "No queue")
+            return reponse(niveau, titre, str(pourquoi["reason"]), code=code)
         return reponse(UNKNOWN, "No queue", "No freeQoS queue for this client on its router.")
     verdict = str(file.get("verdict") or "")
     detail = str(file.get("detail") or "")
