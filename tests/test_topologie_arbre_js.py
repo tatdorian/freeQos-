@@ -718,6 +718,44 @@ console.log(JSON.stringify({
     assert res["membres"] == ["bob"]
 
 
+def test_par_defaut_seuls_les_routeurs_declares_et_les_clients(harnais: Path) -> None:
+    """Sans « Undeclared devices » : les routeurs declares et les clients, rien
+    d'autre. La box detectee d'un client est ecartee, et le client se range
+    sous le routeur de sa session ; un PoP derriere un switch detecte remonte
+    sous le routeur declare au-dessus."""
+    res = executer(
+        harnais,
+        """
+const n = (k, nm, kd) => ({ key: k, name: nm, kind: kd, hidden: false, addresses: [] });
+const l = (key, s, t) => ({ key, source_key: s, target_key: t, interface: 'e',
+  interface_links: 1, attributes: {} });
+const nodes = [
+  n('router:core', 'CORE', 'core'), n('mac:SW', 'switch', 'switch'),
+  n('router:pop', 'PoP Altair', 'pop'), n('mac:CPE', 'ACME OFFICE', 'router'),
+];
+const links = [l('a', 'router:core', 'mac:SW'), l('b', 'mac:SW', 'router:pop'),
+  l('c', 'router:pop', 'mac:CPE')];
+const data = { nodes, links, counts: {},
+  client_nodes: { 'mac:CPE': { login: 'ACME OFFICE', how: 'name' } },
+  placements: { 'ACME OFFICE': { node: 'mac:CPE', how: 'device' } } };
+A.topo.subs = [{ login: 'ACME OFFICE', pop_name: 'PoP Altair', router_name: 'PoP Altair',
+  kind: 'static', last_ip: '10.20.0.50' }];
+A.topo.montrerNonDeclares = false;
+const m = A.topoBuildModel(data);
+A.topo.montrerNonDeclares = true;
+console.log(JSON.stringify({
+  cles: [...m.nodesByKey.keys()].sort(),
+  parentPop: m.nodesByKey.get('router:pop').parentKey,
+  membres: (m.nodesByKey.get('abos:router:pop') || {}).members || null,
+}));
+""",
+    )
+    assert "mac:CPE" not in res["cles"]
+    assert "mac:SW" not in res["cles"]
+    assert res["parentPop"] == "router:core"
+    assert res["membres"] == ["ACME OFFICE"]
+
+
 def test_une_liste_trop_longue_est_bornee(harnais: Path) -> None:
     """Sinon un PoP de 800 abonnes rend l'arbre inutilisable -- et le detail se
     lit dans l'onglet Abonnes, qui est fait pour ca."""
@@ -1285,9 +1323,9 @@ console.log(JSON.stringify({ cles: [...m.nodesByKey.keys()].sort() }));
 
 
 def test_seuls_les_equipements_declares_apparaissent(harnais: Path) -> None:
-    """DEMANDE : un voisin decouvert que personne n'a declare (ni dans Devices,
-    ni dans Clients) n'est pas dans l'arbre ; une fois declare, il y revient.
-    Une case qui MENE a quelque chose de declare reste, pour garder le chemin."""
+    """DEMANDE : par defaut, l'arbre ne montre que les routeurs declares (API ou
+    interface) et les clients. Tout equipement simplement detecte -- l'AP, la
+    box d'un client -- est ecarte ; « Undeclared devices » les rend tous."""
     res = executer(
         harnais,
         """
@@ -1311,10 +1349,9 @@ console.log(JSON.stringify({ cles: [...m.nodesByKey.keys()].sort(), caches,
   tout: tout.nodesByKey.size }));
 """,
     )
-    # Le NAS (Devices), le client relie a sa CPE, et l'AP qui y mene.
-    assert res["cles"] == ["mac:03", "mac:04", "router:nas"]
-    # BAGRI SIEGE et MAIN GATEWAY : declares nulle part, caches.
-    assert res["caches"] == 2
+    # Le NAS seul : les quatre equipements detectes sont caches.
+    assert res["cles"] == ["router:nas"]
+    assert res["caches"] == 4
     assert res["tout"] == 5
 
 
