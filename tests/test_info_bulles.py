@@ -59,6 +59,12 @@ def test_chaque_fiche_est_complete() -> None:
 
 def test_les_valeurs_cles_disent_comment_elles_sont_mesurees_et_lues() -> None:
     aide = _dictionnaire()["aide"]
-    for cle in ("latency", "experience", "saturation risks", "latency by client", "under load"):
+    for cle in (
+        "latency",
+        "experience",
+        "links that could fill up",
+        "latency by client",
+        "under load",
+    ):
         fiche = aide[cle]
         assert fiche.get("m") and fiche.get("s"), cle

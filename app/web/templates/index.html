@@ -59,8 +59,8 @@
       <a class="nav-admin" href="#/rules" data-view="rules"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.4 8-8 9-4.6-1-8-4.5-8-9V6z"/><path d="M8.5 12h7"/></svg><span>Rules</span></a>
       <a class="nav-admin" href="#/network" data-view="network"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M12 7.2v4.3M12 11.5L6.3 17M12 11.5l5.7 5.5"/></svg><span>Network tree</span></a>
       <a class="nav-admin" href="#/traffic" data-view="traffic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16"/><path d="M3 8l4-4 4 4"/><path d="M17 20V4"/><path d="M13 16l4 4 4-4"/></svg><span>Traffic</span></a>
-      <a class="nav-admin" href="#/insights" data-view="insights"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M5.6 5.6l2.1 2.1M3 12h3M18.4 5.6l-2.1 2.1M21 12h-3"/><path d="M9 18h6M10 21h4"/><path d="M12 8a4 4 0 0 0-2.5 7.1c.4.3.5.6.5 1V17h4v-.9c0-.4.2-.7.5-1A4 4 0 0 0 12 8z"/></svg><span>Insights</span></a>
-      <a class="nav-admin" href="#/exec" data-view="exec"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-5 3 3 5-6"/></svg><span>Executive</span></a>
+      <a class="nav-admin" href="#/exec" data-view="exec"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-5 3 3 5-6"/></svg><span>Network health</span></a>
+      <a class="nav-admin" href="#/insights" data-view="insights"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M5.6 5.6l2.1 2.1M3 12h3M18.4 5.6l-2.1 2.1M21 12h-3"/><path d="M9 18h6M10 21h4"/><path d="M12 8a4 4 0 0 0-2.5 7.1c.4.3.5.6.5 1V17h4v-.9c0-.4.2-.7.5-1A4 4 0 0 0 12 8z"/></svg><span>Business insights</span></a>
       <a class="nav-admin" href="#/pops" data-view="pops"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="6" rx="2"/><rect x="3" y="13" width="18" height="6" rx="2"/><path d="M7 8h.01M7 16h.01"/></svg><span>Devices</span></a>
       <a class="nav-admin" href="#/api" data-view="api"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5"/><path d="M16 7l5 5-5 5"/><path d="M13.5 5l-3 14"/></svg><span>API</span></a>
       <a class="nav-admin" href="#/settings" data-view="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a>
@@ -158,14 +158,13 @@
     <!-- ----------------------------------------------------- executif -->
     <section id="view-exec">
       <div class="toolbar">
-        <span class="mode">Network at a glance</span>
-        <select id="exec-range" style="width:auto">
+        <select id="exec-range" style="width:auto" aria-label="Period">
           <option value="15">15 minutes</option>
           <option value="60" selected>1 hour</option>
           <option value="360">6 hours</option>
         </select>
-        <label class="chk" title="Latency probe (/ping from the PoP)">
-          <input type="checkbox" id="rtt-toggle"> RTT probe
+        <label class="chk" title="freeQoS pings each client from its router every 30 s to measure its latency and experience. Light load on the router.">
+          <input type="checkbox" id="rtt-toggle"> Measure latency
         </label>
         <span class="spacer"></span>
         <span class="mode" id="exec-count"></span>
@@ -173,17 +172,17 @@
       <div id="exec-notice"></div>
 
       <!-- UNE QUESTION PAR ONGLET, comme Traffic. -->
-      <div class="segmented pg-tabs" role="tablist" aria-label="Executive views">
+      <div class="segmented pg-tabs" role="tablist" aria-label="Network health views">
         <button type="button" data-pg-tab="overview" class="active">Overview</button>
         <button type="button" data-pg-tab="latency">Latency</button>
-        <button type="button" data-pg-tab="load">Load &amp; queues</button>
-        <button type="button" data-pg-tab="history">History</button>
+        <button type="button" data-pg-tab="load">Load per site</button>
+        <button type="button" data-pg-tab="history">Over time</button>
       </div>
 
       <div class="pg-pane" data-pg-pane="overview">
-        <p class="pg-lead">Is the network fine right now, and where could it saturate?</p>
+        <p class="pg-lead">Is the network fine right now? The verdict first, then the four figures it rests on.</p>
         <div id="exec-summary"></div>
-        <h2>Saturation risks</h2>
+        <h2>Links that could fill up</h2>
         <div class="card" id="exec-hotspots"></div>
       </div>
 
@@ -209,10 +208,10 @@
       </div>
 
       <div class="pg-pane" data-pg-pane="load" hidden>
-        <p class="pg-lead">How full each site and link is, and which queues are working. Click a row to see its details below.</p>
-        <h2>Load by node</h2>
+        <p class="pg-lead">How full each site is right now. Click a site to see its clients and its link below.</p>
+        <h2>How full each site is</h2>
         <div class="card" id="exec-load"></div>
-        <h2>Queues by node</h2>
+        <h2>Sites and their clients</h2>
         <div class="table-wrap" id="exec-nodes"></div>
         <div class="exec-legend" id="exec-legend"></div>
         <h2 id="lq-heading">Selection</h2>
@@ -684,7 +683,7 @@
       </div>
       <div id="ins-notice"></div>
 
-      <div class="segmented pg-tabs" role="tablist" aria-label="Insights views">
+      <div class="segmented pg-tabs" role="tablist" aria-label="Business insights views">
         <button type="button" data-pg-tab="overview" class="active">Overview</button>
         <button type="button" data-pg-tab="risk">At risk</button>
         <button type="button" data-pg-tab="upgrade">Upgrade</button>
@@ -693,7 +692,7 @@
       </div>
 
       <div class="pg-pane" data-pg-pane="overview">
-        <p class="pg-lead">The business side of the measurements, comparing the chosen period with the one before.</p>
+        <p class="pg-lead">What to do with your clients: who may leave, who to offer a bigger plan, and how many more clients each site can take. Click a figure to open its list.</p>
         <div class="grid stats" id="ins-stats"></div>
       </div>
       <div class="pg-pane" data-pg-pane="risk" hidden>
@@ -705,7 +704,7 @@
         <div class="table-wrap" id="ins-upgrade"></div>
       </div>
       <div class="pg-pane" data-pg-pane="capacity" hidden>
-        <p class="pg-lead">How many more clients each site and access point can take before quality drops.</p>
+        <p class="pg-lead">How many more clients each site can take before quality drops. It needs the capacity of the site's link (its antenna in UISP, or a rate set in the Network tree).</p>
         <div class="table-wrap" id="ins-capacity"></div>
       </div>
       <div class="pg-pane" data-pg-pane="all" hidden>

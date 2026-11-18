@@ -962,11 +962,11 @@ function rttVide(detail) {
   if (detail && Number(detail.sent) > 0 && !Number(detail.received)) {
     return sondeMuette()
       ? ['probe silent', 'warn', 'No client answers the probe at all: the probe is at fault, not ' +
-        'the clients. Executive > « Find the cause » tells why.']
+        'the clients. Network health > « Find the cause » tells why.']
       : ['no reply', 'crit', SANS_REPONSE];
   }
   return ['-', 'none', 'No latency measured in the last 5 minutes: latency probe off ' +
-    '(Executive > RTT probe), or this client not probed yet (about one minute after start).'];
+    '(Network health > Measure latency), or this client not probed yet (about one minute after start).'];
 }
 function rttVideHtml(detail) {
   const [texte, sev, titre] = rttVide(detail);
@@ -1354,7 +1354,7 @@ const STAT_ICONES = [
   [/plan|package|pushed|default|set here/i, 'layers', 't-indigo'],
   [/risk|alert|poor|error|fail/i, 'alert', 't-red'],
   [/throughput|traffic|identified|sold|load/i, 'chart', 't-blue'],
-  [/healthy|good|ready/i, 'check', 't-green'],
+  [/healthy|good|ready|doing fine/i, 'check', 't-green'],
 ];
 const STAT_SVG = {
   down: '<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>',
@@ -1957,7 +1957,7 @@ async function loadExec() {
   renderNodeTable(document.getElementById('exec-nodes'));
   renderExecLegend(document.getElementById('exec-legend'));
   document.getElementById('exec-count').textContent =
-    exec.nodes.length + ' node(s), ' + subs.length + ' client(s)';
+    exec.nodes.length + ' site(s), ' + subs.length + ' client(s)';
   exec.instances = await api('/status').catch(() => null);
   renderExecNotice(rttState, firstError, {
     noNodes: exec.nodes.length === 0,
@@ -2054,7 +2054,7 @@ function renderExecSummary(host) {
   const liste = (xs) => xs.slice(0, 3).map((x) => nodeLink(x.n.name)).join(', ') +
     (xs.length > 3 ? ' +' + (xs.length - 3) : '');
   if (satures.length) {
-    faits.push(['crit', satures.length + ' node(s) above 90% of their limit: ' + liste(satures)]);
+    faits.push(['crit', satures.length + ' site(s) above 90% of what their clients may use: ' + liste(satures)]);
   }
   const chauds = (exec.hotspots || []).filter((h) => h.state === 'saturated');
   const tendus = (exec.hotspots || []).filter((h) => h.state === 'busy');
@@ -2088,7 +2088,7 @@ function renderExecSummary(host) {
       'experience (latency or bufferbloat)']);
   }
   if (occupes.length) {
-    faits.push(['warn', occupes.length + ' node(s) between 70 and 90%: ' + liste(occupes)]);
+    faits.push(['warn', occupes.length + ' site(s) between 70 and 90% of what their clients may use: ' + liste(occupes)]);
   }
   if (pireRtt && pireRtt.rttMax >= 100) {
     faits.push(['warn', 'High latency on ' + nodeLink(pireRtt.name) + ': ' +
@@ -2100,7 +2100,7 @@ function renderExecSummary(host) {
       '<b>No traffic measured yet.</b></div></div>';
   } else if (!faits.length) {
     verdict = '<div class="verdict ok"><span class="v-dot"></span><div>' +
-      '<b>All good.</b> No saturated node, no client with a poor experience.</div></div>';
+      '<b>All good.</b> No site is full and no client has a poor experience.</div></div>';
   } else {
     const pire = faits.some((f) => f[0] === 'crit') ? 'crit' : 'warn';
     verdict = '<div class="verdict ' + pire + '"><span class="v-dot"></span><div>' +
@@ -2137,12 +2137,12 @@ function renderExecSummary(host) {
       '<span><i class="sq crit"></i>' + notes.poor + ' poor</span>' +
       (notes.none ? '<span><i class="sq none"></i>' + notes.none + ' not measured</span>' : '') +
     '</div>' +
-    (!connues ? '<div class="sub">Judged on each client\'s latency: turn on the RTT probe above to measure it.</div>' : '') +
+    (!connues ? '<div class="sub">Judged on each client\'s latency: tick <b>Measure latency</b> above to see it.</div>' : '') +
     '</div>';
 
   const top = charges[0];
   const tuile3 = '<div class="card stat' + (top && top.u >= 90 ? ' crit' : top && top.u >= 70 ? ' warn' : '') +
-    '"><div class="label">Busiest node</div>' +
+    '"><div class="label">Busiest site</div>' +
     (top
       ? '<div class="value">' + top.u.toFixed(0) + '<span class="unit">%</span></div>' +
         '<div class="sub">' + nodeLink(top.n.name) + ' carries ' + esc(bpsText(top.n.tx)) +
@@ -2152,7 +2152,7 @@ function renderExecSummary(host) {
   const tuile4 = '<div class="card stat"><div class="label">Latency (median)</div>' +
     (rttMed === null
       ? '<div class="value">-</div><div class="sub">' + ((document.getElementById('rtt-toggle') || {}).checked
-        ? 'No reply from the clients yet.' : 'Turn on the RTT probe above to measure it.') + '</div>'
+        ? 'No reply from the clients yet.' : 'Tick Measure latency above to see it.') + '</div>'
       : '<div class="value" style="color:' + (rttMed < 30 ? 'var(--ok)' : rttMed < 100 ? 'var(--warn)' : 'var(--crit)') +
         '">' + Math.round(rttMed) + '<span class="unit">ms</span></div>' +
         '<div class="sub">Half the clients answer faster than this.' + (pireRtt ? '<br>Slowest site: ' +
@@ -2172,7 +2172,7 @@ function renderExecLoad(host) {
   if (!host) return;
   const nodes = exec.nodes.filter((n) => !n.synthetic);
   if (!nodes.length) {
-    host.innerHTML = '<div class="empty">No node with measured traffic.</div>';
+    host.innerHTML = '<div class="empty">No site with measured traffic yet.</div>';
     return;
   }
   const total = nodes.reduce((a, n) => a + n.tx, 0) || 1;
@@ -2201,7 +2201,7 @@ function renderExecLoad(host) {
     '</div>';
   }).join('') + '</div>' +
   (nodes.length > 20 ? '<div class="hint" style="margin-top:.5rem">' + (nodes.length - 20) +
-    ' more node(s) in the table below.</div>' : '') +
+    ' more site(s) in the table below.</div>' : '') +
   '<div class="exec-legend"><span><i class="sq ok"></i>fine (under 70% of its limit)</span>' +
     '<span><i class="sq warn"></i>getting busy (70-90%)</span><span><i class="sq crit"></i>almost full (over 90%)</span>' +
     '<span><i class="lb-cap-key"></i>what its radio link can actually carry</span></div>';
@@ -2280,8 +2280,8 @@ function renderHotspots(host, data) {
     groupe('Internet side', 'the gateway\'s uplink and the PoP-to-core links: if one fills up, every client is slowed', amont) +
     groupe('PoP side', 'links towards clients, VLANs and relays: if one fills up, only the clients behind it are slowed', pop) +
     (!amont.length && (data.upstream_known || []).length === 0
-      ? '<div class="notice">Upstream links are identified from each router\'s default route at ' +
-        'discovery: run <a href="#/network">discovery</a> once to split internet side from PoP side.</div>'
+      ? '<div class="notice">freeQoS does not know yet which links lead to the internet. Click ' +
+        '<b>Read the configuration and build the tree</b> once, in <a href="#/pops">Devices</a>.</div>'
       : '') +
     (inconnus.length
       ? '<details class="hot-unknown"><summary><b>' + inconnus.length + ' link(s) whose capacity is unknown</b>' +
@@ -2437,8 +2437,8 @@ function renderLatencyClientsTable() {
   const compte = document.getElementById('exec-lat-count');
   if (!data) { host.innerHTML = '<div class="empty">Latency unavailable.</div>'; return; }
   if (!data.enabled) {
-    host.innerHTML = '<div class="notice"><b>RTT probe off.</b> Tick <b>RTT probe</b> above to ' +
-      'measure each client\'s latency.</div>';
+    host.innerHTML = '<div class="notice"><b>Latency is not measured.</b> Tick <b>Measure latency</b> ' +
+      'above: freeQoS then pings each client from its router every 30 s.</div>';
     if (stats) stats.innerHTML = '';
     return;
   }
@@ -2513,8 +2513,8 @@ function renderLatencySegments(host, data) {
     esc(m.interval_ms) + ' ms apart every ' + esc(m.every_s) + ' s; <b>median</b> shown, ' +
     '± = jitter. Hover a value for min / max / loss.</div>';
   if (!data.enabled) {
-    host.innerHTML = '<div class="notice"><b>RTT probe off.</b> Tick <b>RTT probe</b> above to measure ' +
-      'latency by segment.</div>';
+    host.innerHTML = '<div class="notice"><b>Latency is not measured.</b> Tick <b>Measure latency</b> ' +
+      'above to see where the delay comes from.</div>';
     return;
   }
   const cibles = m.internet_targets || [];
@@ -2599,15 +2599,15 @@ function renderExecNotice(rttState, error, st) {
       esc(error.message) + '</div>';
   }
   if (state.noNodes && !error) {
-    html += '<div class="notice"><b>No node.</b> Connect a router in the ' +
+    html += '<div class="notice"><b>No site yet.</b> Connect a router in the ' +
       '<b>Devices</b> tab.</div>';
   }
   if (state.topoOnly && !error) {
-    html += '<div class="notice"><b>Topology only: no subscriber measured.</b></div>';
+    html += '<div class="notice"><b>Routers found, but no client measured yet.</b></div>';
   }
   if (rttState && !rttState.enabled) {
-    html += '<div class="notice"><b>RTT probe off.</b> RTT, QoO and bufferbloat ' +
-      'stay empty.</div>';
+    html += '<div class="notice"><b>Latency is not measured.</b> Client experience and latency stay ' +
+      'empty until you tick <b>Measure latency</b> above.</div>';
   }
   notice.innerHTML = html;
 }
@@ -2777,13 +2777,13 @@ function capaciteNoeud(lien, n) {
   if ((!lien || !lien.capacity_mbps) && !(n.effDown > 0) && !(n.effUp > 0)) {
     // Ni capacite connue ni client limite : "0.0 Mbps / 0.0 Mbps" se lisait
     // comme un noeud coupe. On dit ce qui manque.
-    return '<span class="na" title="Uplink capacity unknown, and no client of this node has a ' +
-      'limit yet. Declare the uplink wired or radio in Saturation risks, or push plans by API.">' +
+    return '<span class="na" title="Link capacity unknown, and no client of this site has a ' +
+      'limit yet. Declare the uplink wired or radio in Links that could fill up (Network health), or push plans by API.">' +
       'unknown</span>';
   }
   if (!lien || !lien.capacity_mbps) {
     return '<span class="na" title="Uplink capacity unknown: declare the uplink wired or radio in ' +
-      'Saturation risks. Shown here: the sum of the clients\' limits.">' +
+      'Links that could fill up (Network health). Shown here: the sum of the clients\' limits.">' +
       esc(mbps(n.effDown / 1e6) + ' / ' + mbps(n.effUp / 1e6)) + ' <span class="pct-hint">limits</span></span>';
   }
   return esc(mbps(lien.capacity_mbps)) + ' ' + badgeMilieu(lien);
@@ -2813,7 +2813,7 @@ function badgeMilieu(lien) {
       esc(lien.capacity_source || '') + ')' + (auto ? ' — detected automatically' : '') + '">wired' + auto + '</span>';
   }
   return '<span class="badge" title="Not declared: the smallest known capacity (' +
-    esc(lien.capacity_source || 'none') + '). Declare it wired or radio in Saturation risks.">auto</span>';
+    esc(lien.capacity_source || 'none') + '). Declare it wired or radio in Links that could fill up (Network health).">auto</span>';
 }
 
 function renderNodeTable(host) {
@@ -2836,13 +2836,13 @@ function renderNodeTable(host) {
   // Les colonnes "hors-bande" (retransmissions, marks, drops) ont disparu :
   // toujours vides pour ce controleur, elles ne faisaient que brouiller.
   const head =
-    '<table class="exec-table"><thead><tr><th></th><th>Node</th><th class="num">Clients</th>' +
+    '<table class="exec-table"><thead><tr><th></th><th>Site</th><th class="num">Clients</th>' +
     '<th class="num">Download now</th><th class="num">Upload now</th>' +
-    '<th class="num" title="Node: what its uplink can carry (wired, or radio read live). ' +
-      'Client: the cap applied (plan, override or boost)">Capacity / limit</th>' +
-    '<th class="num" title="Node: plans sold against the uplink capacity. Client: its plan">' +
+    '<th class="num" title="Site: what its link can carry (wired, or radio read live), then the sum of its clients\' limits. ' +
+      'Client: the limit applied (plan, mode or boost)">Capacity / limit</th>' +
+    '<th class="num" title="Site: the plans sold, against what the link can carry. Client: its plan">' +
       'Sold / plan</th>' +
-    '<th class="num">Latency</th><th class="num" title="0-100, from bufferbloat and latency">Experience</th>' +
+    '<th class="num">Latency</th><th class="num" title="Score out of 100, from latency at rest and when the line is busy">Experience</th>' +
     '</tr></thead><tbody>';
 
   const body = nodes.map((n) => {
@@ -3027,7 +3027,7 @@ function renderQueuePanels() {
   const sel = exec.selected;
   const titre = document.getElementById('lq-heading');
   if (!selectionExists(sel)) {
-    const vide = '<div class="empty">Select a node or a client in the table.</div>';
+    const vide = '<div class="empty">Select a site or a client in the table.</div>';
     live.innerHTML = snap.innerHTML = det.innerHTML = vide;
     if (titre) titre.textContent = 'Selection';
     return;
@@ -3038,7 +3038,7 @@ function renderQueuePanels() {
   const node = isClient ? null : exec.nodes.find((n) => n.name === sel.name);
   const title = isClient ? client.login : node.name;
   if (titre) {
-    titre.innerHTML = (isClient ? 'Client ' : 'Node ') + '<span class="sel-name">' + esc(title) +
+    titre.innerHTML = (isClient ? 'Client ' : 'Site ') + '<span class="sel-name">' + esc(title) +
       '</span>' + (isClient && client.pop_name ? ' <span class="pct-hint">on ' + esc(client.pop_name) +
       '</span>' : '');
   }
@@ -12456,28 +12456,33 @@ function renderInsightsNotice(r, jours) {
   const hote = document.getElementById('ins-notice');
   if (!hote) return;
   if (!r) { hote.innerHTML = ''; return; }
+  // CE QUI MANQUE, DIT SIMPLEMENT, ET REPLIE : le grand bandeau ecrasait la
+  // page alors qu'il ne dit qu'une chose -- certaines listes sont encore
+  // incompletes, et pourquoi. Chaque raison dit quoi faire.
   const manques = [];
   if (!r.subscribers) {
-    manques.push('no subscriber collected yet: add a router in Devices');
+    manques.push('No client measured yet: connect a router in <a href="#/pops">Devices</a>.');
   } else {
     if (r.history_days != null && r.history_days < r.needed_days) {
-      manques.push(esc(r.history_days) + ' day(s) of measurements out of the ' +
-        esc(r.needed_days) + ' needed to compare ' + esc(jours) + ' days with the ' +
-        esc(jours) + ' before (usage drop and silent lines appear after that)');
+      manques.push('Comparing ' + esc(jours) + ' days with the ' + esc(jours) + ' before needs ' +
+        esc(r.needed_days) + ' days of measurements; there are ' + esc(r.history_days) +
+        ' so far. Usage drops and silent lines show up after that.');
     }
     if (r.with_plan < r.subscribers) {
-      manques.push((r.subscribers - r.with_plan) + ' of ' + r.subscribers +
-        ' subscriber(s) without a plan: "bigger plan" cannot be judged for them ' +
-        '(set the speed in the PPP profile or the API)');
+      manques.push((r.subscribers - r.with_plan) + ' of ' + r.subscribers + ' clients have no plan yet: ' +
+        '“ready for a bigger plan” is only judged for clients with a plan. Set plans on the ' +
+        '<a href="#/clients">Clients</a> page.');
     }
-    if (!r.with_traffic) manques.push('no traffic measured over the period');
+    if (!r.with_traffic) manques.push('No traffic measured over the period.');
     if (!r.with_qoe) {
-      manques.push('no latency-under-load measurement yet: the experience score stays empty');
+      manques.push('Latency is not measured, so the experience score is empty. Tick ' +
+        '<b>Measure latency</b> on <a href="#/exec">Network health</a>.');
     }
   }
   hote.innerHTML = manques.length
-    ? '<div class="notice warn"><b>Not enough data yet for reliable lists.</b><ul>' +
-      manques.map((m) => '<li>' + m + '</li>').join('') + '</ul></div>'
+    ? '<details class="notice ins-ready"><summary><b>Some lists are not complete yet</b> ' +
+      '<span class="pct-hint">' + manques.length + ' reason(s) · click to see why</span></summary><ul>' +
+      manques.map((m) => '<li>' + m + '</li>').join('') + '</ul></details>'
     : '';
 }
 
@@ -12490,14 +12495,14 @@ async function loadInsights() {
   ]);
   const lignes = abos.subscribers || [];
   const sm = abos.summary || {};
-  document.getElementById('ins-count').textContent = lignes.length + ' subscriber(s)';
+  document.getElementById('ins-count').textContent = lignes.length + ' client(s)';
   renderInsightsNotice(abos.readiness, jours);
   document.getElementById('ins-stats').innerHTML =
     statCard(sm.at_risk ? 'crit' : '', 'At risk of leaving', String(sm.at_risk || 0), '',
-      'poor experience, usage collapsing, or silent') +
+      'poor experience, usage collapsing or a silent line.<br><b>To do:</b> call them first.') +
     statCard(sm.upgrade ? 'down' : '', 'Ready for a bigger plan', String(sm.upgrade || 0), '',
-      'living at their plan ceiling, good experience') +
-    statCard('', 'Healthy', String(sm.healthy || 0), '', 'nothing to act on');
+      'always at their plan\'s limit, with a good experience.<br><b>To do:</b> offer them more.') +
+    statCard('', 'Doing fine', String(sm.healthy || 0), '', 'nothing to do.');
 
   const lien = (r) => '<a href="#" data-ins-sub="' + r.subscriber_id + '">' + esc(r.login) + '</a>';
   const usage = (r) => esc(bpsText(r.avg_down_bps)) +
@@ -12507,7 +12512,7 @@ async function loadInsights() {
   const plan = (r) => r.plan_down_mbps ? esc(mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0))
     : '<span class="na">no plan</span>';
   const table = (xs, vide) => !xs.length ? '<div class="empty">' + vide + '</div>'
-    : '<table><thead><tr><th>Subscriber</th><th>Site</th><th class="num">Plan</th>' +
+    : '<table><thead><tr><th>Client</th><th>Site</th><th class="num">Plan</th>' +
       '<th class="num">Avg download</th><th class="num">At ceiling</th><th class="num">Experience</th>' +
       '<th>Why</th></tr></thead><tbody>' + xs.map((r) => '<tr><td>' + lien(r) + '</td>' +
         '<td>' + esc(r.pop_name || '-') + '</td><td class="num">' + plan(r) + '</td>' +
@@ -12533,7 +12538,7 @@ async function loadInsights() {
         '<td class="num">' + plan(r) + '</td>' +
         '<td class="num">' + (r.ceiling_share ? Math.round(r.ceiling_share * 100) + '%' : '-') + '</td>' +
         '<td class="num">' + qoe(r) + '</td></tr>').join('') + '</tbody></table>';
-  document.getElementById('ins-all').innerHTML = table(lignes, 'No subscriber.');
+  document.getElementById('ins-all').innerHTML = table(lignes, 'No client.');
   limiterLignes(document.getElementById('ins-risk'), 12, 'Show all');
   limiterLignes(document.getElementById('ins-upgrade'), 12, 'Show all');
   limiterLignes(document.getElementById('ins-all'), 20, 'Show all clients');
@@ -12550,17 +12555,17 @@ async function loadInsights() {
   const lesSites = sites.sites || [];
   document.getElementById('ins-capacity').innerHTML = !lesSites.length
     ? '<div class="empty">No site.</div>'
-    : '<table><thead><tr><th>Site</th><th class="num">Subscribers</th><th class="num">Capacity</th>' +
+    : '<table><thead><tr><th>Site</th><th class="num" title="Clients with a plan: the room is counted in plans">Clients with a plan</th><th class="num">Link capacity</th>' +
       '<th class="num">Busy-hour peak</th><th class="num">Poor experience</th>' +
-      '<th class="num">Room for</th><th>Basis</th></tr></thead><tbody>' +
+      '<th class="num">Room for</th><th>How it is judged</th></tr></thead><tbody>' +
       lesSites.map((x) => '<tr><td><b>' + esc(x.pop_name) + '</b></td>' +
         '<td class="num">' + esc(x.subscribers) + '</td>' +
         '<td class="num">' + (x.capacity_mbps ? esc(mbps(x.capacity_mbps)) : '<span class="na">-</span>') + '</td>' +
         '<td class="num">' + (x.peak_mbps != null ? esc(mbps(x.peak_mbps)) : '<span class="na">-</span>') + '</td>' +
         '<td class="num">' + (x.poor_share != null ? sqCell(Math.round(x.poor_share * 100) + '%',
           x.poor_share >= 0.2 ? 'crit' : x.poor_share > 0 ? 'warn' : 'ok') : '<span class="na">-</span>') + '</td>' +
-        '<td class="num">' + (x.room == null ? '<span class="na">?</span>'
-          : sqCell(x.room + ' more', x.room === 0 ? 'crit' : x.room < 5 ? 'warn' : 'ok')) + '</td>' +
+        '<td class="num">' + (x.room == null ? '<span class="na" title="Unknown until the link capacity is known">unknown</span>'
+          : sqCell(x.room + ' more client(s)', x.room === 0 ? 'crit' : x.room < 5 ? 'warn' : 'ok')) + '</td>' +
         '<td class="hint" style="display:table-cell">' + esc(x.reason || '') + '</td></tr>').join('') +
       '</tbody></table>';
 
@@ -16270,8 +16275,8 @@ const AIDE = {
     s: ECHELLE_CHARGE,
     a: 'Current capacity far below nominal: alignment, interference or rain fade — check signal and SNR on the antenna page.',
   },
-  'saturation risks': {
-    t: 'Every link compared with what it can carry, worst first.',
+  'links that could fill up': {
+    t: 'Every link compared with what it can carry, the fullest first.',
     m: 'Traffic of the link ÷ its capacity (the lowest of: rate set by hand, measured radio capacity, port speed). Bar = now; marker = the peak of the selected period.',
     s: ECHELLE_CHARGE,
     r: 'Internet side (gateway uplink, PoP-to-core): a saturation hits every client. PoP side (towards subscribers, VLANs, relays): only the clients behind that link. A link with “capacity unknown” cannot be judged — set its rate in the Network tree.',
@@ -16283,21 +16288,21 @@ const AIDE = {
     s: [[OK, 'good: median under 30 ms, no loss, little bufferbloat'], [WARN, 'fair: 30–100 ms, spikes, some loss, or +30 to +150 ms under load'],
       [CRIT, 'poor: over 100 ms, 2%+ loss, +150 ms under load, or score under 50'], [NA, 'at plan limit: judged apart (see below)']],
     r: 'Samples taken while the client uses 85%+ of its plan are left out: a full line makes its own queue — that is not a network fault. “no reply” on every client of a router means the probe itself is failing, not the clients.',
-    a: 'Many poor clients behind the same node: look at that node’s load and backhaul. A single poor client: its CPE, signal or home Wi-Fi.',
+    a: 'Many poor clients behind the same site: look at that site’s load and backhaul. A single poor client: its CPE, signal or home Wi-Fi.',
   },
-  'load by node': {
-    t: 'Traffic of each node (site) compared with the sum of its clients’ limits.',
+  'how full each site is': {
+    t: 'Traffic of each site right now, compared with the sum of its clients’ limits.',
     m: 'Sum of the clients’ queues every 10 s, divided by the sum of their limits.',
     r: 'This is a share of what was sold, not of the link: 100% means every client is at its cap at once, which practically never happens.',
   },
-  'queues by node': {
-    t: 'Each node (PoP or router) with its clients: traffic now vs limit, limits applied, plans sold, worst latency and experience.',
+  'sites and their clients': {
+    t: 'Each site with its clients (click + to open them): traffic now against the limit, limits applied, plans sold, worst latency and experience.',
     m: 'Queue counters every 10 s; latency from the probe every 30 s. A VLAN client is listed under the router that carries it.',
     r: 'Click a row to open its detail below. The “Rate” field lets you force a client’s limit by hand — it then overrides its plan until you clear it.',
   },
-  'selection': 'Details of the node or client selected in the table above: link, plans, limits and the clients behind it.',
+  'selection': 'Details of the site or client selected in the table above: link, plans, limits and the clients behind it.',
   'sec|node': {
-    t: 'Detail of the selected node: its link (capacity and load), the limits and plans of its clients, and how each client is doing.',
+    t: 'Detail of the selected site: its link (capacity and load), the limits and plans of its clients, and how each client is doing.',
     r: 'Oversubscription = plans sold ÷ link capacity. Some is normal (clients are not all active at once); far above 3× the link will be full at busy hours.',
   },
   'sec|client': {
@@ -16307,7 +16312,7 @@ const AIDE = {
     t: 'One colour per time step for three indicators: experience score, latency and load vs limit. Read it left to right to see when things went wrong.',
     m: 'Steps of the selected period (e.g. 5 min over 24 h). Steps where a client was at its plan limit are left out of latency and score.',
     s: [[OK, 'green: good'], [WARN, 'orange: fair / watch'], [CRIT, 'red: poor / saturated'], [NA, 'grey: no measurement in that step']],
-    r: 'For a node: the worst client of the step. For the whole network: all clients together. A red band at the same hour every evening is a capacity problem; a red band at random times is more often radio.',
+    r: 'For a site: the worst client of the step. For the whole network: all clients together. A red band at the same hour every evening is a capacity problem; a red band at random times is more often radio.',
   },
   'who consumes': {
     t: 'Volume per subscriber over the period.',
@@ -16376,7 +16381,7 @@ const AIDE = {
     r: 'A site where 20% or more of the clients already have a poor experience shows no room, whatever the margin on paper.',
   },
   'router health': {
-    t: 'CPU, memory and uptime of each polled router.',
+    t: 'CPU (average, busiest core, peak of the last hour), memory and uptime of each polled router. The busiest core is what adds latency.',
     s: [[OK, 'CPU under 70%: fine'], [WARN, '70–90%: busy — queues and NetFlow may lag'], [CRIT, 'over 90%: overloaded — packets and measurements suffer']],
     a: 'A sustained high CPU on a PoP: too many simple queues for the hardware, or a firewall rule doing heavy work.',
   },
@@ -16471,11 +16476,11 @@ const AIDE = {
   // ---------------------------------------------------------- panneaux
   'right now': 'Last 10-second measurement.',
   'clients on this link': {
-    t: 'The clients of this node with how much of their limit they use, their latency and score.',
+    t: 'The clients of this site with how much of their limit they use, their latency and score.',
     r: 'Several clients red on latency at the same time as the link is loaded = the link is the bottleneck. Only one client red = look at that client.',
   },
   'link': {
-    t: 'What freeQoS knows about this node’s link: capacity, load, limits applied and plans sold behind it.',
+    t: 'What freeQoS knows about this site’s link: capacity, load, limits applied and plans sold behind it.',
     r: 'Capacity unknown: set the rate of the link in the Network tree so load and oversubscription can be judged.',
   },
   'plan': {
@@ -16657,7 +16662,7 @@ const AIDE = {
   'sold': 'Sum of the plans sold to these clients. “no plan” = limited by hand or by default.',
   'limit applied': 'The cap written on the router, when it differs from the plan (forced by hand, or a boost).',
   // ---------------------------------------------------------- contextes
-  'col|clients': 'Number of clients of this node.',
+  'col|clients': 'Number of clients of this site.',
   'boost': 'Temporary extra rate given to the client; it ends on its own at the time shown.',
   'session': 'How long the PPPoE session has been up (static clients have none). A session that keeps restarting points to a CPE or radio problem.',
   'sample': 'Age of the last measurement. “stale” = the figures are not current: the collection of this router is late or stopped.',
@@ -16714,7 +16719,7 @@ const AIDE = {
     t: 'On a node row: what its uplink (towards the core or the transit) can carry. On a client row: the cap applied to the client.',
     m: 'Wired link: the capacity declared, or the port speed. Radio link: the capacity its antenna announces live (airOS / UISP). Auto: the lowest known.',
     r: 'A node has no plan — its clients do. Its download / upload % is taken against this capacity. Grey “limits” = uplink capacity unknown: the sum of the clients’ limits is shown instead.',
-    a: 'Declare each uplink wired or radio with “wired / radio…” in Saturation risks.',
+    a: 'Declare each uplink wired or radio with “wired / radio…” in Links that could fill up (Network health).',
   },
   'col|sold / plan': {
     t: 'On a node row: the plans sold behind it divided by its uplink capacity. On a client row: its plan.',
