@@ -82,6 +82,9 @@ def test_normalisation_des_mac() -> None:
         assert normalize_mac(forme) == attendu
     assert normalize_mac("pas-une-mac") is None
     assert normalize_mac(None) is None
+    # Nulle (interfaces virtuelles) ou de diffusion : n'identifie personne.
+    assert normalize_mac("00:00:00:00:00:00") is None
+    assert normalize_mac("ff-ff-ff-ff-ff-ff") is None
 
 
 def test_classification_des_plateformes() -> None:

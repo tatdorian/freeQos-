@@ -684,6 +684,40 @@ console.log(JSON.stringify({ kind: m.nodesByKey.get('abos:router:pop|mairie').ki
     assert res["kind"] == "static"
 
 
+def test_un_client_n_est_pas_liste_sous_sa_propre_case(harnais: Path) -> None:
+    """La case decouverte qui porte le nom d'un client EST ce client : le
+    relister dessous l'affichait deux fois (la box et la ligne IP fixe), et la
+    branche comptait « 2 clients » pour un seul."""
+    res = executer(
+        harnais,
+        """
+const nodes = [
+  { key: 'router:pop', name: 'PoP Altair', kind: 'pop', hidden: false },
+  { key: 'mac:CPE', name: 'ACME OFFICE', kind: 'router', hidden: false },
+];
+const links = [{ key: 'k', source_key: 'router:pop', target_key: 'mac:CPE', interface: 'e',
+  interface_links: 1, attributes: {} }];
+const data = { nodes, links, counts: {},
+  client_nodes: { 'mac:CPE': { login: 'ACME OFFICE', how: 'name' } },
+  placements: { 'ACME OFFICE': { node: 'mac:CPE', how: 'name' },
+                'bob': { node: 'mac:CPE', how: 'name' } } };
+A.topo.subs = [
+  { login: 'ACME OFFICE', pop_name: 'PoP Altair', kind: 'static', last_ip: '10.20.0.50' },
+  { login: 'bob', pop_name: 'PoP Altair', kind: 'pppoe', last_ip: '10.20.0.51' },
+];
+const m = A.topoBuildModel(data);
+const agregat = m.nodesByKey.get('abos:mac:CPE');
+console.log(JSON.stringify({
+  client: m.nodesByKey.get('mac:CPE').clientLogin,
+  membres: agregat ? agregat.members : null,
+}));
+""",
+    )
+    assert res["client"] == "ACME OFFICE"
+    # Seul l'AUTRE client pend sous la box ; elle-meme n'est pas relistee.
+    assert res["membres"] == ["bob"]
+
+
 def test_une_liste_trop_longue_est_bornee(harnais: Path) -> None:
     """Sinon un PoP de 800 abonnes rend l'arbre inutilisable -- et le detail se
     lit dans l'onglet Abonnes, qui est fait pour ca."""

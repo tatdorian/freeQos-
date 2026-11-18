@@ -514,7 +514,7 @@ The same router can be seen several times: as a managed router *and* as a neighb
 - the **RouterOS identity**;
 - **every interface MAC** — a neighbour only reveals the MAC of the interface facing it.
 
-Three rules prevent wrong merges. **Two declared routers never merge** with each other. A **MAC claimed by several** routers stops identifying them (virtual machines cloned from the same image share interface MACs). The **name merges nothing**: it is unique only by convention. When identity cannot be proven, the operator decides: *Same device as…* folds one box into another, *Split* undoes it. Probable duplicates (same words in a different order, "CCR DS" / "DS-CCR") are flagged with a *Merge* button, never merged automatically. A box that groups several observations lists them.
+Three rules prevent wrong merges. **Two declared routers never merge** with each other. A **MAC claimed by several** routers stops identifying them (virtual machines cloned from the same image share interface MACs); the null MAC `00:00:00:00:00:00` of virtual interfaces (tunnels, PPPoE, WireGuard) and the broadcast MAC are ignored outright, they identify nothing. A discovered device that **is a client** (it carries the client's name) shows with a *client* badge, links to the client page and shows its rate; the client is not listed a second time under it. The **name merges nothing**: it is unique only by convention. When identity cannot be proven, the operator decides: *Same device as…* folds one box into another, *Split* undoes it. Probable duplicates (same words in a different order, "CCR DS" / "DS-CCR") are flagged with a *Merge* button, never merged automatically. A box that groups several observations lists them.
 
 #### How the loopback is found
 
