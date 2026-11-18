@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="c5bee443d578b595">
+  <meta name="freeqos-docs-source" content="446f17392c985704">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -4516,18 +4516,18 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <h4 id="network-throughput">Network throughput</h4>
 <p><strong>What it shows.</strong> Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.</p>
 <p><strong>How it is measured.</strong> Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.</p>
-<p><strong>How to read it.</strong> Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Routers — live traffic as “not from clients”. Filter by router or client with the menus.</p>
+<p><strong>How to read it.</strong> Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Live traffic per router as “Other traffic”. Filter by router or client with the menus.</p>
 <p><strong>What to do.</strong> A flat line at 0 while clients are online usually means the collection stopped: check the health dot at the top left and Devices › Polled routers.</p>
-<h4 id="routers-live-traffic">Routers — live traffic</h4>
-<p><strong>What it shows.</strong> Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.</p>
-<p><strong>How it is measured.</strong> Uplink port counters and subscriber queues, read every 10 s. Router CPU and port load come from the same poll.</p>
+<h4 id="live-traffic-per-router">Live traffic per router</h4>
+<p><strong>What it shows.</strong> Each router, right now: what goes through its Internet link, what your clients use, and the rest (“Other traffic”).</p>
+<p><strong>How it is measured.</strong> Internet link: counters of the router’s uplink port. Your clients: the sum of their queues. Other traffic: Internet link minus your clients. All read every 10 s.</p>
 <p><strong>Scale.</strong></p>
 <ul>
 <li>Green: under 70%: comfortable</li>
 <li>Amber: 70 to 90%: watch it — peaks start to queue</li>
 <li>Red: over 90%: saturated — latency rises for everyone behind it</li>
 </ul>
-<p><strong>How to read it.</strong> The coloured state line at the top says whether each collection (subscribers, ports, latency) is running. A large “not from clients” share is traffic of no known client.</p>
+<p><strong>How to read it.</strong> Download = towards your clients, upload = towards the Internet. A large “Other traffic” is traffic of no known client: speed tests between routers, device management, or clients not declared yet. The line at the top says when the routers were last read; it turns orange or red when a reading is late or failing.</p>
 <p><strong>What to do.</strong> Red collection state: open Devices › Polled routers and test the connection of that router.</p>
 <h4 id="top-consumers">Top consumers</h4>
 <p><strong>What it shows.</strong> The subscribers using the most bandwidth right now.</p>
@@ -4892,11 +4892,6 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td>Number of clients of this site.</td>
 </tr>
 <tr>
-<td>Clients</td>
-<td>Routers — live traffic</td>
-<td>Sum of the traffic of this router’s subscribers (their queues).</td>
-</tr>
-<tr>
 <td>Clients measured</td>
 <td></td>
 <td>Clients that answered the latency probe over the period.</td>
@@ -5032,14 +5027,14 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td>Router interface concerned.</td>
 </tr>
 <tr>
-<td>Internet</td>
-<td>Routers — live traffic</td>
-<td>What this router exchanges with the outside on its uplink port, with the port load.</td>
-</tr>
-<tr>
 <td>Internet edge</td>
 <td>Traffic</td>
 <td>NetFlow measured at the internet exit (above the core). In Automatic mode, counted for each direction it sees best: each client once, internet traffic only. Behind NAT, downloads are tied back to the client by the translated address or by matching them with their upload.</td>
+</tr>
+<tr>
+<td>Internet link</td>
+<td>Routers — live traffic</td>
+<td>What this router exchanges with the Internet on its uplink port, with how full that port is.</td>
 </tr>
 <tr>
 <td>Internet side</td>
@@ -5162,11 +5157,6 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td>Radio noise floor, in dBm (lower is better, e.g. −95 is quieter than −85). A high noise floor means interference on the channel.</td>
 </tr>
 <tr>
-<td>Not from clients</td>
-<td>Routers — live traffic</td>
-<td>Internet minus clients: traffic of no known client. Bandwidth tests, device management, routers talking to each other, or clients not declared yet. A large, steady share is worth investigating.</td>
-</tr>
-<tr>
 <td>Object</td>
 <td></td>
 <td>The collection concerned: accounts, packages, sites, access points, services.</td>
@@ -5185,6 +5175,11 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td>Origin</td>
 <td></td>
 <td>Where the item comes from.</td>
+</tr>
+<tr>
+<td>Other traffic</td>
+<td>Routers — live traffic</td>
+<td>Internet link minus your clients: traffic of no known client. Bandwidth tests, device management, routers talking to each other, or clients not declared yet. A large, steady share is worth investigating.</td>
 </tr>
 <tr>
 <td>Oversubscription</td>
@@ -5319,7 +5314,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <tr>
 <td>Routers</td>
 <td></td>
-<td>Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two. Uplink port counters and subscriber queues, read every 10 s. A large gap (“not from clients”) is traffic of no known client: tests, management, or clients not yet declared.</td>
+<td>Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two. Uplink port counters and subscriber queues, read every 10 s. A large “Other traffic” is traffic of no known client: tests, management, or clients not yet declared.</td>
 </tr>
 <tr>
 <td>Sample</td>
@@ -5565,6 +5560,11 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td>Worst score</td>
 <td></td>
 <td>Lowest experience score among the clients of the node. Scale: Green, 80 to 100: good; Amber, 50 to 79: fair — noticeable at busy times; Red, under 50: poor — the client feels it; Grey, grey / “-”: not measured yet.</td>
+</tr>
+<tr>
+<td>Your clients</td>
+<td>Routers — live traffic</td>
+<td>Sum of the traffic of this router’s clients (their queues).</td>
 </tr>
 </tbody>
 </table></div>

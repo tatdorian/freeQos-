@@ -2424,3 +2424,14 @@ body.role-limited .dash-detail { display: none; }
 .cpu-core i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--ok); }
 .cpu-core.warn i { background: var(--warn); }
 .cpu-core.crit i { background: var(--crit); }
+
+/* Trafic en direct par routeur : trois tuiles en clair, le detail des ports replie. */
+.pl-kpi-t { font-size: .74rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); font-weight: 600; }
+.pl-kpi-d { font-size: .76rem; color: var(--muted); line-height: 1.35; }
+.pl-rates { display: flex; flex-wrap: wrap; gap: .2rem 1rem; font-size: .9rem; }
+.pl-rates b { font-size: 1.05rem; }
+.pl-kpi-muted .pl-rates { opacity: .7; }
+.pl-kpi-note { box-shadow: inset 3px 0 0 var(--warn); }
+.pl-ports-d { margin: .2rem 0 .4rem; }
+.pl-ports-d > summary { cursor: pointer; font-size: .85rem; font-weight: 600; padding: .3rem 0; }
+.pl-ports-d .pl-idle { margin-top: .3rem; }
