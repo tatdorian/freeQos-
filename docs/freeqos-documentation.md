@@ -626,6 +626,12 @@ API: `GET /api/v1/topology` returns `placements` (login → box and how) and `cl
 
 A PPPoE client's queue is written on **the router where its session is open**, whatever site the client is filed under (a VLAN site, a site found by address, another router that also sees it). Before, a client filed under another site than the router carrying its session had a queue **nowhere**: its plan was shown, never written, and the automatic pass sent "0 command". Setting the plan now writes the queue at once on that router, and every automatic pass keeps it.
 
+### By IP address, like the API
+
+A client of a router's site that has no PPPoE session under its own name on that router (an account named differently, a session carried by an intermediate device...) gets its queue **by its IP address**, on the router of its site, exactly as when a limit is pushed by the API for that address. Two safeguards keep the wrong client from being capped: the address must have been measured less than five minutes ago, and no other session of that router may be using it.
+
+When a router does not carry the client at all, setting a plan now says so ("is not carried by <router>"), instead of reporting the queue as already correct.
+
 ### A router that is a client of another router
 
 freeQoS never puts a client queue on an address of the network itself: a router's own address, its loopback, its default gateway. One case is a client all the same: a **router connected in PPPoE to its parent** (an office or site router that dials in). Its session is open on the parent, and its address is its own WAN address. Give it a plan like any client: the queue is written **on the parent**, on that address, and caps everything the child router carries. Seen from the child router itself, the same address stays protected.

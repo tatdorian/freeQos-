@@ -13711,6 +13711,7 @@ const ACTION_LABEL = {
 const ETAT_FILE = {
   'file-a-poser': 'pending on router', 'sans-routeur': 'no router', ecarte: 'skipped',
   conflit: 'conflict', erreur: 'error', 'posee-a-la-main': 'set by hand on the router',
+  absent: 'not on this router',
 };
 function etatGeste(a) {
   if (!a.ok) return '<span class="badge crit">refused</span>';

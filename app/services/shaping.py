@@ -19,7 +19,8 @@ import os
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 from app.collectors.config_graph import (
@@ -1366,6 +1367,8 @@ class ShapingService:
             surcharge = surcharges_abonnes.get(login, {})
             secteur = rattachements.get(login)
             session = sessions.pop(login, None)
+            if session is None:
+                session = _session_par_ip(ligne, login_par_ip, maintenant)
             plan_bas, plan_haut = ligne.get("plan_down_mbps"), ligne.get("plan_up_mbps")
             service = services_de_session.get(login)
             if service is not None:
@@ -1918,6 +1921,10 @@ class ShapingService:
     ETAT_RETIREE = "file-retiree"
     ETAT_A_POSER = "file-a-poser"
     ETAT_ECARTE = "ecarte"
+    # Le client n'est pas dans l'etat desire de CE routeur : rien a y ecrire.
+    # Ce n'etait PAS « file deja correcte » : c'est ce faux succes qui affichait
+    # « applied » sans qu'aucune file n'existe.
+    ETAT_ABSENT = "absent"
     ETAT_SANS_ROUTEUR = "sans-routeur"
     ETAT_CONFLIT = "conflit"
     ETAT_ERREUR = "erreur"
@@ -2450,7 +2457,8 @@ class ShapingService:
             ligne["reason"] = empeche
             return ligne
         try:
-            plan = await self.plan_router(router_name, prune=removing)
+            liens, abonnes = await self.build_targets(router_name)
+            plan = await self.plan(router_name, links=liens, subscribers=abonnes, prune=removing)
         except Exception as exc:  # noqa: BLE001 - un routeur muet ne casse pas la saisie
             logger.exception("Plan impossible sur %s pour '%s'", router_name, reference)
             ligne["state"] = self.ETAT_ERREUR
@@ -2481,6 +2489,13 @@ class ShapingService:
             if removing:
                 ligne["state"] = self.ETAT_RETIREE
                 ligne["reason"] = "no queue for this client on the router"
+            elif not any(a.login == reference for a in abonnes):
+                ligne["state"] = self.ETAT_ABSENT
+                ligne["reason"] = (
+                    f"{reference} is not carried by {router_name}: no open PPPoE session "
+                    "for this login on it, and no fixed-IP record for it there -- "
+                    "nothing to write"
+                )
             return ligne
 
         if dry_run:
@@ -2545,6 +2560,7 @@ class ShapingService:
         ETAT_A_POSER,
         ETAT_POSEE,
         ETAT_RETIREE,
+        ETAT_ABSENT,
     )
 
     def _etat_principal(self, lignes: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -4017,6 +4033,39 @@ def transit_reason(lien: dict[str, Any]) -> str | None:
     if str(lien.get("target_kind") or "") in ("gateway", "core"):
         return TRANSIT_SKIP.format(peer=pair, why=str(lien.get("target_kind")))
     return None
+
+
+#: Une adresse mesuree il y a plus longtemps ne situe plus le client.
+FRAICHEUR_IP = timedelta(minutes=5)
+
+
+def _session_par_ip(
+    ligne: dict[str, Any], login_par_ip: dict[str, str], maintenant: datetime
+) -> Any:
+    """LA FILE PAR L'ADRESSE IP, COMME PAR L'API.
+
+    Un client du site de ce routeur sans session PPPoE a son nom (compte nomme
+    autrement, session portee par un equipement intermediaire...) n'avait AUCUNE
+    file : le planificateur ne cherchait que la session. Par l'API, la meme
+    limite posee sur son adresse IP fonctionnait. On fait donc pareil : son
+    adresse IP mesuree recemment porte la file sur le routeur de son site.
+
+    Deux garde-fous, pour ne jamais brider le mauvais client : l'adresse doit
+    avoir ete mesuree il y a moins de cinq minutes, et aucune AUTRE session de
+    ce routeur ne doit l'utiliser.
+    """
+    adresse = str(ligne.get("last_ip") or "").strip()
+    vu = ligne.get("ts")
+    if not adresse or not isinstance(vu, datetime):
+        return None
+    if vu.tzinfo is None:
+        vu = vu.replace(tzinfo=UTC)
+    if maintenant - vu > FRAICHEUR_IP:
+        return None
+    autre = login_par_ip.get(adresse.split("/")[0])
+    if autre is not None and autre != str(ligne.get("login")):
+        return None
+    return SimpleNamespace(address=adresse)
 
 
 def protect_infrastructure(
