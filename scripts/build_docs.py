@@ -141,14 +141,14 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
         ["network throughput", "routers — live traffic", "top consumers", "radio backhauls"],
     ),
     (
-        "Executive",
-        "Where the risk is: saturation, experience, load and queues per node, health over "
-        "time. Clicking a node or a client opens the Selection panel.",
+        "Network health",
+        "Is the network fine, and where could it fill up: the verdict, latency per client, "
+        "load per site, health over time. Clicking a site or a client opens its details.",
         [
-            "saturation risks",
+            "links that could fill up",
             "latency by client",
-            "load by node",
-            "queues by node",
+            "how full each site is",
+            "sites and their clients",
             "selection",
             "sec|node",
             "sec|client",
@@ -184,9 +184,10 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
         ["default plan", "clients", "packages pushed by the api"],
     ),
     (
-        "Insights",
-        "The commercial reading of the measurements, comparing the chosen period with the "
-        "one before.",
+        "Business insights",
+        "What to do with your clients: who may leave, who to offer a bigger plan, and how "
+        "many more clients each site can take, comparing the chosen period with the one "
+        "before.",
         [
             "at risk of leaving",
             "ready for a bigger plan",
