@@ -659,6 +659,14 @@ A static-IP client announces nothing: no session, no RADIUS plan. **The declarat
 
 **Alone on its VLAN.** When a single client is declared on a VLAN (and no PPPoE server listens on it), every network of that VLAN interface belongs to it — **all of them** when the VLAN carries several pools — plus its declared ranges: its queue targets the whole list, and its traffic is attributed to it in NetFlow.
 
+**Already a client: one client, not two.** Declaring by hand the address of a client freeQoS **already knows by its PPPoE session** does not create a second client. The record is **merged into the session**: the name typed becomes the client's display name, the rate typed becomes its plan (unless it already has one), its mode, forced limit, boost, contact details and activity follow, and the duplicate static-IP record is deleted. The queue is set on the session, as for any PPPoE client, and the form says *Already a client*. A record declared **before** the session appears is merged within a minute of the session being seen (job `merge_clients`). The merge only happens when:
+
+- the record was declared **by hand** (a record pushed by the billing API stays the API's: it would recreate it);
+- it is a **single address** (/32), not a block;
+- **exactly one** session seen in the last 10 minutes carries that address, and that session was not removed from freeQoS.
+
+Each merge is written to the client's *Activity* (*Merged*).
+
 **Census and candidates.** The census of a PoP (`GET /api/v1/pops/census`, see above) confirms declared clients — an address inside a declared block is "seen active" — and lists the addresses that match nothing. `GET /api/v1/static-clients/candidates` returns those candidates and `GET /api/v1/static-clients/candidates/diagnostic` the reason each ARP line was set aside. A candidate is never turned into a subscriber automatically: a printer, a camera or another operator's device leaves exactly the same trace, and nobody can guess the sold rate. Declaring always goes through `POST /api/v1/static-clients` (or the *Add a client* form) with a reference and a plan.
 
 ### Ubiquiti antennas and radio capacity

@@ -5304,7 +5304,14 @@ async function scEnregistrer(event) {
       scNotice('<span class="badge ok">Record updated</span>' + scEnforcement(fiche.enforcement));
     } else {
       fiche = await api('/static-clients', { method: 'POST', body: JSON.stringify(payload) });
-      scNotice('<span class="badge ok">Client declared</span>' + scEnforcement(fiche.enforcement));
+      if (fiche.merged_into) {
+        // Meme IP qu'une session deja connue : un seul client, celui de la session.
+        scNotice('<span class="badge ok">Already a client</span> ' + esc(fiche.address || '') +
+          ' is the address of <b>' + esc(fiche.merged_into) + '</b>: the two are now one client, ' +
+          'named "' + esc(fiche.label || fiche.reference) + '", with its mode and plan.');
+      } else {
+        scNotice('<span class="badge ok">Client declared</span>' + scEnforcement(fiche.enforcement));
+      }
     }
     scRemplirFormulaire(null);
     // Declarer un client le retire de la liste des candidats : les deux
