@@ -175,6 +175,10 @@ class CollectionService:
         # faisait passer tous ses clients pour « hors ligne » : on ne savait
         # pas si le client etait parti ou si c'etait la lecture qui manquait.
         self.router_reads: dict[str, dict[str, Any]] = {}
+        # Login -> routeur ou sa session PPPoE est ouverte (dernier releve). La
+        # pose immediate d'un forfait s'en sert : le site enregistre du client
+        # peut ne pas etre celui du routeur qui porte sa session.
+        self.session_routers: dict[str, str] = {}
         # D'OU VIENT LE DEBIT AFFICHE de chaque client : file, interface ou
         # NetFlow, et pourquoi on a quitte la file quand c'est le cas.
         self.measure_sources: dict[str, dict[str, Any]] = {}
@@ -252,6 +256,8 @@ class CollectionService:
             retires = getattr(self, "exclusions", None)
             if retires is not None and retires.logins:
                 outcome = [s for s in outcome if s.login not in retires]
+            for session in outcome:
+                self.session_routers[session.login] = collector.name
             sessions_by_router.append((collector, outcome))
 
         # Compteurs des FILES, lus une fois par routeur et par cycle. C'est la

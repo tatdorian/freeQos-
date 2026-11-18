@@ -10596,6 +10596,14 @@ function pointDebit(point) {
  *  L'arbre est celui que RouterOS applique : un abonne pend sous le lien qu'il
  *  traverse, et partage donc son plafond avec ses voisins. L'afficher a plat
  *  obligerait a le reconstruire de tete. */
+/** Ordre de la carte : clients avant liens, et ce qui demande un regard en tete. */
+function ordrePoint(p) {
+  const client = p.kind !== 'lien';
+  const aDebit = !!(p.cap || p.down_mbps || p.max_down_mbps || (p.detail && (p.detail.down_mbps || p.detail.plan_down_mbps)));
+  const regard = p.state === 'conflit' ? 0 : (p.state === 'ecarte' && aDebit) ? 1 : p.state === 'file-a-poser' ? 2 : 3;
+  return (client ? 0 : 10) + regard;
+}
+
 function renderPoint(point, profondeur) {
   const decalage = 'padding-left:' + (profondeur * 1.1 + 0.2) + 'rem';
   const nature = point.kind === 'lien'
@@ -10831,7 +10839,12 @@ async function loadPoints() {
       '<th>Network point</th><th>Target</th><th class="num">Cap</th>' +
       '<th>Where the cap comes from</th><th>State</th>' +
       '</tr></thead><tbody>' +
-      r.points.map((p) => renderPoint(p, 0)).join('') +
+      // LES CLIENTS D'ABORD. Un gros routeur a des dizaines de liens sans file
+      // (c'est normal : les files de lien sont coupees) ; listes en premier, ils
+      // poussaient la ligne du client cherche au-dela des 25 premieres, cachee
+      // derriere « Show all points ». Puis ce qui merite un regard : un
+      // conflit, un client ecarte ALORS qu'il a un debit, ce qui reste a poser.
+      r.points.slice().sort((a, b) => ordrePoint(a) - ordrePoint(b)).map((p) => renderPoint(p, 0)).join('') +
       '</tbody></table></div>';
   }).join('');
 

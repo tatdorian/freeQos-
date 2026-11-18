@@ -301,6 +301,8 @@ class ShapingService:
         self.registry = registry
         # Clients retires de freeQoS (app/services/exclusions.py), branche par le conteneur.
         self.exclusions: Any = None
+        # Login -> routeur de sa session (CollectionService.session_routers).
+        self.session_routers: dict[str, str] = {}
         self.repository = repository
         # Depot de metriques : donne les abonnes actifs et leur plan. Optionnel
         # pour que le service reste testable sans base.
@@ -1384,17 +1386,31 @@ class ShapingService:
                 )
             )
 
-        # Sessions ouvertes que la base ne connait pas encore (abonne apparu
-        # entre deux cycles de collecte). Une surcharge posee a la main, ou un
-        # service pousse sur son IP, doit s'appliquer des maintenant.
+        # Sessions ouvertes sur CE routeur et pas encore traitees : abonne apparu
+        # entre deux cycles de collecte, OU abonne dont le site enregistre n'est
+        # pas celui de ce routeur.
+        #
+        # LA SESSION FAIT FOI. Constate : un client dont la session PPPoE est
+        # ouverte ici, mais range dans un autre site (VLAN, adresse, autre
+        # routeur qui le voit), n'avait de file NULLE PART -- ce routeur
+        # l'ecartait pour son site, l'autre pour l'absence de session. Son
+        # forfait etait affiche, jamais ecrit. La file va la ou est la session.
+        lignes_par_login = {
+            str(ligne.get("login")): ligne
+            for ligne in lignes_abonnes
+            if ligne.get("kind") != KIND_STATIC
+        }
         for login, session in sessions.items():
             surcharge = surcharges_abonnes.get(login, {})
             service = services_de_session.get(login)
-            if not surcharge and service is None:
-                continue
+            ligne_connue = lignes_par_login.get(login) or {}
             plan_bas, plan_haut = (
-                self._plan_du_service(service) if service is not None else (None, None)
+                self._plan_du_service(service)
+                if service is not None
+                else (ligne_connue.get("plan_down_mbps"), ligne_connue.get("plan_up_mbps"))
             )
+            if not surcharge and service is None and not (plan_bas or plan_haut):
+                continue
             secteur = rattachements.get(login)
             abonnes.append(
                 self._horaire(
@@ -1407,7 +1423,7 @@ class ShapingService:
                         surcharge=surcharge,
                         parent=parent_par_noeud.get(secteur) if secteur else None,
                     ),
-                    site=pop_name,
+                    site=ligne_connue.get("pop_name") or pop_name,
                     maintenant=maintenant,
                 )
             )
@@ -3322,6 +3338,14 @@ class ShapingService:
         # poser un plafond sur cet abonne repondait alors "aucun routeur ne le
         # porte", sans que rien ne dise pourquoi.
         retenus: list[str] = []
+        # LA SESSION D'ABORD : le routeur ou elle est ouverte porte la file, quel
+        # que soit le site enregistre du client (cf. build_targets).
+        sessions_ouvertes = getattr(self, "session_routers", None) or {}
+        connus = {c.name for c in self.registry.collectors}
+        for login in logins:
+            nom = sessions_ouvertes.get(login)
+            if nom and nom in connus and nom not in retenus:
+                retenus.append(nom)
         for pop in pops:
             for nom in await self._routers_for_site(str(pop)):
                 if nom not in retenus:
@@ -3767,6 +3791,27 @@ class ShapingService:
                     "reason": f"{nom} is read-only in freeQoS: allow writing on it in "
                     "Devices › Router settings.",
                 }
+            # Le PLAN REEL du routeur : un conflit de nom, une adresse partagee
+            # avec un autre client, ou un ecart decide a la planification.
+            try:
+                plan = await self.plan(nom, links=_liens, subscribers=abonnes, prune=False)
+            except Exception as exc:  # noqa: BLE001 - le motif reste celui d'avant
+                logger.debug("Plan de %s illisible pour %s : %s", nom, login, exc)
+                plan = None
+            if plan is not None:
+                nom_file = cible.queue_name
+                ecart = next((e for e in plan.skipped if e.login == login), None)
+                if ecart is not None:
+                    return {"code": "skipped", "router": nom, "reason": ecart.reason}
+                conflit = next((c for c in plan.conflicts if c.name == nom_file), None)
+                if conflit is not None:
+                    return {"code": "conflict", "router": nom, "reason": conflit.detail}
+                if not any(a.name == nom_file for a in plan.actions):
+                    return {
+                        "code": "in_place",
+                        "router": nom,
+                        "reason": f"The queue {nom_file} is in place on {nom}: refresh the page.",
+                    }
             return {
                 "code": "pending",
                 "router": nom,
