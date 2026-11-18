@@ -83,6 +83,7 @@ from app.enforcement.models import (
     target_members,
 )
 from app.enforcement.planner import (
+    NO_RATE_SKIP,
     SOURCE_SCHEDULE,
     TARGET_ADDRESS,
     LinkTarget,
@@ -101,7 +102,7 @@ from app.enforcement.routeros import (
 )
 from app.enforcement.schedules import BOOK as SCHEDULE_BOOK
 from app.enforcement.schedules import ScheduleBook
-from app.models import KIND_STATIC, StaticClient
+from app.models import KIND_PPPOE, KIND_STATIC, StaticClient
 from app.services.limit_audit import audit_router
 from app.services.pop_match import explain as explain_pop
 from app.services.pop_match import resolve_pop
@@ -3732,6 +3733,51 @@ class ShapingService:
         return [c.name for c in self.registry.collectors if not ecriture_autorisee(c)]
 
     # ------------------------------------------------------------ interne
+    async def why_no_queue(self, login: str) -> dict[str, Any]:
+        """POURQUOI ce client n'a pas de file sur son routeur, en une phrase.
+
+        « No queue » ne disait pas quoi faire. Les causes, dans l'ordre ou elles
+        bloquent : l'ecriture coupee partout, le client hors ligne, un garde-fou
+        (infrastructure, transit...), pas de debit a appliquer, le routeur en
+        lecture seule -- sinon la file sera posee au prochain passage.
+        """
+        if not self._enforcement_enabled:
+            return {
+                "code": "writing_off",
+                "reason": "Writing to the routers is off: turn it on in Settings › Router writing.",
+            }
+        maintenant = datetime.now(tz=UTC)
+        for collector in self.registry.collectors:
+            try:
+                _liens, abonnes = await self.build_targets(collector.name)
+            except Exception:  # noqa: BLE001 - un routeur illisible n'arrete pas la recherche
+                continue
+            cible = next((a for a in abonnes if a.login == login), None)
+            if cible is None:
+                continue
+            nom = collector.name
+            if cible.skip_reason:
+                return {"code": "skipped", "router": nom, "reason": cible.skip_reason}
+            if not cible.effective_down_at(maintenant) and not cible.effective_up_at(maintenant):
+                return {"code": "no_rate", "router": nom, "reason": NO_RATE_SKIP}
+            if not ecriture_autorisee(collector):
+                return {
+                    "code": "read_only",
+                    "router": nom,
+                    "reason": f"{nom} is read-only in freeQoS: allow writing on it in "
+                    "Devices › Router settings.",
+                }
+            return {
+                "code": "pending",
+                "router": nom,
+                "reason": f"Will be written on {nom} at the next pass (within two minutes).",
+            }
+        return {
+            "code": "offline",
+            "reason": "No open session on a polled router: the queue is written when the "
+            "client connects.",
+        }
+
     def _collector(self, router_name: str) -> MikrotikCollector:
         for collector in self.registry.collectors:
             if collector.name == router_name:
@@ -3944,12 +3990,15 @@ def protect_infrastructure(
     # Un loopback ou la passerelle amont, eux, n'ont rien a faire dans un
     # sous-reseau de client.
     protegees: dict[Any, tuple[str, bool]] = {}
+    # Le routeur qui porte chaque adresse protegee (None : la passerelle).
+    proprietaire: dict[Any, str | None] = {}
     for adresse, (porteur, iface) in own_addresses().items():
         try:
             ip = ipaddress.ip_address(adresse)
         except ValueError:
             continue
         protegees[ip] = (f"router {porteur}", iface in ("loopback", "lo"))
+        proprietaire[ip] = porteur
     if passerelle:
         try:
             protegees[ipaddress.ip_address(passerelle)] = (
@@ -4017,6 +4066,20 @@ def protect_infrastructure(
             hote = reseau.num_addresses == 1
             for ip, (porteur, couvrable) in protegees.items():
                 if ip.version == reseau.version and ip in reseau and (hote or couvrable):
+                    # UN ROUTEUR CLIENT D'UN AUTRE. Sa session PPPoE est ouverte
+                    # sur CE routeur (son parent) et son adresse est la sienne :
+                    # c'est un client de ce routeur comme un autre. Lui donner un
+                    # forfait, c'est vouloir le limiter ici -- on le fait. Le
+                    # garde-fou reste entier pour l'adresse de CE routeur, sa
+                    # passerelle, et tout ce qui n'est pas une session PPPoE.
+                    autre = proprietaire.get(ip)
+                    if (
+                        abonne.kind == KIND_PPPOE
+                        and hote
+                        and autre is not None
+                        and autre != router_name
+                    ):
+                        continue
                     abonne.skip_reason = INFRA_SKIP.format(address=ip, owner=porteur)
                     break
             if abonne.skip_reason:

@@ -156,7 +156,13 @@ async def client_health(
             for q in routeur.get("queues") or []:
                 if q.get("name") == nom_file:
                     file = q
-        sortie["limit"] = sante.limite(file, fait)
+        pourquoi = None
+        if file is None and fait:
+            try:
+                pourquoi = await container.shaping.why_no_queue(login)
+            except Exception as exc:  # noqa: BLE001 - le motif est un plus
+                logger.debug("Motif sans file de %s illisible : %s", login, exc)
+        sortie["limit"] = sante.limite(file, fait, pourquoi)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Limite de %s illisible : %s", login, exc)
         sortie["limit"] = sante.limite(None, False)
