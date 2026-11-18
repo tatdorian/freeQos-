@@ -43,17 +43,17 @@
  "network throughput": {
   "t": "Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.",
   "m": "Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.",
-  "r": "Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Routers — live traffic as “not from clients”. Filter by router or client with the menus.",
+  "r": "Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Live traffic per router as “Other traffic”. Filter by router or client with the menus.",
   "a": "A flat line at 0 while clients are online usually means the collection stopped: check the health dot at the top left and Devices › Polled routers."
  },
  "routers": {
   "t": "Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.",
   "m": "Uplink port counters and subscriber queues, read every 10 s.",
-  "r": "A large gap (“not from clients”) is traffic of no known client: tests, management, or clients not yet declared."
+  "r": "A large “Other traffic” is traffic of no known client: tests, management, or clients not yet declared."
  },
- "routers — live traffic": {
-  "t": "Each router, live: what it exchanges with the internet on its uplink, what its own clients consume, and the gap between the two.",
-  "m": "Uplink port counters and subscriber queues, read every 10 s. Router CPU and port load come from the same poll.",
+ "live traffic per router": {
+  "t": "Each router, right now: what goes through its Internet link, what your clients use, and the rest (“Other traffic”).",
+  "m": "Internet link: counters of the router’s uplink port. Your clients: the sum of their queues. Other traffic: Internet link minus your clients. All read every 10 s.",
   "s": [
    [
     "ok",
@@ -68,7 +68,7 @@
     "over 90%: saturated — latency rises for everyone behind it"
    ]
   ],
-  "r": "The coloured state line at the top says whether each collection (subscribers, ports, latency) is running. A large “not from clients” share is traffic of no known client.",
+  "r": "Download = towards your clients, upload = towards the Internet. A large “Other traffic” is traffic of no known client: speed tests between routers, device management, or clients not declared yet. The line at the top says when the routers were last read; it turns orange or red when a reading is late or failing.",
   "a": "Red collection state: open Devices › Polled routers and test the connection of that router."
  },
  "top consumers": {
@@ -965,10 +965,10 @@
    ]
   ]
  },
- "kpi|internet": "What this router exchanges with the outside on its uplink port, with the port load.",
- "kpi|clients": "Sum of the traffic of this router’s subscribers (their queues).",
- "kpi|not from clients": {
-  "t": "Internet minus clients: traffic of no known client.",
+ "kpi|internet link": "What this router exchanges with the Internet on its uplink port, with how full that port is.",
+ "kpi|your clients": "Sum of the traffic of this router’s clients (their queues).",
+ "kpi|other traffic": {
+  "t": "Internet link minus your clients: traffic of no known client.",
   "r": "Bandwidth tests, device management, routers talking to each other, or clients not declared yet. A large, steady share is worth investigating."
  },
  "vantage|internet edge": "NetFlow measured at the internet exit (above the core). In Automatic mode, counted for each direction it sees best: each client once, internet traffic only. Behind NAT, downloads are tied back to the client by the translated address or by matching them with their upload.",

@@ -138,7 +138,7 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
     (
         "Dashboard",
         "What is happening on the network right now.",
-        ["network throughput", "routers — live traffic", "top consumers", "radio backhauls"],
+        ["network throughput", "live traffic per router", "top consumers", "radio backhauls"],
     ),
     (
         "Network health",
