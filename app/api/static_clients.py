@@ -34,6 +34,7 @@ from app.db.static_clients_repo import (
     StaticClientsRepository,
     VlanSightingsRepository,
 )
+from app.services.client_merge import merge_duplicates
 
 logger = logging.getLogger(__name__)
 
@@ -401,6 +402,12 @@ async def create_static_client(
     except InvalidStaticClientError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     logger.info("Client statique '%s' declare depuis l'interface", created["reference"])
+    # Deja connu par sa session (meme IP) : un seul client, pas deux.
+    fusions = await merge_duplicates(container, only_reference=str(created["reference"]))
+    if fusions:
+        created["merged_into"] = fusions[0]["into"]
+        _redessiner_l_arbre(container)
+        return created
     created["enforcement"] = await _poser_la_file(
         container,
         reference=created["reference"],
