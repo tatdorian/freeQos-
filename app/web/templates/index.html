@@ -1223,6 +1223,15 @@
         </form>
       </div>
 
+      <!-- REGLAGES DES ROUTEURS : juste apres « Connect a router », parce que
+           c'est la que tout se regle ensuite (Set up, Set by freeQoS, ecriture,
+           role, Reset queues, Remove freeQoS). -->
+      <h2>Router settings</h2>
+      <h3>Polled routers</h3>
+      <div class="table-wrap" id="routers-table"></div>
+      <h3>Known sites</h3>
+      <div class="table-wrap" id="pops-table"></div>
+
       <!-- UBIQUITI UISP : le controleur de toutes les antennes airMAX / LTU. On
            le relie une fois (adresse + jeton d'API en lecture), on voit le
            potentiel de chaque antenne, et celles rattachees a un site donnent
@@ -1301,11 +1310,6 @@
       <h2 data-tab="Radio health">Radio health: access points and their CPEs</h2>
       <div id="radio-health"></div>
 
-      <h2>Inventory</h2>
-      <h3>Known sites</h3>
-      <div class="table-wrap" id="pops-table"></div>
-      <h3>Polled routers</h3>
-      <div class="table-wrap" id="routers-table"></div>
     </section>
 
     <!-- ---------------------------------------------- connexion a distance -->
