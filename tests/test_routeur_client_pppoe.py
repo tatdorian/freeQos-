@@ -228,16 +228,16 @@ def test_un_ecart_de_lien_n_est_pas_celui_du_client_homonyme() -> None:
     from app.enforcement.planner import LinkTarget
 
     lien = LinkTarget(
-        name="LIPTINFOR OFFICE",
+        name="ACME OFFICE",
         interface="ether3",
         subnet="10.10.11.0/24",
         measured_capacity_mbps=100,
     )
-    client = _client("LIPTINFOR OFFICE", "198.51.100.77")
+    client = _client("ACME OFFICE", "198.51.100.77")
     _types, files, ecartes = desired_state(links=[lien], subscribers=[client], link_queues=False)
     assert [f.target for f in files] == ["198.51.100.77/32"]
     (ecart,) = ecartes
-    assert ecart.kind == "link" and ecart.login == "LIPTINFOR OFFICE"
+    assert ecart.kind == "link" and ecart.login == "ACME OFFICE"
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
@@ -396,8 +396,8 @@ def test_sans_session_a_son_nom_la_file_se_pose_par_son_ip(app_client, routeur) 
 
 
 async def test_le_site_d_un_routeur_est_toujours_servi_par_ce_routeur(settings) -> None:  # noqa: F811
-    """CONSTATE : le referentiel attribuait le site du PoP NAS-OFFICE au routeur
-    PARENT (un de ses VLAN reconnu comme ce site). NAS-OFFICE n'etait jamais
+    """CONSTATE : le referentiel attribuait le site du PoP NAS-SOUTH au routeur
+    PARENT (un de ses VLAN reconnu comme ce site). NAS-SOUTH n'etait jamais
     retenu pour son propre site : la file de ses clients ne partait que vers le
     parent, en lecture seule -- donc nulle part."""
     from tests.conftest import FakeRouterOsClient
@@ -455,3 +455,131 @@ def test_le_diagnostic_d_un_client_dit_tout_routeur_par_routeur(app_client, rout
     assert r0["targets_for_this_client"][0]["login"] == "dupont"
     # Lecture seule : rien n'a ete ecrit.
     assert _file(routeur, "10.20.0.10") is None
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_fiche_ip_fixe_sur_l_ip_d_une_session_retiree(app_client, routeur) -> None:  # noqa: F811
+    """CONSTATE (diagnostic de production) : la fiche a IP fixe « ACME
+    OFFICE » portait l'IP de la session PPPoE SESS-0042, retiree de freeQoS. La
+    fiche etait fusionnee dans la session et disparaissait avec elle : son mode
+    200/200 n'etait jamais pose, nulle part."""
+    routeur.add_session("sess-0042", address="10.20.0.50")
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+        },
+    )
+    assert r.status_code == 201, r.text
+    _attendre(
+        lambda: bool(
+            app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle)
+            .json()
+            .get("finished_at")
+        ),
+        20,
+    )
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    # La session est retiree de freeQoS (elle reste sur le routeur).
+    r = app_client.post(
+        "/api/v1/clients/remove", headers=cle, json={"logins": ["sess-0042"], "confirm": True}
+    )
+    assert r.status_code == 200, r.text
+    # La fiche a IP fixe, poussee par l'API sur la meme IP.
+    r = app_client.put(
+        "/model/v1/services/office",
+        headers=cle,
+        json={
+            "id": "office",
+            "account": "office",
+            "down_speed": 300000,
+            "up_speed": 300000,
+            "attachments": [{"network_prefixes": ["10.20.0.50"]}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    # Le mode « test » 200/200, pose sur la fiche.
+    r = app_client.put(
+        "/api/v1/shaping/policies",
+        headers=cle,
+        json={
+            "scope": "subscriber",
+            "target_key": "office",
+            "max_down_mbps": 200,
+            "max_up_mbps": 200,
+        },
+    )
+    assert r.status_code == 200, r.text
+    file = _file(routeur, "10.20.0.50")
+    assert file is not None, routeur.simple_queue_rows
+    assert file["max-limit"] == "200000000/200000000"
+    assert file["name"] == "freeqos-office"
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_fiche_ip_fixe_fusionnee_dans_une_session_gardee_son_mode_s_applique(
+    app_client,  # noqa: F811
+    routeur,  # noqa: F811
+) -> None:
+    """La session est gardee : la fiche se fond dans sa file (comme avant), et le
+    mode pose sur la FICHE s'applique a cette file."""
+    routeur.add_session("sess-0042", address="10.20.0.50")
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+        },
+    )
+    assert r.status_code == 201, r.text
+    _attendre(
+        lambda: bool(
+            app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle)
+            .json()
+            .get("finished_at")
+        ),
+        20,
+    )
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    r = app_client.put(
+        "/model/v1/services/office",
+        headers=cle,
+        json={
+            "id": "office",
+            "account": "office",
+            "down_speed": 300000,
+            "up_speed": 300000,
+            "attachments": [{"network_prefixes": ["10.20.0.50"]}],
+        },
+    )
+    assert r.status_code == 200, r.text
+    r = app_client.put(
+        "/api/v1/shaping/policies",
+        headers=cle,
+        json={
+            "scope": "subscriber",
+            "target_key": "office",
+            "max_down_mbps": 200,
+            "max_up_mbps": 200,
+        },
+    )
+    assert r.status_code == 200, r.text
+    file = _file(routeur, "10.20.0.50")
+    assert file is not None, routeur.simple_queue_rows
+    assert file["max-limit"] == "200000000/200000000"
+    assert file["name"] == "freeqos-sess-0042"
