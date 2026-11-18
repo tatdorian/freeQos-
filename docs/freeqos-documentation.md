@@ -622,6 +622,10 @@ What an Administrator can change, all undoable:
 
 API: `GET /api/v1/topology` returns `placements` (login → box and how) and `client_nodes`; `PUT /api/v1/topology/client-places` (`{"logins", "node_key"}`), `DELETE /api/v1/topology/client-places/{login}`, `PUT /api/v1/topology/client-links` (`{"node_key", "login"}`, empty login = not a client), `DELETE /api/v1/topology/client-links/{node_key}`.
 
+### The queue goes where the session is
+
+A PPPoE client's queue is written on **the router where its session is open**, whatever site the client is filed under (a VLAN site, a site found by address, another router that also sees it). Before, a client filed under another site than the router carrying its session had a queue **nowhere**: its plan was shown, never written, and the automatic pass sent "0 command". Setting the plan now writes the queue at once on that router, and every automatic pass keeps it.
+
 ### A router that is a client of another router
 
 freeQoS never puts a client queue on an address of the network itself: a router's own address, its loopback, its default gateway. One case is a client all the same: a **router connected in PPPoE to its parent** (an office or site router that dials in). Its session is open on the parent, and its address is its own WAN address. Give it a plan like any client: the queue is written **on the parent**, on that address, and caps everything the child router carries. Seen from the child router itself, the same address stays protected.

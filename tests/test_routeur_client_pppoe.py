@@ -151,3 +151,74 @@ def test_bout_en_bout_le_forfait_est_ecrit_et_le_motif_dit(app_client, routeur) 
         assert file["max-limit"] == "100000000/100000000"
     finally:
         mikrotik._PROPRIETAIRES.pop("10.20.0.10", None)
+
+
+def test_la_carte_des_limites_montre_les_clients_avant_les_liens() -> None:
+    """Les 25 premiers points seulement sont montres : les dizaines de liens
+    sans file cachaient la ligne du client cherche."""
+    from app.web.ui import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function ordrePoint(p)" in js
+    assert "r.points.slice().sort((a, b) => ordrePoint(a) - ordrePoint(b))" in js
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_la_file_va_la_ou_est_la_session_quel_que_soit_le_site(app_client, routeur) -> None:  # noqa: F811
+    """Constate : session ouverte sur un routeur, client range dans un AUTRE
+    site -> aucun routeur ne posait sa file. Son forfait etait affiche, jamais
+    ecrit (« 0 command »)."""
+    import asyncio
+
+    import asyncpg
+
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+        },
+    )
+    assert r.status_code == 201, r.text
+    _attendre(
+        lambda: bool(
+            app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle)
+            .json()
+            .get("finished_at")
+        ),
+        20,
+    )
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+
+    async def ranger_ailleurs() -> None:
+        conn = await asyncpg.connect(DSN)
+        try:
+            pop = await conn.fetchval(
+                "INSERT INTO pops (name) VALUES ('Autre site') "
+                "ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id"
+            )
+            await conn.execute("UPDATE subscribers SET pop_id = $1 WHERE login = 'dupont'", pop)
+        finally:
+            await conn.close()
+
+    asyncio.run(ranger_ailleurs())
+    r = app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 100, "up_mbps": 100})
+    assert r.status_code == 200, r.text
+    # POSEE TOUT DE SUITE, sur le routeur de la session.
+    assert r.json()["enforcement"]["applied"] >= 1, r.json()["enforcement"]
+    file = _file(routeur, "10.20.0.10")
+    assert file is not None, routeur.simple_queue_rows
+    assert file["max-limit"] == "100000000/100000000"
+    # Et le passage automatique la garde (il envoyait « 0 command »).
+    routeur.simple_queue_rows.remove(file)
+    r = app_client.post("/api/v1/jobs/reconcile_shaping/run", headers=cle)
+    assert r.status_code == 200, r.text
+    file = _file(routeur, "10.20.0.10")
+    assert file is not None, routeur.simple_queue_rows

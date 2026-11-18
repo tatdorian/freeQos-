@@ -442,6 +442,9 @@ async def build_container(settings: Settings) -> Container:
         uisp_source=DbUispSource(uisp_repo, timeout_s=settings.uisp_timeout_s),
     )
     collection.exclusions = exclusions
+    # Le meme dictionnaire, partage : la pose immediate d'un forfait trouve le
+    # routeur de la session sans attendre la reconciliation.
+    shaping.session_routers = collection.session_routers
 
     # Amorce le drapeau de la sonde RTT : la base fait foi une fois posee, sinon
     # on l'y ecrit depuis RTT_ENABLED. Ensuite, l'interface le bascule a chaud.
