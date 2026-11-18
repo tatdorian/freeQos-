@@ -177,36 +177,6 @@ async def test_referentiel_upsert(database: Database) -> None:
     assert row["pop_id"] == pop_id
 
 
-async def test_jours_d_historique_pour_les_insights(database: Database) -> None:
-    """Insights dit combien de jours de mesures existent : vide, c'est zero."""
-    repo = MetricsRepository(database.pool)
-    assert await repo.metrics_history_days() == 0.0
-
-    directory = PgDirectory(database.pool)
-    sid = await directory.ensure_subscriber("histo", plan=Plan(100, 20, "mock"))
-    ancien = datetime.now(tz=UTC) - timedelta(days=3)
-    await PgMetricsWriter(database.pool).write_subscriber_metrics(
-        [
-            (
-                sid,
-                SubscriberSample(
-                    ts=ancien,
-                    login="histo",
-                    router_name="r",
-                    pop_name="p",
-                    address="10.20.0.9",
-                    uptime_s=1,
-                    rx_bytes=0,
-                    tx_bytes=0,
-                    rx_bps=0.0,
-                    tx_bps=0.0,
-                ),
-            )
-        ]
-    )
-    assert 2.9 < await repo.metrics_history_days() < 3.1
-
-
 async def test_ecriture_et_relecture_des_metriques(database: Database, now: datetime) -> None:
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
@@ -4078,52 +4048,6 @@ async def test_la_recherche_instantanee_trouve_login_ip_mac_et_site(database: Da
     assert par_ip["subscribers"][0]["address"] == "100.100.105.242"
     assert (await repo.search_everything("cc:00"))["devices"][0]["name"] == "Radio Altair"
     assert (await repo.search_everything("taill"))["sites"][0]["name"] == "NAS-Tailladje"
-
-
-async def test_les_tendances_comparent_deux_periodes(database: Database) -> None:
-    directory = PgDirectory(database.pool)
-    writer = PgMetricsWriter(database.pool)
-    repo = MetricsRepository(database.pool)
-    pop_id = await directory.ensure_pop("PoP T")
-    from app.models import Plan
-
-    sid = await directory.ensure_subscriber(
-        "trend", pop_id=pop_id, plan=Plan(down_mbps=10.0, up_mbps=2.0, source="t")
-    )
-    maintenant = datetime.now(tz=UTC)
-    lignes = []
-    for h in range(1, 5):  # periode precedente : 8 Mbps
-        lignes.append(
-            (
-                sid,
-                SubscriberSample(
-                    ts=maintenant - timedelta(days=8, hours=h),
-                    login="trend",
-                    router_name="r",
-                    pop_name="p",
-                    rx_bps=0.0,
-                    tx_bps=8e6,
-                ),
-            )
-        )
-    for h in range(1, 5):  # periode courante : 9.5 Mbps = au plafond (>= 90 % de 10)
-        lignes.append(
-            (
-                sid,
-                SubscriberSample(
-                    ts=maintenant - timedelta(hours=h),
-                    login="trend",
-                    router_name="r",
-                    pop_name="p",
-                    rx_bps=0.0,
-                    tx_bps=9.5e6,
-                ),
-            )
-        )
-    await writer.write_subscriber_metrics(lignes)
-    [t] = [r for r in await repo.subscriber_trends(days=7) if r["login"] == "trend"]
-    assert t["avg_down_bps"] == 9.5e6 and t["prev_avg_down_bps"] == 8e6
-    assert t["samples"] == 4 and t["capped_samples"] == 4
 
 
 async def test_service_sans_adresse_accepte_puis_place(database: Database) -> None:

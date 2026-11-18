@@ -8,7 +8,7 @@ continue, poste de dev).
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -1170,48 +1170,6 @@ class MetricsRepository:
             )
         return _rows(records)
 
-    async def subscriber_trends(self, *, days: int = 7) -> list[dict[str, Any]]:
-        """Par abonne : cette periode FACE a la precedente, et le temps au plafond.
-
-        La comparaison de deux periodes egales est ce qui revele un depart qui
-        s'annonce (l'usage s'effondre) ou un abonne a l'etroit (il vit a son
-        plafond). Les debits moyens sont compares, pas des volumes : un abonne
-        mesure moins souvent n'en parait pas moins consommateur.
-        """
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                WITH m AS (
-                    SELECT subscriber_id, ts, coalesce(tx_bps, 0) AS tx, coalesce(rx_bps, 0) AS rx
-                      FROM subscriber_metrics
-                     WHERE ts > now() - make_interval(days => $1 * 2)
-                )
-                SELECT s.id AS subscriber_id, s.login, s.kind, p.name AS pop_name,
-                       s.plan_down_mbps, s.plan_up_mbps, s.last_seen,
-                       avg(m.tx) FILTER (WHERE m.ts > now() - make_interval(days => $1))
-                           AS avg_down_bps,
-                       avg(m.tx) FILTER (WHERE m.ts <= now() - make_interval(days => $1))
-                           AS prev_avg_down_bps,
-                       max(m.tx) FILTER (WHERE m.ts > now() - make_interval(days => $1))
-                           AS peak_down_bps,
-                       count(*) FILTER (WHERE m.ts > now() - make_interval(days => $1))
-                           AS samples,
-                       count(*) FILTER (
-                           WHERE m.ts > now() - make_interval(days => $1)
-                             AND s.plan_down_mbps IS NOT NULL
-                             AND m.tx >= 0.9 * s.plan_down_mbps * 1000000
-                       ) AS capped_samples,
-                       max(m.ts) FILTER (WHERE m.tx + m.rx > 50000) AS last_traffic_at
-                  FROM subscribers s
-                  LEFT JOIN pops p ON p.id = s.pop_id
-                  LEFT JOIN m ON m.subscriber_id = s.id
-                 GROUP BY s.id, p.name
-                 ORDER BY s.login
-                """,
-                days,
-            )
-        return _rows(rows)
-
     async def plan_roster(self) -> list[dict[str, Any]]:
         """Tous les clients connus et le plan qu'ils portent, pour la page Plans."""
         async with self._pool.acquire() as conn:
@@ -1305,15 +1263,6 @@ class MetricsRepository:
                 address,
             )
         return dict(row) if row is not None else None
-
-    async def metrics_history_days(self) -> float:
-        """Jours de mesures par abonne deja en base (0 si aucune)."""
-        async with self._pool.acquire() as conn:
-            debut = await conn.fetchval("SELECT min(ts) FROM subscriber_metrics")
-        if debut is None:
-            return 0.0
-        ecart: timedelta = datetime.now(tz=UTC) - debut
-        return max(0.0, ecart.total_seconds() / 86400)
 
     async def silent_subscribers(self, *, days: int = 7, limit: int = 20) -> list[dict[str, Any]]:
         """Abonnes declares dont plus rien n'est passe depuis N jours.
