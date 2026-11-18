@@ -60,7 +60,6 @@
       <a class="nav-admin" href="#/network" data-view="network"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="19" r="2.2"/><circle cx="19" cy="19" r="2.2"/><path d="M12 7.2v4.3M12 11.5L6.3 17M12 11.5l5.7 5.5"/></svg><span>Network tree</span></a>
       <a class="nav-admin" href="#/traffic" data-view="traffic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16"/><path d="M3 8l4-4 4 4"/><path d="M17 20V4"/><path d="M13 16l4 4 4-4"/></svg><span>Traffic</span></a>
       <a class="nav-admin" href="#/exec" data-view="exec"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"/><path d="M4 19h16"/><path d="M8 15l4-5 3 3 5-6"/></svg><span>Network health</span></a>
-      <a class="nav-admin" href="#/insights" data-view="insights"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v3M5.6 5.6l2.1 2.1M3 12h3M18.4 5.6l-2.1 2.1M21 12h-3"/><path d="M9 18h6M10 21h4"/><path d="M12 8a4 4 0 0 0-2.5 7.1c.4.3.5.6.5 1V17h4v-.9c0-.4.2-.7.5-1A4 4 0 0 0 12 8z"/></svg><span>Business insights</span></a>
       <a class="nav-admin" href="#/pops" data-view="pops"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="6" rx="2"/><rect x="3" y="13" width="18" height="6" rx="2"/><path d="M7 8h.01M7 16h.01"/></svg><span>Devices</span></a>
       <a class="nav-admin" href="#/api" data-view="api"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 7l-5 5 5 5"/><path d="M16 7l5 5-5 5"/><path d="M13.5 5l-3 14"/></svg><span>API</span></a>
       <a class="nav-admin" href="#/settings" data-view="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></a>
@@ -617,7 +616,6 @@
     </section>
 
     <!-- -------------------------------------------------------- abonnes -->
-    <!-- -------------------------------------------------------- insights -->
     <section id="view-plans">
       <p class="hint" style="display:block">The plan belongs to each <b>client</b>. A site (PoP)
         is only a connection point: it has a capacity, not a plan. A client's plan is pushed by
@@ -671,47 +669,6 @@
       <div class="table-wrap" id="plans-packages"></div>
     </section>
 
-    <section id="view-insights">
-      <div class="toolbar">
-        <select id="ins-days" style="width:auto">
-          <option value="7" selected>Last 7 days vs the 7 before</option>
-          <option value="14">Last 14 days vs the 14 before</option>
-          <option value="30">Last 30 days vs the 30 before</option>
-        </select>
-        <span class="spacer"></span>
-        <span class="mode" id="ins-count"></span>
-      </div>
-      <div id="ins-notice"></div>
-
-      <div class="segmented pg-tabs" role="tablist" aria-label="Business insights views">
-        <button type="button" data-pg-tab="overview" class="active">Overview</button>
-        <button type="button" data-pg-tab="risk">At risk</button>
-        <button type="button" data-pg-tab="upgrade">Upgrade</button>
-        <button type="button" data-pg-tab="capacity">Capacity</button>
-        <button type="button" data-pg-tab="all">All clients</button>
-      </div>
-
-      <div class="pg-pane" data-pg-pane="overview">
-        <p class="pg-lead">What to do with your clients: who may leave, who to offer a bigger plan, and how many more clients each site can take. Click a figure to open its list.</p>
-        <div class="grid stats" id="ins-stats"></div>
-      </div>
-      <div class="pg-pane" data-pg-pane="risk" hidden>
-        <p class="pg-lead">Clients who may cancel: poor experience, usage collapsing, or a line gone silent. Call them first.</p>
-        <div class="table-wrap" id="ins-risk"></div>
-      </div>
-      <div class="pg-pane" data-pg-pane="upgrade" hidden>
-        <p class="pg-lead">Clients who live at their plan's limit with a good experience: their plan holds them back, not the network.</p>
-        <div class="table-wrap" id="ins-upgrade"></div>
-      </div>
-      <div class="pg-pane" data-pg-pane="capacity" hidden>
-        <p class="pg-lead">How many more clients each site can take before quality drops. It needs the capacity of the site's link (its antenna in UISP, or a rate set in the Network tree).</p>
-        <div class="table-wrap" id="ins-capacity"></div>
-      </div>
-      <div class="pg-pane" data-pg-pane="all" hidden>
-        <p class="pg-lead">Every client: plan, usage and experience, side by side.</p>
-        <div class="table-wrap" id="ins-all"></div>
-      </div>
-    </section>
 
     <!-- GESTION : les debits des clients selon l'heure et les modes de debit.
          Ouvert a l'Operator : ce sont des decisions commerciales, pas de la
