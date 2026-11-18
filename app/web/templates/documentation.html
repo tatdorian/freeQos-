@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="20935d687c865a2c">
+  <meta name="freeqos-docs-source" content="e4851bc863ef9f75">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -1420,7 +1420,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <li>the <strong>RouterOS identity</strong>;</li>
 <li><strong>every interface MAC</strong> — a neighbour only reveals the MAC of the interface facing it.</li>
 </ul>
-<p>Three rules prevent wrong merges. <strong>Two declared routers never merge</strong> with each other. A <strong>MAC claimed by several</strong> routers stops identifying them (virtual machines cloned from the same image share interface MACs). The <strong>name merges nothing</strong>: it is unique only by convention. When identity cannot be proven, the operator decides: <em>Same device as…</em> folds one box into another, <em>Split</em> undoes it. Probable duplicates (same words in a different order, "CCR DS" / "DS-CCR") are flagged with a <em>Merge</em> button, never merged automatically. A box that groups several observations lists them.</p>
+<p>Three rules prevent wrong merges. <strong>Two declared routers never merge</strong> with each other. A <strong>MAC claimed by several</strong> routers stops identifying them (virtual machines cloned from the same image share interface MACs); the null MAC <code>00:00:00:00:00:00</code> of virtual interfaces (tunnels, PPPoE, WireGuard) and the broadcast MAC are ignored outright, they identify nothing. A discovered device that <strong>is a client</strong> (it carries the client's name) shows with a <em>client</em> badge, links to the client page and shows its rate; the client is not listed a second time under it. The <strong>name merges nothing</strong>: it is unique only by convention. When identity cannot be proven, the operator decides: <em>Same device as…</em> folds one box into another, <em>Split</em> undoes it. Probable duplicates (same words in a different order, "CCR DS" / "DS-CCR") are flagged with a <em>Merge</em> button, never merged automatically. A box that groups several observations lists them.</p>
 <h4 id="how-the-loopback-is-found">How the loopback is found</h4>
 <p>When the loopback is not declared, it is looked for in the configuration, in this order:</p>
 <div class="table-wrap"><table>
