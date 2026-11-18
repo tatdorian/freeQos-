@@ -198,16 +198,16 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
         "Devices",
         "Routers and antennas: their health, adding them, the Ubiquiti UISP controller "
         "(connect it, see every antenna's radio capacity, attach backhauls to their site), "
-        "and the inventory. One section at a time: the table of contents works as tabs.",
+        "and the router settings. One section at a time: the table of contents works as tabs.",
         [
             "router health",
-            "polled routers",
             "connect a router",
+            "router settings",
+            "polled routers",
+            "known sites",
             "ubiquiti antennas",
             "radio health access points and their cpes",
             "add an antenna",
-            "inventory",
-            "known sites",
         ],
     ),
     ("API", "API keys, and the way to the API guide.", ["create a key", "endpoints", "example"]),

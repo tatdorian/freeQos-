@@ -189,6 +189,12 @@ async def routers_health(container: ContainerDep) -> dict[str, Any]:
                 }
             )
             continue
+        # Le CPU de l'heure ecoulee (releve toutes les 30 s) : le pic, pas
+        # seulement l'instant. Cette lecture compte aussi comme un releve.
+        historique = getattr(container, "router_cpu", None)
+        if historique is not None:
+            historique.record(collecteur.name, resultat)
+            resultat = {**resultat, "cpu_hour": historique.summary(collecteur.name)}
         routeurs.append(resultat)
     return {
         "routers": routeurs,

@@ -292,7 +292,7 @@
   "a": "Weak signal on one CPE: alignment or obstacle. Weak on all CPEs of an AP: interference — check the noise floor and change channel."
  },
  "add an antenna": "Declare an airOS device by its address and credentials. Credentials are encrypted at rest with the controller key.",
- "inventory": "Every device freeQoS knows, with where it was discovered.",
+ "router settings": "Every router freeQoS polls, and what you do on each: Set up, Set by freeQoS (everything freeQoS put on it), allow writing, role, Reset queues, Remove freeQoS. Below, the known sites.",
  "known sites": "The PoPs and VLAN sites known to freeQoS. A site pushed by the API takes the place of an automatically discovered one.",
  "shaping and writing to the routers": {
   "t": "Whether freeQoS writes queues by itself.",

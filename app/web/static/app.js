@@ -5709,14 +5709,16 @@ async function loadRoutersHealth() {
   }
   host.innerHTML =
     '<table><thead><tr><th>Router</th><th>PoP</th><th>Model</th>' +
-    '<th class="num">CPU</th><th class="num">Memory</th>' +
+    '<th title="Average of all cores, then each core: the busiest core is what adds latency">CPU now</th>' +
+    '<th class="num" title="Busiest core over the last hour (read every 30 s)">Peak, last hour</th>' +
+    '<th class="num">Memory</th>' +
     '<th class="num">Uptime</th><th>Version</th></tr></thead><tbody>' +
     routeurs.map((r) => {
       if (!r.reachable) {
         return '<tr>' +
           '<td class="login"><b>' + esc(r.router) + '</b></td>' +
           '<td class="nowrap">' + esc(r.pop_name || '-') + '</td>' +
-          '<td colspan="5"><span class="badge crit">unreachable</span>' +
+          '<td colspan="6"><span class="badge crit">unreachable</span>' +
             '<span class="hint">' + esc(r.error || '') + '</span></td>' +
           '</tr>';
       }
@@ -5737,7 +5739,8 @@ async function loadRoutersHealth() {
         '<td>' + esc(r.board_name || '-') +
           (r.cpu_count ? ' <span class="hint">' + esc(r.cpu_count) + ' core(s)</span>' : '') +
           '</td>' +
-        '<td class="num">' + badge(cpu, 70, 85) + '</td>' +
+        '<td>' + cpuDetail(r, badge) + '</td>' +
+        '<td class="num">' + cpuPic(r.cpu_hour, badge) + '</td>' +
         // Sans memoire totale, RouterOS ne permet aucun pourcentage : on montre
         // alors la memoire libre seule, plutot qu'un tiret suivi d'un chiffre
         // qui se lirait comme un nombre negatif.
@@ -5753,6 +5756,34 @@ async function loadRoutersHealth() {
         '<td style="color:var(--faint)">' + esc(r.version || '-') + '</td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
+}
+
+/** LE CPU EN DETAIL : la moyenne, le coeur le plus charge, et une barre par
+ *  coeur. Un coeur sature sur quatre s'affiche 33 % en moyenne : c'est lui,
+ *  pas la moyenne, qui fait monter la latence des files. */
+function cpuDetail(r, badge) {
+  const coeurs = r.cores || [];
+  const max = r.cpu_max_core_pct;
+  const teinte = (v) => (v >= 95 ? 'crit' : v >= 80 ? 'warn' : 'ok');
+  return '<div class="cpu-cell"><span>avg ' + badge(r.cpu_load_pct, 70, 85) + '</span>' +
+    (max != null && coeurs.length > 1
+      ? '<span title="The busiest core">busiest core ' + badge(max, 80, 95) + '</span>' : '') +
+    '</div>' +
+    (coeurs.length > 1 ? '<div class="cpu-cores" aria-label="Load of each core">' + coeurs.map((c) =>
+      '<span class="cpu-core ' + teinte(c.load_pct) + '" title="' + esc(c.cpu) + ': ' + esc(c.load_pct) + ' %' +
+        (c.irq_pct ? ' (irq ' + esc(c.irq_pct) + ' %)' : '') + '"><i style="height:' +
+        Math.max(4, Math.min(100, Number(c.load_pct) || 0)) + '%"></i></span>').join('') + '</div>' : '') +
+    (max != null && max >= 80
+      ? '<span class="hint" style="display:block;color:var(--warn)">Above 80 % on a core, queues add latency.</span>' : '');
+}
+
+/** Le pic de l'heure : le coeur le plus charge releve toutes les 30 s. */
+function cpuPic(h, badge) {
+  if (!h || !h.samples) return '<span class="hint" title="Readings start when the server starts">collecting…</span>';
+  return badge(h.peak_core_pct, 80, 95) +
+    '<span class="hint" style="display:block">' + esc(depuis(h.peak_at)) +
+    (h.minutes_over_threshold ? ' · ' + esc(h.minutes_over_threshold) + ' min over ' + esc(h.threshold_pct) + ' %' : '') +
+    '</span>';
 }
 
 /** Octets en unite lisible, dans la langue de l'interface (anglais) : "0 o"
@@ -16364,7 +16395,7 @@ const AIDE = {
     a: 'Weak signal on one CPE: alignment or obstacle. Weak on all CPEs of an AP: interference — check the noise floor and change channel.',
   },
   'add an antenna': 'Declare an airOS device by its address and credentials. Credentials are encrypted at rest with the controller key.',
-  'inventory': 'Every device freeQoS knows, with where it was discovered.',
+  'router settings': 'Every router freeQoS polls, and what you do on each: Set up, Set by freeQoS (everything freeQoS put on it), allow writing, role, Reset queues, Remove freeQoS. Below, the known sites.',
   'known sites': 'The PoPs and VLAN sites known to freeQoS. A site pushed by the API takes the place of an automatically discovered one.',
   'shaping and writing to the routers': {
     t: 'Whether freeQoS writes queues by itself.',
