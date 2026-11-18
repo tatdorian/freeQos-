@@ -385,6 +385,10 @@ def normalize_mac(value: Any) -> str | None:
     Indispensable : RouterOS ecrit ``AA:BB:CC:DD:EE:FF``, UISP parfois
     ``aa-bb-cc-dd-ee-ff`` ou sans separateur. Sans normalisation, la jointure
     entre les deux mondes echoue silencieusement.
+
+    Une MAC NULLE (00:00:00:00:00:00, celle des interfaces virtuelles : tunnels,
+    PPPoE, WireGuard) ou de diffusion n'identifie aucun equipement : elle est
+    ecartee, sinon tous les routeurs se la disputent.
     """
     if value is None:
         return None
@@ -392,6 +396,8 @@ def normalize_mac(value: Any) -> str | None:
     if len(digits) != 12:
         return None
     digits = digits.upper()
+    if digits in ("000000000000", "FFFFFFFFFFFF"):
+        return None
     return ":".join(digits[i : i + 2] for i in range(0, 12, 2))
 
 

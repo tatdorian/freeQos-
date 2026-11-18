@@ -8455,6 +8455,11 @@ function topoBuildModel(data, options) {
       cle = parNomDeSite.get(s.pop_name);
     }
     if (!cle) { nonPlaces.push(s); return; }
+    // Pose sous SA PROPRE case (l'equipement qui porte son nom) : la case est
+    // deja ce client. Le relister dessous l'affichait deux fois, et comptait
+    // « 2 clients » pour un seul.
+    const caseCible = nodes.get(cle);
+    if (caseCible && caseCible.clientLogin === s.login) return;
     if (!parCase.has(cle)) parCase.set(cle, []);
     parCase.get(cle).push(s);
   });
@@ -9541,17 +9546,26 @@ function renderTopoList() {
     const couleur = KIND_COLOR[n.kind] || 'var(--faint)';
     const attrs = topoAttrs(n);
     const etatCase = attrs.unreachable ? 'crit' : n.fresh === false ? 'off' : 'ok';
+    // La case d'un client EST ce client : son nom mene a sa page, et son debit
+    // s'affiche quand le lien ne dit rien.
+    const cli = n.clientLogin ? (parLogin.get(n.clientLogin) || n.client) : null;
+    const debitCli = cli && mesureFraiche(cli) && (cli.tx_bps || cli.rx_bps)
+      ? { down: Number(cli.tx_bps) || 0, up: Number(cli.rx_bps) || 0 } : null;
+    const nomCase = n.clientLogin
+      ? '<a href="#/client/' + esc(encodeURIComponent(n.clientLogin)) + '" title="' + esc(n.clientLogin) +
+        '">' + esc(topoTitre(n)) + '</a> <span class="badge">client</span>' +
+        (cli && cli.kind === 'static' ? ' <span class="badge">static IP</span>' : '')
+      : esc(topoTitre(n));
     lignes.push('<div class="tl-row' + sel + (n.fresh === false ? ' stale' : '') + '" data-tl-key="' + esc(n.key) +
       '" style="--d:' + prof + '">' +
       (enfants.length ? caret(n.key, ouvert) : vide) +
       '<span class="tl-kind" style="color:' + couleur + '">' + esc(topoIcone(n)) + '</span>' +
-      '<span class="tl-name"><span class="tl-dot ' + etatCase + '"></span>' + esc(topoTitre(n)) +
-        (n.clientLogin ? ' <span class="badge">client</span>' : '') + '</span>' +
+      '<span class="tl-name"><span class="tl-dot ' + etatCase + '"></span>' + nomCase + '</span>' +
       '<span class="tl-meta">' + esc(topoTitre(n) !== n.name ? n.name
         : ((n.addresses || [])[0] || n.address || '')) + '</span>' +
       '<span class="tl-count">' + (c.total ? c.total + ' client' + (c.total > 1 ? 's' : '') +
         ' · ' + topoEnLigneTexte(c.enLigne, c.mesures) : '') + '</span>' +
-      debitTxt(debitDe(n)) + '</div>');
+      debitTxt(debitDe(n) || debitCli) + '</div>');
     if (!ouvert) return;
     // Les equipements connus par leur seule MAC : au-dela de quelques-uns, ils
     // se replient en une ligne pour ne pas noyer les autres.
