@@ -299,3 +299,97 @@ def test_bout_en_bout_un_lien_homonyme_n_empeche_pas_la_file(app_client, routeur
         assert file["max-limit"] == "200000000/200000000"
     finally:
         depot.links = vrais_liens
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_pas_de_faux_succes_quand_le_routeur_ne_porte_pas_le_client(app_client, routeur) -> None:  # noqa: F811
+    """CONSTATE : « applied » dans l'activite, et aucune file sur le routeur. Le
+    routeur ne portait pas le client : le plan n'avait rien a ecrire, et la pose
+    repondait « queue already correct »."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+        },
+    )
+    assert r.status_code == 201, r.text
+    _attendre(
+        lambda: bool(
+            app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle)
+            .json()
+            .get("finished_at")
+        ),
+        20,
+    )
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    import asyncio
+
+    import asyncpg
+
+    async def ranger_ailleurs() -> None:
+        conn = await asyncpg.connect(DSN)
+        try:
+            pop = await conn.fetchval(
+                "INSERT INTO pops (name) VALUES ('Autre site') "
+                "ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id"
+            )
+            await conn.execute("UPDATE subscribers SET pop_id = $1 WHERE login = 'dupont'", pop)
+        finally:
+            await conn.close()
+
+    # Ni session sur ce routeur, ni site de ce routeur : il ne le porte pas.
+    asyncio.run(ranger_ailleurs())
+    routeur.active.clear()
+    r = app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 50, "up_mbps": 10})
+    assert r.status_code == 200, r.text
+    rapport = r.json()["enforcement"]
+    assert rapport["applied"] == 0
+    assert rapport["state"] == "absent", rapport
+    assert "is not carried by nas-test" in rapport["reason"]
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_sans_session_a_son_nom_la_file_se_pose_par_son_ip(app_client, routeur) -> None:  # noqa: F811
+    """COMME PAR L'API : un client du site de ce routeur, sans session PPPoE a
+    son nom, recoit sa file par son adresse IP mesuree recemment."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    r = app_client.post(
+        "/api/v1/pops/routers",
+        headers=cle,
+        json={
+            "name": "nas-test",
+            "host": "192.0.2.10",
+            "username": "qos",
+            "password": "secret-routeur",
+            "role": "pop",
+            "pop_name": "PoP Test",
+        },
+    )
+    assert r.status_code == 201, r.text
+    _attendre(
+        lambda: bool(
+            app_client.get("/api/v1/pops/provisioning/nas-test", headers=cle)
+            .json()
+            .get("finished_at")
+        ),
+        20,
+    )
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    # Plus de session au nom du client sur le routeur ; son adresse est connue.
+    routeur.active.clear()
+    r = app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 20, "up_mbps": 5})
+    assert r.status_code == 200, r.text
+    rapport = r.json()["enforcement"]
+    assert rapport["applied"] >= 1, rapport
+    file = _file(routeur, "10.20.0.10")
+    assert file is not None, routeur.simple_queue_rows
+    assert file["max-limit"] == "5000000/20000000"
