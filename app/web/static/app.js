@@ -11546,11 +11546,6 @@ async function resetSetting(name) {
 }
 
 
-/* ------------------------------------------------------------- insights
- *
- *  QUI RISQUE DE PARTIR, QUI EST PRET A MONTER EN GAMME, et combien d'abonnes
- *  chaque site peut encore prendre. Tout vient de ce qui est deja mesure :
- *  debit, plan, latence sous charge. */
 /* ------------------------------------------------------------------ plans */
 
 /** LE PLAN APPARTIENT AU CLIENT. Un PoP n'est qu'un point de connexion : il a
@@ -12452,129 +12447,6 @@ function openClientPlan(login) {
  *
  *  "Nobody shows a sign of leaving" sur une installation d'hier ne veut pas
  *  dire "tout va bien" mais "pas encore assez d'historique" : on le dit. */
-function renderInsightsNotice(r, jours) {
-  const hote = document.getElementById('ins-notice');
-  if (!hote) return;
-  if (!r) { hote.innerHTML = ''; return; }
-  // CE QUI MANQUE, DIT SIMPLEMENT, ET REPLIE : le grand bandeau ecrasait la
-  // page alors qu'il ne dit qu'une chose -- certaines listes sont encore
-  // incompletes, et pourquoi. Chaque raison dit quoi faire.
-  const manques = [];
-  if (!r.subscribers) {
-    manques.push('No client measured yet: connect a router in <a href="#/pops">Devices</a>.');
-  } else {
-    if (r.history_days != null && r.history_days < r.needed_days) {
-      manques.push('Comparing ' + esc(jours) + ' days with the ' + esc(jours) + ' before needs ' +
-        esc(r.needed_days) + ' days of measurements; there are ' + esc(r.history_days) +
-        ' so far. Usage drops and silent lines show up after that.');
-    }
-    if (r.with_plan < r.subscribers) {
-      manques.push((r.subscribers - r.with_plan) + ' of ' + r.subscribers + ' clients have no plan yet: ' +
-        '“ready for a bigger plan” is only judged for clients with a plan. Set plans on the ' +
-        '<a href="#/clients">Clients</a> page.');
-    }
-    if (!r.with_traffic) manques.push('No traffic measured over the period.');
-    if (!r.with_qoe) {
-      manques.push('Latency is not measured, so the experience score is empty. Tick ' +
-        '<b>Measure latency</b> on <a href="#/exec">Network health</a>.');
-    }
-  }
-  hote.innerHTML = manques.length
-    ? '<details class="notice ins-ready"><summary><b>Some lists are not complete yet</b> ' +
-      '<span class="pct-hint">' + manques.length + ' reason(s) · click to see why</span></summary><ul>' +
-      manques.map((m) => '<li>' + m + '</li>').join('') + '</ul></details>'
-    : '';
-}
-
-async function loadInsights() {
-  ongletPageInitial('insights');
-  const jours = Number(document.getElementById('ins-days').value) || 7;
-  const [abos, sites] = await Promise.all([
-    api('/insights/subscribers?days=' + jours),
-    api('/insights/capacity?hours=' + Math.min(720, jours * 24)).catch(() => ({ sites: [] })),
-  ]);
-  const lignes = abos.subscribers || [];
-  const sm = abos.summary || {};
-  document.getElementById('ins-count').textContent = lignes.length + ' client(s)';
-  renderInsightsNotice(abos.readiness, jours);
-  document.getElementById('ins-stats').innerHTML =
-    statCard(sm.at_risk ? 'crit' : '', 'At risk of leaving', String(sm.at_risk || 0), '',
-      'poor experience, usage collapsing or a silent line.<br><b>To do:</b> call them first.') +
-    statCard(sm.upgrade ? 'down' : '', 'Ready for a bigger plan', String(sm.upgrade || 0), '',
-      'always at their plan\'s limit, with a good experience.<br><b>To do:</b> offer them more.') +
-    statCard('', 'Doing fine', String(sm.healthy || 0), '', 'nothing to do.');
-
-  const lien = (r) => '<a href="#" data-ins-sub="' + r.subscriber_id + '">' + esc(r.login) + '</a>';
-  const usage = (r) => esc(bpsText(r.avg_down_bps)) +
-    (r.prev_avg_down_bps ? ' <span class="pct-hint">was ' + esc(bpsText(r.prev_avg_down_bps)) + '</span>' : '');
-  const qoe = (r) => r.qoe_score == null ? '<span class="na">-</span>'
-    : sqCell(Math.round(r.qoe_score) + (r.qoe_grade ? ' · ' + r.qoe_grade : ''), qoeSev(r.qoe_score));
-  const plan = (r) => r.plan_down_mbps ? esc(mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0))
-    : '<span class="na">no plan</span>';
-  const table = (xs, vide) => !xs.length ? '<div class="empty">' + vide + '</div>'
-    : '<table><thead><tr><th>Client</th><th>Site</th><th class="num">Plan</th>' +
-      '<th class="num">Avg download</th><th class="num">At ceiling</th><th class="num">Experience</th>' +
-      '<th>Why</th></tr></thead><tbody>' + xs.map((r) => '<tr><td>' + lien(r) + '</td>' +
-        '<td>' + esc(r.pop_name || '-') + '</td><td class="num">' + plan(r) + '</td>' +
-        '<td class="num">' + usage(r) + '</td>' +
-        '<td class="num">' + (r.ceiling_share ? Math.round(r.ceiling_share * 100) + '%' : '-') + '</td>' +
-        '<td class="num">' + qoe(r) + '</td><td>' + esc((r.reasons || []).join(' · ')) + '</td></tr>').join('') +
-      '</tbody></table>';
-  // Chaque onglet ne montre que les colonnes qui repondent a SA question.
-  const risque = lignes.filter((r) => r.status === 'at_risk');
-  document.getElementById('ins-risk').innerHTML = !risque.length
-    ? '<div class="empty">Nobody shows a sign of leaving.</div>'
-    : '<table><thead><tr><th>Client</th><th>Site</th><th class="num">Experience</th>' +
-      '<th class="num">Avg download</th><th>Why</th></tr></thead><tbody>' +
-      risque.map((r) => '<tr><td>' + lien(r) + '</td><td>' + esc(r.pop_name || '-') + '</td>' +
-        '<td class="num">' + qoe(r) + '</td><td class="num">' + usage(r) + '</td>' +
-        '<td>' + esc((r.reasons || []).join(' · ')) + '</td></tr>').join('') + '</tbody></table>';
-  const montee = lignes.filter((r) => r.status === 'upgrade');
-  document.getElementById('ins-upgrade').innerHTML = !montee.length
-    ? '<div class="empty">Nobody lives at their plan ceiling.</div>'
-    : '<table><thead><tr><th>Client</th><th>Site</th><th class="num">Plan</th>' +
-      '<th class="num">Time at its limit</th><th class="num">Experience</th></tr></thead><tbody>' +
-      montee.map((r) => '<tr><td>' + lien(r) + '</td><td>' + esc(r.pop_name || '-') + '</td>' +
-        '<td class="num">' + plan(r) + '</td>' +
-        '<td class="num">' + (r.ceiling_share ? Math.round(r.ceiling_share * 100) + '%' : '-') + '</td>' +
-        '<td class="num">' + qoe(r) + '</td></tr>').join('') + '</tbody></table>';
-  document.getElementById('ins-all').innerHTML = table(lignes, 'No client.');
-  limiterLignes(document.getElementById('ins-risk'), 12, 'Show all');
-  limiterLignes(document.getElementById('ins-upgrade'), 12, 'Show all');
-  limiterLignes(document.getElementById('ins-all'), 20, 'Show all clients');
-  // Les chiffres de la vue d'ensemble menent a leur liste.
-  const cartes = document.querySelectorAll('#ins-stats > *');
-  [['risk', 0], ['upgrade', 1]].forEach(([onglet, i]) => {
-    const carte = cartes[i];
-    if (!carte) return;
-    carte.classList.add('pg-goto');
-    carte.title = 'Open the list';
-    carte.onclick = () => ongletPage('insights', onglet);
-  });
-
-  const lesSites = sites.sites || [];
-  document.getElementById('ins-capacity').innerHTML = !lesSites.length
-    ? '<div class="empty">No site.</div>'
-    : '<table><thead><tr><th>Site</th><th class="num" title="Clients with a plan: the room is counted in plans">Clients with a plan</th><th class="num">Link capacity</th>' +
-      '<th class="num">Busy-hour peak</th><th class="num">Poor experience</th>' +
-      '<th class="num">Room for</th><th>How it is judged</th></tr></thead><tbody>' +
-      lesSites.map((x) => '<tr><td><b>' + esc(x.pop_name) + '</b></td>' +
-        '<td class="num">' + esc(x.subscribers) + '</td>' +
-        '<td class="num">' + (x.capacity_mbps ? esc(mbps(x.capacity_mbps)) : '<span class="na">-</span>') + '</td>' +
-        '<td class="num">' + (x.peak_mbps != null ? esc(mbps(x.peak_mbps)) : '<span class="na">-</span>') + '</td>' +
-        '<td class="num">' + (x.poor_share != null ? sqCell(Math.round(x.poor_share * 100) + '%',
-          x.poor_share >= 0.2 ? 'crit' : x.poor_share > 0 ? 'warn' : 'ok') : '<span class="na">-</span>') + '</td>' +
-        '<td class="num">' + (x.room == null ? '<span class="na" title="Unknown until the link capacity is known">unknown</span>'
-          : sqCell(x.room + ' more client(s)', x.room === 0 ? 'crit' : x.room < 5 ? 'warn' : 'ok')) + '</td>' +
-        '<td class="hint" style="display:table-cell">' + esc(x.reason || '') + '</td></tr>').join('') +
-      '</tbody></table>';
-
-  document.querySelectorAll('[data-ins-sub]').forEach((a) => a.addEventListener('click', (e) => {
-    e.preventDefault();
-    openSubscriber(Number(a.dataset.insSub));
-  }));
-}
-
 /* --------------------------------------------------------------- clients */
 
 /** NIVEAUX D'ACCES. Le serveur fait foi (il refuse ce qui depasse le niveau) ;
@@ -15460,7 +15332,6 @@ const LOADERS = {
   rules: loadRules,
   network: loadNetwork,
   plans: loadPlans,
-  insights: loadInsights,
   pops: loadRouters,
   api: loadApi,
   settings: loadSettings,
@@ -15669,7 +15540,7 @@ document.getElementById('flow-range').addEventListener('change', loadTraffic);
 document.querySelectorAll('#trf-tabs [data-trf-tab]').forEach((b) => {
   b.addEventListener('click', () => ongletTrafic(b.dataset.trfTab));
 });
-['exec', 'insights'].forEach((vue) => {
+['exec'].forEach((vue) => {
   document.querySelectorAll('#view-' + vue + ' [data-pg-tab]').forEach((b) =>
     b.addEventListener('click', () => ongletPage(vue, b.dataset.pgTab)));
 });
@@ -15931,7 +15802,6 @@ document.getElementById('auth-form').addEventListener('submit', submitAuth);
   jaugeMdp(document.getElementById('auth-meter'), document.getElementById('auth-password').value,
     document.getElementById('auth-email').value);
 }));
-document.getElementById('ins-days').addEventListener('change', loadInsights);
 document.getElementById('global-search').addEventListener('input', (e) => {
   clearTimeout(GS.timer);
   GS.timer = setTimeout(() => globalSearch(e.target.value), 180);
@@ -16365,21 +16235,6 @@ const AIDE = {
     r: 'Source: pushed by the API (billing / CRM), set by hand here, or the default plan. A limit forced in Subscribers (Rate) overrides all three — it is shown here so you know why the plan is not what is applied.',
   },
   'packages pushed by the api': 'Offers received from your billing system or CRM through the public API (/model/v1/packages). Clients pushed with a package get its rates automatically.',
-  'at risk of leaving': {
-    t: 'Clients showing the signs that come before a cancellation.',
-    m: 'Any of: experience score under 50 over the period; usage down more than 70% versus the previous period; no traffic at all for 3 days or more (for a client that used to consume).',
-    a: 'Call before they do: a CPE swap, a realignment or a plan change is cheaper than a lost client.',
-  },
-  'ready for a bigger plan': {
-    t: 'Clients that live at their plan ceiling while their experience stays good — the plan limits them, not the network.',
-    m: 'At 90%+ of their plan in 15% or more of the samples of the period, with a score of 50 or more.',
-    r: 'A client at its ceiling with poor latency is not here on purpose: selling it more would not fix what is a network problem.',
-  },
-  'sites and access points room for more subscribers': {
-    t: 'How many more subscribers each site or access point can take at today’s usage.',
-    m: 'Busy-hour peak per subscriber, against a target of 80% of the capacity (above that, queues fill and latency rises before the link is full).',
-    r: 'A site where 20% or more of the clients already have a poor experience shows no room, whatever the margin on paper.',
-  },
   'router health': {
     t: 'CPU (average, busiest core, peak of the last hour), memory and uptime of each polled router. The busiest core is what adds latency.',
     s: [[OK, 'CPU under 70%: fine'], [WARN, '70–90%: busy — queues and NetFlow may lag'], [CRIT, 'over 90%: overloaded — packets and measurements suffer']],

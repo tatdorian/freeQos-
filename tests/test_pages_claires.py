@@ -1,4 +1,4 @@
-"""Network health (ex-Executive) et Business insights (ex-Insights) : des pages claires.
+"""Network health (ex-Executive) : une page claire.
 
 Ce qui est fixe ici : des noms de page qui disent ce qu'on y trouve, aucun
 jargon visible (node, RTT probe, QoO, subscriber, PPP profile), une case
@@ -7,8 +7,6 @@ ce qui manque replie en une ligne qui dit quoi faire -- plus de grand bandeau.
 """
 
 from __future__ import annotations
-
-import re
 
 from app.web.ui import STATIC_DIR
 
@@ -23,11 +21,10 @@ def _section(vue: str) -> str:
 
 def test_les_noms_de_page() -> None:
     assert "<span>Network health</span></a>" in HTML
-    assert "<span>Business insights</span></a>" in HTML
     assert "<span>Executive</span>" not in HTML
     assert "<span>Insights</span>" not in HTML
-    # Network health d'abord dans le menu.
-    assert HTML.index("<span>Network health</span>") < HTML.index("<span>Business insights</span>")
+    # Business insights a ete retiree (jugee inutile).
+    assert "Business insights" not in HTML
 
 
 def test_pas_de_jargon_dans_network_health() -> None:
@@ -53,15 +50,3 @@ def test_pas_de_jargon_dans_network_health() -> None:
     )
     for mot in jargon:
         assert mot not in JS, mot
-
-
-def test_business_insights_dit_quoi_faire() -> None:
-    assert "<b>To do:</b> call them first." in JS
-    assert "<b>To do:</b> offer them more." in JS
-    corps = JS[JS.index("function renderInsightsNotice(r, jours)") :]
-    corps = corps[: corps.index("\n}\n")]
-    assert "Some lists are not complete yet" in corps
-    assert "<details" in corps
-    assert "PPP profile" not in corps
-    assert "notice warn" not in corps
-    assert not re.search(r"subscriber\(s\)", corps)

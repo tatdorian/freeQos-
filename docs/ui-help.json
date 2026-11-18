@@ -231,21 +231,6 @@
   "r": "Source: pushed by the API (billing / CRM), set by hand here, or the default plan. A limit forced in Subscribers (Rate) overrides all three — it is shown here so you know why the plan is not what is applied."
  },
  "packages pushed by the api": "Offers received from your billing system or CRM through the public API (/model/v1/packages). Clients pushed with a package get its rates automatically.",
- "at risk of leaving": {
-  "t": "Clients showing the signs that come before a cancellation.",
-  "m": "Any of: experience score under 50 over the period; usage down more than 70% versus the previous period; no traffic at all for 3 days or more (for a client that used to consume).",
-  "a": "Call before they do: a CPE swap, a realignment or a plan change is cheaper than a lost client."
- },
- "ready for a bigger plan": {
-  "t": "Clients that live at their plan ceiling while their experience stays good — the plan limits them, not the network.",
-  "m": "At 90%+ of their plan in 15% or more of the samples of the period, with a score of 50 or more.",
-  "r": "A client at its ceiling with poor latency is not here on purpose: selling it more would not fix what is a network problem."
- },
- "sites and access points room for more subscribers": {
-  "t": "How many more subscribers each site or access point can take at today’s usage.",
-  "m": "Busy-hour peak per subscriber, against a target of 80% of the capacity (above that, queues fill and latency rises before the link is full).",
-  "r": "A site where 20% or more of the clients already have a poor experience shows no room, whatever the margin on paper."
- },
  "router health": {
   "t": "CPU (average, busiest core, peak of the last hour), memory and uptime of each polled router. The busiest core is what adds latency.",
   "s": [

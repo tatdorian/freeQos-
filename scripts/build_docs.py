@@ -184,18 +184,6 @@ PAGES_INTERFACE: list[tuple[str, str, list[str]]] = [
         ["default plan", "clients", "packages pushed by the api"],
     ),
     (
-        "Business insights",
-        "What to do with your clients: who may leave, who to offer a bigger plan, and how "
-        "many more clients each site can take, comparing the chosen period with the one "
-        "before.",
-        [
-            "at risk of leaving",
-            "ready for a bigger plan",
-            "sites and access points room for more subscribers",
-            "every subscriber plan, usage, experience",
-        ],
-    ),
-    (
         "Devices",
         "Routers and antennas: their health, adding them, the Ubiquiti UISP controller "
         "(connect it, see every antenna's radio capacity, attach backhauls to their site), "
