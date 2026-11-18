@@ -1490,9 +1490,9 @@ A single degraded subscriber points at its last mile (CPE, home Wi-Fi), not at t
 
 **On and off.** The setting `qoe_loop_enabled` (*Settings › Advanced › Write safeguards*, live, on by default) turns the loop on or off. Off, the loop reads no score and decides nothing, and every tightening it had applied is released: the planner ignores the tightenings at once, the next reconciliation brings the links back to their normal envelope, and the stored tightenings are reset (`last_action` = `release`) as soon as the setting changes, without waiting for the loop's next pass, so that turning the loop back on starts from scratch rather than re-applying old decisions (turning it back on resets them again, in case some were left over). Like every write, the loop is also subject to the global switch and to each router's switch: on a read-only router, the tightening is decided and the plan computed, nothing is sent.
 
-## 8. Capacity and business insights
+## 8. Capacity
 
-The measurements answer operating questions ("is it working?"). The same data, read over days, answers capacity and commercial ones: how much was sold behind each link, when links saturate, who is about to leave, who is ready for a bigger plan, and how many more subscribers each site can take.
+The measurements answer operating questions ("is it working?"). The same data, read over days, answers capacity ones: how much was sold behind each link, and when links saturate.
 
 ### Sold against real capacity
 
@@ -1514,21 +1514,6 @@ For each link, the **occupancy** is the busy-hour peak divided by its capacity: 
 A link is flagged **to reinforce** when its **average** occupancy over the period is above 80%, with at least 10 samples. A peak at 100% proves nothing — it is what a well-sized link does on a match night; an average above 80% means the next growth will be paid in latency for everyone.
 
 **Links that could fill up** (*Network health*, `GET /api/v1/capacity/hotspots`) apply the gauges' thresholds — from 70% a link is to watch, from 90% it no longer holds one more peak — and split links into two sides: the **internet side** (the gateway's uplink and the PoP-to-core links, where a saturation hits every client) and the **PoP side** (links towards subscribers, VLANs and relays, where it only hits what hangs below). A radio link that only carries 70% of its nominal capacity is flagged as degraded.
-
-### Who is about to leave, who is ready for more
-
-These lists are available **through the API only** (the interface page was removed): `GET /api/v1/insights/subscribers?days=7` compares the chosen period (7, 14 or 30 days) with the one before it, so it needs **twice the period** of history; the answer says how many days it has (`readiness`). `GET /api/v1/insights/capacity` gives the room left per site.
-
-| List | Rule |
-| --- | --- |
-| **At risk of leaving** | A poor experience (QoE score below 50); **or** usage collapsing (current average below 30% of the previous one, which was above 10 kbps); **or** a line that used to be used and has been silent for 3 days or more |
-| **Ready for a bigger plan** | At 90% of its plan or more during at least 15% of the period, **with a good experience** (score 50 or more, or not measured) |
-
-A subscriber who saturates its plan **and** whose latency rises is not in the second list: that is a network problem first, and selling it a bigger plan would fix nothing. Subscribers spending more than 20% of their samples above 90% of their plan are also listed in the capacity view as living *at their ceiling*.
-
-### How many more subscribers a site can take
-
-For each site and access point (`GET /api/v1/insights/capacity`), freeQoS takes the measured busy-hour peak, divides it by the number of subscribers to get what each one adds at peak, and divides the room left **under 80% of the capacity** by that contribution. This is the site's own measurement, not a theoretical oversubscription ratio. A site where 20% or more of the subscribers already have a poor experience has **no room**, whatever the apparent margin. Without a known capacity or a busy-hour measurement, the answer is "unknown", with the reason.
 
 ### Volumes
 
