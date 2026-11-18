@@ -130,6 +130,8 @@ class RouterOsReadClient(Protocol):
 
     def system_resource(self) -> dict[str, Any]: ...
 
+    def system_resource_cpu(self) -> list[dict[str, Any]]: ...
+
     def routerboard(self) -> dict[str, Any]: ...
 
     def license_id(self) -> str | None: ...
@@ -304,6 +306,10 @@ class LibrouterosReadClient:
     def system_resource(self) -> dict[str, Any]:
         rows = self._query("/system/resource")
         return dict(rows[0]) if rows else {}
+
+    def system_resource_cpu(self) -> list[dict[str, Any]]:
+        """La charge de CHAQUE coeur (``/system/resource/cpu``) : cpu, load, irq."""
+        return [dict(r) for r in self._query("/system/resource/cpu")]
 
     def export_config(self) -> str:
         """Config complete du routeur, facon ``/export`` (texte).
@@ -1728,6 +1734,43 @@ class MikrotikCollector:
                 else None
             ),
             "free_hdd": parse_counter(resource.get("free-hdd-space")),
+            **self._cores_sync(),
+        }
+
+    def _cores_sync(self) -> dict[str, Any]:
+        """La charge PAR COEUR, et le coeur le plus charge.
+
+        ``cpu-load`` est la MOYENNE des coeurs : un coeur a 100 % et trois a
+        10 % s'affichent 33 %, alors que le trafic traite par le coeur sature
+        prend du retard. C'est le coeur le plus charge qui dit si les files
+        tiennent. Lecture facultative : un RouterOS qui ne la donne pas garde
+        la moyenne seule.
+        """
+        lire = getattr(self._client, "system_resource_cpu", None)
+        if lire is None:
+            return {"cores": [], "cpu_max_core_pct": None}
+        try:
+            lignes = lire() or []
+        except Exception as exc:  # noqa: BLE001 - facultatif
+            logger.debug("%s : /system/resource/cpu illisible (%s)", self.config.name, exc)
+            return {"cores": [], "cpu_max_core_pct": None}
+        coeurs: list[dict[str, Any]] = []
+        charges: list[int] = []
+        for i, ligne in enumerate(lignes):
+            charge = parse_counter(str(ligne.get("load", "")).rstrip("%") or None)
+            if charge is None:
+                continue
+            charges.append(charge)
+            coeurs.append(
+                {
+                    "cpu": _as_str(ligne.get("cpu")) or f"cpu{i}",
+                    "load_pct": charge,
+                    "irq_pct": parse_counter(str(ligne.get("irq", "")).rstrip("%") or None),
+                }
+            )
+        return {
+            "cores": coeurs,
+            "cpu_max_core_pct": max(charges, default=None),
         }
 
     async def probe(self) -> dict[str, Any]:

@@ -2416,3 +2416,11 @@ body.role-limited .dash-detail { display: none; }
 .fq-sec .table-wrap { margin-top: .5rem; max-height: 22rem; overflow: auto; }
 .fq-sec td code { font-size: .78rem; white-space: nowrap; }
 .fq-sec tr.muted td { opacity: .55; }
+
+/* Router health : le CPU en detail (moyenne, coeur le plus charge, une barre par coeur). */
+.cpu-cell { display: flex; flex-wrap: wrap; gap: .25rem .7rem; align-items: center; font-size: .78rem; color: var(--muted); }
+.cpu-cores { display: flex; gap: 3px; align-items: flex-end; height: 22px; margin-top: .3rem; }
+.cpu-core { position: relative; width: 9px; height: 100%; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+.cpu-core i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--ok); }
+.cpu-core.warn i { background: var(--warn); }
+.cpu-core.crit i { background: var(--crit); }

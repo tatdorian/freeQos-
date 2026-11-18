@@ -721,9 +721,15 @@ A link's throughput comes from the counters of the **port** that carries it, wit
 
 *Devices › Reset queues* deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to **Automatic**: its mode, boost and forced limit are removed, it is back on its plan, and its *Activity* says so (`queues reset on <router>`). A bandwidth schedule that targets the client applies again at its next window.
 
+### Router CPU: per core, and the peak of the last hour
+
+*Devices › Router health* shows, for each router, the **average** CPU, the **busiest core**, and one bar per core (`/system/resource/cpu`). The busiest core is what matters: one saturated core out of four shows as 33 % on average, yet the traffic it handles is delayed, and queues add latency. freeQoS reads every router every 30 s and keeps the last hour in memory: *Peak, last hour* gives the busiest core's peak, when it happened and how long it stayed above 80 %. Keep the busiest core under 70–80 % at peak hours.
+
+When a core stays **above 80 % for over a minute**, an alert is raised (*Router … : CPU core at … %*, warning; critical above 95 %), and emailed like the other router alerts when email alerts are on. It clears by itself when the load drops.
+
 ### Set by freeQoS: everything freeQoS put on a router
 
-*Devices › Inventory › Polled routers › Set by freeQoS* reads the router live and lists, table by table, **every line carrying the freeQoS mark**: client queues (`/queue/simple`, with target, limit, queue type and parent), the CAKE queue types, the restriction lines (firewall filter, mangle, queue tree) and address lists, plus the NetFlow export (whether `traffic-flow` is on, and which collector targets freeQoS set). Nothing is written. Queues made by hand or by RADIUS are only counted, never listed as freeQoS's. It is exactly what *Remove freeQoS* would take off. API: `GET /api/v1/pops/routers/{name}/freeqos-lines`.
+*Devices › Router settings › Polled routers › Set by freeQoS* reads the router live and lists, table by table, **every line carrying the freeQoS mark**: client queues (`/queue/simple`, with target, limit, queue type and parent), the CAKE queue types, the restriction lines (firewall filter, mangle, queue tree) and address lists, plus the NetFlow export (whether `traffic-flow` is on, and which collector targets freeQoS set). Nothing is written. Queues made by hand or by RADIUS are only counted, never listed as freeQoS's. It is exactly what *Remove freeQoS* would take off. API: `GET /api/v1/pops/routers/{name}/freeqos-lines`.
 
 ### Remove freeQoS: the router as it was before
 
@@ -1544,7 +1550,7 @@ Each page reads in sections, with a table of contents at the top and a tooltip o
 | **Clients** | Who are my clients, and how are they doing? | Every client under its **PoP**, with its connection (PPPoE, static IP, or **VLAN 2060**: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; *+ Add a client* (Operator) declares PPPoE, static-IP and VLAN clients. The map button opens the **Map**. |
 | **Plans** (from *Settings › Plans & map*) | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
 | **Insights** | What to do commercially? | Tabs: **Overview** (three figures; click one to open its list), **At risk** (who may cancel, and why), **Upgrade** (who lives at their plan's limit with a good experience), **Capacity** (room left per site and access point), **All clients** |
-| **Devices** | Which equipment? | Router health, adding a router, Ubiquiti antennas, radio health, inventory |
+| **Devices** | Which equipment? | Router health, connecting a router, router settings (Set up, Set by freeQoS, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health |
 | **API** | How to integrate? | API keys, links to the API guide and to this documentation |
 | **Settings** | How does the tool behave? | Accounts, settings, writing to the routers, caps held or not, command log |
 

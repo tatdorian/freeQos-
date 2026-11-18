@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="71f4210dc35bc95e">
+  <meta name="freeqos-docs-source" content="9b8ca9868edc56fe">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -53,6 +53,7 @@
     <a href="#5-measurements-throughput-latency-qoe">5. Measurements: throughput, latency, QoE</a>
     <a class="sub" href="#throughput">Throughput</a>
     <a class="sub" href="#reset-queues-every-client-back-to-automatic">Reset queues: every client back to Automatic</a>
+    <a class="sub" href="#router-cpu-per-core-and-the-peak-of-the-last-hour">Router CPU: per core, and the peak of the last hour</a>
     <a class="sub" href="#set-by-freeqos-everything-freeqos-put-on-a-router">Set by freeQoS: everything freeQoS put on a router</a>
     <a class="sub" href="#remove-freeqos-the-router-as-it-was-before">Remove freeQoS: the router as it was before</a>
     <a class="sub" href="#when-the-queue-does-not-see-the-traffic">When the queue does not see the traffic</a>
@@ -1787,8 +1788,11 @@ curl -s http://127.0.0.1:8000/health/ready
 <p><strong>Two time scales.</strong> History comes from collection (every 10 s). For "how much is going through <em>now</em>", the live measure calls <code>/interface/monitor-traffic</code> on the router, a read-only command; if it fails (version, rights, virtual port), the last collected value is returned with the reason.</p>
 <h3 id="reset-queues-every-client-back-to-automatic">Reset queues: every client back to Automatic</h3>
 <p><em>Devices › Reset queues</em> deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to <strong>Automatic</strong>: its mode, boost and forced limit are removed, it is back on its plan, and its <em>Activity</em> says so (<code>queues reset on &lt;router&gt;</code>). A bandwidth schedule that targets the client applies again at its next window.</p>
+<h3 id="router-cpu-per-core-and-the-peak-of-the-last-hour">Router CPU: per core, and the peak of the last hour</h3>
+<p><em>Devices › Router health</em> shows, for each router, the <strong>average</strong> CPU, the <strong>busiest core</strong>, and one bar per core (<code>/system/resource/cpu</code>). The busiest core is what matters: one saturated core out of four shows as 33 % on average, yet the traffic it handles is delayed, and queues add latency. freeQoS reads every router every 30 s and keeps the last hour in memory: <em>Peak, last hour</em> gives the busiest core's peak, when it happened and how long it stayed above 80 %. Keep the busiest core under 70–80 % at peak hours.</p>
+<p>When a core stays <strong>above 80 % for over a minute</strong>, an alert is raised (<em>Router … : CPU core at … %</em>, warning; critical above 95 %), and emailed like the other router alerts when email alerts are on. It clears by itself when the load drops.</p>
 <h3 id="set-by-freeqos-everything-freeqos-put-on-a-router">Set by freeQoS: everything freeQoS put on a router</h3>
-<p><em>Devices › Inventory › Polled routers › Set by freeQoS</em> reads the router live and lists, table by table, <strong>every line carrying the freeQoS mark</strong>: client queues (<code>/queue/simple</code>, with target, limit, queue type and parent), the CAKE queue types, the restriction lines (firewall filter, mangle, queue tree) and address lists, plus the NetFlow export (whether <code>traffic-flow</code> is on, and which collector targets freeQoS set). Nothing is written. Queues made by hand or by RADIUS are only counted, never listed as freeQoS's. It is exactly what <em>Remove freeQoS</em> would take off. API: <code>GET /api/v1/pops/routers/{name}/freeqos-lines</code>.</p>
+<p><em>Devices › Router settings › Polled routers › Set by freeQoS</em> reads the router live and lists, table by table, <strong>every line carrying the freeQoS mark</strong>: client queues (<code>/queue/simple</code>, with target, limit, queue type and parent), the CAKE queue types, the restriction lines (firewall filter, mangle, queue tree) and address lists, plus the NetFlow export (whether <code>traffic-flow</code> is on, and which collector targets freeQoS set). Nothing is written. Queues made by hand or by RADIUS are only counted, never listed as freeQoS's. It is exactly what <em>Remove freeQoS</em> would take off. API: <code>GET /api/v1/pops/routers/{name}/freeqos-lines</code>.</p>
 <h3 id="remove-freeqos-the-router-as-it-was-before">Remove freeQoS: the router as it was before</h3>
 <p><em>Devices › Remove freeQoS</em> leaves a router as it was before freeQoS, in one gesture (Administrator, confirmed in a window):</p>
 <ol>
@@ -3171,7 +3175,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <tr>
 <td><strong>Devices</strong></td>
 <td>Which equipment?</td>
-<td>Router health, adding a router, Ubiquiti antennas, radio health, inventory</td>
+<td>Router health, connecting a router, router settings (Set up, Set by freeQoS, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health</td>
 </tr>
 <tr>
 <td><strong>API</strong></td>
@@ -4679,7 +4683,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><strong>What it shows.</strong> All subscribers with their limit, current usage, latency and whether the router really holds the cap.</p>
 <p><strong>How to read it.</strong> Click a client to see its plan, its queue on the router and its history. The search box accepts a login, an IP, a MAC or a site.</p>
 <h3 id="devices">Devices</h3>
-<p>Routers and antennas: their health, adding them, the Ubiquiti UISP controller (connect it, see every antenna's radio capacity, attach backhauls to their site), and the inventory. One section at a time: the table of contents works as tabs.</p>
+<p>Routers and antennas: their health, adding them, the Ubiquiti UISP controller (connect it, see every antenna's radio capacity, attach backhauls to their site), and the router settings. One section at a time: the table of contents works as tabs.</p>
 <h4 id="router-health">Router health</h4>
 <p><strong>What it shows.</strong> CPU, memory and uptime of each polled router.</p>
 <p><strong>Scale.</strong></p>
@@ -4689,12 +4693,16 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <li>Red: over 90%: overloaded — packets and measurements suffer</li>
 </ul>
 <p><strong>What to do.</strong> A sustained high CPU on a PoP: too many simple queues for the hardware, or a firewall rule doing heavy work.</p>
-<h4 id="polled-routers">Polled routers</h4>
-<p><strong>What it shows.</strong> The routers freeQoS reads (and writes queues to).</p>
-<p><strong>How to read it.</strong> Reset queues deletes every freeQoS queue of that router and rewrites them cleanly — use it when caps behave strangely. Queues not created by freeQoS are never touched.</p>
 <h4 id="connect-a-router">Connect a router</h4>
 <p><strong>What it shows.</strong> Add a MikroTik router: its address, API port and an account with read rights (and write rights if freeQoS should shape).</p>
 <p><strong>How to read it.</strong> The API-SSL port (8729) is preferred. A dedicated account with the “read, write, api, test” policies is enough — “test” is needed for the latency probe.</p>
+<h4 id="router-settings">Router settings</h4>
+<p>Every router freeQoS polls, and what you do on each: Set up, Set by freeQoS (everything freeQoS put on it), allow writing, role, Reset queues, Remove freeQoS. Below, the known sites.</p>
+<h4 id="polled-routers">Polled routers</h4>
+<p><strong>What it shows.</strong> The routers freeQoS reads (and writes queues to).</p>
+<p><strong>How to read it.</strong> Reset queues deletes every freeQoS queue of that router and rewrites them cleanly — use it when caps behave strangely. Queues not created by freeQoS are never touched.</p>
+<h4 id="known-sites">Known sites</h4>
+<p>The PoPs and VLAN sites known to freeQoS. A site pushed by the API takes the place of an automatically discovered one.</p>
 <h4 id="ubiquiti-antennas">Ubiquiti antennas</h4>
 <p>airOS access points and CPEs polled for their radio state: signal, noise, CCQ, capacity. Their capacity feeds the saturation and room-for-more calculations.</p>
 <h4 id="radio-health-access-points-and-their-cpes">Radio health access points and their CPEs</h4>
@@ -4708,10 +4716,6 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <p><strong>What to do.</strong> Weak signal on one CPE: alignment or obstacle. Weak on all CPEs of an AP: interference — check the noise floor and change channel.</p>
 <h4 id="add-an-antenna">Add an antenna</h4>
 <p>Declare an airOS device by its address and credentials. Credentials are encrypted at rest with the controller key.</p>
-<h4 id="inventory">Inventory</h4>
-<p>Every device freeQoS knows, with where it was discovered.</p>
-<h4 id="known-sites">Known sites</h4>
-<p>The PoPs and VLAN sites known to freeQoS. A site pushed by the API takes the place of an automatically discovered one.</p>
 <h3 id="api">API</h3>
 <p>API keys, and the way to the API guide.</p>
 <h4 id="create-a-key">Create a key</h4>

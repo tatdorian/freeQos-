@@ -212,6 +212,7 @@ class Container:
     uisp_repo: UispRepository | None = None
     public_access_repo: PublicAccessRepository | None = None
     exclusions: Any = None
+    router_cpu: Any = None
     client_profiles_repo: ClientProfilesRepository | None = None
     tree_repo: TreeRepository | None = None
     notifications_repo: NotificationsRepository | None = None
@@ -841,6 +842,23 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_UISP, 60.0, releve_uisp)
     conteneur.watch_sources.append(uisp_traffic.problems)
+
+    # LE CPU DES ROUTEURS, toutes les 30 s : le coeur le plus charge et le pic
+    # de l'heure (Router health), et une alerte quand un coeur reste au-dessus
+    # de 80 % -- au-dela, les files ajoutent de la latence.
+    from app.services.router_cpu import INTERVALLE_S, JOB_ROUTER_CPU, RouterCpu
+
+    router_cpu = RouterCpu()
+    conteneur.router_cpu = router_cpu
+
+    async def releve_cpu() -> None:
+        await router_cpu.sample(list(registry.collectors))
+
+    async def problemes_cpu() -> list[dict[str, Any]]:
+        return router_cpu.problems()
+
+    scheduler.add_job(JOB_ROUTER_CPU, INTERVALLE_S, releve_cpu)
+    conteneur.watch_sources.append(problemes_cpu)
     # Des le demarrage, et pas dix minutes plus tard : un routeur retire (et les
     # anciens PoPs de demonstration) ne doit plus s'afficher nulle part.
     try:
