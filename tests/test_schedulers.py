@@ -104,12 +104,11 @@ def test_lance_a_la_main_il_s_applique_tout_de_suite() -> None:
     assert jusqu_a_l_arret.window_at(LUNDI_12H + timedelta(days=3)) is not None
 
 
-def test_lance_a_la_main_il_passe_devant_les_autres() -> None:
+def test_entre_groupes_celui_lance_a_la_main_passe_devant() -> None:
     nuit = _sched(
         1,
         "Night",
-        "subscribers",
-        targets=["a"],
+        "on_plan",
         windows=[{"start": "00:00", "end": "24:00", "percent": 200}],
     )
     soir = _sched(2, "Evening", "all", manual_on=True)
@@ -117,6 +116,29 @@ def test_lance_a_la_main_il_passe_devant_les_autres() -> None:
     taux = carnet.rate_for(login="a", sites=(), plan_down=10, plan_up=10, now=LUNDI_12H)
     assert taux.schedule_name == "Evening"
     assert taux.down_mbps == 7.0
+
+
+def test_le_scheduler_propre_au_client_passe_devant_le_groupe() -> None:
+    """Ce qui est fait a la main POUR CE CLIENT l'emporte sur le groupe, meme
+    lance a la main."""
+    propre = _sched(
+        1,
+        "ACME a · own",
+        "subscribers",
+        targets=["a"],
+        windows=[{"start": "18:00", "end": "23:00", "percent": 100}],
+    )
+    assert propre.personal
+    groupe = _sched(2, "Evening", "all", manual_on=True)
+    carnet = ScheduleBook([propre, groupe])
+    soir = carnet.rate_for(login="a", sites=(), plan_down=10, plan_up=10, now=LUNDI_19H)
+    assert (soir.schedule_name, soir.down_mbps, soir.personal) == ("ACME a · own", 10.0, True)
+    # Hors de ses heures, le groupe s'applique.
+    midi = carnet.rate_for(login="a", sites=(), plan_down=10, plan_up=10, now=LUNDI_12H)
+    assert (midi.schedule_name, midi.personal) == ("Evening", False)
+    # Les autres clients suivent le groupe.
+    autre = carnet.rate_for(login="b", sites=(), plan_down=10, plan_up=10, now=LUNDI_19H)
+    assert autre.schedule_name == "Evening"
 
 
 def test_celui_dont_les_heures_courent_gouverne() -> None:
@@ -150,13 +172,22 @@ def test_memes_heures_autres_clients_c_est_permis() -> None:
 
 def test_memes_heures_memes_clients_refuse_avec_qui_et_quand() -> None:
     tous = _sched(1, "Evening", "all")
-    choisi = _sched(2, "VIP", "subscribers", targets=["b"])
+    choisis = _sched(2, "VIP", "subscribers", targets=["a", "b"])
     message = overlap_conflict(
-        choisi, [tous], CLIENTS, now=LUNDI_12H, describe_client=lambda c: "ACME " + c["login"]
+        choisis, [tous], CLIENTS, now=LUNDI_12H, describe_client=lambda c: "ACME " + c["login"]
     )
     assert message is not None
-    assert "'VIP' and 'Evening' would both apply to ACME b" in message
+    assert "'VIP' and 'Evening' would both apply to ACME a, ACME b" in message
     assert "(Mon 18:00)" in message
+
+
+def test_un_scheduler_propre_peut_chevaucher_le_groupe_pas_un_autre_propre() -> None:
+    tous = _sched(1, "Evening", "all")
+    propre = _sched(2, "b · own", "subscribers", targets=["b"])
+    assert overlap_conflict(propre, [tous], CLIENTS, now=LUNDI_12H) is None
+    autre_propre = _sched(3, "b · other", "subscribers", targets=["b"])
+    message = overlap_conflict(autre_propre, [tous, propre], CLIENTS, now=LUNDI_12H)
+    assert message is not None and "'b · other' and 'b · own'" in message
 
 
 def test_autres_heures_memes_clients_c_est_permis() -> None:
@@ -240,3 +271,12 @@ def test_le_scheduler_lance_a_la_main_le_dit() -> None:
     carnet = ScheduleBook([_sched(1, "Evening", "all", manual_on=True)])
     taux = carnet.rate_for(login="a", sites=(), plan_down=10, plan_up=10, now=LUNDI_12H)
     assert taux.window == "started by hand"
+
+
+def test_la_page_schedulers_range_ceux_d_un_client_a_part() -> None:
+    from app.web.ui import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert "'<h3 style=\"margin:1.2rem 0 .3rem\">For one client</h3>'" in js
+    assert "function carteSchedulerPropre(r, dis)" in js
+    assert "'<b>its own</b> · '" in js

@@ -98,6 +98,7 @@ def _with_effective_limits(row: dict[str, Any]) -> dict[str, Any]:
     row["limit_source"] = source
     row["schedule_name"] = horaire.schedule_name if horaire else None
     row["schedule_window"] = horaire.window if horaire else None
+    row["schedule_personal"] = bool(horaire and horaire.personal)
     return row
 
 

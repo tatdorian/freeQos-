@@ -499,3 +499,43 @@ def test_lancer_un_scheduler_arrete_celui_lance_sur_les_memes_clients(
     assert r.status_code == 200, r.text
     assert r.json()["stopped"] == ["Evening"]
     assert _limites(routeur)["client-a"] == NUIT
+
+
+def test_le_scheduler_propre_au_client_passe_devant_le_groupe(
+    banc: tuple[TestClient, RouteurQuiRetient],
+) -> None:
+    """« Evening » a 50 % pour tous les clients a leur plan, et pour client-a
+    SON scheduler a 100 % aux memes heures : client-a garde sa vitesse, les
+    autres passent a 50 %. Le chevauchement est permis (propre contre groupe)."""
+    client, routeur = banc
+    cle = _cle(client)
+    _brancher(client, cle)
+    for corps in (
+        {
+            "name": "Evening",
+            "scope": "on_plan",
+            "windows": [{"start": "18:00", "end": "23:00", "percent": 50}],
+        },
+        {
+            "name": "client-a · own",
+            "scope": "subscribers",
+            "targets": ["client-a"],
+            "windows": [{"start": "18:00", "end": "23:00", "percent": 100}],
+        },
+    ):
+        r = client.post(
+            "/api/v1/bandwidth-schedules",
+            headers=cle,
+            json={"timezone": "Africa/Niamey", **corps},
+        )
+        assert r.status_code == 201, r.text
+    _passe(client, cle, LUNDI, "19:00")
+    limites = _limites(routeur)
+    assert limites["client-a"] == PLAN
+    assert limites["client-c"] == "5000000/10000000"
+    ligne = next(
+        x
+        for x in client.get("/api/v1/subscribers/latest", headers=cle).json()
+        if x["login"] == "client-a"
+    )
+    assert ligne["schedule_personal"] is True

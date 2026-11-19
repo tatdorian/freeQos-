@@ -403,6 +403,11 @@ class BandwidthSchedule:
     def precision(self) -> int:
         return _PRECISION.get(self.scope, 9)
 
+    @property
+    def personal(self) -> bool:
+        """Un scheduler pour UN SEUL client (fait a la main pour lui)."""
+        return self.scope == SCOPE_SUBSCRIBERS and len(self.targets) == 1
+
     def local(self, now: datetime) -> datetime:
         return now.astimezone(ZoneInfo(self.timezone))
 
@@ -497,6 +502,8 @@ class ScheduledRate:
     window: str
     #: Calcule sur la vitesse du MODE du client : il passe devant le mode.
     over_mode: bool = False
+    #: Le scheduler propre a ce client (et non un scheduler de groupe).
+    personal: bool = False
 
 
 class ScheduleBook:
@@ -522,8 +529,12 @@ class ScheduleBook:
         mode_id: int | None = None,
         now: datetime | None = None,
     ) -> BandwidthSchedule | None:
-        """LE profil qui gouverne cet abonne : celui lance a la main d'abord, puis
-        celui dont une plage court, puis le plus precis, puis le plus recent."""
+        """LE profil qui gouverne cet abonne, parmi ceux qui courent maintenant :
+
+        1. le scheduler PROPRE au client (fait a la main pour lui) passe devant
+           tout scheduler de groupe ;
+        2. puis celui lance a la main (Start now) ;
+        3. puis le plus precis, puis le plus recent."""
         sites = tuple(sites)
         instant = now or datetime.now(tz=UTC)
         candidats = [
@@ -536,8 +547,9 @@ class ScheduleBook:
         return min(
             candidats,
             key=lambda s: (
-                0 if s.manual_active(instant) else 1,
                 0 if s.window_at(instant) is not None else 1,
+                0 if s.personal else 1,
+                0 if s.manual_active(instant) else 1,
                 s.precision,
                 -s.id,
             ),
@@ -582,6 +594,7 @@ class ScheduleBook:
             schedule_name=profil.name,
             window="started by hand" if profil.manual_active(instant) else plage.describe(),
             over_mode=en_mode,
+            personal=profil.personal,
         )
 
     def signature(self, now: datetime | None = None) -> tuple[tuple[int, int | None], ...]:
@@ -652,6 +665,10 @@ def overlap_conflict(
     mes_minutes = _minutes_utc(profil, instant)
     for autre in autres:
         if autre.id == profil.id or not autre.enabled:
+            continue
+        # Un scheduler PROPRE a un client remplace le groupe pour lui : ils
+        # peuvent partager des heures. Deux propres au meme client, non.
+        if profil.personal != autre.personal:
             continue
         communes = mes_minutes & _minutes_utc(autre, instant)
         if not communes:

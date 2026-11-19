@@ -11743,7 +11743,7 @@ const SCHED_PORTEE = {
 
 function schedRate(w) {
   if (w.mode_id != null) return 'mode <b>' + esc(w.mode_name || '#' + w.mode_id) + '</b>';
-  if (w.percent != null) return esc(String(w.percent)) + ' % of their speed';
+  if (w.percent != null) return esc(String(w.percent)) + ' % of the speed';
   return [w.down_mbps != null ? '&darr; ' + esc(mbps(w.down_mbps)) : '',
     w.up_mbps != null ? '&uarr; ' + esc(mbps(w.up_mbps)) : ''].filter(Boolean).join(' ');
 }
@@ -11785,6 +11785,67 @@ async function loadSchedules() {
   if (!(CLI.rows || []).length) loadClientsData().then(() => { schedScopeSeg(); schedTargetsField(); }).catch(() => {});
 }
 
+/** L'etat d'un scheduler maintenant : en cours, lance a la main, en attente. */
+function schedEtatMaintenant(f) {
+  const heure = (iso) => esc(new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }));
+  if (f.error) return sqCell('Invalid', 'crit', f.error);
+  if (!f.enabled) return sqCell('suspended', 'warn');
+  if (f.manual_active) {
+    return sqCell('running · started by hand', 'ok') + '<span class="hint">' +
+      (f.manual_until ? 'until ' + heure(f.manual_until) : 'until you stop it') + '</span>';
+  }
+  if (f.active_window) {
+    return sqCell('running', 'ok') + (f.next_change_at ? '<span class="hint">until ' + heure(f.next_change_at) + '</span>' : '');
+  }
+  return '<span class="na">waiting</span>' + (f.next_change_at ? '<span class="hint">starts ' +
+    esc(new Date(f.next_change_at).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })) +
+    '</span>' : '');
+}
+
+/** Lancer a la main (menu de durees), ou arreter s'il tourne deja ainsi. */
+function schedBoutonLancer(f) {
+  return f.manual_active
+    ? '<button class="sm primary" data-sched-stop="' + esc(f.id) + '">Stop</button> '
+    : '<select class="sm" data-sched-start="' + esc(f.id) + '" aria-label="Start now">' +
+      '<option value="">Start now…</option><option value="60">for 1 hour</option>' +
+      '<option value="120">for 2 hours</option><option value="240">for 4 hours</option>' +
+      '<option value="1440">for 24 hours</option><option value="0">until I stop it</option></select> ';
+}
+
+/** Le client d'un scheduler propre, par son nom, vers sa fiche. */
+function schedClientLien(login) {
+  const r = (CLI.rows || []).find((x) => x.login === login);
+  return '<a href="#/client/' + esc(encodeURIComponent(login)) + '"><b>' +
+    esc((r && r.display_name) || login) + '</b></a>' +
+    (r && r.display_name ? '<span class="hint">' + esc(login) + '</span>' : '');
+}
+
+function schedTableau(lignes, propres) {
+  if (!lignes.length) return '<div class="empty">No group scheduler.</div>';
+  return '<table><thead><tr>' + (propres ? '<th>Client</th>' : '<th>Scheduler</th>') +
+    '<th>Speed</th>' + (propres ? '' : '<th>Who</th>') + '<th>Hours</th><th>Now</th><th></th></tr></thead><tbody>' +
+    lignes.map((f) => {
+      const ligne = '<tr>' +
+        (propres ? '<td>' + schedClientLien((f.targets || [])[0]) + '</td>'
+          : '<td><b>' + esc(f.name) + '</b><span class="hint">' +
+            (f.timezone === fuseauLocal() ? 'your time zone'
+              : esc(f.timezone) + ' · ' + esc(heureDans(f.timezone)) + ' there') + '</span></td>') +
+        '<td>' + schedCeQuIlApplique(f) + '</td>' +
+        (propres ? '' : '<td>' + schedCible(f) + '</td>') +
+        '<td>' + (f.windows || []).map(schedWindowText).join('<br>') + '</td>' +
+        '<td>' + schedEtatMaintenant(f) + '</td>' +
+        '<td class="nowrap">' + schedBoutonLancer(f) +
+          '<button class="sm" data-sched-edit="' + esc(f.id) + '">Edit</button> ' +
+          (propres ? '' : '<button class="sm" data-sched-preview="' + esc(f.id) + '">Clients</button> ') +
+          '<button class="sm" data-sched-toggle="' + esc(f.id) + '">' +
+            (f.enabled ? 'Suspend' : 'Resume') + '</button> ' +
+          '<button class="sm" data-sched-del="' + esc(f.id) + '">Delete</button>' +
+        '</td></tr>';
+      if (String(SCHED.preview) !== String(f.id)) return ligne;
+      return ligne + '<tr class="plan-edit"><td colspan="6">' + schedPreviewHtml() + '</td></tr>';
+    }).join('') + '</tbody></table>';
+}
+
 function renderSchedules() {
   const host = document.getElementById('sched-list');
   const d = SCHED.data;
@@ -11797,45 +11858,14 @@ function renderSchedules() {
   host.innerHTML = (d.enforcement_enabled ? '' : '<div class="notice warn">Writing to the ' +
       'routers is off (Settings): the scheduled speeds are computed and shown, nothing is ' +
       'written.</div>') +
-    '<table><thead><tr><th>Scheduler</th><th>Speed</th><th>Who</th><th>Hours</th>' +
-    '<th>Now</th><th></th></tr></thead><tbody>' +
-    lignes.map((f) => {
-      const main = !!f.manual_active;
-      const maintenant = f.error
-        ? sqCell('Invalid', 'crit', f.error)
-        : !f.enabled ? sqCell('suspended', 'warn')
-          : main ? sqCell('running · started by hand', 'ok') + '<span class="hint">' +
-            (f.manual_until ? 'until ' + esc(new Date(f.manual_until).toLocaleTimeString([], {
-              hour: '2-digit', minute: '2-digit', hour12: false })) : 'until you stop it') + '</span>'
-            : f.active_window ? sqCell('running', 'ok') + (f.next_change_at ? '<span class="hint">until ' +
-              esc(new Date(f.next_change_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })) + '</span>' : '')
-              : '<span class="na">waiting</span>' + (f.next_change_at ? '<span class="hint">starts ' +
-                esc(new Date(f.next_change_at).toLocaleString([], { weekday: 'short', hour: '2-digit',
-                  minute: '2-digit', hour12: false })) + '</span>' : '');
-      const lancer = main
-        ? '<button class="sm primary" data-sched-stop="' + esc(f.id) + '">Stop</button> '
-        : '<select class="sm" data-sched-start="' + esc(f.id) + '" aria-label="Start now">' +
-          '<option value="">Start now…</option><option value="60">for 1 hour</option>' +
-          '<option value="120">for 2 hours</option><option value="240">for 4 hours</option>' +
-          '<option value="1440">for 24 hours</option><option value="0">until I stop it</option></select> ';
-      const ligne = '<tr>' +
-        '<td><b>' + esc(f.name) + '</b><span class="hint">' +
-          (f.timezone === fuseauLocal() ? 'your time zone'
-            : esc(f.timezone) + ' · ' + esc(heureDans(f.timezone)) + ' there') + '</span></td>' +
-        '<td>' + schedCeQuIlApplique(f) + '</td>' +
-        '<td>' + schedCible(f) + '</td>' +
-        '<td>' + (f.windows || []).map(schedWindowText).join('<br>') + '</td>' +
-        '<td>' + maintenant + '</td>' +
-        '<td class="nowrap">' + lancer +
-          '<button class="sm" data-sched-edit="' + esc(f.id) + '">Edit</button> ' +
-          '<button class="sm" data-sched-preview="' + esc(f.id) + '">Clients</button> ' +
-          '<button class="sm" data-sched-toggle="' + esc(f.id) + '">' +
-            (f.enabled ? 'Suspend' : 'Resume') + '</button> ' +
-          '<button class="sm" data-sched-del="' + esc(f.id) + '">Delete</button>' +
-        '</td></tr>';
-      if (String(SCHED.preview) !== String(f.id)) return ligne;
-      return ligne + '<tr class="plan-edit"><td colspan="6">' + schedPreviewHtml() + '</td></tr>';
-    }).join('') + '</tbody></table>' + schedLastSwitch(d.last_switch);
+    schedTableau(lignes.filter((f) => !f.personal), false) +
+    // LES SCHEDULERS PROPRES A UN CLIENT : a part, pour les retrouver.
+    '<h3 style="margin:1.2rem 0 .3rem">For one client</h3>' +
+    '<p class="hint" style="display:block;margin:0 0 .5rem">Made for a single client, on its page ' +
+      '(<i>Plan &amp; mode</i>). During its hours it goes before every group scheduler.</p>' +
+    (lignes.some((f) => f.personal) ? schedTableau(lignes.filter((f) => f.personal), true)
+      : '<div class="empty">None: open a client, <i>Plan &amp; mode</i>, to give it its own scheduler.</div>') +
+    schedLastSwitch(d.last_switch);
 
   host.querySelectorAll('[data-sched-start]').forEach((sel) => sel.addEventListener('change', () => {
     if (sel.value === '') return;
@@ -14038,6 +14068,113 @@ function modifierClient(login, fiche) {
   root.querySelector('#ec-name').focus();
 }
 
+/** SON SCHEDULER : un % pendant des heures, pour ce client seul. Pendant ses
+ *  heures, il passe devant tout scheduler de groupe. */
+function carteSchedulerPropre(r, dis) {
+  const f = FICHE.propre;
+  const w0 = (f && (f.windows || [])[0]) || {};
+  const plages = f ? f.windows || [] : [{ start: '18:00', end: '23:00' }];
+  const ligne = (w) => '<div class="own-slot" data-own-slot style="display:flex;gap:.4rem;align-items:center;flex-wrap:wrap;margin:.3rem 0">' +
+    '<input type="time" name="start" style="width:auto;flex:0 0 auto" value="' + esc(w.start || '18:00') + '"' + dis + '> &rarr; ' +
+    '<input type="time" name="end" style="width:auto;flex:0 0 auto" value="' + esc(w.end === '24:00' ? '00:00' : (w.end || '23:00')) + '"' + dis + '>' +
+    '<span class="day-pills">' + SCHED_JOURS.map(([cle, nom]) =>
+      '<label class="day-pill" title="' + nom + '"><input type="checkbox" name="day" value="' + cle + '"' +
+      (!(w.days || []).length || (w.days || []).includes(cle) ? ' checked' : '') + dis + '><span>' + nom.charAt(0) +
+      '</span></label>').join('') + '</span>' +
+    '<button type="button" class="sm link-btn" data-own-remove' + dis + ' title="Remove these hours">&times;</button></div>';
+  const etat = f ? '<p class="hint" style="display:block">Now: ' + schedEtatMaintenant(f) + '</p>' : '';
+  return '<div class="card"><h3>Its own scheduler</h3>' +
+    '<p class="hint" style="display:block">A % of its speed, during its hours, <b>for this client only</b>. ' +
+      'It goes before every group scheduler.</p>' + etat +
+    '<div class="field"><label for="own-pct">Percentage <small>(70 = 30 % slower, 100 = its normal speed, 200 = twice)</small></label>' +
+      '<input id="own-pct" type="number" min="1" max="1000" step="any" placeholder="100" value="' +
+      esc(w0.percent != null ? w0.percent : '') + '"' + dis + '></div>' +
+    '<div id="own-slots">' + plages.map(ligne).join('') + '</div>' +
+    '<button type="button" class="sm link-btn" id="own-add"' + dis + '>+ Add hours</button>' +
+    '<div class="actions" style="margin-top:.6rem">' +
+      (f ? '<button class="sm danger" id="own-del"' + dis + '>Delete</button>' + schedBoutonLancer(f) : '') +
+      '<span class="spacer"></span><button class="primary" id="own-save"' + dis + '>' +
+      (f ? 'Save' : 'Create its scheduler') + '</button></div><div id="own-out"></div></div>';
+}
+
+function cablerSchedulerPropre(host, login, r) {
+  const carte = host.querySelector('#own-slots');
+  if (!carte) return;
+  const out = host.querySelector('#own-out');
+  const lier = () => carte.querySelectorAll('[data-own-remove]').forEach((b) => { b.onclick = () => b.closest('[data-own-slot]').remove(); });
+  lier();
+  const ajout = host.querySelector('#own-add');
+  if (ajout) {
+    ajout.onclick = () => {
+      carte.insertAdjacentHTML('beforeend', carte.lastElementChild ? carte.lastElementChild.outerHTML
+        : '<div data-own-slot><input type="time" name="start" value="18:00"> <input type="time" name="end" value="23:00"></div>');
+      lier();
+    };
+  }
+  const f = FICHE.propre;
+  const fini = async (msg) => { out.innerHTML = msg; setTimeout(loadClientPage, 1200); };
+  const enregistrer = host.querySelector('#own-save');
+  if (enregistrer) {
+    enregistrer.onclick = async () => {
+      const pct = Number(host.querySelector('#own-pct').value);
+      if (!(pct > 0)) { out.innerHTML = '<div class="notice warn">Give a percentage above 0.</div>'; return; }
+      const fenetres = [...carte.querySelectorAll('[data-own-slot]')].map((l) => {
+        const fin = l.querySelector('[name="end"]').value;
+        return { start: l.querySelector('[name="start"]').value, end: fin === '00:00' ? '24:00' : fin,
+          days: [...l.querySelectorAll('input[name="day"]:checked')].map((c) => c.value), percent: pct };
+      });
+      if (!fenetres.length) { out.innerHTML = '<div class="notice warn">Add at least one hours range.</div>'; return; }
+      const corps = { name: ((r.display_name || login) + ' · own').slice(0, 128), timezone: f ? f.timezone : fuseauLocal(),
+        scope: 'subscribers', targets: [login], windows: fenetres, enabled: true };
+      try {
+        const res = f
+          ? await api('/bandwidth-schedules/' + encodeURIComponent(f.id), { method: 'PATCH', body: JSON.stringify(corps) })
+          : await api('/bandwidth-schedules', { method: 'POST', body: JSON.stringify(corps) });
+        fini('<div class="notice ok">Its scheduler is saved: ' + esc(pct) + ' % of its speed during its hours.' +
+          schedEnforcement(res.enforcement) + '</div>');
+      } catch (err) {
+        out.innerHTML = noticeErreur(err);
+      }
+    };
+  }
+  const suppr = host.querySelector('#own-del');
+  if (suppr && f) {
+    suppr.onclick = async () => {
+      if (!confirm('Delete the scheduler of ' + (r.display_name || login) + '? Group schedulers apply to it again.')) return;
+      try {
+        await api('/bandwidth-schedules/' + encodeURIComponent(f.id), { method: 'DELETE' });
+        fini('<div class="notice ok">Deleted.</div>');
+      } catch (err) {
+        out.innerHTML = noticeErreur(err);
+      }
+    };
+  }
+  const lancer = host.querySelector('[data-sched-start]');
+  if (lancer && f) {
+    lancer.onchange = async () => {
+      if (lancer.value === '') return;
+      try {
+        await api('/bandwidth-schedules/' + encodeURIComponent(f.id) + '/start', {
+          method: 'POST', body: JSON.stringify({ minutes: Number(lancer.value) || null }) });
+        fini('<div class="notice ok">Started now.</div>');
+      } catch (err) {
+        out.innerHTML = noticeErreur(err);
+      }
+    };
+  }
+  const arreter = host.querySelector('[data-sched-stop]');
+  if (arreter && f) {
+    arreter.onclick = async () => {
+      try {
+        await api('/bandwidth-schedules/' + encodeURIComponent(f.id) + '/stop', { method: 'POST' });
+        fini('<div class="notice ok">Stopped: it follows its hours again.</div>');
+      } catch (err) {
+        out.innerHTML = noticeErreur(err);
+      }
+    };
+  }
+}
+
 async function loadClientPage() {
   const login = FICHE.login;
   const host = document.getElementById('client-page');
@@ -14053,13 +14190,17 @@ async function loadClientPage() {
     return;
   }
   const pas = FICHE.periode <= 60 ? 30 : FICHE.periode <= 1440 ? 300 : 3600;
-  const [data, journal, sante, fiche] = await Promise.all([
+  const [data, journal, sante, fiche, horaires] = await Promise.all([
     r.subscriber_id ? api('/subscribers/' + r.subscriber_id + '/metrics?minutes=' + FICHE.periode +
       '&bucket_seconds=' + pas).catch(() => null) : Promise.resolve(null),
     api('/activity?limit=50&login=' + encodeURIComponent(login)).catch(() => []),
     FICHE.onglet === 'overview' ? api('/clients/' + encodeURIComponent(login) + '/health').catch(() => null) : Promise.resolve(null),
     api('/clients/' + encodeURIComponent(login) + '/profile').catch(() => null),
+    FICHE.onglet === 'plan' ? api('/bandwidth-schedules').catch(() => null) : Promise.resolve(null),
   ]);
+  // SON SCHEDULER PROPRE (fait pour lui seul), s'il en a un.
+  FICHE.propre = ((horaires && horaires.schedules) || []).find((f) => f.personal &&
+    (f.targets || [])[0] === login) || null;
   const profil = (fiche && fiche.profile) || {};
   const decouvert = (fiche && fiche.discovered) || {};
   const ip = r.last_ip || decouvert.ip || '';
@@ -14126,7 +14267,8 @@ async function loadClientPage() {
         '<tr><td>Mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
         // LE SCHEDULER EN COURS : son nom, ses heures, et s'il decide la vitesse.
         '<tr><td>Scheduler</td><td>' + ((s.schedule_name || r.schedule_name)
-          ? '<a href="#/management"><b>' + esc(s.schedule_name || r.schedule_name) + '</b></a> · ' +
+          ? ((s.schedule_personal || r.schedule_personal) ? '<b>its own</b> · '
+            : '<a href="#/management"><b>' + esc(s.schedule_name || r.schedule_name) + '</b></a> · ') +
             esc(s.schedule_window || r.schedule_window || '') +
             ((s.limit_source || r.limit_source) === 'schedule' ? ''
               : ' <span class="hint" style="display:inline">(not applied now: ' +
@@ -14189,7 +14331,7 @@ async function loadClientPage() {
         esc(s.plan_up_mbps || '') + '"' + dis + '></div>' +
       '<div class="actions" style="margin-top:.6rem"><button class="sm danger" id="cp-plan-reset"' + dis + '>Remove</button>' +
       '<span class="spacer"></span><button class="primary" id="cp-plan-save"' + dis + '>Save the plan</button></div>' +
-      '<div id="cp-plan-out"></div></div>' +
+      '<div id="cp-plan-out"></div></div>' + carteSchedulerPropre(r, dis) +
       '<div class="card"><h3>Boost</h3><p class="hint" style="display:block">' +
       (b ? 'A boost is running: ' + esc(boostReste(b)) + (boostReste(b) === 'until stopped' ? '.' : ' left.')
         : 'Extra rate for a set time, or until you stop it.') +
@@ -14258,6 +14400,7 @@ async function loadClientPage() {
       host.querySelector('#cp-plan-out').innerHTML = noticeErreur(err);
     }
   });
+  cablerSchedulerPropre(host, login, r);
   const graphe = host.querySelector('#cp-chart');
   if (graphe) {
     renderThroughput(graphe, pts.map((p) => ({ bucket: p.bucket, tx_bps: p.tx_bps_max, rx_bps: p.rx_bps_max, subscribers: p.samples })));
