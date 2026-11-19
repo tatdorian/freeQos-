@@ -74,6 +74,13 @@ class WindowInput(BaseModel):
             "the mode's rate, and follows the mode when it is edited."
         ),
     )
+    emergency: bool = Field(
+        default=False,
+        description=(
+            "Instead of a rate: each client gets ITS OWN emergency bandwidth "
+            "(PUT /clients/{login}/emergency). A client without one keeps its speed."
+        ),
+    )
 
 
 class ScheduleInput(BaseModel):
