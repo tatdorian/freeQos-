@@ -52,7 +52,7 @@
       <a href="#/dashboard" data-view="dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Dashboard</span></a>
       <a href="#/clients" data-view="clients"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><path d="M15.5 12.5l2 2 4-4.5"/></svg><span>Clients</span></a>
       <a href="#/modes" data-view="modes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg><span>Modes</span></a>
-      <a href="#/management" data-view="management"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg><span>Schedules</span></a>
+      <a href="#/management" data-view="management"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg><span>Schedulers</span></a>
       <a href="#/alerts" data-view="alerts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16z"/><path d="M10 21h4"/></svg><span>Alerts</span></a>
       <a href="#/activity" data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span>Activity</span></a>
       <span class="nav-sep nav-admin">Network</span>
@@ -682,34 +682,63 @@
            recent. -->
 
 
-      <h2>Bandwidth schedules</h2>
+      <p class="hint" style="display:block;margin:0 0 .8rem">A scheduler changes the speed of some
+        clients during the hours you choose: <b>a % of their speed</b> (their plan, or their mode) or
+        <b>a mode</b>. Outside these hours they keep their speed. <b>Start now</b> applies one at once, by hand.</p>
       <div class="table-wrap" id="sched-list"></div>
       <div id="sched-result"></div>
-      <h3 id="sched-form-title" style="margin:1rem 0 .4rem">New schedule</h3>
-      <!-- Formulaire facon Reglages iOS : des groupes arrondis, une ligne par
-           reglage, des pastilles pour les jours. Les champs (sched-*) restent
-           ceux que lit schedPayload(). -->
+      <h3 id="sched-form-title" style="margin:1rem 0 .4rem">New scheduler</h3>
       <form class="sched-form" id="sched-form" autocomplete="off">
         <div class="ios-group">
           <input id="sched-name" class="ios-title" required maxlength="128"
-                 placeholder="Schedule name" aria-label="Schedule name">
+                 placeholder="Name (Evening, Night, Weekend…)" aria-label="Scheduler name">
+          <!-- CE QU'IL APPLIQUE : un pourcentage de la vitesse de chaque client,
+               ou un mode. -->
           <div class="ios-row">
-            <span class="ios-key">Applies to</span>
-            <select id="sched-scope" hidden>
-              <option value="all">All clients</option>
-              <option value="pops">Sites</option>
-              <option value="plans">Plans (download rate)</option>
-              <option value="subscribers">Named clients</option>
-            </select>
-            <div class="segmented" id="sched-scope-seg" role="group" aria-label="Applies to">
-              <button type="button" data-v="all">All</button>
-              <button type="button" data-v="subscribers">Clients</button>
-              <button type="button" data-v="pops">Sites</button>
-              <button type="button" data-v="plans">Plans</button>
+            <span class="ios-key">Applies</span>
+            <input type="hidden" id="sched-rate-kind" value="percent">
+            <div class="segmented" id="sched-rate-seg" role="group" aria-label="What it applies">
+              <button type="button" data-v="percent">A % of their speed</button>
+              <button type="button" data-v="mode">A mode</button>
+              <button type="button" data-v="rate" hidden>Fixed Mbps</button>
             </div>
           </div>
-          <!-- A QUI S'APPLIQUE LE PROFIL : une liste a cocher, avec recherche.
-               Le champ cache garde la saisie. -->
+          <label class="ios-row" data-rate-kind="percent" for="sched-percent">
+            <span class="ios-key">Percentage<span class="ios-note">70 = 30 % slower · 200 = twice as fast</span></span>
+            <span class="ios-val"><input id="sched-percent" type="number" min="1" max="1000" step="any"
+              placeholder="70" style="width:6rem"> %</span>
+          </label>
+          <label class="ios-row" data-rate-kind="mode" for="sched-mode" hidden>
+            <span class="ios-key">Mode<span class="ios-note">the mode's speed during these hours</span></span>
+            <select id="sched-mode" class="ios-val ios-select"></select>
+          </label>
+          <div class="ios-row" data-rate-kind="rate" hidden>
+            <span class="ios-key">Speed</span>
+            <span class="ios-val">&darr; <input id="sched-down" type="number" min="0" step="any" style="width:5rem">
+              &uarr; <input id="sched-up" type="number" min="0" step="any" style="width:5rem"> Mbps</span>
+          </div>
+          <!-- A QUI : les clients a leur plan, les clients d'un ou plusieurs
+               modes, des clients choisis, ou tout le monde. -->
+          <div class="ios-row">
+            <span class="ios-key">To</span>
+            <select id="sched-scope" hidden>
+              <option value="on_plan">Clients on their plan</option>
+              <option value="modes">Clients in modes</option>
+              <option value="subscribers">Chosen clients</option>
+              <option value="all">Everyone</option>
+              <option value="pops">Sites</option>
+              <option value="plans">Plans (download rate)</option>
+            </select>
+            <div class="segmented" id="sched-scope-seg" role="group" aria-label="To">
+              <button type="button" data-v="on_plan">Clients on their plan</button>
+              <button type="button" data-v="modes">Modes</button>
+              <button type="button" data-v="subscribers">Clients</button>
+              <button type="button" data-v="all">Everyone</button>
+              <button type="button" data-v="pops" hidden>Sites</button>
+              <button type="button" data-v="plans" hidden>Plans</button>
+            </div>
+          </div>
+          <p class="ios-row ios-sub hint" id="sched-scope-hint" style="display:block"></p>
           <div class="ios-row ios-sub" id="sched-targets-field" hidden>
             <span class="ios-key" id="sched-targets-label">Targets</span>
             <input type="hidden" id="sched-targets">
@@ -723,8 +752,6 @@
               <div class="pick-items" id="sched-pick-items"></div>
             </div>
           </div>
-          <!-- Fuseau : un MENU (une molette native sur telephone), qui part du
-               fuseau du navigateur. Les heures des plages sont celles-la. -->
           <label class="ios-row" for="sched-tz">
             <span class="ios-key">Time zone<span class="ios-note" id="sched-tz-now"></span></span>
             <select id="sched-tz" class="ios-val ios-select" required></select>
@@ -735,12 +762,11 @@
           </label>
         </div>
 
-        <div class="ios-caption">Time slots</div>
+        <div class="ios-caption">Hours</div>
         <div class="ios-group" id="sched-windows"></div>
-        <button type="button" class="ios-add" id="sched-add-window">+ Add a time slot</button>
-        <p class="ios-foot">Outside every slot, the client's plan applies. Each named slot is also a
-          <b>mode</b> (Evening, Night…) you can give a client by hand, and the <b>Constant</b> mode keeps a
-          client at its plan at all hours. Change a % here: the mode follows.</p>
+        <button type="button" class="ios-add" id="sched-add-window">+ Add hours</button>
+        <p class="ios-foot">Add as many hours as you need. Two schedulers can share the same hours
+          as long as they do not change the same clients: otherwise saving says which clients and when.</p>
 
         <div class="actions sched-actions">
           <button type="button" id="sched-cancel" hidden>Cancel</button>

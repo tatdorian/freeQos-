@@ -175,7 +175,7 @@ class ModesRepository:
                     raise ModeConflictError(
                         "this mode is used by the schedule(s) "
                         + ", ".join(f"'{n}'" for n in profils)
-                        + ": change those time slots first"
+                        + ": change those schedulers first"
                     )
                 resultat = await conn.execute("DELETE FROM bandwidth_modes WHERE id = $1", mode_id)
         if resultat.endswith(" 0"):
@@ -183,9 +183,12 @@ class ModesRepository:
 
     @staticmethod
     async def _schedules_using(conn: Any, mode_id: int) -> builtins.list[str]:
+        # Une plage qui DONNE ce mode, ou un scheduler qui VISE ses clients.
         rows = await conn.fetch(
-            "SELECT name FROM bandwidth_schedules WHERE windows @> $1::jsonb ORDER BY name",
+            "SELECT name FROM bandwidth_schedules WHERE windows @> $1::jsonb "
+            "OR (scope = 'modes' AND targets @> $2::jsonb) ORDER BY name",
             json.dumps([{"mode_id": mode_id}]),
+            json.dumps([str(mode_id)]),
         )
         return [str(r["name"]) for r in rows]
 

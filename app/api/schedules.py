@@ -13,7 +13,7 @@ autre. ``ENFORCEMENT_ENABLED`` reste le dernier mot.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
@@ -24,6 +24,7 @@ from app.db.schedules_repo import (
     ScheduleConflictError,
     ScheduleNotFoundError,
     SchedulesRepository,
+    to_model,
 )
 from app.enforcement.planner import effective_rate
 from app.enforcement.schedules import (
@@ -32,14 +33,15 @@ from app.enforcement.schedules import (
     InvalidScheduleError,
     Modes,
     ScheduleBook,
+    _memes_cibles_possibles,
+    overlap_conflict,
 )
-from app.services.slot_modes import sync_slot_modes
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["bandwidth schedules"])
 
-Scope = Literal["all", "pops", "plans", "subscribers"]
+Scope = Literal["all", "pops", "plans", "subscribers", "modes", "on_plan"]
 Day = Literal["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
@@ -87,8 +89,9 @@ class ScheduleInput(BaseModel):
         default_factory=list,
         max_length=1000,
         description=(
-            "pops: site names; plans: plan download rates in Mbps (e.g. 20); "
-            "subscribers: logins or static-client references. Ignored for 'all'."
+            "subscribers: logins or static-client references; modes: mode ids (the "
+            "clients in these modes); pops: site names; plans: plan download rates in "
+            "Mbps (e.g. 20). Ignored for 'all' and 'on_plan' (the clients without a mode)."
         ),
     )
     windows: list[WindowInput] = Field(min_length=1, max_length=MAX_WINDOWS)
@@ -134,8 +137,63 @@ def _valider(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     canonique = profil.to_dict()
     canonique.pop("id")
+    # Lance / arrete a la main : seulement par /start et /stop.
+    canonique.pop("manual_on", None)
+    canonique.pop("manual_until", None)
     canonique["note"] = champs.get("note")
     return canonique
+
+
+async def _verifier_chevauchements(
+    container: Any, canonique: dict[str, Any], modes: Modes, *, ident: int = 0
+) -> None:
+    """409 si ce scheduler touche les memes clients qu'un autre aux memes heures."""
+    if not canonique.get("enabled", True):
+        return
+    profil = BandwidthSchedule.build(
+        id=ident,
+        name=str(canonique["name"]),
+        windows=list(canonique.get("windows") or []),
+        scope=str(canonique.get("scope") or "all"),
+        targets=list(canonique.get("targets") or []),
+        timezone=str(canonique.get("timezone") or "UTC"),
+        modes=modes,
+    )
+    autres = []
+    for ligne in await _repo(container).list_all():
+        if int(ligne["id"]) == ident or not ligne.get("enabled", True):
+            continue
+        try:
+            autres.append(to_model(ligne, modes))
+        except (InvalidScheduleError, KeyError, TypeError, ValueError):
+            continue
+    if not autres:
+        return
+    clients: list[dict[str, Any]] = []
+    depot = getattr(container, "repository", None)
+    if depot is not None:
+        clients = await depot.subscriber_latest(
+            limit=5000, order_by="login", include_unmeasured=True
+        )
+    noms: dict[str, str] = {}
+    profils = getattr(container, "client_profiles_repo", None)
+    if profils is not None:
+        try:
+            noms = {
+                str(p["login"]): str(p.get("display_name"))
+                for p in await profils.list_all()
+                if p.get("display_name")
+            }
+        except Exception:  # noqa: BLE001 - les noms ne servent qu'au message
+            noms = {}
+    message = overlap_conflict(
+        profil,
+        autres,
+        clients,
+        describe_client=lambda c: noms.get(str(c.get("login"))) or c.get("login"),
+    )
+    if message:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=message)
 
 
 def _etat(
@@ -153,10 +211,18 @@ def _etat(
             timezone=str(ligne.get("timezone") or "UTC"),
             enabled=bool(ligne.get("enabled", True)),
             modes=modes,
+            manual_on=bool(ligne.get("manual_on", False)),
+            manual_until=ligne.get("manual_until"),
         )
     except InvalidScheduleError as exc:
         sortie["error"] = str(exc)
         return sortie
+    sortie["manual_active"] = profil.manual_active(maintenant)
+    sortie["manual_until"] = (
+        profil.manual_until.isoformat()
+        if profil.manual_active(maintenant) and profil.manual_until
+        else None
+    )
     # Les plages telles qu'elles s'appliquent : le nom d'un mode renomme depuis
     # est celui d'aujourd'hui.
     sortie["windows"] = [w.to_dict() for w in profil.windows]
@@ -179,19 +245,6 @@ async def _appliquer(container: ContainerDep, motif: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Application des profils horaires impossible")
         return {"applied": 0, "errors": [f"{type(exc).__name__}: {exc}"]}
-
-
-async def _modes_des_creneaux(container: Any, fiche: dict[str, Any]) -> list[str]:
-    """Chaque creneau nomme devient un mode (Evening, Night), plus Constant.
-
-    Jamais bloquant : le planning est enregistre quoi qu'il arrive."""
-    try:
-        return await sync_slot_modes(
-            container, list(fiche.get("windows") or []), author="system:schedule"
-        )
-    except Exception:  # noqa: BLE001
-        logger.exception("Modes des creneaux non alignes")
-        return []
 
 
 @router.get("/bandwidth-schedules", summary="Time-of-day bandwidth schedules")
@@ -217,14 +270,13 @@ async def create_schedule(payload: ScheduleInput, container: ContainerDep) -> di
     depot = _repo(container)
     modes = await depot.modes()
     canonique = _valider(payload.model_dump(), modes)
+    await _verifier_chevauchements(container, canonique, modes)
     try:
         cree = await depot.create(canonique)
     except ScheduleConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     logger.info("Profil horaire '%s' cree", cree["name"])
-    modes_creneaux = await _modes_des_creneaux(container, cree)
     sortie = _etat(cree, datetime.now(tz=UTC), modes)
-    sortie["slot_modes"] = modes_creneaux
     sortie["enforcement"] = await _appliquer(container, f"schedule '{cree['name']}' created")
     return sortie
 
@@ -243,16 +295,117 @@ async def update_schedule(
     modifs = payload.model_dump(exclude_unset=True)
     modes = await depot.modes()
     canonique = _valider({**existant, **modifs}, modes, ident=schedule_id)
+    await _verifier_chevauchements(container, canonique, modes, ident=schedule_id)
     try:
         modifie = await depot.update(schedule_id, canonique)
     except ScheduleConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ScheduleNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    modes_creneaux = await _modes_des_creneaux(container, modifie)
     sortie = _etat(modifie, datetime.now(tz=UTC), modes)
-    sortie["slot_modes"] = modes_creneaux
     sortie["enforcement"] = await _appliquer(container, f"schedule '{modifie['name']}' edited")
+    return sortie
+
+
+class StartInput(BaseModel):
+    minutes: int | None = Field(
+        default=None,
+        ge=1,
+        le=60 * 24 * 31,
+        description="How long it runs. null: until it is stopped.",
+    )
+
+
+@router.post(
+    "/bandwidth-schedules/{schedule_id}/start",
+    summary="Start a scheduler now, by hand (whatever the time)",
+)
+async def start_schedule(
+    payload: StartInput,
+    container: ContainerDep,
+    schedule_id: Annotated[int, Path(ge=1)],
+) -> dict[str, Any]:
+    """Applique ce scheduler TOUT DE SUITE, quelle que soit l'heure : pour
+    ``minutes``, ou jusqu'a ``/stop``. Il passe devant les autres schedulers de
+    ses clients tant qu'il tourne. Un scheduler suspendu est repris."""
+    depot = _repo(container)
+    try:
+        existant = await depot.get(schedule_id)
+    except ScheduleNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    fin = datetime.now(tz=UTC) + timedelta(minutes=payload.minutes) if payload.minutes else None
+    # UN SEUL LANCE A LA MAIN PAR CLIENT : ceux qui touchent les memes clients
+    # s'arretent (le dernier geste l'emporte, et la page le dit).
+    modes = await depot.modes()
+    arretes = await _arreter_les_autres_lances(container, existant, modes)
+    modifie = await depot.update(
+        schedule_id, {"manual_on": True, "manual_until": fin, "enabled": True}
+    )
+    sortie = _etat(modifie, datetime.now(tz=UTC), modes)
+    sortie["stopped"] = arretes
+    sortie["enforcement"] = await _appliquer(
+        container, f"schedule '{existant['name']}' started by hand"
+    )
+    return sortie
+
+
+async def _arreter_les_autres_lances(
+    container: Any, ligne: dict[str, Any], modes: Modes
+) -> list[str]:
+    """Arrete les schedulers lances a la main qui touchent les memes clients."""
+    depot = _repo(container)
+    maintenant = datetime.now(tz=UTC)
+    try:
+        profil = to_model({**ligne, "enabled": True}, modes)
+    except (InvalidScheduleError, KeyError, TypeError, ValueError):
+        return []
+    clients: list[dict[str, Any]] = []
+    metriques = getattr(container, "repository", None)
+    if metriques is not None:
+        clients = await metriques.subscriber_latest(
+            limit=5000, order_by="login", include_unmeasured=True
+        )
+
+    def vise(p: BandwidthSchedule, c: dict[str, Any]) -> bool:
+        return p.governs(
+            login=str(c.get("login")),
+            sites=(c.get("pop_name"),),
+            plan_down=c.get("plan_down_mbps"),
+            mode_id=c.get("mode_id"),
+        )
+
+    arretes: list[str] = []
+    for autre in await depot.list_all():
+        if int(autre["id"]) == int(ligne["id"]) or not autre.get("manual_on"):
+            continue
+        try:
+            modele = to_model({**autre, "enabled": True}, modes)
+        except (InvalidScheduleError, KeyError, TypeError, ValueError):
+            continue
+        if not modele.manual_active(maintenant):
+            continue
+        if _memes_cibles_possibles(profil, modele) or any(
+            vise(profil, c) and vise(modele, c) for c in clients
+        ):
+            await depot.update(int(autre["id"]), {"manual_on": False, "manual_until": None})
+            arretes.append(str(autre["name"]))
+    return arretes
+
+
+@router.post("/bandwidth-schedules/{schedule_id}/stop", summary="Stop a scheduler started by hand")
+async def stop_schedule(
+    container: ContainerDep, schedule_id: Annotated[int, Path(ge=1)]
+) -> dict[str, Any]:
+    """Il reprend ses horaires normaux."""
+    depot = _repo(container)
+    try:
+        modifie = await depot.update(schedule_id, {"manual_on": False, "manual_until": None})
+    except ScheduleNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    sortie = _etat(modifie, datetime.now(tz=UTC), await depot.modes())
+    sortie["enforcement"] = await _appliquer(
+        container, f"schedule '{modifie['name']}' stopped by hand"
+    )
     return sortie
 
 
@@ -323,21 +476,33 @@ async def preview_schedule(
         login = str(abonne.get("login") or "")
         sites = (abonne.get("pop_name"),)
         plan_bas, plan_haut = abonne.get("plan_down_mbps"), abonne.get("plan_up_mbps")
-        if not profil.governs(login=login, sites=sites, plan_down=plan_bas):
+        mode = abonne.get("mode_id")
+        if not profil.governs(login=login, sites=sites, plan_down=plan_bas, mode_id=mode):
             continue
-        maitre = carnet.governing(login=login, sites=sites, plan_down=plan_bas)
+        maitre = carnet.governing(
+            login=login, sites=sites, plan_down=plan_bas, mode_id=mode, now=maintenant
+        )
         if maitre is not None and maitre.id != profil.id:
             ailleurs.append({"login": login, "governed_by": maitre.name})
             continue
         horaire = carnet.rate_for(
-            login=login, sites=sites, plan_down=plan_bas, plan_up=plan_haut, now=maintenant
+            login=login,
+            sites=sites,
+            plan_down=plan_bas,
+            plan_up=plan_haut,
+            now=maintenant,
+            mode_id=mode,
+            mode_down=abonne.get("override_down_mbps"),
+            mode_up=abonne.get("override_up_mbps"),
         )
+        devant = bool(horaire and horaire.over_mode)
         bas, source = effective_rate(
             plan_mbps=plan_bas,
             override_mbps=abonne.get("override_down_mbps"),
             boost_mbps=abonne.get("boost_down_mbps"),
             boost_expires_at=abonne.get("boost_expires_at"),
             schedule_mbps=horaire.down_mbps if horaire else None,
+            schedule_over_override=devant,
         )
         haut, _ = effective_rate(
             plan_mbps=plan_haut,
@@ -345,6 +510,7 @@ async def preview_schedule(
             boost_mbps=abonne.get("boost_up_mbps"),
             boost_expires_at=abonne.get("boost_expires_at"),
             schedule_mbps=horaire.up_mbps if horaire else None,
+            schedule_over_override=devant,
         )
         gouvernes.append(
             {
