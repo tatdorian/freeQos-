@@ -121,7 +121,8 @@ def app_client(routeur, monkeypatch, tmp_path):  # type: ignore[no-untyped-def]
             "topology_links, bandwidth_modes, bandwidth_schedules, site_locations, "
             "client_locations, uisp_controllers, uisp_links, public_access, airos_antennas, "
             "client_profiles, client_activity, tree_client_places, tree_client_links, "
-            "smtp_config, alert_events, uisp_device_metrics, runtime_flags, excluded_clients"
+            "smtp_config, alert_events, uisp_device_metrics, runtime_flags, excluded_clients, "
+            "owned_queues"
         ).split(", ")
         try:
             # Seulement les tables deja creees : sur une base neuve (ou apres
@@ -238,7 +239,12 @@ def test_une_application_externe_pilote_routeurs_et_limites(app_client, routeur)
     file = _file(routeur, "10.20.0.10")
     assert file is not None, routeur.simple_queue_rows
     assert file["max-limit"] == "10000000/50000000"
-    assert "freeqos:managed" in str(file.get("comment", ""))
+    # Le nom du client, sans prefixe ni commentaire : freeQoS s'en souvient.
+    assert file["name"] == "dupont"
+    assert not file.get("comment")
+    from app.enforcement.models import OWNED_QUEUES
+
+    assert "dupont" in OWNED_QUEUES.get("nas-test", set())
 
     # --- 3. le forfait change -> la file suit
     app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 200, "up_mbps": 40})

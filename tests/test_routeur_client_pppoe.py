@@ -521,7 +521,7 @@ def test_fiche_ip_fixe_sur_l_ip_d_une_session_retiree(app_client, routeur) -> No
     file = _file(routeur, "10.20.0.50")
     assert file is not None, routeur.simple_queue_rows
     assert file["max-limit"] == "200000000/200000000"
-    assert file["name"] == "freeqos-office"
+    assert file["name"] == "office"
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
@@ -582,4 +582,4 @@ def test_fiche_ip_fixe_fusionnee_dans_une_session_gardee_son_mode_s_applique(
     file = _file(routeur, "10.20.0.50")
     assert file is not None, routeur.simple_queue_rows
     assert file["max-limit"] == "200000000/200000000"
-    assert file["name"] == "freeqos-sess-0042"
+    assert file["name"] == "sess-0042"

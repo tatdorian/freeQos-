@@ -65,7 +65,7 @@ def test_ce_que_freeqos_a_pose_sur_le_routeur(app_client, routeur) -> None:  # n
     d = r.json()
     par_cle = {s["key"]: s for s in d["sections"]}
     files = par_cle["simple"]["rows"]
-    assert [f["name"] for f in files] == ["freeqos-dupont"]
+    assert [f["name"] for f in files] == ["dupont"]
     assert files[0]["max-limit"] == "10000000/50000000"
     assert {t["name"] for t in par_cle["type"]["rows"]} == {"freeqos-cake-up", "freeqos-cake-down"}
     assert d["other_simple_queues"] == 1

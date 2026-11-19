@@ -282,7 +282,7 @@ async def test_declarer_un_client_pose_sa_file_tout_de_suite(
     assert rapport["state"] == ShapingService.ETAT_POSEE
     assert rapport["applied"] >= 1
     assert rapport["router"] == "pop-francophonie"
-    assert "freeqos-mairie" in [a.name for a in ecriture.executed]
+    assert "mairie" in [a.name for a in ecriture.executed]
 
 
 async def test_seule_la_file_de_ce_client_est_ecrite(
@@ -304,7 +304,7 @@ async def test_seule_la_file_de_ce_client_est_ecrite(
     await service.enforce_static_client(reference="mairie", pop_name="francophonie", author="test")
 
     noms = [a.name for a in ecriture.executed if a.path == "/queue/simple"]
-    assert noms == ["freeqos-mairie"]
+    assert noms == ["mairie"]
 
 
 async def test_un_client_sans_debit_recoit_la_limite_par_defaut(
@@ -329,7 +329,7 @@ async def test_un_client_sans_debit_recoit_la_limite_par_defaut(
 
     assert rapport["state"] == ShapingService.ETAT_POSEE
     files = [a for a in ecriture.executed if a.path == "/queue/simple"]
-    assert [a.name for a in files] == ["freeqos-mairie"]
+    assert [a.name for a in files] == ["mairie"]
     assert files[0].fields["max-limit"] == "20000000/100000000"
 
 
@@ -396,7 +396,7 @@ async def test_enregistrer_un_client_ecrit_meme_interrupteur_coupe(
     )
 
     assert rapport["state"] == ShapingService.ETAT_POSEE
-    assert [a.name for a in ecriture.executed if a.path == "/queue/simple"] == ["freeqos-mairie"]
+    assert [a.name for a in ecriture.executed if a.path == "/queue/simple"] == ["mairie"]
 
 
 async def test_un_routeur_muet_ne_fait_pas_perdre_la_declaration(
@@ -468,6 +468,7 @@ async def test_retirer_un_client_retire_sa_file_et_elle_seule(
 
     assert rapport["state"] == ShapingService.ETAT_RETIREE
     retirees = [a.name for a in ecriture.executed if a.verb == "remove"]
+    # Sa file d'avant (« freeqos-mairie », marquee) part : elle seule.
     assert retirees == ["freeqos-mairie"]
 
 
@@ -491,30 +492,28 @@ def test_la_restriction_garde_la_chaine_des_parents() -> None:
         actions=[
             _action("freeqos-parent-bh"),
             _action("freeqos-parent-secteur", parent="freeqos-parent-bh"),
-            _action("freeqos-mairie", parent="freeqos-parent-secteur"),
-            _action("freeqos-voisin"),
+            _action("mairie", parent="freeqos-parent-secteur"),
+            _action("voisin"),
         ],
     )
 
-    restreint = plan.restrict_to(plan.parent_chain("freeqos-mairie"))
+    restreint = plan.restrict_to(plan.parent_chain("mairie"))
 
     assert [a.name for a in restreint.actions] == [
         "freeqos-parent-bh",
         "freeqos-parent-secteur",
-        "freeqos-mairie",
+        "mairie",
     ]
 
 
 def test_la_restriction_garde_les_types_cake_mais_pas_pour_un_retrait() -> None:
     plan = Plan(
         router_name="r",
-        actions=[_action("freeqos-cake-down", path="/queue/type"), _action("freeqos-mairie")],
+        actions=[_action("freeqos-cake-down", path="/queue/type"), _action("mairie")],
     )
 
-    assert len(plan.restrict_to({"freeqos-mairie"}).actions) == 2
-    assert [a.name for a in plan.restrict_to({"freeqos-mairie"}, keep_types=False).actions] == [
-        "freeqos-mairie"
-    ]
+    assert len(plan.restrict_to({"mairie"}).actions) == 2
+    assert [a.name for a in plan.restrict_to({"mairie"}, keep_types=False).actions] == ["mairie"]
 
 
 def test_une_chaine_circulaire_ne_boucle_pas() -> None:
@@ -572,7 +571,7 @@ def test_api_la_declaration_pose_la_file_et_le_dit(api) -> None:
     enforcement = reponse.json()["enforcement"]
     assert enforcement["state"] == ShapingService.ETAT_POSEE
     assert enforcement["applied"] >= 1
-    assert "freeqos-mairie" in [a.name for a in ecriture.executed]
+    assert "mairie" in [a.name for a in ecriture.executed]
 
 
 def test_api_une_declaration_reste_valide_meme_si_le_routeur_refuse(api) -> None:
@@ -609,7 +608,7 @@ def test_api_modifier_le_debit_reapplique_la_file(api) -> None:
 
     assert reponse.status_code == 200
     assert reponse.json()["enforcement"]["state"] == ShapingService.ETAT_POSEE
-    assert [a.verb for a in ecriture.executed if a.name == "freeqos-mairie"] == ["set"]
+    assert [a.verb for a in ecriture.executed if a.name == "mairie"] == ["set"]
 
 
 def test_api_supprimer_une_fiche_retire_sa_file(api) -> None:
@@ -619,7 +618,7 @@ def test_api_supprimer_une_fiche_retire_sa_file(api) -> None:
 
     assert client.delete(f"/api/v1/static-clients/{cree['id']}").status_code == 204
 
-    assert [a.name for a in ecriture.executed if a.verb == "remove"] == ["freeqos-mairie"]
+    assert [a.name for a in ecriture.executed if a.verb == "remove"] == ["mairie"]
 
 
 def test_api_l_etat_des_files_dit_le_motif_de_chaque_fiche(api) -> None:

@@ -1522,3 +1522,18 @@ CREATE TABLE IF NOT EXISTS excluded_clients (
     removed_by  TEXT,
     removed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- -----------------------------------------------------------------------------
+-- LES FILES DE CLIENTS POSEES PAR FREEQOS, routeur par routeur.
+--
+-- Elles ne portent ni prefixe ni commentaire sur le routeur (un nom propre dans
+-- Winbox : « ACME-OFFICE ») : c'est ICI que freeQoS se souvient qu'elles
+-- sont a lui. Une file du meme nom posee a la main n'y est jamais : jamais
+-- touchee.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS owned_queues (
+    router      TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (router, name)
+);

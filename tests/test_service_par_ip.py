@@ -109,7 +109,7 @@ async def test_une_ip_fixe_est_placee_sur_le_routeur_qui_porte_son_reseau(
 
     assert rapport["state"] == "file-posee"
     files = [a for a in ecriture.executed if a.path == "/queue/simple"]
-    assert [a.name for a in files] == ["freeqos-svc-fixe"]
+    assert [a.name for a in files] == ["svc-fixe"]
     assert files[0].fields["max-limit"] == "5000000/50000000"
 
 
@@ -148,7 +148,7 @@ async def test_une_ip_de_session_pppoe_donne_son_debit_a_la_session(
     assert rapport["state"] == "file-posee"
     assert rapport["session"] == "dupont"
     files = [a for a in ecriture.executed if a.path == "/queue/simple"]
-    assert [a.name for a in files] == ["freeqos-dupont"]
+    assert [a.name for a in files] == ["dupont"]
     assert files[0].fields["max-limit"] == "20000000/100000000"
 
 
