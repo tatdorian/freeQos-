@@ -432,9 +432,30 @@ class BandwidthSchedule:
         """La plage en cours a cet instant, dans le fuseau du profil."""
         if self.manual_active(now):
             return self.manual_window
+        return self._scheduled_window(now)
+
+    def _scheduled_window(self, now: datetime) -> Window | None:
+        """La plage PREVUE a cet instant, sans tenir compte d'un lancement a la main."""
         local = self.local(now)
         minute = local.hour * 60 + local.minute
         return next((w for w in self.windows if w.covers(local.weekday(), minute)), None)
+
+    def scheduled_end(self, now: datetime, *, horizon_days: int = 8) -> datetime | None:
+        """La fin PREVUE de la plage en cours, ou de la prochaine (UTC), ou None.
+
+        « Activer maintenant, avant l'heure » : le scheduler part tout de suite
+        et s'arrete a l'heure de fin qu'il a toujours eue, puis tout revient a
+        la normale. None : il ne s'arrete jamais (toute la semaine).
+        """
+        depart = now.replace(second=0, microsecond=0)
+        commence = self._scheduled_window(depart) is not None
+        for pas in range(1, horizon_days * MINUTES_PAR_JOUR + 1):
+            instant = depart + timedelta(minutes=pas)
+            if self._scheduled_window(instant) is not None:
+                commence = True
+            elif commence:
+                return instant
+        return None
 
     def next_change(self, now: datetime, *, horizon_days: int = 8) -> datetime | None:
         """Le prochain instant ou la plage en cours change (UTC), ou None.

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="b5f71aa4fef7496b">
+  <meta name="freeqos-docs-source" content="4fa4e2a667d13de1">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2893,11 +2893,9 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>A static-IP client</strong> also has its network part editable there by an Administrator: IP or subnet, VLAN, site.</li>
 </ul>
 <p>The client's page shows its <strong>IP address</strong> in the header (click to copy) and its details in <em>Client details</em>. The list shows the name when one is set, with the login and the IP below it; the search finds a client by its name too.</p>
-<p><strong>Add a client</strong> (Clients, <strong>+</strong> button, Administrator) offers two ways:</p>
-<ul>
-<li><strong>PPPoE login</strong>: declare a client before it connects: login, site, optionally a name, a plan and the CPE MAC. It shows as <em>never seen</em> until its first session; discovery then joins it <strong>by its login</strong> and the details entered are kept.</li>
-<li><strong>Fixed IP / VLAN</strong>: a client without a session, measured on its address (as before).</li>
-</ul>
+<p><strong>Add a client</strong> (Clients, <strong>+</strong> button, Administrator) declares <strong>fixed-IP and VLAN clients</strong> only: reference, site, address (one IP, a subnet, a range or several IPs), optionally a name, a VLAN, a plan and the CPE MAC. PPPoE clients are not entered here: they appear by themselves at their first session. (<code>POST /api/v1/clients</code> still declares a PPPoE login ahead through the API.)</p>
+<p><strong>Editing a client keeps it the same client.</strong> Changing a client's reference in <em>Add a client</em> (<em>Edit</em>) renames it: its history, plan, mode, boost, details, activity, map position and the schedulers that name it all follow the new name, and its queue on the router is renamed (the old one is removed, the new one set). Before, the old name stayed in the list, offline, next to a new client with no history. A name already used by a PPPoE session is refused (<code>409</code>). Changing its site moves its queue to the new site's router.</p>
+<p><strong>Deleted and removed clients leave the list.</strong> A fixed-IP client deleted from the inventory, and a client removed from freeQoS, no longer show in <em>Clients</em> (the history of a deleted fixed-IP client stays in the database; a removed client is listed under <em>Removed</em> above the list).</p>
 <p>Every change is written to the client's <em>Activity</em>. API: <code>GET /api/v1/clients/{login}/profile</code> (discovered facts and details), <code>PUT /api/v1/clients/{login}/profile</code>, <code>POST /api/v1/clients</code> (<code>{"login", "pop_name", "display_name", "cpe_mac", ...}</code>), <code>GET /api/v1/client-profiles</code>.</p>
 <h3 id="removing-clients-from-freeqos-not-from-the-router">Removing clients from freeQoS (not from the router)</h3>
 <p>Keep in freeQoS the clients you want and remove the others: tick them on the <em>Clients</em> page, then <strong>Remove from freeQoS</strong> (Administrator, confirmed in a window).</p>
@@ -2995,7 +2993,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p><strong>As many schedulers as you want.</strong> Two schedulers may share the same hours <strong>as long as they do not change the same clients</strong>: <em>Evening</em> for the clients on their plan and <em>Evening Pro</em> for the mode <em>Pro</em>, both 18:00–23:00, is fine. If the same client would be changed by two schedulers at the same time, saving is refused (<code>409</code>) with <strong>who and when</strong>: <em>'VIP' and 'Evening' would both apply to ACME OFFICE at the same time (Mon 18:00). Change the hours, or choose other clients or modes.</em> Two hours of the same scheduler may not overlap either.</p>
 <p><strong>A scheduler for one client.</strong> On a client's page (<em>Plan &amp; mode</em>), <strong>Its own scheduler</strong> sets a % of its speed during its hours, <strong>for this client only</strong> (100 % = it keeps its speed while a group scheduler runs). It is stored as a scheduler for that single client (<code>scope=subscribers</code>, one target). <strong>What is made for one client goes before the group</strong>: during its hours it wins over every group scheduler, even one started by hand, so it may share hours with a group scheduler; two schedulers of the same client at the same time are still refused. They are listed apart, under <strong>For one client</strong> on the <em>Schedulers</em> page (client name, speed, hours, state, with a link to the client), and the client page says <em>Scheduler: its own</em> while it runs.</p>
 <p>Who decides the speed, from strongest to weakest: a running <strong>boost</strong>; a manual limit set through the API; the client's <strong>own scheduler</strong> during its hours; a <strong>group scheduler</strong> started by hand, then a group scheduler during its hours; the client's <strong>mode</strong>, otherwise its <strong>plan</strong>.</p>
-<p><strong>Start now, by hand.</strong> <em>Start now…</em> on a scheduler applies it <strong>at once</strong>, whatever the time: for 1 h, 2 h, 4 h, 24 h, or <strong>until you stop it</strong> (<code>POST /api/v1/bandwidth-schedules/{id}/start</code> with <code>{"minutes": 60}</code> or <code>{"minutes": null}</code>). While it runs by hand it goes before the other schedulers of its clients; starting one stops any other scheduler started by hand on the same clients (the page says which). <strong>Stop</strong> (<code>POST …/{id}/stop</code>) gives it back its normal hours. A suspended scheduler is resumed when started.</p>
+<p><strong>Start now, by hand.</strong> <em>Start now…</em> on a scheduler applies it <strong>at once</strong>, whatever the time: <strong>until its scheduled end</strong>, for 1 h, 2 h, 4 h, 24 h, or <strong>until you stop it</strong> (<code>POST /api/v1/bandwidth-schedules/{id}/start</code> with <code>{"until_scheduled_end": true}</code>, <code>{"minutes": 60}</code> or <code>{"minutes": null}</code>). <em>Until its scheduled end</em> starts it before its time and stops it at the end time it was planned for — the end of the window running now, or else of the next one (for an 18:00–23:00 scheduler started at 12:00: from 12:00 to 23:00) — then everything goes back to normal and the scheduler follows its hours again the next day. A scheduler that never ends in the coming week is refused (<code>400</code>): choose a duration. While it runs by hand it goes before the other schedulers of its clients; starting one stops any other scheduler started by hand on the same clients (the page says which). <strong>Stop</strong> (<code>POST …/{id}/stop</code>) gives it back its normal hours. A suspended scheduler is resumed when started.</p>
 <p><strong>The switch is automatic.</strong> A job re-reads the schedulers every 30 s: as soon as hours start or end, or a scheduler started by hand reaches its end, the queues are re-planned and written (author <code>system:schedule</code>), without waiting for the 2-minute reconciliation. Saving, starting, stopping, suspending or deleting a scheduler applies it at once. Nothing is written while writing is off. The last switch (when, why, how many writes, on which routers) is shown under the list; <em>Clients</em> on a scheduler (<code>GET …/{id}/preview</code>) lists the clients it changes and their speed right now.</p>
 <p><strong>Upgrading.</strong> A schedule from an earlier version that had several rates (evening 70 %, night 200 %) is split at start-up into one scheduler per rate, with the same clients and hours (<code>Day and night</code> and <code>Day and night · night</code>). The modes an earlier version created automatically for each slot (<em>Evening</em>, <em>Night</em>, <em>Constant</em>) are removed when no client and no scheduler uses them.</p>
 <h3 id="the-shaping-map">The shaping map</h3>
@@ -3175,7 +3173,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <tr>
 <td><strong>Dashboard</strong> (first page, both roles)</td>
 <td>Is everything all right today?</td>
-<td>A banner: <strong>All good</strong>, or the problems that need you, most urgent first, each one a click away from the clients concerned; clients connected, traffic now, sites, modes and boosts; one card per site. Below, for the Administrator only: <em>Network detail</em> (throughput, traffic per router, top consumers, radio backhauls)</td>
+<td>A banner: <strong>All good</strong>, or the problems that need you, most urgent first, each one a click away from the clients concerned; clients connected, traffic now, sites, modes and boosts; one card per site. Below, for the Administrator only: <em>Network detail</em> (throughput curve and top consumers; live traffic per router and radio backhauls are no longer on the dashboard: routers are followed in <em>Devices</em>)</td>
 </tr>
 <tr>
 <td><strong>Rules</strong> (Administrator)</td>
@@ -3200,7 +3198,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <tr>
 <td><strong>Clients</strong></td>
 <td>Who are my clients, and how are they doing?</td>
-<td>Every client under its <strong>PoP</strong>, with its connection (PPPoE, static IP, or <strong>VLAN 2060</strong>: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; <em>+ Add a client</em> (Operator) declares PPPoE, static-IP and VLAN clients. The map button opens the <strong>Map</strong>.</td>
+<td>Every client under its <strong>PoP</strong>, with its connection (PPPoE, static IP, or <strong>VLAN 2060</strong>: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; <em>+ Add a client</em> declares static-IP and VLAN clients (PPPoE clients appear by themselves). The map button opens the <strong>Map</strong>.</td>
 </tr>
 <tr>
 <td><strong>Plans</strong> (from <em>Settings › Plans &amp; map</em>)</td>
@@ -3538,7 +3536,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <tr>
 <td><strong>Operator</strong> (<code>operator</code>)</td>
 <td>Clients</td>
-<td><strong>Manages the clients</strong>: adds them (PPPoE login declared ahead, static IP, VLAN), edits their details and connection, changes plan, mode and boost on one or many clients, defines bandwidth modes and schedules; sees at a glance whether there is a problem</td>
+<td><strong>Manages the clients</strong>: adds them (static IP, VLAN), edits their details and connection, changes plan, mode and boost on one or many clients, defines bandwidth modes and schedules; sees at a glance whether there is a problem</td>
 <td><strong>Dashboard</strong> (today's status), <strong>Clients</strong>, <strong>Modes</strong>, <strong>Schedules</strong>, <strong>Alerts</strong>, <strong>Activity</strong>; no network pages, no Settings (password and log out from the account card)</td>
 </tr>
 <tr>
@@ -4582,7 +4580,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <h4 id="network-throughput">Network throughput</h4>
 <p><strong>What it shows.</strong> Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.</p>
 <p><strong>How it is measured.</strong> Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.</p>
-<p><strong>How to read it.</strong> Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Live traffic per router as “Other traffic”. Filter by router or client with the menus.</p>
+<p><strong>How to read it.</strong> Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve. Filter by router or client with the menus.</p>
 <p><strong>What to do.</strong> A flat line at 0 while clients are online usually means the collection stopped: check the health dot at the top left and Devices › Polled routers.</p>
 <h4 id="live-traffic-per-router">Live traffic per router</h4>
 <p><strong>What it shows.</strong> Each router, right now: what goes through its Internet link, what your clients use, and the rest (“Other traffic”).</p>

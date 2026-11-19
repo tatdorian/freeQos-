@@ -621,6 +621,14 @@ class MetricsRepository:
                    AND ($2::text IS NULL OR s.login ILIKE '%' || $2 || '%')
                    AND ($3::text IS NULL OR s.kind = $3)
                    AND ($5::bool OR l.subscriber_id IS NOT NULL)
+                   -- Ni les clients RETIRES de freeQoS, ni un client a IP fixe
+                   -- dont la fiche a ete supprimee (son historique reste en
+                   -- base, mais il n'a plus rien a faire dans la liste : il s'y
+                   -- affichait hors ligne pour toujours).
+                   AND NOT EXISTS (SELECT 1 FROM excluded_clients x WHERE x.login = s.login)
+                   AND (s.kind <> 'static'
+                        OR EXISTS (SELECT 1 FROM static_clients sc
+                                    WHERE sc.reference = s.login))
                  ORDER BY {order_sql}
                  LIMIT $4
                 """,  # noqa: S608 - order_sql provient d'une liste blanche

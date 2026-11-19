@@ -43,7 +43,7 @@
  "network throughput": {
   "t": "Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.",
   "m": "Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.",
-  "r": "Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Live traffic per router as “Other traffic”. Filter by router or client with the menus.",
+  "r": "Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve. Filter by router or client with the menus.",
   "a": "A flat line at 0 while clients are online usually means the collection stopped: check the health dot at the top left and Devices › Polled routers."
  },
  "routers": {
