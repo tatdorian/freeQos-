@@ -33,6 +33,7 @@ from app.enforcement.schedules import (
     Modes,
     ScheduleBook,
 )
+from app.services.slot_modes import sync_slot_modes
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,19 @@ async def _appliquer(container: ContainerDep, motif: str) -> dict[str, Any]:
         return {"applied": 0, "errors": [f"{type(exc).__name__}: {exc}"]}
 
 
+async def _modes_des_creneaux(container: Any, fiche: dict[str, Any]) -> list[str]:
+    """Chaque creneau nomme devient un mode (Evening, Night), plus Constant.
+
+    Jamais bloquant : le planning est enregistre quoi qu'il arrive."""
+    try:
+        return await sync_slot_modes(
+            container, list(fiche.get("windows") or []), author="system:schedule"
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Modes des creneaux non alignes")
+        return []
+
+
 @router.get("/bandwidth-schedules", summary="Time-of-day bandwidth schedules")
 async def list_schedules(container: ContainerDep) -> dict[str, Any]:
     """Les profils, la plage en cours de chacun et sa prochaine bascule."""
@@ -208,7 +222,9 @@ async def create_schedule(payload: ScheduleInput, container: ContainerDep) -> di
     except ScheduleConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     logger.info("Profil horaire '%s' cree", cree["name"])
+    modes_creneaux = await _modes_des_creneaux(container, cree)
     sortie = _etat(cree, datetime.now(tz=UTC), modes)
+    sortie["slot_modes"] = modes_creneaux
     sortie["enforcement"] = await _appliquer(container, f"schedule '{cree['name']}' created")
     return sortie
 
@@ -233,7 +249,9 @@ async def update_schedule(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ScheduleNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    modes_creneaux = await _modes_des_creneaux(container, modifie)
     sortie = _etat(modifie, datetime.now(tz=UTC), modes)
+    sortie["slot_modes"] = modes_creneaux
     sortie["enforcement"] = await _appliquer(container, f"schedule '{modifie['name']}' edited")
     return sortie
 

@@ -12272,7 +12272,10 @@ async function schedSave(id, corps) {
       })
       : await api('/bandwidth-schedules', { method: 'POST', body: JSON.stringify(corps) });
     res.innerHTML = '<div class="notice ok">Schedule "' + esc(r.name) + '" saved.' +
-      schedEnforcement(r.enforcement) + '</div>';
+      schedEnforcement(r.enforcement) +
+      ((r.slot_modes || []).length ? ' <span class="hint" style="display:inline">Modes updated: <b>' +
+        esc(r.slot_modes.join(', ')) + '</b> — they can be given to a client by hand.</span>' : '') +
+      '</div>';
     return true;
   } catch (err) {
     res.innerHTML = noticeErreur(err);
@@ -14101,7 +14104,10 @@ async function loadClientPage() {
       '<div class="mode-cards">' +
       carte(null, 'Automatic', 'Plan and schedule') +
       CLI.modes.map((x) => carte(x.id, x.name, esc(modeTaux(x)))).join('') +
-      '</div><div class="actions" style="margin-top:.8rem"><span class="spacer"></span>' +
+      '</div><p class="hint" style="display:block"><b>Automatic</b> follows the schedule (Evening, Night…). ' +
+        'Pick <b>Evening</b> or <b>Night</b> to force it now, <b>Constant</b> to keep the plan at all hours.' +
+        (CLI.modes.length ? '' : ' Save a schedule once (Schedules page) and these modes appear here.') + '</p>' +
+      '<div class="actions" style="margin-top:.8rem"><span class="spacer"></span>' +
       '<button class="primary" id="cp-apply-mode"' + dis + '>Apply the mode</button></div><div id="cp-mode-out"></div></div>' +
       '<div class="cp-side"><div class="card"><h3>Plan</h3>' +
       '<div class="field"><label for="cp-down">Download (Mbps)</label><input id="cp-down" type="number" min="0.001" step="any" value="' +
