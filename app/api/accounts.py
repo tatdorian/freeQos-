@@ -317,6 +317,9 @@ OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("POST", re.compile(r"^/clients/actions$"), ROLE_OPERATOR),
     ("PUT", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
     ("DELETE", re.compile(r"^/plans/[^/]+$"), ROLE_OPERATOR),
+    # La bande passante d'urgence, a cote du forfait.
+    ("PUT", re.compile(r"^/clients/[^/]+/emergency$"), ROLE_OPERATOR),
+    ("DELETE", re.compile(r"^/clients/[^/]+/emergency$"), ROLE_OPERATOR),
     # LA GESTION : les modes de debit et les profils horaires (jour / soiree /
     # nuit) sont des decisions commerciales sur les clients, pas de la technique.
     ("POST", re.compile(r"^/bandwidth-modes$"), ROLE_OPERATOR),

@@ -1537,3 +1537,18 @@ CREATE TABLE IF NOT EXISTS owned_queues (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (router, name)
 );
+
+-- -----------------------------------------------------------------------------
+-- BANDE PASSANTE D'URGENCE, client par client.
+--
+-- Le forfait est la bande passante NORMALE (sans mode). Un mode marque
+-- « emergency » donne a chaque client SA bande passante d'urgence, saisie ici ;
+-- un client sans valeur d'urgence recoit le debit du mode.
+ALTER TABLE bandwidth_modes ADD COLUMN IF NOT EXISTS emergency BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE TABLE IF NOT EXISTS client_emergency_rates (
+    login       TEXT PRIMARY KEY,
+    down_mbps   DOUBLE PRECISION NOT NULL CHECK (down_mbps > 0),
+    up_mbps     DOUBLE PRECISION NOT NULL CHECK (up_mbps > 0),
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

@@ -649,6 +649,15 @@ class TopologyRepository:
             )
         return [dict(row) for row in rows]
 
+    async def emergency_rates(self) -> dict[str, tuple[float, float]]:
+        """login -> bande passante d'urgence (down, up), pour les modes d'urgence."""
+        from app.db import emergency_repo
+
+        try:
+            return await emergency_repo.all_rates(self._pool)
+        except Exception:  # noqa: BLE001 - table absente (base ancienne) : rien
+            return {}
+
     async def policy_map(self, scope: str) -> dict[str, dict[str, Any]]:
         return {row["target_key"]: row for row in await self.policies(scope)}
 
