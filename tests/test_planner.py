@@ -710,7 +710,7 @@ def test_un_lien_sur_reseau_porte_les_abonnes_qu_il_contient() -> None:
 
 
 def test_un_mauvais_parent_deja_pose_est_retire() -> None:
-    """Constate sur NAS-FRANCOPHONIE : freeqos-nestl restait sous
+    """Constate sur NAS-FRANCOPHONIE : freeqos-acmex restait sous
     freeqos-parent-MikroTik (target=ether6,lan-bridge). Son trafic, qui passe
     par la VLAN, ne correspondait pas a ce parent : ni plafonne (860 kbps pour
     100), ni compte (0 bps). Le parent omis du plan ne pouvait jamais etre
@@ -719,7 +719,7 @@ def test_un_mauvais_parent_deja_pose_est_retire() -> None:
     from app.models import KIND_STATIC
 
     client = abonne(
-        "nestl",
+        "acmex",
         down=0.1,
         up=0.1,
         parent=lien_interface.queue_name,
