@@ -816,10 +816,11 @@ function gsOpen(action) {
     return;
   }
   if (type === 'ip') {
-    location.hash = '#/traffic';
+    // Plus d'onglet Traffic : l'adresse se cherche dans la liste des clients.
+    location.hash = '#/clients';
     setTimeout(() => {
-      const champ = document.getElementById('svc-lookup');
-      if (champ) { champ.value = valeur; lookupIp(valeur); champ.scrollIntoView({ block: 'center' }); }
+      const champ = document.getElementById('cli-search');
+      if (champ) { champ.value = valeur; renderClients(); }
     }, 400);
   }
 }
@@ -5694,7 +5695,7 @@ async function loadRoutersHealth() {
   try {
     data = await api('/pops/health');
   } catch (err) {
-    host.innerHTML = noticeErreur(err);
+    if (host) host.innerHTML = noticeErreur(err);
     return;
   }
   const routeurs = data.routers || [];
@@ -5703,6 +5704,9 @@ async function loadRoutersHealth() {
   document.querySelectorAll('[data-model-for]').forEach((td) => {
     td.textContent = modeleConnu(td.dataset.modelFor);
   });
+  // Le tableau a quitte Devices pour sa page (Router health) : ici, seul le
+  // modele de chaque routeur sert encore.
+  if (!host) return;
   if (!routeurs.length) {
     host.innerHTML = '<div class="empty">No router yet: add one in the <b>Connect a router</b> tab.</div>';
     return;
@@ -5756,6 +5760,106 @@ async function loadRoutersHealth() {
         '<td style="color:var(--faint)">' + esc(r.version || '-') + '</td>' +
         '</tr>';
     }).join('') + '</tbody></table>';
+}
+
+/* ------------------------------------------------------ Router health
+ * Une carte par routeur : ce qu'il dit de lui-meme, lu en direct. Le CPU en
+ * detail (moyenne, coeur le plus charge, chaque coeur), le pic et la courbe de
+ * l'heure ecoulee (releve toutes les 30 s), la memoire, le disque, les
+ * capteurs (temperature, tension). */
+async function loadRouterHealthPage() {
+  const host = document.getElementById('rh-cards');
+  const resume = document.getElementById('rh-summary');
+  if (!host) return;
+  let data;
+  try {
+    data = await api('/pops/health');
+  } catch (err) {
+    host.innerHTML = noticeErreur(err);
+    return;
+  }
+  const routeurs = data.routers || [];
+  if (!routeurs.length) {
+    resume.innerHTML = '';
+    host.innerHTML = '<div class="empty">No router yet: connect one in <a href="#/pops">Devices</a>.</div>';
+    return;
+  }
+  const lus = routeurs.filter((r) => r.reachable);
+  const chauds = lus.filter((r) => (r.cpu_max_core_pct != null ? r.cpu_max_core_pct : r.cpu_load_pct) >= 80);
+  const pleins = lus.filter((r) => (r.memory_used_pct || 0) >= 80);
+  const tuile = (titre, valeur, sous, cls) => '<div class="card today-kpi ' + (cls || '') + '"><span>' + titre +
+    '</span><b>' + valeur + '</b><small>' + sous + '</small></div>';
+  resume.innerHTML = '<div class="today-kpis">' +
+    tuile('Routers', lus.length + '<em>/' + routeurs.length + '</em>',
+      data.unreachable ? data.unreachable + ' not answering' : 'all answering', data.unreachable ? 'warn' : '') +
+    tuile('CPU above 80 %', String(chauds.length), chauds.length ? chauds.map((r) => esc(r.router)).join(', ') : 'none', chauds.length ? 'warn' : '') +
+    tuile('Memory above 80 %', String(pleins.length), pleins.length ? pleins.map((r) => esc(r.router)).join(', ') : 'none', pleins.length ? 'warn' : '') +
+    '</div>';
+  const teinte = (v, chaud, brulant) => (v == null ? '' : v >= brulant ? 'crit' : v >= chaud ? 'warn' : 'ok');
+  const jauge = (titre, v, sous, chaud, brulant) => '<div class="rh-gauge ' + teinte(v, chaud, brulant) + '">' +
+    '<div class="rh-gauge-head"><span>' + titre + '</span><b>' + (v == null ? '-' : esc(Math.round(v)) + ' %') + '</b></div>' +
+    '<div class="rh-bar"><i style="width:' + Math.max(0, Math.min(100, Number(v) || 0)) + '%"></i></div>' +
+    (sous ? '<small>' + sous + '</small>' : '') + '</div>';
+  host.innerHTML = routeurs.map((r) => {
+    const tete = '<div class="cp-card-head"><div><h3>' + esc(r.router) + '</h3><span class="hint">' +
+      esc([r.pop_name, r.identity && r.identity !== r.router ? r.identity : '', r.host].filter(Boolean).join(' · ')) +
+      '</span></div>' + (r.reachable ? '<span class="badge ok">online</span>' : '<span class="badge crit">unreachable</span>') + '</div>';
+    if (!r.reachable) {
+      return '<div class="card rh-card">' + tete + '<p class="hint" style="display:block">' + esc(r.error || 'No answer.') + '</p></div>';
+    }
+    const coeurs = r.cores || [];
+    const h = r.cpu_hour || {};
+    const memUtilisee = r.total_memory && r.free_memory != null ? r.total_memory - r.free_memory : null;
+    const disqueUtilise = r.total_hdd && r.free_hdd != null ? (r.total_hdd - r.free_hdd) / r.total_hdd * 100 : null;
+    const capteurs = r.sensors || [];
+    return '<div class="card rh-card">' + tete +
+      '<div class="rh-facts">' +
+        '<span><small>Model</small>' + esc(r.board_name || '-') + '</span>' +
+        '<span><small>RouterOS</small>' + esc(r.version || '-') + '</span>' +
+        '<span><small>Uptime</small>' + esc(uptime(r.uptime_s)) + '</span>' +
+        '<span><small>CPU</small>' + esc([r.cpu_count ? r.cpu_count + ' core(s)' : '', r.cpu_frequency_mhz ? r.cpu_frequency_mhz + ' MHz' : '',
+          r.architecture || ''].filter(Boolean).join(' · ') || '-') + '</span>' +
+      '</div>' +
+      jauge('CPU, average of the cores', r.cpu_load_pct, '', 70, 85) +
+      (coeurs.length > 1 ? jauge('CPU, busiest core', r.cpu_max_core_pct, 'This core, not the average, is what adds latency.', 80, 95) +
+        '<div class="cpu-cores rh-cores" aria-label="Load of each core">' + coeurs.map((c) =>
+          '<span class="cpu-core ' + teinte(c.load_pct, 80, 95) + '" title="' + esc(c.cpu) + ': ' + esc(c.load_pct) + ' %' +
+            (c.irq_pct ? ' (irq ' + esc(c.irq_pct) + ' %)' : '') + '"><i style="height:' +
+            Math.max(4, Math.min(100, Number(c.load_pct) || 0)) + '%"></i></span>').join('') + '</div>' : '') +
+      '<div class="rh-line"><span>Peak, last hour</span><b>' + (h.samples && h.peak_core_pct != null ? esc(h.peak_core_pct) + ' %' : 'collecting…') + '</b>' +
+        (h.samples && h.peak_core_pct != null ? '<small>' + esc(depuis(h.peak_at)) + (h.minutes_over_threshold ? ' · ' + esc(h.minutes_over_threshold) +
+          ' min over ' + esc(h.threshold_pct) + ' %' : '') + '</small>' : '') + '</div>' +
+      rhCourbe(h.history || []) +
+      jauge('Memory', r.memory_used_pct,
+        memUtilisee != null ? esc(bytesText(memUtilisee)) + ' used of ' + esc(bytesText(r.total_memory)) +
+          ' · ' + esc(bytesText(r.free_memory)) + ' free' : (r.free_memory ? esc(bytesText(r.free_memory)) + ' free' : ''), 80, 90) +
+      (r.total_hdd ? jauge('Storage', disqueUtilise, esc(bytesText(r.free_hdd)) + ' free of ' + esc(bytesText(r.total_hdd)), 80, 90) : '') +
+      (capteurs.length ? '<div class="rh-sensors">' + capteurs.map((c) => '<span><small>' + esc(c.name) + '</small>' +
+        esc(c.value) + (c.unit ? ' ' + esc(c.unit) : '') + '</span>').join('') + '</div>' : '') +
+      '</div>';
+  }).join('');
+}
+
+/** La derniere heure, releve par releve : le coeur le plus charge (plein),
+ *  la moyenne des coeurs (trait) et la memoire (pointilles), de 0 a 100 %. */
+function rhCourbe(points) {
+  if (points.length < 2) return '<p class="hint" style="display:block">The last-hour chart fills in as readings come (every 30 s).</p>';
+  const L = 300;
+  const H = 70;
+  const t0 = new Date(points[0].at).getTime();
+  const t1 = new Date(points[points.length - 1].at).getTime() || t0 + 1;
+  const x = (p) => ((new Date(p.at).getTime() - t0) / Math.max(1, t1 - t0)) * L;
+  const y = (v) => H - (Math.max(0, Math.min(100, Number(v) || 0)) / 100) * H;
+  const trace = (cle) => points.filter((p) => p[cle] != null).map((p, i) =>
+    (i ? 'L' : 'M') + x(p).toFixed(1) + ' ' + y(p[cle]).toFixed(1)).join(' ');
+  const coeur = trace('max_core');
+  return '<div class="rh-chart"><svg viewBox="0 0 ' + L + ' ' + H + '" preserveAspectRatio="none" aria-label="CPU and memory, last hour">' +
+    '<line x1="0" x2="' + L + '" y1="' + y(80) + '" y2="' + y(80) + '" class="rh-seuil"/>' +
+    (coeur ? '<path d="' + coeur + ' L' + L + ' ' + H + ' L0 ' + H + ' Z" class="rh-aire"/><path d="' + coeur + '" class="rh-coeur"/>' : '') +
+    '<path d="' + trace('avg') + '" class="rh-moy"/>' +
+    '<path d="' + trace('mem') + '" class="rh-mem"/></svg>' +
+    '<div class="rh-legend"><span class="c">busiest core</span><span class="m">average</span><span class="r">memory</span>' +
+    '<span class="hint" style="display:inline">last hour · line = 80 %</span></div></div>';
 }
 
 /** LE CPU EN DETAIL : la moyenne, le coeur le plus charge, et une barre par
@@ -15725,8 +15829,7 @@ const LOADERS = {
   client: loadClientPage,
   dashboard: loadDashboard,
   exec: loadExec,
-  traffic: loadTraffic,
-  rules: loadRules,
+  routerhealth: loadRouterHealthPage,
   network: loadNetwork,
   plans: loadPlans,
   pops: loadRouters,
@@ -15735,7 +15838,8 @@ const LOADERS = {
 };
 
 async function show(view) {
-  if (view === 'services') view = 'traffic'; // ancien onglet, fusionne dans Trafic
+  // Plus d'onglets Traffic ni Rules (demande de l'exploitant).
+  if (view === 'services' || view === 'traffic' || view === 'rules') view = 'dashboard';
   if (view === 'subscribers') view = 'clients'; // ancien onglet Abonnes, remplace par Clients
   if (!LOADERS[view]) view = 'dashboard';
   state.view = view;
@@ -15884,6 +15988,7 @@ function route() {
   }
   // Plus de page Modes : un ancien lien mene aux clients.
   if (vue === 'modes') vue = 'clients';
+  if (vue === 'traffic' || vue === 'rules') vue = 'dashboard';
   if (estLimite() && !['dashboard', 'clients', 'alerts', 'activity', 'management', 'map', 'client'].includes(vue)) vue = 'dashboard';
   show(vue || 'dashboard');
 }

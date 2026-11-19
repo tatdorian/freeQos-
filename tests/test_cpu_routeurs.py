@@ -135,3 +135,72 @@ def test_un_client_a_ip_fixe_sans_compteur_n_est_pas_connecte() -> None:
     assert "function sansMesure(r)" in js
     assert "return !sansMesure(r);" in js
     assert "Not measured · no counter yet" in js
+
+
+# ------------------------------------------- page Router health (detail)
+class RouteurAvecCapteurs(RouteurQuatreCoeurs):
+    def system_resource(self):  # type: ignore[no-untyped-def]
+        return {
+            **super().system_resource(),
+            "total-memory": "1073741824",
+            "free-hdd-space": "90000000",
+            "total-hdd-space": "128000000",
+            "architecture-name": "arm64",
+            "cpu-frequency": "1700",
+        }
+
+    def system_health(self):  # type: ignore[no-untyped-def]
+        # RouterOS 7 : une ligne par capteur.
+        return [
+            {"name": "temperature", "value": "47", "type": "C"},
+            {"name": "voltage", "value": "24.1", "type": "V"},
+        ]
+
+
+class RouteurV6(FakeRouterOsClient):
+    def system_health(self):  # type: ignore[no-untyped-def]
+        # RouterOS 6 : une seule ligne a colonnes.
+        return [{"temperature": "51", "voltage": "23.9"}]
+
+
+def test_la_sante_donne_memoire_disque_et_capteurs(router_config) -> None:  # type: ignore[no-untyped-def]
+    sante = MikrotikCollector(router_config, client=RouteurAvecCapteurs()).health_sync()
+    assert sante["total_memory"] == 1073741824
+    assert sante["memory_used_pct"] is not None
+    assert (sante["free_hdd"], sante["total_hdd"]) == (90000000, 128000000)
+    assert sante["architecture"] == "arm64" and sante["cpu_frequency_mhz"] == 1700
+    assert {"name": "temperature", "value": "47", "unit": "°C"} in sante["sensors"]
+    assert {"name": "voltage", "value": "24.1", "unit": "V"} in sante["sensors"]
+
+
+def test_les_capteurs_de_routeros_6_sont_lus(router_config) -> None:  # type: ignore[no-untyped-def]
+    sante = MikrotikCollector(router_config, client=RouteurV6()).health_sync()
+    assert {"name": "temperature", "value": "51", "unit": "°C"} in sante["sensors"]
+    assert {"name": "voltage", "value": "23.9", "unit": "V"} in sante["sensors"]
+
+
+def test_un_routeur_sans_capteur(router_config) -> None:  # type: ignore[no-untyped-def]
+    sante = MikrotikCollector(router_config, client=FakeRouterOsClient()).health_sync()
+    assert sante["sensors"] == []
+
+
+def test_l_heure_ecoulee_releve_par_releve_pour_la_courbe() -> None:
+    cpu = RouterCpu()
+    t0 = datetime(2026, 11, 18, 10, 0, tzinfo=UTC)
+    cpu.record("nas", {**_sante(40), "memory_used_pct": 42.0}, t0)
+    cpu.record("nas", {**_sante(70), "memory_used_pct": 43.0}, t0 + timedelta(seconds=30))
+    historique = cpu.summary("nas", t0 + timedelta(minutes=1))["history"]
+    assert [(p["max_core"], p["mem"]) for p in historique] == [(40, 42.0), (70, 43.0)]
+
+
+def test_la_page_router_health() -> None:
+    html = (STATIC_DIR.parent / "templates" / "index.html").read_text(encoding="utf-8")
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'href="#/routerhealth" data-view="routerhealth"' in html
+    assert 'id="view-routerhealth"' in html and 'id="rh-cards"' in html
+    assert "routerhealth: loadRouterHealthPage," in js
+    assert "function rhCourbe(points)" in js
+    # Plus d'onglets Rules ni Traffic : un ancien lien ramene au tableau de bord.
+    assert 'href="#/rules" data-view="rules"' not in html
+    assert 'href="#/traffic" data-view="traffic"' not in html
+    assert "if (vue === 'traffic' || vue === 'rules') vue = 'dashboard';" in js

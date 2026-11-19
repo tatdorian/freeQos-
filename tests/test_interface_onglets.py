@@ -65,10 +65,11 @@ def test_ce_qui_vivait_dans_ces_onglets_est_toujours_la() -> None:
     assert 'id="shaping-points"' in HTML
 
 
-def test_l_onglet_trafic_existe_et_est_cable() -> None:
-    assert "traffic" in ONGLETS
-    assert 'id="view-traffic"' in HTML
-    assert "traffic: loadTraffic" in JS
+def test_les_onglets_trafic_et_regles_ont_disparu() -> None:
+    """DEMANDE EXPLICITE : plus d'onglets Traffic ni Rules. L'API reste."""
+    assert "traffic" not in ONGLETS and "rules" not in ONGLETS
+    assert "traffic: loadTraffic" not in JS and "rules: loadRules" not in JS
+    assert "routerhealth" in ONGLETS
 
 
 def test_l_onglet_capacite_a_disparu() -> None:
