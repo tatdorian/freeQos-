@@ -85,6 +85,7 @@ from app.enforcement.models import (
 )
 from app.enforcement.planner import (
     NO_RATE_SKIP,
+    NOS_TYPES,
     SOURCE_SCHEDULE,
     TARGET_ADDRESS,
     LinkTarget,
@@ -324,6 +325,13 @@ class ShapingService:
         self._write_clients: dict[str, RouterOsWriteClient] = {}
         # Garde-fou contre l'oscillation (cf. ``_filtrer_oscillations``).
         self._ecrits: dict[tuple[str, str, str, str], list[tuple[float, str]]] = {}
+        #: Routeurs qui ont REFUSE le type FQ-CoDel (motif du refus) : ils
+        #: restent en CAKE. Oublie au redemarrage, ou un nouvel essai est fait.
+        self.fq_codel_refused: dict[str, str] = {}
+        #: UNE ecriture a la fois par routeur : une reconciliation lancee par une
+        #: bascule des Reglages et une ecriture demandee a la main ne se
+        #: croisent pas sur les memes lignes.
+        self._verrous_ecriture: dict[str, asyncio.Lock] = {}
         self.frozen: dict[tuple[str, str], dict[str, Any]] = {}
         self._write_client_factory = write_client_factory or LibrouterosWriteClient
         self.last_snapshot: TopologySnapshot | None = None
@@ -2752,7 +2760,7 @@ class ShapingService:
         montre est exactement ce qui partirait. La cible NetFlow est lue a part
         (``NetflowExportService``).
         """
-        from app.enforcement.planner import QUEUE_TYPE_DOWN, QUEUE_TYPE_UP
+        from app.enforcement.planner import NOS_TYPES
         from app.enforcement.restrictions import parse_tag
 
         collecteur = self._collector(router_name)
@@ -2788,9 +2796,7 @@ class ShapingService:
             "address": [r for r in tables["address"] if marquee(r)],
             "simple": [q for q in tables["simple"] if q.get(".id") and is_ours(q)],
             "type": [
-                t
-                for t in tables["type"]
-                if t.get(".id") and str(t.get("name") or "") in (QUEUE_TYPE_UP, QUEUE_TYPE_DOWN)
+                t for t in tables["type"] if t.get(".id") and str(t.get("name") or "") in NOS_TYPES
             ],
             # Pour situer : combien de files du routeur ne sont PAS a freeQoS.
             "_other_simple": [q for q in tables["simple"] if not is_ours(q)],
@@ -3513,6 +3519,7 @@ class ShapingService:
             safety_factor=self.settings.shaping_safety_factor,
             floor_mbps=self.settings.shaping_floor_mbps,
             queue_types=desired_queue_types(
+                kind=self.queue_kind_for(router_name),
                 overhead=self.settings.cake_overhead,
                 rtt_ms=self.settings.cake_rtt_ms,
                 diffserv=self.settings.cake_diffserv,
@@ -3593,6 +3600,7 @@ class ShapingService:
             safety_factor=self.settings.shaping_safety_factor,
             floor_mbps=self.settings.shaping_floor_mbps,
             queue_types=desired_queue_types(
+                kind=self.queue_kind_for(collector.name),
                 overhead=self.settings.cake_overhead,
                 rtt_ms=self.settings.cake_rtt_ms,
                 diffserv=self.settings.cake_diffserv,
@@ -3632,6 +3640,14 @@ class ShapingService:
         return plan
 
     # ---------------------------------------------------------------- apply
+    def queue_kind_for(self, router_name: str) -> str:
+        """Le type des files de CE routeur : le reglage, sauf si le routeur a
+        refuse FQ-CoDel -- il reste alors en CAKE."""
+        voulu = str(getattr(self.settings, "queue_kind", "cake") or "cake")
+        if voulu == "fq-codel" and router_name in self.fq_codel_refused:
+            return "cake"
+        return voulu
+
     async def apply(
         self,
         plan: Plan,
@@ -3690,18 +3706,21 @@ class ShapingService:
             plan = self._filtrer_oscillations(plan)
             client = self._write_client(plan.router_name)
 
-        resultat = await apply_plan(
-            plan,
-            client,  # type: ignore[arg-type]
-            dry_run=dry_run,
-            max_actions=self.settings.enforcement_max_actions,
-            # Un retrait qui echoue n'empeche pas les suivants : chacun est
-            # independant, et tout ce qui part soulage les clients.
-            stop_on_error=not retrait,
-        )
+        verrou = self._verrous_ecriture.setdefault(plan.router_name, asyncio.Lock())
+        async with verrou:
+            resultat = await apply_plan(
+                plan,
+                client,  # type: ignore[arg-type]
+                dry_run=dry_run,
+                max_actions=self.settings.enforcement_max_actions,
+                # Un retrait qui echoue n'empeche pas les suivants : chacun est
+                # independant, et tout ce qui part soulage les clients.
+                stop_on_error=not retrait,
+            )
 
         if not dry_run:
             self._retenir_ecritures(resultat)
+            self._noter_refus_fq_codel(resultat)
         if not dry_run and resultat.applied:
             # Ce qu'on vient d'ecrire a change l'etat des routeurs : un audit
             # calcule avant ne decrit plus rien. Sans cet oubli, l'interface
@@ -3793,6 +3812,24 @@ class ShapingService:
             unchanged=plan.unchanged,
         )
 
+    def _noter_refus_fq_codel(self, resultat: ApplyResult) -> None:
+        """SI FQ-CODEL NE FONCTIONNE PAS, ON NE LE MET PAS : un routeur qui
+        refuse de creer ce type reste en CAKE (le plan suivant le dit)."""
+        for issue in resultat.outcomes:
+            action = issue.action
+            if (
+                not issue.ok
+                and action.path == "/queue/type"
+                and action.verb == "add"
+                and action.fields.get("kind") == "fq-codel"
+            ):
+                self.fq_codel_refused[resultat.router_name] = str(issue.detail or "refused")
+                logger.warning(
+                    "%s refuse FQ-CoDel (%s) : ses files restent en CAKE",
+                    resultat.router_name,
+                    issue.detail,
+                )
+
     def _retenir_ecritures(self, resultat: ApplyResult) -> None:
         maintenant = time.monotonic()
         for issue in resultat.outcomes:
@@ -3802,6 +3839,10 @@ class ShapingService:
             ligne = self._cle_ligne(action)
             for champ in self.CHAMPS_SURVEILLES:
                 if champ not in action.fields or not ligne:
+                    continue
+                # Basculer CAKE <-> FQ-CoDel dans les Reglages n'est pas une
+                # oscillation : c'est un choix de l'exploitant.
+                if champ == "queue" and set(str(action.fields[champ]).split("/")) <= set(NOS_TYPES):
                     continue
                 cle = (resultat.router_name, action.path, ligne, champ)
                 histo = self._ecrits.setdefault(cle, [])
