@@ -112,6 +112,46 @@ def test_basculer_repointe_puis_retire_les_anciens_types_en_dernier() -> None:
     assert set(file.fields) == {"queue"}  # rien d'autre ne bouge
 
 
+def test_les_types_ne_portent_plus_freeqos_dans_leur_nom() -> None:
+    """Demande de l'exploitant : « cake-up/cake-down » dans Winbox, plus
+    « freeqos-cake-up ». Les anciens types sont repointes puis retires."""
+    assert {t.name for t in desired_queue_types()} == {"cake-up", "cake-down"}
+    assert {t.name for t in desired_queue_types(kind="fq-codel")} == {
+        "fq-codel-up",
+        "fq-codel-down",
+    }
+    types = desired_queue_types()
+    _, files, _ = desired_state(
+        links=[], subscribers=[_abonne("dupont", "10.20.0.10")], queue_types=types
+    )
+    ancienne = {
+        **_file_routeur("dupont", "10.20.0.10"),
+        "queue": "freeqos-cake-up/freeqos-cake-down",
+    }
+    plan = build_plan(
+        "nas",
+        desired_types=types,
+        desired_queues=files,
+        actual_types=[
+            {".id": "*T1", "name": "freeqos-cake-up", "kind": "cake"},
+            {".id": "*T2", "name": "freeqos-cake-down", "kind": "cake"},
+        ],
+        actual_queues=[ancienne],
+        prune=False,
+    )
+    resume = [(a.verb, a.path, a.name) for a in plan.actions]
+    assert resume[:2] == [
+        ("add", "/queue/type", "cake-up"),
+        ("add", "/queue/type", "cake-down"),
+    ]
+    file = next(a for a in plan.actions if a.path == "/queue/simple")
+    assert file.fields == {"queue": "cake-up/cake-down"}
+    assert resume[-2:] == [
+        ("remove", "/queue/type", "freeqos-cake-up"),
+        ("remove", "/queue/type", "freeqos-cake-down"),
+    ]
+
+
 def test_un_type_encore_porte_par_une_file_reste() -> None:
     """Une file d'abonne hors ligne, gardee sans purge, porte encore CAKE."""
     types = desired_queue_types(kind="fq-codel")

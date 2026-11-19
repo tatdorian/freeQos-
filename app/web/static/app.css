@@ -2434,3 +2434,42 @@ body.role-limited .dash-detail { display: none; }
 .pl-ports-d { margin: .2rem 0 .4rem; }
 .pl-ports-d > summary { cursor: pointer; font-size: .85rem; font-weight: 600; padding: .3rem 0; }
 .pl-ports-d .pl-idle { margin-top: .3rem; }
+
+/* ------------------------------------------------------ Router health */
+#rh-summary .today-kpis { grid-template-columns: repeat(3, 1fr); margin-bottom: 1rem; }
+.rh-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1rem; }
+.rh-card { display: flex; flex-direction: column; gap: .7rem; }
+.rh-facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: .4rem .8rem; font-size: .9rem; }
+.rh-facts span, .rh-sensors span { display: flex; flex-direction: column; }
+.rh-facts small, .rh-sensors small { color: var(--muted); font-size: .75rem; }
+.rh-gauge-head { display: flex; justify-content: space-between; font-size: .88rem; }
+.rh-gauge-head b { font-variant-numeric: tabular-nums; }
+.rh-gauge small { display: block; color: var(--muted); font-size: .78rem; margin-top: .2rem; }
+.rh-bar { height: 8px; border-radius: 4px; background: var(--fill); overflow: hidden; margin-top: .25rem; }
+.rh-bar i { display: block; height: 100%; background: var(--ok); border-radius: 4px; }
+.rh-gauge.warn .rh-bar i { background: var(--warn); }
+.rh-gauge.crit .rh-bar i { background: var(--crit); }
+.rh-gauge.warn .rh-gauge-head b { color: var(--warn); }
+.rh-gauge.crit .rh-gauge-head b { color: var(--crit); }
+.rh-cores { height: 28px; }
+.rh-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .6rem; font-size: .88rem; }
+.rh-line small { color: var(--muted); }
+.rh-chart svg { width: 100%; height: 70px; display: block; background: var(--fill); border-radius: 8px; }
+.rh-chart path { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
+.rh-chart .rh-coeur { stroke: var(--up); }
+.rh-chart .rh-aire { fill: var(--up-dim); stroke: none; }
+.rh-chart .rh-moy { stroke: var(--down); }
+.rh-chart .rh-mem { stroke: var(--purple); stroke-dasharray: 3 3; }
+.rh-chart .rh-seuil { stroke: var(--crit); stroke-width: 1; stroke-dasharray: 2 4; opacity: .6; vector-effect: non-scaling-stroke; }
+.rh-legend { display: flex; flex-wrap: wrap; gap: .3rem .9rem; font-size: .75rem; color: var(--muted); margin-top: .3rem; }
+.rh-legend span.c::before, .rh-legend span.m::before, .rh-legend span.r::before {
+  content: ""; display: inline-block; width: 12px; height: 3px; margin-right: .3rem; vertical-align: middle; border-radius: 2px;
+}
+.rh-legend span.c::before { background: var(--up); }
+.rh-legend span.m::before { background: var(--down); }
+.rh-legend span.r::before { background: var(--purple); }
+.rh-sensors { display: flex; flex-wrap: wrap; gap: .5rem 1.2rem; font-size: .9rem; border-top: 1px solid var(--border); padding-top: .6rem; }
+@media (max-width: 700px) {
+  #rh-summary .today-kpis { grid-template-columns: 1fr; }
+  .rh-grid { grid-template-columns: 1fr; }
+}

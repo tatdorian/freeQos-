@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="8d4a169e5819c654">
+  <meta name="freeqos-docs-source" content="2ddead1429d3cbf6">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -56,7 +56,7 @@
     <a href="#5-measurements-throughput-latency-qoe">5. Measurements: throughput, latency, QoE</a>
     <a class="sub" href="#throughput">Throughput</a>
     <a class="sub" href="#reset-queues-every-client-back-to-automatic">Reset queues: every client back to Automatic</a>
-    <a class="sub" href="#router-cpu-per-core-and-the-peak-of-the-last-hour">Router CPU: per core, and the peak of the last hour</a>
+    <a class="sub" href="#router-health-cpu-memory-storage-sensors">Router health: CPU, memory, storage, sensors</a>
     <a class="sub" href="#set-by-freeqos-everything-freeqos-put-on-a-router">Set by freeQoS: everything freeQoS put on a router</a>
     <a class="sub" href="#remove-freeqos-the-router-as-it-was-before">Remove freeQoS: the router as it was before</a>
     <a class="sub" href="#when-the-queue-does-not-see-the-traffic">When the queue does not see the traffic</a>
@@ -1806,8 +1806,9 @@ curl -s http://127.0.0.1:8000/health/ready
 <p><strong>Two time scales.</strong> History comes from collection (every 10 s). For "how much is going through <em>now</em>", the live measure calls <code>/interface/monitor-traffic</code> on the router, a read-only command; if it fails (version, rights, virtual port), the last collected value is returned with the reason.</p>
 <h3 id="reset-queues-every-client-back-to-automatic">Reset queues: every client back to Automatic</h3>
 <p><em>Devices › Reset queues</em> deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to <strong>Automatic</strong>: its mode, boost and forced limit are removed, it is back on its plan, and its <em>Activity</em> says so (<code>queues reset on &lt;router&gt;</code>). A scheduler that targets the client applies again at its next hours.</p>
-<h3 id="router-cpu-per-core-and-the-peak-of-the-last-hour">Router CPU: per core, and the peak of the last hour</h3>
-<p><em>Devices › Router health</em> shows, for each router, the <strong>average</strong> CPU, the <strong>busiest core</strong>, and one bar per core (<code>/system/resource/cpu</code>). The busiest core is what matters: one saturated core out of four shows as 33 % on average, yet the traffic it handles is delayed, and queues add latency. freeQoS reads every router every 30 s and keeps the last hour in memory: <em>Peak, last hour</em> gives the busiest core's peak, when it happened and how long it stayed above 80 %. Keep the busiest core under 70–80 % at peak hours.</p>
+<h3 id="router-health-cpu-memory-storage-sensors">Router health: CPU, memory, storage, sensors</h3>
+<p><strong>Router health</strong> (Administrator menu) has its own page: one card per router, read live. On top, how many routers answer, and which ones have a core or their memory above 80 %. Each card gives the model, RouterOS version, uptime and CPU (cores, frequency, architecture); the <strong>CPU</strong> (average of the cores, busiest core, one bar per core); <strong>Peak, last hour</strong> and a <strong>chart of the last hour</strong> (busiest core, average, memory; the line is 80 %); the <strong>memory</strong> (used, total, free); the <strong>storage</strong> (free of total); and the <strong>sensors</strong> the router has (<code>/system/health</code>: temperature, voltage… — a CHR has none). An unreachable router shows its error. API: <code>GET /api/v1/pops/health</code> (<code>cpu_hour.history</code> holds the last hour, one point every 30 s; <code>sensors</code>, <code>total_hdd</code>, <code>cpu_frequency_mhz</code>, <code>architecture</code>).</p>
+<p>The page shows, for each router, the <strong>average</strong> CPU, the <strong>busiest core</strong>, and one bar per core (<code>/system/resource/cpu</code>). The busiest core is what matters: one saturated core out of four shows as 33 % on average, yet the traffic it handles is delayed, and queues add latency. freeQoS reads every router every 30 s and keeps the last hour in memory: <em>Peak, last hour</em> gives the busiest core's peak, when it happened and how long it stayed above 80 %. Keep the busiest core under 70–80 % at peak hours.</p>
 <p>When a core stays <strong>above 80 % for over a minute</strong>, an alert is raised (<em>Router … : CPU core at … %</em>, warning; critical above 95 %), and emailed like the other router alerts when email alerts are on. It clears by itself when the load drops.</p>
 <h3 id="set-by-freeqos-everything-freeqos-put-on-a-router">Set by freeQoS: everything freeQoS put on a router</h3>
 <p><em>Devices › Router settings › Polled routers › Set by freeQoS</em> reads the router live and lists, table by table, <strong>every line carrying the freeQoS mark</strong>: client queues (<code>/queue/simple</code>, with target, limit, queue type and parent), the CAKE queue types, the restriction lines (firewall filter, mangle, queue tree) and address lists, plus the NetFlow export (whether <code>traffic-flow</code> is on, and which collector targets freeQoS set). Nothing is written. Queues made by hand or by RADIUS are only counted, never listed as freeQoS's. It is exactly what <em>Remove freeQoS</em> would take off. API: <code>GET /api/v1/pops/routers/{name}/freeqos-lines</code>.</p>
@@ -1815,7 +1816,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p><em>Devices › Remove freeQoS</em> leaves a router as it was before freeQoS, in one gesture (Administrator, confirmed in a window):</p>
 <ol>
 <li><strong>writing is turned off</strong> on that router first (it becomes <em>read-only</em>), so no reconciliation, restriction pass or setup puts anything back;</li>
-<li><strong>everything carrying the freeQoS mark is removed</strong>: subscriber queues (children before parents), the <code>freeqos-cake-up</code> / <code>freeqos-cake-down</code> queue types, and the restriction lines (firewall filter, mangle, queue tree, address lists);</li>
+<li><strong>everything carrying the freeQoS mark is removed</strong>: subscriber queues (children before parents), the <code>cake-up</code> / <code>cake-down</code> (or <code>fq-codel-up</code> / <code>fq-codel-down</code>) queue types, and the old <code>freeqos-*</code> ones, and the restriction lines (firewall filter, mangle, queue tree, address lists);</li>
 <li>optionally, the <strong>NetFlow export target</strong> freeQoS added (unticked by default: the Traffic page keeps seeing the router).</li>
 </ol>
 <p>Only lines with the <code>freeqos:managed</code> mark of this instance go: queues made by hand, by RADIUS (<code>&lt;pppoe-...&gt;</code>) or by another tool stay, and so do FastTrack and every other rule. Each removal is independent: one that fails does not stop the others, and the result lists what failed. Modes, plans and rules stay saved in freeQoS: allowing writing again (and <em>Set up</em>) puts everything back. API: <code>POST /api/v1/pops/routers/uninstall/{name}</code> with <code>{"confirm": true, "stop_netflow": false}</code>.</p>
@@ -2375,6 +2376,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </ul>
 <p><strong>Each source is isolated</strong>: a resolver that breaks, a registry that rate-limits or a geolocation service that fails never costs the verdict the others gave. <strong>The reverse name beats the block</strong>: an Open Connect cache hosted at your premises is in no published block, yet it carries the most traffic. An address with no reverse name is still marked resolved — "this address has no name" is an answer, and most of the internet is in that case.</p>
 <h3 id="what-the-traffic-page-shows">What the Traffic page shows</h3>
+<p><em>The <strong>Traffic</strong> and <strong>Rules</strong> tabs are no longer in the menu (an old link opens the Dashboard). What follows describes the API, still available (<code>/api/v1/traffic-rules</code> and the flow endpoints). Searching an IP address now opens <strong>Clients</strong> filtered on it.</em></p>
 <p>The page is split into tabs, one question at a time: <strong>Overview</strong> (totals, top clients, top services), <strong>Clients</strong> (who talks to whom, client by client), <strong>Destinations</strong> (map, countries, addresses reached), <strong>Find an IP</strong>, and <strong>Advanced</strong> (service catalogue, NetFlow exporters). Long tables show their first lines only, with <em>Show all</em>. The chosen tab is remembered in your browser.</p>
 <p><strong>Who used it.</strong> Click a service (Overview) or an address (Destinations): a window lists every client that reached it over the period, with its site, the volume received and sent, whether it is talking to it right now (<em>live</em>), and a link to its page. From there, <em>Block or cap it…</em> opens the Rules form prefilled.</p>
 <div class="table-wrap"><table>
@@ -2422,6 +2424,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p><strong>A machine without a subscriber record counts too.</strong> "This address reached that one" is the observation; attaching it to a subscriber is an interpretation, which may be missing (monitoring station, camera, router). Such lines appear under the client address, marked <em>not declared</em>.</p>
 <p><strong>Volume over time per subscriber</strong>: <code>GET /api/v1/netflow/subscribers/{id}/series</code>. <strong>Live connections</strong> (<code>GET /api/v1/netflow/connections</code>) read the collector's in-memory window, the only truly live view: it empties at each write and fills up again — that is not a failure.</p>
 <h3 id="traffic-restrictions">Traffic restrictions</h3>
+<p><em>No <strong>Rules</strong> tab any more: restrictions are managed through the API (<code>/api/v1/traffic-rules</code>); existing ones keep applying.</em></p>
 <p>A restriction targets a catalogue service for one or more subscribers. Two actions:</p>
 <div class="table-wrap"><table>
 <thead>
@@ -2656,7 +2659,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 </tbody>
 </table></div>
-<p><strong>Switching rewrites only the queue types.</strong> freeQoS creates <code>freeqos-fq-up</code> / <code>freeqos-fq-down</code> (or <code>freeqos-cake-up</code> / <code>freeqos-cake-down</code> when going back), points every freeQoS queue to them (<code>queue=</code> only: no speed, target or parent changes), then removes the old types <strong>last</strong>, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only freeQoS's own lines are touched (marked <code>freeqos:managed</code>, or client queues freeQoS remembers creating).</p>
+<p><strong>Switching rewrites only the queue types.</strong> freeQoS creates <code>fq-codel-up</code> / <code>fq-codel-down</code> (or <code>cake-up</code> / <code>cake-down</code> when going back), points every freeQoS queue to them (<code>queue=</code> only: no speed, target or parent changes), then removes the old types <strong>last</strong>, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only freeQoS's own lines are touched (marked <code>freeqos:managed</code>, or client queues freeQoS remembers creating).</p>
 <p><strong>If FQ-CoDel does not work on a router, it is not used there.</strong> A router that refuses to create the <code>fq-codel</code> type (a RouterOS without it) keeps CAKE: the refusal is noted, its queues stay on CAKE without error, and <em>Settings</em> lists the router with RouterOS's answer. It is tried again after a restart of freeQoS.</p>
 <h3 id="how-queues-nest">How queues nest</h3>
 <p>RouterOS queues form a tree:</p>
@@ -2674,7 +2677,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </ol>
 <p>Deleting a subscriber's plan removes its queue on the next cycle.</p>
 <h3 id="what-is-installed-on-the-router">What is installed on the router</h3>
-<p><strong>Two queue types</strong>: <code>freeqos-cake-up</code> and <code>freeqos-cake-down</code>. Their CAKE options come from the settings:</p>
+<p><strong>Two queue types</strong>: <code>cake-up</code> and <code>cake-down</code> — no <code>freeqos</code> in their names, like the client queues (in FQ-CoDel: <code>fq-codel-up</code> / <code>fq-codel-down</code>). Types named <code>freeqos-cake-*</code> / <code>freeqos-fq-*</code> by an earlier version are replaced by themselves: freeQoS creates the new types, points its queues to them, then removes the old ones in the same pass. Their CAKE options come from the settings:</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -3173,7 +3176,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>The capacity view also ranks subscribers by <strong>volume</strong> over the period. The top of instantaneous rates names whoever is downloading right now; the volume over a week names whoever weighs on the network. They are almost never the same subscribers.</p>
 <h2 id="9-interface">9. Interface</h2>
 <p><strong>Errors say what happened and what to do</strong>: a title (<em>Not allowed with your account</em>, <em>Not possible right now</em>, <em>A router or service did not answer</em>, <em>freeQoS cannot be reached</em>...), the server's reason, and the next step. An error from a button shows in a corner without blocking the page; a page that cannot load says so in a banner and retries on its own.</p>
-<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. <strong>Traffic</strong> and <strong>Network health</strong> are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with <em>Show all</em>. The chosen tab is remembered in your browser. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
+<p>Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. <strong>Network health</strong> is split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with <em>Show all</em>. The chosen tab is remembered in your browser. The two long configuration pages, <strong>Settings</strong> and <strong>Devices</strong>, show one section at a time: their table of contents works as tabs.</p>
 <div class="table-wrap"><table>
 <thead>
 <tr>
@@ -3189,19 +3192,14 @@ curl -s http://127.0.0.1:8000/health/ready
 <td>A banner: <strong>All good</strong>, or the problems that need you, most urgent first, each one a click away from the clients concerned; clients connected, traffic now, sites, modes and boosts; one card per site. Below, for the Administrator only: <em>Network detail</em> (throughput curve and top consumers; live traffic per router and radio backhauls are no longer on the dashboard: routers are followed in <em>Devices</em>)</td>
 </tr>
 <tr>
-<td><strong>Rules</strong> (Administrator)</td>
-<td>What may clients reach?</td>
-<td>Rules in force, and the form to write one: block or cap a service (YouTube, Netflix...), a category or IP prefixes, for every client, chosen sites or chosen clients</td>
-</tr>
-<tr>
 <td><strong>Network health</strong></td>
 <td>Is the network fine, where could it fill up?</td>
 <td>Four tabs, one question each: <strong>Overview</strong> (verdict, four key figures, links that could fill up), <strong>Latency</strong> (per client, where the delay comes from; tick <em>Measure latency</em> to turn the probe on), <strong>Load per site</strong> (how full each site is, then each site with its clients; click a row for its details), <strong>Over time</strong> (health hour by hour)</td>
 </tr>
 <tr>
-<td><strong>Traffic</strong></td>
-<td>Who consumes what, where to?</td>
-<td>Tabs: Overview, Clients (who talks to whom), Destinations (map, countries, addresses), Find an IP, Advanced; click a service or an address to see who used it (restrictions moved to <strong>Rules</strong>)</td>
+<td><strong>Router health</strong> (Administrator)</td>
+<td>Are my routers fine?</td>
+<td>One card per router: model, RouterOS, uptime; CPU (average, busiest core, each core), peak and chart of the last hour; memory; storage; sensors (temperature, voltage)</td>
 </tr>
 <tr>
 <td><strong>Network tree</strong></td>
@@ -3221,7 +3219,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <tr>
 <td><strong>Devices</strong></td>
 <td>Which equipment?</td>
-<td>Router health, connecting a router, router settings (Set up, Set by freeQoS, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health</td>
+<td>Connecting a router, router settings (Set up, Set by freeQoS, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health</td>
 </tr>
 <tr>
 <td><strong>API</strong></td>
@@ -3259,7 +3257,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 <tr>
 <td>no answer in time</td>
-<td>Firewall <code>input</code> chain (TCP 8728/8729 from freeQoS), the route back to freeQoS, CPU of the router (<em>Devices › Router health</em>)</td>
+<td>Firewall <code>input</code> chain (TCP 8728/8729 from freeQoS), the route back to freeQoS, CPU of the router (<em>Router health</em>)</td>
 </tr>
 <tr>
 <td>login refused</td>

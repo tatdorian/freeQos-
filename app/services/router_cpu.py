@@ -50,7 +50,9 @@ class RouterCpu:
         now = now or datetime.now(tz=UTC)
         file = self._releves.setdefault(routeur, deque())
         pic = coeur if coeur is not None else moyenne
-        file.append({"at": now, "avg": moyenne, "max_core": pic})
+        file.append(
+            {"at": now, "avg": moyenne, "max_core": pic, "mem": sante.get("memory_used_pct")}
+        )
         while file and now - file[0]["at"] > FENETRE:
             file.popleft()
 
@@ -70,6 +72,16 @@ class RouterCpu:
             "avg_pct": round(sum(moyennes) / len(moyennes), 1) if moyennes else None,
             "minutes_over_threshold": round(au_dessus * INTERVALLE_S / 60, 1),
             "threshold_pct": SEUIL_ALERTE,
+            # L'heure ecoulee, releve par releve : la courbe de la page Router health.
+            "history": [
+                {
+                    "at": r["at"].isoformat(),
+                    "avg": r["avg"],
+                    "max_core": r["max_core"],
+                    "mem": r.get("mem"),
+                }
+                for r in file
+            ],
         }
 
     def problems(self) -> list[dict[str, Any]]:
@@ -89,7 +101,7 @@ class RouterCpu:
                         "title": f"Router {routeur}: CPU core at {coeur} %",
                         "detail": f"Its busiest core has stayed above {SEUIL_ALERTE} % for over a "
                         "minute: queues may add latency for every client of this router. Look at "
-                        "Devices › Router health, and lighten the load (rules, NetFlow export).",
+                        "Router health, and lighten the load (rules, NetFlow export).",
                     }
                 )
         return problemes

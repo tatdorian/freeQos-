@@ -747,9 +747,11 @@ A link's throughput comes from the counters of the **port** that carries it, wit
 
 *Devices › Reset queues* deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to **Automatic**: its mode, boost and forced limit are removed, it is back on its plan, and its *Activity* says so (`queues reset on <router>`). A scheduler that targets the client applies again at its next hours.
 
-### Router CPU: per core, and the peak of the last hour
+### Router health: CPU, memory, storage, sensors
 
-*Devices › Router health* shows, for each router, the **average** CPU, the **busiest core**, and one bar per core (`/system/resource/cpu`). The busiest core is what matters: one saturated core out of four shows as 33 % on average, yet the traffic it handles is delayed, and queues add latency. freeQoS reads every router every 30 s and keeps the last hour in memory: *Peak, last hour* gives the busiest core's peak, when it happened and how long it stayed above 80 %. Keep the busiest core under 70–80 % at peak hours.
+**Router health** (Administrator menu) has its own page: one card per router, read live. On top, how many routers answer, and which ones have a core or their memory above 80 %. Each card gives the model, RouterOS version, uptime and CPU (cores, frequency, architecture); the **CPU** (average of the cores, busiest core, one bar per core); **Peak, last hour** and a **chart of the last hour** (busiest core, average, memory; the line is 80 %); the **memory** (used, total, free); the **storage** (free of total); and the **sensors** the router has (`/system/health`: temperature, voltage… — a CHR has none). An unreachable router shows its error. API: `GET /api/v1/pops/health` (`cpu_hour.history` holds the last hour, one point every 30 s; `sensors`, `total_hdd`, `cpu_frequency_mhz`, `architecture`).
+
+The page shows, for each router, the **average** CPU, the **busiest core**, and one bar per core (`/system/resource/cpu`). The busiest core is what matters: one saturated core out of four shows as 33 % on average, yet the traffic it handles is delayed, and queues add latency. freeQoS reads every router every 30 s and keeps the last hour in memory: *Peak, last hour* gives the busiest core's peak, when it happened and how long it stayed above 80 %. Keep the busiest core under 70–80 % at peak hours.
 
 When a core stays **above 80 % for over a minute**, an alert is raised (*Router … : CPU core at … %*, warning; critical above 95 %), and emailed like the other router alerts when email alerts are on. It clears by itself when the load drops.
 
@@ -762,7 +764,7 @@ When a core stays **above 80 % for over a minute**, an alert is raised (*Router 
 *Devices › Remove freeQoS* leaves a router as it was before freeQoS, in one gesture (Administrator, confirmed in a window):
 
 1. **writing is turned off** on that router first (it becomes *read-only*), so no reconciliation, restriction pass or setup puts anything back;
-2. **everything carrying the freeQoS mark is removed**: subscriber queues (children before parents), the `freeqos-cake-up` / `freeqos-cake-down` queue types, and the restriction lines (firewall filter, mangle, queue tree, address lists);
+2. **everything carrying the freeQoS mark is removed**: subscriber queues (children before parents), the `cake-up` / `cake-down` (or `fq-codel-up` / `fq-codel-down`) queue types, and the old `freeqos-*` ones, and the restriction lines (firewall filter, mangle, queue tree, address lists);
 3. optionally, the **NetFlow export target** freeQoS added (unticked by default: the Traffic page keeps seeing the router).
 
 Only lines with the `freeqos:managed` mark of this instance go: queues made by hand, by RADIUS (`<pppoe-...>`) or by another tool stay, and so do FastTrack and every other rule. Each removal is independent: one that fails does not stop the others, and the result lists what failed. Modes, plans and rules stay saved in freeQoS: allowing writing again (and *Set up*) puts everything back. API: `POST /api/v1/pops/routers/uninstall/{name}` with `{"confirm": true, "stop_netflow": false}`.
@@ -1099,6 +1101,8 @@ An address without a reverse name is asked again 3 times at most. A name read fr
 
 ### What the Traffic page shows
 
+*The **Traffic** and **Rules** tabs are no longer in the menu (an old link opens the Dashboard). What follows describes the API, still available (`/api/v1/traffic-rules` and the flow endpoints). Searching an IP address now opens **Clients** filtered on it.*
+
 The page is split into tabs, one question at a time: **Overview** (totals, top clients, top services), **Clients** (who talks to whom, client by client), **Destinations** (map, countries, addresses reached), **Find an IP**, and **Advanced** (service catalogue, NetFlow exporters). Long tables show their first lines only, with *Show all*. The chosen tab is remembered in your browser.
 
 **Who used it.** Click a service (Overview) or an address (Destinations): a window lists every client that reached it over the period, with its site, the volume received and sent, whether it is talking to it right now (*live*), and a link to its page. From there, *Block or cap it…* opens the Rules form prefilled.
@@ -1119,6 +1123,8 @@ The page is split into tabs, one question at a time: **Overview** (totals, top c
 **Volume over time per subscriber**: `GET /api/v1/netflow/subscribers/{id}/series`. **Live connections** (`GET /api/v1/netflow/connections`) read the collector's in-memory window, the only truly live view: it empties at each write and fills up again — that is not a failure.
 
 ### Traffic restrictions
+
+*No **Rules** tab any more: restrictions are managed through the API (`/api/v1/traffic-rules`); existing ones keep applying.*
 
 A restriction targets a catalogue service for one or more subscribers. Two actions:
 
@@ -1227,7 +1233,7 @@ CAKE (*Common Applications Kept Enhanced*) is the queueing algorithm freeQoS use
 | PPPoE overhead, DSCP classes, NAT mode | ✅ | ❌ |
 | Router CPU | higher | lower |
 
-**Switching rewrites only the queue types.** freeQoS creates `freeqos-fq-up` / `freeqos-fq-down` (or `freeqos-cake-up` / `freeqos-cake-down` when going back), points every freeQoS queue to them (`queue=` only: no speed, target or parent changes), then removes the old types **last**, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only freeQoS's own lines are touched (marked `freeqos:managed`, or client queues freeQoS remembers creating).
+**Switching rewrites only the queue types.** freeQoS creates `fq-codel-up` / `fq-codel-down` (or `cake-up` / `cake-down` when going back), points every freeQoS queue to them (`queue=` only: no speed, target or parent changes), then removes the old types **last**, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only freeQoS's own lines are touched (marked `freeqos:managed`, or client queues freeQoS remembers creating).
 
 **If FQ-CoDel does not work on a router, it is not used there.** A router that refuses to create the `fq-codel` type (a RouterOS without it) keeps CAKE: the refusal is noted, its queues stay on CAKE without error, and *Settings* lists the router with RouterOS's answer. It is tried again after a restart of freeQoS.
 
@@ -1252,7 +1258,7 @@ Deleting a subscriber's plan removes its queue on the next cycle.
 
 ### What is installed on the router
 
-**Two queue types**: `freeqos-cake-up` and `freeqos-cake-down`. Their CAKE options come from the settings:
+**Two queue types**: `cake-up` and `cake-down` — no `freeqos` in their names, like the client queues (in FQ-CoDel: `fq-codel-up` / `fq-codel-down`). Types named `freeqos-cake-*` / `freeqos-fq-*` by an earlier version are replaced by themselves: freeQoS creates the new types, points its queues to them, then removes the old ones in the same pass. Their CAKE options come from the settings:
 
 | Setting | Default | Role |
 | --- | --- | --- |
@@ -1598,18 +1604,17 @@ The capacity view also ranks subscribers by **volume** over the period. The top 
 
 **Errors say what happened and what to do**: a title (*Not allowed with your account*, *Not possible right now*, *A router or service did not answer*, *freeQoS cannot be reached*...), the server's reason, and the next step. An error from a button shows in a corner without blocking the page; a page that cannot load says so in a banner and retries on its own.
 
-Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. **Traffic** and **Network health** are split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with *Show all*. The chosen tab is remembered in your browser. The two long configuration pages, **Settings** and **Devices**, show one section at a time: their table of contents works as tabs.
+Each page reads in sections, with a table of contents at the top and a tooltip on every figure that deserves an explanation. **Network health** is split into tabs, each starting with one sentence that says what it answers; long tables show their first rows, with *Show all*. The chosen tab is remembered in your browser. The two long configuration pages, **Settings** and **Devices**, show one section at a time: their table of contents works as tabs.
 
 | Page | Question it answers | Sections |
 | --- | --- | --- |
 | **Dashboard** (first page, both roles) | Is everything all right today? | A banner: **All good**, or the problems that need you, most urgent first, each one a click away from the clients concerned; clients connected, traffic now, sites, modes and boosts; one card per site. Below, for the Administrator only: *Network detail* (throughput curve and top consumers; live traffic per router and radio backhauls are no longer on the dashboard: routers are followed in *Devices*) |
-| **Rules** (Administrator) | What may clients reach? | Rules in force, and the form to write one: block or cap a service (YouTube, Netflix...), a category or IP prefixes, for every client, chosen sites or chosen clients |
 | **Network health** | Is the network fine, where could it fill up? | Four tabs, one question each: **Overview** (verdict, four key figures, links that could fill up), **Latency** (per client, where the delay comes from; tick *Measure latency* to turn the probe on), **Load per site** (how full each site is, then each site with its clients; click a row for its details), **Over time** (health hour by hour) |
-| **Traffic** | Who consumes what, where to? | Tabs: Overview, Clients (who talks to whom), Destinations (map, countries, addresses), Find an IP, Advanced; click a service or an address to see who used it (restrictions moved to **Rules**) |
+| **Router health** (Administrator) | Are my routers fine? | One card per router: model, RouterOS, uptime; CPU (average, busiest core, each core), peak and chart of the last hour; memory; storage; sensors (temperature, voltage) |
 | **Network tree** | How is the network wired? | Discovered tree, editable with the mouse (move, re-parent, merge, hide) |
 | **Clients** | Who are my clients, and how are they doing? | Every client under its **PoP**, with its connection (PPPoE, static IP, or **VLAN 2060**: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; *+ Add a client* declares static-IP and VLAN clients (PPPoE clients appear by themselves). The map button opens the **Map**. |
 | **Plans** (from *Settings › Plans & map*) | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
-| **Devices** | Which equipment? | Router health, connecting a router, router settings (Set up, Set by freeQoS, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health |
+| **Devices** | Which equipment? | Connecting a router, router settings (Set up, Set by freeQoS, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health |
 | **API** | How to integrate? | API keys, links to the API guide and to this documentation |
 | **Settings** | How does the tool behave? | Accounts, settings, writing to the routers, caps held or not, command log |
 
@@ -1631,7 +1636,7 @@ A client is **Not measured · router X not answering freeQoS** when freeQoS coul
 | Reason shown | What to check on the router or the network |
 | --- | --- |
 | connection refused: the API service is off or restricted to another address | `/ip service print`: `api` (8728) or `api-ssl` (8729) enabled, and its `address=` contains the address freeQoS comes from **as the router sees it** (after NAT or through a tunnel it may not be the server's public IP) |
-| no answer in time | Firewall `input` chain (TCP 8728/8729 from freeQoS), the route back to freeQoS, CPU of the router (*Devices › Router health*) |
+| no answer in time | Firewall `input` chain (TCP 8728/8729 from freeQoS), the route back to freeQoS, CPU of the router (*Router health*) |
 | login refused | The API account and its password (`/user print`, `/log print where topics~"account"`) |
 | no route to the router | Routing between the freeQoS server and the router |
 
