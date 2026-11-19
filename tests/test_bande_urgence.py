@@ -163,12 +163,48 @@ def test_la_valeur_d_urgence_d_un_client_inconnu_est_refusee(app_client, routeur
     assert r.status_code == 422, r.text
 
 
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_un_scheduler_d_urgence_lance_a_la_main(app_client, routeur) -> None:  # noqa: F811
+    """Sans page Modes : les debits sont saisis a la main sur le client, et
+    c'est un scheduler qui passe les clients en bande passante d'urgence."""
+    ecriture, _lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 20, "up_mbps": 10})
+    app_client.put(
+        "/api/v1/clients/dupont/emergency", headers=cle, json={"down_mbps": 8, "up_mbps": 3}
+    )
+    r = app_client.post(
+        "/api/v1/bandwidth-schedules",
+        headers=cle,
+        json={
+            "name": "Storm",
+            "scope": "all",
+            "windows": [{"start": "03:00", "end": "03:01", "days": ["sun"], "emergency": True}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["windows"][0]["emergency"] is True
+    ident = r.json()["id"]
+    r = app_client.post(f"/api/v1/bandwidth-schedules/{ident}/start", headers=cle, json={})
+    assert r.status_code == 200, r.text
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "3000000/8000000"
+
+    # Sa valeur change pendant que le scheduler tourne : la file suit.
+    app_client.put(
+        "/api/v1/clients/dupont/emergency", headers=cle, json={"down_mbps": 9, "up_mbps": 4}
+    )
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "4000000/9000000"
+
+    r = app_client.post(f"/api/v1/bandwidth-schedules/{ident}/stop", headers=cle)
+    assert r.status_code == 200, r.text
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/20000000"
+
+
 def test_l_interface_propose_les_deux_bandes_passantes() -> None:
     from app.web.ui import STATIC_DIR
 
     js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
-    html = (STATIC_DIR.parent / "templates" / "index.html").read_text(encoding="utf-8")
     assert "<h3>Normal bandwidth (plan)</h3>" in js
     assert "<h3>Emergency bandwidth</h3>" in js
-    assert 'id="mode-emergency"' in html
-    assert "emergency: document.getElementById('mode-emergency').checked" in js
+    assert "{ emergency: true }" in js

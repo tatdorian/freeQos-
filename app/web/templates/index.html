@@ -51,7 +51,6 @@
     <nav class="tabs">
       <a href="#/dashboard" data-view="dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Dashboard</span></a>
       <a href="#/clients" data-view="clients"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><path d="M15.5 12.5l2 2 4-4.5"/></svg><span>Clients</span></a>
-      <a href="#/modes" data-view="modes"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="8" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="10" cy="18" r="2"/></svg><span>Modes</span></a>
       <a href="#/management" data-view="management"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg><span>Schedulers</span></a>
       <a href="#/alerts" data-view="alerts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16z"/><path d="M10 21h4"/></svg><span>Alerts</span></a>
       <a href="#/activity" data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span>Activity</span></a>
@@ -675,9 +674,11 @@
            recent. -->
 
 
-      <p class="hint" style="display:block;margin:0 0 .8rem">A scheduler changes the speed of some
-        clients during the hours you choose: <b>a % of their speed</b> (their plan, or their mode) or
-        <b>a mode</b>. Outside these hours they keep their speed. <b>Start now</b> applies one at once, by hand.</p>
+      <p class="hint" style="display:block;margin:0 0 .8rem">Each client has its speeds, set by hand on
+        its page: its <b>normal bandwidth</b> (its plan) and its <b>emergency bandwidth</b>. A scheduler
+        changes them during the hours you choose: <b>a % of their speed</b>, or <b>their emergency
+        bandwidth</b>. Outside these hours they keep their normal bandwidth. <b>Start now</b> applies one
+        at once, by hand.</p>
       <div class="table-wrap" id="sched-list"></div>
       <div id="sched-result"></div>
       <h3 id="sched-form-title" style="margin:1rem 0 .4rem">New scheduler</h3>
@@ -692,7 +693,7 @@
             <input type="hidden" id="sched-rate-kind" value="percent">
             <div class="segmented" id="sched-rate-seg" role="group" aria-label="What it applies">
               <button type="button" data-v="percent">A % of their speed</button>
-              <button type="button" data-v="mode">A mode</button>
+              <button type="button" data-v="emergency">Their emergency bandwidth</button>
               <button type="button" data-v="rate" hidden>Fixed Mbps</button>
             </div>
           </div>
@@ -701,10 +702,10 @@
             <span class="ios-val"><input id="sched-percent" type="number" min="1" max="1000" step="any"
               placeholder="70" style="width:6rem"> %</span>
           </label>
-          <label class="ios-row" data-rate-kind="mode" for="sched-mode" hidden>
-            <span class="ios-key">Mode<span class="ios-note">the mode's speed during these hours</span></span>
-            <select id="sched-mode" class="ios-val ios-select"></select>
-          </label>
+          <p class="ios-row ios-sub hint" data-rate-kind="emergency" hidden style="display:block">Each client gets
+            <b>its own emergency bandwidth</b>, set on its page. A client without one keeps its speed.</p>
+          <!-- Plus de modes : le menu reste pour les anciens schedulers qui en donnent un. -->
+          <select id="sched-mode" hidden></select>
           <div class="ios-row" data-rate-kind="rate" hidden>
             <span class="ios-key">Speed</span>
             <span class="ios-val">&darr; <input id="sched-down" type="number" min="0" step="any" style="width:5rem">
@@ -716,7 +717,6 @@
             <span class="ios-key">To</span>
             <select id="sched-scope" hidden>
               <option value="on_plan">Clients on their plan</option>
-              <option value="modes">Clients in modes</option>
               <option value="subscribers">Chosen clients</option>
               <option value="all">Everyone</option>
               <option value="pops">Sites</option>
@@ -724,7 +724,6 @@
             </select>
             <div class="segmented" id="sched-scope-seg" role="group" aria-label="To">
               <button type="button" data-v="on_plan">Clients on their plan</button>
-              <button type="button" data-v="modes">Modes</button>
               <button type="button" data-v="subscribers">Clients</button>
               <button type="button" data-v="all">Everyone</button>
               <button type="button" data-v="pops" hidden>Sites</button>
@@ -768,70 +767,9 @@
       </form>
     </section>
 
-    <!-- MODES : les modes de debit, et QUI est dans quel mode. On en cree de
-         nouveaux ici ; on les donne depuis Clients. -->
-    <section id="view-modes">
-      <div id="modes-board"></div>
-      <!-- MODES DE DEBIT : les debits nommes que les operateurs donnent a un
-           client d'un geste (Clients > Change mode). Les definir est de la
-           gestion, comme les donner : niveau Operator. -->
-      <h2>All modes</h2>
-      <div class="table-wrap" id="modes-list"></div>
-      <div id="modes-result"></div>
-      <h3 id="modes-form-title" style="margin:1rem 0 .4rem">New mode</h3>
-      <form class="stack card" id="modes-form" autocomplete="off">
-        <div class="row-3">
-          <div class="field">
-            <label for="mode-name">Name</label>
-            <input id="mode-name" required maxlength="64" placeholder="Backup">
-          </div>
-          <div class="field">
-            <label>Unit</label>
-            <!-- UN MODE EST UNE VITESSE : kbps ou Mbps, jamais un % du plan (les
-                 pourcentages sont le travail des schedulers). -->
-            <div class="segmented" id="mode-unit" role="group" aria-label="Unit">
-              <button type="button" data-u="kbps">kbps</button>
-              <button type="button" data-u="mbps" class="active">Mbps</button>
-            </div>
-            <input type="hidden" id="mode-kind" value="fixed">
-          </div>
-          <div class="field">
-            <label for="mode-position">Order in the list</label>
-            <input id="mode-position" type="number" min="0" max="10000" value="0">
-          </div>
-        </div>
-        <div class="row-3">
-          <div class="field">
-            <label for="mode-down">Download <span id="mode-unit-down">Mbps</span></label>
-            <input id="mode-down" type="number" min="0.001" step="any" required>
-          </div>
-          <div class="field">
-            <label for="mode-up">Upload <span id="mode-unit-up">Mbps</span></label>
-            <input id="mode-up" type="number" min="0.001" step="any" required>
-          </div>
-          <div class="field">
-            <label for="mode-note">Note</label>
-            <input id="mode-note" maxlength="300" placeholder="optional">
-          </div>
-        </div>
-        <!-- MODE D'URGENCE : chaque client y recoit SA bande passante
-             d'urgence (saisie sur sa fiche, a cote de son forfait). -->
-        <label class="chk" title="Each client in this mode gets its own emergency bandwidth, set on its page next to its plan. A client without one gets the speed above.">
-          <input type="checkbox" id="mode-emergency"> Emergency mode: each client gets <b>its own emergency bandwidth</b> (set on the client's page); the speed above is for clients without one
-        </label>
-        <!-- LES CLIENTS DU MODE, dans le formulaire : cocher les met dans ce
-             mode, decocher les rend a Automatic, enregistre avec le reste. -->
-        <div class="field">
-          <label>Clients in this mode</label>
-          <div class="mode-picker" id="mode-picker"></div>
-        </div>
-        <div class="actions">
-          <span class="spacer"></span>
-          <button type="button" class="sm" id="mode-cancel" hidden>Cancel</button>
-          <button type="submit" class="primary" id="mode-submit">Add the mode</button>
-        </div>
-      </form>
-    </section>
+    <!-- Plus de page Modes (demande de l'exploitant) : chaque client a ses
+         debits saisis a la main (normal = forfait, urgence), et ce sont les
+         schedulers qui les font changer. -->
 
     <!-- ALERTES : ce qui demande quelqu'un, regroupe. Une panne de site ne doit
          pas devenir vingt alertes de clients. -->
@@ -1003,7 +941,7 @@
             <option value="offline">Not connected</option>
             <option value="boost">Boost running</option>
           </select>
-          <select id="cli-mode" style="width:auto" aria-label="Bandwidth mode"></select>
+          <select id="cli-mode" hidden aria-label="Bandwidth mode"></select>
           <select id="cli-sort" style="width:auto" aria-label="Sort">
             <option value="name">Sort: name</option>
             <option value="site">Sort: site</option>
@@ -1025,7 +963,6 @@
         <div class="cli-selbar" id="cli-selbar" hidden>
           <span id="cli-selcount"></span>
           <span class="spacer"></span>
-          <button type="button" class="sm primary" id="cli-sel-mode">Mode</button>
           <button type="button" class="sm" id="cli-sel-boost">Boost</button>
           <button type="button" class="sm" id="cli-sel-stop">Stop</button>
           <button type="button" class="sm" id="cli-sel-traffic">Traffic</button>

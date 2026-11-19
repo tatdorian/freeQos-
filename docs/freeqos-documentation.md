@@ -1305,7 +1305,9 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 
 **A rate set by hand is written at once.** Setting a subscriber's or a link's rate writes the corresponding queue immediately (the full plan of the router, restricted to that queue), and the reply says what was written, on which router, or what prevented it (`apply_now=false` only records the intention).
 
-### Bandwidth modes (Backup, Night…)
+### Bandwidth modes (API only)
+
+*The interface no longer offers modes (see* Normal and emergency bandwidth *below): what follows describes the API, kept for integrations and for clients put in a mode by an earlier version.*
 
 A **bandwidth mode** is a named rate given to a client in one click, from the **Clients** page: *Backup* when the backhaul is degraded, *Extreme backup* for a crisis or non-payment, *Night*... The operator picks a name in a list instead of typing rates (*Modes*, or `/api/v1/bandwidth-modes`).
 
@@ -1318,19 +1320,18 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 - **Writing:** like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.
 - **Plan and mode coexist.** The plan is the speed of **one** client (no need to create a mode for each particular speed); a mode, when the client has one, applies instead of the plan. Changing a client's plan keeps its mode and its boost: only a manual limit (an override without a mode) is lifted, so that the new plan takes effect.
 
-#### Normal and emergency bandwidth
+#### Normal and emergency bandwidth — no more Modes page
 
-Each client has **two bandwidths**, side by side on its page (*Plan & mode*):
+**The *Modes* page is gone.** Each client's speeds are **set by hand** on its page (*Bandwidth* tab), and **schedulers** change them:
 
-- **Normal bandwidth** — its **plan**: applied when it has **no mode**.
-- **Emergency bandwidth** — applied whenever an **emergency mode** is activated for it. Optional; set on the client's page (*Emergency bandwidth*, Operator) or with `PUT /api/v1/clients/{login}/emergency` (`{"down_mbps": 8, "up_mbps": 3}`, at least 0.064 Mbps each way; `GET` reads it, `DELETE` removes it).
+- **Normal bandwidth** — its **plan**: the speed it has outside any scheduler.
+- **Emergency bandwidth** — optional, set on the client's page (*Emergency bandwidth*, Operator) or with `PUT /api/v1/clients/{login}/emergency` (`{"down_mbps": 8, "up_mbps": 3}`, at least 0.064 Mbps each way; `GET` reads it, `DELETE` removes it).
 
-A mode becomes an **emergency mode** by ticking *Emergency mode* in its form (`"emergency": true` on `/api/v1/bandwidth-modes`). Putting clients in it — one, a selection, or every client of the mode at once — gives **each one its own emergency bandwidth**; a client without one gets the mode's speed, which serves as the default. Example: *Emergency* at 4/2 Mbps; a client with an emergency bandwidth of 8/3 gets 8/3, a client with none gets 4/2; back to *No mode*, each gets its normal bandwidth again.
+A **scheduler** applies either **a % of their speed** or **their emergency bandwidth** (*Schedulers › Applies*; API: a window with `"emergency": true` and no rate). During its hours — or at once with **Start now** — each client it targets gets **its own** emergency bandwidth; a client without one **keeps its speed** (nothing is invented). Outside its hours, or after **Stop**, each client is back on its normal bandwidth. Example: a *Storm* scheduler on *Everyone*, started by hand: a client with an emergency bandwidth of 8/3 Mbps goes to 8/3, a client without one stays on its plan.
 
-- Changing the emergency bandwidth of a client **already in** an emergency mode applies at once (the reply carries `applied_now`); removing it gives the client the mode's speed.
-- Ticking *Emergency mode* on an existing mode re-applies it to its clients at once: each moves to its own emergency bandwidth.
-- A scheduler that gives an emergency mode during its hours gives each client its own emergency bandwidth too.
+- Changing a client's emergency bandwidth while an emergency scheduler runs for it applies at once.
 - The client list (`GET /api/v1/subscribers/latest`) carries `emergency_down_mbps` / `emergency_up_mbps`, and its *effective* rate is the one really written. Renaming, merging or removing a client carries its emergency bandwidth along (or deletes it, on removal).
+- **Clients still in a mode** from an earlier version keep it: their page shows *An old mode … still applies* with **Back to normal bandwidth**. The `/api/v1/bandwidth-modes` API and the mode actions remain for integrations (a mode flagged `"emergency": true` gives each client its emergency bandwidth too), but the interface no longer offers modes: no *Modes* page, no *Change mode* button, no mode choice on a client, no *Modes* target or *A mode* option in schedulers. An old `#/modes` link opens *Clients*.
 
 **Client actions** (`POST /api/v1/clients/actions`, `{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}`) act on one or several clients. The reply gives a result **per client** (`succeeded`, `failed`, `results[]`): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.
 
@@ -1345,7 +1346,7 @@ A mode becomes an **emergency mode** by ticking *Emergency mode* in its form (`"
 
 **Online, for a fixed-IP client.** A fixed-IP client has no session: it counts as online only when freeQoS measures it — counters of its queue, NetFlow, or a ping reply. Without any of them (no queue yet, writing off) it shows **Not measured · no counter yet**, never *connected* at 0.
 
-**Clients page.** Four cards on top: *Clients* (and the number of sites), *Connected* (with a bar, green above 80 %, orange from 50 %, red below), *In a mode*, *Boosts*. A card is also a filter: tap it to list those clients. For each client, **Usage now** is a bar of its download rate against its limit, with a word: *Quiet* (under 10 %), *Normal*, *Busy* (60 % and more), *At its limit* (90 % and more). The IP address is not shown in the list: it is on the client's page (search by IP still works).
+**Clients page.** Four cards on top: *Clients* (and the number of sites), *Connected* (with a bar, green above 80 %, orange from 50 %, red below), *Scheduler now* (clients off their normal bandwidth), *Boosts*. A card is also a filter: tap it to list those clients. For each client, **Usage now** is a bar of its download rate against its limit, with a word: *Quiet* (under 10 %), *Normal*, *Busy* (60 % and more), *At its limit* (90 % and more). The IP address is not shown in the list: it is on the client's page (search by IP still works).
 
 Made for **hundreds of clients** (20 sites of 20 clients): search, filters by site, connection and mode, **sort** (name, site, not connected first, highest usage), and **pages** of 25, 50, 100 or 200. Sorted by site, each site gets a header with its count, its connected clients and a *Select the site* button. The box at the top of the list selects every client matching the filters, on every page.
 
@@ -1453,24 +1454,24 @@ A problem is emailed **once**, when it has lasted the chosen delay (3 minutes by
 
 | Tool | What it is | Where |
 | --- | --- | --- |
-| **Plan** | The speed of **one** client, set by hand (or pushed by the billing API) | Client page › *Plan & mode* |
-| **Mode** | A **named speed** (*Backup*, *Pro*…) given to one or several clients | *Modes* page, *Clients* page |
-| **Scheduler** | During the **hours** you choose, a **% of the clients' speed** or **a mode**, for the clients you choose | *Schedulers* page |
+| **Normal bandwidth** (plan) | The speed of **one** client, set by hand (or pushed by the billing API) | Client page › *Bandwidth* |
+| **Emergency bandwidth** | The emergency speed of **one** client, set by hand | Client page › *Bandwidth* |
+| **Scheduler** | During the **hours** you choose (or at once with *Start now*), a **% of the clients' speed** or **their emergency bandwidth**, for the clients you choose | *Schedulers* page |
 
-**Plan and mode coexist**: every client keeps its plan; a mode, when it has one, applies instead of the plan, and *No mode* gives it back its plan.
+There is no *Modes* page any more: speeds are set by hand on each client, and schedulers change them.
 
 **A scheduler** (*Schedulers*, or `/api/v1/bandwidth-schedules`) has:
 
-- **what it applies**: **a % of their speed** (`percent`: 70 = 30 % slower, 200 = twice as fast) — the speed of their **mode** for a client in a mode, its **plan** otherwise — or **a mode** (`mode_id`: the clients get that mode's speed during the hours);
-- **who**: *Clients on their plan* (`on_plan`: every client without a mode), *Modes* (`modes`: the clients of the modes you tick, `targets` = mode ids), *Clients* (`subscribers`: the clients you tick) or *Everyone* (`all`). `pops` (sites) and `plans` (plan download rate) stay available through the API;
+- **what it applies**: **a % of their speed** (`percent`: 70 = 30 % slower, 200 = twice as fast) or **their emergency bandwidth** (`emergency: true`: each client gets its own; a client without one keeps its speed). `mode_id` (a mode's speed) stays available through the API;
+- **who**: *Clients on their plan* (`on_plan`: every client without an old mode), *Clients* (`subscribers`: the clients you tick) or *Everyone* (`all`). `modes`, `pops` (sites) and `plans` (plan download rate) stay available through the API;
 - **its hours**, as many as you need: from → to (tap or drag the time), and the days (`days`: the days on which the hours **start**; 22:00 → 06:00 crosses midnight; `24:00` is midnight at the end);
 - its **time zone** (IANA, `Europe/Paris`, `Africa/Abidjan`…: the hours are local, daylight saving time is handled).
 
-Outside its hours, clients keep their speed (plan or mode). The client page shows, under *Bandwidth & mode*, the **scheduler running now** for that client (its name and hours, or *started by hand*), and says when another limit (a boost, a manual limit) is above it. A **manual limit** (forced limit without a mode, set through the API) stays above every scheduler, and a **boost** above everything.
+Outside its hours, clients keep their normal bandwidth. The client page shows, under *Bandwidth*, the **scheduler running now** for that client (its name and hours, or *started by hand*), and says when another limit (a boost, a manual limit) is above it. A **manual limit** (forced limit without a mode, set through the API) stays above every scheduler, and a **boost** above everything.
 
 **As many schedulers as you want.** Two schedulers may share the same hours **as long as they do not change the same clients**: *Evening* for the clients on their plan and *Evening Pro* for the mode *Pro*, both 18:00–23:00, is fine. If the same client would be changed by two schedulers at the same time, saving is refused (`409`) with **who and when**: *'VIP' and 'Evening' would both apply to ACME OFFICE at the same time (Mon 18:00). Change the hours, or choose other clients or modes.* Two hours of the same scheduler may not overlap either.
 
-**A scheduler for one client.** On a client's page (*Plan & mode*), **Its own scheduler** sets a % of its speed during its hours, **for this client only** (100 % = it keeps its speed while a group scheduler runs). It is stored as a scheduler for that single client (`scope=subscribers`, one target). **What is made for one client goes before the group**: during its hours it wins over every group scheduler, even one started by hand, so it may share hours with a group scheduler; two schedulers of the same client at the same time are still refused. They are listed apart, under **For one client** on the *Schedulers* page (client name, speed, hours, state, with a link to the client), and the client page says *Scheduler: its own* while it runs.
+**A scheduler for one client.** On a client's page (*Bandwidth*), **Its own scheduler** sets a % of its speed during its hours, **for this client only** (100 % = it keeps its speed while a group scheduler runs). It is stored as a scheduler for that single client (`scope=subscribers`, one target). **What is made for one client goes before the group**: during its hours it wins over every group scheduler, even one started by hand, so it may share hours with a group scheduler; two schedulers of the same client at the same time are still refused. They are listed apart, under **For one client** on the *Schedulers* page (client name, speed, hours, state, with a link to the client), and the client page says *Scheduler: its own* while it runs.
 
 Who decides the speed, from strongest to weakest: a running **boost**; a manual limit set through the API; the client's **own scheduler** during its hours; a **group scheduler** started by hand, then a group scheduler during its hours; the client's **mode**, otherwise its **plan**.
 
@@ -1783,7 +1784,7 @@ freeQoS holds router credentials that can write across the whole network. Securi
 | Level (`role`) | Sees | Can do | Interface |
 | --- | --- | --- | --- |
 | **Viewer** (`read`) | Everything | Nothing | Every page, read-only banner |
-| **Operator** (`operator`) | Clients | **Manages the clients**: adds them (static IP, VLAN), edits their details and connection, changes plan, mode and boost on one or many clients, defines bandwidth modes and schedules; sees at a glance whether there is a problem | **Dashboard** (today's status), **Clients**, **Modes**, **Schedules**, **Alerts**, **Activity**; no network pages, no Settings (password and log out from the account card) |
+| **Operator** (`operator`) | Clients | **Manages the clients**: adds them (static IP, VLAN), edits their details and connection, sets their normal and emergency bandwidth, gives boosts on one or many clients, defines schedulers; sees at a glance whether there is a problem | **Dashboard** (today's status), **Clients**, **Schedules**, **Alerts**, **Activity**; no network pages, no Settings (password and log out from the account card) |
 | **Administrator** (`edit`) | Everything | Everything the Operator does, plus **the network**: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic **Rules**, the network tree, detailed monitoring (Traffic, Network health, network detail of the Dashboard), API keys, Settings, accounts | Every page; the network pages are grouped under *Network* in the sidebar |
 
   The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `PUT /api/v1/clients/{login}/profile`, `POST /api/v1/clients`, `POST/PATCH/DELETE /api/v1/static-clients`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`, `POST/PATCH/DELETE /api/v1/bandwidth-modes` and `/api/v1/bandwidth-schedules`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it, in the **activity log** below and in the enforcement audit.

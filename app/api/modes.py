@@ -390,6 +390,9 @@ async def put_emergency(
     reapplique = await _reappliquer_si_urgence(container, metrics, login, auteur)
     if reapplique is not None:
         sortie["applied_now"] = reapplique
+    else:
+        # Un scheduler d'urgence peut tourner pour lui : sa file suit tout de suite.
+        sortie["applied"] = await _apply_for_subscriber(container, login, author=auteur)
     return sortie
 
 
@@ -411,6 +414,8 @@ async def delete_emergency(
         reapplique = await _reappliquer_si_urgence(container, metrics, login, auteur)
         if reapplique is not None:
             sortie["applied_now"] = reapplique
+        else:
+            sortie["applied"] = await _apply_for_subscriber(container, login, author=auteur)
     return sortie
 
 

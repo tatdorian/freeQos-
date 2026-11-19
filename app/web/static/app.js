@@ -1401,7 +1401,7 @@ async function renderToday() {
   const en = rows.filter(clientEnLigne);
   const bas = en.reduce((a, r) => a + (Number(r.tx_bps) || 0), 0);
   const haut = en.reduce((a, r) => a + (Number(r.rx_bps) || 0), 0);
-  const actifs = rows.filter((r) => r.mode_id || CLI.boosts[r.login]).length;
+  const actifs = rows.filter((r) => r.limit_source === 'schedule' || r.mode_id || CLI.boosts[r.login]).length;
 
   // Sites : PoP par PoP (une VLAN n'est pas un site, cf. l'API).
   const sites = {};
@@ -1441,7 +1441,7 @@ async function renderToday() {
       chiffre('Traffic now', esc(bpsText(bas)), '&uarr; ' + esc(bpsText(haut)) + ' up') +
       chiffre('Sites', okSites + '<em>/' + Object.keys(sites).length + '</em>', okSites === Object.keys(sites).length ? 'all normal' : 'see below',
         okSites === Object.keys(sites).length ? '' : 'warn') +
-      chiffre('Modes & boosts', String(actifs), actifs ? 'clients in a mode or boosted' : 'nobody in a mode') +
+      chiffre('Schedulers & boosts', String(actifs), actifs ? 'clients off their normal bandwidth' : 'everyone on normal bandwidth') +
     '</div>' +
     '<h2>Sites</h2><div class="today-sites">' + Object.entries(sites).sort((a, b) => a[0].localeCompare(b[0])).map(([nom, x]) => {
       const [lv, mot] = etatSite(nom, x);
@@ -11765,6 +11765,7 @@ const SCHED_PORTEE = {
 };
 
 function schedRate(w) {
+  if (w.emergency && w.mode_id == null) return 'each client\'s <b>emergency bandwidth</b>';
   if (w.mode_id != null) return 'mode <b>' + esc(w.mode_name || '#' + w.mode_id) + '</b>';
   if (w.percent != null) return esc(String(w.percent)) + ' % of the speed';
   return [w.down_mbps != null ? '&darr; ' + esc(mbps(w.down_mbps)) : '',
@@ -11901,9 +11902,9 @@ function renderSchedules() {
     // LES SCHEDULERS PROPRES A UN CLIENT : a part, pour les retrouver.
     '<h3 style="margin:1.2rem 0 .3rem">For one client</h3>' +
     '<p class="hint" style="display:block;margin:0 0 .5rem">Made for a single client, on its page ' +
-      '(<i>Plan &amp; mode</i>). During its hours it goes before every group scheduler.</p>' +
+      '(<i>Bandwidth</i>). During its hours it goes before every group scheduler.</p>' +
     (lignes.some((f) => f.personal) ? schedTableau(lignes.filter((f) => f.personal), true)
-      : '<div class="empty">None: open a client, <i>Plan &amp; mode</i>, to give it its own scheduler.</div>') +
+      : '<div class="empty">None: open a client, <i>Bandwidth</i>, to give it its own scheduler.</div>') +
     schedLastSwitch(d.last_switch);
 
   host.querySelectorAll('[data-sched-start]').forEach((sel) => sel.addEventListener('change', () => {
@@ -12260,10 +12261,10 @@ function schedScopeSeg() {
   const rows = CLI.rows || [];
   const surPlan = rows.filter((r) => r.mode_id == null).length;
   const textes = {
-    on_plan: 'Every client without a mode (' + surPlan + ' now): the % applies to its plan.',
-    modes: 'The clients in the modes you tick: the % applies to the speed of their mode.',
-    subscribers: 'The clients you tick: the % applies to their speed (their mode, or their plan).',
-    all: 'Every client (' + rows.length + ' now): the % applies to its speed (its mode, or its plan).',
+    on_plan: 'Every client on its normal bandwidth (' + surPlan + ' now).',
+    modes: 'The clients of the old modes you tick.',
+    subscribers: 'The clients you tick.',
+    all: 'Every client (' + rows.length + ' now).',
     pops: 'The clients of the sites you tick.',
     plans: 'The clients whose plan has the download rate you tick.',
   };
@@ -12327,7 +12328,8 @@ function schedFill(fiche) {
   document.getElementById('sched-enabled').checked = fiche ? !!fiche.enabled : true;
   // UN SCHEDULER = UN DEBIT : celui de sa premiere plage.
   const w0 = (fiche && (fiche.windows || [])[0]) || { percent: 70 };
-  const genre = w0.mode_id != null ? 'mode' : w0.percent != null ? 'percent' : 'rate';
+  const genre = w0.emergency && w0.mode_id == null ? 'emergency'
+    : w0.mode_id != null ? 'mode' : w0.percent != null ? 'percent' : 'rate';
   schedRateKind(genre);
   document.getElementById('sched-percent').value = w0.percent != null ? w0.percent : '';
   document.getElementById('sched-mode').dataset.value = w0.mode_id != null ? w0.mode_id : '';
@@ -12351,7 +12353,8 @@ function schedPayload() {
     const v = (document.getElementById(id).value || '').trim();
     return v === '' ? null : Number(v);
   };
-  const debit = genre === 'mode' ? { mode_id: nombre('sched-mode') }
+  const debit = genre === 'emergency' ? { emergency: true }
+    : genre === 'mode' ? { mode_id: nombre('sched-mode') }
     : genre === 'percent' ? { percent: nombre('sched-percent') }
       : { down_mbps: nombre('sched-down') || null, up_mbps: nombre('sched-up') || null };
   const plages = [...document.querySelectorAll('#sched-windows [data-sched-window]')].map((tr) => ({
@@ -12730,7 +12733,7 @@ function modeDuClient(r, sansScheduler) {
     return { cls: m && m.disables_boost ? 'crit' : 'set', text: (r.mode_name || (m ? m.name : 'Mode')) + sched };
   }
   if (r.override_down_mbps) return { cls: 'set', text: 'Manual limit' };
-  return { cls: 'auto', text: 'No mode' + sched };
+  return { cls: 'auto', text: 'Normal' + sched };
 }
 
 function clientEnLigne(r) { return mesureFraiche(r); }
@@ -12770,7 +12773,8 @@ function filtrerClients() {
     if (mode === 'auto' && (r.mode_id || r.override_down_mbps)) return false;
     if (mode === 'manual' && !(r.override_down_mbps && !r.mode_id)) return false;
     if (mode === 'any' && !(r.mode_id || r.override_down_mbps)) return false;
-    if (mode && !['auto', 'manual', 'any'].includes(mode) && String(r.mode_id) !== mode) return false;
+    if (mode === 'sched' && r.limit_source !== 'schedule') return false;
+    if (mode && !['auto', 'manual', 'any', 'sched'].includes(mode) && String(r.mode_id) !== mode) return false;
     return true;
   });
 }
@@ -12811,13 +12815,14 @@ async function loadClients() {
     const v = selMode.value;
     selMode.innerHTML = '<option value="">Mode</option><option value="auto">No mode</option>' +
       '<option value="any">In a mode or limited</option><option value="manual">Manual limit</option>' +
+      '<option value="sched">On a scheduler now</option>' +
       CLI.modes.map((m) => '<option value="' + m.id + '">' + esc(m.name) + '</option>').join('');
     selMode.value = v;
     selMode.dataset.sig = sigM;
   }
 
   const enLigne = rows.filter(clientEnLigne).length;
-  const enMode = rows.filter((r) => r.mode_id || r.override_down_mbps).length;
+  const enMode = rows.filter((r) => r.limit_source === 'schedule').length;
   const boostes = rows.filter((r) => CLI.boosts[r.login]).length;
   const part = rows.length ? enLigne / rows.length : 0;
   const nSites = new Set(rows.map((r) => r.pop_name).filter(Boolean)).size;
@@ -12826,24 +12831,21 @@ async function loadClients() {
       nSites ? nSites + ' site' + (nSites > 1 ? 's' : '') : '', null, 'all') +
     qtile('wifi', !rows.length ? 't-gray' : part >= 0.8 ? 't-green' : part >= 0.5 ? 't-orange' : 't-red',
       'Connected', enLigne, rows.length ? Math.round(part * 100) + ' % online' : '', part, 'online') +
-    qtile('sliders', enMode ? 't-orange' : 't-gray', 'In a mode', enMode,
-      enMode ? 'not on Automatic' : 'all on Automatic', null, 'inmode') +
+    qtile('sliders', enMode ? 't-orange' : 't-gray', 'Scheduler now', enMode,
+      enMode ? 'off their normal bandwidth' : 'all on normal bandwidth', null, 'inmode') +
     qtile('bolt', boostes ? 't-purple' : 't-gray', 'Boosts', boostes,
       boostes ? 'running now' : 'none running', null, 'boost');
   document.querySelectorAll('#cli-stats [data-tile]').forEach((t) => t.addEventListener('click', () => {
     const f = t.dataset.tile;
     ['cli-search', 'cli-pop', 'cli-status', 'cli-mode'].forEach((id) => { document.getElementById(id).value = ''; });
     if (f === 'online' || f === 'boost') document.getElementById('cli-status').value = f;
-    if (f === 'inmode') document.getElementById('cli-mode').value = 'any';
+    if (f === 'inmode') document.getElementById('cli-mode').value = 'sched';
     CLI.onlySel = false;
     CLI.page = 0;
     renderClients();
   }));
-  document.getElementById('cli-notice').innerHTML = !CLI.modes.length
-    ? '<div class="notice">No bandwidth mode is defined yet: only <b>Automatic</b> and boosts are ' +
-      'offered. ' + (peut('operator') ? '<a href="#/modes">Define modes in Modes</a>.'
-        : 'An Operator defines them in Modes.') + '</div>'
-    : (!peut('operator') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '');
+  document.getElementById('cli-notice').innerHTML =
+    !peut('operator') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '';
   renderClients();
 }
 
@@ -12940,7 +12942,7 @@ function lignesExport() {
 const COLONNES_EXPORT = [
   ['Client', 'client', 't', 24], ['Status', 'etat', 's', 12], ['Last seen', 'vu', 'd', 17],
   ['Site', 'site', 't', 16], ['Kind', 'genre', 't', 10], ['IP address', 'ip', 't', 16],
-  ['Mode', 'mode', 't', 18], ['Limit set by', 'source', 't', 18], ['Boost', 'boost', 't', 14],
+  ['Bandwidth', 'mode', 't', 18], ['Limit set by', 'source', 't', 18], ['Boost', 'boost', 't', 14],
   ['Boost ends', 'boostFin', 'd', 17], ['Download now (Mbps)', 'bas', 'n', 13],
   ['Upload now (Mbps)', 'haut', 'n', 13], ['Use of limit', 'part', 'p', 11],
   ['Limit down (Mbps)', 'limBas', 'n', 12], ['Limit up (Mbps)', 'limHaut', 'n', 12],
@@ -13193,7 +13195,7 @@ function renderClients() {
   host.innerHTML = '<table class="cli-list"><thead><tr>' +
     '<th class="chk"><input type="checkbox" id="cli-all" aria-label="Select all matching clients"' +
       (tous ? ' checked' : '') + '></th>' +
-    '<th>Client</th><th>Mode</th><th>Usage now</th><th class="num cli-lim">Limit</th>' +
+    '<th>Client</th><th>Bandwidth</th><th>Usage now</th><th class="num cli-lim">Limit</th>' +
     '<th class="sticky-actions"></th></tr></thead><tbody>' +
     lignes.map((r) => {
       const m = modeDuClient(r);
@@ -13220,8 +13222,6 @@ function renderClients() {
         '<td class="num cli-lim">' + (r.effective_down_mbps ? '<span class="lim-d">&darr; ' + esc(mbps(r.effective_down_mbps)) +
           '</span><span class="lim-u">&uarr; ' + esc(mbps(r.effective_up_mbps || 0)) + '</span>' : '<span class="na">no limit</span>') + '</td>' +
         '<td class="sticky-actions"><div class="cli-acts">' +
-          '<button class="icon-btn" data-cli-mode="' + esc(r.login) + '" title="Change mode" aria-label="Change mode"' + dis + '>' +
-            '<svg viewBox="0 0 24 24"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg></button>' +
           (b ? '<button class="icon-btn on" data-cli-stop="' + esc(r.login) + '" title="Stop boost" aria-label="Stop boost"' + dis + '>' +
               '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>'
             : '<button class="icon-btn" data-cli-boost="' + esc(r.login) + '" title="Boost" aria-label="Boost"' + dis + '>' +
@@ -13296,7 +13296,7 @@ function majSelection() {
   barre.hidden = n === 0;
   document.getElementById('cli-selcount').textContent = n + ' selected';
   const permis = peut('operator');
-  ['cli-sel-mode', 'cli-sel-boost', 'cli-sel-stop'].forEach((id) => {
+  ['cli-sel-boost', 'cli-sel-stop'].forEach((id) => {
     document.getElementById(id).disabled = !permis;
   });
   // Retirer des clients de freeQoS : un geste d'Administrator.
@@ -13319,7 +13319,6 @@ function cablerClients() {
   document.getElementById('cli-sel-none').addEventListener('click', () => {
     CLI.sel.clear(); CLI.onlySel = false; renderClients();
   });
-  document.getElementById('cli-sel-mode').addEventListener('click', () => openModeDialog([...CLI.sel]));
   document.getElementById('cli-sel-boost').addEventListener('click', () => openGroupBoost([...CLI.sel]));
   document.getElementById('cli-sel-stop').addEventListener('click', () => stopBoosts([...CLI.sel]));
   document.getElementById('cli-sel-traffic').addEventListener('click', () => openGroupTraffic([...CLI.sel]));
@@ -14276,9 +14275,8 @@ async function loadClientPage() {
       (b ? '<span class="boost-pill">boost · ' + esc(boostReste(b)) + '</span>' : '') +
     '</div></div><span class="spacer"></span>' +
     '<button id="cp-edit"' + dis + '>Edit client</button>' +
-    '<button id="cp-plan"' + dis + '>Edit plan</button>' +
-    '<button class="primary" id="cp-mode"' + dis + '>Change mode</button></div>' +
-    '<nav class="cp-tabs">' + [['overview', 'Overview'], ['plan', 'Plan & mode'], ['activity', 'Activity']].map(([k, l]) =>
+    '<button class="primary" id="cp-plan"' + dis + '>Edit bandwidth</button></div>' +
+    '<nav class="cp-tabs">' + [['overview', 'Overview'], ['plan', 'Bandwidth'], ['activity', 'Activity']].map(([k, l]) =>
       '<button type="button" data-tab="' + k + '"' + (FICHE.onglet === k ? ' class="active"' : '') + '>' + l + '</button>').join('') + '</nav>';
 
   let corps = '';
@@ -14311,8 +14309,8 @@ async function loadClientPage() {
       '</div></div><div id="cp-chart"></div><div class="cp-totals">' +
         '<div><span>&darr; Downloaded</span><b>' + esc(octetsText(octets('tx_bps_avg'))) + '</b></div>' +
         '<div><span>&uarr; Uploaded</span><b>' + esc(octetsText(octets('rx_bps_avg'))) + '</b></div></div></div>' +
-      '<div class="cp-side">' + carteDiagnostic(sante) + '<div class="card"><h3>Bandwidth &amp; mode</h3><table class="kv"><tbody>' +
-        '<tr><td>Mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
+      '<div class="cp-side">' + carteDiagnostic(sante) + '<div class="card"><h3>Bandwidth</h3><table class="kv"><tbody>' +
+        (r.mode_id != null ? '<tr><td>Old mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' : '') +
         // LE SCHEDULER EN COURS : son nom, ses heures, et s'il decide la vitesse.
         '<tr><td>Scheduler</td><td>' + ((s.schedule_name || r.schedule_name)
           ? ((s.schedule_personal || r.schedule_personal) ? '<b>its own</b> · '
@@ -14322,11 +14320,12 @@ async function loadClientPage() {
               : ' <span class="hint" style="display:inline">(not applied now: ' +
                 esc(SOURCE_LIMITE[s.limit_source || r.limit_source] || 'another limit') + ')</span>')
           : '<span class="na">none right now</span>') + '</td></tr>' +
-        '<tr><td>Plan</td><td>' + (s.plan_down_mbps ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : 'default plan') + '</td></tr>' +
+        '<tr><td>Normal</td><td>' + (s.plan_down_mbps ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : 'default plan') + '</td></tr>' +
+        '<tr><td>Emergency</td><td>' + (r.emergency_down_mbps ? esc(mbps(r.emergency_down_mbps) + ' / ' + mbps(r.emergency_up_mbps || 0))
+          : '<span class="na">not set</span>') + '</td></tr>' +
         '<tr><td>Applied now</td><td>' + esc(limite) + '</td></tr>' +
         '<tr><td>Boost</td><td>' + (b ? esc(boostReste(b)) + (boostReste(b) === 'until stopped' ? '' : ' left') : 'none') + '</td></tr>' +
         '</tbody></table><div class="actions" style="margin-top:.8rem">' +
-        '<button class="sm" id="cp-mode2"' + dis + '>Change mode</button>' +
         (b ? '<button class="sm" id="cp-stop"' + dis + '>Stop boost</button>'
           : '<button class="sm primary" id="cp-boost"' + dis + '>Boost</button>') + '</div></div>' +
       '<div class="card"><div class="cp-card-head"><h3>Client details</h3>' +
@@ -14352,32 +14351,15 @@ async function loadClientPage() {
       (journal.length > 5 ? '<button class="sm link-btn" data-tab="activity">See all &rarr;</button>' : '') + '</div>' +
       '<div class="table-wrap">' + lignesActivite(journal.slice(0, 5), false) + '</div></div>';
   } else if (FICHE.onglet === 'plan') {
-    const carte = (id, nom, sous) => {
-      const sel = String(r.mode_id || null) === String(id);
-      return '<label class="mode-card' + (id === null ? ' wide' : '') + (sel ? ' sel' : '') + '">' +
-        '<input type="radio" name="cp-mode" value="' + (id === null ? '' : id) + '"' + (sel ? ' checked' : '') + dis + '>' +
-        '<span><b>' + esc(nom) + (sel ? ' · current' : '') + '</b><small>' + sous + '</small></span></label>';
-    };
-    const planTxt = s.plan_down_mbps ? mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps) : 'no plan yet';
-    // BANDE PASSANTE D'URGENCE : appliquee quand un mode d'urgence est active.
     const urgTxt = r.emergency_down_mbps ? mbps(r.emergency_down_mbps) + ' / ' + mbps(r.emergency_up_mbps) : '';
-    const modesUrgence = CLI.modes.filter((x) => x.emergency).map((x) => x.name);
-    corps = '<div class="cp-grid"><div class="card"><h3>Bandwidth mode</h3>' +
-      '<p class="hint" style="display:block">Its <b>plan</b> is its own speed. A <b>mode</b>, when it has ' +
-        'one, applies instead; <b>No mode</b> gives it back its plan. Schedulers then change this speed by ' +
-        'a % during their hours.</p>' +
-      '<div class="mode-cards">' +
-      carte(null, 'No mode', 'its plan: ' + esc(planTxt)) +
-      CLI.modes.map((x) => carte(x.id, x.name + (x.emergency ? ' (emergency)' : ''), x.emergency && urgTxt
-        ? 'its emergency bandwidth: ' + esc(urgTxt) : esc(modeTaux(x)))).join('') +
-      '</div>' + (CLI.modes.length ? '' : '<p class="hint" style="display:block">No mode yet: create one on the ' +
-        '<a href="#/modes">Modes</a> page.</p>') +
-      '<div class="actions" style="margin-top:.8rem"><span class="spacer"></span>' +
-      '<button class="primary" id="cp-apply-mode"' + dis + '>Apply</button></div><div id="cp-mode-out"></div></div>' +
-      '<div class="cp-side"><div class="card"><h3>Normal bandwidth (plan)</h3>' +
-      '<p class="hint" style="display:block">Applied when it has no mode.</p>' +
-      (r.mode_id != null ? '<p class="hint" style="display:block">Kept for this client. The mode <b>' +
-        esc(r.mode_name || '') + '</b> applies now; with <b>No mode</b> this plan applies again.</p>' : '') +
+    // Plus de modes : un client mis dans un mode par une version precedente
+    // le garde jusqu'a ce qu'on le rende a sa bande passante normale.
+    const ancienMode = r.mode_id != null ? '<div class="notice warn">An old mode, <b>' + esc(r.mode_name || '') +
+      '</b>, still applies to this client. <button class="sm" id="cp-apply-mode"' + dis + '>Back to normal bandwidth</button>' +
+      '<div id="cp-mode-out"></div></div>' : '';
+    corps = '<div class="cp-grid"><div class="cp-side">' + ancienMode +
+      '<div class="card"><h3>Normal bandwidth (plan)</h3>' +
+      '<p class="hint" style="display:block">Its own speed, set by hand. Schedulers change it during their hours.</p>' +
       '<div class="field"><label for="cp-down">Download (Mbps)</label><input id="cp-down" type="number" min="0.001" step="any" value="' +
         esc(s.plan_down_mbps || '') + '"' + dis + '></div>' +
       '<div class="field"><label for="cp-up">Upload (Mbps)</label><input id="cp-up" type="number" min="0.001" step="any" value="' +
@@ -14386,17 +14368,16 @@ async function loadClientPage() {
       '<span class="spacer"></span><button class="primary" id="cp-plan-save"' + dis + '>Save the plan</button></div>' +
       '<div id="cp-plan-out"></div></div>' +
       '<div class="card"><h3>Emergency bandwidth</h3>' +
-      '<p class="hint" style="display:block">Applied whenever an <b>emergency mode</b> is activated for it' +
-        (modesUrgence.length ? ' (' + modesUrgence.map(esc).join(', ') + ')' : ': tick “Emergency mode” on a mode, ' +
-          'on the <a href="#/modes">Modes</a> page') +
-        '. Without one, the emergency mode gives it the mode\'s speed.</p>' +
+      '<p class="hint" style="display:block">Applied when a <a href="#/management">scheduler</a> gives ' +
+        '<b>their emergency bandwidth</b>: during its hours, or at once with <i>Start now</i>. ' +
+        'Without one, this client keeps its speed.</p>' +
       '<div class="field"><label for="cp-em-down">Download (Mbps)</label><input id="cp-em-down" type="number" min="0.064" step="any" value="' +
         esc(r.emergency_down_mbps || '') + '"' + dis + '></div>' +
       '<div class="field"><label for="cp-em-up">Upload (Mbps)</label><input id="cp-em-up" type="number" min="0.064" step="any" value="' +
         esc(r.emergency_up_mbps || '') + '"' + dis + '></div>' +
       '<div class="actions" style="margin-top:.6rem">' + (urgTxt ? '<button class="sm danger" id="cp-em-reset"' + dis + '>Remove</button>' : '') +
       '<span class="spacer"></span><button class="primary" id="cp-em-save"' + dis + '>Save</button></div>' +
-      '<div id="cp-em-out"></div></div>' + carteSchedulerPropre(r, dis) +
+      '<div id="cp-em-out"></div></div></div><div class="cp-side">' + carteSchedulerPropre(r, dis) +
       '<div class="card"><h3>Boost</h3><p class="hint" style="display:block">' +
       (b ? 'A boost is running: ' + esc(boostReste(b)) + (boostReste(b) === 'until stopped' ? '.' : ' left.')
         : 'Extra rate for a set time, or until you stop it.') +
@@ -14416,20 +14397,17 @@ async function loadClientPage() {
     loadClientPage();
   }));
   const clic = (id, f) => { const el = host.querySelector('#' + id); if (el) el.addEventListener('click', f); };
-  clic('cp-mode', () => openModeDialog([login]));
   clic('cp-edit', () => modifierClient(login, fiche));
   clic('cp-edit2', () => modifierClient(login, fiche));
   clic('cp-live-btn', () => liveCheck(r.subscriber_id, 'cp-live', 'cp-live-btn'));
   clic('cp-ip', async (e) => {
     try { await navigator.clipboard.writeText(ip); e.target.classList.add('copied'); setTimeout(() => e.target.classList.remove('copied'), 1200); } catch (_) { /* pas de presse-papiers */ }
   });
-  clic('cp-mode2', () => openModeDialog([login]));
   clic('cp-plan', () => { FICHE.onglet = 'plan'; loadClientPage(); });
   clic('cp-boost', () => openGroupBoost([login]));
   clic('cp-stop', () => stopBoosts([login]));
   clic('cp-apply-mode', async (e) => {
-    const choix = host.querySelector('input[name="cp-mode"]:checked');
-    const id = choix && choix.value !== '' ? Number(choix.value) : null;
+    const id = null;
     e.target.disabled = true;
     try {
       const res = await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: [login], action: 'mode', mode_id: id }) });
@@ -15063,7 +15041,7 @@ function dessinerCoteCarte() {
         '<table class="kv"><tbody>' +
           '<tr><td>Status</td><td>' + (clientEnLigne(r) ? 'Online' : texteHorsLigne(r)) + '</td></tr>' +
           '<tr><td>Site</td><td>' + (c.site ? '<a href="#" data-goto="' + esc(c.site) + '">' + esc(c.site) + '</a>' : '-') + '</td></tr>' +
-          '<tr><td>Mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
+          '<tr><td>Bandwidth</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
           '<tr><td>Position</td><td>' + (c.place ? esc(c.lat.toFixed(5) + ', ' + c.lon.toFixed(5)) : 'around its site') + '</td></tr>' +
         '</tbody></table>' +
         '<div class="actions"><a class="btn sm primary" href="#/client/' + encodeURIComponent(c.login) + '">Open the client</a>' +
@@ -15524,7 +15502,7 @@ async function rapportPdf(site) {
   }
   if (site) {
     d.titre('All clients of the site (' + rows.length + ')');
-    d.tableau([{ t: 'Client', l: 2.2 }, { t: 'IP address', l: 1.5 }, { t: 'Status', l: 1.2 }, { t: 'Mode', l: 1.6 },
+    d.tableau([{ t: 'Client', l: 2.2 }, { t: 'IP address', l: 1.5 }, { t: 'Status', l: 1.2 }, { t: 'Bandwidth', l: 1.6 },
       { t: 'Limit (Mbps)', l: 1.4 }],
     rows.map((r) => [r.login, r.last_ip || '', clientEnLigne(r) ? 'connected' : 'offline', modeDuClient(r).text,
       r.effective_down_mbps ? sansUnite(r.effective_down_mbps) + ' / ' + sansUnite(r.effective_up_mbps || 0) : '-']));
@@ -15743,7 +15721,6 @@ const LOADERS = {
   map: loadMap,
   alerts: loadAlerts,
   activity: loadActivity,
-  modes: loadModesPage,
   management: loadManagement,
   client: loadClientPage,
   dashboard: loadDashboard,
@@ -15905,7 +15882,9 @@ function route() {
     if (FICHE.login !== login) { FICHE.login = login; FICHE.onglet = 'overview'; }
     vue = 'client';
   }
-  if (estLimite() && !['dashboard', 'clients', 'modes', 'alerts', 'activity', 'management', 'map', 'client'].includes(vue)) vue = 'dashboard';
+  // Plus de page Modes : un ancien lien mene aux clients.
+  if (vue === 'modes') vue = 'clients';
+  if (estLimite() && !['dashboard', 'clients', 'alerts', 'activity', 'management', 'map', 'client'].includes(vue)) vue = 'dashboard';
   show(vue || 'dashboard');
 }
 
