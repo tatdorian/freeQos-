@@ -1227,7 +1227,7 @@ CAKE (*Common Applications Kept Enhanced*) is the queueing algorithm freeQoS use
 | PPPoE overhead, DSCP classes, NAT mode | ✅ | ❌ |
 | Router CPU | higher | lower |
 
-**Switching rewrites only the queue types.** freeQoS creates `freeqos-fq-up` / `freeqos-fq-down` (or `freeqos-cake-up` / `freeqos-cake-down` when going back), points every freeQoS queue to them (`queue=` only: no speed, target or parent changes), then removes the old types **last**, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only lines marked `freeqos:managed` are touched.
+**Switching rewrites only the queue types.** freeQoS creates `freeqos-fq-up` / `freeqos-fq-down` (or `freeqos-cake-up` / `freeqos-cake-down` when going back), points every freeQoS queue to them (`queue=` only: no speed, target or parent changes), then removes the old types **last**, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only freeQoS's own lines are touched (marked `freeqos:managed`, or client queues freeQoS remembers creating).
 
 **If FQ-CoDel does not work on a router, it is not used there.** A router that refuses to create the `fq-codel` type (a RouterOS without it) keeps CAKE: the refusal is noted, its queues stay on CAKE without error, and *Settings* lists the router with RouterOS's answer. It is tried again after a restart of freeQoS.
 
@@ -1393,7 +1393,7 @@ Keep in freeQoS the clients you want and remove the others: tick them on the *Cl
 
 - its record, history, plan, mode, forced limit and boost are deleted from freeQoS;
 - it goes on the list of **removed clients**, so it does **not come back**, even while its session stays connected: the next reading ignores it;
-- the queue **freeQoS** had set for it (`freeqos-<login>`, marked `freeqos:managed`) is taken off at freeQoS's next write (within two minutes when writing is on), so no forgotten limit stays. No other line of the router is concerned.
+- the queue **freeQoS** had set for it (named after the client, and remembered by freeQoS) is taken off at freeQoS's next write (within two minutes when writing is on), so no forgotten limit stays. No other line of the router is concerned.
 
 **Removed (N)**, above the list, shows the removed clients; **Bring back** takes one off the list: it reappears at the next reading as a newly found client (no plan, so no queue). API: `POST /api/v1/clients/remove` with `{"logins": [...], "confirm": true}`, `GET /api/v1/clients/removed`, `DELETE /api/v1/clients/removed/{login}`.
 
@@ -1478,6 +1478,14 @@ Who decides the speed, from strongest to weakest: a running **boost**; a manual 
 | Manual queue | A queue set by the operator, without `freeqos:managed`: shown because it caps, **never** modified |
 
 Points without a queue are listed like the others: a map that only showed what works would leave the rest to be found nowhere. The raw details stay available under the map: analysis of what exists (`GET /api/v1/shaping/state`), the plan computed on demand, and the command log.
+
+### Client queue names: the client's name, no prefix, no comment
+
+A client's queue is named **after the client** (`ACME-OFFICE`, characters RouterOS dislikes become `-`) and carries **no comment**: Winbox shows a clean list. Link queues and queue types keep their `freeqos-` prefix and `freeqos:managed` comment.
+
+**How freeQoS knows which queues are its own.** Since nothing is written on a client queue, freeQoS **remembers**, router by router, the names of the client queues it created itself (table `owned_queues`, reloaded at start). Only those are ever changed or removed. A queue with the same name **set by hand** is never in that memory: freeQoS never touches it, and reports a conflict (*a queue by that name already exists and was not created by freeQoS*) instead of creating a second one.
+
+**Upgrading.** An existing queue `freeqos-<client>` (marked `freeqos:managed`) is **renamed** to `<client>` and its comment cleared, in place, at the next write — same queue, same counters, never deleted and recreated. Removing a client also removes its queue while it still has its old name.
 
 ### Where a subscriber queue points, and when it is skipped
 

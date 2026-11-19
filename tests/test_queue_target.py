@@ -113,7 +113,7 @@ def test_changement_d_adresse_produit_un_set_pas_un_remplacement() -> None:
     _, files, _ = desired_state(links=[], subscribers=[abonne(address="10.20.0.77")])
     existante = {
         ".id": "*3",
-        "name": "freeqos-dupont",
+        "name": "dupont",
         "target": "10.20.0.10/32",
         "max-limit": "20M/100M",
         "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
@@ -134,7 +134,7 @@ def test_adresse_inchangee_ne_produit_rien() -> None:
     _, files, _ = desired_state(links=[], subscribers=[abonne()])
     existante = {
         ".id": "*1",
-        "name": "freeqos-dupont",
+        "name": "dupont",
         "target": "10.20.0.10/32",
         "max-limit": "20M/100M",
         "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
@@ -161,7 +161,7 @@ def test_chaque_abonne_ecarte_est_justifie() -> None:
         ],
     )
 
-    assert [f.name for f in files] == ["freeqos-en-ligne"]
+    assert [f.name for f in files] == ["en-ligne"]
     motifs = {s.login: s.reason for s in ecartes}
     assert set(motifs) == {"hors-ligne", "sans-plan", "disabled"}
     assert "subscriber offline" in motifs["hors-ligne"]
@@ -210,7 +210,7 @@ def test_deux_abonnes_sur_la_meme_adresse_ne_sont_pas_shapes() -> None:
         ],
     )
 
-    assert [f.name for f in files] == ["freeqos-tranquille"]
+    assert [f.name for f in files] == ["tranquille"]
     motifs = {s.login: s.reason for s in ecartes}
     assert set(motifs) == {"ancien", "nouveau"}
     assert "also claimed by nouveau" in motifs["ancien"]
@@ -226,4 +226,4 @@ def test_un_abonne_sans_debit_ne_bloque_pas_l_adresse_d_un_autre() -> None:
             abonne("reel", address="10.20.0.10"),
         ],
     )
-    assert [f.name for f in files] == ["freeqos-reel"]
+    assert [f.name for f in files] == ["reel"]

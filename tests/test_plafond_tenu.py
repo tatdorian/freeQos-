@@ -78,9 +78,9 @@ def test_le_fasttrack_donne_la_commande_qui_le_corrige() -> None:
 
 def test_une_file_parfaite_derriere_un_fasttrack_n_est_pas_en_vigueur() -> None:
     """LE cas qui fait perdre des journees : la file est juste, et ne bride rien."""
-    rows = [file("freeqos-test-ba", "172.16.25.253/32", "100000/100000")]
+    rows = [file("test-ba", "172.16.25.253/32", "100000/100000")]
     etat = limit_state(
-        voulue("freeqos-test-ba", "172.16.25.253/32", 0.1, 0.1),
+        voulue("test-ba", "172.16.25.253/32", 0.1, 0.1),
         rows=rows,
         masquees={},
         fasttrack=True,
@@ -107,9 +107,9 @@ def test_un_reseau_plus_large_place_avant_masque_l_abonne() -> None:
     """Un /29 pose plus haut prend le trafic du /32 qui le suit."""
     rows = [
         file("bloc-pro", "100.100.101.112/29", "50000000/50000000"),
-        file("freeqos-client", "100.100.101.114/32", "100000/100000"),
+        file("client", "100.100.101.114/32", "100000/100000"),
     ]
-    assert "freeqos-client" in masked_queues(rows)
+    assert "client" in masked_queues(rows)
 
 
 def test_un_parent_ne_masque_pas_son_enfant() -> None:
@@ -117,7 +117,7 @@ def test_un_parent_ne_masque_pas_son_enfant() -> None:
     panne a chaque abonne correctement rattache."""
     rows = [
         file("freeqos-parent-altair", "10.0.0.0/24", "100000000/100000000"),
-        file("freeqos-alice", "10.0.0.5/32", "10000000/10000000", parent="freeqos-parent-altair"),
+        file("alice", "10.0.0.5/32", "10000000/10000000", parent="freeqos-parent-altair"),
     ]
     assert masked_queues(rows) == {}
 
@@ -125,7 +125,7 @@ def test_un_parent_ne_masque_pas_son_enfant() -> None:
 def test_une_file_desactivee_ne_masque_personne() -> None:
     rows = [
         file("vieille", "10.0.0.5/32", "1000000/1000000", disabled="true"),
-        file("freeqos-alice", "10.0.0.5/32", "10000000/10000000"),
+        file("alice", "10.0.0.5/32", "10000000/10000000"),
     ]
     assert masked_queues(rows) == {}
 
@@ -146,16 +146,14 @@ def test_cibles_sans_rapport_ne_se_masquent_pas() -> None:
 
 # --------------------------------------------------------------- verdicts
 def test_file_absente_dit_que_rien_ne_bride() -> None:
-    etat = limit_state(
-        voulue("freeqos-alice", "10.0.0.5/32", 1, 10), rows=[], masquees={}, fasttrack=False
-    )
+    etat = limit_state(voulue("alice", "10.0.0.5/32", 1, 10), rows=[], masquees={}, fasttrack=False)
     assert etat.verdict == VERDICT_ABSENTE
 
 
 def test_file_desactivee_a_la_main_est_signalee() -> None:
-    rows = [file("freeqos-alice", "10.0.0.5/32", "1000000/10000000", disabled="true")]
+    rows = [file("alice", "10.0.0.5/32", "1000000/10000000", disabled="true")]
     etat = limit_state(
-        voulue("freeqos-alice", "10.0.0.5/32", 1, 10),
+        voulue("alice", "10.0.0.5/32", 1, 10),
         rows=rows,
         masquees={},
         fasttrack=False,
@@ -165,9 +163,9 @@ def test_file_desactivee_a_la_main_est_signalee() -> None:
 
 def test_ecart_de_debit_nomme_les_deux_valeurs() -> None:
     """Le cas du terrain : 100 kbps decides, 100M/500M sur le routeur."""
-    rows = [file("freeqos-test-ba", "172.16.25.253/32", "100M/500M")]
+    rows = [file("test-ba", "172.16.25.253/32", "100M/500M")]
     etat = limit_state(
-        voulue("freeqos-test-ba", "172.16.25.253/32", 0.1, 0.1),
+        voulue("test-ba", "172.16.25.253/32", 0.1, 0.1),
         rows=rows,
         masquees={},
         fasttrack=False,
@@ -180,9 +178,9 @@ def test_ecart_de_debit_nomme_les_deux_valeurs() -> None:
 def test_meme_debit_ecrit_autrement_reste_en_vigueur() -> None:
     """RouterOS rend '100000/100000' la ou on a ecrit '100k/100k' : ce n'est pas
     un ecart, et le signaler userait la confiance dans l'audit."""
-    rows = [file("freeqos-alice", "10.0.0.5/32", "100k/100k")]
+    rows = [file("alice", "10.0.0.5/32", "100k/100k")]
     etat = limit_state(
-        voulue("freeqos-alice", "10.0.0.5/32", 0.1, 0.1),
+        voulue("alice", "10.0.0.5/32", 0.1, 0.1),
         rows=rows,
         masquees={},
         fasttrack=False,
@@ -194,11 +192,11 @@ def test_meme_debit_ecrit_autrement_reste_en_vigueur() -> None:
 def test_le_masquage_prime_sur_le_debit_juste() -> None:
     rows = [
         file("bloc-pro", "10.0.0.0/24", "50000000/50000000"),
-        file("freeqos-alice", "10.0.0.5/32", "1000000/10000000"),
+        file("alice", "10.0.0.5/32", "1000000/10000000"),
     ]
     rapport = audit_router(
         router_name="pop",
-        desired=[voulue("freeqos-alice", "10.0.0.5/32", 1, 10)],
+        desired=[voulue("alice", "10.0.0.5/32", 1, 10)],
         rows=rows,
         firewall=[],
     )
@@ -210,15 +208,15 @@ def test_le_masquage_prime_sur_le_debit_juste() -> None:
 # ----------------------------------------------------------------- rapport
 def test_le_rapport_compte_ce_qui_fuit() -> None:
     rows = [
-        file("freeqos-alice", "10.0.0.5/32", "1000000/10000000"),
-        file("freeqos-bob", "10.0.0.6/32", "999/999"),
+        file("alice", "10.0.0.5/32", "1000000/10000000"),
+        file("bob", "10.0.0.6/32", "999/999"),
     ]
     rapport = audit_router(
         router_name="pop",
         desired=[
-            voulue("freeqos-alice", "10.0.0.5/32", 1, 10),
-            voulue("freeqos-bob", "10.0.0.6/32", 1, 10),
-            voulue("freeqos-carol", "10.0.0.7/32", 1, 10),
+            voulue("alice", "10.0.0.5/32", 1, 10),
+            voulue("bob", "10.0.0.6/32", 1, 10),
+            voulue("carol", "10.0.0.7/32", 1, 10),
         ],
         rows=rows,
         firewall=[],
@@ -231,10 +229,10 @@ def test_le_rapport_compte_ce_qui_fuit() -> None:
 
 def test_le_fasttrack_condamne_tout_le_routeur() -> None:
     """Une seule regle suffit : aucun plafond du routeur n'est tenu."""
-    rows = [file("freeqos-alice", "10.0.0.5/32", "1000000/10000000")]
+    rows = [file("alice", "10.0.0.5/32", "1000000/10000000")]
     rapport = audit_router(
         router_name="pop",
-        desired=[voulue("freeqos-alice", "10.0.0.5/32", 1, 10)],
+        desired=[voulue("alice", "10.0.0.5/32", 1, 10)],
         rows=rows,
         firewall=[{"chain": "forward", "action": "fasttrack-connection"}],
     )
@@ -351,7 +349,7 @@ async def test_le_plafond_pose_est_ensuite_declare_en_vigueur(
     audit = await service.limit_audit(live=True)
 
     (routeur,) = audit["routers"]
-    ligne = next(q for q in routeur["queues"] if q["name"] == "freeqos-test-ba")
+    ligne = next(q for q in routeur["queues"] if q["name"] == "test-ba")
     assert ligne["verdict"] == VERDICT_EN_VIGUEUR
     assert ligne["login"] == "test-ba"
     assert audit["leaking"] == 0
@@ -366,7 +364,7 @@ async def test_l_audit_denonce_le_plafond_reste_en_base(
     routeur_lecture.simple_queue_rows = [
         {
             ".id": "*1",
-            "name": "freeqos-test-ba",
+            "name": "test-ba",
             "target": "10.20.0.1/32",
             "max-limit": "100M/500M",
             "comment": MANAGED_COMMENT,
@@ -382,7 +380,7 @@ async def test_l_audit_denonce_le_plafond_reste_en_base(
 
     audit = await service.limit_audit(live=True)
 
-    ligne = next(q for q in audit["routers"][0]["queues"] if q["name"] == "freeqos-test-ba")
+    ligne = next(q for q in audit["routers"][0]["queues"] if q["name"] == "test-ba")
     assert ligne["verdict"] == VERDICT_ECART
     assert audit["leaking"] == 1
 
@@ -561,13 +559,13 @@ async def test_une_ecriture_perime_l_audit_en_cache(
     await service.registry.reload()
 
     premier = await service.limit_audit(live=True)
-    ligne = next(q for q in premier["routers"][0]["queues"] if q["name"] == "freeqos-test-ba")
+    ligne = next(q for q in premier["routers"][0]["queues"] if q["name"] == "test-ba")
     assert ligne["verdict"] == VERDICT_ABSENTE
 
     await service.enforce_subscriber(login="test-ba", author="test")
     second = await service.limit_audit(live=True)
 
-    ligne = next(q for q in second["routers"][0]["queues"] if q["name"] == "freeqos-test-ba")
+    ligne = next(q for q in second["routers"][0]["queues"] if q["name"] == "test-ba")
     assert ligne["verdict"] == VERDICT_EN_VIGUEUR
 
 
@@ -611,7 +609,7 @@ def test_les_files_sans_plafond_ne_gonflent_pas_l_alarme() -> None:
         desired=[
             voulue("freeqos-parent-MikroTik", "172.16.38.0/23", None, None),
             voulue("freeqos-parent-NAS-FRANCOPHONIE", "100.100.101.112/29", None, None),
-            voulue("freeqos-test-ta", "172.16.39.253/32", 50, 300),
+            voulue("test-ta", "172.16.39.253/32", 50, 300),
         ],
         rows=[],
         firewall=[],
@@ -628,7 +626,7 @@ def test_enforcement_coupe_explique_la_file_absente() -> None:
     l'autorisation d'ecrire, et c'est cela qu'il faut lire."""
     rapport = audit_router(
         router_name="NAS-Tailladje",
-        desired=[voulue("freeqos-test-ta", "172.16.39.253/32", 50, 300)],
+        desired=[voulue("test-ta", "172.16.39.253/32", 50, 300)],
         rows=[],
         firewall=[],
         enforcement_enabled=False,
@@ -644,7 +642,7 @@ def test_un_site_neuf_dit_que_la_reconciliation_n_est_pas_passee() -> None:
     evite de lire une panne la ou il n'y a qu'une attente."""
     rapport = audit_router(
         router_name="NAS-Tailladje",
-        desired=[voulue("freeqos-test-ta", "172.16.39.253/32", 50, 300)],
+        desired=[voulue("test-ta", "172.16.39.253/32", 50, 300)],
         rows=[],
         firewall=[],
         enforcement_enabled=True,
@@ -661,7 +659,7 @@ def test_une_file_vraiment_manquante_reste_un_defaut() -> None:
     passee, et toujours pas de file -- c'est un defaut, et il se dit."""
     rapport = audit_router(
         router_name="NAS-Tailladje",
-        desired=[voulue("freeqos-test-ta", "172.16.39.253/32", 50, 300)],
+        desired=[voulue("test-ta", "172.16.39.253/32", 50, 300)],
         rows=[],
         firewall=[],
         enforcement_enabled=True,

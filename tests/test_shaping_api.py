@@ -567,7 +567,7 @@ def test_analyse_distingue_les_files_tierces(
     settings: Settings, topo, routeur: FakeRouterOsClient
 ) -> None:
     routeur.simple_queue_rows = [
-        {".id": "*1", "name": "freeqos-dupont", "comment": MANAGED_COMMENT},
+        {".id": "*1", "name": "dupont", "comment": MANAGED_COMMENT},
         {".id": "*2", "name": "queue-radius", "comment": ""},
     ]
     body = make_client(settings, topo, routeur).get("/api/v1/shaping/state").json()
@@ -757,7 +757,7 @@ def test_avec_rattachement_le_parent_est_le_bon_lien(
     body = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
 
     file_abonne = next(
-        a for a in body["actions"] if a["path"] == "/queue/simple" and a["name"] == "freeqos-dupont"
+        a for a in body["actions"] if a["path"] == "/queue/simple" and a["name"] == "dupont"
     )
     assert "parent=freeqos-parent-bh-test" in file_abonne["command"]
     assert body["unparented_subscribers"] == 0
@@ -773,7 +773,7 @@ def test_rattachement_vers_un_lien_inconnu_reste_sans_parent(
 
     body = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
 
-    file_abonne = next(a for a in body["actions"] if a["name"] == "freeqos-dupont")
+    file_abonne = next(a for a in body["actions"] if a["name"] == "dupont")
     assert "parent=none" in file_abonne["command"]
 
 
@@ -995,7 +995,7 @@ def test_le_boost_apparait_dans_le_plan(client: TestClient) -> None:
     )
     plan = client.post("/api/v1/shaping/plan", json={"router": "pop-test"}).json()
 
-    file_abonne = next(a for a in plan["actions"] if a["name"] == "freeqos-dupont")
+    file_abonne = next(a for a in plan["actions"] if a["name"] == "dupont")
     assert "750000000" in file_abonne["command"]
 
 

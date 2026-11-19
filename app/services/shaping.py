@@ -72,15 +72,20 @@ from app.enforcement.capability import (
     inspect_write_capability,
 )
 from app.enforcement.models import (
+    MANAGED_COMMENT,
+    OWNED_QUEUES,
     PREFIX,
     Plan,
     PlanAction,
     QueueSpec,
     is_ours,
+    legacy_subscriber_queue_name,
     managed_comment,
+    mark_owned,
     network_target,
     other_instance,
     slugify,
+    subscriber_queue_name,
     target_members,
 )
 from app.enforcement.planner import (
@@ -328,6 +333,8 @@ class ShapingService:
         #: Routeurs qui ont REFUSE le type FQ-CoDel (motif du refus) : ils
         #: restent en CAKE. Oublie au redemarrage, ou un nouvel essai est fait.
         self.fq_codel_refused: dict[str, str] = {}
+        #: Pool PostgreSQL de la memoire des files de clients (``owned_queues``).
+        self.owned_pool: Any = None
         #: UNE ecriture a la fois par routeur : une reconciliation lancee par une
         #: bascule des Reglages et une ecriture demandee a la main ne se
         #: croisent pas sur les memes lignes.
@@ -1186,7 +1193,9 @@ class ShapingService:
         def lire() -> RouterShapingState:
             return RouterShapingState(
                 router_name=collector.name,
-                simple_queues=client.simple_queues(),
+                # Nos files de clients n'ont plus de marque ecrite : freeQoS se
+                # souvient d'elles (``OWNED_QUEUES``).
+                simple_queues=mark_owned(collector.name, list(client.simple_queues() or [])),
                 queue_types=client.queue_types(),
                 queue_trees=client.queue_trees(),
             )
@@ -1979,7 +1988,7 @@ class ShapingService:
     @staticmethod
     def queue_name_for(reference: str) -> str:
         """Le nom de file d'un client declare. Meme regle que le planificateur."""
-        return f"{PREFIX}{slugify(reference)}"
+        return subscriber_queue_name(reference)
 
     async def enforce_static_client(
         self,
@@ -2521,7 +2530,12 @@ class ShapingService:
             ligne["queue"] = queue_name
         ecarte = next((s for s in plan.skipped if s.login == reference and s.kind != "link"), None)
         conflit = next((c for c in plan.conflicts if c.name == queue_name), None)
-        restreint = plan.restrict_to(plan.parent_chain(queue_name), keep_types=not removing)
+        # Sa file d'AVANT (« freeqos-<client> », pas encore renommee) compte
+        # aussi : retirer le client doit l'emporter.
+        ancien_nom = legacy_subscriber_queue_name(reference)
+        restreint = plan.restrict_to(
+            plan.parent_chain(queue_name) | {ancien_nom}, keep_types=not removing
+        )
         ligne["actions"] = [action.summary() for action in restreint.actions]
 
         if conflit is not None:
@@ -2529,7 +2543,8 @@ class ShapingService:
             ligne["reason"] = conflit.detail
             return ligne
         a_retirer = any(
-            action.verb == "remove" and action.name == queue_name for action in restreint.actions
+            action.verb == "remove" and action.name in (queue_name, ancien_nom)
+            for action in restreint.actions
         )
         if ecarte is not None and not a_retirer:
             # Le motif vient du planificateur lui-meme : "aucun debit a
@@ -2778,6 +2793,7 @@ class ShapingService:
             ):
                 lecture = getattr(client, methode, None)
                 tables[cle] = list(lecture() or []) if lecture is not None else []
+            mark_owned(router_name, tables["simple"])
             return tables
 
         tables = await asyncio.wait_for(
@@ -3554,7 +3570,10 @@ class ShapingService:
         retires = getattr(self, "exclusions", None)
         if retires is None:
             return set()
-        return {f"{PREFIX}{slugify(login)}" for login in retires.logins}
+        noms: set[str] = set()
+        for login in retires.logins:
+            noms.update((subscriber_queue_name(login), legacy_subscriber_queue_name(login)))
+        return noms
 
     # ------------------------------------------------------ plafonds en amont
     def is_upstream(self, collector: Any) -> bool:
@@ -3721,6 +3740,7 @@ class ShapingService:
         if not dry_run:
             self._retenir_ecritures(resultat)
             self._noter_refus_fq_codel(resultat)
+            await self._retenir_nos_files(resultat)
         if not dry_run and resultat.applied:
             # Ce qu'on vient d'ecrire a change l'etat des routeurs : un audit
             # calcule avant ne decrit plus rien. Sans cet oubli, l'interface
@@ -3811,6 +3831,40 @@ class ShapingService:
             skipped=plan.skipped,
             unchanged=plan.unchanged,
         )
+
+    async def _retenir_nos_files(self, resultat: ApplyResult) -> None:
+        """La MEMOIRE de nos files de clients (sans marque sur le routeur) :
+        posees ou renommees par nous, retenues ; retirees, oubliees."""
+        routeur = resultat.router_name
+        memoire = OWNED_QUEUES.setdefault(routeur, set())
+        posees: set[str] = set()
+        oubliees: set[str] = set()
+        for issue in resultat.outcomes:
+            action = issue.action
+            if not issue.ok or action.path != "/queue/simple":
+                continue
+            if action.verb == "add" and MANAGED_COMMENT not in str(
+                action.fields.get("comment") or ""
+            ):
+                posees.add(str(action.fields.get("name") or action.name))
+            elif action.verb == "set" and "name" in action.fields:
+                avant = action.changes.get("name", (None, None))[0]
+                if avant:
+                    oubliees.add(str(avant))
+                posees.add(str(action.fields["name"]))
+            elif action.verb == "remove" and action.name:
+                oubliees.add(str(action.name))
+        oubliees -= posees
+        memoire.difference_update(oubliees)
+        memoire.update(posees)
+        pool = getattr(self, "owned_pool", None)
+        if pool is not None and (posees or oubliees):
+            from app.db.owned_queues import remember
+
+            try:
+                await remember(pool, routeur, posees, oubliees)
+            except Exception:  # noqa: BLE001 - la memoire vive reste juste
+                logger.exception("Memoire des files de %s non enregistree", routeur)
 
     def _noter_refus_fq_codel(self, resultat: ApplyResult) -> None:
         """SI FQ-CODEL NE FONCTIONNE PAS, ON NE LE MET PAS : un routeur qui

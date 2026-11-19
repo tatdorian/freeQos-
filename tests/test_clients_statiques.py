@@ -247,13 +247,13 @@ async def test_le_debit_vient_des_compteurs_de_sa_file(settings: Settings) -> No
 
     # RouterOS rend la paire du point de vue de la CIBLE : <upload>/<download>.
     client.simple_queue_rows = [
-        {"name": "freeqos-mairie-vitre", "target": "10.0.0.5/32", "bytes": "1000/5000"}
+        {"name": "mairie-vitre", "target": "10.0.0.5/32", "bytes": "1000/5000"}
     ]
     await service.collect_subscribers()  # premiere mesure : pas encore de debit
 
     clock.advance(10)
     client.simple_queue_rows = [
-        {"name": "freeqos-mairie-vitre", "target": "10.0.0.5/32", "bytes": "2000/15000"}
+        {"name": "mairie-vitre", "target": "10.0.0.5/32", "bytes": "2000/15000"}
     ]
     await service.collect_subscribers()
 
@@ -480,7 +480,7 @@ async def test_le_plan_ecrit_la_meme_commande_que_pour_un_abonne(
     plan = await service.plan("pop-test", links=liens, subscribers=abonnes)
 
     ajouts = [a for a in plan.actions if a.verb == "add" and a.path == "/queue/simple"]
-    assert [a.fields["name"] for a in ajouts] == ["freeqos-mairie-vitre"]
+    assert [a.fields["name"] for a in ajouts] == ["mairie-vitre"]
     assert ajouts[0].fields["target"] == "10.0.0.5/32"
     # 50 Mbps montant / 200 Mbps descendant, format RouterOS.
     assert ajouts[0].fields["max-limit"] == "50000000/200000000"
@@ -984,15 +984,13 @@ async def test_pppoe_l_upload_vient_de_la_file_pas_du_rx_de_l_interface(
     clock = Clock()
     client = FakeRouterOsClient()
     client.add_session("dupont", address="10.20.0.10", rx_byte=0, tx_byte=0)
-    client.simple_queue_rows = [
-        {"name": "freeqos-dupont", "target": "10.20.0.10/32", "bytes": "0/0"}
-    ]
+    client.simple_queue_rows = [{"name": "dupont", "target": "10.20.0.10/32", "bytes": "0/0"}]
     service, writer, _ = build_service(settings, client, InventaireMemoire([]), clock=clock)
     await service.collect_subscribers()
     clock.advance(10)
     client.advance("dupont", rx_delta=481_250, tx_delta=250_000)
     client.simple_queue_rows = [
-        {"name": "freeqos-dupont", "target": "10.20.0.10/32", "bytes": "250000/250000"}
+        {"name": "dupont", "target": "10.20.0.10/32", "bytes": "250000/250000"}
     ]
     await service.collect_subscribers()
 

@@ -125,7 +125,7 @@ def test_etat_desire_complet() -> None:
     )
 
     assert [t.name for t in types] == [QUEUE_TYPE_UP, QUEUE_TYPE_DOWN]
-    assert [f.name for f in files] == ["freeqos-parent-bh-altair", "freeqos-dupont"]
+    assert [f.name for f in files] == ["freeqos-parent-bh-altair", "dupont"]
 
     parent, enfant = files
     assert parent.max_down_mbps == 450.0  # 500 x 0,9
@@ -143,7 +143,7 @@ def test_lien_decouvert_recoit_une_file_illimitee() -> None:
     contraire un lien sans aucune prise dans l'interface."""
     _, files, _ = desired_state(links=[lien(capacity=None)], subscribers=[abonne()])
 
-    assert [f.name for f in files] == ["freeqos-parent-bh-altair", "freeqos-dupont"]
+    assert [f.name for f in files] == ["freeqos-parent-bh-altair", "dupont"]
     assert files[0].max_limit == "0/0"
 
 
@@ -152,7 +152,7 @@ def test_lien_sans_capacite_ignorable() -> None:
     _, files, _ = desired_state(
         links=[lien(capacity=None)], subscribers=[abonne()], queue_unmeasured_links=False
     )
-    assert [f.name for f in files] == ["freeqos-dupont"]
+    assert [f.name for f in files] == ["dupont"]
 
 
 def test_la_file_d_un_lien_vise_son_segment_l3() -> None:
@@ -246,7 +246,7 @@ def test_plan_sur_routeur_vierge() -> None:
     assert plan.counts() == {"add": 4, "set": 0, "remove": 0}  # 2 types + 2 files
     # Les parents passent avant leurs enfants : RouterOS refuse l'inverse.
     noms = [a.fields.get("name") for a in plan.actions if a.path == "/queue/simple"]
-    assert noms == ["freeqos-parent-bh-altair", "freeqos-dupont"]
+    assert noms == ["freeqos-parent-bh-altair", "dupont"]
 
 
 def test_la_commande_est_lisible_avant_envoi() -> None:
@@ -258,21 +258,22 @@ def test_la_commande_est_lisible_avant_envoi() -> None:
 
     commande = plan.actions[0].command
     assert commande.startswith("/queue/simple/add ")
-    assert "name=freeqos-dupont" in commande
+    assert "name=dupont" in commande
     # La cible est l'ADRESSE de la session, sous sa forme canonique : c'est
     # elle que RouterOS relira, donc la seule qui ne produise pas un faux ecart.
     assert "target=10.20.0.10/32" in commande
     assert "max-limit=20000000/100000000" in commande
-    # Pas de guillemets superflus : freeqos:managed ne contient aucun caractere
-    # ambigu pour le shell RouterOS.
-    assert f"comment={MANAGED_COMMENT}" in commande
+    # La file d'un client ne porte AUCUNE marque : ni prefixe, ni commentaire
+    # (freeQoS se souvient d'elle).
+    assert 'comment=""' in commande
+    assert MANAGED_COMMENT not in commande
 
 
 def test_etat_deja_conforme_ne_produit_rien() -> None:
     types, files, _ = desired_state(links=[], subscribers=[abonne()])
     existante = {
         ".id": "*1",
-        "name": "freeqos-dupont",
+        "name": "dupont",
         "target": "10.20.0.10/32",
         "max-limit": "20000000/100000000",
         "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
@@ -292,7 +293,7 @@ def test_ecriture_routeros_comparee_sans_se_tromper_de_forme() -> None:
     _, files, _ = desired_state(links=[], subscribers=[abonne()])
     existante = {
         ".id": "*1",
-        "name": "freeqos-dupont",
+        "name": "dupont",
         "target": "10.20.0.10/32",
         "max-limit": "20M/100M",
         "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
@@ -308,7 +309,7 @@ def test_changement_de_debit_produit_un_set() -> None:
     _, files, _ = desired_state(links=[], subscribers=[abonne(down=300)])
     existante = {
         ".id": "*7",
-        "name": "freeqos-dupont",
+        "name": "dupont",
         "target": "10.20.0.10/32",
         "max-limit": "20M/100M",
         "queue": f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}",
@@ -322,9 +323,7 @@ def test_changement_de_debit_produit_un_set() -> None:
     action = plan.actions[0]
     assert action.target_id == "*7"
     assert action.changes["max-limit"] == ("20M/100M", "20000000/300000000")
-    assert action.summary() == (
-        "modifier freeqos-dupont (max-limit 20M/100M -> 20000000/300000000)"
-    )
+    assert action.summary() == ("modifier dupont (max-limit 20M/100M -> 20000000/300000000)")
     # Seul le debit part : reecrire cible, parent et types faisait reconstruire
     # la file par RouterOS, et un trafic en cours en sortait jusqu'a relance.
     assert set(action.fields) == {"max-limit"}
@@ -338,7 +337,7 @@ def test_une_file_non_marquee_n_est_jamais_modifiee() -> None:
     _, files, _ = desired_state(links=[], subscribers=[abonne()])
     manuelle = {
         ".id": "*1",
-        "name": "freeqos-dupont",
+        "name": "dupont",
         "target": "10.20.0.10/32",
         "max-limit": "1M/1M",
         "comment": "pose a la main par l'exploitant",
@@ -349,7 +348,7 @@ def test_une_file_non_marquee_n_est_jamais_modifiee() -> None:
 
     assert plan.is_empty
     assert len(plan.conflicts) == 1
-    assert plan.conflicts[0].name == "freeqos-dupont"
+    assert plan.conflicts[0].name == "dupont"
     assert MANAGED_COMMENT in plan.conflicts[0].detail
 
 
@@ -430,7 +429,7 @@ def test_file_tierce_desactivee_ne_masque_rien() -> None:
     )
 
     assert plan.counts() == {"add": 1, "set": 0, "remove": 0}
-    assert plan.actions[0].fields["name"] == "freeqos-dupont"
+    assert plan.actions[0].fields["name"] == "dupont"
 
 
 def test_plusieurs_files_tierces_sur_la_meme_cible_ne_sont_pas_touchees() -> None:
@@ -464,7 +463,7 @@ def test_reprise_desactivable() -> None:
 
     assert plan.is_empty
     assert len(plan.conflicts) == 1
-    assert plan.conflicts[0].name == "freeqos-dupont"
+    assert plan.conflicts[0].name == "dupont"
     assert "sub-dupont" in plan.conflicts[0].detail
     assert "10.20.0.10/32" in plan.conflicts[0].detail
 

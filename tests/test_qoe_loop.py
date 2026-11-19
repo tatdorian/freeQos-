@@ -318,7 +318,7 @@ async def test_un_secteur_degrade_produit_un_plan_puis_le_calme_n_en_produit_auc
     assert "max-limit=162000000/162000000" in parent
 
     # Le plan SOUSCRIT des abonnes n'a pas bouge d'un bit.
-    abonnes = [c for c in commandes if "freeqos-dupont" in c or "freeqos-durand" in c]
+    abonnes = [c for c in commandes if "dupont" in c or "durand" in c]
     assert abonnes and all("20000000/100000000" in c for c in abonnes)
 
     # --- cycle 2 : tout le monde est revenu dans les clous ---
@@ -414,7 +414,7 @@ async def test_la_boucle_ne_purge_jamais(
     secteur_routeur.simple_queue_rows = [
         {
             ".id": "*1",
-            "name": "freeqos-parti",
+            "name": "parti",
             "target": "10.20.0.99/32",
             "max-limit": "20M/100M",
             "comment": MANAGED_COMMENT,

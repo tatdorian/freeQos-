@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="efd51efe85d3811d">
+  <meta name="freeqos-docs-source" content="b5f71aa4fef7496b">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -93,6 +93,7 @@
     <a class="sub" href="#email-alerts">Email alerts</a>
     <a class="sub" href="#schedulers-evening-night-weekend">Schedulers (evening, night, weekend…)</a>
     <a class="sub" href="#the-shaping-map">The shaping map</a>
+    <a class="sub" href="#client-queue-names-the-clients-name-no-prefix-no-comment">Client queue names: the client's name, no prefix, no comment</a>
     <a class="sub" href="#where-a-subscriber-queue-points-and-when-it-is-skipped">Where a subscriber queue points, and when it is skipped</a>
     <a class="sub" href="#are-the-caps-actually-held">Are the caps actually held?</a>
     <a class="sub" href="#the-write-switch-and-the-accounts-rights">The write switch and the account's rights</a>
@@ -2655,7 +2656,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 </tbody>
 </table></div>
-<p><strong>Switching rewrites only the queue types.</strong> freeQoS creates <code>freeqos-fq-up</code> / <code>freeqos-fq-down</code> (or <code>freeqos-cake-up</code> / <code>freeqos-cake-down</code> when going back), points every freeQoS queue to them (<code>queue=</code> only: no speed, target or parent changes), then removes the old types <strong>last</strong>, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only lines marked <code>freeqos:managed</code> are touched.</p>
+<p><strong>Switching rewrites only the queue types.</strong> freeQoS creates <code>freeqos-fq-up</code> / <code>freeqos-fq-down</code> (or <code>freeqos-cake-up</code> / <code>freeqos-cake-down</code> when going back), points every freeQoS queue to them (<code>queue=</code> only: no speed, target or parent changes), then removes the old types <strong>last</strong>, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only freeQoS's own lines are touched (marked <code>freeqos:managed</code>, or client queues freeQoS remembers creating).</p>
 <p><strong>If FQ-CoDel does not work on a router, it is not used there.</strong> A router that refuses to create the <code>fq-codel</code> type (a RouterOS without it) keeps CAKE: the refusal is noted, its queues stay on CAKE without error, and <em>Settings</em> lists the router with RouterOS's answer. It is tried again after a restart of freeQoS.</p>
 <h3 id="how-queues-nest">How queues nest</h3>
 <p>RouterOS queues form a tree:</p>
@@ -2904,7 +2905,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <ul>
 <li>its record, history, plan, mode, forced limit and boost are deleted from freeQoS;</li>
 <li>it goes on the list of <strong>removed clients</strong>, so it does <strong>not come back</strong>, even while its session stays connected: the next reading ignores it;</li>
-<li>the queue <strong>freeQoS</strong> had set for it (<code>freeqos-&lt;login&gt;</code>, marked <code>freeqos:managed</code>) is taken off at freeQoS's next write (within two minutes when writing is on), so no forgotten limit stays. No other line of the router is concerned.</li>
+<li>the queue <strong>freeQoS</strong> had set for it (named after the client, and remembered by freeQoS) is taken off at freeQoS's next write (within two minutes when writing is on), so no forgotten limit stays. No other line of the router is concerned.</li>
 </ul>
 <p><strong>Removed (N)</strong>, above the list, shows the removed clients; <strong>Bring back</strong> takes one off the list: it reappears at the next reading as a newly found client (no plan, so no queue). API: <code>POST /api/v1/clients/remove</code> with <code>{"logins": [...], "confirm": true}</code>, <code>GET /api/v1/clients/removed</code>, <code>DELETE /api/v1/clients/removed/{login}</code>.</p>
 <h3 id="ubiquiti-uisp-antennas">Ubiquiti UISP (antennas)</h3>
@@ -3030,6 +3031,10 @@ curl -s http://127.0.0.1:8000/health/ready
 </tbody>
 </table></div>
 <p>Points without a queue are listed like the others: a map that only showed what works would leave the rest to be found nowhere. The raw details stay available under the map: analysis of what exists (<code>GET /api/v1/shaping/state</code>), the plan computed on demand, and the command log.</p>
+<h3 id="client-queue-names-the-clients-name-no-prefix-no-comment">Client queue names: the client's name, no prefix, no comment</h3>
+<p>A client's queue is named <strong>after the client</strong> (<code>ACME-OFFICE</code>, characters RouterOS dislikes become <code>-</code>) and carries <strong>no comment</strong>: Winbox shows a clean list. Link queues and queue types keep their <code>freeqos-</code> prefix and <code>freeqos:managed</code> comment.</p>
+<p><strong>How freeQoS knows which queues are its own.</strong> Since nothing is written on a client queue, freeQoS <strong>remembers</strong>, router by router, the names of the client queues it created itself (table <code>owned_queues</code>, reloaded at start). Only those are ever changed or removed. A queue with the same name <strong>set by hand</strong> is never in that memory: freeQoS never touches it, and reports a conflict (<em>a queue by that name already exists and was not created by freeQoS</em>) instead of creating a second one.</p>
+<p><strong>Upgrading.</strong> An existing queue <code>freeqos-&lt;client&gt;</code> (marked <code>freeqos:managed</code>) is <strong>renamed</strong> to <code>&lt;client&gt;</code> and its comment cleared, in place, at the next write — same queue, same counters, never deleted and recreated. Removing a client also removes its queue while it still has its old name.</p>
 <h3 id="where-a-subscriber-queue-points-and-when-it-is-skipped">Where a subscriber queue points, and when it is skipped</h3>
 <p>The subscriber's address is <strong>read on the router when the plan is computed</strong>, never taken from the database: a stored address may be one cycle late, and if the subscriber reconnected in between, the pool may have given its IP to a neighbour. It is written in canonical form with its prefix (<code>10.20.0.12/32</code>): RouterOS always rewrites a bare address that way, and sending it bare would produce a difference at every cycle.</p>
 <div class="table-wrap"><table>

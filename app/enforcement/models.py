@@ -47,14 +47,55 @@ def comment_instance(comment: Any) -> str | None:
     return None
 
 
-def is_managed(row: dict[str, Any]) -> bool:
-    """La ligne a ete posee par UNE instance de freeQoS (la notre ou une autre)."""
+# ------------------------------------------------- files des clients, sans marque
+#
+# LES FILES DES CLIENTS NE PORTENT NI PREFIXE NI COMMENTAIRE (demande de
+# l'exploitant : un nom propre dans Winbox, « ACME-OFFICE », et rien
+# d'autre). Leur propriete n'est donc plus ECRITE sur le routeur : freeQoS
+# SE SOUVIENT, routeur par routeur, des noms des files qu'il y a lui-meme
+# creees (table ``owned_queues``). Une file du meme nom posee a la main par
+# l'exploitant n'est jamais dans cette memoire : elle n'est jamais touchee.
+#
+#: ``routeur -> noms des files de clients posees par freeQoS``.
+OWNED_QUEUES: dict[str, set[str]] = {}
+#: Cle posee par freeQoS sur une ligne LUE dont il se souvient (jamais ecrite).
+OWNED_KEY = "_freeqos"
+
+
+def subscriber_queue_name(login: str) -> str:
+    """Le nom de la file d'un client : son nom, sans prefixe (« ACME-OFFICE »)."""
+    return slugify(login)
+
+
+def legacy_subscriber_queue_name(login: str) -> str:
+    """Son nom d'avant (« freeqos-ACME-OFFICE ») : renomme au passage suivant."""
+    return f"{PREFIX}{slugify(login)}"
+
+
+def mark_owned(router: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Marque, EN MEMOIRE, les files lues que freeQoS a posees sur ce routeur."""
+    noms = OWNED_QUEUES.get(router) or set()
+    if noms:
+        for row in rows:
+            if str(row.get("name") or "") in noms and not _marquee(row):
+                row[OWNED_KEY] = True
+    return rows
+
+
+def _marquee(row: dict[str, Any]) -> bool:
+    """Porte la marque ECRITE de freeQoS (commentaire)."""
     return MANAGED_COMMENT in str(row.get("comment") or "")
+
+
+def is_managed(row: dict[str, Any]) -> bool:
+    """La ligne a ete posee par UNE instance de freeQoS (la notre ou une autre) :
+    marquee par son commentaire, ou file de client dont freeQoS se souvient."""
+    return row.get(OWNED_KEY) is True or _marquee(row)
 
 
 def other_instance(row: dict[str, Any]) -> str | None:
     """L'instance de freeQoS AUTRE que la notre qui a pose cette ligne, ou None."""
-    if not is_managed(row) or not INSTANCE_ID:
+    if not _marquee(row) or not INSTANCE_ID:
         return None
     autre = comment_instance(row.get("comment"))
     return autre if autre and autre != INSTANCE_ID else None
@@ -72,7 +113,12 @@ def is_ours(row: dict[str, Any]) -> bool:
 
 def needs_claim(row: dict[str, Any]) -> bool:
     """Ligne a nous, mais sans notre identifiant : a marquer."""
-    return bool(INSTANCE_ID) and is_ours(row) and comment_instance(row.get("comment")) is None
+    return (
+        bool(INSTANCE_ID)
+        and _marquee(row)
+        and is_ours(row)
+        and comment_instance(row.get("comment")) is None
+    )
 
 
 ActionVerb = Literal["add", "set", "remove"]
@@ -272,6 +318,9 @@ class QueueSpec:
     queue_down: str | None = None
     comment: str = field(default_factory=managed_comment)
     disabled: bool = False
+    # Noms d'avant de CETTE file (« freeqos-<client> ») : une file a nous sous
+    # l'un d'eux est renommee, pas recreee.
+    legacy_names: tuple[str, ...] = ()
     # Ordre d'evaluation : les parents doivent preceder leurs enfants.
     order: int = 0
 

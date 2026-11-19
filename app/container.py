@@ -871,6 +871,16 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_ROUTER_CPU, INTERVALLE_S, releve_cpu)
     conteneur.watch_sources.append(problemes_cpu)
+    # LA MEMOIRE DES FILES DE CLIENTS : sans prefixe ni commentaire sur les
+    # routeurs, c'est elle qui dit lesquelles sont a freeQoS.
+    shaping.owned_pool = database.pool
+    try:
+        from app.db.owned_queues import load as charger_nos_files
+
+        connues = await charger_nos_files(database.pool)
+        logger.info("Files de clients posees par freeQoS : %d en memoire", connues)
+    except Exception:  # noqa: BLE001 - jamais bloquant au demarrage
+        logger.exception("Memoire des files de clients illisible")
     # LES SCHEDULERS : un planning a plusieurs debits devient un scheduler par
     # debit ; les modes automatiques d'une version precedente, inutilises,
     # sont retires.

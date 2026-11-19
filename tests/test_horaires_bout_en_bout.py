@@ -96,7 +96,8 @@ def banc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[Test
                     "routers, pops, subscribers, subscriber_metrics, client_plans, "
                     "shaping_policies, enforcement_audit, static_clients, api_keys, app_users, "
                     "app_sessions, topology_nodes, topology_links, bandwidth_modes, "
-                    "bandwidth_schedules, client_activity, runtime_flags, runtime_settings"
+                    "bandwidth_schedules, client_activity, runtime_flags, runtime_settings, "
+                    "owned_queues"
                 ).split(", ")
                 if await conn.fetchval("SELECT to_regclass($1)", t) is not None
             ]
@@ -186,7 +187,7 @@ def _limites(routeur: RouteurQuiRetient) -> dict[str, str | None]:
     sortie: dict[str, str | None] = dict.fromkeys(CLIENTS)
     for q in routeur.simple_queue_rows:
         for login in CLIENTS:
-            if q.get("name") == f"freeqos-{login}":
+            if q.get("name") == login:
                 sortie[login] = q.get("max-limit")
     return sortie
 

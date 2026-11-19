@@ -215,7 +215,7 @@ def test_une_seule_file_porte_tout_le_contrat() -> None:
     _types, files, ecartes = desired_state(
         links=[], subscribers=[cible_statique("10.0.0.0/29", "10.0.1.0/28")]
     )
-    abonnes = [f for f in files if f.name == "freeqos-clinique"]
+    abonnes = [f for f in files if f.name == "clinique"]
     assert len(abonnes) == 1
     assert abonnes[0].target == "10.0.0.0/29,10.0.1.0/28"
     assert abonnes[0].max_limit == "50000000/100000000"
@@ -231,7 +231,7 @@ def test_une_plage_revendiquee_par_deux_clients_est_ambigue() -> None:
             cible_statique("10.0.1.0/28", login="voisin"),
         ],
     )
-    assert not [f for f in files if f.name in ("freeqos-clinique", "freeqos-voisin")]
+    assert not [f for f in files if f.name in ("clinique", "voisin")]
     motifs = {s.login: s.reason for s in ecartes}
     assert "10.0.1.0/28" in motifs["clinique"] and "voisin" in motifs["clinique"]
     assert "clinique" in motifs["voisin"]
@@ -248,7 +248,7 @@ def test_le_parent_doit_contenir_toutes_les_plages() -> None:
         links=[lien("vlan-a", "10.0.0.0/24"), lien("pop", "10.0.0.0/16")],
         subscribers=[cible_statique("10.0.0.0/29", "10.0.1.0/28")],
     )
-    abonne = next(f for f in files if f.name == "freeqos-clinique")
+    abonne = next(f for f in files if f.name == "clinique")
     # Le /24 ne contient pas 10.0.1.0/28 : seul le /16 contient tout.
     assert abonne.parent == "freeqos-parent-pop"
 
@@ -258,7 +258,7 @@ def test_sans_parent_commun_la_file_reste_a_la_racine() -> None:
         links=[lien("vlan-a", "10.0.0.0/24")],
         subscribers=[cible_statique("10.0.0.0/29", "192.168.9.0/28")],
     )
-    abonne = next(f for f in files if f.name == "freeqos-clinique")
+    abonne = next(f for f in files if f.name == "clinique")
     assert abonne.parent is None
 
 
@@ -268,7 +268,8 @@ def test_une_cible_relue_dans_un_autre_ordre_ne_reecrit_rien() -> None:
         links=[], subscribers=[cible_statique("10.0.0.0/29", "10.0.1.0/28")]
     )
     existante = files[0].routeros_fields()
-    existante.update({".id": "*1", "target": "10.0.1.0/28,10.0.0.0/29"})
+    # Une file de client posee par freeQoS : il s'en souvient (pas de marque).
+    existante.update({".id": "*1", "target": "10.0.1.0/28,10.0.0.0/29", "_freeqos": True})
     plan = build_plan(
         "pop-test",
         desired_types=[],
