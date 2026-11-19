@@ -1214,6 +1214,21 @@ CAKE (*Common Applications Kept Enhanced*) is the queueing algorithm freeQoS use
 | **NAT mode** (`nat`) | Looks at addresses before translation | Fairness between hosts works behind CGNAT |
 | **Reference RTT** (`rtt`) | Sets how fast queue management reacts | 50 ms suits an access network |
 
+### Queue type: CAKE or FQ-CoDel
+
+*Settings › Router writing › Queue type* (two buttons, CAKE / FQ-CoDel; `queue_kind`, also in *Advanced*) chooses the algorithm of **every** freeQoS queue: **cake** (default) or **fq-codel**. FQ-CoDel keeps what matters for the subscriber — a separate queue per flow and active queue management that keeps latency low under load — and uses **less router CPU** than CAKE. What it does not have: overhead compensation (the limit counts IP bytes; clients get their full limit), DSCP priority classes and NAT-aware host fairness. The *cake_…* settings are greyed out and have no effect while FQ-CoDel is chosen.
+
+| | CAKE | FQ-CoDel |
+| --- | --- | --- |
+| Low latency under load, per-flow fairness | ✅ | ✅ |
+| Speeds, modes, schedulers, boosts, parent queues | ✅ | ✅ (identical: they set `max-limit`, not the queue type) |
+| PPPoE overhead, DSCP classes, NAT mode | ✅ | ❌ |
+| Router CPU | higher | lower |
+
+**Switching rewrites only the queue types.** freeQoS creates `freeqos-fq-up` / `freeqos-fq-down` (or `freeqos-cake-up` / `freeqos-cake-down` when going back), points every freeQoS queue to them (`queue=` only: no speed, target or parent changes), then removes the old types **last**, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only lines marked `freeqos:managed` are touched.
+
+**If FQ-CoDel does not work on a router, it is not used there.** A router that refuses to create the `fq-codel` type (a RouterOS without it) keeps CAKE: the refusal is noted, its queues stay on CAKE without error, and *Settings* lists the router with RouterOS's answer. It is tried again after a restart of freeQoS.
+
 ### How queues nest
 
 RouterOS queues form a tree:

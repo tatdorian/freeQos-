@@ -1398,6 +1398,22 @@
 
       <!-- --------------------------------------------- shaping et ecriture -->
       <h2 data-tab="Router writing">Shaping and writing to the routers</h2>
+      <!-- TYPE DES FILES : CAKE ou FQ-CoDel (moins de CPU). Basculer ne refait
+           que les types des files freeQoS ; un routeur qui refuse FQ-CoDel
+           reste en CAKE. -->
+      <div class="card" id="queue-kind-card" style="margin-bottom:1rem">
+        <div class="cp-card-head"><h3>Queue type</h3>
+          <div class="segmented" id="queue-kind-seg" role="group" aria-label="Queue type">
+            <button type="button" data-qk="cake">CAKE</button>
+            <button type="button" data-qk="fq-codel">FQ-CoDel</button>
+          </div>
+        </div>
+        <p class="hint" style="display:block"><b>CAKE</b>: the most complete (PPPoE overhead, DSCP priority,
+          NAT awareness). <b>FQ-CoDel</b>: the same low latency and fairness between flows, for
+          <b>less router CPU</b>. Speeds, modes, schedulers and boosts do not change: switching only
+          rewrites the queue types of freeQoS queues, at once.</p>
+        <div id="queue-kind-out"></div>
+      </div>
       <details id="settings-shaping">
         <summary>Write switch, map of caps, command log</summary>
 

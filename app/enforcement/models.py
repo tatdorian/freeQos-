@@ -419,7 +419,10 @@ class Plan:
         actions = [
             action
             for action in self.actions
-            if (keep_types and action.path == "/queue/type") or (action.name or "") in gardes
+            # Les types a CREER suivent ; un type a RETIRER (bascule CAKE <->
+            # FQ-CoDel) attend le plan complet, ou ses files sont repointees.
+            if (keep_types and action.path == "/queue/type" and action.verb != "remove")
+            or (action.name or "") in gardes
         ]
         return Plan(
             router_name=self.router_name,

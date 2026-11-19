@@ -11315,7 +11315,7 @@ async function refreshHealth() {
 /* -------------------------------------------------------------- reglages */
 
 const GROUPE_TITRE = {
-  shaping: 'Shaping', cake: 'CAKE (AQM)', enforcement: 'Write safeguards',
+  shaping: 'Shaping', cake: 'Queue type (CAKE or FQ-CoDel)', enforcement: 'Write safeguards',
   cadences: 'Collection cadences', detection: 'Static-IP client detection',
   trafic: 'Traffic (NetFlow)', services: 'Services and IP location',
 };
@@ -11349,14 +11349,17 @@ function settingControl(r) {
     ' value="' + (vide ? '' : esc(r.value)) + '">';
 }
 
-function settingRow(r) {
+function settingRow(r, fq) {
   const pose = r.source === 'db';
+  // En FQ-CoDel, les options CAKE n'ont pas d'effet : grisees, et dit.
+  const inerte = fq && /^cake_/.test(r.name);
   const badge = pose
     ? '<span class="badge ok" title="Value set here, stored in the database">database</span>'
     : '<span class="badge" title="No value set: the default applies">default</span>';
   const defaut = r.default === null || r.default === undefined ? '—' : String(r.default);
-  return '<tr>' +
+  return '<tr' + (inerte ? ' style="opacity:.55"' : '') + '>' +
     '<td><code>' + esc(r.name) + '</code>' +
+      (inerte ? ' <span class="badge">no effect with FQ-CoDel</span>' : '') +
       '<span class="hint">' + esc(r.help) + '</span></td>' +
     '<td style="min-width:190px">' + settingControl(r) + '</td>' +
     '<td>' + badge + '<span class="hint">default: ' + esc(defaut) + '</span></td>' +
@@ -11586,15 +11589,27 @@ async function loadSettings() {
       body.settings.length;
   }
 
+  renderQueueKind(body);
   const ordre = ['shaping', 'cake', 'enforcement', 'trafic', 'cadences'];
   const groupes = Object.keys(body.groups)
     .sort((a, b) => ordre.indexOf(a) - ordre.indexOf(b));
+  const typeFile = (body.settings.find((x) => x.name === 'queue_kind') || {}).value;
+  const fq = typeFile === 'fq-codel';
+  // SI FQ-CODEL NE FONCTIONNE PAS SUR UN ROUTEUR, IL RESTE EN CAKE : dit ici.
+  const refus = Object.entries(body.fq_codel_refused || {});
+  const noteType = (g) => g !== 'cake' ? '' :
+    '<p class="hint" style="display:block;margin:-.2rem 0 .5rem">Queue type of every freeQoS queue: ' +
+    '<b>cake</b> (default, most complete) or <b>fq-codel</b> (same low latency and fairness, less router ' +
+    'CPU). Speeds, modes, schedulers and boosts stay the same; switching only rewrites the queue types.</p>' +
+    (fq && refus.length ? '<div class="notice warn">FQ-CoDel did not work on ' +
+      refus.map(([r, m]) => '<b>' + esc(r) + '</b> (' + esc(m) + ')').join(', ') +
+      ': these routers keep CAKE.</div>' : '');
   host.innerHTML = groupes.map((g) =>
-    '<h3>' + esc(GROUPE_TITRE[g] || g) + '</h3>' +
+    '<h3>' + esc(GROUPE_TITRE[g] || g) + '</h3>' + noteType(g) +
     '<div class="table-wrap"><table><thead><tr>' +
       '<th>Setting</th><th>Value</th><th>Source</th><th></th>' +
     '</tr></thead><tbody>' +
-    body.groups[g].map(settingRow).join('') +
+    body.groups[g].map((r) => settingRow(r, fq)).join('') +
     '</tbody></table></div>').join('');
 
   host.querySelectorAll('[data-set-save]').forEach((b) => {
@@ -11609,6 +11624,35 @@ async function loadSettings() {
   // interrogerait tout le parc pour rien.
   const bloc = document.getElementById('settings-shaping');
   if (bloc && bloc.open) await loadShaping();
+}
+
+/** CAKE ou FQ-CoDel, en deux boutons. Un routeur qui refuse FQ-CoDel reste en CAKE. */
+function renderQueueKind(body) {
+  const seg = document.getElementById('queue-kind-seg');
+  if (!seg) return;
+  const actuel = (body.settings.find((x) => x.name === 'queue_kind') || {}).value || 'cake';
+  seg.querySelectorAll('[data-qk]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.qk === actuel);
+    b.disabled = !peut('edit');
+    b.onclick = async () => {
+      if (b.dataset.qk === actuel) return;
+      const out = document.getElementById('queue-kind-out');
+      try {
+        await api('/settings/queue_kind', { method: 'PUT', body: JSON.stringify({ value: b.dataset.qk }) });
+        out.innerHTML = '<div class="notice ok">' + (b.dataset.qk === 'fq-codel' ? 'FQ-CoDel' : 'CAKE') +
+          ' chosen: the freeQoS queues are being switched now (speeds unchanged).</div>';
+        await loadSettings();
+      } catch (err) {
+        out.innerHTML = noticeErreur(err);
+      }
+    };
+  });
+  const refus = Object.entries(body.fq_codel_refused || {});
+  const out = document.getElementById('queue-kind-out');
+  if (actuel === 'fq-codel' && refus.length && !out.querySelector('.notice.ok')) {
+    out.innerHTML = '<div class="notice warn">FQ-CoDel did not work on ' +
+      refus.map(([r, m]) => '<b>' + esc(r) + '</b> (' + esc(m) + ')').join(', ') + ': these routers keep CAKE.</div>';
+  }
 }
 
 function settingNotice(html) {
