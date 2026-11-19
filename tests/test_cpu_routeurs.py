@@ -11,6 +11,8 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from app.collectors.mikrotik import MikrotikCollector
 from app.services.router_cpu import SEUIL_ALERTE, RouterCpu
 from app.web.ui import STATIC_DIR
@@ -102,3 +104,34 @@ def test_l_interface_montre_le_detail() -> None:
     assert html.index("<h2>Connect a router (PoP)</h2>") < html.index("<h2>Router settings</h2>")
     assert html.index("<h2>Router settings</h2>") < html.index("<h2>Ubiquiti UISP</h2>")
     assert "<h2>Inventory</h2>" not in html
+
+
+@pytest.mark.parametrize(
+    ("brut", "attendu"),
+    [
+        (33, 33),
+        ("33", 33),
+        ("33%", 33),
+        ("33 %", 33),
+        ("12.5", 12),
+        (12.6, 13),
+        ("", None),
+        (None, None),
+        ("n/a", None),
+    ],
+)
+def test_toutes_les_formes_de_charge_cpu_sont_lues(brut: object, attendu: int | None) -> None:
+    """Selon la version de RouterOS et la bibliotheque, la charge arrive en nombre
+    ou en texte, avec ou sans « % » : toutes donnent le meme chiffre."""
+    from app.collectors.mikrotik import _pourcent
+
+    assert _pourcent(brut) == attendu
+
+
+def test_un_client_a_ip_fixe_sans_compteur_n_est_pas_connecte() -> None:
+    """« Connected » a 0 pour un client a IP fixe que freeQoS ne mesure pas :
+    faux. Sans compteur ni ping, il est « Not measured »."""
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert "function sansMesure(r)" in js
+    assert "return !sansMesure(r);" in js
+    assert "Not measured · no counter yet" in js

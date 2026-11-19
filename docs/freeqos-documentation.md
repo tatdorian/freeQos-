@@ -665,6 +665,8 @@ A static-IP client announces nothing: no session, no RADIUS plan. **The declarat
 - it is a **single address** (/32), not a block;
 - **exactly one** session seen in the last 10 minutes carries that address, and that session was not removed from freeQoS.
 
+**Two fixed-IP records on the same address** (`ACME OFFICE` typed by hand, `ACME-OFFICE` pushed by the API) are the same client twice — and their queue names collide (`freeqos-acme-office`), so only one was measured while the other showed offline. A record declared **by hand** on the single address of another fixed-IP record is merged into it the same way: into the **API** record when there is one (the API owns it), otherwise into the record typed **first**. Its name becomes the display name if the other has none, its rate fills the other's when it has none, and its mode, contact details and activity follow.
+
 Each merge is written to the client's *Activity* (*Merged*).
 
 **Census and candidates.** The census of a PoP (`GET /api/v1/pops/census`, see above) confirms declared clients — an address inside a declared block is "seen active" — and lists the addresses that match nothing. `GET /api/v1/static-clients/candidates` returns those candidates and `GET /api/v1/static-clients/candidates/diagnostic` the reason each ARP line was set aside. A candidate is never turned into a subscriber automatically: a printer, a camera or another operator's device leaves exactly the same trace, and nobody can guess the sold rate. Declaring always goes through `POST /api/v1/static-clients` (or the *Add a client* form) with a reference and a plan.
@@ -1326,6 +1328,8 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 - The log records what and for how long ("x1.5 of the current rate (550 kbps -> 825 kbps down, ...) for 4 h", "temporary rate 5 / 2 Mbps for 3 days", "... until stopped").
 
 ### Clients page, map, alerts and reports
+
+**Online, for a fixed-IP client.** A fixed-IP client has no session: it counts as online only when freeQoS measures it — counters of its queue, NetFlow, or a ping reply. Without any of them (no queue yet, writing off) it shows **Not measured · no counter yet**, never *connected* at 0.
 
 **Clients page.** Four cards on top: *Clients* (and the number of sites), *Connected* (with a bar, green above 80 %, orange from 50 %, red below), *In a mode*, *Boosts*. A card is also a filter: tap it to list those clients. For each client, **Usage now** is a bar of its download rate against its limit, with a word: *Quiet* (under 10 %), *Normal*, *Busy* (60 % and more), *At its limit* (90 % and more). The IP address is not shown in the list: it is on the client's page (search by IP still works).
 

@@ -839,6 +839,10 @@ class MetricsRepository:
                 WITH recent AS (
                     SELECT * FROM subscriber_latest
                      WHERE ts > now() - INTERVAL '2 minutes'
+                       -- Un client a IP fixe sans compteur ni ping n'est pas
+                       -- « en ligne » : rien ne le prouve.
+                       AND NOT (kind = 'static' AND rx_bps IS NULL AND tx_bps IS NULL
+                                AND rtt_ms IS NULL)
                 )
                 SELECT
                     (SELECT count(*) FROM subscribers)                     AS subscribers,
@@ -874,6 +878,10 @@ class MetricsRepository:
                 WITH recent AS (
                     SELECT * FROM subscriber_latest
                      WHERE ts > now() - INTERVAL '2 minutes'
+                       -- Un client a IP fixe sans compteur ni ping n'est pas
+                       -- « en ligne » : rien ne le prouve.
+                       AND NOT (kind = 'static' AND rx_bps IS NULL AND tx_bps IS NULL
+                                AND rtt_ms IS NULL)
                 )
                 SELECT p.id, p.name, p.router_host,
                        (SELECT count(*) FROM subscribers s WHERE s.pop_id = p.id)
