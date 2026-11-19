@@ -8166,7 +8166,16 @@ const TOPO_RANG = {
  *  keepalives pendant qu'un test de debit passait. */
 function mesureFraiche(r) {
   if (!r || !r.ts) return false;
-  return (Date.now() - new Date(r.ts).getTime()) < 90000;
+  if ((Date.now() - new Date(r.ts).getTime()) >= 90000) return false;
+  // UN CLIENT A IP FIXE n'a pas de session : un releve recent ne prouve rien
+  // s'il ne porte aucun compteur (pas encore de file, ecriture coupee) ni
+  // reponse au ping. Le dire « connecte a 0 » etait faux : il n'est pas mesure.
+  return !sansMesure(r);
+}
+
+/** IP fixe, releve recent mais sans compteur ni ping : pas mesure. */
+function sansMesure(r) {
+  return !!r && r.kind === 'static' && r.rx_bps == null && r.tx_bps == null && r.rtt_ms == null;
 }
 
 
@@ -12751,6 +12760,10 @@ function texteHorsLigne(r) {
   if (muet) {
     return '<span class="cli-unread" title="' + esc(muet.error || '') + '">Not measured · router ' + esc(muet.router) + ' not answering freeQoS' +
       (muet.ok_at ? ' (last read ' + esc(depuis(muet.ok_at)) + ')' : '') + '</span>';
+  }
+  if (sansMesure(r) && r.ts && (Date.now() - new Date(r.ts).getTime()) < 90000) {
+    return '<span class="cli-unread" title="No queue counter and no ping reply for this fixed-IP client: ' +
+      'freeQoS cannot tell whether it is online. Its queue gives the counters once it is set.">Not measured · no counter yet</span>';
   }
   return '<span class="cli-off">Offline · ' + (r.ts ? 'seen ' + esc(depuis(r.ts)) : 'never seen') + '</span>';
 }

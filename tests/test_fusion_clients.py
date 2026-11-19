@@ -185,3 +185,61 @@ def test_une_fiche_de_l_api_n_est_jamais_fusionnee(app_client, routeur) -> None:
     r = app_client.post("/api/v1/jobs/merge_clients/run", headers=cle)
     assert r.status_code == 200, r.text
     assert "SVC-0042" in _references(app_client, cle)
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_deux_fiches_a_ip_fixe_sur_la_meme_ip_n_en_font_qu_une(app_client, routeur) -> None:  # noqa: F811
+    """Constate : « ACME OFFICE » saisi a la main et « ACME-OFFICE » sur la meme
+    IP s'affichaient deux fois (l'un hors ligne, l'autre mesure). La fiche a la
+    main rejoint celle de l'API ; entre deux fiches a la main, la premiere."""
+    ecriture, _lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    conteneur = app_client.app.state.container
+
+    async def fiche_api() -> None:
+        async with conteneur.database.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO static_clients (reference, label, pop_name, address, source) "
+                "VALUES ('ACME-OFFICE', 'ACME', 'PoP Test', '10.20.0.60', 'api')"
+            )
+
+    assert app_client.portal is not None
+    app_client.portal.call(fiche_api)
+    r = app_client.post(
+        "/api/v1/static-clients",
+        headers=cle,
+        json={
+            "reference": "ACME OFFICE",
+            "label": "ACME Office",
+            "pop_name": "PoP Test",
+            "address": "10.20.0.60",
+            "plan_down_mbps": 30,
+            "plan_up_mbps": 10,
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["merged_into"] == "ACME-OFFICE"
+    references = _references(app_client, cle)
+    assert "ACME OFFICE" not in references and "ACME-OFFICE" in references
+
+    # Deux fiches a la main : la seconde rejoint la premiere.
+    r = app_client.post(
+        "/api/v1/static-clients",
+        headers=cle,
+        json={"reference": "ACME SHOP", "pop_name": "PoP Test", "address": "10.20.0.70"},
+    )
+    assert r.status_code == 201 and "merged_into" not in r.json(), r.text
+    r = app_client.post(
+        "/api/v1/static-clients",
+        headers=cle,
+        json={
+            "reference": "ACME-SHOP",
+            "label": "Shop",
+            "pop_name": "PoP Test",
+            "address": "10.20.0.70",
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert r.json()["merged_into"] == "ACME SHOP"
+    assert "ACME-SHOP" not in _references(app_client, cle)

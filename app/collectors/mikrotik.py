@@ -1720,7 +1720,7 @@ class MikrotikCollector:
             "version": _as_str(resource.get("version")),
             "board_name": _as_str(resource.get("board-name")),
             "uptime_s": parse_routeros_uptime(resource.get("uptime")),
-            "cpu_load_pct": parse_counter(resource.get("cpu-load")),
+            "cpu_load_pct": _pourcent(resource.get("cpu-load")),
             "cpu_count": parse_counter(resource.get("cpu-count")),
             "free_memory": libre,
             "total_memory": total,
@@ -1757,7 +1757,7 @@ class MikrotikCollector:
         coeurs: list[dict[str, Any]] = []
         charges: list[int] = []
         for i, ligne in enumerate(lignes):
-            charge = parse_counter(str(ligne.get("load", "")).rstrip("%") or None)
+            charge = _pourcent(ligne.get("load"))
             if charge is None:
                 continue
             charges.append(charge)
@@ -1765,7 +1765,7 @@ class MikrotikCollector:
                 {
                     "cpu": _as_str(ligne.get("cpu")) or f"cpu{i}",
                     "load_pct": charge,
-                    "irq_pct": parse_counter(str(ligne.get("irq", "")).rstrip("%") or None),
+                    "irq_pct": _pourcent(ligne.get("irq")),
                 }
             )
         return {
@@ -1899,3 +1899,22 @@ def _as_str(value: object) -> str | None:
 
 def utcnow() -> datetime:
     return datetime.now(tz=UTC)
+
+
+def _pourcent(valeur: object) -> int | None:
+    """Une charge CPU RouterOS en pourcentage entier, quelle que soit sa forme.
+
+    L'API la rend en nombre (``33``), mais selon la version et la bibliotheque
+    elle arrive aussi en texte : ``"33"``, ``"33%"``, ``"33 %"``, voire
+    ``"12.5"``. Une forme non reconnue donne None, jamais un chiffre invente."""
+    if valeur is None or isinstance(valeur, bool):
+        return None
+    if isinstance(valeur, int | float):
+        return round(valeur)
+    texte = str(valeur).strip().rstrip("%").strip().replace(",", ".")
+    if not texte:
+        return None
+    try:
+        return round(float(texte))
+    except ValueError:
+        return None
