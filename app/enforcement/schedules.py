@@ -580,7 +580,7 @@ class ScheduleBook:
             up_mbps=haut,
             schedule_id=profil.id,
             schedule_name=profil.name,
-            window=plage.describe(),
+            window="started by hand" if profil.manual_active(instant) else plage.describe(),
             over_mode=en_mode,
         )
 

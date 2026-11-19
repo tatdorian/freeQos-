@@ -214,3 +214,29 @@ async def test_un_planning_a_deux_debits_devient_deux_schedulers() -> None:
     assert second["scope"] == "all"
     # Deja separe : rien de plus au demarrage suivant.
     assert await split_mixed_schedules(depot) == []
+
+
+# ------------------------------------------------------- interface
+def test_la_fiche_client_montre_le_scheduler_en_cours() -> None:
+    from app.web.ui import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert "'<tr><td>Scheduler</td><td>'" in js
+    assert "none right now" in js
+
+
+def test_un_mode_ne_se_saisit_plus_en_pourcentage() -> None:
+    from app.web.ui import STATIC_DIR
+
+    html = (STATIC_DIR.parent / "templates" / "index.html").read_text(encoding="utf-8")
+    debut = html.index('id="mode-unit"')
+    unites = html[debut : html.index("</div>", debut)]
+    assert 'data-u="kbps"' in unites
+    assert 'data-u="mbps"' in unites
+    assert "percent" not in unites
+
+
+def test_le_scheduler_lance_a_la_main_le_dit() -> None:
+    carnet = ScheduleBook([_sched(1, "Evening", "all", manual_on=True)])
+    taux = carnet.rate_for(login="a", sites=(), plan_down=10, plan_up=10, now=LUNDI_12H)
+    assert taux.window == "started by hand"

@@ -59,7 +59,7 @@ def test_un_mode_pose_son_debit_puis_automatic_rend_le_forfait(app_client, route
     nuit = app_client.post(
         "/api/v1/bandwidth-modes",
         headers=cle,
-        json={"name": "Night", "rate_kind": "percent", "down_value": 200, "up_value": 100},
+        json={"name": "Night", "down_value": 40, "up_value": 10},
     ).json()
 
     # Un client en Backup : 6/6, quel que soit son forfait.
@@ -73,13 +73,23 @@ def test_un_mode_pose_son_debit_puis_automatic_rend_le_forfait(app_client, route
     )
     assert ligne["mode_name"] == "Backup"
 
-    # Un mode en part du forfait : 200 % de 20 descendant, 100 % de 10 montant.
+    # Un autre mode : sa vitesse, quel que soit le forfait.
     app_client.put("/api/v1/clients/dupont/mode", headers=cle, json={"mode_id": nuit["id"]})
     assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/40000000"
 
+    # Un mode est une VITESSE : un pourcentage du plan est refuse (c'est le
+    # travail des schedulers).
+    r = app_client.post(
+        "/api/v1/bandwidth-modes",
+        headers=cle,
+        json={"name": "Half", "rate_kind": "percent", "down_value": 50, "up_value": 50},
+    )
+    assert r.status_code == 400
+    assert "use a scheduler" in r.json()["detail"]
+
     # Le mode change de debit : le client suit tout de suite.
     r = app_client.patch(
-        f"/api/v1/bandwidth-modes/{nuit['id']}", headers=cle, json={"down_value": 300}
+        f"/api/v1/bandwidth-modes/{nuit['id']}", headers=cle, json={"down_value": 60}
     )
     assert r.status_code == 200, r.text
     assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/60000000"
@@ -145,12 +155,12 @@ def test_le_journal_raconte_chaque_geste_et_le_forfait_garde_le_mode(app_client,
     nuit = app_client.post(
         "/api/v1/bandwidth-modes",
         headers=cle,
-        json={"name": "Night", "rate_kind": "percent", "down_value": 200, "up_value": 100},
+        json={"name": "Night", "down_value": 40, "up_value": 10},
     ).json()
     app_client.put("/api/v1/clients/dupont/mode", headers=cle, json={"mode_id": nuit["id"]})
     assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/40000000"
 
-    # Nouveau forfait : le mode reste, et suit le forfait (200 % de 30).
+    # Nouveau forfait par l'API : le mode reste, avec sa vitesse.
     r = app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 30, "up_mbps": 10})
     assert r.status_code == 200, r.text
     ligne = next(
@@ -159,7 +169,7 @@ def test_le_journal_raconte_chaque_geste_et_le_forfait_garde_le_mode(app_client,
         if x["login"] == "dupont"
     )
     assert ligne["mode_name"] == "Night"
-    assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/60000000"
+    assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/40000000"
 
     app_client.post(
         "/api/v1/clients/actions",
@@ -249,7 +259,7 @@ def test_un_profil_horaire_donne_un_mode_a_des_clients_choisis(app_client, route
     nuit = app_client.post(
         "/api/v1/bandwidth-modes",
         headers=cle,
-        json={"name": "Night", "rate_kind": "percent", "down_value": 200, "up_value": 100},
+        json={"name": "Night", "down_value": 40, "up_value": 10},
     ).json()
 
     plage = {"label": "all day", "start": "00:00", "end": "24:00", "mode_id": backup["id"]}
@@ -278,7 +288,7 @@ def test_un_profil_horaire_donne_un_mode_a_des_clients_choisis(app_client, route
     assert r.status_code == 409
     assert "Secours" in r.json()["detail"]
 
-    # Un mode en part du forfait : 200 % de 20 descendant, 100 % de 10 montant.
+    # Un autre mode dans la plage : sa vitesse.
     r = app_client.patch(
         f"/api/v1/bandwidth-schedules/{profil['id']}",
         headers=cle,

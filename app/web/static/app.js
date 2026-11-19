@@ -12654,14 +12654,14 @@ function modeTaux(m) {
       : mbps(m.down_value) + ' down · ' + mbps(m.up_value) + ' up');
 }
 
-function modeDuClient(r) {
-  const sched = r.limit_source === 'schedule' ? ' · ' + (r.schedule_name || 'scheduler') : '';
+function modeDuClient(r, sansScheduler) {
+  const sched = !sansScheduler && r.limit_source === 'schedule' ? ' · ' + (r.schedule_name || 'scheduler') : '';
   if (r.mode_id) {
     const m = CLI.modes.find((x) => x.id === r.mode_id);
     return { cls: m && m.disables_boost ? 'crit' : 'set', text: (r.mode_name || (m ? m.name : 'Mode')) + sched };
   }
   if (r.override_down_mbps) return { cls: 'set', text: 'Manual limit' };
-  return { cls: 'auto', text: 'Its plan' + sched };
+  return { cls: 'auto', text: 'No mode' + sched };
 }
 
 function clientEnLigne(r) { return mesureFraiche(r); }
@@ -12736,7 +12736,7 @@ async function loadClients() {
   const sigM = CLI.modes.map((m) => m.id + ':' + m.name).join('|');
   if (selMode.dataset.sig !== sigM) {
     const v = selMode.value;
-    selMode.innerHTML = '<option value="">Mode</option><option value="auto">Its plan</option>' +
+    selMode.innerHTML = '<option value="">Mode</option><option value="auto">No mode</option>' +
       '<option value="any">In a mode or limited</option><option value="manual">Manual limit</option>' +
       CLI.modes.map((m) => '<option value="' + m.id + '">' + esc(m.name) + '</option>').join('');
     selMode.value = v;
@@ -13531,7 +13531,7 @@ function openModeDialog(logins) {
       '<input type="radio" name="mode-choice" value="' + (id === null ? '' : id) + '"' + (sel ? ' checked' : '') + '>' +
       '<span><b>' + esc(nom) + '</b><small>' + sous + '</small></span></label>';
   };
-  const cartes = carte(null, 'Its plan', 'No mode: the client gets its own plan<br>' +
+  const cartes = carte(null, 'No mode', 'The client gets its own plan<br>' +
       'Schedulers for clients on their plan apply to it', true) +
     CLI.modes.map((m) => carte(m.id, m.name,
       (m.disables_boost ? 'Boost stopped and refused' : 'The speed of this mode') +
@@ -13716,11 +13716,13 @@ async function loadModesAdmin() {
   document.getElementById('modes-form').hidden = !ecrire;
   document.getElementById('modes-form-title').hidden = !ecrire;
   host.innerHTML = !modes.length
-    ? '<div class="empty">No mode yet. Typical set: Backup (6 Mbps), Extreme backup (512 kbps), ' +
-      'Night (200 % of the plan).</div>'
+    ? '<div class="empty">No mode yet. A mode is a speed: Backup (6 Mbps), Extreme backup (512 kbps), ' +
+      'Pro (50 Mbps). To change speeds by a %, use a scheduler.</div>'
     : '<table><thead><tr><th>Mode</th><th>Rate</th><th class="num">Clients</th>' +
       '<th>Note</th><th></th></tr></thead><tbody>' +
-      modes.map((m) => '<tr><td><b>' + esc(m.name) + '</b></td><td>' + esc(modeTaux(m)) + '</td>' +
+      modes.map((m) => '<tr><td><b>' + esc(m.name) + '</b></td><td>' + esc(modeTaux(m)) +
+        (m.rate_kind === 'percent' ? ' <span class="badge warn" title="A mode is a speed now: edit it and ' +
+          'give it kbps or Mbps. It keeps working until then.">give it a fixed speed</span>' : '') + '</td>' +
         '<td class="num">' + (m.clients || 0) + '</td><td>' + esc(m.note || '') + '</td>' +
         '<td><div class="actions" style="justify-content:flex-end">' + (ecrire
           ? '<button class="sm" data-mode-edit="' + m.id + '">Edit</button>' +
@@ -13731,11 +13733,17 @@ async function loadModesAdmin() {
     MODES.editing = m.id;
     document.getElementById('mode-name').value = m.name;
     // Un debit fixe sous 1 Mbps se relit en kbps, comme il a ete saisi.
-    const kb = m.rate_kind !== 'percent' && Number(m.down_value) < 1 && Number(m.up_value) < 1;
-    modeUnite(m.rate_kind === 'percent' ? 'percent' : kb ? 'kbps' : 'mbps');
+    const pct = m.rate_kind === 'percent';
+    const kb = !pct && Number(m.down_value) < 1 && Number(m.up_value) < 1;
+    modeUnite(kb ? 'kbps' : 'mbps');
     const f = kb ? 1000 : 1;
-    document.getElementById('mode-down').value = +(m.down_value * f).toFixed(3);
-    document.getElementById('mode-up').value = +(m.up_value * f).toFixed(3);
+    // Un ancien mode en % du plan : on lui donne une vitesse fixe.
+    document.getElementById('mode-down').value = pct ? '' : +(m.down_value * f).toFixed(3);
+    document.getElementById('mode-up').value = pct ? '' : +(m.up_value * f).toFixed(3);
+    if (pct) {
+      document.getElementById('modes-result').innerHTML = '<div class="notice warn">"' + esc(m.name) +
+        '" was ' + esc(modeTaux(m)) + '. A mode is a fixed speed now: type its speed in kbps or Mbps.</div>';
+    }
     document.getElementById('mode-position').value = m.position || 0;
     document.getElementById('mode-note').value = m.note || '';
     document.getElementById('modes-form-title').textContent = 'Edit ' + m.name;
@@ -13759,13 +13767,13 @@ async function loadModesAdmin() {
 /** L'unite du debit d'un mode : kbps, Mbps, ou % du forfait. */
 function modeUnite(u) {
   MODES.unite = u;
-  document.getElementById('mode-kind').value = u === 'percent' ? 'percent' : 'fixed';
+  document.getElementById('mode-kind').value = 'fixed';
   document.querySelectorAll('#mode-unit [data-u]').forEach((b) => b.classList.toggle('active', b.dataset.u === u));
   majUniteMode();
 }
 
 function majUniteMode() {
-  const u = { kbps: 'kbps', mbps: 'Mbps', percent: '% of plan' }[MODES.unite || 'mbps'];
+  const u = { kbps: 'kbps', mbps: 'Mbps' }[MODES.unite || 'mbps'];
   document.getElementById('mode-unit-down').textContent = u;
   document.getElementById('mode-unit-up').textContent = u;
 }
@@ -13846,7 +13854,7 @@ function etatGeste(a) {
     esc(ETAT_FILE[a.queue_state] || a.queue_state) + '</span>';
 }
 const SOURCE_LIMITE = {
-  plan: 'from the plan', override: 'from the mode or a manual limit', schedule: 'from the schedule',
+  plan: 'from the plan', override: 'from the mode or a manual limit', schedule: 'from the scheduler',
   boost: 'boost running', none: 'no limit',
 };
 
@@ -14058,7 +14066,9 @@ async function loadClientPage() {
   const s = (data && data.subscriber) || r;
   const pts = (data && data.points) || [];
   const on = clientEnLigne(r);
-  const m = modeDuClient(r);
+  // La lecture la plus fraiche (la fiche) l'emporte sur la liste en cache.
+  // Le scheduler a sa propre ligne sur la fiche : la pastille dit le mode seul.
+  const m = modeDuClient({ ...r, ...s }, true);
   const b = CLI.boosts[login];
   const ecrire = peut('operator');
   const dis = ecrire ? '' : ' disabled';
@@ -14114,6 +14124,14 @@ async function loadClientPage() {
         '<div><span>&uarr; Uploaded</span><b>' + esc(octetsText(octets('rx_bps_avg'))) + '</b></div></div></div>' +
       '<div class="cp-side">' + carteDiagnostic(sante) + '<div class="card"><h3>Bandwidth &amp; mode</h3><table class="kv"><tbody>' +
         '<tr><td>Mode</td><td><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span></td></tr>' +
+        // LE SCHEDULER EN COURS : son nom, ses heures, et s'il decide la vitesse.
+        '<tr><td>Scheduler</td><td>' + ((s.schedule_name || r.schedule_name)
+          ? '<a href="#/management"><b>' + esc(s.schedule_name || r.schedule_name) + '</b></a> · ' +
+            esc(s.schedule_window || r.schedule_window || '') +
+            ((s.limit_source || r.limit_source) === 'schedule' ? ''
+              : ' <span class="hint" style="display:inline">(not applied now: ' +
+                esc(SOURCE_LIMITE[s.limit_source || r.limit_source] || 'another limit') + ')</span>')
+          : '<span class="na">none right now</span>') + '</td></tr>' +
         '<tr><td>Plan</td><td>' + (s.plan_down_mbps ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : 'default plan') + '</td></tr>' +
         '<tr><td>Applied now</td><td>' + esc(limite) + '</td></tr>' +
         '<tr><td>Boost</td><td>' + (b ? esc(boostReste(b)) + (boostReste(b) === 'until stopped' ? '' : ' left') : 'none') + '</td></tr>' +
@@ -14151,19 +14169,20 @@ async function loadClientPage() {
         '<span><b>' + esc(nom) + (sel ? ' · current' : '') + '</b><small>' + sous + '</small></span></label>';
     };
     const planTxt = s.plan_down_mbps ? mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps) : 'no plan yet';
-    corps = '<div class="cp-grid"><div class="card"><h3>Speed: its plan or a mode</h3>' +
-      '<p class="hint" style="display:block">A client has <b>its plan</b> or <b>a mode</b>, never both. ' +
-        'Schedulers then change this speed by a % during their hours.</p>' +
+    corps = '<div class="cp-grid"><div class="card"><h3>Bandwidth mode</h3>' +
+      '<p class="hint" style="display:block">Its <b>plan</b> is its own speed. A <b>mode</b>, when it has ' +
+        'one, applies instead; <b>No mode</b> gives it back its plan. Schedulers then change this speed by ' +
+        'a % during their hours.</p>' +
       '<div class="mode-cards">' +
-      carte(null, 'Its plan', esc(planTxt)) +
+      carte(null, 'No mode', 'its plan: ' + esc(planTxt)) +
       CLI.modes.map((x) => carte(x.id, x.name, esc(modeTaux(x)))).join('') +
       '</div>' + (CLI.modes.length ? '' : '<p class="hint" style="display:block">No mode yet: create one on the ' +
         '<a href="#/modes">Modes</a> page.</p>') +
       '<div class="actions" style="margin-top:.8rem"><span class="spacer"></span>' +
       '<button class="primary" id="cp-apply-mode"' + dis + '>Apply</button></div><div id="cp-mode-out"></div></div>' +
-      '<div class="cp-side"><div class="card"><h3>Its plan</h3>' +
-      (r.mode_id != null ? '<p class="hint" style="display:block">Not used now: the client is in mode <b>' +
-        esc(r.mode_name || '') + '</b>. Saving a plan takes it out of the mode.</p>' : '') +
+      '<div class="cp-side"><div class="card"><h3>Plan</h3>' +
+      (r.mode_id != null ? '<p class="hint" style="display:block">Kept for this client. The mode <b>' +
+        esc(r.mode_name || '') + '</b> applies now; with <b>No mode</b> this plan applies again.</p>' : '') +
       '<div class="field"><label for="cp-down">Download (Mbps)</label><input id="cp-down" type="number" min="0.001" step="any" value="' +
         esc(s.plan_down_mbps || '') + '"' + dis + '></div>' +
       '<div class="field"><label for="cp-up">Upload (Mbps)</label><input id="cp-up" type="number" min="0.001" step="any" value="' +
@@ -14221,13 +14240,7 @@ async function loadClientPage() {
     const haut = Number(host.querySelector('#cp-up').value);
     const out = host.querySelector('#cp-plan-out');
     if (!(bas > 0) || !(haut > 0)) { out.innerHTML = '<div class="notice warn">Give both rates, above 0.</div>'; return; }
-    // UN PLAN OU UN MODE : enregistrer un plan sort le client de son mode.
-    if (r.mode_id != null && !confirm(login + ' is in mode "' + (r.mode_name || '') + '". Saving a plan ' +
-        'takes it out of the mode: its speed becomes this plan. Continue?')) return;
     try {
-      if (r.mode_id != null) {
-        await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: [login], action: 'mode', mode_id: null }) });
-      }
       await api('/plans/' + encodeURIComponent(login), { method: 'PUT', body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
       out.innerHTML = '<div class="notice ok">Plan saved: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) + '.</div>';
       document.activeElement.blur();
@@ -15352,7 +15365,7 @@ async function loadModesPage() {
   const gerer = (m) => peut('operator') ? '<div class="actions" style="margin-top:.6rem">' +
     '<button type="button" class="sm" data-mode-clients="' + m.id + '">Add or remove clients</button></div>' : '';
   document.getElementById('modes-board').innerHTML = '<div class="mode-board">' +
-    carte('Its plan', 'Clients without a mode', parMode.auto, 'auto') +
+    carte('No mode', 'Clients on their own plan', parMode.auto, 'auto') +
     CLI.modes.map((m) => carte(m.name, esc(modeTaux(m)),
       parMode[m.id], m.disables_boost ? 'crit' : '', gerer(m))).join('') +
     (manuels.length ? carte('Manual limit', 'Set by hand by an Administrator', manuels, '') : '') +

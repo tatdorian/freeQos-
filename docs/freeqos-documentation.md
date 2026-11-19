@@ -1292,14 +1292,14 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 
 A **bandwidth mode** is a named rate given to a client in one click, from the **Clients** page: *Backup* when the backhaul is degraded, *Extreme backup* for a crisis or non-payment, *Night*... The operator picks a name in a list instead of typing rates (*Modes*, or `/api/v1/bandwidth-modes`).
 
-- **Rate:** fixed (`rate_kind=fixed`) or a **share of the client's plan** (`percent`: 200 = twice the plan). A share needs the client's plan; a client without a known plan can only get a fixed mode. In the form, the unit is a switch: **kbps**, **Mbps** or **% of plan**. A rate typed in kbps is stored in Mbps (512 kbps = 0.512 Mbps), and shown again in kbps when the mode is edited.
-- **Its plan** (formerly *Automatic*) is not a stored mode: it is the absence of a mode. The client gets its plan, and the schedulers for *clients on their plan* apply to it.
-- **Where it sits:** a client's mode is its speed (`shaping_policies.max_down_mbps/max_up_mbps`, with `mode_id` and `mode_name`). A scheduler that targets the client applies its % to this speed (*Backup* 6 Mbps at 200 % = 12 Mbps), or replaces it with its own mode during its hours. A running boost stays above. Back to *Its plan* removes the mode and keeps a running boost.
+- **Rate: a fixed speed**, in **kbps** or **Mbps** (the unit is a switch in the form). A rate typed in kbps is stored in Mbps (512 kbps = 0.512 Mbps), and shown again in kbps when the mode is edited. **A mode is never a % of the plan** (`rate_kind=percent` is refused with `400`): a client has its plan *or* a mode, and changing speeds by a percentage is the job of a **scheduler**. A mode created as a % by an earlier version keeps working; the *Modes* page marks it *give it a fixed speed*, and editing it asks for its speed in kbps or Mbps.
+- **No mode** (formerly *Automatic*) is not a stored mode: it is the absence of a mode. The client gets its plan, and the schedulers for *clients on their plan* apply to it. Lists and the client page say *No mode*.
+- **Where it sits:** a client's mode is its speed (`shaping_policies.max_down_mbps/max_up_mbps`, with `mode_id` and `mode_name`). A scheduler that targets the client applies its % to this speed (*Backup* 6 Mbps at 200 % = 12 Mbps), or replaces it with its own mode during its hours. A running boost stays above. Back to *No mode* removes the mode (the plan applies again) and keeps a running boost.
 - **Modes that stop boosts** (`disables_boost`, API only): entering the mode clears the running boost, and a new boost is refused (`409 Boost is unavailable in <mode>. Change the mode first.`). The form no longer offers this option: a mode saved from the form has it off.
 - **Its clients:** the mode form itself has a list of clients to tick (*Clients in this mode*), with search and a site filter: saving the mode also puts the ticked clients in it and puts the unticked ones back on their plan — for a new mode as for an existing one. On the *Modes* board, *Add or remove clients* on a mode opens the same list.
 - **Editing a mode's rate** re-applies it at once to every client in it. A mode given to clients cannot be deleted (`409`): put them back on their plan or in another mode first.
 - **Writing:** like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.
-- **Changing a client's plan keeps its mode and its boost:** only a manual limit (an override without a mode) is lifted, so that the new plan takes effect. A mode expressed as a share of the plan follows the new plan at once.
+- **Plan and mode coexist.** The plan is the speed of **one** client (no need to create a mode for each particular speed); a mode, when the client has one, applies instead of the plan. Changing a client's plan keeps its mode and its boost: only a manual limit (an override without a mode) is lifted, so that the new plan takes effect.
 
 **Client actions** (`POST /api/v1/clients/actions`, `{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}`) act on one or several clients. The reply gives a result **per client** (`succeeded`, `failed`, `results[]`): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.
 
@@ -1423,7 +1423,7 @@ A problem is emailed **once**, when it has lasted the chosen delay (3 minutes by
 | **Mode** | A **named speed** (*Backup*, *Pro*…) given to one or several clients | *Modes* page, *Clients* page |
 | **Scheduler** | During the **hours** you choose, a **% of the clients' speed** or **a mode**, for the clients you choose | *Schedulers* page |
 
-A client has **its plan or a mode, never both**: putting it in a mode replaces the speed of its plan; saving a plan on its page takes it out of its mode (the page asks first).
+**Plan and mode coexist**: every client keeps its plan; a mode, when it has one, applies instead of the plan, and *No mode* gives it back its plan.
 
 **A scheduler** (*Schedulers*, or `/api/v1/bandwidth-schedules`) has:
 
@@ -1432,7 +1432,7 @@ A client has **its plan or a mode, never both**: putting it in a mode replaces t
 - **its hours**, as many as you need: from → to (tap or drag the time), and the days (`days`: the days on which the hours **start**; 22:00 → 06:00 crosses midnight; `24:00` is midnight at the end);
 - its **time zone** (IANA, `Europe/Paris`, `Africa/Abidjan`…: the hours are local, daylight saving time is handled).
 
-Outside its hours, clients keep their speed (plan or mode). A **manual limit** (forced limit without a mode, set through the API) stays above every scheduler, and a **boost** above everything.
+Outside its hours, clients keep their speed (plan or mode). The client page shows, under *Bandwidth & mode*, the **scheduler running now** for that client (its name and hours, or *started by hand*), and says when another limit (a boost, a manual limit) is above it. A **manual limit** (forced limit without a mode, set through the API) stays above every scheduler, and a **boost** above everything.
 
 **As many schedulers as you want.** Two schedulers may share the same hours **as long as they do not change the same clients**: *Evening* for the clients on their plan and *Evening Pro* for the mode *Pro*, both 18:00–23:00, is fine. If the same client would be changed by two schedulers at the same time, saving is refused (`409`) with **who and when**: *'VIP' and 'Evening' would both apply to ACME OFFICE at the same time (Mon 18:00). Change the hours, or choose other clients or modes.* Two hours of the same scheduler may not overlap either.
 

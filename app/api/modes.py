@@ -50,7 +50,11 @@ AUTOMATIC = {
 class ModeInput(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     rate_kind: Literal["fixed", "percent"] = Field(
-        default="fixed", description="'fixed': Mbps. 'percent': a share of the client's plan."
+        default="fixed",
+        description=(
+            "'fixed' (Mbps) only: a mode is a speed. 'percent' is refused -- a percentage "
+            "of the clients' speed is a scheduler's job."
+        ),
     )
     down_value: float = Field(gt=0, le=100_000)
     up_value: float = Field(gt=0, le=100_000)
@@ -103,6 +107,20 @@ def _modes(container: ContainerDep) -> ModesRepository:
     return container.modes_repo
 
 
+#: UN MODE EST UNE VITESSE. Un client a son plan OU un mode : un mode calcule
+#: en pourcentage du plan melangerait les deux. Les pourcentages sont le
+#: travail des schedulers.
+MOTIF_POURCENT = (
+    "A mode is a fixed speed (kbps or Mbps), not a % of the plan: a client has its plan "
+    "or a mode. To change speeds by a percentage, use a scheduler."
+)
+
+
+def _refuser_pourcentage(rate_kind: Any) -> None:
+    if rate_kind == "percent":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=MOTIF_POURCENT)
+
+
 def _erreur(exc: Exception) -> HTTPException:
     if isinstance(exc, ModeNotFoundError):
         return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
@@ -125,6 +143,7 @@ async def list_modes(container: ContainerDep) -> dict[str, Any]:
     "/bandwidth-modes", status_code=status.HTTP_201_CREATED, summary="Create a bandwidth mode"
 )
 async def create_mode(payload: ModeInput, container: ContainerDep) -> dict[str, Any]:
+    _refuser_pourcentage(payload.rate_kind)
     try:
         return await _modes(container).create(payload.model_dump())
     except (InvalidModeError, ModeConflictError) as exc:
@@ -144,8 +163,15 @@ async def update_mode(
     Un mode "Backup" passe de 6 a 8 Mbps : les clients en Backup doivent
     passer a 8 tout de suite, pas au prochain geste sur chacun d'eux.
     """
+    modifs = payload.model_dump(exclude_unset=True)
     try:
-        mode = await _modes(container).update(mode_id, payload.model_dump(exclude_unset=True))
+        actuel = await _modes(container).get(mode_id)
+    except ModeNotFoundError as exc:
+        raise _erreur(exc) from exc
+    # Un ancien mode en % ne se modifie qu'en lui donnant une vitesse fixe.
+    _refuser_pourcentage(modifs.get("rate_kind") or actuel.get("rate_kind"))
+    try:
+        mode = await _modes(container).update(mode_id, modifs)
     except (InvalidModeError, ModeConflictError, ModeNotFoundError) as exc:
         raise _erreur(exc) from exc
     resultats = []
