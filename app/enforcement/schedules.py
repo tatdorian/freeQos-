@@ -187,6 +187,17 @@ class Window:
         return f"{self.label + ' ' if self.label else ''}{heures} {jours}"
 
     def to_dict(self) -> dict[str, Any]:
+        if self.emergency and self.mode_id is None:
+            return {
+                "label": self.label,
+                "start": format_time(self.start_min),
+                "end": format_time(self.end_min or MINUTES_PAR_JOUR),
+                "days": [DAYS[j] for j in sorted(self.days)],
+                "down_mbps": None,
+                "up_mbps": None,
+                "percent": None,
+                "emergency": True,
+            }
         if self.mode_id is not None:
             # Une plage en mode s'enregistre par la REFERENCE du mode : son debit
             # est relu a chaque chargement, il suit les modifications du mode.
@@ -268,6 +279,22 @@ def parse_window(raw: dict[str, Any], modes: Modes | None = None) -> Window:
             "use 00:00-24:00 for a whole day"
         )
     libelle = str(raw.get("label") or "").strip()[:64] or None
+    if raw.get("emergency"):
+        # LA BANDE PASSANTE D'URGENCE DE CHAQUE CLIENT, saisie sur sa fiche :
+        # pas de debit dans la plage, il est celui du client.
+        if any(
+            raw.get(c) not in (None, "") for c in ("percent", "down_mbps", "up_mbps", "mode_id")
+        ):
+            raise InvalidScheduleError(
+                "a time slot gives the clients' emergency bandwidth OR a rate, not both"
+            )
+        return Window(
+            start_min=debut,
+            end_min=fin,
+            days=parse_days(raw.get("days")),
+            label=libelle,
+            emergency=True,
+        )
     if raw.get("mode_id") not in (None, ""):
         return Window(
             start_min=debut,
@@ -613,10 +640,19 @@ class ScheduleBook:
             return None
         en_mode = mode_id is not None and bool(mode_down or mode_up)
         base_bas, base_haut = (mode_down, mode_up) if en_mode else (plan_down, plan_up)
-        bas, haut = plage.rates(base_bas, base_haut)
-        if plage.emergency and emergency is not None:
-            # Un mode d'urgence donne a CE client sa bande passante d'urgence.
+        bas: float | None
+        haut: float | None
+        if plage.emergency and plage.mode_id is None:
+            # La bande passante d'urgence de CE client ; sans elle, il garde
+            # sa vitesse (rien n'est invente).
+            if emergency is None:
+                return None
             bas, haut = emergency
+        else:
+            bas, haut = plage.rates(base_bas, base_haut)
+            if plage.emergency and emergency is not None:
+                # Un mode d'urgence donne a CE client sa bande passante d'urgence.
+                bas, haut = emergency
         if bas is None and haut is None:
             return None
         return ScheduledRate(

@@ -256,15 +256,48 @@ def test_la_fiche_client_montre_le_scheduler_en_cours() -> None:
     assert "none right now" in js
 
 
-def test_un_mode_ne_se_saisit_plus_en_pourcentage() -> None:
+def test_il_n_y_a_plus_de_page_modes() -> None:
+    """Demande de l'exploitant : plus de page Modes. Les debits se saisissent a
+    la main sur chaque client ; les schedulers les font changer."""
     from app.web.ui import STATIC_DIR
 
     html = (STATIC_DIR.parent / "templates" / "index.html").read_text(encoding="utf-8")
-    debut = html.index('id="mode-unit"')
-    unites = html[debut : html.index("</div>", debut)]
-    assert 'data-u="kbps"' in unites
-    assert 'data-u="mbps"' in unites
-    assert "percent" not in unites
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'href="#/modes"' not in html
+    assert 'id="view-modes"' not in html
+    assert 'id="cli-sel-mode"' not in html
+    assert 'data-v="emergency">Their emergency bandwidth</button>' in html
+    assert ">A mode</button>" not in html
+    assert "if (vue === 'modes') vue = 'clients';" in js
+    assert "Change mode" not in js
+
+
+# --------------------------------------------- scheduler : debit d'urgence
+def test_un_scheduler_donne_la_bande_passante_d_urgence_de_chaque_client() -> None:
+    s = _sched(1, "Storm", "all", windows=[{"start": "00:00", "end": "24:00", "emergency": True}])
+    carnet = ScheduleBook([s])
+    avec = carnet.rate_for(
+        login="a", sites=(), plan_down=20, plan_up=10, now=LUNDI_12H, emergency=(8.0, 3.0)
+    )
+    assert avec is not None and (avec.down_mbps, avec.up_mbps) == (8.0, 3.0)
+    # Sans bande passante d'urgence, le client garde sa vitesse.
+    assert carnet.rate_for(login="b", sites=(), plan_down=20, plan_up=10, now=LUNDI_12H) is None
+
+
+def test_une_plage_d_urgence_se_relit_telle_quelle() -> None:
+    s = _sched(1, "Storm", "all", windows=[{"start": "18:00", "end": "23:00", "emergency": True}])
+    plage = s.to_dict()["windows"][0]
+    assert plage["emergency"] is True and plage["percent"] is None
+
+
+def test_une_plage_d_urgence_ne_porte_pas_de_debit() -> None:
+    with pytest.raises(InvalidScheduleError):
+        _sched(
+            1,
+            "Storm",
+            "all",
+            windows=[{"start": "18:00", "end": "23:00", "emergency": True, "percent": 50}],
+        )
 
 
 def test_le_scheduler_lance_a_la_main_le_dit() -> None:
