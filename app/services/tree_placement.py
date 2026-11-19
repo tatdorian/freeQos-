@@ -35,7 +35,7 @@ INFRASTRUCTURE = {"pop", "core", "gateway", "router", "backhaul"}
 
 
 def normalise(nom: Any) -> str:
-    """« Nestlé SA » == « nestle-sa » == « NESTLE_SA »."""
+    """« Acmé SA » == « acme-sa » == « ACME_SA »."""
     texte = unicodedata.normalize("NFKD", str(nom or ""))
     texte = "".join(c for c in texte if not unicodedata.combining(c))
     return re.sub(r"[^a-z0-9]", "", texte.lower())

@@ -11737,20 +11737,35 @@ const SCHED = { data: null, editing: null, preview: null, previewData: null };
 const SCHED_JOURS = [['mon', 'Mo'], ['tue', 'Tu'], ['wed', 'We'], ['thu', 'Th'],
   ['fri', 'Fr'], ['sat', 'Sa'], ['sun', 'Su']];
 const SCHED_PORTEE = {
-  all: 'All clients', pops: 'Sites', plans: 'Plans', subscribers: 'Named clients',
+  all: 'Everyone', on_plan: 'Clients on their plan', modes: 'Modes', subscribers: 'Clients',
+  pops: 'Sites', plans: 'Plans',
 };
 
 function schedRate(w) {
   if (w.mode_id != null) return 'mode <b>' + esc(w.mode_name || '#' + w.mode_id) + '</b>';
-  if (w.percent != null) return esc(String(w.percent)) + ' % of plan';
+  if (w.percent != null) return esc(String(w.percent)) + ' % of their speed';
   return [w.down_mbps != null ? '&darr; ' + esc(mbps(w.down_mbps)) : '',
     w.up_mbps != null ? '&uarr; ' + esc(mbps(w.up_mbps)) : ''].filter(Boolean).join(' ');
 }
 
 function schedWindowText(w) {
-  const jours = (w.days || []).length === 7 ? 'every day' : (w.days || []).join(', ');
-  return (w.label ? '<b>' + esc(w.label) + '</b> ' : '') + esc(w.start + '–' + w.end) +
-    ' <span class="hint" style="display:inline">' + esc(jours) + '</span> · ' + schedRate(w);
+  const jours = (w.days || []).length === 7 || !(w.days || []).length ? 'every day' : (w.days || []).join(', ');
+  return esc(w.start + '–' + w.end) + ' <span class="hint" style="display:inline">' + esc(jours) + '</span>';
+}
+
+/** A qui il s'applique, en clair (les modes par leur nom). */
+function schedCible(f) {
+  if (f.scope === 'all' || f.scope === 'on_plan') return esc(SCHED_PORTEE[f.scope]);
+  const nomMode = (id) => ((SCHED.modes || []).find((m) => String(m.id) === String(id)) || {}).name || ('mode ' + id);
+  const cibles = (f.targets || []).map((t) => f.scope === 'modes' ? nomMode(t) : f.scope === 'plans' ? t + ' Mbps' : t);
+  return esc(SCHED_PORTEE[f.scope] || f.scope) + ': ' + esc(cibles.slice(0, 6).join(', ') +
+    (cibles.length > 6 ? ' +' + (cibles.length - 6) : ''));
+}
+
+/** Ce qu'il applique : celui de ses plages (un scheduler = un debit). */
+function schedCeQuIlApplique(f) {
+  const debits = [...new Set((f.windows || []).map(schedRate))];
+  return debits.join(' / ');
 }
 
 async function loadSchedules() {
@@ -11766,7 +11781,8 @@ async function loadSchedules() {
     return;
   }
   renderSchedules();
-  document.querySelectorAll('#sched-windows select[name="mode_id"]').forEach(schedModeOptions);
+  schedModeOptions(document.getElementById('sched-mode'));
+  if (!(CLI.rows || []).length) loadClientsData().then(() => { schedScopeSeg(); schedTargetsField(); }).catch(() => {});
 }
 
 function renderSchedules() {
@@ -11778,34 +11794,39 @@ function renderSchedules() {
     host.innerHTML = '<div class="empty">No schedule: every client gets its plan at all hours.</div>';
     return;
   }
-  const cible = (f) => f.scope === 'all' ? 'All clients'
-    : esc(SCHED_PORTEE[f.scope] || f.scope) + ': ' + esc((f.targets || []).join(', ') +
-      (f.scope === 'plans' ? ' Mbps' : ''));
   host.innerHTML = (d.enforcement_enabled ? '' : '<div class="notice warn">Writing to the ' +
-      'routers is off (Settings): the scheduled rates are computed and shown, nothing is ' +
+      'routers is off (Settings): the scheduled speeds are computed and shown, nothing is ' +
       'written.</div>') +
-    '<table><thead><tr><th>Schedule</th><th>Applies to</th><th>Time slots</th>' +
-    '<th>Now</th><th>Next switch</th><th>State</th><th></th></tr></thead><tbody>' +
+    '<table><thead><tr><th>Scheduler</th><th>Speed</th><th>Who</th><th>Hours</th>' +
+    '<th>Now</th><th></th></tr></thead><tbody>' +
     lignes.map((f) => {
+      const main = !!f.manual_active;
       const maintenant = f.error
         ? sqCell('Invalid', 'crit', f.error)
-        : f.active_window
-          ? sqCell(f.active_window.label || 'In a slot', 'ok') +
-            '<span class="hint">' + schedRate(f.active_window) + '</span>'
-          : '<span class="na">plan</span>';
+        : !f.enabled ? sqCell('suspended', 'warn')
+          : main ? sqCell('running · started by hand', 'ok') + '<span class="hint">' +
+            (f.manual_until ? 'until ' + esc(new Date(f.manual_until).toLocaleTimeString([], {
+              hour: '2-digit', minute: '2-digit', hour12: false })) : 'until you stop it') + '</span>'
+            : f.active_window ? sqCell('running', 'ok') + (f.next_change_at ? '<span class="hint">until ' +
+              esc(new Date(f.next_change_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })) + '</span>' : '')
+              : '<span class="na">waiting</span>' + (f.next_change_at ? '<span class="hint">starts ' +
+                esc(new Date(f.next_change_at).toLocaleString([], { weekday: 'short', hour: '2-digit',
+                  minute: '2-digit', hour12: false })) + '</span>' : '');
+      const lancer = main
+        ? '<button class="sm primary" data-sched-stop="' + esc(f.id) + '">Stop</button> '
+        : '<select class="sm" data-sched-start="' + esc(f.id) + '" aria-label="Start now">' +
+          '<option value="">Start now…</option><option value="60">for 1 hour</option>' +
+          '<option value="120">for 2 hours</option><option value="240">for 4 hours</option>' +
+          '<option value="1440">for 24 hours</option><option value="0">until I stop it</option></select> ';
       const ligne = '<tr>' +
         '<td><b>' + esc(f.name) + '</b><span class="hint">' +
           (f.timezone === fuseauLocal() ? 'your time zone'
             : esc(f.timezone) + ' · ' + esc(heureDans(f.timezone)) + ' there') + '</span></td>' +
-        '<td>' + cible(f) + '</td>' +
+        '<td>' + schedCeQuIlApplique(f) + '</td>' +
+        '<td>' + schedCible(f) + '</td>' +
         '<td>' + (f.windows || []).map(schedWindowText).join('<br>') + '</td>' +
         '<td>' + maintenant + '</td>' +
-        '<td>' + (f.next_change_at ? esc(new Date(f.next_change_at).toLocaleString([], {
-          weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false })) +
-          (f.timezone === fuseauLocal() ? '' : '<span class="hint">your time</span>')
-          : '<span class="na">-</span>') + '</td>' +
-        '<td>' + (f.enabled ? sqCell('active', 'ok') : sqCell('suspended', 'warn')) + '</td>' +
-        '<td class="nowrap">' +
+        '<td class="nowrap">' + lancer +
           '<button class="sm" data-sched-edit="' + esc(f.id) + '">Edit</button> ' +
           '<button class="sm" data-sched-preview="' + esc(f.id) + '">Clients</button> ' +
           '<button class="sm" data-sched-toggle="' + esc(f.id) + '">' +
@@ -11813,9 +11834,15 @@ function renderSchedules() {
           '<button class="sm" data-sched-del="' + esc(f.id) + '">Delete</button>' +
         '</td></tr>';
       if (String(SCHED.preview) !== String(f.id)) return ligne;
-      return ligne + '<tr class="plan-edit"><td colspan="7">' + schedPreviewHtml() + '</td></tr>';
+      return ligne + '<tr class="plan-edit"><td colspan="6">' + schedPreviewHtml() + '</td></tr>';
     }).join('') + '</tbody></table>' + schedLastSwitch(d.last_switch);
 
+  host.querySelectorAll('[data-sched-start]').forEach((sel) => sel.addEventListener('change', () => {
+    if (sel.value === '') return;
+    schedLancer(sel.dataset.schedStart, Number(sel.value) || null);
+  }));
+  host.querySelectorAll('[data-sched-stop]').forEach((b) => b.addEventListener('click',
+    () => schedArreter(b.dataset.schedStop)));
   host.querySelectorAll('[data-sched-edit]').forEach((b) => b.addEventListener('click', () => {
     const fiche = lignes.find((f) => String(f.id) === b.dataset.schedEdit);
     schedFill(fiche);
@@ -11831,6 +11858,37 @@ function renderSchedules() {
     const fiche = lignes.find((f) => String(f.id) === b.dataset.schedDel);
     schedDelete(fiche);
   }));
+}
+
+/** LANCER A LA MAIN : tout de suite, quelle que soit l'heure. */
+async function schedLancer(id, minutes) {
+  const res = document.getElementById('sched-result');
+  try {
+    const r = await api('/bandwidth-schedules/' + encodeURIComponent(id) + '/start', {
+      method: 'POST', body: JSON.stringify({ minutes }),
+    });
+    res.innerHTML = '<div class="notice ok">"' + esc(r.name) + '" is running now' +
+      (r.manual_until ? ', until ' + esc(new Date(r.manual_until).toLocaleTimeString([], {
+        hour: '2-digit', minute: '2-digit', hour12: false })) : ', until you stop it') + '.' +
+      ((r.stopped || []).length ? ' Stopped, as it applied to the same clients: <b>' +
+        esc(r.stopped.join(', ')) + '</b>.' : '') +
+      schedEnforcement(r.enforcement) + '</div>';
+  } catch (err) {
+    res.innerHTML = noticeErreur(err);
+  }
+  await loadSchedules();
+}
+
+async function schedArreter(id) {
+  const res = document.getElementById('sched-result');
+  try {
+    const r = await api('/bandwidth-schedules/' + encodeURIComponent(id) + '/stop', { method: 'POST' });
+    res.innerHTML = '<div class="notice ok">"' + esc(r.name) + '" stopped: it follows its hours again.' +
+      schedEnforcement(r.enforcement) + '</div>';
+  } catch (err) {
+    res.innerHTML = noticeErreur(err);
+  }
+  await loadSchedules();
 }
 
 /** La derniere bascule : la preuve que le changement d'heure a ete pousse. */
@@ -11894,46 +11952,20 @@ function schedPreviewHtml() {
 }
 
 function schedWindowRow(w) {
-  const f = w || { start: '', end: '', days: SCHED_JOURS.map((j) => j[0]), percent: null };
+  const f = w || { start: '', end: '', days: SCHED_JOURS.map((j) => j[0]) };
   const jours = new Set(f.days && f.days.length ? f.days : SCHED_JOURS.map((j) => j[0]));
-  const genre = f.mode_id != null ? 'mode'
-    : (f.down_mbps != null || f.up_mbps != null) ? 'rate' : 'percent';
   // L'heure ne se TAPE pas : on la touche (molette) ou on la fait glisser.
   const heure = (nom, val, ph, titre) => '<input name="' + nom + '" class="slot-time" readonly ' +
     'inputmode="none" placeholder="' + ph + '"' + (nom === 'end' ? ' data-allow24' : '') +
     ' title="' + (titre ? titre + ' ' : '') + 'Tap to choose, or drag up / down." aria-label="' +
     (nom === 'start' ? 'From' : 'To') + '" value="' + esc(val || ph) + '">';
-  const nombre = (nom, val, extra) => '<input name="' + nom + '" type="number" step="any" ' +
-    'class="slot-num" ' + extra + ' value="' + esc(val == null ? '' : val) + '">';
   return '<div class="slot" data-sched-window>' +
-    '<div class="slot-top">' +
-      '<input name="label" class="slot-label" maxlength="64" placeholder="Slot name" ' +
-        'aria-label="Slot name" value="' + esc(f.label || '') + '">' +
-      '<button type="button" class="slot-del" data-sched-remove title="Remove this time slot" ' +
-        'aria-label="Remove this time slot">&times;</button>' +
-    '</div>' +
     '<div class="slot-mid">' +
       '<span class="slot-hours">' + heure('start', f.start, '18:00') + '<span class="slot-arrow">&rarr;</span>' +
-        heure('end', f.end, '23:00', 'Before the start time: the slot ends the next day ' +
+        heure('end', f.end, '23:00', 'Before the start time: it ends the next day ' +
           '(22:00 to 06:00). 24:00 = midnight.') + '</span>' +
-      '<span class="slot-rate">' +
-        '<input type="hidden" name="mode" value="' + genre + '">' +
-        '<span data-mode="percent"' + (genre === 'percent' ? '' : ' hidden') + '>' +
-          nombre('percent', f.percent, 'min="1" max="1000" placeholder="70" aria-label="Percent of plan"') +
-          '<span class="slot-unit">% of plan</span></span>' +
-        '<span data-mode="rate"' + (genre === 'rate' ? '' : ' hidden') + '>&darr;' +
-          nombre('down', f.down_mbps, 'min="0" placeholder="20" aria-label="Download Mbps"') + '&uarr;' +
-          nombre('up', f.up_mbps, 'min="0" placeholder="5" aria-label="Upload Mbps"') +
-          '<span class="slot-unit">Mbps</span></span>' +
-        '<span data-mode="mode"' + (genre === 'mode' ? '' : ' hidden') + '>' +
-          '<select name="mode_id" class="slot-mode" aria-label="Bandwidth mode" data-value="' +
-            esc(f.mode_id == null ? '' : f.mode_id) + '"></select></span>' +
-        '<span class="segmented seg-xs" role="group" aria-label="Rate type">' +
-          [['percent', '%'], ['rate', 'Mbps'], ['mode', 'Mode']].map(([v, t]) =>
-            '<button type="button" data-rate="' + v + '"' + (genre === v ? ' class="active"' : '') +
-            '>' + t + '</button>').join('') +
-        '</span>' +
-      '</span>' +
+      '<button type="button" class="slot-del" data-sched-remove title="Remove these hours" ' +
+        'aria-label="Remove these hours">&times;</button>' +
     '</div>' +
     '<div class="day-pills" role="group" aria-label="Days (start)">' + SCHED_JOURS.map(([cle, nom]) =>
       '<label class="day-pill" title="' + nom + '"><input type="checkbox" name="day" value="' + cle + '"' +
@@ -11948,13 +11980,6 @@ function schedBindRows() {
     if (ligne.dataset.lie) return;
     ligne.dataset.lie = '1';
     ligne.querySelector('[data-sched-remove]').addEventListener('click', () => ligne.remove());
-    ligne.querySelectorAll('[data-rate]').forEach((b) => b.addEventListener('click', () => {
-      ligne.querySelector('[name="mode"]').value = b.dataset.rate;
-      ligne.querySelectorAll('[data-rate]').forEach((x) => x.classList.toggle('active', x === b));
-      ligne.querySelectorAll('[data-mode]').forEach((span) => {
-        span.hidden = span.dataset.mode !== b.dataset.rate;
-      });
-    }));
   });
 }
 
@@ -11963,12 +11988,20 @@ function schedAddRow(w) {
     // Une nouvelle plage commence ou finit la precedente, pour deux heures.
     const fins = [...document.querySelectorAll('#sched-windows [name="end"]')];
     const debut = fins.length ? hhmmVersMin(fins[fins.length - 1].value) % 1440 : 18 * 60;
-    w = { start: minVersHhmm(debut), end: minVersHhmm((debut + 120) % 1440 || 1440), percent: null };
+    w = { start: minVersHhmm(debut), end: minVersHhmm((debut + 120) % 1440 || 1440) };
   }
   document.getElementById('sched-windows').insertAdjacentHTML('beforeend', schedWindowRow(w));
   schedBindRows();
-  const sel = document.querySelector('#sched-windows [data-sched-window]:last-child select[name="mode_id"]');
-  if (sel) schedModeOptions(sel);
+}
+
+/** Ce qu'il applique : % de la vitesse, un mode (ou des Mbps, saisis par l'API). */
+function schedRateKind(v) {
+  document.getElementById('sched-rate-kind').value = v;
+  document.querySelectorAll('#sched-rate-seg [data-v]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.v === v);
+    if (b.dataset.v === 'rate') b.hidden = v !== 'rate';
+  });
+  document.querySelectorAll('#sched-form [data-rate-kind]').forEach((r) => { r.hidden = r.dataset.rateKind !== v; });
 }
 
 /* ---------------------------------------------------- choix d'une heure
@@ -12142,7 +12175,7 @@ function schedModeOptions(sel) {
     : sansUnite(m.down_value) + ' / ' + sansUnite(m.up_value);
   const debit = (m) => valeurs(m) + (m.rate_kind === 'percent' ? ' % of plan' : ' Mbps');
   sel.innerHTML = (modes.length ? '<option value="">Choose a mode</option>'
-    : '<option value="">No mode yet (Modes page)</option>') +
+    : '<option value="">No mode yet: create one on the Modes page</option>') +
     modes.map((m) => '<option value="' + esc(m.id) + '"' +
       (String(m.id) === String(choisi) ? ' selected' : '') + '>' + esc(m.name) + ' · ' +
       esc(debit(m)) + '</option>').join('');
@@ -12153,7 +12186,19 @@ function schedScopeSeg() {
   const v = document.getElementById('sched-scope').value;
   document.querySelectorAll('#sched-scope-seg [data-v]').forEach((b) => {
     b.classList.toggle('active', b.dataset.v === v);
+    if (b.dataset.v === 'pops' || b.dataset.v === 'plans') b.hidden = v !== b.dataset.v;
   });
+  const rows = CLI.rows || [];
+  const surPlan = rows.filter((r) => r.mode_id == null).length;
+  const textes = {
+    on_plan: 'Every client without a mode (' + surPlan + ' now): the % applies to its plan.',
+    modes: 'The clients in the modes you tick: the % applies to the speed of their mode.',
+    subscribers: 'The clients you tick: the % applies to their speed (their mode, or their plan).',
+    all: 'Every client (' + rows.length + ' now): the % applies to its speed (its mode, or its plan).',
+    pops: 'The clients of the sites you tick.',
+    plans: 'The clients whose plan has the download rate you tick.',
+  };
+  document.getElementById('sched-scope-hint').textContent = textes[v] || '';
 }
 
 /** A qui s'applique le profil : une LISTE A COCHER, pas une saisie. Les
@@ -12161,15 +12206,20 @@ function schedScopeSeg() {
  *  reservee a l'Administrator, n'est pas chargee ici). */
 function schedTargetsField() {
   const portee = document.getElementById('sched-scope').value;
-  document.getElementById('sched-targets-field').hidden = portee === 'all';
-  const libelles = { pops: 'Sites', plans: 'Plans (download rate)', subscribers: 'Clients' };
+  document.getElementById('sched-targets-field').hidden = portee === 'all' || portee === 'on_plan';
+  const libelles = { pops: 'Sites', plans: 'Plans (download rate)', subscribers: 'Clients', modes: 'Modes' };
   document.getElementById('sched-targets-label').textContent = libelles[portee] || 'Targets';
   const rows = CLI.rows || [];
   const compte = (f) => rows.filter(f).length;
   let options = [];
-  if (portee === 'subscribers') {
-    options = rows.map((r) => ({ v: r.login, l: r.login, s: r.pop_name || '' }))
-      .sort((x, y) => x.v.localeCompare(y.v));
+  if (portee === 'modes') {
+    options = (SCHED.modes || []).map((m) => ({ v: String(m.id), l: m.name,
+      s: compte((r) => String(r.mode_id) === String(m.id)) + ' client(s)' }));
+  } else if (portee === 'subscribers') {
+    options = rows.map((r) => ({ v: r.login, l: r.display_name || r.login,
+      s: (r.display_name ? r.login + ' · ' : '') + (r.pop_name || '') +
+        (r.mode_id != null ? ' · mode ' + (r.mode_name || '') : '') }))
+      .sort((x, y) => x.l.localeCompare(y.l));
   } else if (portee === 'pops') {
     options = [...new Set(rows.map((r) => r.pop_name).filter(Boolean).concat(POPS_CONNUS || []))].sort()
       .map((p) => ({ v: p, l: p, s: compte((r) => r.pop_name === p) + ' client(s)' }));
@@ -12203,50 +12253,50 @@ function schedFill(fiche) {
   SCHED.editing = fiche || null;
   document.getElementById('sched-name').value = fiche ? fiche.name : '';
   schedTzSet(fiche ? fiche.timezone : fuseauLocal());
-  document.getElementById('sched-scope').value = fiche ? fiche.scope : 'all';
+  document.getElementById('sched-scope').value = fiche ? fiche.scope : 'on_plan';
   document.getElementById('sched-targets').value = fiche ? (fiche.targets || []).join(', ') : '';
   document.getElementById('sched-enabled').checked = fiche ? !!fiche.enabled : true;
+  // UN SCHEDULER = UN DEBIT : celui de sa premiere plage.
+  const w0 = (fiche && (fiche.windows || [])[0]) || { percent: 70 };
+  const genre = w0.mode_id != null ? 'mode' : w0.percent != null ? 'percent' : 'rate';
+  schedRateKind(genre);
+  document.getElementById('sched-percent').value = w0.percent != null ? w0.percent : '';
+  document.getElementById('sched-mode').dataset.value = w0.mode_id != null ? w0.mode_id : '';
+  schedModeOptions(document.getElementById('sched-mode'));
+  document.getElementById('sched-down').value = w0.down_mbps != null ? w0.down_mbps : '';
+  document.getElementById('sched-up').value = w0.up_mbps != null ? w0.up_mbps : '';
   document.getElementById('sched-windows').innerHTML = '';
-  const plages = fiche ? fiche.windows || [] : [
-    { label: 'evening', start: '18:00', end: '23:00', percent: 70 },
-    { label: 'night', start: '23:00', end: '06:00', percent: 200 },
-  ];
+  const plages = fiche ? fiche.windows || [] : [{ start: '18:00', end: '23:00' }];
   plages.forEach((w) => schedAddRow(w));
   document.getElementById('sched-submit').textContent = fiche ? 'Save and apply' : 'Create and apply';
   document.getElementById('sched-cancel').hidden = !fiche;
   document.getElementById('sched-form-title').textContent = fiche
-    ? 'Edit ' + fiche.name : 'New schedule';
+    ? 'Edit ' + fiche.name : 'New scheduler';
   schedScopeSeg();
   schedTargetsField();
 }
 
 function schedPayload() {
-  const plages = [...document.querySelectorAll('#sched-windows [data-sched-window]')].map((tr) => {
-    const champ = (nom) => (tr.querySelector('[name="' + nom + '"]').value || '').trim();
-    const nombre = (nom) => (champ(nom) === '' ? null : Number(champ(nom)));
-    const w = {
-      label: champ('label') || null,
-      start: champ('start'),
-      end: champ('end'),
-      days: [...tr.querySelectorAll('input[name="day"]:checked')].map((c) => c.value),
-    };
-    const genre = tr.querySelector('[name="mode"]').value;
-    if (genre === 'mode') {
-      w.mode_id = nombre('mode_id');
-    } else if (genre === 'percent') {
-      w.percent = nombre('percent');
-    } else {
-      w.down_mbps = nombre('down') || null;
-      w.up_mbps = nombre('up') || null;
-    }
-    return w;
-  });
+  const genre = document.getElementById('sched-rate-kind').value;
+  const nombre = (id) => {
+    const v = (document.getElementById(id).value || '').trim();
+    return v === '' ? null : Number(v);
+  };
+  const debit = genre === 'mode' ? { mode_id: nombre('sched-mode') }
+    : genre === 'percent' ? { percent: nombre('sched-percent') }
+      : { down_mbps: nombre('sched-down') || null, up_mbps: nombre('sched-up') || null };
+  const plages = [...document.querySelectorAll('#sched-windows [data-sched-window]')].map((tr) => ({
+    start: (tr.querySelector('[name="start"]').value || '').trim(),
+    end: (tr.querySelector('[name="end"]').value || '').trim(),
+    days: [...tr.querySelectorAll('input[name="day"]:checked')].map((c) => c.value),
+    ...debit,
+  }));
   const portee = document.getElementById('sched-scope').value;
   return {
     name: document.getElementById('sched-name').value.trim(),
     timezone: document.getElementById('sched-tz').value || fuseauLocal(),
     scope: portee,
-    targets: portee === 'all' ? [] : document.getElementById('sched-targets').value
+    targets: portee === 'all' || portee === 'on_plan' ? [] : document.getElementById('sched-targets').value
       .split(',').map((x) => x.trim()).filter(Boolean),
     enabled: document.getElementById('sched-enabled').checked,
     windows: plages,
@@ -12272,10 +12322,7 @@ async function schedSave(id, corps) {
       })
       : await api('/bandwidth-schedules', { method: 'POST', body: JSON.stringify(corps) });
     res.innerHTML = '<div class="notice ok">Schedule "' + esc(r.name) + '" saved.' +
-      schedEnforcement(r.enforcement) +
-      ((r.slot_modes || []).length ? ' <span class="hint" style="display:inline">Modes updated: <b>' +
-        esc(r.slot_modes.join(', ')) + '</b> — they can be given to a client by hand.</span>' : '') +
-      '</div>';
+      schedEnforcement(r.enforcement) + '</div>';
     return true;
   } catch (err) {
     res.innerHTML = noticeErreur(err);
@@ -12374,6 +12421,8 @@ function schedInit() {
     sel.dispatchEvent(new Event('change'));
   }));
   document.getElementById('sched-pick-q').addEventListener('input', schedTargetsField);
+  document.querySelectorAll('#sched-rate-seg [data-v]').forEach((b) => b.addEventListener('click',
+    () => schedRateKind(b.dataset.v)));
   document.getElementById('sched-add-window').addEventListener('click', () => schedAddRow(null));
   document.getElementById('sched-cancel').addEventListener('click', () => schedFill(null));
   document.getElementById('sched-form').addEventListener('submit', async (e) => {
@@ -12606,12 +12655,13 @@ function modeTaux(m) {
 }
 
 function modeDuClient(r) {
+  const sched = r.limit_source === 'schedule' ? ' · ' + (r.schedule_name || 'scheduler') : '';
   if (r.mode_id) {
     const m = CLI.modes.find((x) => x.id === r.mode_id);
-    return { cls: m && m.disables_boost ? 'crit' : 'set', text: r.mode_name || (m ? m.name : 'Mode') };
+    return { cls: m && m.disables_boost ? 'crit' : 'set', text: (r.mode_name || (m ? m.name : 'Mode')) + sched };
   }
   if (r.override_down_mbps) return { cls: 'set', text: 'Manual limit' };
-  return { cls: 'auto', text: r.limit_source === 'schedule' ? 'Automatic · schedule' : 'Automatic' };
+  return { cls: 'auto', text: 'Its plan' + sched };
 }
 
 function clientEnLigne(r) { return mesureFraiche(r); }
@@ -12686,7 +12736,7 @@ async function loadClients() {
   const sigM = CLI.modes.map((m) => m.id + ':' + m.name).join('|');
   if (selMode.dataset.sig !== sigM) {
     const v = selMode.value;
-    selMode.innerHTML = '<option value="">Mode</option><option value="auto">Automatic</option>' +
+    selMode.innerHTML = '<option value="">Mode</option><option value="auto">Its plan</option>' +
       '<option value="any">In a mode or limited</option><option value="manual">Manual limit</option>' +
       CLI.modes.map((m) => '<option value="' + m.id + '">' + esc(m.name) + '</option>').join('');
     selMode.value = v;
@@ -13481,10 +13531,10 @@ function openModeDialog(logins) {
       '<input type="radio" name="mode-choice" value="' + (id === null ? '' : id) + '"' + (sel ? ' checked' : '') + '>' +
       '<span><b>' + esc(nom) + '</b><small>' + sous + '</small></span></label>';
   };
-  const cartes = carte(null, 'Automatic', 'Follows the plan and the time-of-day schedule<br>' +
-      'The rate changes with the hour on its own', true) +
+  const cartes = carte(null, 'Its plan', 'No mode: the client gets its own plan<br>' +
+      'Schedulers for clients on their plan apply to it', true) +
     CLI.modes.map((m) => carte(m.id, m.name,
-      (m.disables_boost ? 'Schedule paused · Boost stopped and refused' : 'Manual mode · Schedule paused until Automatic') +
+      (m.disables_boost ? 'Boost stopped and refused' : 'The speed of this mode') +
       '<br>' + esc(modeTaux(m)))).join('');
   const { root, fermer } = openModal(
     '<div class="modal-head"><div><h3>Change bandwidth mode</h3><div class="sub">' + sousTitreCibles(logins) +
@@ -14100,16 +14150,20 @@ async function loadClientPage() {
         '<input type="radio" name="cp-mode" value="' + (id === null ? '' : id) + '"' + (sel ? ' checked' : '') + dis + '>' +
         '<span><b>' + esc(nom) + (sel ? ' · current' : '') + '</b><small>' + sous + '</small></span></label>';
     };
-    corps = '<div class="cp-grid"><div class="card"><h3>Bandwidth mode</h3>' +
+    const planTxt = s.plan_down_mbps ? mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps) : 'no plan yet';
+    corps = '<div class="cp-grid"><div class="card"><h3>Speed: its plan or a mode</h3>' +
+      '<p class="hint" style="display:block">A client has <b>its plan</b> or <b>a mode</b>, never both. ' +
+        'Schedulers then change this speed by a % during their hours.</p>' +
       '<div class="mode-cards">' +
-      carte(null, 'Automatic', 'Plan and schedule') +
+      carte(null, 'Its plan', esc(planTxt)) +
       CLI.modes.map((x) => carte(x.id, x.name, esc(modeTaux(x)))).join('') +
-      '</div><p class="hint" style="display:block"><b>Automatic</b> follows the schedule (Evening, Night…). ' +
-        'Pick <b>Evening</b> or <b>Night</b> to force it now, <b>Constant</b> to keep the plan at all hours.' +
-        (CLI.modes.length ? '' : ' Save a schedule once (Schedules page) and these modes appear here.') + '</p>' +
+      '</div>' + (CLI.modes.length ? '' : '<p class="hint" style="display:block">No mode yet: create one on the ' +
+        '<a href="#/modes">Modes</a> page.</p>') +
       '<div class="actions" style="margin-top:.8rem"><span class="spacer"></span>' +
-      '<button class="primary" id="cp-apply-mode"' + dis + '>Apply the mode</button></div><div id="cp-mode-out"></div></div>' +
-      '<div class="cp-side"><div class="card"><h3>Plan</h3>' +
+      '<button class="primary" id="cp-apply-mode"' + dis + '>Apply</button></div><div id="cp-mode-out"></div></div>' +
+      '<div class="cp-side"><div class="card"><h3>Its plan</h3>' +
+      (r.mode_id != null ? '<p class="hint" style="display:block">Not used now: the client is in mode <b>' +
+        esc(r.mode_name || '') + '</b>. Saving a plan takes it out of the mode.</p>' : '') +
       '<div class="field"><label for="cp-down">Download (Mbps)</label><input id="cp-down" type="number" min="0.001" step="any" value="' +
         esc(s.plan_down_mbps || '') + '"' + dis + '></div>' +
       '<div class="field"><label for="cp-up">Upload (Mbps)</label><input id="cp-up" type="number" min="0.001" step="any" value="' +
@@ -14167,7 +14221,13 @@ async function loadClientPage() {
     const haut = Number(host.querySelector('#cp-up').value);
     const out = host.querySelector('#cp-plan-out');
     if (!(bas > 0) || !(haut > 0)) { out.innerHTML = '<div class="notice warn">Give both rates, above 0.</div>'; return; }
+    // UN PLAN OU UN MODE : enregistrer un plan sort le client de son mode.
+    if (r.mode_id != null && !confirm(login + ' is in mode "' + (r.mode_name || '') + '". Saving a plan ' +
+        'takes it out of the mode: its speed becomes this plan. Continue?')) return;
     try {
+      if (r.mode_id != null) {
+        await api('/clients/actions', { method: 'POST', body: JSON.stringify({ logins: [login], action: 'mode', mode_id: null }) });
+      }
       await api('/plans/' + encodeURIComponent(login), { method: 'PUT', body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
       out.innerHTML = '<div class="notice ok">Plan saved: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) + '.</div>';
       document.activeElement.blur();
@@ -15292,7 +15352,7 @@ async function loadModesPage() {
   const gerer = (m) => peut('operator') ? '<div class="actions" style="margin-top:.6rem">' +
     '<button type="button" class="sm" data-mode-clients="' + m.id + '">Add or remove clients</button></div>' : '';
   document.getElementById('modes-board').innerHTML = '<div class="mode-board">' +
-    carte('Automatic', 'Plan and time-of-day schedule', parMode.auto, 'auto') +
+    carte('Its plan', 'Clients without a mode', parMode.auto, 'auto') +
     CLI.modes.map((m) => carte(m.name, esc(modeTaux(m)),
       parMode[m.id], m.disables_boost ? 'crit' : '', gerer(m))).join('') +
     (manuels.length ? carte('Manual limit', 'Set by hand by an Administrator', manuels, '') : '') +

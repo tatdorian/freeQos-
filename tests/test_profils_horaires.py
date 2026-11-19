@@ -517,8 +517,8 @@ def test_api_apercu_des_clients_gouvernes(api) -> None:
     assert (dupont["now_down_mbps"], dupont["now_up_mbps"]) == (50.0, 10.0)
     assert dupont["source"] == "schedule"
 
-    # Un profil nomme, plus precis, prend dupont : le general ne le gouverne plus.
-    client.post(
+    # Un second scheduler sur dupont AUX MEMES HEURES : refuse, avec qui et quand.
+    r = client.post(
         "/api/v1/bandwidth-schedules",
         json={
             "name": "vip",
@@ -527,9 +527,23 @@ def test_api_apercu_des_clients_gouvernes(api) -> None:
             "windows": [{"start": "00:00", "end": "24:00", "percent": 300}],
         },
     )
-    apercu = client.get(f"/api/v1/bandwidth-schedules/{general['id']}/preview").json()
-    assert apercu["counts"]["governed"] == 0
-    assert apercu["overridden"] == [{"login": "dupont", "governed_by": "vip"}]
+    assert r.status_code == 409, r.text
+    assert "'vip' and 'general' would both apply to dupont" in r.json()["detail"]
+    # Aux heures ou le general ne court pas, c'est permis.
+    client.patch(
+        f"/api/v1/bandwidth-schedules/{general['id']}",
+        json={"windows": [{"start": "08:00", "end": "18:00", "percent": 50}]},
+    )
+    r = client.post(
+        "/api/v1/bandwidth-schedules",
+        json={
+            "name": "vip",
+            "scope": "subscribers",
+            "targets": ["dupont"],
+            "windows": [{"start": "18:00", "end": "08:00", "percent": 300}],
+        },
+    )
+    assert r.status_code == 201, r.text
 
 
 # ------------------------------------------------------- plage en mode

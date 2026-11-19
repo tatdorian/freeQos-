@@ -17,9 +17,22 @@ from app.enforcement.schedules import BandwidthSchedule, InvalidScheduleError, M
 
 logger = logging.getLogger(__name__)
 
-COLUMNS = "id, name, enabled, timezone, scope, targets, windows, note, created_at, updated_at"
+COLUMNS = (
+    "id, name, enabled, timezone, scope, targets, windows, note, manual_on, manual_until, "
+    "created_at, updated_at"
+)
 
-CHAMPS = ("name", "enabled", "timezone", "scope", "targets", "windows", "note")
+CHAMPS = (
+    "name",
+    "enabled",
+    "timezone",
+    "scope",
+    "targets",
+    "windows",
+    "note",
+    "manual_on",
+    "manual_until",
+)
 CHAMPS_JSON = ("targets", "windows")
 
 
@@ -56,6 +69,8 @@ def to_model(row: dict[str, Any], modes: Modes | None = None) -> BandwidthSchedu
         timezone=str(row.get("timezone") or "UTC"),
         enabled=bool(row.get("enabled", True)),
         modes=modes,
+        manual_on=bool(row.get("manual_on", False)),
+        manual_until=row.get("manual_until"),
     )
 
 

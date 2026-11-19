@@ -287,6 +287,15 @@ async def discover_with_devices(
     return await shaping.discover(uisp_devices=devices)
 
 
+def _mode_de(surcharge: dict[str, Any]) -> int | None:
+    """Le mode du client, lu dans sa politique (None : il est a son plan)."""
+    valeur = surcharge.get("mode_id")
+    try:
+        return int(valeur) if valeur is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 class ShapingService:
     def __init__(
         self,
@@ -1664,6 +1673,7 @@ class ShapingService:
             boost_expires_at=surcharge.get("boost_expires_at"),
             enabled=surcharge.get("enabled", True),
             parent=parent,
+            mode_id=_mode_de(surcharge),
         )
 
     def _horaire(
@@ -1681,11 +1691,15 @@ class ShapingService:
             plan_down=cible.plan_down_mbps,
             plan_up=cible.plan_up_mbps,
             now=maintenant,
+            mode_id=cible.mode_id,
+            mode_down=cible.override_down_mbps,
+            mode_up=cible.override_up_mbps,
         )
         if horaire is not None:
             cible.schedule_down_mbps = horaire.down_mbps
             cible.schedule_up_mbps = horaire.up_mbps
             cible.schedule_name = f"{horaire.schedule_name} ({horaire.window})"
+            cible.schedule_over_override = horaire.over_mode
         return cible
 
     def _cible_abonne(
@@ -1714,6 +1728,7 @@ class ShapingService:
             boost_expires_at=surcharge.get("boost_expires_at"),
             enabled=surcharge.get("enabled", True),
             parent=parent,
+            mode_id=_mode_de(surcharge),
         )
 
     # ------------------------------------------------ carte du shaping

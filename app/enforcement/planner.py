@@ -93,6 +93,7 @@ def effective_rate(
     boost_expires_at: datetime | None,
     now: datetime | None = None,
     schedule_mbps: float | None = None,
+    schedule_over_override: bool = False,
 ) -> tuple[float | None, str]:
     """Debit reellement applique, et d'ou il vient.
 
@@ -104,10 +105,17 @@ def effective_rate(
     en cours (jour / soiree / nuit), puis plan RADIUS. Le profil passe SOUS la
     surcharge : une decision prise sur cet abonne-la (bride pour impaye) ne se
     defait pas parce que la nuit commence.
+
+    SAUF LE MODE. Un scheduler applique un pourcentage de la vitesse du client :
+    pour un client dans un mode, c'est un pourcentage DU MODE
+    (``schedule_over_override``) -- le debit horaire en derive, il passe donc
+    devant. Une limite manuelle (sans mode) reste au-dessus de tout scheduler.
     """
     if boost_mbps and boost_expires_at is not None:
         if boost_expires_at > (now or datetime.now(tz=UTC)):
             return boost_mbps, SOURCE_BOOST
+    if schedule_over_override and schedule_mbps:
+        return schedule_mbps, SOURCE_SCHEDULE
     if override_mbps:
         return override_mbps, SOURCE_OVERRIDE
     if schedule_mbps:
@@ -158,6 +166,10 @@ class SubscriberTarget:
     schedule_down_mbps: float | None = None
     schedule_up_mbps: float | None = None
     schedule_name: str | None = None
+    # Le scheduler s'applique sur la vitesse du MODE du client : il passe devant.
+    schedule_over_override: bool = False
+    # Le mode du client (None : a son plan). C'est ce qu'un scheduler vise.
+    mode_id: int | None = None
     enabled: bool = True
     # Raison de ne pas brider cette adresse (c'est celle d'un de nos routeurs).
     skip_reason: str | None = None
@@ -215,6 +227,7 @@ class SubscriberTarget:
             boost_expires_at=self.boost_expires_at,
             now=now,
             schedule_mbps=self.schedule_down_mbps,
+            schedule_over_override=self.schedule_over_override,
         )[0]
 
     def effective_up_at(self, now: datetime | None = None) -> float | None:
@@ -225,6 +238,7 @@ class SubscriberTarget:
             boost_expires_at=self.boost_expires_at,
             now=now,
             schedule_mbps=self.schedule_up_mbps,
+            schedule_over_override=self.schedule_over_override,
         )[0]
 
     def rate_source(self, now: datetime | None = None) -> str:
@@ -236,6 +250,7 @@ class SubscriberTarget:
             boost_expires_at=self.boost_expires_at,
             now=now,
             schedule_mbps=self.schedule_down_mbps,
+            schedule_over_override=self.schedule_over_override,
         )[1]
 
     @property

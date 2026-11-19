@@ -28,7 +28,7 @@ async def test_seules_nos_files_partent_les_enfants_avant_les_parents(
         {".id": "*1", "name": "freeqos-parent-bh", "comment": MANAGED_COMMENT, "parent": "none"},
         {
             ".id": "*2",
-            "name": "freeqos-nestl",
+            "name": "freeqos-acmex",
             "comment": MANAGED_COMMENT,
             "parent": "freeqos-parent-bh",
         },

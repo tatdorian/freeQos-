@@ -72,13 +72,18 @@ def _with_effective_limits(row: dict[str, Any]) -> dict[str, Any]:
         sites=(row.get("pop_name"),),
         plan_down=row.get("plan_down_mbps"),
         plan_up=row.get("plan_up_mbps"),
+        mode_id=row.get("mode_id"),
+        mode_down=row.get("override_down_mbps"),
+        mode_up=row.get("override_up_mbps"),
     )
+    devant = bool(horaire and horaire.over_mode)
     descendant, source = effective_rate(
         plan_mbps=row.get("plan_down_mbps"),
         override_mbps=row.get("override_down_mbps"),
         boost_mbps=row.get("boost_down_mbps"),
         boost_expires_at=row.get("boost_expires_at"),
         schedule_mbps=horaire.down_mbps if horaire else None,
+        schedule_over_override=devant,
     )
     montant, _ = effective_rate(
         plan_mbps=row.get("plan_up_mbps"),
@@ -86,6 +91,7 @@ def _with_effective_limits(row: dict[str, Any]) -> dict[str, Any]:
         boost_mbps=row.get("boost_up_mbps"),
         boost_expires_at=row.get("boost_expires_at"),
         schedule_mbps=horaire.up_mbps if horaire else None,
+        schedule_over_override=devant,
     )
     row["effective_down_mbps"] = descendant
     row["effective_up_mbps"] = montant

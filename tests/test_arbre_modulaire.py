@@ -36,7 +36,7 @@ def placer(
 
 
 def test_les_noms_se_comparent_sans_casse_accents_ni_ponctuation() -> None:
-    assert normalise("Nestlé SA") == normalise("nestle-sa") == normalise("NESTLE_SA")
+    assert normalise("Acmé SA") == normalise("acme-sa") == normalise("ACME_SA")
 
 
 def test_un_client_pend_sous_son_site() -> None:
