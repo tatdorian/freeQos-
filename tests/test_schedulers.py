@@ -280,3 +280,12 @@ def test_la_page_schedulers_range_ceux_d_un_client_a_part() -> None:
     assert "'<h3 style=\"margin:1.2rem 0 .3rem\">For one client</h3>'" in js
     assert "function carteSchedulerPropre(r, dis)" in js
     assert "'<b>its own</b> · '" in js
+
+
+def test_le_menu_start_now_ne_deborde_pas() -> None:
+    """Constate : le menu « Start now… » prenait toute la largeur, poussait le
+    tableau hors de l'ecran et ecrasait Edit / Clients / Suspend / Delete."""
+    from app.web.ui import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert "'style=\"width:auto;min-width:0;display:inline-block;vertical-align:middle\">'" in js
