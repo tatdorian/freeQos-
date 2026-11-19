@@ -239,8 +239,8 @@ def test_set_up_sans_aucune_limite_n_ecrit_aucune_file(
     _rien_qui_touche_le_trafic(pop)
     # Seuls les deux types CAKE existent, et aucune file ne les utilise.
     assert sorted(t["name"] for t in pop.queue_type_rows) == [
-        "freeqos-cake-down",
-        "freeqos-cake-up",
+        "cake-down",
+        "cake-up",
     ]
     assert all(t.get("kind") == "cake" for t in pop.queue_type_rows)
 

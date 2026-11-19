@@ -67,7 +67,7 @@ def test_ce_que_freeqos_a_pose_sur_le_routeur(app_client, routeur) -> None:  # n
     files = par_cle["simple"]["rows"]
     assert [f["name"] for f in files] == ["dupont"]
     assert files[0]["max-limit"] == "10000000/50000000"
-    assert {t["name"] for t in par_cle["type"]["rows"]} == {"freeqos-cake-up", "freeqos-cake-down"}
+    assert {t["name"] for t in par_cle["type"]["rows"]} == {"cake-up", "cake-down"}
     assert d["other_simple_queues"] == 1
     assert d["total"] == 3
     assert d["netflow"]["enabled"] is True

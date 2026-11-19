@@ -132,6 +132,8 @@ class RouterOsReadClient(Protocol):
 
     def system_resource_cpu(self) -> list[dict[str, Any]]: ...
 
+    def system_health(self) -> list[dict[str, Any]]: ...
+
     def routerboard(self) -> dict[str, Any]: ...
 
     def license_id(self) -> str | None: ...
@@ -310,6 +312,10 @@ class LibrouterosReadClient:
     def system_resource_cpu(self) -> list[dict[str, Any]]:
         """La charge de CHAQUE coeur (``/system/resource/cpu``) : cpu, load, irq."""
         return [dict(r) for r in self._query("/system/resource/cpu")]
+
+    def system_health(self) -> list[dict[str, Any]]:
+        """Les capteurs (``/system/health``) : temperature, tension, ventilateurs."""
+        return [dict(r) for r in self._query("/system/health")]
 
     def export_config(self) -> str:
         """Config complete du routeur, facon ``/export`` (texte).
@@ -1734,8 +1740,56 @@ class MikrotikCollector:
                 else None
             ),
             "free_hdd": parse_counter(resource.get("free-hdd-space")),
+            "total_hdd": parse_counter(resource.get("total-hdd-space")),
+            "architecture": _as_str(resource.get("architecture-name")),
+            "cpu_name": _as_str(resource.get("cpu")),
+            "cpu_frequency_mhz": parse_counter(resource.get("cpu-frequency")),
             **self._cores_sync(),
+            "sensors": self._sensors_sync(),
         }
+
+    def _sensors_sync(self) -> list[dict[str, Any]]:
+        """Temperature, tension, ventilateurs : ce que le routeur sait mesurer.
+
+        RouterOS 7 rend une ligne par capteur (name, value, type) ; RouterOS 6,
+        une seule ligne a colonnes (temperature, voltage...). Les deux sont
+        ramenes a la meme forme. Facultatif : un CHR n'a aucun capteur.
+        """
+        lire = getattr(self._client, "system_health", None)
+        if lire is None:
+            return []
+        try:
+            lignes = lire() or []
+        except Exception as exc:  # noqa: BLE001 - facultatif
+            logger.debug("%s : /system/health illisible (%s)", self.config.name, exc)
+            return []
+        unites = {"temperature": "°C", "voltage": "V", "current": "A", "power-consumption": "W"}
+        capteurs: list[dict[str, Any]] = []
+        for ligne in lignes:
+            if "name" in ligne and "value" in ligne:
+                nom = str(ligne.get("name") or "")
+                unite = str(ligne.get("type") or "") or next(
+                    (u for cle, u in unites.items() if cle in nom), ""
+                )
+                capteurs.append(
+                    {
+                        "name": nom,
+                        "value": _as_str(ligne.get("value")),
+                        "unit": unite.replace("C", "°C") if unite == "C" else unite,
+                    }
+                )
+                continue
+            for cle, valeur in ligne.items():
+                if cle.startswith(".") or valeur in (None, ""):
+                    continue
+                capteurs.append(
+                    {
+                        "name": cle,
+                        "value": _as_str(valeur),
+                        "unit": next((u for c, u in unites.items() if c in cle), ""),
+                    }
+                )
+        return capteurs
 
     def _cores_sync(self) -> dict[str, Any]:
         """La charge PAR COEUR, et le coeur le plus charge.

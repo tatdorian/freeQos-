@@ -46,16 +46,31 @@ from app.models import KIND_PPPOE, KIND_STATIC
 
 logger = logging.getLogger(__name__)
 
-QUEUE_TYPE_UP = f"{PREFIX}cake-up"
-QUEUE_TYPE_DOWN = f"{PREFIX}cake-down"
+#: SANS « freeqos- » (demande de l'exploitant) : un nom propre dans Winbox.
+QUEUE_TYPE_UP = "cake-up"
+QUEUE_TYPE_DOWN = "cake-down"
 #: Les memes, en FQ-CoDel (plus leger en CPU). Un autre NOM : basculer cree les
 #: nouveaux types, repointe nos files, puis retire les anciens devenus inutiles.
-QUEUE_TYPE_FQ_UP = f"{PREFIX}fq-up"
-QUEUE_TYPE_FQ_DOWN = f"{PREFIX}fq-down"
+QUEUE_TYPE_FQ_UP = "fq-codel-up"
+QUEUE_TYPE_FQ_DOWN = "fq-codel-down"
 QUEUE_KIND_CAKE = "cake"
 QUEUE_KIND_FQ_CODEL = "fq-codel"
+#: Les noms d'AVANT (« freeqos-cake-up »...) : nos files sont repointees sur les
+#: nouveaux, puis ces types, devenus inutiles, sont retires au meme passage.
+LEGACY_TYPES = (
+    f"{PREFIX}cake-up",
+    f"{PREFIX}cake-down",
+    f"{PREFIX}fq-up",
+    f"{PREFIX}fq-down",
+)
 #: Nos types de file, quel que soit le choix : ceux qu'on peut retirer.
-NOS_TYPES = (QUEUE_TYPE_UP, QUEUE_TYPE_DOWN, QUEUE_TYPE_FQ_UP, QUEUE_TYPE_FQ_DOWN)
+NOS_TYPES = (
+    QUEUE_TYPE_UP,
+    QUEUE_TYPE_DOWN,
+    QUEUE_TYPE_FQ_UP,
+    QUEUE_TYPE_FQ_DOWN,
+    *LEGACY_TYPES,
+)
 #: Motif d'un client sans debit a appliquer : aucune file, jamais de 0/0.
 NO_RATE_SKIP = (
     "no rate to apply (neither plan nor mode): no queue is written -- a queue that "
@@ -1046,7 +1061,7 @@ def _retirer_types_inutiles(
 ) -> None:
     """BASCULE CAKE <-> FQ-CoDEL : nos anciens types, devenus inutiles, partent.
 
-    Seulement NOS types (``freeqos-cake-*`` / ``freeqos-fq-*``), et seulement
+    Seulement NOS types (``cake-*`` / ``fq-codel-*``, et les anciens ``freeqos-*``), et seulement
     quand plus AUCUNE file ne les portera apres ce plan : une file d'abonne hors
     ligne gardee en place, ou une file de l'exploitant qui les utiliserait, les
     garde. Ces retraits passent en DERNIER, apres le repointage des files."""

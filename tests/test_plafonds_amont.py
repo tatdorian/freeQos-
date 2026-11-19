@@ -70,10 +70,10 @@ async def test_le_coeur_porte_la_meme_file_que_le_pop(settings: Settings) -> Non
     assert champs["parent"] == "none"
     assert "upstream" in champs["comment"]
     # Le meme type que sur le PoP : CAKE, cree sur le coeur s'il manque.
-    assert champs["queue"] == "freeqos-cake-up/freeqos-cake-down"
+    assert champs["queue"] == "cake-up/cake-down"
     assert {a.name for a in plan.actions if a.path == "/queue/type"} == {
-        "freeqos-cake-up",
-        "freeqos-cake-down",
+        "cake-up",
+        "cake-down",
     }
     # Le meme debit que le forfait (100/20 Mbps), sans marge.
     assert champs["max-limit"] == "20000000/100000000"
