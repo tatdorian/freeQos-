@@ -439,7 +439,8 @@ def test_une_mesure_perimee_ne_passe_pas_pour_actuelle() -> None:
     mesure est marquee perimee et ne s'additionne plus."""
     assert "function mesureFraiche(r)" in JS
     assert JS.count("mesureFraiche") >= 7
-    assert 'id="ports-live"' in HTML and "/ports/live" in JS
+    # « Live traffic per router » a quitte le tableau de bord (demande client).
+    assert 'id="ports-live"' not in HTML
 
 
 def test_un_abonne_se_supprime_depuis_la_liste() -> None:

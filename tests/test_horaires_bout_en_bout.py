@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -469,6 +469,48 @@ def test_un_scheduler_se_lance_et_s_arrete_a_la_main(
     assert _limites(routeur)["client-a"] == "5000000/10000000"
     _passe(client, cle, LUNDI, "13:30")
     assert _limites(routeur)["client-a"] == PLAN
+
+
+def test_activer_avant_l_heure_garde_l_heure_de_fin(
+    banc: tuple[TestClient, RouteurQuiRetient],
+) -> None:
+    """Demande client : « Activate now » a midi pour le scheduler 18 h - 23 h.
+    Il s'applique tout de suite, s'arrete a 23 h comme prevu, puis la normale."""
+    client, routeur = banc
+    cle = _cle(client)
+    _brancher(client, cle)
+    r = client.post(
+        "/api/v1/bandwidth-schedules",
+        headers=cle,
+        json={
+            "name": "Evening",
+            "timezone": "Africa/Niamey",
+            "scope": "on_plan",
+            "windows": [{"start": "18:00", "end": "23:00", "percent": 50}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    ident = r.json()["id"]
+    _passe(client, cle, LUNDI, "12:00")
+    assert _limites(routeur)["client-a"] == PLAN
+
+    r = client.post(
+        f"/api/v1/bandwidth-schedules/{ident}/start",
+        headers=cle,
+        json={"until_scheduled_end": True},
+    )
+    assert r.status_code == 200, r.text
+    fin = datetime.fromisoformat(r.json()["manual_until"])
+    assert fin == LUNDI.replace(hour=23).astimezone(UTC)
+    assert _limites(routeur)["client-a"] == "5000000/10000000"
+    _passe(client, cle, LUNDI, "15:00")
+    assert _limites(routeur)["client-a"] == "5000000/10000000"
+    _passe(client, cle, LUNDI, "23:01")
+    assert _limites(routeur)["client-a"] == PLAN
+
+    # Le lendemain, il reprend ses heures comme d'habitude.
+    _passe(client, cle, LUNDI + timedelta(days=1), "18:30")
+    assert _limites(routeur)["client-a"] == "5000000/10000000"
 
 
 def test_lancer_un_scheduler_arrete_celui_lance_sur_les_memes_clients(

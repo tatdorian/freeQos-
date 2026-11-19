@@ -1470,7 +1470,6 @@ async function loadDashboard() {
   if (estLimite()) { await aujourdhui; return; }
   const courbe = loadThroughput();
   const top = loadTopTalkers();
-  const ports = loadPortsLive();
   const [overview, tree] = await Promise.all([api('/overview'), api('/network/tree')]);
 
   const down = bps(overview.tx_bps), up = bps(overview.rx_bps);
@@ -1494,7 +1493,7 @@ async function loadDashboard() {
   // En parallele : la courbe et le top partent AVANT les chiffres de tete,
   // et chaque bloc s'affiche des que SA donnee arrive.
   renderBackhaulCards(tree);
-  await Promise.all([courbe, top, ports, aujourdhui]);
+  await Promise.all([courbe, top, aujourdhui]);
 }
 
 /** PORTS EN DIRECT : tout ce que les routeurs comptent, sessions ou non.
@@ -1740,6 +1739,7 @@ function renderBackhaulCards(tree) {
   const links = [];
   tree.forEach((pop) => (pop.backhauls || []).forEach((b) => links.push({ pop, b })));
   const host = document.getElementById('backhaul-cards');
+  if (!host) return;
   if (!links.length) {
     host.innerHTML = '<div class="card"><div class="empty">No radio backhaul yet.<br>' +
       'Add the antenna in <a href="#/pops">Devices › Ubiquiti antennas</a>, or link UISP.</div></div>';
@@ -4983,38 +4983,8 @@ function choisirPop(select, valeur) {
   select.value = valeur || (noms.length === 1 ? noms[0] : '');
 }
 
-/** « Add a client » : un login PPPoE (rejoint par la decouverte) ou une IP fixe. */
-function choisirAjout(kind) {
-  document.querySelectorAll('#add-kind [data-kind]').forEach((b) => b.classList.toggle('active', b.dataset.kind === kind));
-  document.getElementById('pp-form').hidden = kind !== 'pppoe';
-  document.getElementById('sc-form').hidden = kind !== 'static';
-}
-
-async function ppDeclarer(e) {
-  e.preventDefault();
-  const out = document.getElementById('pp-out');
-  const val = (id) => document.getElementById(id).value.trim();
-  const login = val('pp-login');
-  const bas = Number(val('pp-down'));
-  const haut = Number(val('pp-up'));
-  if ((bas > 0) !== (haut > 0)) { out.innerHTML = '<div class="notice warn">Give both plan rates, or neither.</div>'; return; }
-  try {
-    await api('/clients', { method: 'POST', body: JSON.stringify({
-      login, pop_name: val('pp-pop'), display_name: val('pp-name') || null, cpe_mac: val('pp-mac') || null }) });
-    if (bas > 0) {
-      await api('/plans/' + encodeURIComponent(login), { method: 'PUT', body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
-    }
-    document.getElementById('pp-form').reset();
-    out.innerHTML = '<div class="notice ok">' + esc(login) + ' added. It shows as never seen until its first session.</div>';
-    await loadClients();
-  } catch (err) {
-    out.innerHTML = noticeErreur(err);
-  }
-}
-
 function scRemplirFormulaire(fiche) {
   scEdition = fiche;
-  if (fiche) choisirAjout('static');
   const v = (id, valeur) => { document.getElementById(id).value = valeur === null || valeur === undefined ? '' : valeur; };
   v('sc-reference', fiche ? fiche.reference : '');
   v('sc-label', fiche ? fiche.label : '');
@@ -11861,9 +11831,24 @@ function schedBoutonLancer(f) {
     ? '<button class="sm primary" data-sched-stop="' + esc(f.id) + '">Stop</button> '
     : '<select class="sm sched-start" data-sched-start="' + esc(f.id) + '" aria-label="Start now" ' +
       'style="width:auto;min-width:0;display:inline-block;vertical-align:middle">' +
-      '<option value="">Start now…</option><option value="60">for 1 hour</option>' +
+      '<option value="">Start now…</option>' +
+      '<option value="end" title="Starts now, before its time, and stops at its usual end time: then back to normal">until its scheduled end</option>' +
+      '<option value="60">for 1 hour</option>' +
       '<option value="120">for 2 hours</option><option value="240">for 4 hours</option>' +
       '<option value="1440">for 24 hours</option><option value="0">until I stop it</option></select> ';
+}
+
+/** Le corps de « Start now » : jusqu'a sa fin prevue, une duree, ou sans fin. */
+function schedCorpsLancer(valeur) {
+  return JSON.stringify(valeur === 'end' ? { until_scheduled_end: true } : { minutes: Number(valeur) || null });
+}
+
+/** L'heure de fin d'un lancement, avec le jour quand ce n'est pas aujourd'hui. */
+function schedFinLancer(iso) {
+  const d = new Date(iso);
+  const heure = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  return d.toDateString() === new Date().toDateString() ? heure
+    : d.toLocaleDateString([], { weekday: 'short' }) + ' ' + heure;
 }
 
 /** Le client d'un scheduler propre, par son nom, vers sa fiche. */
@@ -11923,7 +11908,7 @@ function renderSchedules() {
 
   host.querySelectorAll('[data-sched-start]').forEach((sel) => sel.addEventListener('change', () => {
     if (sel.value === '') return;
-    schedLancer(sel.dataset.schedStart, Number(sel.value) || null);
+    schedLancer(sel.dataset.schedStart, sel.value);
   }));
   host.querySelectorAll('[data-sched-stop]').forEach((b) => b.addEventListener('click',
     () => schedArreter(b.dataset.schedStop)));
@@ -11945,15 +11930,15 @@ function renderSchedules() {
 }
 
 /** LANCER A LA MAIN : tout de suite, quelle que soit l'heure. */
-async function schedLancer(id, minutes) {
+async function schedLancer(id, valeur) {
   const res = document.getElementById('sched-result');
   try {
     const r = await api('/bandwidth-schedules/' + encodeURIComponent(id) + '/start', {
-      method: 'POST', body: JSON.stringify({ minutes }),
+      method: 'POST', body: schedCorpsLancer(valeur),
     });
     res.innerHTML = '<div class="notice ok">"' + esc(r.name) + '" is running now' +
-      (r.manual_until ? ', until ' + esc(new Date(r.manual_until).toLocaleTimeString([], {
-        hour: '2-digit', minute: '2-digit', hour12: false })) : ', until you stop it') + '.' +
+      (r.manual_until ? ', until ' + esc(schedFinLancer(r.manual_until)) +
+        (valeur === 'end' ? ' (its usual end), then back to normal' : '') : ', until you stop it') + '.' +
       ((r.stopped || []).length ? ' Stopped, as it applied to the same clients: <b>' +
         esc(r.stopped.join(', ')) + '</b>.' : '') +
       schedEnforcement(r.enforcement) + '</div>';
@@ -14213,8 +14198,9 @@ function cablerSchedulerPropre(host, login, r) {
       if (lancer.value === '') return;
       try {
         await api('/bandwidth-schedules/' + encodeURIComponent(f.id) + '/start', {
-          method: 'POST', body: JSON.stringify({ minutes: Number(lancer.value) || null }) });
-        fini('<div class="notice ok">Started now.</div>');
+          method: 'POST', body: schedCorpsLancer(lancer.value) });
+        fini('<div class="notice ok">Started now' +
+          (lancer.value === 'end' ? ', until its usual end time, then back to normal' : '') + '.</div>');
       } catch (err) {
         out.innerHTML = noticeErreur(err);
       }
@@ -16159,10 +16145,9 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
   panneau.hidden = !panneau.hidden;
   if (panneau.hidden) return;
   scRemplirFormulaire(null);
-  choisirAjout('pppoe');
   // Le bouton annonce « Ajouter un client » : le curseur doit etre dans le
   // premier champ, pas quelque part au-dessus d'un panneau a parcourir.
-  const reference = document.getElementById('pp-login');
+  const reference = document.getElementById('sc-reference');
   if (reference) {
     reference.focus();
     reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -16170,8 +16155,6 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
   await Promise.all([loadStaticClients(), loadVlanClients()]);
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
-document.getElementById('pp-form').addEventListener('submit', ppDeclarer);
-document.querySelectorAll('#add-kind [data-kind]').forEach((b) => b.addEventListener('click', () => choisirAjout(b.dataset.kind)));
 document.getElementById('sc-cancel').addEventListener('click', () => scRemplirFormulaire(null));
 // La liste se relit quand on ouvre le menu : un routeur ou un PoP ajoute
 // depuis un autre onglet y apparait sans recharger la page.
@@ -16508,7 +16491,7 @@ const AIDE = {
   'network throughput': {
     t: 'Total traffic of all your subscribers (PPPoE and static clients) over time. Download is drawn above the axis, upload below.',
     m: 'Read every 10 s from each subscriber’s queue on its router, then summed. Solid line = average of each time step; dotted line = the highest 10-second moment inside the step, so a short burst is not flattened away.',
-    r: 'Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve: it shows in Live traffic per router as “Other traffic”. Filter by router or client with the menus.',
+    r: 'Traffic that belongs to no subscriber — a bandwidth test between routers, device management, an undeclared client — is not in this curve. Filter by router or client with the menus.',
     a: 'A flat line at 0 while clients are online usually means the collection stopped: check the health dot at the top left and Devices › Polled routers.',
   },
   'routers': {

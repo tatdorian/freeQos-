@@ -35,6 +35,11 @@ from app.db.static_clients_repo import (
     VlanSightingsRepository,
 )
 from app.services.client_merge import merge_duplicates
+from app.services.client_rename import (
+    ClientNameTakenError,
+    check_new_name_free,
+    rename_client,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -432,6 +437,18 @@ async def update_static_client(
     """
     repository = _require_repository(container)
     try:
+        avant = await repository.get(client_id)
+    except StaticClientNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    ancien_nom = str(avant["reference"])
+    ancien_site = str(avant["pop_name"])
+    database = getattr(container, "database", None)
+    if payload.reference is not None and payload.reference != ancien_nom and database:
+        try:
+            await check_new_name_free(database.pool, ancien_nom, payload.reference)
+        except ClientNameTakenError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    try:
         modifie = await repository.update(client_id, payload.model_dump(exclude_unset=True))
     except StaticClientNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -439,6 +456,15 @@ async def update_static_client(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except InvalidStaticClientError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    nouveau_nom = str(modifie["reference"])
+    if nouveau_nom != ancien_nom and database:
+        # Le MEME client sous un autre nom : historique, forfait, mode, fiche,
+        # schedulers le suivent -- pas un second client a cote de l'ancien.
+        await rename_client(container, ancien_nom, nouveau_nom, actor="ui:static-client")
+    if nouveau_nom != ancien_nom or str(modifie["pop_name"]) != ancien_site:
+        # L'ancienne file (ancien nom, ou ancien site) part avant que la
+        # nouvelle soit posee : sinon le routeur garderait les deux.
+        await _poser_la_file(container, reference=ancien_nom, pop_name=ancien_site, removing=True)
     modifie["enforcement"] = await _poser_la_file(
         container,
         reference=modifie["reference"],

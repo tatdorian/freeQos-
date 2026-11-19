@@ -289,3 +289,40 @@ def test_le_menu_start_now_ne_deborde_pas() -> None:
 
     js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
     assert "'style=\"width:auto;min-width:0;display:inline-block;vertical-align:middle\">'" in js
+
+
+# ------------------------------------------- lancer avant l'heure, fin prevue
+def test_lancer_avant_l_heure_s_arrete_a_la_fin_prevue() -> None:
+    """Demande client : « Activate now » a 12 h pour un scheduler 18 h - 23 h
+    tourne tout de suite et s'arrete a 23 h, comme prevu ; puis la normale."""
+    s = _sched(1, "Evening", "all")
+    assert s.scheduled_end(LUNDI_12H) == LUNDI_12H.replace(hour=23)
+
+
+def test_lance_pendant_sa_plage_il_finit_a_la_fin_de_celle_ci() -> None:
+    s = _sched(1, "Evening", "all")
+    assert s.scheduled_end(LUNDI_19H) == LUNDI_19H.replace(hour=23)
+
+
+def test_une_plage_qui_passe_minuit_finit_le_lendemain() -> None:
+    s = _sched(1, "Night", "all", windows=[{"start": "22:00", "end": "06:00", "percent": 50}])
+    assert s.scheduled_end(LUNDI_12H) == LUNDI_12H.replace(day=17, hour=6)
+
+
+def test_la_fin_prevue_suit_le_fuseau_du_scheduler() -> None:
+    s = _sched(1, "Evening", "all", timezone="Europe/Paris")
+    # 18 h - 23 h a Paris (UTC+1 en mars avant le changement d'heure) : 22 h UTC.
+    assert s.scheduled_end(LUNDI_12H) == LUNDI_12H.replace(hour=22)
+
+
+def test_la_fin_prevue_ignore_un_lancement_a_la_main() -> None:
+    s = _sched(1, "Evening", "all", manual_on=True, manual_until=None)
+    assert s.scheduled_end(LUNDI_12H) == LUNDI_12H.replace(hour=23)
+
+
+def test_le_menu_propose_jusqu_a_la_fin_prevue() -> None:
+    from app.web.ui import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert '<option value="end"' in js and "until its scheduled end" in js
+    assert "{ until_scheduled_end: true }" in js
