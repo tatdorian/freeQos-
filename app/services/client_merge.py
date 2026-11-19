@@ -67,6 +67,22 @@ async def merge_duplicates(
             continue
         sessions_par_ip.setdefault(ip, []).append(login)
 
+    # LES AUTRES FICHES A IP FIXE, par adresse : une fiche a la main posee sur
+    # l'IP d'une fiche deja la (poussee par l'API, ou saisie avant elle) est
+    # le meme client en double.
+    unique = (32, 128)
+    fiches_par_ip: dict[str, list[dict[str, Any]]] = {}
+    for autre in fiches:
+        if int(autre.get("prefix_len") or 32) in unique:
+            fiches_par_ip.setdefault(_hote(autre.get("address")), []).append(autre)
+
+    def anterieure(autre: dict[str, Any], fiche: dict[str, Any]) -> bool:
+        """L'API fait foi ; entre deux fiches a la main, la premiere saisie."""
+        if autre.get("source") == "api":
+            return True
+        return int(autre.get("id") or 0) < int(fiche.get("id") or 0)
+
+    fusionnees: set[str] = set()
     fusions: list[dict[str, str]] = []
     for fiche in fiches:
         reference = str(fiche.get("reference") or "")
@@ -76,23 +92,45 @@ async def merge_duplicates(
             continue
         if int(fiche.get("prefix_len") or 32) not in (32, 128):
             continue
+        if reference in fusionnees:
+            continue
         ip = _hote(fiche.get("address"))
         candidats = [c for c in sessions_par_ip.get(ip, []) if c != reference]
+        cible_statique: dict[str, Any] | None = None
+        if not candidats:
+            doubles = [
+                a
+                for a in fiches_par_ip.get(ip, [])
+                if a.get("reference") != reference
+                and str(a.get("reference")) not in fusionnees
+                and anterieure(a, fiche)
+                and (retires is None or str(a.get("reference")) not in retires)
+            ]
+            if len(doubles) == 1:
+                cible_statique = doubles[0]
+                candidats = [str(cible_statique["reference"])]
         if len(candidats) != 1:
             continue
         cible = candidats[0]
         try:
-            await _fusionner(container, fiche, cible, ip, actor)
+            await _fusionner(container, fiche, cible, ip, actor, cible_statique=cible_statique)
         except Exception:  # noqa: BLE001 - une fusion ratee n'empeche pas les autres
             logger.exception("Fusion de '%s' dans '%s' impossible", reference, cible)
             continue
+        fusionnees.add(reference)
         fusions.append({"from": reference, "into": cible, "address": ip})
         logger.info("Client '%s' (fiche a la main, %s) fusionne dans '%s'", reference, ip, cible)
     return fusions
 
 
 async def _fusionner(
-    container: Any, fiche: dict[str, Any], cible: str, ip: str, actor: str
+    container: Any,
+    fiche: dict[str, Any],
+    cible: str,
+    ip: str,
+    actor: str,
+    *,
+    cible_statique: dict[str, Any] | None = None,
 ) -> None:
     reference = str(fiche["reference"])
     nom = str(fiche.get("label") or "").strip() or reference
@@ -124,7 +162,21 @@ async def _fusionner(
             cible,
         )
         await conn.execute("DELETE FROM client_plans WHERE login = $1", reference)
-        if fiche.get("plan_down_mbps") or fiche.get("plan_up_mbps"):
+        if cible_statique is not None:
+            # Une fiche a IP fixe porte son debit DANS la fiche : celui de la
+            # fiche en double la complete, sans l'ecraser.
+            await conn.execute(
+                """
+                UPDATE static_clients
+                   SET plan_down_mbps = COALESCE(plan_down_mbps, $2),
+                       plan_up_mbps = COALESCE(plan_up_mbps, $3), updated_at = now()
+                 WHERE id = $1
+                """,
+                int(cible_statique["id"]),
+                fiche.get("plan_down_mbps"),
+                fiche.get("plan_up_mbps"),
+            )
+        elif fiche.get("plan_down_mbps") or fiche.get("plan_up_mbps"):
             await conn.execute(
                 """
                 INSERT INTO client_plans (login, down_mbps, up_mbps, source, updated_by,
