@@ -315,6 +315,13 @@ class StartInput(BaseModel):
         le=60 * 24 * 31,
         description="How long it runs. null: until it is stopped.",
     )
+    until_scheduled_end: bool = Field(
+        default=False,
+        description=(
+            "Start now, before its time, and stop at the end time it was scheduled "
+            "for (the window running now, or else the next one). Then back to normal."
+        ),
+    )
 
 
 @router.post(
@@ -338,6 +345,20 @@ async def start_schedule(
     # UN SEUL LANCE A LA MAIN PAR CLIENT : ceux qui touchent les memes clients
     # s'arretent (le dernier geste l'emporte, et la page le dit).
     modes = await depot.modes()
+    if payload.until_scheduled_end:
+        try:
+            profil = to_model({**existant, "enabled": True, "manual_on": False}, modes)
+        except (InvalidScheduleError, KeyError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        fin = profil.scheduled_end(datetime.now(tz=UTC))
+        if fin is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"'{existant['name']}' has no end time in the coming week: "
+                    "choose a duration instead."
+                ),
+            )
     arretes = await _arreter_les_autres_lances(container, existant, modes)
     modifie = await depot.update(
         schedule_id, {"manual_on": True, "manual_until": fin, "enabled": True}

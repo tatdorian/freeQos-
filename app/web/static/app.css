@@ -2235,7 +2235,6 @@ a.btn:hover { text-decoration: none; filter: brightness(1.05); }
 .cp-ip { font: inherit; font-family: var(--mono, ui-monospace, monospace); font-size: .82rem; padding: .15rem .55rem;
   border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); cursor: copy; min-height: 0; }
 .cp-ip.copied::after { content: " ✓ copied"; color: var(--ok, #16a34a); }
-.add-kind { margin: 0 0 .7rem; }
 .ec-sep { margin: .4rem 0 0; font-size: .9rem; }
 #pp-form[hidden], #sc-form[hidden] { display: none; }
 .cp-measure-why { display: block; color: var(--warn); font-size: .78rem; margin-top: .15rem; }

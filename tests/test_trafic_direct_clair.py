@@ -19,9 +19,13 @@ def _rendu() -> str:
     return JS[debut : JS.index("/* Filtres du graphe de debit", debut)]
 
 
-def test_titre_et_phrase_d_introduction() -> None:
-    assert "<h2>Live traffic per router</h2>" in HTML
-    assert "Routers &mdash; live traffic" not in HTML
+def test_la_section_a_quitte_le_tableau_de_bord() -> None:
+    """Demande client : ni « Live traffic per router » ni « Radio backhauls »
+    sur le tableau de bord ; « Top consumers » reste."""
+    assert "<h2>Live traffic per router</h2>" not in HTML
+    assert 'id="ports-live"' not in HTML
+    assert 'id="backhaul-cards"' not in HTML
+    assert "<h2>Top consumers</h2>" in HTML
 
 
 def test_trois_tuiles_en_clair() -> None:

@@ -1880,6 +1880,13 @@ async def test_la_vue_expose_la_nature(database: Database, now: datetime) -> Non
         plan=Plan(down_mbps=200, up_mbps=50, source="static-inventory"),
         kind="static",
     )
+    # Un client a IP fixe vient toujours d'une fiche : sans elle, il est un
+    # client supprime, que la liste ne montre plus.
+    async with database.pool.acquire() as conn:
+        await conn.execute(
+            "INSERT INTO static_clients (reference, pop_name, address) "
+            "VALUES ('mairie-vitre', 'PoP Altair', '10.0.0.5')"
+        )
     await writer.write_subscriber_metrics(
         [
             (ppp, SubscriberSample(ts=now, login="dupont", router_name="r", pop_name="PoP Altair")),
