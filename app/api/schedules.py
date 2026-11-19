@@ -217,6 +217,7 @@ def _etat(
     except InvalidScheduleError as exc:
         sortie["error"] = str(exc)
         return sortie
+    sortie["personal"] = profil.personal
     sortie["manual_active"] = profil.manual_active(maintenant)
     sortie["manual_until"] = (
         profil.manual_until.isoformat()
@@ -384,6 +385,8 @@ async def _arreter_les_autres_lances(
             continue
         if not modele.manual_active(maintenant):
             continue
+        if profil.personal != modele.personal:
+            continue  # le propre au client et le groupe ne s'arretent pas l'un l'autre
         if _memes_cibles_possibles(profil, modele) or any(
             vise(profil, c) and vise(modele, c) for c in clients
         ):
