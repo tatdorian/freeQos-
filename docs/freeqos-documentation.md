@@ -1318,6 +1318,20 @@ A **bandwidth mode** is a named rate given to a client in one click, from the **
 - **Writing:** like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.
 - **Plan and mode coexist.** The plan is the speed of **one** client (no need to create a mode for each particular speed); a mode, when the client has one, applies instead of the plan. Changing a client's plan keeps its mode and its boost: only a manual limit (an override without a mode) is lifted, so that the new plan takes effect.
 
+#### Normal and emergency bandwidth
+
+Each client has **two bandwidths**, side by side on its page (*Plan & mode*):
+
+- **Normal bandwidth** — its **plan**: applied when it has **no mode**.
+- **Emergency bandwidth** — applied whenever an **emergency mode** is activated for it. Optional; set on the client's page (*Emergency bandwidth*, Operator) or with `PUT /api/v1/clients/{login}/emergency` (`{"down_mbps": 8, "up_mbps": 3}`, at least 0.064 Mbps each way; `GET` reads it, `DELETE` removes it).
+
+A mode becomes an **emergency mode** by ticking *Emergency mode* in its form (`"emergency": true` on `/api/v1/bandwidth-modes`). Putting clients in it — one, a selection, or every client of the mode at once — gives **each one its own emergency bandwidth**; a client without one gets the mode's speed, which serves as the default. Example: *Emergency* at 4/2 Mbps; a client with an emergency bandwidth of 8/3 gets 8/3, a client with none gets 4/2; back to *No mode*, each gets its normal bandwidth again.
+
+- Changing the emergency bandwidth of a client **already in** an emergency mode applies at once (the reply carries `applied_now`); removing it gives the client the mode's speed.
+- Ticking *Emergency mode* on an existing mode re-applies it to its clients at once: each moves to its own emergency bandwidth.
+- A scheduler that gives an emergency mode during its hours gives each client its own emergency bandwidth too.
+- The client list (`GET /api/v1/subscribers/latest`) carries `emergency_down_mbps` / `emergency_up_mbps`, and its *effective* rate is the one really written. Renaming, merging or removing a client carries its emergency bandwidth along (or deletes it, on removal).
+
 **Client actions** (`POST /api/v1/clients/actions`, `{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}`) act on one or several clients. The reply gives a result **per client** (`succeeded`, `failed`, `results[]`): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.
 
 **Boost or temporary plan, from the Clients page.** On one or several selected clients (or from a client's page):

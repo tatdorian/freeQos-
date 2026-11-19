@@ -99,7 +99,7 @@ class SchedulesRepository:
         """Les modes de debit, pour les plages qui en designent un."""
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT id, name, rate_kind, down_value, up_value FROM bandwidth_modes"
+                "SELECT id, name, rate_kind, down_value, up_value, emergency FROM bandwidth_modes"
             )
         return {int(r["id"]): dict(r) for r in rows}
 

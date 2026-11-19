@@ -317,6 +317,8 @@ class ShapingService:
         self.registry = registry
         # Clients retires de freeQoS (app/services/exclusions.py), branche par le conteneur.
         self.exclusions: Any = None
+        #: login -> bande passante d'urgence, relue a chaque construction de cibles.
+        self._urgences: dict[str, tuple[float, float]] = {}
         # Login -> routeur de sa session (CollectionService.session_routers).
         self.session_routers: dict[str, str] = {}
         self.repository = repository
@@ -1225,6 +1227,10 @@ class ShapingService:
 
         surcharges_liens = await self.repository.policy_map("link")
         surcharges_abonnes = await self.repository.policy_map("subscriber")
+        # Bandes passantes d'urgence : un scheduler qui donne un mode d'urgence
+        # applique celle de chaque client.
+        lire_urgences = getattr(self.repository, "emergency_rates", None)
+        self._urgences = await lire_urgences() if lire_urgences is not None else {}
         rattachements = await self.repository.attachments()
         # Resserrages decides par la boucle fermee QoE (phase 4). Ils vivent dans
         # leur propre table, pas dans les surcharges : une surcharge est une
@@ -1711,6 +1717,7 @@ class ShapingService:
             mode_id=cible.mode_id,
             mode_down=cible.override_down_mbps,
             mode_up=cible.override_up_mbps,
+            emergency=self._urgences.get(cible.login),
         )
         if horaire is not None:
             cible.schedule_down_mbps = horaire.down_mbps

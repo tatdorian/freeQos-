@@ -75,6 +75,11 @@ def _with_effective_limits(row: dict[str, Any]) -> dict[str, Any]:
         mode_id=row.get("mode_id"),
         mode_down=row.get("override_down_mbps"),
         mode_up=row.get("override_up_mbps"),
+        emergency=(
+            (float(row["emergency_down_mbps"]), float(row["emergency_up_mbps"]))
+            if row.get("emergency_down_mbps") and row.get("emergency_up_mbps")
+            else None
+        ),
     )
     devant = bool(horaire and horaire.over_mode)
     descendant, source = effective_rate(
@@ -611,12 +616,15 @@ class MetricsRepository:
                        p.boost_reason,
                        p.note           AS policy_note,
                        p.mode_id,
-                       p.mode_name
+                       p.mode_name,
+                       e.down_mbps      AS emergency_down_mbps,
+                       e.up_mbps        AS emergency_up_mbps
                   FROM subscribers s
                   LEFT JOIN pops pop ON pop.id = s.pop_id
                   LEFT JOIN subscriber_latest l ON l.subscriber_id = s.id
                   LEFT JOIN shaping_policies p
                          ON p.scope = 'subscriber' AND p.target_key = s.login
+                  LEFT JOIN client_emergency_rates e ON e.login = s.login
                  WHERE ($1::int IS NULL OR s.pop_id = $1)
                    AND ($2::text IS NULL OR s.login ILIKE '%' || $2 || '%')
                    AND ($3::text IS NULL OR s.kind = $3)

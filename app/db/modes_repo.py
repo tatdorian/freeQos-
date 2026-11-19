@@ -16,9 +16,18 @@ import asyncpg
 
 COLUMNS = (
     "id, name, rate_kind, down_value, up_value, disables_boost, position, note, "
-    "created_at, updated_at"
+    "emergency, created_at, updated_at"
 )
-CHAMPS = ("name", "rate_kind", "down_value", "up_value", "disables_boost", "position", "note")
+CHAMPS = (
+    "name",
+    "rate_kind",
+    "down_value",
+    "up_value",
+    "disables_boost",
+    "position",
+    "note",
+    "emergency",
+)
 
 RATE_FIXED = "fixed"
 RATE_PERCENT = "percent"
@@ -41,13 +50,21 @@ class InvalidModeError(ValueError):
 
 
 def mode_rates(
-    mode: dict[str, Any], plan_down_mbps: float | None, plan_up_mbps: float | None
+    mode: dict[str, Any],
+    plan_down_mbps: float | None,
+    plan_up_mbps: float | None,
+    emergency: tuple[float, float] | None = None,
 ) -> tuple[float, float]:
     """Debit (descendant, montant) en Mbps que ce mode donne a ce client.
 
     Un mode en pourcentage a besoin du forfait du client : sans forfait connu,
     "50 % du forfait" ne veut rien dire, et inventer un debit serait pire.
+
+    MODE D'URGENCE : chaque client y recoit SA bande passante d'urgence, saisie
+    a cote de son forfait (``emergency``). Sans elle, le debit du mode vaut.
     """
+    if mode.get("emergency") and emergency is not None:
+        return float(emergency[0]), float(emergency[1])
     bas, haut = float(mode["down_value"]), float(mode["up_value"])
     if mode.get("rate_kind") == RATE_PERCENT:
         if not plan_down_mbps or not plan_up_mbps:
@@ -116,8 +133,9 @@ class ModesRepository:
                 row = await conn.fetchrow(
                     f"""
                     INSERT INTO bandwidth_modes
-                           (name, rate_kind, down_value, up_value, disables_boost, position, note)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                           (name, rate_kind, down_value, up_value, disables_boost, position, note,
+                            emergency)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                     RETURNING {COLUMNS}
                     """,  # noqa: S608
                     fiche["name"],
@@ -127,6 +145,7 @@ class ModesRepository:
                     bool(fiche.get("disables_boost", False)),
                     int(fiche.get("position") or 0),
                     fiche.get("note"),
+                    bool(fiche.get("emergency", False)),
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise ModeConflictError(f"a mode named '{fiche['name']}' already exists") from exc
@@ -152,6 +171,7 @@ class ModesRepository:
                     bool(fiche.get("disables_boost")),
                     int(fiche.get("position") or 0),
                     fiche.get("note"),
+                    bool(fiche.get("emergency")),
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise ModeConflictError(f"a mode named '{fiche['name']}' already exists") from exc

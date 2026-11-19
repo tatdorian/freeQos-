@@ -29,6 +29,7 @@ _PAR_LOGIN: tuple[tuple[str, str], ...] = (
     ("client_locations", "name"),
     ("tree_client_places", "login"),
     ("excluded_clients", "login"),
+    ("client_emergency_rates", "login"),
 )
 
 

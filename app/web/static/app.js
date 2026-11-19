@@ -13793,7 +13793,9 @@ async function loadModesAdmin() {
       'Pro (50 Mbps). To change speeds by a %, use a scheduler.</div>'
     : '<table><thead><tr><th>Mode</th><th>Rate</th><th class="num">Clients</th>' +
       '<th>Note</th><th></th></tr></thead><tbody>' +
-      modes.map((m) => '<tr><td><b>' + esc(m.name) + '</b></td><td>' + esc(modeTaux(m)) +
+      modes.map((m) => '<tr><td><b>' + esc(m.name) + '</b>' + (m.emergency ? ' <span class="badge crit" title="' +
+          'Each client gets its own emergency bandwidth; this speed is for clients without one">emergency</span>' : '') +
+        '</td><td>' + esc(modeTaux(m)) + (m.emergency ? '<span class="hint">or each client\'s emergency bandwidth</span>' : '') +
         (m.rate_kind === 'percent' ? ' <span class="badge warn" title="A mode is a speed now: edit it and ' +
           'give it kbps or Mbps. It keeps working until then.">give it a fixed speed</span>' : '') + '</td>' +
         '<td class="num">' + (m.clients || 0) + '</td><td>' + esc(m.note || '') + '</td>' +
@@ -13819,6 +13821,7 @@ async function loadModesAdmin() {
     }
     document.getElementById('mode-position').value = m.position || 0;
     document.getElementById('mode-note').value = m.note || '';
+    document.getElementById('mode-emergency').checked = !!m.emergency;
     document.getElementById('modes-form-title').textContent = 'Edit ' + m.name;
     // Ses clients, cochables dans le formulaire meme.
     modePicker(m.id);
@@ -13884,6 +13887,7 @@ function cablerModes() {
       position: Number(document.getElementById('mode-position').value) || 0,
       note: document.getElementById('mode-note').value.trim() || null,
       disables_boost: false,
+      emergency: document.getElementById('mode-emergency').checked,
     };
     const sortie = document.getElementById('modes-result');
     try {
@@ -13909,7 +13913,7 @@ function cablerModes() {
 
 const ACTION_LABEL = {
   mode: 'Bandwidth mode', boost: 'Boost', stop_boost: 'Boost stopped',
-  plan: 'Plan', plan_removed: 'Plan removed',
+  plan: 'Plan', plan_removed: 'Plan removed', emergency: 'Emergency bandwidth', Renamed: 'Renamed',
   details: 'Client details', declared: 'Client added',
 };
 
@@ -14355,18 +14359,23 @@ async function loadClientPage() {
         '<span><b>' + esc(nom) + (sel ? ' · current' : '') + '</b><small>' + sous + '</small></span></label>';
     };
     const planTxt = s.plan_down_mbps ? mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps) : 'no plan yet';
+    // BANDE PASSANTE D'URGENCE : appliquee quand un mode d'urgence est active.
+    const urgTxt = r.emergency_down_mbps ? mbps(r.emergency_down_mbps) + ' / ' + mbps(r.emergency_up_mbps) : '';
+    const modesUrgence = CLI.modes.filter((x) => x.emergency).map((x) => x.name);
     corps = '<div class="cp-grid"><div class="card"><h3>Bandwidth mode</h3>' +
       '<p class="hint" style="display:block">Its <b>plan</b> is its own speed. A <b>mode</b>, when it has ' +
         'one, applies instead; <b>No mode</b> gives it back its plan. Schedulers then change this speed by ' +
         'a % during their hours.</p>' +
       '<div class="mode-cards">' +
       carte(null, 'No mode', 'its plan: ' + esc(planTxt)) +
-      CLI.modes.map((x) => carte(x.id, x.name, esc(modeTaux(x)))).join('') +
+      CLI.modes.map((x) => carte(x.id, x.name + (x.emergency ? ' (emergency)' : ''), x.emergency && urgTxt
+        ? 'its emergency bandwidth: ' + esc(urgTxt) : esc(modeTaux(x)))).join('') +
       '</div>' + (CLI.modes.length ? '' : '<p class="hint" style="display:block">No mode yet: create one on the ' +
         '<a href="#/modes">Modes</a> page.</p>') +
       '<div class="actions" style="margin-top:.8rem"><span class="spacer"></span>' +
       '<button class="primary" id="cp-apply-mode"' + dis + '>Apply</button></div><div id="cp-mode-out"></div></div>' +
-      '<div class="cp-side"><div class="card"><h3>Plan</h3>' +
+      '<div class="cp-side"><div class="card"><h3>Normal bandwidth (plan)</h3>' +
+      '<p class="hint" style="display:block">Applied when it has no mode.</p>' +
       (r.mode_id != null ? '<p class="hint" style="display:block">Kept for this client. The mode <b>' +
         esc(r.mode_name || '') + '</b> applies now; with <b>No mode</b> this plan applies again.</p>' : '') +
       '<div class="field"><label for="cp-down">Download (Mbps)</label><input id="cp-down" type="number" min="0.001" step="any" value="' +
@@ -14375,7 +14384,19 @@ async function loadClientPage() {
         esc(s.plan_up_mbps || '') + '"' + dis + '></div>' +
       '<div class="actions" style="margin-top:.6rem"><button class="sm danger" id="cp-plan-reset"' + dis + '>Remove</button>' +
       '<span class="spacer"></span><button class="primary" id="cp-plan-save"' + dis + '>Save the plan</button></div>' +
-      '<div id="cp-plan-out"></div></div>' + carteSchedulerPropre(r, dis) +
+      '<div id="cp-plan-out"></div></div>' +
+      '<div class="card"><h3>Emergency bandwidth</h3>' +
+      '<p class="hint" style="display:block">Applied whenever an <b>emergency mode</b> is activated for it' +
+        (modesUrgence.length ? ' (' + modesUrgence.map(esc).join(', ') + ')' : ': tick “Emergency mode” on a mode, ' +
+          'on the <a href="#/modes">Modes</a> page') +
+        '. Without one, the emergency mode gives it the mode\'s speed.</p>' +
+      '<div class="field"><label for="cp-em-down">Download (Mbps)</label><input id="cp-em-down" type="number" min="0.064" step="any" value="' +
+        esc(r.emergency_down_mbps || '') + '"' + dis + '></div>' +
+      '<div class="field"><label for="cp-em-up">Upload (Mbps)</label><input id="cp-em-up" type="number" min="0.064" step="any" value="' +
+        esc(r.emergency_up_mbps || '') + '"' + dis + '></div>' +
+      '<div class="actions" style="margin-top:.6rem">' + (urgTxt ? '<button class="sm danger" id="cp-em-reset"' + dis + '>Remove</button>' : '') +
+      '<span class="spacer"></span><button class="primary" id="cp-em-save"' + dis + '>Save</button></div>' +
+      '<div id="cp-em-out"></div></div>' + carteSchedulerPropre(r, dis) +
       '<div class="card"><h3>Boost</h3><p class="hint" style="display:block">' +
       (b ? 'A boost is running: ' + esc(boostReste(b)) + (boostReste(b) === 'until stopped' ? '.' : ' left.')
         : 'Extra rate for a set time, or until you stop it.') +
@@ -14442,6 +14463,30 @@ async function loadClientPage() {
       loadClientPage();
     } catch (err) {
       host.querySelector('#cp-plan-out').innerHTML = noticeErreur(err);
+    }
+  });
+  clic('cp-em-save', async () => {
+    const bas = Number(host.querySelector('#cp-em-down').value);
+    const haut = Number(host.querySelector('#cp-em-up').value);
+    const out = host.querySelector('#cp-em-out');
+    if (!(bas >= 0.064) || !(haut >= 0.064)) { out.innerHTML = '<div class="notice warn">Give both rates, at least 0.064 Mbps (64 kbps).</div>'; return; }
+    try {
+      const res = await api('/clients/' + encodeURIComponent(login) + '/emergency', { method: 'PUT', body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
+      out.innerHTML = '<div class="notice ok">Emergency bandwidth saved: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) +
+        (res.applied_now ? ', applied now (it is in an emergency mode)' : '') + '.</div>';
+      document.activeElement.blur();
+      setTimeout(loadClientPage, 1200);
+    } catch (err) {
+      out.innerHTML = noticeErreur(err);
+    }
+  });
+  clic('cp-em-reset', async () => {
+    if (!confirm('Remove the emergency bandwidth of ' + login + '? An emergency mode then gives it the mode\'s speed.')) return;
+    try {
+      await api('/clients/' + encodeURIComponent(login) + '/emergency', { method: 'DELETE' });
+      loadClientPage();
+    } catch (err) {
+      host.querySelector('#cp-em-out').innerHTML = noticeErreur(err);
     }
   });
   cablerSchedulerPropre(host, login, r);
@@ -15553,8 +15598,8 @@ async function loadModesPage() {
     '<button type="button" class="sm" data-mode-clients="' + m.id + '">Add or remove clients</button></div>' : '';
   document.getElementById('modes-board').innerHTML = '<div class="mode-board">' +
     carte('No mode', 'Clients on their own plan', parMode.auto, 'auto') +
-    CLI.modes.map((m) => carte(m.name, esc(modeTaux(m)),
-      parMode[m.id], m.disables_boost ? 'crit' : '', gerer(m))).join('') +
+    CLI.modes.map((m) => carte(m.name, m.emergency ? 'Emergency: each client\'s emergency bandwidth, else ' + esc(modeTaux(m))
+      : esc(modeTaux(m)), parMode[m.id], m.disables_boost || m.emergency ? 'crit' : '', gerer(m))).join('') +
     (manuels.length ? carte('Manual limit', 'Set by hand by an Administrator', manuels, '') : '') +
     '</div>';
   document.querySelectorAll('[data-mode-clients]').forEach((b) =>
