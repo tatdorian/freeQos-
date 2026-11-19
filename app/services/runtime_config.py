@@ -218,6 +218,17 @@ REGLAGES: tuple[Reglage, ...] = (
     ),
     # --- CAKE ---
     Reglage(
+        "queue_kind",
+        "cake",
+        "choix",
+        "Queue type of every freeQoS queue. 'cake' (default): full AQM with PPPoE "
+        "overhead, DSCP classes and NAT awareness. 'fq-codel': the same low latency "
+        "and per-flow fairness for less router CPU; the CAKE options below have no "
+        "effect. Speeds, modes, schedulers and boosts are the same either way. "
+        "Switching only rewrites the queue types of freeQoS queues.",
+        choices=("cake", "fq-codel"),
+    ),
+    Reglage(
         "cake_overhead",
         "cake",
         "int",

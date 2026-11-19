@@ -46,6 +46,14 @@ logger = logging.getLogger(__name__)
 
 QUEUE_TYPE_UP = f"{PREFIX}cake-up"
 QUEUE_TYPE_DOWN = f"{PREFIX}cake-down"
+#: Les memes, en FQ-CoDel (plus leger en CPU). Un autre NOM : basculer cree les
+#: nouveaux types, repointe nos files, puis retire les anciens devenus inutiles.
+QUEUE_TYPE_FQ_UP = f"{PREFIX}fq-up"
+QUEUE_TYPE_FQ_DOWN = f"{PREFIX}fq-down"
+QUEUE_KIND_CAKE = "cake"
+QUEUE_KIND_FQ_CODEL = "fq-codel"
+#: Nos types de file, quel que soit le choix : ceux qu'on peut retirer.
+NOS_TYPES = (QUEUE_TYPE_UP, QUEUE_TYPE_DOWN, QUEUE_TYPE_FQ_UP, QUEUE_TYPE_FQ_DOWN)
 #: Motif d'un client sans debit a appliquer : aucune file, jamais de 0/0.
 NO_RATE_SKIP = (
     "no rate to apply (neither plan nor mode): no queue is written -- a queue that "
@@ -342,7 +350,11 @@ def shaped_capacity(
 
 
 def desired_queue_types(
-    *, overhead: int | None = None, rtt_ms: int | None = None, **extra: Any
+    *,
+    overhead: int | None = None,
+    rtt_ms: int | None = None,
+    kind: str = QUEUE_KIND_CAKE,
+    **extra: Any,
 ) -> list[QueueTypeSpec]:
     """Les deux types CAKE utilises par toutes les files.
 
@@ -354,6 +366,13 @@ def desired_queue_types(
     ack_filter, wash, mpu) telles quelles a ``QueueTypeSpec`` : une valeur None
     n'ecrit pas le champ (defaut RouterOS conserve).
     """
+    if kind == QUEUE_KIND_FQ_CODEL:
+        # FQ-CoDel : les reglages par defaut de RouterOS (target 5 ms, interval
+        # 100 ms, ECN). Les options CAKE n'existent pas pour lui.
+        return [
+            QueueTypeSpec(name=QUEUE_TYPE_FQ_UP, kind=QUEUE_KIND_FQ_CODEL),
+            QueueTypeSpec(name=QUEUE_TYPE_FQ_DOWN, kind=QUEUE_KIND_FQ_CODEL),
+        ]
     commun = {"overhead": overhead, "rtt_ms": rtt_ms, **extra}
     return [
         QueueTypeSpec(name=QUEUE_TYPE_UP, **commun),
@@ -379,6 +398,8 @@ def desired_state(
     silencieusement du plan est indiscernable d'un abonne correctement shape.
     """
     types = list(queue_types) if queue_types is not None else desired_queue_types()
+    # Les types que portent nos files : le premier monte, le second descend.
+    type_haut, type_bas = types[0].name, types[1].name
 
     files: list[QueueSpec] = []
     ecartes: list[PlanSkip] = []
@@ -500,8 +521,8 @@ def desired_state(
                 target=cible_lien,
                 max_up_mbps=up,
                 max_down_mbps=down,
-                queue_up=QUEUE_TYPE_UP,
-                queue_down=QUEUE_TYPE_DOWN,
+                queue_up=type_haut,
+                queue_down=type_bas,
                 order=index,
             )
         )
@@ -607,8 +628,8 @@ def desired_state(
                 max_up_mbps=up,
                 max_down_mbps=down,
                 parent=parent,
-                queue_up=QUEUE_TYPE_UP,
-                queue_down=QUEUE_TYPE_DOWN,
+                queue_up=type_haut,
+                queue_down=type_bas,
                 order=1000,
             )
         )
@@ -806,7 +827,7 @@ def build_plan(
                     path="/queue/type",
                     fields=champs,
                     name=spec.name,
-                    reason="CAKE type missing",
+                    reason="queue type missing",
                 )
             )
             continue
@@ -819,7 +840,7 @@ def build_plan(
                     fields={k: v for k, v in champs.items() if k != "name"},
                     target_id=str(existant.get(".id") or existant.get("id") or ""),
                     name=spec.name,
-                    reason="CAKE parameters differ",
+                    reason="queue type parameters differ",
                     changes=changements,
                 )
             )
@@ -965,7 +986,49 @@ def build_plan(
                 )
             )
 
+    _retirer_types_inutiles(plan, desired_types, desired_queues, actual_types, files_existantes)
     return plan
+
+
+def _retirer_types_inutiles(
+    plan: Plan,
+    desired_types: Sequence[QueueTypeSpec],
+    desired_queues: Sequence[QueueSpec],
+    actual_types: Sequence[dict[str, Any]],
+    files_existantes: dict[str, dict[str, Any]],
+) -> None:
+    """BASCULE CAKE <-> FQ-CoDEL : nos anciens types, devenus inutiles, partent.
+
+    Seulement NOS types (``freeqos-cake-*`` / ``freeqos-fq-*``), et seulement
+    quand plus AUCUNE file ne les portera apres ce plan : une file d'abonne hors
+    ligne gardee en place, ou une file de l'exploitant qui les utiliserait, les
+    garde. Ces retraits passent en DERNIER, apres le repointage des files."""
+    voulus = {t.name for t in desired_types}
+    par_nom = {q.name: q for q in desired_queues}
+    retirees = {a.name for a in plan.actions if a.verb == "remove" and a.path == "/queue/simple"}
+    portes: set[str] = set()
+    for nom, row in files_existantes.items():
+        if nom in retirees:
+            continue
+        if nom in par_nom and _is_managed(row):
+            spec = par_nom[nom]
+            portes.update(t for t in (spec.queue_up, spec.queue_down) if t)
+            continue
+        portes.update(str(row.get("queue") or "").split("/"))
+    for row in actual_types:
+        nom = str(row.get("name") or "")
+        if nom not in NOS_TYPES or nom in voulus or nom in portes:
+            continue
+        plan.actions.append(
+            PlanAction(
+                verb="remove",
+                path="/queue/type",
+                fields={"name": nom},
+                target_id=str(row.get(".id") or row.get("id") or ""),
+                name=nom,
+                reason="queue type no longer used (queue type switched in Settings)",
+            )
+        )
 
 
 def _traiter_file_tierce(

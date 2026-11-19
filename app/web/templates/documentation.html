@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="a32306354e5eb601">
+  <meta name="freeqos-docs-source" content="e84316ad538cd45d">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -78,6 +78,7 @@
     <a class="sub" href="#what-freeqos-caps-and-what-it-never-caps">What freeQoS caps, and what it never caps</a>
     <a class="sub" href="#how-shaping-works">How shaping works</a>
     <a class="sub" href="#what-cake-does">What CAKE does</a>
+    <a class="sub" href="#queue-type-cake-or-fq-codel">Queue type: CAKE or FQ-CoDel</a>
     <a class="sub" href="#how-queues-nest">How queues nest</a>
     <a class="sub" href="#where-a-subscribers-plan-comes-from">Where a subscriber's plan comes from</a>
     <a class="sub" href="#what-is-installed-on-the-router">What is installed on the router</a>
@@ -2620,6 +2621,41 @@ curl -s http://127.0.0.1:8000/health/ready
 </tr>
 </tbody>
 </table></div>
+<h3 id="queue-type-cake-or-fq-codel">Queue type: CAKE or FQ-CoDel</h3>
+<p><em>Settings › Router writing › Queue type</em> (two buttons, CAKE / FQ-CoDel; <code>queue_kind</code>, also in <em>Advanced</em>) chooses the algorithm of <strong>every</strong> freeQoS queue: <strong>cake</strong> (default) or <strong>fq-codel</strong>. FQ-CoDel keeps what matters for the subscriber — a separate queue per flow and active queue management that keeps latency low under load — and uses <strong>less router CPU</strong> than CAKE. What it does not have: overhead compensation (the limit counts IP bytes; clients get their full limit), DSCP priority classes and NAT-aware host fairness. The <em>cake_…</em> settings are greyed out and have no effect while FQ-CoDel is chosen.</p>
+<div class="table-wrap"><table>
+<thead>
+<tr>
+<th></th>
+<th>CAKE</th>
+<th>FQ-CoDel</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Low latency under load, per-flow fairness</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Speeds, modes, schedulers, boosts, parent queues</td>
+<td>✅</td>
+<td>✅ (identical: they set <code>max-limit</code>, not the queue type)</td>
+</tr>
+<tr>
+<td>PPPoE overhead, DSCP classes, NAT mode</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Router CPU</td>
+<td>higher</td>
+<td>lower</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Switching rewrites only the queue types.</strong> freeQoS creates <code>freeqos-fq-up</code> / <code>freeqos-fq-down</code> (or <code>freeqos-cake-up</code> / <code>freeqos-cake-down</code> when going back), points every freeQoS queue to them (<code>queue=</code> only: no speed, target or parent changes), then removes the old types <strong>last</strong>, once no queue uses them any more — a queue kept for an offline client keeps its type until it goes. It happens at once, without waiting for the 2-minute reconciliation, and switching back and forth is never taken for an oscillation. Only lines marked <code>freeqos:managed</code> are touched.</p>
+<p><strong>If FQ-CoDel does not work on a router, it is not used there.</strong> A router that refuses to create the <code>fq-codel</code> type (a RouterOS without it) keeps CAKE: the refusal is noted, its queues stay on CAKE without error, and <em>Settings</em> lists the router with RouterOS's answer. It is tried again after a restart of freeQoS.</p>
 <h3 id="how-queues-nest">How queues nest</h3>
 <p>RouterOS queues form a tree:</p>
 <ul>

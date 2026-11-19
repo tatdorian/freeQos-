@@ -618,6 +618,12 @@ class Settings(BaseSettings):
     # Encapsulation a compter dans CAKE. PPPoE sur ethernet = 8 + 14 octets ;
     # ajouter 4 par etiquette VLAN, 4 par label MPLS. Sous-estimer revient a
     # shaper au-dessus de la capacite du lien, ce qui annule l'AQM.
+    # TYPE DES FILES POSEES PAR FREEQOS. "cake" (defaut) : AQM complet (overhead
+    # PPPoE, classes DSCP, NAT). "fq-codel" : la meme latence basse et la meme
+    # equite entre flux, pour nettement moins de CPU ; les options cake_* n'ont
+    # alors pas d'effet. Les debits (max-limit), modes, schedulers et boosts
+    # sont identiques : ils ne dependent pas du type.
+    queue_kind: Literal["cake", "fq-codel"] = "cake"
     cake_overhead: int = 22
     cake_rtt_ms: int = 50
     # Options CAKE avancees. Le rendu RouterOS existe deja (QueueTypeSpec) ; il

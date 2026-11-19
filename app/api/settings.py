@@ -8,6 +8,7 @@ prochain tour de boucle).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Annotated, Any
 
@@ -49,6 +50,9 @@ async def _apres_changement(container: ContainerDep, name: str, avant: Any, apre
     d'un coup des decisions anciennes. Rendre aussi a la remise en marche
     couvre le cas ou la boucle etait deja coupee au demarrage.
     """
+    if name == "queue_kind" and avant != apres:
+        await _bascule_type_de_file(container, avant, apres)
+        return
     if name != "qoe_loop_enabled" or avant == apres:
         return
     liberer = getattr(container.topology_repo, "release_qoe_trims", None)
@@ -66,6 +70,32 @@ async def _apres_changement(container: ContainerDep, name: str, avant: Any, apre
         return
     if liberes:
         logger.info("Resserrages QoE rendus (%s) : %s", motif, ", ".join(liberes))
+
+
+async def _bascule_type_de_file(container: ContainerDep, avant: Any, apres: Any) -> None:
+    """CAKE <-> FQ-CoDel : les files freeQoS sont repointees TOUT DE SUITE, en
+    arriere-plan -- seuls leurs types changent, pas leurs debits."""
+    shaping = getattr(container, "shaping", None)
+    if shaping is None:
+        return
+    logger.info("Type des files : %s -> %s", avant, apres)
+
+    async def repointer() -> None:
+        try:
+            refus = dict(getattr(shaping, "fq_codel_refused", {}))
+            await shaping.reconcile()
+            # Un routeur qui vient de refuser FQ-CoDel repasse en CAKE tout de suite.
+            if dict(getattr(shaping, "fq_codel_refused", {})) != refus:
+                await shaping.reconcile()
+        except Exception:  # noqa: BLE001 - la reconciliation suivante rattrapera
+            logger.exception("Repointage des files apres bascule impossible")
+
+    tache = asyncio.create_task(repointer())
+    _TACHES.add(tache)
+    tache.add_done_callback(_TACHES.discard)
+
+
+_TACHES: set[Any] = set()
 
 
 def _config(container: ContainerDep) -> RuntimeConfig:
@@ -105,9 +135,12 @@ async def list_settings(container: ContainerDep) -> dict[str, Any]:
     groupes: dict[str, list[dict[str, Any]]] = {}
     for entree in entrees:
         groupes.setdefault(entree["group"], []).append(entree)
+    shaping = getattr(container, "shaping", None)
     return {
         "settings": entrees,
         "groups": groupes,
+        # Routeurs qui ont refuse FQ-CoDel : ils restent en CAKE.
+        "fq_codel_refused": dict(getattr(shaping, "fq_codel_refused", {}) or {}),
         "from_db": sorted(config.overrides),
         # Dit noir sur blanc ce qui reste hors de portee de l'interface.
         "bootstrap_only": AMORCAGE,

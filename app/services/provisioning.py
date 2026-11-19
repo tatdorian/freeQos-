@@ -226,8 +226,11 @@ async def _constat(container: Any, router: str) -> dict[str, Any]:
         return {"error": f"{type(exc).__name__}: {exc}"}
     if not lu.reachable:
         return {"error": lu.error}
+    # Nos types de file, CAKE ou FQ-CoDel selon le reglage.
     types = [
-        str(t.get("name")) for t in lu.queue_types if "cake" in str(t.get("kind") or t.get("name"))
+        str(t.get("name"))
+        for t in lu.queue_types
+        if str(t.get("kind") or "") in ("cake", "fq-codel") or "cake" in str(t.get("name"))
     ]
     constat["cake_types"] = sorted(t for t in types if t.startswith("freeqos"))
     constat["managed_queues"] = len(lu.managed_queues)
