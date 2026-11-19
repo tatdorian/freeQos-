@@ -871,6 +871,18 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_ROUTER_CPU, INTERVALLE_S, releve_cpu)
     conteneur.watch_sources.append(problemes_cpu)
+    # LES MODES DES CRENEAUX, des le demarrage : un planning enregistre avant
+    # cette version offre aussi ses Evening / Night (et Constant) aux clients,
+    # sans avoir a le reenregistrer.
+    from app.services.slot_modes import sync_slot_modes
+
+    try:
+        for profil in await schedules_repo.list_all():
+            await sync_slot_modes(
+                conteneur, list(profil.get("windows") or []), author="system:schedule"
+            )
+    except Exception:  # noqa: BLE001 - jamais bloquant au demarrage
+        logger.exception("Modes des creneaux non alignes au demarrage")
     # Des le demarrage, et pas dix minutes plus tard : un routeur retire (et les
     # anciens PoPs de demonstration) ne doit plus s'afficher nulle part.
     try:
