@@ -518,6 +518,11 @@ async def preview_schedule(
             mode_id=mode,
             mode_down=abonne.get("override_down_mbps"),
             mode_up=abonne.get("override_up_mbps"),
+            emergency=(
+                (float(abonne["emergency_down_mbps"]), float(abonne["emergency_up_mbps"]))
+                if abonne.get("emergency_down_mbps") and abonne.get("emergency_up_mbps")
+                else None
+            ),
         )
         devant = bool(horaire and horaire.over_mode)
         bas, source = effective_rate(

@@ -162,6 +162,17 @@ async def _fusionner(
             cible,
         )
         await conn.execute("DELETE FROM client_plans WHERE login = $1", reference)
+        # La bande passante d'urgence suit, sans ecraser celle de la cible.
+        await conn.execute(
+            """
+            UPDATE client_emergency_rates SET login = $2, updated_at = now()
+             WHERE login = $1
+               AND NOT EXISTS (SELECT 1 FROM client_emergency_rates WHERE login = $2)
+            """,
+            reference,
+            cible,
+        )
+        await conn.execute("DELETE FROM client_emergency_rates WHERE login = $1", reference)
         if cible_statique is not None:
             # Une fiche a IP fixe porte son debit DANS la fiche : celui de la
             # fiche en double la complete, sans l'ecraser.

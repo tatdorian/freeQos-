@@ -149,6 +149,9 @@ class Window:
     percent_up: float | None = None
     mode_id: int | None = None
     mode_name: str | None = None
+    #: La plage donne un mode d'URGENCE : chaque client y recoit sa propre
+    #: bande passante d'urgence quand il en a une.
+    emergency: bool = False
 
     def minutes(self) -> list[tuple[int, int]]:
         """Les intervalles couverts dans la semaine, en minutes depuis lundi 00:00."""
@@ -241,7 +244,11 @@ def _plage_en_mode(raw: dict[str, Any], modes: Modes | None) -> dict[str, Any]:
     if mode is None:
         raise InvalidScheduleError(f"unknown bandwidth mode {ident}: it was deleted?")
     bas, haut = float(mode["down_value"]), float(mode["up_value"])
-    commun = {"mode_id": ident, "mode_name": str(mode.get("name") or f"mode {ident}")}
+    commun = {
+        "mode_id": ident,
+        "mode_name": str(mode.get("name") or f"mode {ident}"),
+        "emergency": bool(mode.get("emergency")),
+    }
     if mode.get("rate_kind") == "percent":
         return {**commun, "percent": bas, "percent_up": haut}
     return {**commun, "down_mbps": bas, "up_mbps": haut}
@@ -587,6 +594,7 @@ class ScheduleBook:
         mode_id: int | None = None,
         mode_down: float | None = None,
         mode_up: float | None = None,
+        emergency: tuple[float, float] | None = None,
     ) -> ScheduledRate | None:
         """Le debit horaire de cet abonne a cet instant, ou None (forfait normal).
 
@@ -606,6 +614,9 @@ class ScheduleBook:
         en_mode = mode_id is not None and bool(mode_down or mode_up)
         base_bas, base_haut = (mode_down, mode_up) if en_mode else (plan_down, plan_up)
         bas, haut = plage.rates(base_bas, base_haut)
+        if plage.emergency and emergency is not None:
+            # Un mode d'urgence donne a CE client sa bande passante d'urgence.
+            bas, haut = emergency
         if bas is None and haut is None:
             return None
         return ScheduledRate(

@@ -814,6 +814,11 @@
             <input id="mode-note" maxlength="300" placeholder="optional">
           </div>
         </div>
+        <!-- MODE D'URGENCE : chaque client y recoit SA bande passante
+             d'urgence (saisie sur sa fiche, a cote de son forfait). -->
+        <label class="chk" title="Each client in this mode gets its own emergency bandwidth, set on its page next to its plan. A client without one gets the speed above.">
+          <input type="checkbox" id="mode-emergency"> Emergency mode: each client gets <b>its own emergency bandwidth</b> (set on the client's page); the speed above is for clients without one
+        </label>
         <!-- LES CLIENTS DU MODE, dans le formulaire : cocher les met dans ce
              mode, decocher les rend a Automatic, enregistre avec le reste. -->
         <div class="field">

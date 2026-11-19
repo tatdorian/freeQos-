@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from app.api.deps import ContainerDep, RepositoryDep, acteur, noter
 from app.api.shaping import _apply_for_subscriber, _require_topology, client_connu, poser_boost
+from app.db import emergency_repo
 from app.db.modes_repo import (
     InvalidModeError,
     ModeConflictError,
@@ -63,6 +64,13 @@ class ModeInput(BaseModel):
     )
     position: int = Field(default=0, ge=0, le=10_000)
     note: str | None = Field(default=None, max_length=300)
+    emergency: bool = Field(
+        default=False,
+        description=(
+            "Emergency mode: each client in it gets ITS OWN emergency bandwidth "
+            "(set next to its plan); a client without one gets this mode's speed"
+        ),
+    )
 
 
 class ModeUpdate(BaseModel):
@@ -73,6 +81,12 @@ class ModeUpdate(BaseModel):
     disables_boost: bool | None = None
     position: int | None = Field(default=None, ge=0, le=10_000)
     note: str | None = Field(default=None, max_length=300)
+    emergency: bool | None = None
+
+
+class EmergencyInput(BaseModel):
+    down_mbps: float = Field(ge=0.064, le=100_000)
+    up_mbps: float = Field(ge=0.064, le=100_000)
 
 
 class ModeChoice(BaseModel):
@@ -235,8 +249,11 @@ async def _donner_mode(
         await topo.clear_mode(login, updated_by=author)
         rapport: dict[str, Any] = {"login": login, "ok": True, "mode": None}
     else:
+        urgence = await _urgence_de(container, login) if mode.get("emergency") else None
         try:
-            bas, haut = mode_rates(mode, abonne.get("plan_down_mbps"), abonne.get("plan_up_mbps"))
+            bas, haut = mode_rates(
+                mode, abonne.get("plan_down_mbps"), abonne.get("plan_up_mbps"), urgence
+            )
         except InvalidModeError as exc:
             await noter(
                 container,
@@ -265,14 +282,19 @@ async def _donner_mode(
             "up_mbps": haut,
             "boost_stopped": bool(mode.get("disables_boost")),
         }
+        if mode.get("emergency"):
+            # Sa bande passante d'urgence, ou celle du mode faute de mieux.
+            rapport["emergency_rate"] = "client" if urgence is not None else "mode"
     logger.info("Mode de %s -> %s (par %s)", login, mode["name"] if mode else "Automatic", author)
     if apply_now:
         rapport["applied"] = await _apply_for_subscriber(container, login, author=author)
     if mode is None:
         detail = "Automatic: plan and schedule"
     else:
-        detail = f"{nom}: {rapport['down_mbps']:g} / {rapport['up_mbps']:g} Mbps" + (
-            ", boost stopped" if rapport.get("boost_stopped") else ""
+        detail = (
+            f"{nom}: {rapport['down_mbps']:g} / {rapport['up_mbps']:g} Mbps"
+            + (" (its emergency bandwidth)" if rapport.get("emergency_rate") == "client" else "")
+            + (", boost stopped" if rapport.get("boost_stopped") else "")
         )
     await noter(
         container,
@@ -284,6 +306,112 @@ async def _donner_mode(
         applied=rapport.get("applied"),
     )
     return rapport
+
+
+async def _urgence_de(container: Any, login: str) -> tuple[float, float] | None:
+    """La bande passante d'urgence de ce client, s'il en a une."""
+    base = getattr(container, "database", None)
+    if base is None:
+        return None
+    return await emergency_repo.get_rates(base.pool, login)
+
+
+def _base(container: Any) -> Any:
+    base = getattr(container, "database", None)
+    if base is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Emergency bandwidth unavailable (database not initialised)",
+        )
+    return base.pool
+
+
+@router.get(
+    "/clients/{login}/emergency",
+    summary="A client's emergency bandwidth (applied in an emergency mode)",
+)
+async def get_emergency(login: str, container: ContainerDep) -> dict[str, Any]:
+    ligne = await emergency_repo.get(_base(container), login)
+    return {
+        "login": login,
+        "down_mbps": ligne["down_mbps"] if ligne else None,
+        "up_mbps": ligne["up_mbps"] if ligne else None,
+        "updated_by": ligne["updated_by"] if ligne else None,
+        "updated_at": ligne["updated_at"].isoformat() if ligne else None,
+    }
+
+
+async def _reappliquer_si_urgence(
+    container: Any, metrics: Any, login: str, auteur: str
+) -> dict[str, Any] | None:
+    """Le client est dans un mode d'urgence : sa nouvelle valeur vaut tout de suite."""
+    topo = getattr(container, "topology_repo", None)
+    if topo is None or not hasattr(topo, "policy_of"):
+        return None
+    politique = await topo.policy_of(login)
+    if not politique or not politique.get("mode_id"):
+        return None
+    try:
+        mode = await _modes(container).get(int(politique["mode_id"]))
+    except ModeNotFoundError:
+        return None
+    if not mode.get("emergency"):
+        return None
+    return await _donner_mode(container, metrics, login, mode, author=auteur)
+
+
+@router.put(
+    "/clients/{login}/emergency",
+    summary="Set a client's emergency bandwidth (applied in an emergency mode)",
+)
+async def put_emergency(
+    login: str,
+    payload: EmergencyInput,
+    request: Request,
+    container: ContainerDep,
+    metrics: RepositoryDep,
+) -> dict[str, Any]:
+    if await client_connu(container, metrics, login) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown client")
+    auteur = acteur(request)
+    await emergency_repo.put(_base(container), login, payload.down_mbps, payload.up_mbps, auteur)
+    await noter(
+        container,
+        request,
+        login=login,
+        action="emergency",
+        detail=f"Emergency bandwidth: {payload.down_mbps:g} / {payload.up_mbps:g} Mbps",
+    )
+    sortie: dict[str, Any] = {
+        "login": login,
+        "down_mbps": payload.down_mbps,
+        "up_mbps": payload.up_mbps,
+    }
+    reapplique = await _reappliquer_si_urgence(container, metrics, login, auteur)
+    if reapplique is not None:
+        sortie["applied_now"] = reapplique
+    return sortie
+
+
+@router.delete("/clients/{login}/emergency", summary="Remove a client's emergency bandwidth")
+async def delete_emergency(
+    login: str, request: Request, container: ContainerDep, metrics: RepositoryDep
+) -> dict[str, Any]:
+    retire = await emergency_repo.delete(_base(container), login)
+    sortie: dict[str, Any] = {"login": login, "removed": retire}
+    if retire:
+        auteur = acteur(request)
+        await noter(
+            container,
+            request,
+            login=login,
+            action="emergency",
+            detail="Emergency bandwidth removed: an emergency mode gives it the mode's speed",
+        )
+        reapplique = await _reappliquer_si_urgence(container, metrics, login, auteur)
+        if reapplique is not None:
+            sortie["applied_now"] = reapplique
+    return sortie
 
 
 async def _mode_choisi(container: ContainerDep, mode_id: int | None) -> dict[str, Any] | None:

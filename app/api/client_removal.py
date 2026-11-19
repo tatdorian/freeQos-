@@ -75,6 +75,12 @@ async def _oublier(repo: Any, container: Any, login: str) -> dict[str, Any]:
         rapport["override_removed"] = bool(await topo.delete_policy("subscriber", login))
         rapport["boost_removed"] = bool(await topo.clear_boost("subscriber", login))
 
+    base = getattr(container, "database", None)
+    if base is not None:
+        from app.db import emergency_repo
+
+        rapport["emergency_removed"] = await emergency_repo.delete(base.pool, login)
+
     statiques = getattr(container, "static_clients_repo", None)
     if statiques is not None:
         for ligne in await statiques.list_all():

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="4fa4e2a667d13de1">
+  <meta name="freeqos-docs-source" content="d70cd7b2e0f61fee">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2795,6 +2795,19 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Editing a mode's rate</strong> re-applies it at once to every client in it. A mode given to clients cannot be deleted (<code>409</code>): put them back on their plan or in another mode first.</li>
 <li><strong>Writing:</strong> like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.</li>
 <li><strong>Plan and mode coexist.</strong> The plan is the speed of <strong>one</strong> client (no need to create a mode for each particular speed); a mode, when the client has one, applies instead of the plan. Changing a client's plan keeps its mode and its boost: only a manual limit (an override without a mode) is lifted, so that the new plan takes effect.</li>
+</ul>
+<h4 id="normal-and-emergency-bandwidth">Normal and emergency bandwidth</h4>
+<p>Each client has <strong>two bandwidths</strong>, side by side on its page (<em>Plan &amp; mode</em>):</p>
+<ul>
+<li><strong>Normal bandwidth</strong> — its <strong>plan</strong>: applied when it has <strong>no mode</strong>.</li>
+<li><strong>Emergency bandwidth</strong> — applied whenever an <strong>emergency mode</strong> is activated for it. Optional; set on the client's page (<em>Emergency bandwidth</em>, Operator) or with <code>PUT /api/v1/clients/{login}/emergency</code> (<code>{"down_mbps": 8, "up_mbps": 3}</code>, at least 0.064 Mbps each way; <code>GET</code> reads it, <code>DELETE</code> removes it).</li>
+</ul>
+<p>A mode becomes an <strong>emergency mode</strong> by ticking <em>Emergency mode</em> in its form (<code>"emergency": true</code> on <code>/api/v1/bandwidth-modes</code>). Putting clients in it — one, a selection, or every client of the mode at once — gives <strong>each one its own emergency bandwidth</strong>; a client without one gets the mode's speed, which serves as the default. Example: <em>Emergency</em> at 4/2 Mbps; a client with an emergency bandwidth of 8/3 gets 8/3, a client with none gets 4/2; back to <em>No mode</em>, each gets its normal bandwidth again.</p>
+<ul>
+<li>Changing the emergency bandwidth of a client <strong>already in</strong> an emergency mode applies at once (the reply carries <code>applied_now</code>); removing it gives the client the mode's speed.</li>
+<li>Ticking <em>Emergency mode</em> on an existing mode re-applies it to its clients at once: each moves to its own emergency bandwidth.</li>
+<li>A scheduler that gives an emergency mode during its hours gives each client its own emergency bandwidth too.</li>
+<li>The client list (<code>GET /api/v1/subscribers/latest</code>) carries <code>emergency_down_mbps</code> / <code>emergency_up_mbps</code>, and its <em>effective</em> rate is the one really written. Renaming, merging or removing a client carries its emergency bandwidth along (or deletes it, on removal).</li>
 </ul>
 <p><strong>Client actions</strong> (<code>POST /api/v1/clients/actions</code>, <code>{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}</code>) act on one or several clients. The reply gives a result <strong>per client</strong> (<code>succeeded</code>, <code>failed</code>, <code>results[]</code>): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.</p>
 <p><strong>Boost or temporary plan, from the Clients page.</strong> On one or several selected clients (or from a client's page):</p>
@@ -5633,7 +5646,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 216 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 219 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -6826,6 +6839,21 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>POST</code></td>
 <td><code>/api/v1/clients/actions</code></td>
 <td>Change mode or boost of one or several clients</td>
+</tr>
+<tr>
+<td><code>GET</code></td>
+<td><code>/api/v1/clients/{login}/emergency</code></td>
+<td>A client's emergency bandwidth (applied in an emergency mode)</td>
+</tr>
+<tr>
+<td><code>PUT</code></td>
+<td><code>/api/v1/clients/{login}/emergency</code></td>
+<td>Set a client's emergency bandwidth (applied in an emergency mode)</td>
+</tr>
+<tr>
+<td><code>DELETE</code></td>
+<td><code>/api/v1/clients/{login}/emergency</code></td>
+<td>Remove a client's emergency bandwidth</td>
 </tr>
 <tr>
 <td><code>PUT</code></td>
