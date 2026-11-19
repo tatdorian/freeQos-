@@ -325,6 +325,7 @@ OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("POST", re.compile(r"^/bandwidth-schedules$"), ROLE_OPERATOR),
     ("PATCH", re.compile(r"^/bandwidth-schedules/\d+$"), ROLE_OPERATOR),
     ("DELETE", re.compile(r"^/bandwidth-schedules/\d+$"), ROLE_OPERATOR),
+    ("POST", re.compile(r"^/bandwidth-schedules/\d+/(start|stop)$"), ROLE_OPERATOR),
 )
 
 

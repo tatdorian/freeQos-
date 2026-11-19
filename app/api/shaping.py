@@ -1205,15 +1205,20 @@ def debit_sans_boost(
                 sites=(abonne.get("pop_name"),),
                 plan_down=plan_bas,
                 plan_up=plan_haut,
+                mode_id=pol.get("mode_id"),
+                mode_down=pol.get("max_down_mbps"),
+                mode_up=pol.get("max_up_mbps"),
             )
         except Exception:  # noqa: BLE001 - un profil illisible ne bloque pas le boost
             horaire = None
+    devant = bool(horaire and horaire.over_mode)
     bas, _ = effective_rate(
         plan_mbps=plan_bas,
         override_mbps=pol.get("max_down_mbps"),
         boost_mbps=None,
         boost_expires_at=None,
         schedule_mbps=horaire.down_mbps if horaire else None,
+        schedule_over_override=devant,
     )
     haut, _ = effective_rate(
         plan_mbps=plan_haut,
@@ -1221,6 +1226,7 @@ def debit_sans_boost(
         boost_mbps=None,
         boost_expires_at=None,
         schedule_mbps=horaire.up_mbps if horaire else None,
+        schedule_over_override=devant,
     )
     return bas, haut
 

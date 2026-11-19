@@ -268,9 +268,11 @@ def test_une_journee_complete(banc: tuple[TestClient, RouteurQuiRetient]) -> Non
     }
 
 
-def test_un_mode_donne_a_la_main_prime_sur_l_horaire(
+def test_un_scheduler_s_applique_a_la_vitesse_du_mode(
     banc: tuple[TestClient, RouteurQuiRetient],
 ) -> None:
+    """REGLE DES SCHEDULERS : le pourcentage s'applique a la vitesse du client,
+    celle de son MODE s'il en a un. Backup (6/6) a 200 % la nuit = 12/12."""
     client, routeur = banc
     cle = _cle(client)
     _brancher(client, cle)
@@ -283,15 +285,16 @@ def test_un_mode_donne_a_la_main_prime_sur_l_horaire(
     assert r.status_code == 200, r.text
     _creer_horaire(client, cle)
     _passe(client, cle, LUNDI, "12:00")
-    _passe(client, cle, LUNDI, "18:00")
+    assert _limites(routeur)["client-b"] == "6000000/6000000"  # hors plage : son mode
+    _passe(client, cle, LUNDI, "23:30")
     limites = _limites(routeur)
-    assert limites["client-a"] == SOIR
-    assert limites["client-b"] == "6000000/6000000"  # son mode, pas la soiree
+    assert limites["client-a"] == NUIT
+    assert limites["client-b"] == "12000000/12000000"  # 200 % de son mode
 
-    # Rendu a Automatic pendant la plage : il suit la soiree tout de suite.
+    # Rendu a son plan pendant la plage : 200 % de son plan.
     auto = client.put("/api/v1/clients/client-b/mode", headers=cle, json={"mode_id": None})
     assert auto.status_code == 200, auto.text
-    assert _limites(routeur)["client-b"] == SOIR
+    assert _limites(routeur)["client-b"] == NUIT
 
 
 def test_les_jours_choisis_seulement(banc: tuple[TestClient, RouteurQuiRetient]) -> None:
@@ -426,3 +429,73 @@ def test_une_purge_coupee_ne_retire_que_les_files_sans_debit() -> None:
         remove_names={"freeqos-sans-debit", "a-la-main"},
     )
     assert [a.name for a in plan.actions if a.verb == "remove"] == ["freeqos-sans-debit"]
+
+
+def test_un_scheduler_se_lance_et_s_arrete_a_la_main(
+    banc: tuple[TestClient, RouteurQuiRetient],
+) -> None:
+    """« Start now » : a midi, le scheduler du soir s'applique tout de suite ;
+    « Stop » rend le plan ; lance pour une heure, il s'arrete tout seul."""
+    client, routeur = banc
+    cle = _cle(client)
+    _brancher(client, cle)
+    r = client.post(
+        "/api/v1/bandwidth-schedules",
+        headers=cle,
+        json={
+            "name": "Evening",
+            "timezone": "Africa/Niamey",
+            "scope": "on_plan",
+            "windows": [{"start": "18:00", "end": "23:00", "percent": 50}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    ident = r.json()["id"]
+    _passe(client, cle, LUNDI, "12:00")
+    assert _limites(routeur)["client-a"] == PLAN
+
+    r = client.post(f"/api/v1/bandwidth-schedules/{ident}/start", headers=cle, json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["manual_active"] is True
+    assert _limites(routeur)["client-a"] == "5000000/10000000"  # 50 % de 20/10
+
+    r = client.post(f"/api/v1/bandwidth-schedules/{ident}/stop", headers=cle)
+    assert r.status_code == 200, r.text
+    assert _limites(routeur)["client-a"] == PLAN
+
+    r = client.post(f"/api/v1/bandwidth-schedules/{ident}/start", headers=cle, json={"minutes": 60})
+    assert r.status_code == 200, r.text
+    assert _limites(routeur)["client-a"] == "5000000/10000000"
+    _passe(client, cle, LUNDI, "13:30")
+    assert _limites(routeur)["client-a"] == PLAN
+
+
+def test_lancer_un_scheduler_arrete_celui_lance_sur_les_memes_clients(
+    banc: tuple[TestClient, RouteurQuiRetient],
+) -> None:
+    client, routeur = banc
+    cle = _cle(client)
+    _brancher(client, cle)
+    ids = {}
+    for nom, heures, pct in (
+        ("Evening", ("18:00", "23:00"), 50),
+        ("Night", ("23:00", "06:00"), 200),
+    ):
+        r = client.post(
+            "/api/v1/bandwidth-schedules",
+            headers=cle,
+            json={
+                "name": nom,
+                "timezone": "Africa/Niamey",
+                "scope": "on_plan",
+                "windows": [{"start": heures[0], "end": heures[1], "percent": pct}],
+            },
+        )
+        assert r.status_code == 201, r.text
+        ids[nom] = r.json()["id"]
+    _passe(client, cle, LUNDI, "12:00")
+    client.post(f"/api/v1/bandwidth-schedules/{ids['Evening']}/start", headers=cle, json={})
+    r = client.post(f"/api/v1/bandwidth-schedules/{ids['Night']}/start", headers=cle, json={})
+    assert r.status_code == 200, r.text
+    assert r.json()["stopped"] == ["Evening"]
+    assert _limites(routeur)["client-a"] == NUIT

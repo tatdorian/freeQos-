@@ -60,10 +60,21 @@ SCOPE_ALL = "all"
 SCOPE_POPS = "pops"
 SCOPE_PLANS = "plans"
 SCOPE_SUBSCRIBERS = "subscribers"
-SCOPES = (SCOPE_ALL, SCOPE_POPS, SCOPE_PLANS, SCOPE_SUBSCRIBERS)
+#: Les clients d'un ou plusieurs MODES (cibles : identifiants des modes).
+SCOPE_MODES = "modes"
+#: Les clients a leur PLAN, sans mode.
+SCOPE_ON_PLAN = "on_plan"
+SCOPES = (SCOPE_ALL, SCOPE_POPS, SCOPE_PLANS, SCOPE_SUBSCRIBERS, SCOPE_MODES, SCOPE_ON_PLAN)
 
 #: Precision d'une portee : la plus petite gouverne.
-_PRECISION = {SCOPE_SUBSCRIBERS: 0, SCOPE_PLANS: 1, SCOPE_POPS: 2, SCOPE_ALL: 3}
+_PRECISION = {
+    SCOPE_SUBSCRIBERS: 0,
+    SCOPE_MODES: 1,
+    SCOPE_PLANS: 1,
+    SCOPE_ON_PLAN: 2,
+    SCOPE_POPS: 2,
+    SCOPE_ALL: 3,
+}
 
 MINUTES_PAR_JOUR = 24 * 60
 MINUTES_PAR_SEMAINE = 7 * MINUTES_PAR_JOUR
@@ -325,12 +336,17 @@ def normalise_targets(scope: str, targets: Iterable[Any] | None) -> tuple[str, .
     if scope not in SCOPES:
         raise InvalidScheduleError(f"unknown scope '{scope}': {', '.join(SCOPES)}")
     valeurs = [str(t).strip() for t in (targets or []) if str(t).strip()]
-    if scope == SCOPE_ALL:
+    if scope in (SCOPE_ALL, SCOPE_ON_PLAN):
         return ()
     if not valeurs:
         raise InvalidScheduleError(f"scope '{scope}' needs at least one target")
     if scope == SCOPE_PLANS:
         valeurs = [_cible_forfait(v) for v in valeurs]
+    if scope == SCOPE_MODES:
+        try:
+            valeurs = [str(int(float(v))) for v in valeurs]
+        except ValueError as exc:
+            raise InvalidScheduleError("modes: give the identifiers of the modes") from exc
     vues: list[str] = []
     for valeur in valeurs:
         if valeur not in vues:
@@ -347,6 +363,10 @@ class BandwidthSchedule:
     targets: tuple[str, ...] = ()
     timezone: str = "UTC"
     enabled: bool = True
+    # LANCE A LA MAIN : il s'applique tout de suite, quelle que soit l'heure,
+    # jusqu'a ``manual_until`` (None : jusqu'a ce qu'on l'arrete).
+    manual_on: bool = False
+    manual_until: datetime | None = None
     _cles_sites: frozenset[str] = field(default=frozenset(), repr=False, compare=False)
 
     @classmethod
@@ -361,6 +381,8 @@ class BandwidthSchedule:
         timezone: str = "UTC",
         enabled: bool = True,
         modes: Modes | None = None,
+        manual_on: bool = False,
+        manual_until: datetime | None = None,
     ) -> BandwidthSchedule:
         cibles = normalise_targets(scope, targets)
         sites = frozenset(site_key(c) for c in cibles) if scope == SCOPE_POPS else frozenset()
@@ -372,6 +394,8 @@ class BandwidthSchedule:
             targets=cibles,
             timezone=validate_timezone(timezone),
             enabled=enabled,
+            manual_on=bool(manual_on),
+            manual_until=manual_until,
             _cles_sites=sites,
         )
 
@@ -382,8 +406,27 @@ class BandwidthSchedule:
     def local(self, now: datetime) -> datetime:
         return now.astimezone(ZoneInfo(self.timezone))
 
+    def manual_active(self, now: datetime | None = None) -> bool:
+        """Lance a la main, et pas encore arrive a son terme."""
+        if not self.manual_on:
+            return False
+        if self.manual_until is None:
+            return True
+        return (now or datetime.now(tz=UTC)) < self.manual_until
+
+    @property
+    def manual_window(self) -> Window:
+        """La plage « lancee a la main » : le debit du scheduler, a toute heure."""
+        from dataclasses import replace
+
+        return replace(
+            self.windows[0], start_min=0, end_min=0, days=ALL_DAYS, label="started by hand"
+        )
+
     def window_at(self, now: datetime) -> Window | None:
         """La plage en cours a cet instant, dans le fuseau du profil."""
+        if self.manual_active(now):
+            return self.manual_window
         local = self.local(now)
         minute = local.hour * 60 + local.minute
         return next((w for w in self.windows if w.covers(local.weekday(), minute)), None)
@@ -402,12 +445,23 @@ class BandwidthSchedule:
                 return instant
         return None
 
-    def governs(self, *, login: str, sites: Iterable[str | None], plan_down: float | None) -> bool:
+    def governs(
+        self,
+        *,
+        login: str,
+        sites: Iterable[str | None],
+        plan_down: float | None,
+        mode_id: int | None = None,
+    ) -> bool:
         """Ce profil vise-t-il cet abonne ? (sans regarder l'heure)"""
         if not self.enabled:
             return False
         if self.scope == SCOPE_ALL:
             return True
+        if self.scope == SCOPE_ON_PLAN:
+            return mode_id is None
+        if self.scope == SCOPE_MODES:
+            return mode_id is not None and str(int(mode_id)) in self.targets
         if self.scope == SCOPE_SUBSCRIBERS:
             return login in self.targets
         if self.scope == SCOPE_POPS:
@@ -427,6 +481,8 @@ class BandwidthSchedule:
             "scope": self.scope,
             "targets": list(self.targets),
             "windows": [w.to_dict() for w in self.windows],
+            "manual_on": self.manual_on,
+            "manual_until": self.manual_until.isoformat() if self.manual_until else None,
         }
 
 
@@ -439,6 +495,8 @@ class ScheduledRate:
     schedule_id: int
     schedule_name: str
     window: str
+    #: Calcule sur la vitesse du MODE du client : il passe devant le mode.
+    over_mode: bool = False
 
 
 class ScheduleBook:
@@ -456,16 +514,34 @@ class ScheduleBook:
         self.schedules = tuple(schedules)
 
     def governing(
-        self, *, login: str, sites: Iterable[str | None], plan_down: float | None
+        self,
+        *,
+        login: str,
+        sites: Iterable[str | None],
+        plan_down: float | None,
+        mode_id: int | None = None,
+        now: datetime | None = None,
     ) -> BandwidthSchedule | None:
-        """LE profil qui gouverne cet abonne : le plus precis, puis le plus recent."""
+        """LE profil qui gouverne cet abonne : celui lance a la main d'abord, puis
+        celui dont une plage court, puis le plus precis, puis le plus recent."""
         sites = tuple(sites)
+        instant = now or datetime.now(tz=UTC)
         candidats = [
-            s for s in self.schedules if s.governs(login=login, sites=sites, plan_down=plan_down)
+            s
+            for s in self.schedules
+            if s.governs(login=login, sites=sites, plan_down=plan_down, mode_id=mode_id)
         ]
         if not candidats:
             return None
-        return min(candidats, key=lambda s: (s.precision, -s.id))
+        return min(
+            candidats,
+            key=lambda s: (
+                0 if s.manual_active(instant) else 1,
+                0 if s.window_at(instant) is not None else 1,
+                s.precision,
+                -s.id,
+            ),
+        )
 
     def rate_for(
         self,
@@ -475,17 +551,28 @@ class ScheduleBook:
         plan_down: float | None,
         plan_up: float | None,
         now: datetime | None = None,
+        mode_id: int | None = None,
+        mode_down: float | None = None,
+        mode_up: float | None = None,
     ) -> ScheduledRate | None:
-        """Le debit horaire de cet abonne a cet instant, ou None (forfait normal)."""
+        """Le debit horaire de cet abonne a cet instant, ou None (forfait normal).
+
+        Le pourcentage s'applique a la VITESSE DU CLIENT : celle de son mode s'il
+        en a un, sinon son plan."""
         if not self.schedules:
             return None
-        profil = self.governing(login=login, sites=sites, plan_down=plan_down)
+        instant = now or datetime.now(tz=UTC)
+        profil = self.governing(
+            login=login, sites=sites, plan_down=plan_down, mode_id=mode_id, now=instant
+        )
         if profil is None:
             return None
-        plage = profil.window_at(now or datetime.now(tz=UTC))
+        plage = profil.window_at(instant)
         if plage is None:
             return None
-        bas, haut = plage.rates(plan_down, plan_up)
+        en_mode = mode_id is not None and bool(mode_down or mode_up)
+        base_bas, base_haut = (mode_down, mode_up) if en_mode else (plan_down, plan_up)
+        bas, haut = plage.rates(base_bas, base_haut)
         if bas is None and haut is None:
             return None
         return ScheduledRate(
@@ -494,6 +581,7 @@ class ScheduleBook:
             schedule_id=profil.id,
             schedule_name=profil.name,
             window=plage.describe(),
+            over_mode=en_mode,
         )
 
     def signature(self, now: datetime | None = None) -> tuple[tuple[int, int | None], ...]:
@@ -503,6 +591,9 @@ class ScheduleBook:
         for profil in self.schedules:
             if not profil.enabled:
                 continue
+            if profil.manual_active(instant):
+                sortie.append((profil.id, -1))
+                continue
             plage = profil.window_at(instant)
             sortie.append((profil.id, profil.windows.index(plage) if plage else None))
         return tuple(sortie)
@@ -511,3 +602,99 @@ class ScheduleBook:
 #: Le carnet de l'application. Vide tant que rien n'est charge : sans profil,
 #: rien ne change, ni dans le plan ni dans l'affichage.
 BOOK = ScheduleBook()
+
+
+# ---------------------------------------------------------------- chevauchements
+#
+# DEUX SCHEDULERS PEUVENT PARTAGER DES HEURES, PAS DES CLIENTS. « Soir » pour
+# les clients a leur plan et « Soir » pour le mode Pro, aux memes heures : c'est
+# permis, ils ne touchent pas les memes clients. Le meme client vise par deux
+# schedulers a la meme minute : refuse a l'enregistrement, avec QUI et QUAND.
+
+
+def _minutes_utc(profil: BandwidthSchedule, now: datetime) -> set[int]:
+    """Les minutes de la semaine (UTC) couvertes par ses plages."""
+    decalage = profil.local(now).utcoffset()
+    ecart = int(decalage.total_seconds() // 60) if decalage else 0
+    minutes: set[int] = set()
+    for plage in profil.windows:
+        for debut, duree in plage.minutes():
+            minutes.update((m - ecart) % MINUTES_PAR_SEMAINE for m in range(debut, debut + duree))
+    return minutes
+
+
+def _memes_cibles_possibles(a: BandwidthSchedule, b: BandwidthSchedule) -> bool:
+    """Peuvent-ils viser le meme client, quels que soient les clients d'aujourd'hui ?"""
+    if SCOPE_ALL in (a.scope, b.scope):
+        return True
+    if a.scope != b.scope:
+        return False
+    if a.scope == SCOPE_ON_PLAN:
+        return True
+    if a.scope == SCOPE_POPS:
+        return bool(a._cles_sites & b._cles_sites)
+    return bool(set(a.targets) & set(b.targets))
+
+
+def overlap_conflict(
+    profil: BandwidthSchedule,
+    autres: Iterable[BandwidthSchedule],
+    clients: Iterable[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    describe_client: Any = None,
+) -> str | None:
+    """Le message d'erreur si ``profil`` touche les memes clients qu'un autre aux
+    memes heures, sinon None. ``clients`` : login, pop_name, plan_down_mbps,
+    mode_id (et display_name pour le message)."""
+    instant = now or datetime.now(tz=UTC)
+    liste = list(clients)
+    mes_minutes = _minutes_utc(profil, instant)
+    for autre in autres:
+        if autre.id == profil.id or not autre.enabled:
+            continue
+        communes = mes_minutes & _minutes_utc(autre, instant)
+        if not communes:
+            continue
+        touches = [
+            c
+            for c in liste
+            if all(
+                p.governs(
+                    login=str(c.get("login")),
+                    sites=(c.get("pop_name"),),
+                    plan_down=c.get("plan_down_mbps"),
+                    mode_id=c.get("mode_id"),
+                )
+                for p in (replace_enabled(profil), autre)
+            )
+        ]
+        if not touches and not _memes_cibles_possibles(profil, autre):
+            continue
+        # L'heure dans le fuseau du scheduler, comme on l'a saisie.
+        decalage = profil.local(instant).utcoffset()
+        ecart = int(decalage.total_seconds() // 60) if decalage else 0
+        locale = (min(communes) + ecart) % MINUTES_PAR_SEMAINE
+        jour, heure = divmod(locale, MINUTES_PAR_JOUR)
+        quand = f"{DAYS[jour].capitalize()} {format_time(heure)}"
+        if touches:
+            noms = [
+                str(describe_client(c) if describe_client else c.get("login")) for c in touches[:5]
+            ]
+            qui = ", ".join(noms) + (f" and {len(touches) - 5} more" if len(touches) > 5 else "")
+            return (
+                f"'{profil.name}' and '{autre.name}' would both apply to {qui} at the same "
+                f"time ({quand}). Change the hours, or choose other clients or modes."
+            )
+        return (
+            f"'{profil.name}' and '{autre.name}' target the same clients at the same time "
+            f"({quand}). Change the hours, or choose other clients or modes."
+        )
+    return None
+
+
+def replace_enabled(profil: BandwidthSchedule) -> BandwidthSchedule:
+    """Le meme profil, actif : on verifie un profil suspendu comme s'il tournait."""
+    from dataclasses import replace
+
+    return replace(profil, enabled=True)

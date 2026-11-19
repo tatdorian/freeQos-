@@ -1294,6 +1294,16 @@ CREATE TABLE IF NOT EXISTS bandwidth_schedules (
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- SCHEDULERS : ils visent aussi les clients d'un ou plusieurs MODES ('modes',
+-- cibles = identifiants des modes) ou les clients a leur PLAN ('on_plan'), et
+-- se LANCENT A LA MAIN : tout de suite, jusqu'a manual_until (NULL = jusqu'a
+-- ce qu'on l'arrete).
+ALTER TABLE bandwidth_schedules DROP CONSTRAINT IF EXISTS bandwidth_schedules_scope_check;
+ALTER TABLE bandwidth_schedules ADD CONSTRAINT bandwidth_schedules_scope_check
+    CHECK (scope IN ('all', 'pops', 'plans', 'subscribers', 'modes', 'on_plan'));
+ALTER TABLE bandwidth_schedules ADD COLUMN IF NOT EXISTS manual_on BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE bandwidth_schedules ADD COLUMN IF NOT EXISTS manual_until TIMESTAMPTZ;
+
 -- NIVEAUX D'ACCES (Viewer, Operator, Administrator). Les bases creees avant
 -- n'acceptaient que 'read' et 'edit' ; une version intermediaire avait cinq
 -- niveaux, ramenes ici aux trois : User/Supervisor -> Operator,

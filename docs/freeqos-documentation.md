@@ -743,7 +743,7 @@ A link's throughput comes from the counters of the **port** that carries it, wit
 
 ### Reset queues: every client back to Automatic
 
-*Devices › Reset queues* deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to **Automatic**: its mode, boost and forced limit are removed, it is back on its plan, and its *Activity* says so (`queues reset on <router>`). A bandwidth schedule that targets the client applies again at its next window.
+*Devices › Reset queues* deletes every freeQoS queue of the router and lays them down again from the plans. Every client of that router (sessions on it, static-IP clients, and the clients of its VLAN sites) goes back to **Automatic**: its mode, boost and forced limit are removed, it is back on its plan, and its *Activity* says so (`queues reset on <router>`). A scheduler that targets the client applies again at its next hours.
 
 ### Router CPU: per core, and the peak of the last hour
 
@@ -1293,11 +1293,11 @@ Every 2 minutes (`SHAPING_RECONCILE_INTERVAL_S`), freeQoS reads the queues in pl
 A **bandwidth mode** is a named rate given to a client in one click, from the **Clients** page: *Backup* when the backhaul is degraded, *Extreme backup* for a crisis or non-payment, *Night*... The operator picks a name in a list instead of typing rates (*Modes*, or `/api/v1/bandwidth-modes`).
 
 - **Rate:** fixed (`rate_kind=fixed`) or a **share of the client's plan** (`percent`: 200 = twice the plan). A share needs the client's plan; a client without a known plan can only get a fixed mode. In the form, the unit is a switch: **kbps**, **Mbps** or **% of plan**. A rate typed in kbps is stored in Mbps (512 kbps = 0.512 Mbps), and shown again in kbps when the mode is edited.
-- **Automatic** is not a stored mode: it is the absence of a mode. The client follows its plan and, when it has one, its **bandwidth schedule** — its rate then changes with the hour on its own.
-- **Where it sits:** a client's mode is its permanent override (`shaping_policies.max_down_mbps/max_up_mbps`, with `mode_id` and `mode_name`). It is therefore above the schedule (a client in *Backup* stays in *Backup* when the night begins) and below a running boost. Back to Automatic removes the override and keeps a running boost.
+- **Its plan** (formerly *Automatic*) is not a stored mode: it is the absence of a mode. The client gets its plan, and the schedulers for *clients on their plan* apply to it.
+- **Where it sits:** a client's mode is its speed (`shaping_policies.max_down_mbps/max_up_mbps`, with `mode_id` and `mode_name`). A scheduler that targets the client applies its % to this speed (*Backup* 6 Mbps at 200 % = 12 Mbps), or replaces it with its own mode during its hours. A running boost stays above. Back to *Its plan* removes the mode and keeps a running boost.
 - **Modes that stop boosts** (`disables_boost`, API only): entering the mode clears the running boost, and a new boost is refused (`409 Boost is unavailable in <mode>. Change the mode first.`). The form no longer offers this option: a mode saved from the form has it off.
-- **Its clients:** the mode form itself has a list of clients to tick (*Clients in this mode*), with search and a site filter: saving the mode also puts the ticked clients in it and puts the unticked ones back to Automatic — for a new mode as for an existing one. On the *Modes* board, *Add or remove clients* on a mode opens the same list.
-- **Editing a mode's rate** re-applies it at once to every client in it. A mode given to clients cannot be deleted (`409`): put them back to Automatic or in another mode first.
+- **Its clients:** the mode form itself has a list of clients to tick (*Clients in this mode*), with search and a site filter: saving the mode also puts the ticked clients in it and puts the unticked ones back on their plan — for a new mode as for an existing one. On the *Modes* board, *Add or remove clients* on a mode opens the same list.
+- **Editing a mode's rate** re-applies it at once to every client in it. A mode given to clients cannot be deleted (`409`): put them back on their plan or in another mode first.
 - **Writing:** like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.
 - **Changing a client's plan keeps its mode and its boost:** only a manual limit (an override without a mode) is lifted, so that the new plan takes effect. A mode expressed as a share of the plan follows the new plan at once.
 
@@ -1345,7 +1345,7 @@ An **Administrator** gives a position (*Position* / *Place it*) in three ways: *
 | `ERR_NO_ROUTER` | warning | The last change is saved but no router carries the client | The site's router, or the client's session |
 | `ERR_QUEUE_CONFLICT` | warning | A queue set by hand on the router targets the client | Remove it, or let freeQoS manage it |
 | `ERR_NEVER_SEEN` | info | Declared but never measured | Not connected yet, or a wrong address / login |
-| `MODE_CRISIS` | info | Clients in a mode that stops boosts | Put them back to Automatic when it is over |
+| `MODE_CRISIS` | info | Clients in a mode that stops boosts | Put them back on their plan when it is over |
 
 **PDF report.** *Alerts › PDF report* (all sites, or the site chosen in the list) and *Map › a site › PDF report* (audit of one site) download a PDF made in the browser (no server, no internet needed): the counts, every alert with its code and what to check, the sites, the offline clients with their IP and last contact, for a site all its clients, and the list of codes.
 
@@ -1413,37 +1413,34 @@ Every minute the server looks for failures, whether or not anyone has the interf
 
 A problem is emailed **once**, when it has lasted the chosen delay (3 minutes by default), and once more when it is **resolved**; the problems of a minute go in one email. The section lists the recent problems and whether they were emailed. API: `GET/PUT/DELETE /api/v1/notifications/smtp`, `POST /api/v1/notifications/test`, `GET /api/v1/notifications/history`.
 
-### Bandwidth schedules (day, evening, night)
+### Schedulers (evening, night, weekend…)
 
-Many operators sell rates that change with the time of day: a plan reduced in the evening peak, opened at night, normal during the day — and switched **automatically**, on time. A **bandwidth schedule** (*Schedules*, or `/api/v1/bandwidth-schedules`) is a set of **time slots**, each with the rate that applies during it. *Applies to* is a segmented control (*All*, *Clients*, *Sites*, *Plans*); except for *All*, it opens a **list to tick**, with search and *All* / *None*. Each slot is one card: its name, the hours (*18:00 → 23:00*), the rate with a **% / Mbps / Mode** switch, and the days as round pills (tap to turn a day off). The hours are not typed: **tap** an hour to open a wheel (hours, then minutes by 5), or **drag it up or down** to move it by a quarter of an hour (up = later, down = earlier); the mouse wheel and the arrow keys work too. **Time zone** is a menu that starts on the browser's own time zone and shows the time it is there; the list of schedules shows each schedule's next switch in **your** local time. The rate is either:
+**Three tools, one rule each.**
 
-- a **percentage of the plan** (`percent`: 200 = twice the plan at night, 70 = 30 % less in the evening), which follows every subscriber's own plan without copying it; or
-- a **fixed rate** (`down_mbps` / `up_mbps`; a single direction is allowed, the other one keeps its plan); or
-- a **bandwidth mode** (`mode_id`: *Backup*, *Night*... the same modes you give a client by hand). With *Applies to › Clients*, this puts one or several chosen clients in a mode during the slot. The schedule keeps a **reference** to the mode, not a copy of its rate: edit the mode on the *Modes* page and every slot using it follows at once. A mode used by a schedule cannot be deleted until those slots are changed.
+| Tool | What it is | Where |
+| --- | --- | --- |
+| **Plan** | The speed of **one** client, set by hand (or pushed by the billing API) | Client page › *Plan & mode* |
+| **Mode** | A **named speed** (*Backup*, *Pro*…) given to one or several clients | *Modes* page, *Clients* page |
+| **Scheduler** | During the **hours** you choose, a **% of the clients' speed** or **a mode**, for the clients you choose | *Schedulers* page |
 
-Outside every slot, the normal plan applies.
+A client has **its plan or a mode, never both**: putting it in a mode replaces the speed of its plan; saving a plan on its page takes it out of its mode (the page asks first).
 
-**Each slot is also a mode, automatically.** Saving a schedule turns each **named** slot in percentage of the plan into a bandwidth mode of the same name and the same percentage (*Evening 70 %*, *Night 200 %*), and creates the **Constant** mode (100 % of the plan) if it does not exist. Existing schedules get their modes when freeQoS starts. Then:
+**A scheduler** (*Schedulers*, or `/api/v1/bandwidth-schedules`) has:
 
-- **Automatic** (no mode) follows the schedule, hour by hour;
-- **Evening** or **Night** given to a client by hand (*Clients* page or client page) forces that rate now, whatever the hour; back to *Automatic* follows the schedule again;
-- **Constant** keeps the client at its plan **at all hours**: a mode sits above the schedule;
-- the percentage is changed **in the schedule**, as before: the mode follows, and so do the clients put in it by hand. A mode you created yourself with the same name is never modified (only the modes freeQoS created for a slot follow it).
+- **what it applies**: **a % of their speed** (`percent`: 70 = 30 % slower, 200 = twice as fast) — the speed of their **mode** for a client in a mode, its **plan** otherwise — or **a mode** (`mode_id`: the clients get that mode's speed during the hours);
+- **who**: *Clients on their plan* (`on_plan`: every client without a mode), *Modes* (`modes`: the clients of the modes you tick, `targets` = mode ids), *Clients* (`subscribers`: the clients you tick) or *Everyone* (`all`). `pops` (sites) and `plans` (plan download rate) stay available through the API;
+- **its hours**, as many as you need: from → to (tap or drag the time), and the days (`days`: the days on which the hours **start**; 22:00 → 06:00 crosses midnight; `24:00` is midnight at the end);
+- its **time zone** (IANA, `Europe/Paris`, `Africa/Abidjan`…: the hours are local, daylight saving time is handled).
 
-| Field | Meaning |
-| --- | --- |
-| `start`, `end` | Local `HH:MM`. An end before the start crosses midnight (`22:00`–`06:00`); `24:00` is midnight at the end of a slot (`00:00`–`24:00` = the whole day) |
-| `days` | The days on which the slot **starts** (`mon` … `sun`; empty = every day). Friday's night runs into Saturday morning |
-| `timezone` | IANA name of the subscribers' time zone (`Europe/Paris`, `Africa/Abidjan`…). The hours are local to it and daylight saving time is handled; the interface pre-fills the browser's zone |
-| `scope`, `targets` | `all` clients; `pops` (site names, matched like everywhere else, case and accents ignored); `plans` (the plan's **download rate** in Mbps: `20` = every 20 Mbps plan); `subscribers` (PPPoE logins or static-client references) |
+Outside its hours, clients keep their speed (plan or mode). A **manual limit** (forced limit without a mode, set through the API) stays above every scheduler, and a **boost** above everything.
 
-**Two slots of one schedule may not overlap** — which one would win at 19:00 between "evening 18:00–23:00" and "peak 19:00–21:00"? The overlap is refused when saving, with the day and time where it happens.
+**As many schedulers as you want.** Two schedulers may share the same hours **as long as they do not change the same clients**: *Evening* for the clients on their plan and *Evening Pro* for the mode *Pro*, both 18:00–23:00, is fine. If the same client would be changed by two schedulers at the same time, saving is refused (`409`) with **who and when**: *'VIP' and 'Evening' would both apply to ACME OFFICE at the same time (Mon 18:00). Change the hours, or choose other clients or modes.* Two hours of the same scheduler may not overlap either.
 
-**One schedule per subscriber.** When several schedules target the same subscriber, the most **precise** one governs it alone: named subscribers, then plans, then sites, then all clients; at equal precision, the most recent. Schedules never combine: the operator can always say, subscriber by subscriber, where its rate comes from. The *Clients* button of a schedule (`GET /api/v1/bandwidth-schedules/{id}/preview`) lists the subscribers it governs, their plan and their rate **right now**, and those a more precise schedule takes away from it.
+**Start now, by hand.** *Start now…* on a scheduler applies it **at once**, whatever the time: for 1 h, 2 h, 4 h, 24 h, or **until you stop it** (`POST /api/v1/bandwidth-schedules/{id}/start` with `{"minutes": 60}` or `{"minutes": null}`). While it runs by hand it goes before the other schedulers of its clients; starting one stops any other scheduler started by hand on the same clients (the page says which). **Stop** (`POST …/{id}/stop`) gives it back its normal hours. A suspended scheduler is resumed when started.
 
-**The switch is automatic.** A job re-reads the schedules every 30 s and compares, for each schedule, the slot running now to the one of the previous pass: as soon as a slot starts or ends, the queues are re-planned and written (author `system:schedule` in the audit), without waiting for the 2-minute reconciliation — which, in any case, writes the scheduled rate too. Saving, suspending or deleting a schedule applies it at once. The same safeguards as reconciliation apply: nothing is written while writing is off, and a scheduled switch never deletes a queue. The oscillation guard does not watch `max-limit`, so three switches a day are never mistaken for an oscillation. The last switch (when, why, how many writes, on which routers) is shown under the list.
+**The switch is automatic.** A job re-reads the schedulers every 30 s: as soon as hours start or end, or a scheduler started by hand reaches its end, the queues are re-planned and written (author `system:schedule`), without waiting for the 2-minute reconciliation. Saving, starting, stopping, suspending or deleting a scheduler applies it at once. Nothing is written while writing is off. The last switch (when, why, how many writes, on which routers) is shown under the list; *Clients* on a scheduler (`GET …/{id}/preview`) lists the clients it changes and their speed right now.
 
-The subscriber list shows a scheduled rate with a *schedule* badge (the schedule and slot in the tooltip), and the *Plans* page shows, under each plan, the rate applied right now and the governing schedule.
+**Upgrading.** A schedule from an earlier version that had several rates (evening 70 %, night 200 %) is split at start-up into one scheduler per rate, with the same clients and hours (`Day and night` and `Day and night · night`). The modes an earlier version created automatically for each slot (*Evening*, *Night*, *Constant*) are removed when no client and no scheduler uses them.
 
 ### The shaping map
 
