@@ -125,7 +125,7 @@ def test_modes_un_client_plusieurs_clients_et_retour(app_client: TestClient, rou
         app_client.post(
             "/api/v1/bandwidth-modes",
             headers=cle,
-            json={"name": "Evening", "rate_kind": "percent", "down_value": 50, "up_value": 50},
+            json={"name": "Evening", "down_value": 10, "up_value": 5},
         )
     )
     modes = {
@@ -145,7 +145,7 @@ def test_modes_un_client_plusieurs_clients_et_retour(app_client: TestClient, rou
     )
     assert _limite(routeur) == "6000000/8000000"
 
-    # Plusieurs clients d'un coup (ici un seul en ligne) : mode en part du forfait.
+    # Plusieurs clients d'un coup (ici un seul en ligne).
     rapport = _ok(
         app_client.post(
             "/api/v1/clients/actions",

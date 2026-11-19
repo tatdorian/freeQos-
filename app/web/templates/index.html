@@ -794,12 +794,11 @@
           </div>
           <div class="field">
             <label>Unit</label>
-            <!-- L'unite : kbps ou Mbps (un debit fixe), ou % du forfait. Le
-                 serveur range un debit fixe en Mbps. -->
+            <!-- UN MODE EST UNE VITESSE : kbps ou Mbps, jamais un % du plan (les
+                 pourcentages sont le travail des schedulers). -->
             <div class="segmented" id="mode-unit" role="group" aria-label="Unit">
               <button type="button" data-u="kbps">kbps</button>
               <button type="button" data-u="mbps" class="active">Mbps</button>
-              <button type="button" data-u="percent">% of plan</button>
             </div>
             <input type="hidden" id="mode-kind" value="fixed">
           </div>
