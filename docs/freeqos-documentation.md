@@ -1423,6 +1423,13 @@ Many operators sell rates that change with the time of day: a plan reduced in th
 
 Outside every slot, the normal plan applies.
 
+**Each slot is also a mode, automatically.** Saving a schedule turns each **named** slot in percentage of the plan into a bandwidth mode of the same name and the same percentage (*Evening 70 %*, *Night 200 %*), and creates the **Constant** mode (100 % of the plan) if it does not exist. Existing schedules get their modes when freeQoS starts. Then:
+
+- **Automatic** (no mode) follows the schedule, hour by hour;
+- **Evening** or **Night** given to a client by hand (*Clients* page or client page) forces that rate now, whatever the hour; back to *Automatic* follows the schedule again;
+- **Constant** keeps the client at its plan **at all hours**: a mode sits above the schedule;
+- the percentage is changed **in the schedule**, as before: the mode follows, and so do the clients put in it by hand. A mode you created yourself with the same name is never modified (only the modes freeQoS created for a slot follow it).
+
 | Field | Meaning |
 | --- | --- |
 | `start`, `end` | Local `HH:MM`. An end before the start crosses midnight (`22:00`–`06:00`); `24:00` is midnight at the end of a slot (`00:00`–`24:00` = the whole day) |

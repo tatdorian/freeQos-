@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="26ae7f5e0ce80ee8">
+  <meta name="freeqos-docs-source" content="35006c6ecf3ed7a4">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2924,6 +2924,13 @@ curl -s http://127.0.0.1:8000/health/ready
 <li>a <strong>bandwidth mode</strong> (<code>mode_id</code>: <em>Backup</em>, <em>Night</em>... the same modes you give a client by hand). With <em>Applies to › Clients</em>, this puts one or several chosen clients in a mode during the slot. The schedule keeps a <strong>reference</strong> to the mode, not a copy of its rate: edit the mode on the <em>Modes</em> page and every slot using it follows at once. A mode used by a schedule cannot be deleted until those slots are changed.</li>
 </ul>
 <p>Outside every slot, the normal plan applies.</p>
+<p><strong>Each slot is also a mode, automatically.</strong> Saving a schedule turns each <strong>named</strong> slot in percentage of the plan into a bandwidth mode of the same name and the same percentage (<em>Evening 70 %</em>, <em>Night 200 %</em>), and creates the <strong>Constant</strong> mode (100 % of the plan) if it does not exist. Existing schedules get their modes when freeQoS starts. Then:</p>
+<ul>
+<li><strong>Automatic</strong> (no mode) follows the schedule, hour by hour;</li>
+<li><strong>Evening</strong> or <strong>Night</strong> given to a client by hand (<em>Clients</em> page or client page) forces that rate now, whatever the hour; back to <em>Automatic</em> follows the schedule again;</li>
+<li><strong>Constant</strong> keeps the client at its plan <strong>at all hours</strong>: a mode sits above the schedule;</li>
+<li>the percentage is changed <strong>in the schedule</strong>, as before: the mode follows, and so do the clients put in it by hand. A mode you created yourself with the same name is never modified (only the modes freeQoS created for a slot follow it).</li>
+</ul>
 <div class="table-wrap"><table>
 <thead>
 <tr>
