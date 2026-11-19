@@ -1441,7 +1441,7 @@ async function renderToday() {
       chiffre('Traffic now', esc(bpsText(bas)), '&uarr; ' + esc(bpsText(haut)) + ' up') +
       chiffre('Sites', okSites + '<em>/' + Object.keys(sites).length + '</em>', okSites === Object.keys(sites).length ? 'all normal' : 'see below',
         okSites === Object.keys(sites).length ? '' : 'warn') +
-      chiffre('Modes & boosts', String(actifs), actifs ? 'clients not on Automatic' : 'everyone on Automatic') +
+      chiffre('Modes & boosts', String(actifs), actifs ? 'clients in a mode or boosted' : 'nobody in a mode') +
     '</div>' +
     '<h2>Sites</h2><div class="today-sites">' + Object.entries(sites).sort((a, b) => a[0].localeCompare(b[0])).map(([nom, x]) => {
       const [lv, mot] = etatSite(nom, x);
@@ -6245,7 +6245,7 @@ function retirerFreeqos(name) {
 
 async function cleanRouterQueues(name, bouton) {
   if (!confirm('Delete ALL freeQoS queues on ' + name + ' and rebuild them from scratch?\n\n' +
-    'Every client of this router (its sites and VLANs included) goes back to Automatic: modes, boosts and forced limits are removed, each client is back on its plan.\n' +
+    'Every client of this router (its sites and VLANs included) goes back to No mode: modes, boosts and forced limits are removed, each client is back on its plan.\n' +
     'Queues you created by hand are kept. Clients are briefly unshaped while the queues are rebuilt.')) return;
   const sortie = document.getElementById('router-export');
   bouton.disabled = true;
@@ -6256,7 +6256,7 @@ async function cleanRouterQueues(name, bouton) {
     sortie.innerHTML = '<div class="notice ' + (errs.length ? 'err' : 'ok') + '">' +
       esc(name) + ': ' + r.removed + ' queue(s) deleted, ' + r.recreated + ' recreated' +
       (r.kept_foreign ? ', ' + r.kept_foreign + ' other queue(s) left untouched' : '') + '.' +
-      ((r.limits_reset || []).length ? ' Back to Automatic (mode removed): ' + r.limits_reset.map(esc).join(', ') + '.' : '') +
+      ((r.limits_reset || []).length ? ' Back to No mode (mode removed): ' + r.limits_reset.map(esc).join(', ') + '.' : '') +
       (errs.length ? '<br>' + errs.map(esc).join('<br>') : '') + '</div>';
   } catch (err) {
     sortie.innerHTML = noticeErreur(err);
@@ -11859,7 +11859,8 @@ function schedEtatMaintenant(f) {
 function schedBoutonLancer(f) {
   return f.manual_active
     ? '<button class="sm primary" data-sched-stop="' + esc(f.id) + '">Stop</button> '
-    : '<select class="sm" data-sched-start="' + esc(f.id) + '" aria-label="Start now">' +
+    : '<select class="sm sched-start" data-sched-start="' + esc(f.id) + '" aria-label="Start now" ' +
+      'style="width:auto;min-width:0;display:inline-block;vertical-align:middle">' +
       '<option value="">Start now…</option><option value="60">for 1 hour</option>' +
       '<option value="120">for 2 hours</option><option value="240">for 4 hours</option>' +
       '<option value="1440">for 24 hours</option><option value="0">until I stop it</option></select> ';
@@ -13628,8 +13629,8 @@ function openModeDialog(logins) {
     '</div></div><button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
     '<div class="modal-body" id="mode-body"><div class="mode-cards">' + cartes + '</div>' +
     '<p class="hint" style="display:block;margin-top:.8rem">A mode stays until the client is put back to ' +
-    'Automatic. Rates apply to download and upload. A boost still takes precedence, except in a mode ' +
-    'that stops boosts.</p></div>' +
+    '<b>No mode</b> (its own plan). Rates apply to download and upload. A boost still takes precedence, ' +
+    'except in a mode that stops boosts.</p></div>' +
     '<div class="modal-foot" id="mode-foot"><button data-modal-close>Cancel</button>' +
     '<button class="primary" id="mode-review">Review change &rarr;</button></div>');
   root.querySelectorAll('input[name="mode-choice"]').forEach((i) => i.addEventListener('change', () => {
@@ -13638,10 +13639,10 @@ function openModeDialog(logins) {
   }));
   root.querySelector('#mode-review').addEventListener('click', () => {
     const mode = CLI.modes.find((m) => m.id === choix);
-    const nom = mode ? mode.name : 'Automatic';
+    const nom = mode ? mode.name : 'No mode';
     const noms = logins.slice(0, 8).map(esc).join(', ') + (logins.length > 8 ? ' and ' + (logins.length - 8) + ' more' : '');
     root.querySelector('#mode-body').innerHTML = '<p>Put <b>' + noms + '</b> in <b>' + esc(nom) + '</b>' +
-      (mode ? ' (' + esc(modeTaux(mode)) + ')' : ' (plan and schedule)') + '.</p>' +
+      (mode ? ' (' + esc(modeTaux(mode)) + ')' : ' (its own plan)') + '.</p>' +
       (mode && mode.disables_boost ? '<div class="notice warn">Running boosts on these clients will be stopped.</div>' : '') +
       '<div id="mode-out"></div>';
     root.querySelector('#mode-foot').innerHTML = '<button id="mode-back">Back</button>' +
