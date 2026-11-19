@@ -68,7 +68,7 @@ def _file(routeur: RouteurQuiRetient, nom: str) -> dict[str, Any] | None:  # noq
 
 
 def _limite(routeur: RouteurQuiRetient, login: str = "dupont") -> str | None:  # noqa: F811
-    q = _file(routeur, f"freeqos-{login}")
+    q = _file(routeur, login)
     return None if q is None else q.get("max-limit")
 
 
@@ -255,7 +255,7 @@ def test_un_client_a_ip_fixe_par_l_api(app_client: TestClient, routeur) -> None:
             },
         )
     )
-    file = _file(routeur, "freeqos-b2b-bank")
+    file = _file(routeur, "b2b-bank")
     assert file is not None, routeur.simple_queue_rows
     assert file["target"] == "10.20.0.200/30"
     assert file["max-limit"] == "50000000/50000000"
@@ -267,7 +267,7 @@ def test_un_client_a_ip_fixe_par_l_api(app_client: TestClient, routeur) -> None:
             json={"plan_down_mbps": 100},
         )
     )
-    assert _file(routeur, "freeqos-b2b-bank")["max-limit"] == "50000000/100000000"
+    assert _file(routeur, "b2b-bank")["max-limit"] == "50000000/100000000"
 
 
 def test_une_cle_en_lecture_seule_ne_pose_rien(app_client: TestClient, routeur) -> None:  # noqa: F811

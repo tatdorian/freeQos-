@@ -33,11 +33,13 @@ from app.enforcement.models import (
     QueueTypeSpec,
     address_target,
     is_ours,
+    legacy_subscriber_queue_name,
     needs_claim,
     network_target,
     other_instance,
     prefixes_target,
     slugify,
+    subscriber_queue_name,
     target_members,
 )
 from app.models import KIND_PPPOE, KIND_STATIC
@@ -191,8 +193,11 @@ class SubscriberTarget:
         """Cle de reconciliation, STABLE : elle ne depend pas de l'adresse.
 
         C'est ce qui fait qu'un changement d'IP produit un ``set target=...`` sur
-        la file existante, et non une suppression suivie d'une creation."""
-        return f"{PREFIX}{slugify(self.login)}"
+        la file existante, et non une suppression suivie d'une creation.
+
+        Le NOM DU CLIENT, sans prefixe (« ACME-OFFICE ») : c'est ce que
+        l'exploitant lit dans Winbox."""
+        return subscriber_queue_name(self.login)
 
     def queue_target(self, mode: str = TARGET_ADDRESS) -> str | None:
         """Ce que la file doit viser, ou None si l'abonne n'est pas shapable.
@@ -631,6 +636,10 @@ def desired_state(
                 queue_up=type_haut,
                 queue_down=type_bas,
                 order=1000,
+                # NI COMMENTAIRE NI PREFIXE : freeQoS se souvient de ses files
+                # de clients (cf. ``OWNED_QUEUES``).
+                comment="",
+                legacy_names=(legacy_subscriber_queue_name(subscriber.login),),
             )
         )
     return types, files, ecartes
@@ -638,7 +647,11 @@ def desired_state(
 
 def queues_without_rate(skipped: Iterable[PlanSkip]) -> set[str]:
     """Les noms de file des clients ecartes faute de debit (``NO_RATE_SKIP``)."""
-    return {f"{PREFIX}{slugify(s.login)}" for s in skipped if s.reason == NO_RATE_SKIP}
+    noms: set[str] = set()
+    for s in skipped:
+        if s.reason == NO_RATE_SKIP:
+            noms.update((subscriber_queue_name(s.login), legacy_subscriber_queue_name(s.login)))
+    return noms
 
 
 def _parent_par_adresse(target: str, reseaux: list[tuple[Any, str]]) -> str | None:
@@ -881,6 +894,36 @@ def build_plan(
         champs = file_spec.routeros_fields()
 
         if existante is None:
+            # RENOMMER plutot que recreer : notre file d'avant (« freeqos-<client> »,
+            # marquee) devient « <client> », sans commentaire. Recreer laisserait
+            # deux files sur la meme cible -- seule la premiere s'applique.
+            ancienne = next(
+                (
+                    files_existantes[n]
+                    for n in file_spec.legacy_names
+                    if n in files_existantes and _is_managed(files_existantes[n])
+                ),
+                None,
+            )
+            if ancienne is not None:
+                noms_desires.add(str(ancienne.get("name")))
+                changements = _diff_fields(ancienne, champs, ignore={"name", "comment"})
+                changements["name"] = (str(ancienne.get("name") or ""), file_spec.name)
+                changements["comment"] = (str(ancienne.get("comment") or ""), champs["comment"])
+                plan.actions.append(
+                    PlanAction(
+                        verb="set",
+                        path="/queue/simple",
+                        fields={k: champs[k] for k in changements},
+                        target_id=str(ancienne.get(".id") or ancienne.get("id") or ""),
+                        name=file_spec.name,
+                        reason="renamed: client name, no freeqos- prefix and no comment",
+                        changes=changements,
+                    )
+                )
+                continue
+
+        if existante is None:
             # Egalite de forme d'abord, puis d'ENSEMBLE : RouterOS rend une
             # cible en liste dans son ordre a lui.
             etrangeres = (
@@ -928,9 +971,9 @@ def build_plan(
                         "it is never modified from here. Two controllers must not drive "
                         "the same router -- stop one of them."
                         if autre
-                        else "a queue by that name already exists without the "
-                        f"'{MANAGED_COMMENT}' marker: it does not belong to the "
-                        "controller and will not be modified"
+                        else "a queue by that name already exists and was not created by "
+                        f"freeQoS (no '{MANAGED_COMMENT}' marker, not in its memory): it "
+                        "belongs to someone else and will not be modified"
                     ),
                 )
             )
@@ -967,7 +1010,11 @@ def build_plan(
         for nom, row in files_existantes.items():
             if nom in noms_desires or not _is_managed(row):
                 continue
-            if not nom.startswith(PREFIX):
+            # CEINTURE ET BRETELLES : une ligne marquee n'est retiree que si son
+            # nom porte aussi notre prefixe (files de liens, anciennes files de
+            # clients) -- ou si freeQoS se souvient l'avoir posee (files de
+            # clients d'aujourd'hui, sans marque ni prefixe).
+            if not nom.startswith(PREFIX) and row.get("_freeqos") is not True:
                 continue
             if not prune and nom not in a_retirer:
                 continue

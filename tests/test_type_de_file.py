@@ -95,7 +95,7 @@ def test_basculer_repointe_puis_retire_les_anciens_types_en_dernier() -> None:
         desired_types=types,
         desired_queues=files,
         actual_types=_types_cake(),
-        actual_queues=[_file_routeur("freeqos-dupont", "10.20.0.10")],
+        actual_queues=[_file_routeur("dupont", "10.20.0.10")],
         prune=False,
     )
     resume = [(a.verb, a.path, a.name) for a in plan.actions]
@@ -103,7 +103,7 @@ def test_basculer_repointe_puis_retire_les_anciens_types_en_dernier() -> None:
         ("add", "/queue/type", QUEUE_TYPE_FQ_UP),
         ("add", "/queue/type", QUEUE_TYPE_FQ_DOWN),
     ]
-    assert ("set", "/queue/simple", "freeqos-dupont") in resume
+    assert ("set", "/queue/simple", "dupont") in resume
     assert resume[-2:] == [
         ("remove", "/queue/type", QUEUE_TYPE_UP),
         ("remove", "/queue/type", QUEUE_TYPE_DOWN),
@@ -124,8 +124,8 @@ def test_un_type_encore_porte_par_une_file_reste() -> None:
         desired_queues=files,
         actual_types=_types_cake(),
         actual_queues=[
-            _file_routeur("freeqos-dupont", "10.20.0.10"),
-            _file_routeur("freeqos-absent", "10.20.0.99"),
+            _file_routeur("dupont", "10.20.0.10"),
+            _file_routeur("absent", "10.20.0.99"),
         ],
         prune=False,
     )
@@ -142,10 +142,10 @@ def test_un_plan_reduit_a_un_client_ne_retire_aucun_type() -> None:
         desired_types=types,
         desired_queues=files,
         actual_types=_types_cake(),
-        actual_queues=[_file_routeur("freeqos-dupont", "10.20.0.10")],
+        actual_queues=[_file_routeur("dupont", "10.20.0.10")],
         prune=False,
     )
-    reduit = plan.restrict_to({"freeqos-dupont"})
+    reduit = plan.restrict_to({"dupont"})
     assert [a.verb for a in reduit.actions if a.path == "/queue/type"] == ["add", "add"]
 
 
