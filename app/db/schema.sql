@@ -1552,3 +1552,26 @@ CREATE TABLE IF NOT EXISTS client_emergency_rates (
     updated_by  TEXT,
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- -----------------------------------------------------------------------------
+-- LES URGENCES : des debits de crise prepares a l'avance, lances d'un bouton
+-- (page Emergency). Un nom, un debit (% du forfait, limite fixe, ou la bande
+-- passante d'urgence propre a chaque client), des clients (tous, des sites, des
+-- clients choisis). Active, elle passe devant le forfait et les schedulers.
+CREATE TABLE IF NOT EXISTS emergencies (
+    id            SERIAL PRIMARY KEY,
+    name          TEXT NOT NULL UNIQUE,
+    kind          TEXT NOT NULL DEFAULT 'percent' CHECK (kind IN ('percent', 'fixed', 'client')),
+    percent       DOUBLE PRECISION CHECK (percent IS NULL OR (percent > 0 AND percent <= 100)),
+    down_mbps     DOUBLE PRECISION CHECK (down_mbps IS NULL OR down_mbps > 0),
+    up_mbps       DOUBLE PRECISION CHECK (up_mbps IS NULL OR up_mbps > 0),
+    scope         TEXT NOT NULL DEFAULT 'all' CHECK (scope IN ('all', 'clients', 'pops')),
+    targets       JSONB NOT NULL DEFAULT '[]'::jsonb,
+    active        BOOLEAN NOT NULL DEFAULT FALSE,
+    active_since  TIMESTAMPTZ,
+    active_by     TEXT,
+    note          TEXT,
+    updated_by    TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);

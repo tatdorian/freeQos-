@@ -71,6 +71,7 @@ from app.enforcement.capability import (
     disabled_in_freeqos,
     inspect_write_capability,
 )
+from app.enforcement.emergency import BOOK as EMERGENCY_BOOK
 from app.enforcement.models import (
     MANAGED_COMMENT,
     OWNED_QUEUES,
@@ -319,6 +320,8 @@ class ShapingService:
         self.exclusions: Any = None
         #: login -> bande passante d'urgence, relue a chaque construction de cibles.
         self._urgences: dict[str, tuple[float, float]] = {}
+        #: Les urgences (page Emergency) ; relues avant chaque plan.
+        self.emergencies_repo: Any = None
         # Login -> routeur de sa session (CollectionService.session_routers).
         self.session_routers: dict[str, str] = {}
         self.repository = repository
@@ -1231,6 +1234,7 @@ class ShapingService:
         # applique celle de chaque client.
         lire_urgences = getattr(self.repository, "emergency_rates", None)
         self._urgences = await lire_urgences() if lire_urgences is not None else {}
+        await self.load_emergencies()
         rattachements = await self.repository.attachments()
         # Resserrages decides par la boucle fermee QoE (phase 4). Ils vivent dans
         # leur propre table, pas dans les surcharges : une surcharge est une
@@ -1724,6 +1728,20 @@ class ShapingService:
             cible.schedule_up_mbps = horaire.up_mbps
             cible.schedule_name = f"{horaire.schedule_name} ({horaire.window})"
             cible.schedule_over_override = horaire.over_mode
+        urgence = EMERGENCY_BOOK.for_client(
+            login=cible.login,
+            site=site,
+            plan_down=cible.plan_down_mbps,
+            plan_up=cible.plan_up_mbps,
+            own=self._urgences.get(cible.login),
+        )
+        if urgence is not None:
+            # UNE URGENCE ACTIVE : son debit passe devant le forfait, le mode et
+            # tout scheduler. Seul un boost reste au-dessus.
+            cible.schedule_down_mbps = urgence.down_mbps
+            cible.schedule_up_mbps = urgence.up_mbps
+            cible.schedule_name = f"Emergency: {urgence.name}"
+            cible.schedule_over_override = True
         return cible
 
     def _cible_abonne(
@@ -3080,6 +3098,17 @@ class ShapingService:
         return resultat
 
     # ------------------------------------------------- profils horaires
+    async def load_emergencies(self) -> int:
+        """Relit les urgences ACTIVES dans le carnet partage. Une base illisible
+        garde le carnet precedent."""
+        if self.emergencies_repo is None:
+            return len(EMERGENCY_BOOK.active)
+        try:
+            EMERGENCY_BOOK.replace(await self.emergencies_repo.models())
+        except Exception:  # noqa: BLE001 - le carnet precedent reste en place
+            logger.exception("Urgences illisibles : le carnet precedent est garde")
+        return len(EMERGENCY_BOOK.active)
+
     async def load_schedules(self) -> int:
         """Relit les profils horaires en base, dans le carnet partage.
 

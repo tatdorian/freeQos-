@@ -82,6 +82,34 @@ def _with_effective_limits(row: dict[str, Any]) -> dict[str, Any]:
         ),
     )
     devant = bool(horaire and horaire.over_mode)
+    # UNE URGENCE ACTIVE (page Emergency) : la meme regle que le planificateur.
+    from app.enforcement.emergency import BOOK as URGENCES
+
+    propre = (
+        (float(row["emergency_down_mbps"]), float(row["emergency_up_mbps"]))
+        if row.get("emergency_down_mbps") and row.get("emergency_up_mbps")
+        else None
+    )
+    urgence = URGENCES.for_client(
+        login=str(row.get("login") or ""),
+        site=row.get("pop_name"),
+        plan_down=row.get("plan_down_mbps"),
+        plan_up=row.get("plan_up_mbps"),
+        own=propre,
+    )
+    if urgence is not None:
+        from app.enforcement.schedules import ScheduledRate
+
+        horaire = ScheduledRate(
+            down_mbps=urgence.down_mbps,
+            up_mbps=urgence.up_mbps,
+            schedule_id=0,
+            schedule_name=f"Emergency: {urgence.name}",
+            window="started by hand",
+            over_mode=True,
+        )
+        devant = True
+    row["emergency_name"] = urgence.name if urgence is not None else None
     descendant, source = effective_rate(
         plan_mbps=row.get("plan_down_mbps"),
         override_mbps=row.get("override_down_mbps"),
