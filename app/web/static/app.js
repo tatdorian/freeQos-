@@ -11784,11 +11784,27 @@ function renderDomain() {
   };
 }
 
+/** Settings > Default plan : son etat en un coup d'oeil (desactive par defaut). */
+function etatForfaitDefaut(body) {
+  const host = document.getElementById('settings-default-plan-state');
+  if (!host) return;
+  const val = (nom) => (body.settings.find((x) => x.name === nom) || {}).value;
+  const bas = Number(val('default_plan_down_mbps')) || 0;
+  const haut = Number(val('default_plan_up_mbps')) || 0;
+  const detectes = val('default_plan_for_detected_clients') === true;
+  host.innerHTML = bas || haut
+    ? '<span class="badge warn">On: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) +
+      (detectes ? ', PPPoE sessions with no plan included' : ', clients entered without a rate only') +
+      '</span>'
+    : '<span class="badge">Off</span>';
+}
+
 async function loadSettings() {
   renderAccounts();
   loadDomain();
   loadNotif();
   const body = await api('/settings');
+  etatForfaitDefaut(body);
   const host = document.getElementById('settings-groups');
   const compte = document.getElementById('settings-count');
   if (compte) {

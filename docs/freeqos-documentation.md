@@ -1255,7 +1255,7 @@ A subscriber alone on a quiet sector gets its full plan. When everyone pulls at 
 The plan belongs to the subscriber, not to the PoP: a PoP has a capacity, not a plan. It is resolved in this order:
 
 1. **The plan written for this subscriber**, pushed through the API (billing, Preseem integration) or entered on the *Plans* page. The last write wins.
-2. **A subscriber pushed or declared without a rate** has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (`DEFAULT_PLAN_DOWN_MBPS` / `DEFAULT_PLAN_UP_MBPS`, *Settings › Plans & map*; `0` = none, the default).
+2. **A subscriber pushed or declared without a rate** has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (`DEFAULT_PLAN_DOWN_MBPS` / `DEFAULT_PLAN_UP_MBPS`, *Settings › Default plan*, which opens the Plans page; `0` = none, the default). The **Also PPPoE sessions with no plan** box extends it to sessions seen on a router with no plan; clients with no plan are listed first on the Clients page, marked **No plan**.
 3. **A subscriber that is only detected** has no plan: it is observed, never throttled to a rate nobody sold, unless `DEFAULT_PLAN_FOR_DETECTED_CLIENTS=true`.
 
 Deleting a subscriber's plan removes its queue on the next cycle.
@@ -1645,7 +1645,7 @@ Each page reads in sections, with a table of contents at the top and a tooltip o
 | **Router health** (Administrator) | Are my routers fine? | One card per router: model, RouterOS, uptime; CPU (average, busiest core, each core), peak and chart of the last hour; memory; storage; sensors (temperature, voltage) |
 | **Network tree** | How is the network wired? | Discovered tree, editable with the mouse (move, re-parent, merge, hide) |
 | **Clients** | Who are my clients, and how are they doing? | Every client under its **PoP**, with its connection (PPPoE, static IP, or **VLAN 2060**: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; *+ Add a client* declares static-IP and VLAN clients (PPPoE clients appear by themselves). |
-| **Plans** (from *Settings › Plans & map*) | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
+| **Plans** (from *Settings › Default plan*) | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
 | **Devices** | Which equipment? | Connecting a router, router settings (Set up, Set by freeQoS, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health |
 | **API** | How to integrate? | API keys, links to the API guide and to this documentation |
 | **Settings** | How does the tool behave? | Accounts, settings, writing to the routers, caps held or not, command log |
