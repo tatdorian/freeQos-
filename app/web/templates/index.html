@@ -972,15 +972,10 @@
 
         <!-- Ce qui est DECLARE, juste sous la saisie : on voit le client
              apparaitre a l'endroit ou on vient de le poser. -->
-        <h3 style="margin:1.4rem 0 .4rem">Declared static-IP clients</h3>
+        <!-- UN CLIENT EST UN CLIENT : une seule liste, sa VLAN y est une colonne
+             (pas de liste « par VLAN » a part, demande de l'exploitant). -->
+        <h3 style="margin:1.4rem 0 .4rem">Clients added by hand</h3>
         <div class="table-wrap" id="sc-table"></div>
-
-        <!-- CLIENTS PAR VLAN : LA SAISIE EST LA SOURCE, PAS UNE DECOUVERTE.
-             Ce tableau rend ce qui a ete DECLARE sur chaque VLAN -- la question
-             "qu'est-ce que j'ai vendu sur cette VLAN", et non "qu'est-ce qui
-             parle dessus". -->
-        <h3 style="margin:1.4rem 0 .4rem">Clients by VLAN</h3>
-        <div class="table-wrap" id="sc-vlans"></div>
 
       </div>
 
