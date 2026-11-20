@@ -5045,65 +5045,7 @@ function scPayload() {
   };
 }
 
-/** Ce qui est DECLARE sur chaque VLAN.
- *
- *  Le tableau rend la SAISIE, pas une decouverte. C'est la nuance qui compte :
- *  un client sur VLAN routee n'ouvre pas de session, RADIUS ne le decrit pas,
- *  et rien sur le reseau ne dit quel debit lui a ete vendu. Ce que les flux
- *  montrent, ce sont des adresses qui parlent -- une imprimante et un client
- *  professionnel y ont exactement la meme apparence. */
-async function loadVlanClients() {
-  const host = document.getElementById('sc-vlans');
-  if (!host) return;
-  let corps;
-  try {
-    corps = await api('/static-clients/vlans');
-  } catch (err) {
-    host.innerHTML = noticeErreur(err);
-    return;
-  }
-  const lignes = corps.vlans || [];
-  const orphelins = (corps.unmatched || []).filter((h) => h.vlan_id).length;
-  if (!lignes.length) {
-    // Le compte d'adresses orphelines reste : c'est un RENSEIGNEMENT (des
-    // machines parlent sur des VLAN sans etre declarees), pas un mode d'emploi.
-    // Le renvoi au formulaire, lui, disait « ci-dessous » alors qu'il est
-    // desormais au-dessus -- et n'apprenait rien.
-    host.innerHTML = '<div class="empty">No client declared on a VLAN.' +
-      (orphelins
-        ? ' ' + esc(orphelins) + ' address(es) do talk on VLANs without ' +
-          'being declared.'
-        : '') +
-      '</div>';
-    return;
-  }
-  const parVlan = new Map();
-  (corps.unmatched || []).forEach((h) => {
-    if (!h.vlan_id) return;
-    parVlan.set(h.vlan_id, (parVlan.get(h.vlan_id) || 0) + 1);
-  });
-  host.innerHTML = '<table><thead><tr><th>VLAN</th><th>PoP</th>' +
-    '<th class="num">Clients</th><th class="num">Active</th>' +
-    '<th class="num">Sold (down)</th><th class="num">Sold (up)</th>' +
-    '<th>Origin</th><th class="num">Undeclared</th></tr></thead><tbody>' +
-    lignes.map((v) => {
-      const vus = parVlan.get(v.vlan) || 0;
-      return '<tr><td><b>' + esc(v.vlan) + '</b></td>' +
-        '<td>' + esc((v.pops || []).filter(Boolean).join(', ') || '-') + '</td>' +
-        '<td class="num">' + esc(v.clients) + '</td>' +
-        '<td class="num">' + esc(v.actifs) + '</td>' +
-        '<td class="num">' + esc(Math.round(v.vendu_down_mbps || 0)) + ' Mbps</td>' +
-        '<td class="num">' + esc(Math.round(v.vendu_up_mbps || 0)) + ' Mbps</td>' +
-        '<td>' + (v.depuis_api
-          ? '<span class="badge">' + esc(v.depuis_api) + ' via API</span> '
-          : '') + '<span class="badge ok">' + esc(v.clients - v.depuis_api) +
-          ' by hand</span></td>' +
-        '<td class="num">' + (vus
-          ? '<span class="badge warn">' + esc(vus) + '</span>'
-          : '<span class="faint">0</span>') + '</td></tr>';
-    }).join('') + '</tbody></table>';
-}
-
+/** Les clients ajoutes a la main (IP fixe et/ou VLAN) : une seule liste. */
 async function loadStaticClients() {
   const host = document.getElementById('sc-table');
   let fiches;
@@ -5287,7 +5229,7 @@ async function scEnregistrer(event) {
     scRemplirFormulaire(null);
     // Declarer un client le retire de la liste des candidats : les deux
     // tableaux doivent etre relus ensemble, sinon il apparait aux deux endroits.
-    await Promise.all([loadStaticClients(), loadVlanClients()]);
+    await loadStaticClients();
     if (state.view === 'clients') loadClients();
     // La fiche modifiee change le plan : le tableau des abonnes doit suivre.
     await loadSubscribers();
@@ -5308,7 +5250,7 @@ async function scSupprimer(id, fiches) {
     await api('/static-clients/' + encodeURIComponent(id), { method: 'DELETE' });
     if (scEdition && String(scEdition.id) === String(id)) scRemplirFormulaire(null);
     // Retirer une fiche peut faire REAPPARAITRE son adresse en candidat.
-    await Promise.all([loadStaticClients(), loadVlanClients()]);
+    await loadStaticClients();
     if (state.view === 'clients') loadClients();
     await loadSubscribers();
   } catch (err) {
@@ -16627,7 +16569,7 @@ document.getElementById('sc-toggle').addEventListener('click', async () => {
     reference.focus();
     reference.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
-  await Promise.all([loadStaticClients(), loadVlanClients()]);
+  await loadStaticClients();
 });
 document.getElementById('sc-form').addEventListener('submit', scEnregistrer);
 document.getElementById('sc-cancel').addEventListener('click', () => scRemplirFormulaire(null));

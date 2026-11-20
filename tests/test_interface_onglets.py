@@ -204,11 +204,12 @@ def test_les_blocs_replies_ne_chargent_rien_tant_qu_ils_sont_fermes() -> None:
 
 
 def test_le_formulaire_de_client_porte_bien_le_champ_vlan() -> None:
-    """Les clients par VLAN se declarent a la main : le champ doit exister, et
-    le tableau qui les range aussi."""
+    """Les clients sur VLAN se declarent a la main : le champ doit exister. Un
+    client est un client : pas de liste « Clients by VLAN » a part."""
     assert 'id="sc-vlan"' in HTML
-    assert 'id="sc-vlans"' in HTML
-    assert "loadVlanClients" in JS
+    assert 'id="sc-vlans"' not in HTML
+    assert "Clients by VLAN" not in HTML
+    assert ">Clients added by hand</h3>" in HTML
 
 
 def test_le_diagnostic_netflow_mene_au_geste_suivant() -> None:
@@ -328,7 +329,6 @@ def test_la_saisie_est_en_haut_du_panneau() -> None:
     panneau = HTML[HTML.index('<div id="sc-panel"') : HTML.index('id="limits-alert"')]
     form = panneau.index('id="sc-form"')
     assert form < panneau.index('id="sc-table"')
-    assert form < panneau.index('id="sc-vlans"')
 
 
 def test_le_pop_et_l_adresse_sont_exiges_et_nommes() -> None:
