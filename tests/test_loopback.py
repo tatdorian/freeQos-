@@ -658,3 +658,30 @@ async def test_un_loopback_refuse_ne_fait_pas_perdre_la_mesure() -> None:
 
     assert await collector.ping("203.0.113.217") == pytest.approx(5.0)
     assert client.ping_sources == ["10.9.9.9", None]
+
+
+# ---------------------------------------- l'IP de connexion EST la loopback
+def test_l_ip_de_connexion_est_la_loopback() -> None:
+    """Demande de l'exploitant : pas de champ « Loopback » a part. L'IP par
+    laquelle on joint le routeur est sa loopback ; un nom DNS la laisse a deduire."""
+    from app.api.routers_admin import RouterInput, RouterUpdate
+
+    assert RouterInput(name="nas", host="10.255.0.1", password="x").loopback == "10.255.0.1"
+    assert RouterInput(name="nas", host="nas.example.net", password="x").loopback is None
+    # Donnee explicitement (API) : elle reste.
+    explicite = RouterInput(name="nas", host="10.10.0.11", password="x", loopback="10.255.0.9")
+    assert explicite.loopback == "10.255.0.9"
+    # Une nouvelle adresse de connexion devient la nouvelle loopback.
+    assert (
+        RouterUpdate(host="10.255.0.2").model_dump(exclude_unset=True)["loopback"] == "10.255.0.2"
+    )
+
+
+def test_le_formulaire_n_a_plus_de_champ_loopback() -> None:
+    from app.web.ui import STATIC_DIR
+
+    html = (STATIC_DIR.parent / "templates" / "index.html").read_text(encoding="utf-8")
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'id="f-loopback"' not in html
+    assert ">Router IP (loopback)</label>" in html
+    assert "loopback: ipSeule((data.get('host') || '').trim())," in js

@@ -16,11 +16,12 @@ l'ecriture et aucune reponse ne le contient, meme chiffre.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Path, status
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, model_validator
 
 from app.api.accounts import UserDep
 from app.api.deps import ContainerDep
@@ -61,6 +62,26 @@ class RouterInput(BaseModel):
     # Motif journalise avec l'etat initial de l'interrupteur.
     reason: str | None = Field(default=None, max_length=300)
 
+    @model_validator(mode="after")
+    def _loopback_est_l_adresse(self) -> RouterInput:
+        """L'IP par laquelle on joint le routeur EST sa loopback (demande de
+        l'exploitant) : sans loopback donnee, c'est elle. Un nom DNS laisse la
+        loopback a deduire du routeur."""
+        if self.loopback is None:
+            self.loopback = loopback_depuis(self.host)
+        return self
+
+
+def loopback_depuis(hote: str | None) -> str | None:
+    """L'adresse si c'est une IP d'hote utilisable comme loopback, sinon None."""
+    try:
+        ip = ipaddress.ip_address(str(hote or "").strip())
+    except ValueError:
+        return None
+    if ip.is_loopback or ip.is_unspecified or ip.is_multicast:
+        return None
+    return str(ip)
+
 
 class RouterUpdate(BaseModel):
     """Mise a jour partielle : omettre le mot de passe le laisse inchange."""
@@ -85,6 +106,13 @@ class RouterUpdate(BaseModel):
     # Autoriser l'ecriture sur un routeur de production merite un geste
     # explicite, comme pour l'interrupteur global. La couper, jamais.
     confirm: bool = False
+
+    @model_validator(mode="after")
+    def _loopback_suit_l_adresse(self) -> RouterUpdate:
+        """Une nouvelle adresse de connexion est aussi la nouvelle loopback."""
+        if self.host is not None and "loopback" not in self.model_fields_set:
+            self.loopback = loopback_depuis(self.host)
+        return self
 
 
 class WriteSwitch(BaseModel):
