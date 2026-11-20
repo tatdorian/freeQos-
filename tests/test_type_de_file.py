@@ -293,6 +293,52 @@ def test_basculer_dans_les_reglages_et_revenir(app_client, routeur) -> None:  # 
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_un_seul_routeur_passe_en_fq_codel(app_client, routeur) -> None:  # noqa: F811
+    """Demande de l'exploitant : choisir le type ROUTEUR PAR ROUTEUR. Le defaut
+    reste CAKE ; ce routeur-ci passe en FQ-CoDel, puis revient au defaut."""
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 20, "up_mbps": 10})
+    assert _queue(routeur) == f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}"
+    d = app_client.get("/api/v1/shaping/queue-kinds", headers=cle).json()
+    assert d["default"] == "cake"
+    [ligne] = [r for r in d["routers"] if r["router"] == "nas-test"]
+    assert ligne["choice"] is None and ligne["kind"] == "cake"
+
+    r = app_client.put(
+        "/api/v1/shaping/queue-kinds/nas-test", headers=cle, json={"kind": "fq-codel"}
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["switching"] is True
+    _attendre(lambda: _queue(routeur) == f"{QUEUE_TYPE_FQ_UP}/{QUEUE_TYPE_FQ_DOWN}", 15)
+    d = app_client.get("/api/v1/shaping/queue-kinds", headers=cle).json()
+    assert d["default"] == "cake"  # le defaut ne bouge pas
+    assert [r["kind"] for r in d["routers"] if r["router"] == "nas-test"] == ["fq-codel"]
+
+    r = app_client.put("/api/v1/shaping/queue-kinds/nas-test", headers=cle, json={"kind": None})
+    assert r.status_code == 200, r.text
+    _attendre(lambda: _queue(routeur) == f"{QUEUE_TYPE_UP}/{QUEUE_TYPE_DOWN}", 15)
+    assert (
+        app_client.put(
+            "/api/v1/shaping/queue-kinds/inconnu", headers=cle, json={"kind": "cake"}
+        ).status_code
+        == 404
+    )
+
+
+def test_chaque_bascule_demande_une_confirmation() -> None:
+    from app.web.ui import STATIC_DIR
+
+    js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+    html = (STATIC_DIR.parent / "templates" / "index.html").read_text(encoding="utf-8")
+    assert "function qkConfirmer(vers, cible, agir)" in js
+    assert "function qkImplications(vers, cible)" in js
+    assert "'/shaping/queue-kinds/' + encodeURIComponent(r.router)" in js
+    assert 'id="queue-kind-routers"' in html
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
 def test_si_le_routeur_refuse_fq_codel_il_reste_en_cake(app_client, routeur) -> None:  # noqa: F811
     import app.services.shaping as sh
 
