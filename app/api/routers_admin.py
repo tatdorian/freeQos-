@@ -510,6 +510,9 @@ async def update_router(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail=CONFIRMATION_REQUISE
             )
+        ancien_nom = (
+            str((await repository.get_public(router_id)).get("name") or "") if payload.name else ""
+        )
         updated = await repository.update(
             router_id, payload.model_dump(exclude={"password", "reason", "confirm"}), password
         )
@@ -518,6 +521,8 @@ async def update_router(
     except DuplicateRouterError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    if ancien_nom and ancien_nom != str(updated["name"]):
+        await _suivre_le_nom(container, ancien_nom, str(updated["name"]))
     bascule = payload.write_enabled is not None and avant != payload.write_enabled
     if bascule:
         await _journaliser_interrupteur(
@@ -542,6 +547,24 @@ async def update_router(
     if updated.get("enabled", True) and not seulement_coupee and not seulement_role:
         updated["provisioning"] = provisioning.start(container, str(updated["name"]))
     return updated
+
+
+async def _suivre_le_nom(container: Any, ancien: str, nouveau: str) -> None:
+    """Routeur renomme : freeQoS garde la memoire de ses files et son type."""
+    shaping = getattr(container, "shaping", None)
+    pool = getattr(shaping, "owned_pool", None)
+    if pool is None:
+        return
+    from app.db.owned_queues import rename_router
+
+    try:
+        await rename_router(pool, ancien, nouveau)
+    except Exception:  # noqa: BLE001 - le renommage du routeur reste fait
+        logger.exception("Memoire des files non reportee de %s vers %s", ancien, nouveau)
+        return
+    kinds = getattr(shaping, "queue_kinds", None)
+    if isinstance(kinds, dict) and ancien in kinds and nouveau not in kinds:
+        kinds[nouveau] = kinds.pop(ancien)
 
 
 def _connu(container: ContainerDep, router_name: str) -> None:
