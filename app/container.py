@@ -839,6 +839,10 @@ async def build_container(settings: Settings) -> Container:
 
     async def fusionner_doublons() -> None:
         await merge_duplicates(conteneur)
+        # Les clients RETIRES qui sont des clients declares (meme IP, MAC, nom).
+        from app.services.removed_duplicates import resolve as ranger_retires
+
+        await ranger_retires(conteneur)
 
     scheduler.add_job(JOB_MERGE, 60.0, fusionner_doublons)
 

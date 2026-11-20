@@ -145,6 +145,8 @@ class CollectionService:
         self.settings = settings
         # Clients retires de freeQoS (app/services/exclusions.py), branche par le conteneur.
         self.exclusions: Any = None
+        #: Clients retires vus connectes : login -> IP, MAC, routeur (memoire seule).
+        self.removed_sessions: dict[str, dict[str, Any]] = {}
         self.collectors = list(collectors)
         self.backhaul_provider = backhaul_provider
         # Provider des antennes ajoutees depuis l'interface (airOS en base). Il
@@ -255,6 +257,18 @@ class CollectionService:
             # meme connectes (app/services/exclusions.py).
             retires = getattr(self, "exclusions", None)
             if retires is not None and retires.logins:
+                # Ni fiche ni mesure -- mais on retient, EN MEMOIRE, l'IP et la
+                # MAC sous lesquelles il est connecte : c'est ce qui permet de
+                # reconnaitre un client retire qui est le meme qu'un client
+                # declare (app/services/removed_duplicates.py).
+                for s in outcome:
+                    if s.login in retires:
+                        self.removed_sessions[s.login] = {
+                            "address": s.address,
+                            "caller_id": s.caller_id,
+                            "router": collector.name,
+                            "pop_name": s.pop_name,
+                        }
                 outcome = [s for s in outcome if s.login not in retires]
             for session in outcome:
                 self.session_routers[session.login] = collector.name
