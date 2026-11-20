@@ -266,7 +266,7 @@ def test_il_n_y_a_plus_de_page_modes() -> None:
     assert 'href="#/modes"' not in html
     assert 'id="view-modes"' not in html
     assert 'id="cli-sel-mode"' not in html
-    assert 'data-v="emergency">Their emergency bandwidth</button>' in html
+    assert 'data-v="emergency">Their emergency bandwidth</button>' not in html
     assert ">A mode</button>" not in html
     assert "if (vue === 'modes') vue = 'clients';" in js
     assert "Change mode" not in js
