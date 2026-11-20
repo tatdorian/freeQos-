@@ -518,7 +518,9 @@ Three rules prevent wrong merges. **Two declared routers never merge** with each
 
 #### How the loopback is found
 
-When the loopback is not declared, it is looked for in the configuration, in this order:
+**The IP you connect the router with is its loopback.** *Devices › Connect a router* has a single address field, *Router IP (loopback)*: freeQoS connects to it and uses it as the router's loopback — there is no separate *Loopback* field any more. Through the API, `loopback` defaults to `host` when `host` is an IP address (an explicit `loopback` still wins), and changing `host` changes the loopback with it.
+
+When the router is reached by a **DNS name**, the loopback is looked for in the configuration, in this order:
 
 | Source | What is read |
 | --- | --- |
