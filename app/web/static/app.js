@@ -16039,6 +16039,16 @@ async function rapportPdf(site) {
 }
 
 /** Les donnees de la page Clients, sans la dessiner (alertes, activite). */
+/** Un client DECLARE : ajoute a la main ou pousse par l'API (fiche), avec un
+ *  forfait ecrit (API, saisi, RADIUS -- pas le debit par defaut), un nom donne
+ *  (dont un client fusionne dans sa session), ou un mode / une limite pose a la
+ *  main. Le reste est seulement DETECTE sur un routeur. */
+function clientDeclare(r) {
+  if (r.kind === 'static' || r.display_name || r.mode_id || r.override_down_mbps) return true;
+  const src = String(r.plan_source || '');
+  return !!src && src !== 'none' && src !== 'default' && !src.endsWith(':default');
+}
+
 async function loadClientsData() {
   const [rows, modes, boosts, lectures, fiches] = await Promise.all([
     api('/subscribers/latest?limit=500&include_unmeasured=true'),
@@ -16051,7 +16061,10 @@ async function loadClientsData() {
   // trouve : portee sur chaque ligne, sans jamais remplacer ses faits.
   const profils = (fiches && fiches.profiles) || {};
   rows.forEach((r) => { r.profile = profils[r.login] || null; r.display_name = r.profile && r.profile.display_name; });
-  CLI.rows = rows;
+  // SEULS LES CLIENTS DECLARES : une session vue sur un routeur et que
+  // personne n'a declaree n'est pas un client de la liste (elle reste dans
+  // Settings > Default plan, « Clients without a plan »).
+  CLI.rows = rows.filter(clientDeclare);
   // Un site dont AUCUN routeur ne se lit plus : ses clients ne sont pas
   // « hors ligne », ils ne sont plus mesures. Ce n'est pas la meme panne.
   CLI.lecture = {};
