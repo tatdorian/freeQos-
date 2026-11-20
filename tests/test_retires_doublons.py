@@ -195,6 +195,9 @@ def test_de_bout_en_bout_un_retire_sur_l_ip_d_un_client_declare(app_client, rout
     liste = app_client.get("/api/v1/clients/removed", headers=cle).json()
     assert liste["count"] == 0
     assert [(d["login"], d["same_as"]) for d in liste["duplicates"]] == [("dupont", "ACME-SIEGE")]
+    # Ce que le releve en voit, pour comprendre un retire sans lien.
+    assert liste["duplicates"][0]["seen"]["address"] == "10.20.0.10"
+    assert liste["duplicates"][0]["seen"]["router"] == "nas-test"
     # Toujours ignoree : le releve ne la recree pas.
     assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
     abonnes = app_client.get("/api/v1/subscribers", headers=cle).json()
