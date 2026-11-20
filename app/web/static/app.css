@@ -2471,3 +2471,14 @@ button.danger.em-big:hover:not(:disabled) { background: color-mix(in srgb, var(-
 #ma-clients .mc-list { max-height: 280px; overflow: auto; }
 .qk-list { padding-left: 1.1rem; margin: .4rem 0 0; display: grid; gap: .35rem; font-size: .9rem; }
 #queue-kind-routers { margin: .6rem 0; }
+
+/* Clients SANS FORFAIT : en tete de liste, et reperables d'un coup d'oeil. */
+.cli-list tr.cli-noplan { background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.cli-list tr.cli-noplan > td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
+/* La colonne des boutons est opaque (elle reste collee a droite) : meme teinte. */
+.cli-list tr.cli-noplan td.sticky-actions {
+  background: linear-gradient(color-mix(in srgb, var(--warn) 7%, transparent),
+    color-mix(in srgb, var(--warn) 7%, transparent)), var(--surface);
+}
+/* Le badge passe a la ligne plutot que de couper le nom. */
+.cli-main .cli-name { flex-wrap: wrap; row-gap: .2rem; }
