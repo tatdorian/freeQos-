@@ -673,11 +673,10 @@
            recent. -->
 
 
-      <p class="hint" style="display:block;margin:0 0 .8rem">Each client has its speeds, set by hand on
-        its page: its <b>normal bandwidth</b> (its plan) and its <b>emergency bandwidth</b>. A scheduler
-        changes them during the hours you choose: <b>a % of their speed</b>, or <b>their emergency
-        bandwidth</b>. Outside these hours they keep their normal bandwidth. <b>Start now</b> applies one
-        at once, by hand.</p>
+      <p class="hint" style="display:block;margin:0 0 .8rem">Each client has its <b>plan</b>, set by hand on
+        its page. A scheduler changes the speed of the clients you choose by <b>a %</b>, during the hours you
+        choose; outside these hours they keep their plan. <b>Start now</b> applies one at once, by hand. A
+        scheduler for one client only is made on that client's page.</p>
       <div class="table-wrap" id="sched-list"></div>
       <div id="sched-result"></div>
       <h3 id="sched-form-title" style="margin:1rem 0 .4rem">New scheduler</h3>
@@ -692,7 +691,7 @@
             <input type="hidden" id="sched-rate-kind" value="percent">
             <div class="segmented" id="sched-rate-seg" role="group" aria-label="What it applies">
               <button type="button" data-v="percent">A % of their speed</button>
-              <button type="button" data-v="emergency">Their emergency bandwidth</button>
+              <button type="button" data-v="emergency" hidden>Emergency bandwidth</button>
               <button type="button" data-v="rate" hidden>Fixed Mbps</button>
             </div>
           </div>
@@ -701,8 +700,6 @@
             <span class="ios-val"><input id="sched-percent" type="number" min="1" max="1000" step="any"
               placeholder="70" style="width:6rem"> %</span>
           </label>
-          <p class="ios-row ios-sub hint" data-rate-kind="emergency" hidden style="display:block">Each client gets
-            <b>its own emergency bandwidth</b>, set on its page. A client without one keeps its speed.</p>
           <!-- Plus de modes : le menu reste pour les anciens schedulers qui en donnent un. -->
           <select id="sched-mode" hidden></select>
           <div class="ios-row" data-rate-kind="rate" hidden>
