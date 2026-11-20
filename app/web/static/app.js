@@ -14297,7 +14297,7 @@ function modifierClient(login, fiche) {
     '<div class="sub">' + esc(login) + (d.pop_name ? ' · ' + esc(d.pop_name) : '') + '</div></div>' +
     '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
     '<form class="modal-body stack" id="ec-form" autocomplete="off">' +
-    '<div class="row-2">' + champ('ec-name', 'Name', p.display_name, 'maxlength="128" placeholder="Pharmacie du Plateau"') +
+    '<div class="row-2">' + champ('ec-name', 'Name', p.display_name, 'maxlength="128" placeholder="Customer name"') +
       champ('ec-phone', 'Phone', p.phone, 'maxlength="40" inputmode="tel"') + '</div>' +
     '<div class="row-2">' + champ('ec-email', 'Email', p.email, 'maxlength="254" type="email"') +
       champ('ec-mac', 'CPE MAC', p.cpe_mac, 'maxlength="32" placeholder="24:5A:4C:12:34:56"') + '</div>' +
