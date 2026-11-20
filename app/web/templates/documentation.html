@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="d89df842ec4c750d">
+  <meta name="freeqos-docs-source" content="81360ba1f81d412e">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2676,7 +2676,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>The plan belongs to the subscriber, not to the PoP: a PoP has a capacity, not a plan. It is resolved in this order:</p>
 <ol>
 <li><strong>The plan written for this subscriber</strong>, pushed through the API (billing, Preseem integration) or entered on the <em>Plans</em> page. The last write wins.</li>
-<li><strong>A subscriber pushed or declared without a rate</strong> has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (<code>DEFAULT_PLAN_DOWN_MBPS</code> / <code>DEFAULT_PLAN_UP_MBPS</code>, <em>Settings › Plans &amp; map</em>; <code>0</code> = none, the default).</li>
+<li><strong>A subscriber pushed or declared without a rate</strong> has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (<code>DEFAULT_PLAN_DOWN_MBPS</code> / <code>DEFAULT_PLAN_UP_MBPS</code>, <em>Settings › Default plan</em>, which opens the Plans page; <code>0</code> = none, the default). The <strong>Also PPPoE sessions with no plan</strong> box extends it to sessions seen on a router with no plan; clients with no plan are listed first on the Clients page, marked <strong>No plan</strong>.</li>
 <li><strong>A subscriber that is only detected</strong> has no plan: it is observed, never throttled to a rate nobody sold, unless <code>DEFAULT_PLAN_FOR_DETECTED_CLIENTS=true</code>.</li>
 </ol>
 <p>Deleting a subscriber's plan removes its queue on the next cycle.</p>
@@ -3240,7 +3240,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <td>Every client under its <strong>PoP</strong>, with its connection (PPPoE, static IP, or <strong>VLAN 2060</strong>: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; <em>+ Add a client</em> declares static-IP and VLAN clients (PPPoE clients appear by themselves).</td>
 </tr>
 <tr>
-<td><strong>Plans</strong> (from <em>Settings › Plans &amp; map</em>)</td>
+<td><strong>Plans</strong> (from <em>Settings › Default plan</em>)</td>
 <td>Which rate for whom?</td>
 <td>Default plan, each subscriber's plan and its source, packages pushed by the API</td>
 </tr>

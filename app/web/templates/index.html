@@ -618,10 +618,10 @@
         observed, not capped, unless that limit is applied to detected clients too (below).</p>
       <div class="grid stats" id="plans-stats"></div>
 
-      <!-- CLIENTS SANS FORFAIT : chacun recoit SA file a ce debit (pas une
+      <!-- FORFAIT PAR DEFAUT = clients SANS forfait : chacun recoit SA file a ce debit (pas une
            file attrape-tout en bas de liste). A 1 kbps, un client oublie ou mal
            saisi se signale tout seul ; il est liste plus bas (filtre « No plan »). -->
-      <h2>Clients without a plan</h2>
+      <h2>Default plan</h2>
       <div class="card stack">
         <form id="plans-default-form" class="lq-rate" style="margin:0">
           &darr; <input id="plans-default-down" type="number" min="0" step="any" style="width:7rem">
@@ -632,8 +632,9 @@
         </form>
         <label class="chk"><input type="checkbox" id="plans-default-detected">
           Also PPPoE sessions with no plan (seen on a router, never given a plan)</label>
-        <span class="hint" style="display:block">Each client without a plan gets its own queue at
-          this rate, like any other client: nothing is added at the bottom of the queue list, and
+        <span class="hint" style="display:block">The default plan is the limit of the clients
+          without a plan. Off by default (0 = no limit: they are only observed). Each client
+          without a plan gets its own queue at this rate, like any other client: nothing is added at the bottom of the queue list, and
           clients that have a plan are never affected. Set 1 kbps to make unconfigured clients
           stand out, then filter the list below on <b>No plan</b>. 0 = no limit (the client is
           only observed). Clients removed from freeQoS never get a queue.</span>
@@ -1394,14 +1395,14 @@
       <h2>Email alerts</h2>
       <div class="card" id="settings-notif"></div>
 
-      <!-- Plans et carte : hors de la barre (peu servis au quotidien), mais a
-           un clic. Le forfait d'un client se change sur sa fiche. -->
-      <h2>Plans &amp; map</h2>
+      <!-- FORFAIT PAR DEFAUT : la limite des clients SANS forfait. Desactive
+           par defaut (0 = aucune limite) ; son etat est rappele ici. -->
+      <h2>Default plan</h2>
       <div class="card stack">
-        <div><b>Plans</b> &mdash; the limit for clients without a plan, and every client's plan in one table (a client's plan is also changed on
-          its page). <a class="sm" href="#/plans">Open Plans</a></div>
-        <div><b>Map</b> &mdash; sites and clients placed on a map. Also opened from the map button of the Clients list.
-          <a class="sm" href="#/map">Open the map</a></div>
+        <div><b>Default plan</b> &mdash; the limit given to clients without a plan (for example
+          1 kbps to spot unconfigured clients). Off by default: clients without a plan are only
+          observed. <span id="settings-default-plan-state"></span>
+          <a class="sm" href="#/plans">Set the default plan</a></div>
       </div>
 
       <h2>Domain &amp; HTTPS</h2>
