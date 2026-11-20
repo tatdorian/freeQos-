@@ -1368,6 +1368,8 @@ API: `GET/POST /api/v1/emergencies`, `PATCH/DELETE /api/v1/emergencies/{id}`, `P
 
 **Online, for a fixed-IP client.** A fixed-IP client has no session: it counts as online only when freeQoS measures it — counters of its queue, NetFlow, or a ping reply. Without any of them (no queue yet, writing off) it shows **Not measured · no counter yet**, never *connected* at 0.
 
+**Clients page: declared clients only.** The list shows the clients that were declared: added by hand or pushed by the API, given a plan (API, set by hand, RADIUS — not the default rate), given a name, or put in a mode or a limit by hand (a client merged into its PPPoE session keeps its name, so it stays). A PPPoE session only seen on a router, that nobody declared, is not listed; it shows under *Settings › Default plan*, in *Clients without a plan*.
+
 **Clients page.** Four cards on top: *Clients* (and the number of sites), *Connected* (with a bar, green above 80 %, orange from 50 %, red below), *Scheduler now* (clients off their normal bandwidth), *Boosts*. A card is also a filter: tap it to list those clients. For each client, **Usage now** is a bar of its download rate against its limit, with a word: *Quiet* (under 10 %), *Normal*, *Busy* (60 % and more), *At its limit* (90 % and more). The IP address is not shown in the list: it is on the client's page (search by IP still works).
 
 Made for **hundreds of clients** (20 sites of 20 clients): search, filters by site, connection and mode, **sort** (name, site, not connected first, highest usage), and **pages** of 25, 50, 100 or 200. Sorted by site, each site gets a header with its count, its connected clients and a *Select the site* button. The box at the top of the list selects every client matching the filters, on every page.

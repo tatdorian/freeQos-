@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="58c44c258f6bdf00">
+  <meta name="freeqos-docs-source" content="b1b3cd3105a98c30">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2835,6 +2835,7 @@ curl -s http://127.0.0.1:8000/health/ready
 </ul>
 <h3 id="clients-page-map-alerts-and-reports">Clients page, map, alerts and reports</h3>
 <p><strong>Online, for a fixed-IP client.</strong> A fixed-IP client has no session: it counts as online only when freeQoS measures it — counters of its queue, NetFlow, or a ping reply. Without any of them (no queue yet, writing off) it shows <strong>Not measured · no counter yet</strong>, never <em>connected</em> at 0.</p>
+<p><strong>Clients page: declared clients only.</strong> The list shows the clients that were declared: added by hand or pushed by the API, given a plan (API, set by hand, RADIUS — not the default rate), given a name, or put in a mode or a limit by hand (a client merged into its PPPoE session keeps its name, so it stays). A PPPoE session only seen on a router, that nobody declared, is not listed; it shows under <em>Settings › Default plan</em>, in <em>Clients without a plan</em>.</p>
 <p><strong>Clients page.</strong> Four cards on top: <em>Clients</em> (and the number of sites), <em>Connected</em> (with a bar, green above 80 %, orange from 50 %, red below), <em>Scheduler now</em> (clients off their normal bandwidth), <em>Boosts</em>. A card is also a filter: tap it to list those clients. For each client, <strong>Usage now</strong> is a bar of its download rate against its limit, with a word: <em>Quiet</em> (under 10 %), <em>Normal</em>, <em>Busy</em> (60 % and more), <em>At its limit</em> (90 % and more). The IP address is not shown in the list: it is on the client's page (search by IP still works).</p>
 <p>Made for <strong>hundreds of clients</strong> (20 sites of 20 clients): search, filters by site, connection and mode, <strong>sort</strong> (name, site, not connected first, highest usage), and <strong>pages</strong> of 25, 50, 100 or 200. Sorted by site, each site gets a header with its count, its connected clients and a <em>Select the site</em> button. The box at the top of the list selects every client matching the filters, on every page.</p>
 <ul>
