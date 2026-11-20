@@ -28,7 +28,7 @@ from app.api.deps import ContainerDep, noter
 from app.db.modes_repo import mode_rates
 from app.enforcement.schedules import BOOK as SCHEDULE_BOOK
 from app.models import KIND_STATIC
-from app.services.plans import apply_now, default_plan
+from app.services.plans import SOURCE_DEFAUT, apply_now, default_plan
 
 router = APIRouter(tags=["plans"])
 
@@ -139,8 +139,20 @@ async def _roster(container: ContainerDep) -> list[dict[str, Any]]:
             if ecrit.get("down_mbps") is not None or ecrit.get("up_mbps") is not None:
                 client["down_mbps"] = ecrit.get("down_mbps")
                 client["up_mbps"] = ecrit.get("up_mbps")
-        if client["origin"] == ORIGINE_DEFAUT and defaut is not None:
-            # Le plan reellement applique : celui par defaut.
+        # SANS FORFAIT : la limite par defaut ne vaut que la ou elle est
+        # REELLEMENT posee -- fiche a IP fixe, client pousse sans debit, et
+        # session seulement detectee si le reglage l'etend aux detectes. Sinon
+        # la page affichait un debit que le routeur n'avait pas.
+        detecte = fiche is None and ecrit is None
+        if detecte and str(ligne.get("plan_source") or "").startswith(SOURCE_DEFAUT):
+            # Le debit par defaut deja recopie sur la fiche n'est pas un forfait.
+            client["down_mbps"] = client["up_mbps"] = None
+        sans_debit = client["down_mbps"] is None and client["up_mbps"] is None
+        client["no_plan"] = sans_debit
+        client["default_applied"] = bool(
+            sans_debit and defaut is not None and (not detecte or _defaut_aux_detectes(container))
+        )
+        if client["default_applied"] and defaut is not None:
             client["down_mbps"] = defaut.down_mbps
             client["up_mbps"] = defaut.up_mbps
         client["updated_at"] = _last(client["updated_at"])
@@ -164,6 +176,10 @@ async def _roster(container: ContainerDep) -> list[dict[str, Any]]:
         client["schedule_window"] = horaire.window if horaire else None
         sortie.append(client)
     return sortie
+
+
+def _defaut_aux_detectes(container: Any) -> bool:
+    return bool(getattr(container.settings, "default_plan_for_detected_clients", False))
 
 
 async def _limites_forcees(container: ContainerDep) -> dict[str, tuple[Any, Any]]:
@@ -277,6 +293,9 @@ async def list_plans(container: ContainerDep) -> dict[str, Any]:
         "default": {
             "down_mbps": defaut.down_mbps if defaut else None,
             "up_mbps": defaut.up_mbps if defaut else None,
+            # Aussi les sessions PPPoE detectees sans forfait (pas seulement les
+            # clients saisis ou pousses sans debit).
+            "detected_clients": _defaut_aux_detectes(container),
         },
         "provider": container.settings.plan_provider,
         "packages": await _packages(container),
@@ -285,6 +304,9 @@ async def list_plans(container: ContainerDep) -> dict[str, Any]:
             "api": sum(1 for c in clients if c["origin"] == ORIGINE_API),
             "manual": sum(1 for c in clients if c["origin"] == ORIGINE_MANUELLE),
             "default": sum(1 for c in clients if c["origin"] == ORIGINE_DEFAUT),
+            # Sans forfait : ceux a configurer. Dont, limites par defaut.
+            "no_plan": sum(1 for c in clients if c["no_plan"]),
+            "default_applied": sum(1 for c in clients if c["default_applied"]),
             "pending": len(attente),
         },
         "clients": clients,
