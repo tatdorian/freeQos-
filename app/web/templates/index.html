@@ -775,6 +775,60 @@
          pas devenir vingt alertes de clients. -->
     <section id="view-alerts">
       <div id="alerts-list"></div>
+
+      <!-- MES ALERTES PAR EMAIL : chaque compte choisit ce qui doit le
+           prevenir ; c'est envoye A SON ADRESSE par le compte SMTP de Settings. -->
+      <h2 style="margin-top:1.6rem">My email alerts</h2>
+      <p class="hint" style="display:block;margin:0 0 .6rem">Choose what should warn you: it is emailed to
+        <b id="ma-me">your address</b>, through the SMTP account set in Settings. Each account has its own alerts.</p>
+      <div id="ma-smtp"></div>
+      <div id="ma-list"></div>
+      <div id="ma-result"></div>
+      <h3 id="ma-form-title" style="margin:1rem 0 .4rem">New email alert</h3>
+      <form class="stack card" id="ma-form" autocomplete="off">
+        <div class="field">
+          <label for="ma-name">Name</label>
+          <input id="ma-name" required maxlength="80" placeholder="My routers, VIP clients, Night watch…">
+        </div>
+        <div class="field">
+          <label>Warn me when</label>
+          <input type="hidden" id="ma-kind" value="events">
+          <div class="segmented" id="ma-kind-seg" role="group" aria-label="Kind of alert">
+            <button type="button" data-v="events" class="active">The network has a problem</button>
+            <button type="button" data-v="client_offline">Chosen clients go offline</button>
+            <button type="button" data-v="router_cpu">A router's CPU is high</button>
+          </div>
+        </div>
+        <div class="field" data-ma-kind="events">
+          <label>Problems</label>
+          <div class="ma-checks" id="ma-cats"></div>
+          <label style="margin-top:.6rem">Only on these sites <span class="hint" style="display:inline">(none ticked = all sites)</span></label>
+          <div class="ma-checks" id="ma-sites"></div>
+        </div>
+        <div class="field" data-ma-kind="client_offline" hidden>
+          <label>Clients</label>
+          <div class="em-picker" id="ma-clients"></div>
+        </div>
+        <div class="field" data-ma-kind="router_cpu" hidden>
+          <label for="ma-threshold">When the busiest core is above</label>
+          <div><input id="ma-threshold" type="number" min="10" max="100" step="1" value="85" style="width:6rem"> %</div>
+          <label style="margin-top:.6rem">Routers <span class="hint" style="display:inline">(none ticked = all routers)</span></label>
+          <div class="ma-checks" id="ma-routers"></div>
+        </div>
+        <div class="row-3">
+          <div class="field">
+            <label for="ma-delay">Only if it lasts more than</label>
+            <div><input id="ma-delay" type="number" min="0" max="1440" value="5" style="width:6rem"> minutes</div>
+          </div>
+          <label class="chk" style="align-self:end"><input type="checkbox" id="ma-resolved" checked> Also tell me when it is resolved</label>
+          <label class="chk" style="align-self:end"><input type="checkbox" id="ma-enabled" checked> On</label>
+        </div>
+        <div class="actions">
+          <span class="spacer"></span>
+          <button type="button" class="sm" id="ma-cancel" hidden>Cancel</button>
+          <button type="submit" class="primary" id="ma-submit">Save the alert</button>
+        </div>
+      </form>
     </section>
 
     <!-- ACTIVITE : qui a change quoi, quand, sur quel client, et si c'est

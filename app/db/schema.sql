@@ -1575,3 +1575,39 @@ CREATE TABLE IF NOT EXISTS emergencies (
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- -----------------------------------------------------------------------------
+-- ALERTES PERSONNELLES (page Alerts) : chaque compte choisit ce qui doit le
+-- prevenir, et le recoit A SON ADRESSE, par le compte SMTP de Settings.
+-- kind : 'events' (categories de problemes, eventuellement sur des sites),
+-- 'client_offline' (des clients choisis), 'router_cpu' (un seuil de CPU).
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id               SERIAL PRIMARY KEY,
+    owner_email      TEXT NOT NULL,
+    name             TEXT NOT NULL,
+    kind             TEXT NOT NULL CHECK (kind IN ('events', 'client_offline', 'router_cpu')),
+    categories       TEXT[] NOT NULL DEFAULT '{}',
+    sites            TEXT[] NOT NULL DEFAULT '{}',
+    targets          TEXT[] NOT NULL DEFAULT '{}',
+    threshold        DOUBLE PRECISION,
+    delay_minutes    INTEGER NOT NULL DEFAULT 3 CHECK (delay_minutes BETWEEN 0 AND 1440),
+    notify_resolved  BOOLEAN NOT NULL DEFAULT TRUE,
+    enabled          BOOLEAN NOT NULL DEFAULT TRUE,
+    last_sent_at     TIMESTAMPTZ,
+    last_error       TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_alert_rules_owner ON alert_rules (owner_email);
+-- L'etat de chaque probleme, regle par regle : depuis quand, et s'il a ete dit.
+CREATE TABLE IF NOT EXISTS alert_rule_events (
+    rule_id      INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+    key          TEXT NOT NULL,
+    level        TEXT NOT NULL,
+    title        TEXT NOT NULL,
+    detail       TEXT,
+    first_seen   TIMESTAMPTZ NOT NULL,
+    last_seen    TIMESTAMPTZ NOT NULL,
+    notified_at  TIMESTAMPTZ,
+    PRIMARY KEY (rule_id, key)
+);

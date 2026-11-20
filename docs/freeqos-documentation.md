@@ -1466,6 +1466,21 @@ Every minute the server looks for failures, whether or not anyone has the interf
 
 A problem is emailed **once**, when it has lasted the chosen delay (3 minutes by default), and once more when it is **resolved**; the problems of a minute go in one email. The section lists the recent problems and whether they were emailed. API: `GET/PUT/DELETE /api/v1/notifications/smtp`, `POST /api/v1/notifications/test`, `GET /api/v1/notifications/history`.
 
+
+#### My email alerts (Alerts page, each account)
+
+On **Alerts**, *My email alerts* lets **every account** (Viewer included) choose what should warn it. The emails go to **the address of the account that created the alert**, through the SMTP account set above (Settings › Email alerts); the general recipients list is not used for them. If no SMTP account is set, or email alerts are switched off, the page says so and the alerts start as soon as it is set.
+
+An alert warns when:
+
+- **the network has a problem**: tick the kinds — a router stops answering (or its CPU stays high), a site goes down, measurement fails, clients go over their limit, a UISP device goes offline, an emergency is running — and optionally **only on these sites**;
+- **chosen clients go offline** (no measurement for more than 2 minutes): a list to tick, with search;
+- **a router's CPU is high**: the busiest core above **your threshold** (10–100 %), on all routers or chosen ones.
+
+Each alert has its **delay** (*only if it lasts more than N minutes*), sends **one email per alert** when a problem has lasted that long, and — if ticked — **one more when it is resolved**. *Send a test* checks that the email reaches you; the list shows what is open now, the last email sent, or why it could not be sent. An account sees and edits its own alerts; an Administrator sees all of them, with their address. An API key cannot create one (it has no address).
+
+API: `GET/POST /api/v1/alert-rules`, `PATCH/DELETE /api/v1/alert-rules/{id}`, `POST /api/v1/alert-rules/{id}/test` (`{"name", "kind": "events" | "client_offline" | "router_cpu", "categories", "sites", "targets", "threshold", "delay_minutes", "notify_resolved", "enabled"}`).
+
 ### Schedulers (evening, night, weekend…)
 
 **Three tools, one rule each.**

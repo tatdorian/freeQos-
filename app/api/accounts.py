@@ -49,6 +49,7 @@ from app.services.accounts import (
     ROLE_EDIT,
     ROLE_LABELS,
     ROLE_OPERATOR,
+    ROLE_READ,
     SAFE_METHODES,
     InvalidAccountError,
     LoginThrottle,
@@ -329,6 +330,12 @@ OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("PATCH", re.compile(r"^/bandwidth-schedules/\d+$"), ROLE_OPERATOR),
     ("DELETE", re.compile(r"^/bandwidth-schedules/\d+$"), ROLE_OPERATOR),
     ("POST", re.compile(r"^/bandwidth-schedules/\d+/(start|stop)$"), ROLE_OPERATOR),
+    # SES ALERTES PERSONNELLES : elles ne previennent que lui-meme, donc tout
+    # compte (meme Viewer) peut en creer. Une regle d'un autre reste a lui.
+    ("POST", re.compile(r"^/alert-rules$"), ROLE_READ),
+    ("PATCH", re.compile(r"^/alert-rules/\d+$"), ROLE_READ),
+    ("DELETE", re.compile(r"^/alert-rules/\d+$"), ROLE_READ),
+    ("POST", re.compile(r"^/alert-rules/\d+/test$"), ROLE_READ),
     # LES URGENCES : les preparer, et surtout les lancer d'un bouton.
     ("POST", re.compile(r"^/emergencies$"), ROLE_OPERATOR),
     ("PATCH", re.compile(r"^/emergencies/\d+$"), ROLE_OPERATOR),

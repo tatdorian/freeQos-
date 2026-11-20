@@ -15536,9 +15536,167 @@ function calculerAlertes(rows, journal, site) {
   return alertes.sort((x, y) => rang[x.niveau] - rang[y.niveau]);
 }
 
+/* ------------------------------------------------- mes alertes par email
+ * Chaque compte cree SES alertes ; elles partent a SON adresse par le compte
+ * SMTP de Settings. */
+const MA = { editing: null, wired: false, clients: new Set(), q: '', data: null };
+const MA_CATS = {
+  router: 'A router stops answering, or its CPU stays high',
+  site: 'A site goes down (its clients drop together)',
+  measurement: 'Measurement fails',
+  limit: 'Clients go over their limit',
+  uisp: 'A UISP device goes offline',
+  emergency: 'An emergency is running',
+};
+
+async function loadMesAlertes() {
+  maCabler();
+  let d;
+  try { d = await api('/alert-rules'); } catch (err) { document.getElementById('ma-list').innerHTML = noticeErreur(err); return; }
+  MA.data = d;
+  document.getElementById('ma-me').textContent = d.me || 'your address';
+  document.getElementById('ma-smtp').innerHTML = d.smtp && !d.smtp.ready
+    ? '<div class="notice warn">No email can be sent yet: ' + esc(d.smtp.reason || '') + '. Your alerts are kept and start as soon as it is set.</div>' : '';
+  const qui = (r) => r.kind === 'events' ? r.categories.map((c) => MA_CATS[c] || c).join(' · ') +
+      (r.sites.length ? ' — on ' + r.sites.join(', ') : '')
+    : r.kind === 'client_offline' ? r.targets.length + ' client(s) offline: ' + r.targets.slice(0, 5).join(', ') + (r.targets.length > 5 ? '…' : '')
+      : 'CPU above ' + r.threshold + ' %' + (r.targets.length ? ' on ' + r.targets.join(', ') : ' on any router');
+  const regles = d.rules || [];
+  const autres = regles.some((r) => String(r.owner_email).toLowerCase() !== String(d.me || '').toLowerCase());
+  const host = document.getElementById('ma-list');
+  host.innerHTML = !regles.length ? '<div class="empty">No email alert yet: create one below.</div>'
+    : '<div class="card"><div class="table-wrap"><table><thead><tr><th>Alert</th><th>Warns about</th>' +
+      (autres ? '<th>Sent to</th>' : '') + '<th>Now</th><th></th></tr></thead><tbody>' + regles.map((r) => '<tr>' +
+        '<td><b>' + esc(r.name) + '</b><span class="hint">' + (r.enabled ? 'after ' + esc(r.delay_minutes) + ' min' +
+          (r.notify_resolved ? ' · and when resolved' : '') : 'off') + '</span></td>' +
+        '<td>' + esc(qui(r)) + '</td>' + (autres ? '<td>' + esc(r.owner_email) + '</td>' : '') +
+        '<td>' + (r.open ? '<span class="badge warn">' + esc(r.open) + ' open</span>' : '<span class="badge ok">quiet</span>') +
+          (r.last_error ? '<span class="hint" style="color:var(--crit)">' + esc(r.last_error) + '</span>'
+            : r.last_sent_at ? '<span class="hint">last email ' + esc(depuis(r.last_sent_at)) + '</span>' : '') + '</td>' +
+        '<td class="nowrap"><button class="sm" data-ma-test="' + r.id + '">Send a test</button> ' +
+          '<button class="sm" data-ma-edit="' + r.id + '">Edit</button> ' +
+          '<button class="sm danger" data-ma-del="' + r.id + '">Delete</button></td></tr>').join('') + '</tbody></table></div></div>';
+  const res = document.getElementById('ma-result');
+  host.querySelectorAll('[data-ma-test]').forEach((b) => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try {
+      const r = await api('/alert-rules/' + b.dataset.maTest + '/test', { method: 'POST' });
+      res.innerHTML = '<div class="notice ok">Test email sent to <b>' + esc(r.to) + '</b>.</div>';
+    } catch (err) { res.innerHTML = noticeErreur(err); }
+    b.disabled = false;
+  }));
+  host.querySelectorAll('[data-ma-edit]').forEach((b) => b.addEventListener('click', () => {
+    maRemplir(regles.find((r) => String(r.id) === b.dataset.maEdit));
+    document.getElementById('ma-name').scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }));
+  host.querySelectorAll('[data-ma-del]').forEach((b) => b.addEventListener('click', async () => {
+    const r = regles.find((x) => String(x.id) === b.dataset.maDel);
+    if (!confirm('Delete the alert "' + r.name + '"?')) return;
+    try { await api('/alert-rules/' + r.id, { method: 'DELETE' }); loadMesAlertes(); } catch (err) { toastErreur(err); }
+  }));
+  if (!document.getElementById('ma-form').contains(document.activeElement)) maListes();
+}
+
+/** Les cases du formulaire : categories, sites, routeurs, clients. */
+function maListes() {
+  const coches = (host, valeurs, attr, choisis) => {
+    const garde = new Set([...document.querySelectorAll('#' + host + ' input:checked')].map((c) => c.value));
+    const base = choisis || garde;
+    document.getElementById(host).innerHTML = valeurs.length ? valeurs.map(([v, l]) => '<label class="chk"><input type="checkbox" value="' +
+      esc(v) + '"' + (base.has(v) ? ' checked' : '') + '> ' + esc(l) + '</label>').join('') : '<span class="hint">none yet</span>';
+    void attr;
+  };
+  coches('ma-cats', Object.entries(MA_CATS), 'cat', MA.cats);
+  const sites = [...new Set((CLI.rows || []).map((r) => r.pop_name).filter(Boolean))].sort();
+  coches('ma-sites', sites.map((x) => [x, x]), 'site', MA.sites);
+  const routeurs = Object.keys((state.routerHealth || {})).length ? Object.keys(state.routerHealth)
+    : [...new Set((MA.routeurs || []))];
+  coches('ma-routers', routeurs.sort().map((x) => [x, x]), 'router', MA.routers);
+  MA.cats = null; MA.sites = null; MA.routers = null;
+  maClients();
+}
+
+function maClients() {
+  const host = document.getElementById('ma-clients');
+  const rows = (CLI.rows || []).filter((r) => !MA.q || [r.login, r.display_name, r.pop_name, r.last_ip]
+    .some((v) => String(v || '').toLowerCase().includes(MA.q)));
+  host.innerHTML = '<div class="mc-bar"><input type="search" class="mc-q" placeholder="Search a client, a site or an IP" value="' + esc(MA.q) + '"></div>' +
+    '<div class="mc-tools"><span class="mode">' + MA.clients.size + ' chosen</span></div><div class="mc-list">' +
+    rows.map((r) => '<label class="mc-row"><input type="checkbox" data-ma-cli="' + esc(r.login) + '"' + (MA.clients.has(r.login) ? ' checked' : '') +
+      '><span>' + esc(r.display_name || r.login) + '</span><span class="hint">' + esc(r.pop_name || '') + '</span></label>').join('') + '</div>';
+  const q = host.querySelector('.mc-q');
+  q.addEventListener('input', () => { MA.q = q.value.trim().toLowerCase(); maClients(); host.querySelector('.mc-q').focus(); });
+  host.querySelectorAll('[data-ma-cli]').forEach((c) => c.addEventListener('change', () => {
+    if (c.checked) MA.clients.add(c.dataset.maCli); else MA.clients.delete(c.dataset.maCli);
+    host.querySelector('.mc-tools .mode').textContent = MA.clients.size + ' chosen';
+  }));
+}
+
+function maGenre(v) {
+  document.getElementById('ma-kind').value = v;
+  document.querySelectorAll('#ma-kind-seg [data-v]').forEach((b) => b.classList.toggle('active', b.dataset.v === v));
+  document.querySelectorAll('#ma-form [data-ma-kind]').forEach((x) => { x.hidden = x.dataset.maKind !== v; });
+}
+
+function maRemplir(r) {
+  MA.editing = r ? r.id : null;
+  document.getElementById('ma-name').value = r ? r.name : '';
+  maGenre(r ? r.kind : 'events');
+  document.getElementById('ma-threshold').value = r && r.threshold != null ? r.threshold : 85;
+  document.getElementById('ma-delay').value = r ? r.delay_minutes : 5;
+  document.getElementById('ma-resolved').checked = r ? !!r.notify_resolved : true;
+  document.getElementById('ma-enabled').checked = r ? !!r.enabled : true;
+  MA.cats = new Set(r ? r.categories : ['router', 'site']);
+  MA.sites = new Set(r ? r.sites : []);
+  MA.routers = new Set(r && r.kind === 'router_cpu' ? r.targets : []);
+  MA.clients = new Set(r && r.kind === 'client_offline' ? r.targets : []);
+  document.getElementById('ma-form-title').textContent = r ? 'Edit ' + r.name : 'New email alert';
+  document.getElementById('ma-cancel').hidden = !r;
+  maListes();
+}
+
+function maCabler() {
+  if (MA.wired) return;
+  MA.wired = true;
+  api('/pops/read-status').then((d) => { MA.routeurs = ((d && d.routers) || []).map((x) => x.router); maListes(); }).catch(() => null);
+  document.querySelectorAll('#ma-kind-seg [data-v]').forEach((b) => b.addEventListener('click', () => maGenre(b.dataset.v)));
+  document.getElementById('ma-cancel').addEventListener('click', () => maRemplir(null));
+  document.getElementById('ma-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const genre = document.getElementById('ma-kind').value;
+    const coches = (id) => [...document.querySelectorAll('#' + id + ' input:checked')].map((c) => c.value);
+    const corps = {
+      name: document.getElementById('ma-name').value.trim(),
+      kind: genre,
+      categories: genre === 'events' ? coches('ma-cats') : [],
+      sites: genre === 'events' ? coches('ma-sites') : [],
+      targets: genre === 'client_offline' ? [...MA.clients] : genre === 'router_cpu' ? coches('ma-routers') : [],
+      threshold: genre === 'router_cpu' ? Number(document.getElementById('ma-threshold').value) : null,
+      delay_minutes: Number(document.getElementById('ma-delay').value) || 0,
+      notify_resolved: document.getElementById('ma-resolved').checked,
+      enabled: document.getElementById('ma-enabled').checked,
+    };
+    const res = document.getElementById('ma-result');
+    try {
+      const r = MA.editing
+        ? await api('/alert-rules/' + MA.editing, { method: 'PATCH', body: JSON.stringify(corps) })
+        : await api('/alert-rules', { method: 'POST', body: JSON.stringify(corps) });
+      res.innerHTML = '<div class="notice ok">Alert "' + esc(r.name) + '" saved: it is emailed to <b>' + esc(r.owner_email) +
+        '</b>. Use <i>Send a test</i> to check that it arrives.</div>';
+      maRemplir(null);
+      loadMesAlertes();
+    } catch (err) {
+      res.innerHTML = noticeErreur(err);
+    }
+  });
+  maRemplir(null);
+}
+
 async function loadAlerts() {
   const [, journal] = await Promise.all([loadClientsData(),
     api('/activity?limit=300').catch(() => [])]);
+  // Apres la liste des clients : les sites et les clients a cocher en viennent.
+  loadMesAlertes();
   ALR.journal = journal || [];
   const sites = [...new Set(CLI.rows.map((r) => r.pop_name).filter(Boolean))].sort();
   const choix = document.getElementById('alert-site');
