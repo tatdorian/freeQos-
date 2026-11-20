@@ -53,6 +53,7 @@ def evaluate(
             {
                 "key": f"router:{routeur}",
                 "category": "router",
+                "site": router_sites.get(routeur),
                 "level": "crit",
                 "title": f"Router {routeur} not answering freeQoS",
                 "detail": f"{lecture.get('error') or 'no answer'} · since {depuis:%H:%M} UTC. "
@@ -77,6 +78,7 @@ def evaluate(
                 {
                     "key": f"site:{site}",
                     "category": "site",
+                    "site": site,
                     "level": "crit",
                     "title": f"Site {site} down",
                     "detail": f"{len(tombes)} of {len(vus)} clients went offline together: "
@@ -169,6 +171,15 @@ async def run_cycle(container: Any, *, now: datetime | None = None) -> dict[str,
         jobs=[j for j in jobs if j.get("job") != JOB_WATCH],
         extra=extra,
     )
+    # LES ALERTES PERSONNELLES : chacune part a l'adresse du compte qui l'a
+    # creee, quels que soient les destinataires des alertes generales.
+    from app.services.alert_rules import run_rules
+
+    try:
+        personnelles = await run_rules(container, problems=problemes, clients=clients, now=now)
+    except Exception:  # noqa: BLE001 - les alertes generales passent quand meme
+        logger.exception("Alertes personnelles en echec")
+        personnelles = {"error": True}
     ouverts = await repo.open_events()
     for p in problemes:
         await repo.upsert_event(p, now)
@@ -176,7 +187,11 @@ async def run_cycle(container: Any, *, now: datetime | None = None) -> dict[str,
     await repo.resolve([k for k in ouverts if k not in actuels], now)
 
     config = await repo.config()
-    rapport: dict[str, Any] = {"problems": len(problemes), "sent": False}
+    rapport: dict[str, Any] = {
+        "problems": len(problemes),
+        "sent": False,
+        "personal": personnelles,
+    }
     if not config or not config.get("enabled") or not config.get("recipients"):
         return rapport
     categories = set(config.get("events") or [])

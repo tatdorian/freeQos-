@@ -30,6 +30,7 @@ from app import __version__
 from app.api import (
     accounts,
     admin,
+    alert_rules,
     antennas_admin,
     api_keys,
     capacity,
@@ -249,6 +250,7 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         plans,
         schedules,
         emergencies,
+        alert_rules,
         modes,
         sites_map,
         uisp,

@@ -84,6 +84,10 @@ class RouterCpu:
             ],
         }
 
+    def latest(self) -> dict[str, dict[str, Any]]:
+        """Le dernier releve de chaque routeur : {avg, max_core, mem, at}."""
+        return {routeur: dict(file[-1]) for routeur, file in self._releves.items() if file}
+
     def problems(self) -> list[dict[str, Any]]:
         """Pour la surveillance : un coeur au-dessus du seuil depuis une minute."""
         problemes = []
