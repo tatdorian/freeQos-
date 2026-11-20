@@ -97,3 +97,40 @@ async def test_un_plan_qui_pose_quelque_chose_reste_refuse_en_lecture_seule(
     )
     with pytest.raises(RouterWriteDisabledError):
         await service.apply(plan, dry_run=False, author="ui:test", explicit=True, removal=True)
+
+
+async def test_les_files_sans_prefixe_dont_freeqos_se_souvient_partent_aussi(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Les files de clients n'ont plus ni prefixe ni commentaire : c'est la
+    MEMOIRE de freeQoS qui dit lesquelles sont a lui. « Remove freeQoS » les
+    retire, avec les types du nom actuel, et laisse une file du meme genre
+    posee a la main."""
+    monkeypatch.setattr(models, "INSTANCE_ID", "cette-instance")
+    monkeypatch.setattr(models, "OWNED_QUEUES", {"pop-test": {"ACME-OFFICE", "SITE-NORD"}})
+    import app.services.shaping as module_shaping
+
+    monkeypatch.setattr(module_shaping, "OWNED_QUEUES", models.OWNED_QUEUES)
+    routeur = FakeRouterOsClient()
+    routeur.simple_queue_rows = [
+        {".id": "*1", "name": "SITE-NORD", "comment": "", "parent": "none"},
+        {".id": "*2", "name": "ACME-OFFICE", "comment": "", "parent": "SITE-NORD"},
+        {".id": "*3", "name": "CLIENT-VIP", "comment": "", "parent": "none"},
+    ]
+    routeur.queue_type_rows = [
+        {".id": "*T1", "name": "cake-up", "kind": "cake"},
+        {".id": "*T2", "name": "fq-codel-down", "kind": "fq-codel"},
+        {".id": "*T3", "name": "default", "kind": "pfifo"},
+    ]
+    ecrivain = FauxClientEcriture()
+    service = make_service(settings, routeur, write_client_factory=lambda c: ecrivain)
+    await service.registry.reload()
+
+    rapport = await service.uninstall("pop-test", author="ui:test")
+
+    ids = [a.target_id for a in ecrivain.executed]
+    assert set(ids) == {"*1", "*2", "*T1", "*T2"}
+    assert ids.index("*2") < ids.index("*1") < ids.index("*T1")
+    assert rapport["by_kind"]["simple queues"] == 2
+    # Retirees : freeQoS les oublie, il ne reclamera pas une file recreee a la main.
+    assert models.OWNED_QUEUES["pop-test"] == set()
