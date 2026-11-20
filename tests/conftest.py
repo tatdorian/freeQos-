@@ -30,16 +30,20 @@ def _loopbacks_oublies():
     sans cet oubli, un test en heriterait d'un autre."""
     from app.collectors.mikrotik import forget_router_facts
     from app.enforcement import models
+    from app.enforcement.emergency import BOOK as URGENCES
     from app.services import shaping
 
     forget_router_facts()
     # Pas d'identifiant d'instance herite d'un autre test.
     models.INSTANCE_ID = None
     shaping.OTHER_INSTANCES.clear()
+    # Ni d'urgence active laissee par un autre test.
+    URGENCES.replace([])
     yield
     forget_router_facts()
     models.INSTANCE_ID = None
     shaping.OTHER_INSTANCES.clear()
+    URGENCES.replace([])
 
 
 class FakeRouterOsClient:

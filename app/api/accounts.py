@@ -329,6 +329,11 @@ OPERATIONS_CLIENT: tuple[tuple[str, re.Pattern[str], str], ...] = (
     ("PATCH", re.compile(r"^/bandwidth-schedules/\d+$"), ROLE_OPERATOR),
     ("DELETE", re.compile(r"^/bandwidth-schedules/\d+$"), ROLE_OPERATOR),
     ("POST", re.compile(r"^/bandwidth-schedules/\d+/(start|stop)$"), ROLE_OPERATOR),
+    # LES URGENCES : les preparer, et surtout les lancer d'un bouton.
+    ("POST", re.compile(r"^/emergencies$"), ROLE_OPERATOR),
+    ("PATCH", re.compile(r"^/emergencies/\d+$"), ROLE_OPERATOR),
+    ("DELETE", re.compile(r"^/emergencies/\d+$"), ROLE_OPERATOR),
+    ("POST", re.compile(r"^/emergencies/\d+/(activate|stop)$"), ROLE_OPERATOR),
 )
 
 

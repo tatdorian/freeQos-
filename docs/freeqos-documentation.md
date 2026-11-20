@@ -1339,6 +1339,18 @@ A **scheduler** applies either **a % of their speed** or **their emergency bandw
 - The client list (`GET /api/v1/subscribers/latest`) carries `emergency_down_mbps` / `emergency_up_mbps`, and its *effective* rate is the one really written. Renaming, merging or removing a client carries its emergency bandwidth along (or deletes it, on removal).
 - **Clients still in a mode** from an earlier version keep it: their page shows *An old mode … still applies* with **Back to normal bandwidth**. The `/api/v1/bandwidth-modes` API and the mode actions remain for integrations (a mode flagged `"emergency": true` gives each client its emergency bandwidth too), but the interface no longer offers modes: no *Modes* page, no *Change mode* button, no mode choice on a client, no *Modes* target or *A mode* option in schedulers. An old `#/modes` link opens *Clients*.
 
+#### The Emergency page: prepared emergencies, started with one button
+
+**Emergency** (menu, Operator) holds **emergencies prepared in advance** — *Backhaul down*, *Power cut*, *Weekend*… Each one has:
+
+- a **name**;
+- a **speed**: **a % of the plan** (50 % = half of each client's plan), **a fixed limit** (for instance 8 / 3 Mbps — a cap: a client whose plan is lower keeps its plan), or **each client's own** emergency bandwidth (set on the client's page; a client without one keeps its speed);
+- its **clients**: *Everyone*, chosen *Sites*, or *Chosen clients* (a list to tick, with search and a site filter).
+
+When it happens, press **Activate** (confirmed): the emergency speed applies **at once**, before the plans, the old modes and every scheduler — only a running boost stays above. **Stop** gives every client back its plan (or what its schedulers say). Each card says how many clients it covers, how many would keep their speed, and since when it runs; a red banner says how many emergencies are running. **Several emergencies** can be prepared and can run together: on a client covered by two running emergencies, **the last one started wins**; stopping it brings back the other. Editing a running emergency applies at once; deleting it stops it. Each client's *Activity* records the start and the stop, and the client list shows *Emergency: <name>*.
+
+API: `GET/POST /api/v1/emergencies`, `PATCH/DELETE /api/v1/emergencies/{id}`, `POST /api/v1/emergencies/{id}/activate`, `POST /api/v1/emergencies/{id}/stop` (`{"name", "kind": "percent" | "fixed" | "client", "percent", "down_mbps", "up_mbps", "scope": "all" | "pops" | "clients", "targets"}`), Operator level.
+
 **Client actions** (`POST /api/v1/clients/actions`, `{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}`) act on one or several clients. The reply gives a result **per client** (`succeeded`, `failed`, `results[]`): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.
 
 **Boost or temporary plan, from the Clients page.** On one or several selected clients (or from a client's page):
@@ -1610,6 +1622,7 @@ Each page reads in sections, with a table of contents at the top and a tooltip o
 | --- | --- | --- |
 | **Dashboard** (first page, both roles) | Is everything all right today? | A banner: **All good**, or the problems that need you, most urgent first, each one a click away from the clients concerned; clients connected, traffic now, sites, modes and boosts; one card per site. Below, for the Administrator only: *Network detail* (throughput curve and top consumers; live traffic per router and radio backhauls are no longer on the dashboard: routers are followed in *Devices*) |
 | **Network health** | Is the network fine, where could it fill up? | Four tabs, one question each: **Overview** (verdict, four key figures, links that could fill up), **Latency** (per client, where the delay comes from; tick *Measure latency* to turn the probe on), **Load per site** (how full each site is, then each site with its clients; click a row for its details), **Over time** (health hour by hour) |
+| **Emergency** | What do I do when the network is in trouble? | The prepared emergencies (name, speed, clients), each with **Activate** / **Stop**; the form to prepare one |
 | **Router health** (Administrator) | Are my routers fine? | One card per router: model, RouterOS, uptime; CPU (average, busiest core, each core), peak and chart of the last hour; memory; storage; sensors (temperature, voltage) |
 | **Network tree** | How is the network wired? | Discovered tree, editable with the mouse (move, re-parent, merge, hide) |
 | **Clients** | Who are my clients, and how are they doing? | Every client under its **PoP**, with its connection (PPPoE, static IP, or **VLAN 2060**: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; *+ Add a client* declares static-IP and VLAN clients (PPPoE clients appear by themselves). The map button opens the **Map**. |
@@ -1789,7 +1802,7 @@ freeQoS holds router credentials that can write across the whole network. Securi
 | Level (`role`) | Sees | Can do | Interface |
 | --- | --- | --- | --- |
 | **Viewer** (`read`) | Everything | Nothing | Every page, read-only banner |
-| **Operator** (`operator`) | Clients | **Manages the clients**: adds them (static IP, VLAN), edits their details and connection, sets their normal and emergency bandwidth, gives boosts on one or many clients, defines schedulers; sees at a glance whether there is a problem | **Dashboard** (today's status), **Clients**, **Schedules**, **Alerts**, **Activity**; no network pages, no Settings (password and log out from the account card) |
+| **Operator** (`operator`) | Clients | **Manages the clients**: adds them (static IP, VLAN), edits their details and connection, sets their normal and emergency bandwidth, gives boosts on one or many clients, defines schedulers; sees at a glance whether there is a problem | **Dashboard** (today's status), **Clients**, **Schedules**, **Emergency**, **Alerts**, **Activity**; no network pages, no Settings (password and log out from the account card) |
 | **Administrator** (`edit`) | Everything | Everything the Operator does, plus **the network**: routers and PoPs (Devices), antennas and their API (Ubiquiti), traffic **Rules**, the network tree, detailed monitoring (Traffic, Network health, network detail of the Dashboard), API keys, Settings, accounts | Every page; the network pages are grouped under *Network* in the sidebar |
 
   The writes open to the Operator form a **closed list** (`POST/DELETE /api/v1/shaping/boosts`, `PUT /api/v1/clients/{login}/mode`, `PUT /api/v1/clients/{login}/profile`, `POST /api/v1/clients`, `POST/PATCH/DELETE /api/v1/static-clients`, `POST /api/v1/clients/actions`, `PUT/DELETE /api/v1/plans/{login}`, `POST/PATCH/DELETE /api/v1/bandwidth-modes` and `/api/v1/bandwidth-schedules`): a route added later is reserved to the Administrator until it is opened on purpose. Every change is recorded with the **account** that made it, in the **activity log** below and in the enforcement audit.

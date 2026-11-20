@@ -35,6 +35,7 @@ from app.db.client_profiles_repo import ClientProfilesRepository
 from app.db.database import Database
 from app.db.destinations_repo import DestinationsRepository
 from app.db.directory import Directory, PgDirectory
+from app.db.emergencies_repo import EmergenciesRepository
 from app.db.flows_repo import FlowsRepository, NetflowExportersRepository
 from app.db.link_media_repo import LinkMediaRepository, LinkMediaStore
 from app.db.model_repo import ModelRepository
@@ -206,6 +207,7 @@ class Container:
     destinations_repo: DestinationsRepository | None = None
     traffic_rules_repo: TrafficRulesRepository | None = None
     schedules_repo: SchedulesRepository | None = None
+    emergencies_repo: EmergenciesRepository | None = None
     modes_repo: ModesRepository | None = None
     site_locations_repo: SiteLocationsRepository | None = None
     client_locations_repo: SiteLocationsRepository | None = None
@@ -360,6 +362,8 @@ async def build_container(settings: Settings) -> Container:
     traffic_rules_repo = TrafficRulesRepository(database.pool)
     # Les profils de debit horaires (jour / soiree / nuit).
     schedules_repo = SchedulesRepository(database.pool)
+    # Les urgences (page Emergency), lancees d'un bouton.
+    emergencies_repo = EmergenciesRepository(database.pool)
     # Les modes de debit (Backup, Night...) qu'on donne a un client d'un geste.
     modes_repo = ModesRepository(database.pool)
     # Ou sont les sites, pour la carte.
@@ -409,6 +413,8 @@ async def build_container(settings: Settings) -> Container:
     # la bascule suivante le corrigerait -- deux ecritures pour rien.
     shaping.schedules_repo = schedules_repo
     await shaping.load_schedules()
+    shaping.emergencies_repo = emergencies_repo
+    await shaping.load_emergencies()
     shaping.exclusions = exclusions
 
     # Sonde de latence : TOUJOURS instanciee et planifiee. Son execution est
@@ -746,6 +752,7 @@ async def build_container(settings: Settings) -> Container:
         destinations_repo=destinations_repo,
         traffic_rules_repo=traffic_rules_repo,
         schedules_repo=schedules_repo,
+        emergencies_repo=emergencies_repo,
         modes_repo=modes_repo,
         site_locations_repo=site_locations_repo,
         client_locations_repo=client_locations_repo,
