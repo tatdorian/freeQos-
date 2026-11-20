@@ -13096,6 +13096,7 @@ function filtrerClients() {
     if (etat === 'online' && !clientEnLigne(r)) return false;
     if (etat === 'offline' && clientEnLigne(r)) return false;
     if (etat === 'boost' && !CLI.boosts[r.login]) return false;
+    if (etat === 'noplan' && !clientSansForfait(r)) return false;
     if (mode === 'auto' && (r.mode_id || r.override_down_mbps)) return false;
     if (mode === 'manual' && !(r.override_down_mbps && !r.mode_id)) return false;
     if (mode === 'any' && !(r.mode_id || r.override_down_mbps)) return false;
@@ -13170,8 +13171,23 @@ async function loadClients() {
     CLI.page = 0;
     renderClients();
   }));
+  const sansPlan = rows.filter(clientSansForfait).length;
   document.getElementById('cli-notice').innerHTML =
-    !peut('operator') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '';
+    (!peut('operator') ? '<div class="notice">Viewer access: clients are shown, changes are disabled.</div>' : '') +
+    (sansPlan
+      ? '<div class="notice warn"><strong>' + sansPlan + ' client' + (sansPlan > 1 ? 's have' : ' has') +
+        ' no plan.</strong><span class="hint">Listed first and marked <b>No plan</b>. Give each one a ' +
+        'plan on its page; the limit for clients without a plan is set in Plans.</span>' +
+        '<span class="hint"><button type="button" class="sm" id="cli-noplan-only">Show only them</button></span></div>'
+      : '');
+  const seuls = document.getElementById('cli-noplan-only');
+  if (seuls) seuls.addEventListener('click', () => {
+    ['cli-search', 'cli-pop', 'cli-mode'].forEach((id) => { document.getElementById(id).value = ''; });
+    document.getElementById('cli-status').value = 'noplan';
+    CLI.onlySel = false;
+    CLI.page = 0;
+    renderClients();
+  });
   renderClients();
 }
 
@@ -13214,14 +13230,26 @@ function usageClair(r) {
     '<div class="use-up">&uarr; ' + esc(bpsText(r.rx_bps)) + ' up</div></div>';
 }
 
+/** SANS FORFAIT : aucun debit vendu ni saisi pour ce client. Le debit par
+ *  defaut recopie sur sa fiche (source « default ») n'en est pas un : c'est
+ *  justement le client a configurer. */
+function clientSansForfait(r) {
+  const src = String(r.plan_source || '');
+  if (src === 'default' || src.endsWith(':default')) return true;
+  return !(Number(r.plan_down_mbps) > 0) && !(Number(r.plan_up_mbps) > 0);
+}
+
 function trierClients(lignes) {
   const tri = (document.getElementById('cli-sort') || {}).value || 'name';
   const nom = (a, b) => String(a.login).localeCompare(String(b.login), undefined, { numeric: true });
+  // LES CLIENTS SANS FORFAIT D'ABORD, quel que soit le tri (dans leur site
+  // pour le tri par site) : ce sont ceux a configurer.
+  const sans = (a, b) => clientSansForfait(b) - clientSansForfait(a);
   const t = [...lignes];
-  if (tri === 'site') t.sort((a, b) => String(a.pop_name || '~').localeCompare(String(b.pop_name || '~')) || nom(a, b));
-  else if (tri === 'offline') t.sort((a, b) => (clientEnLigne(a) - clientEnLigne(b)) || nom(a, b));
-  else if (tri === 'usage') t.sort((a, b) => ((Number(b.tx_bps) || 0) - (Number(a.tx_bps) || 0)) || nom(a, b));
-  else t.sort(nom);
+  if (tri === 'site') t.sort((a, b) => String(a.pop_name || '~').localeCompare(String(b.pop_name || '~')) || sans(a, b) || nom(a, b));
+  else if (tri === 'offline') t.sort((a, b) => sans(a, b) || (clientEnLigne(a) - clientEnLigne(b)) || nom(a, b));
+  else if (tri === 'usage') t.sort((a, b) => sans(a, b) || ((Number(b.tx_bps) || 0) - (Number(a.tx_bps) || 0)) || nom(a, b));
+  else t.sort((a, b) => sans(a, b) || nom(a, b));
   return t;
 }
 
@@ -13535,11 +13563,15 @@ function renderClients() {
           '<span>' + c.n + ' client' + (c.n > 1 ? 's' : '') + ' · ' + c.on + ' connected</span>' +
           '<button type="button" class="sm link-btn" data-site-sel="' + esc(siteCourant) + '">Select the site</button></td></tr>';
       }
-      return entete + '<tr class="clickable" data-cli="' + esc(r.login) + '">' +
+      const sansPlan = clientSansForfait(r);
+      return entete + '<tr class="clickable' + (sansPlan ? ' cli-noplan' : '') + '" data-cli="' + esc(r.login) + '">' +
         '<td class="chk"><input type="checkbox" data-sel="' + esc(r.login) + '"' +
           (CLI.sel.has(r.login) ? ' checked' : '') + ' aria-label="Select ' + esc(r.login) + '"></td>' +
         '<td class="cli-main"><span class="cli-name"><i class="dot-co ' + (on ? 'on' : 'off') + '" title="' +
-          (on ? 'Connected' : (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '"></i>' + esc(r.display_name || r.login) + '</span>' +
+          (on ? 'Connected' : (r.ts ? 'Seen ' + esc(depuis(r.ts)) : 'Not seen')) + '"></i>' + esc(r.display_name || r.login) +
+          (sansPlan ? ' <span class="badge warn" title="No plan was set for this client: give it ' +
+            'one on its page (Change plan). Until then it gets the limit for clients without a plan, ' +
+            'if one is set (Plans).">No plan</span>' : '') + '</span>' +
           '<span class="cli-sub">' + esc([r.display_name ? r.login : '', r.pop_name, r.vlan_id ? 'VLAN ' + r.vlan_id : '', r.last_ip].filter(Boolean).join(' · ')) + '</span></td>' +
         '<td class="cli-mode"><span class="mode-pill ' + m.cls + '">' + esc(m.text) + '</span>' +
           (b ? '<span class="boost-pill cli-boost">&#9889; ' + esc(boostReste(b)) + '</span>' : '') + '</td>' +
