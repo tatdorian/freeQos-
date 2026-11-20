@@ -1442,7 +1442,7 @@ async function renderToday() {
       chiffre('Traffic now', esc(bpsText(bas)), '&uarr; ' + esc(bpsText(haut)) + ' up') +
       chiffre('Sites', okSites + '<em>/' + Object.keys(sites).length + '</em>', okSites === Object.keys(sites).length ? 'all normal' : 'see below',
         okSites === Object.keys(sites).length ? '' : 'warn') +
-      chiffre('Schedulers & boosts', String(actifs), actifs ? 'clients off their plan right now' : 'everyone on their plan') +
+      chiffre('Schedulers & boosts', String(actifs), actifs ? 'clients off their normal bandwidth' : 'everyone on normal bandwidth') +
     '</div>' +
     '<h2>Sites</h2><div class="today-sites">' + Object.entries(sites).sort((a, b) => a[0].localeCompare(b[0])).map(([nom, x]) => {
       const [lv, mot] = etatSite(nom, x);
@@ -12173,7 +12173,7 @@ function schedRateKind(v) {
   document.getElementById('sched-rate-kind').value = v;
   document.querySelectorAll('#sched-rate-seg [data-v]').forEach((b) => {
     b.classList.toggle('active', b.dataset.v === v);
-    if (b.dataset.v === 'rate' || b.dataset.v === 'emergency') b.hidden = v !== b.dataset.v;
+    if (b.dataset.v === 'rate') b.hidden = v !== 'rate';
   });
   document.querySelectorAll('#sched-form [data-rate-kind]').forEach((r) => { r.hidden = r.dataset.rateKind !== v; });
 }
@@ -12365,7 +12365,7 @@ function schedScopeSeg() {
   const rows = CLI.rows || [];
   const surPlan = rows.filter((r) => r.mode_id == null).length;
   const textes = {
-    on_plan: 'Every client on its plan (' + surPlan + ' now).',
+    on_plan: 'Every client on its normal bandwidth (' + surPlan + ' now).',
     modes: 'The clients of the old modes you tick.',
     subscribers: 'The clients you tick.',
     all: 'Every client (' + rows.length + ' now).',
@@ -12936,7 +12936,7 @@ async function loadClients() {
     qtile('wifi', !rows.length ? 't-gray' : part >= 0.8 ? 't-green' : part >= 0.5 ? 't-orange' : 't-red',
       'Connected', enLigne, rows.length ? Math.round(part * 100) + ' % online' : '', part, 'online') +
     qtile('sliders', enMode ? 't-orange' : 't-gray', 'Scheduler now', enMode,
-      enMode ? 'off their plan right now' : 'all on their plan', null, 'inmode') +
+      enMode ? 'off their normal bandwidth' : 'all on normal bandwidth', null, 'inmode') +
     qtile('bolt', boostes ? 't-purple' : 't-gray', 'Boosts', boostes,
       boostes ? 'running now' : 'none running', null, 'boost');
   document.querySelectorAll('#cli-stats [data-tile]').forEach((t) => t.addEventListener('click', () => {
@@ -13924,6 +13924,7 @@ async function loadModesAdmin() {
     }
     document.getElementById('mode-position').value = m.position || 0;
     document.getElementById('mode-note').value = m.note || '';
+    document.getElementById('mode-emergency').checked = !!m.emergency;
     document.getElementById('modes-form-title').textContent = 'Edit ' + m.name;
     // Ses clients, cochables dans le formulaire meme.
     modePicker(m.id);
@@ -13989,6 +13990,7 @@ function cablerModes() {
       position: Number(document.getElementById('mode-position').value) || 0,
       note: document.getElementById('mode-note').value.trim() || null,
       disables_boost: false,
+      emergency: document.getElementById('mode-emergency').checked,
     };
     const sortie = document.getElementById('modes-result');
     try {
@@ -14422,7 +14424,9 @@ async function loadClientPage() {
               : ' <span class="hint" style="display:inline">(not applied now: ' +
                 esc(SOURCE_LIMITE[s.limit_source || r.limit_source] || 'another limit') + ')</span>')
           : '<span class="na">none right now</span>') + '</td></tr>' +
-        '<tr><td>Plan</td><td>' + (s.plan_down_mbps ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : 'default plan') + '</td></tr>' +
+        '<tr><td>Normal</td><td>' + (s.plan_down_mbps ? esc(mbps(s.plan_down_mbps) + ' / ' + mbps(s.plan_up_mbps || 0)) : 'default plan') + '</td></tr>' +
+        '<tr><td>Emergency</td><td>' + (r.emergency_down_mbps ? esc(mbps(r.emergency_down_mbps) + ' / ' + mbps(r.emergency_up_mbps || 0))
+          : '<span class="na">not set</span>') + '</td></tr>' +
         '<tr><td>Applied now</td><td>' + esc(limite) + '</td></tr>' +
         '<tr><td>Boost</td><td>' + (b ? esc(boostReste(b)) + (boostReste(b) === 'until stopped' ? '' : ' left') : 'none') + '</td></tr>' +
         '</tbody></table><div class="actions" style="margin-top:.8rem">' +
@@ -14451,14 +14455,15 @@ async function loadClientPage() {
       (journal.length > 5 ? '<button class="sm link-btn" data-tab="activity">See all &rarr;</button>' : '') + '</div>' +
       '<div class="table-wrap">' + lignesActivite(journal.slice(0, 5), false) + '</div></div>';
   } else if (FICHE.onglet === 'plan') {
+    const urgTxt = r.emergency_down_mbps ? mbps(r.emergency_down_mbps) + ' / ' + mbps(r.emergency_up_mbps) : '';
     // Plus de modes : un client mis dans un mode par une version precedente
     // le garde jusqu'a ce qu'on le rende a sa bande passante normale.
     const ancienMode = r.mode_id != null ? '<div class="notice warn">An old mode, <b>' + esc(r.mode_name || '') +
-      '</b>, still applies to this client. <button class="sm" id="cp-apply-mode"' + dis + '>Back to its plan</button>' +
+      '</b>, still applies to this client. <button class="sm" id="cp-apply-mode"' + dis + '>Back to normal bandwidth</button>' +
       '<div id="cp-mode-out"></div></div>' : '';
     corps = '<div class="cp-grid"><div class="cp-side">' + ancienMode +
-      '<div class="card"><h3>Plan</h3>' +
-      '<p class="hint" style="display:block">Its own speed, set by hand. Schedulers change it by a % during their hours.</p>' +
+      '<div class="card"><h3>Normal bandwidth (plan)</h3>' +
+      '<p class="hint" style="display:block">Its own speed, set by hand. Schedulers change it during their hours.</p>' +
       '<div class="field"><label for="cp-down">Download (Mbps)</label><input id="cp-down" type="number" min="0.001" step="any" value="' +
         esc(s.plan_down_mbps || '') + '"' + dis + '></div>' +
       '<div class="field"><label for="cp-up">Upload (Mbps)</label><input id="cp-up" type="number" min="0.001" step="any" value="' +
@@ -14466,7 +14471,17 @@ async function loadClientPage() {
       '<div class="actions" style="margin-top:.6rem"><button class="sm danger" id="cp-plan-reset"' + dis + '>Remove</button>' +
       '<span class="spacer"></span><button class="primary" id="cp-plan-save"' + dis + '>Save the plan</button></div>' +
       '<div id="cp-plan-out"></div></div>' +
-      '</div><div class="cp-side">' + carteSchedulerPropre(r, dis) +
+      '<div class="card"><h3>Emergency bandwidth</h3>' +
+      '<p class="hint" style="display:block">Applied when a <a href="#/management">scheduler</a> gives ' +
+        '<b>their emergency bandwidth</b>: during its hours, or at once with <i>Start now</i>. ' +
+        'Without one, this client keeps its speed.</p>' +
+      '<div class="field"><label for="cp-em-down">Download (Mbps)</label><input id="cp-em-down" type="number" min="0.064" step="any" value="' +
+        esc(r.emergency_down_mbps || '') + '"' + dis + '></div>' +
+      '<div class="field"><label for="cp-em-up">Upload (Mbps)</label><input id="cp-em-up" type="number" min="0.064" step="any" value="' +
+        esc(r.emergency_up_mbps || '') + '"' + dis + '></div>' +
+      '<div class="actions" style="margin-top:.6rem">' + (urgTxt ? '<button class="sm danger" id="cp-em-reset"' + dis + '>Remove</button>' : '') +
+      '<span class="spacer"></span><button class="primary" id="cp-em-save"' + dis + '>Save</button></div>' +
+      '<div id="cp-em-out"></div></div></div><div class="cp-side">' + carteSchedulerPropre(r, dis) +
       '<div class="card"><h3>Boost</h3><p class="hint" style="display:block">' +
       (b ? 'A boost is running: ' + esc(boostReste(b)) + (boostReste(b) === 'until stopped' ? '.' : ' left.')
         : 'Extra rate for a set time, or until you stop it.') +
@@ -14530,6 +14545,30 @@ async function loadClientPage() {
       loadClientPage();
     } catch (err) {
       host.querySelector('#cp-plan-out').innerHTML = noticeErreur(err);
+    }
+  });
+  clic('cp-em-save', async () => {
+    const bas = Number(host.querySelector('#cp-em-down').value);
+    const haut = Number(host.querySelector('#cp-em-up').value);
+    const out = host.querySelector('#cp-em-out');
+    if (!(bas >= 0.064) || !(haut >= 0.064)) { out.innerHTML = '<div class="notice warn">Give both rates, at least 0.064 Mbps (64 kbps).</div>'; return; }
+    try {
+      const res = await api('/clients/' + encodeURIComponent(login) + '/emergency', { method: 'PUT', body: JSON.stringify({ down_mbps: bas, up_mbps: haut }) });
+      out.innerHTML = '<div class="notice ok">Emergency bandwidth saved: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) +
+        (res.applied_now ? ', applied now (it is in an emergency mode)' : '') + '.</div>';
+      document.activeElement.blur();
+      setTimeout(loadClientPage, 1200);
+    } catch (err) {
+      out.innerHTML = noticeErreur(err);
+    }
+  });
+  clic('cp-em-reset', async () => {
+    if (!confirm('Remove the emergency bandwidth of ' + login + '? An emergency mode then gives it the mode\'s speed.')) return;
+    try {
+      await api('/clients/' + encodeURIComponent(login) + '/emergency', { method: 'DELETE' });
+      loadClientPage();
+    } catch (err) {
+      host.querySelector('#cp-em-out').innerHTML = noticeErreur(err);
     }
   });
   cablerSchedulerPropre(host, login, r);
