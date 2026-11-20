@@ -5762,6 +5762,181 @@ async function loadRoutersHealth() {
     }).join('') + '</tbody></table>';
 }
 
+/* ------------------------------------------------------------ Emergency
+ * Des urgences preparees (un nom, un debit, des clients), lancees d'un bouton.
+ * « Activate » applique tout de suite ; « Stop » rend a chacun son forfait. */
+const EM = { editing: null, wired: false, choisis: new Set(), sites: new Set(), q: '', site: '' };
+
+async function loadEmergencyPage() {
+  emCabler();
+  const host = document.getElementById('em-list');
+  let data;
+  try {
+    [data] = await Promise.all([api('/emergencies'), CLI.rows.length ? null : loadClientsData().catch(() => null)]);
+  } catch (err) {
+    host.innerHTML = noticeErreur(err);
+    return;
+  }
+  const ecrire = peut('operator');
+  document.getElementById('em-form').hidden = !ecrire;
+  document.getElementById('em-form-title').hidden = !ecrire;
+  const liste = data.emergencies || [];
+  EM.liste = liste;
+  const qui = (u) => u.scope === 'all' ? 'Everyone'
+    : u.scope === 'pops' ? 'Sites: ' + (u.targets || []).join(', ') : (u.targets || []).length + ' chosen client(s)';
+  host.innerHTML = (data.active ? '<div class="notice err em-banner"><b>' + data.active + ' emergenc' +
+      (data.active > 1 ? 'ies are' : 'y is') + ' running.</b> Its clients are on their emergency speed until you press Stop.</div>' : '') +
+    (!liste.length ? '<div class="empty">No emergency prepared yet: create one below, then start it with one button when needed.</div>'
+      : '<div class="em-grid">' + liste.map((u) => '<div class="card em-card' + (u.active ? ' on' : '') + '">' +
+        '<div class="cp-card-head"><div><h3>' + esc(u.name) + '</h3><span class="hint">' + esc(u.describe) + '</span></div>' +
+          (u.active ? '<span class="badge crit">running</span>' : '<span class="badge">ready</span>') + '</div>' +
+        '<p class="em-who">' + esc(qui(u)) + ' · <b>' + esc(u.clients) + '</b> client' + (u.clients === 1 ? '' : 's') +
+          (u.unchanged ? ' <span class="hint">(' + esc(u.unchanged) + ' would keep their speed)</span>' : '') + '</p>' +
+        (u.active ? '<p class="hint" style="display:block">Running since ' + esc(depuis(u.active_since)) +
+          (u.active_by ? ' · started by ' + esc(u.active_by) : '') + '</p>' : '') +
+        '<div class="actions">' + (ecrire ? (u.active
+          ? '<button class="primary em-big" data-em-stop="' + u.id + '">Stop</button>'
+          : '<button class="danger em-big" data-em-go="' + u.id + '">Activate</button>') +
+          '<span class="spacer"></span><button class="sm" data-em-edit="' + u.id + '">Edit</button>' +
+          '<button class="sm danger" data-em-del="' + u.id + '">Delete</button>' : '') + '</div></div>').join('') + '</div>');
+  host.querySelectorAll('[data-em-go]').forEach((b) => b.addEventListener('click', () => emBasculer(Number(b.dataset.emGo), true)));
+  host.querySelectorAll('[data-em-stop]').forEach((b) => b.addEventListener('click', () => emBasculer(Number(b.dataset.emStop), false)));
+  host.querySelectorAll('[data-em-edit]').forEach((b) => b.addEventListener('click', () => {
+    emRemplir(liste.find((u) => String(u.id) === b.dataset.emEdit));
+    document.getElementById('em-name').scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }));
+  host.querySelectorAll('[data-em-del]').forEach((b) => b.addEventListener('click', async () => {
+    const u = liste.find((x) => String(x.id) === b.dataset.emDel);
+    if (!confirm('Delete the emergency "' + u.name + '"?' + (u.active ? ' It is running: its clients go back to their plan.' : ''))) return;
+    try { await api('/emergencies/' + u.id, { method: 'DELETE' }); toast('Emergency deleted.', 3000); loadEmergencyPage(); } catch (err) { toastErreur(err); }
+  }));
+  if (!document.getElementById('em-picker').hidden) emPicker();
+}
+
+async function emBasculer(id, marche) {
+  const u = (EM.liste || []).find((x) => x.id === id);
+  if (marche && !confirm('Start "' + u.name + '" now for ' + u.clients + ' client(s)?\n\n' + u.describe +
+    ', until you press Stop.')) return;
+  const res = document.getElementById('em-result');
+  try {
+    const r = await api('/emergencies/' + id + '/' + (marche ? 'activate' : 'stop'), { method: 'POST' });
+    const e = r.enforcement || {};
+    res.innerHTML = '<div class="notice ' + (marche ? 'warn' : 'ok') + '">"' + esc(r.name) + '" ' +
+      (marche ? 'is running: ' + esc(r.clients) + ' client(s) on their emergency speed.' : 'stopped: its clients are back on their plan.') +
+      (e.errors && e.errors.length ? ' <span class="hint">' + esc(e.errors.join(' · ')) + '</span>'
+        : e.applied ? ' ' + esc(e.applied) + ' queue change(s) written.' : '') + '</div>';
+  } catch (err) {
+    res.innerHTML = noticeErreur(err);
+  }
+  await loadClientsData().catch(() => null);
+  loadEmergencyPage();
+}
+
+function emSeg(id, cle, v) {
+  document.getElementById(cle).value = v;
+  document.querySelectorAll('#' + id + ' [data-v]').forEach((b) => b.classList.toggle('active', b.dataset.v === v));
+}
+
+function emGenre(v) {
+  emSeg('em-kind-seg', 'em-kind', v);
+  document.querySelectorAll('#em-form [data-em-kind]').forEach((x) => { x.hidden = x.dataset.emKind !== v; });
+}
+
+function emPortee(v) {
+  emSeg('em-scope-seg', 'em-scope', v);
+  document.getElementById('em-picker').hidden = v === 'all';
+  if (v !== 'all') emPicker();
+}
+
+/** Qui : des sites, ou des clients a cocher (recherche, filtre par site). */
+function emPicker() {
+  const host = document.getElementById('em-picker');
+  const portee = document.getElementById('em-scope').value;
+  const rows = CLI.rows || [];
+  const sites = [...new Set(rows.map((r) => r.pop_name).filter(Boolean))].sort();
+  if (portee === 'pops') {
+    host.innerHTML = '<div class="em-sites">' + sites.map((x) => '<label class="chk"><input type="checkbox" data-em-site="' + esc(x) + '"' +
+      (EM.sites.has(x) ? ' checked' : '') + '> ' + esc(x) + ' <span class="hint">' + rows.filter((r) => r.pop_name === x).length +
+      ' clients</span></label>').join('') + '</div>';
+    host.querySelectorAll('[data-em-site]').forEach((c) => c.addEventListener('change', () => {
+      if (c.checked) EM.sites.add(c.dataset.emSite); else EM.sites.delete(c.dataset.emSite);
+    }));
+    return;
+  }
+  const visibles = rows.filter((r) => (!EM.site || r.pop_name === EM.site) && (!EM.q ||
+    [r.login, r.display_name, r.pop_name, r.last_ip].some((v) => String(v || '').toLowerCase().includes(EM.q))))
+    .sort((a, b) => String(a.pop_name || '').localeCompare(String(b.pop_name || '')) || a.login.localeCompare(b.login));
+  host.innerHTML = '<div class="mc-bar"><input type="search" class="mc-q" placeholder="Search a client, a site or an IP" value="' + esc(EM.q) + '">' +
+    '<select class="mc-sel" aria-label="Site"><option value="">All sites</option>' + sites.map((x) => '<option' +
+      (x === EM.site ? ' selected' : '') + '>' + esc(x) + '</option>').join('') + '</select></div>' +
+    '<div class="mc-tools"><button type="button" class="sm link-btn" data-em-all>Tick all shown</button>' +
+    '<button type="button" class="sm link-btn" data-em-none>Untick all shown</button><span class="spacer"></span>' +
+    '<span class="mode">' + EM.choisis.size + ' chosen</span></div><div class="mc-list">' +
+    visibles.map((r) => '<label class="mc-row"><input type="checkbox" data-em-cli="' + esc(r.login) + '"' +
+      (EM.choisis.has(r.login) ? ' checked' : '') + '><span>' + esc(r.display_name || r.login) + '</span><span class="hint">' +
+      esc([r.pop_name, r.plan_down_mbps ? mbps(r.plan_down_mbps) + ' / ' + mbps(r.plan_up_mbps || 0) : ''].filter(Boolean).join(' · ')) +
+      '</span></label>').join('') + '</div>';
+  const q = host.querySelector('.mc-q');
+  q.addEventListener('input', () => { EM.q = q.value.trim().toLowerCase(); emPicker(); host.querySelector('.mc-q').focus(); });
+  host.querySelector('.mc-sel').addEventListener('change', (e) => { EM.site = e.target.value; emPicker(); });
+  host.querySelector('[data-em-all]').addEventListener('click', () => { visibles.forEach((r) => EM.choisis.add(r.login)); emPicker(); });
+  host.querySelector('[data-em-none]').addEventListener('click', () => { visibles.forEach((r) => EM.choisis.delete(r.login)); emPicker(); });
+  host.querySelectorAll('[data-em-cli]').forEach((c) => c.addEventListener('change', () => {
+    if (c.checked) EM.choisis.add(c.dataset.emCli); else EM.choisis.delete(c.dataset.emCli);
+    host.querySelector('.mc-tools .mode').textContent = EM.choisis.size + ' chosen';
+  }));
+}
+
+function emRemplir(u) {
+  EM.editing = u ? u.id : null;
+  document.getElementById('em-name').value = u ? u.name : '';
+  emGenre(u ? u.kind : 'percent');
+  document.getElementById('em-percent').value = u && u.percent != null ? u.percent : 50;
+  document.getElementById('em-down').value = u && u.down_mbps != null ? u.down_mbps : '';
+  document.getElementById('em-up').value = u && u.up_mbps != null ? u.up_mbps : '';
+  EM.choisis = new Set(u && u.scope === 'clients' ? u.targets : []);
+  EM.sites = new Set(u && u.scope === 'pops' ? u.targets : []);
+  emPortee(u ? u.scope : 'all');
+  document.getElementById('em-form-title').textContent = u ? 'Edit ' + u.name : 'New emergency';
+  document.getElementById('em-cancel').hidden = !u;
+}
+
+function emCabler() {
+  if (EM.wired) return;
+  EM.wired = true;
+  document.querySelectorAll('#em-kind-seg [data-v]').forEach((b) => b.addEventListener('click', () => emGenre(b.dataset.v)));
+  document.querySelectorAll('#em-scope-seg [data-v]').forEach((b) => b.addEventListener('click', () => emPortee(b.dataset.v)));
+  document.getElementById('em-cancel').addEventListener('click', () => emRemplir(null));
+  document.getElementById('em-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const genre = document.getElementById('em-kind').value;
+    const portee = document.getElementById('em-scope').value;
+    const nombre = (id) => { const v = document.getElementById(id).value.trim(); return v === '' ? null : Number(v); };
+    const corps = {
+      name: document.getElementById('em-name').value.trim(),
+      kind: genre,
+      percent: genre === 'percent' ? nombre('em-percent') : null,
+      down_mbps: genre === 'fixed' ? nombre('em-down') : null,
+      up_mbps: genre === 'fixed' ? nombre('em-up') : null,
+      scope: portee,
+      targets: portee === 'clients' ? [...EM.choisis] : portee === 'pops' ? [...EM.sites] : [],
+    };
+    const res = document.getElementById('em-result');
+    try {
+      const r = EM.editing
+        ? await api('/emergencies/' + EM.editing, { method: 'PATCH', body: JSON.stringify(corps) })
+        : await api('/emergencies', { method: 'POST', body: JSON.stringify(corps) });
+      res.innerHTML = '<div class="notice ok">"' + esc(r.name) + '" saved: ' + esc(r.describe) + ', ' + esc(r.clients) +
+        ' client(s).' + (r.active ? ' It is running: the change applies now.' : ' Press <b>Activate</b> when needed.') + '</div>';
+      emRemplir(null);
+      loadEmergencyPage();
+    } catch (err) {
+      res.innerHTML = noticeErreur(err);
+    }
+  });
+  emRemplir(null);
+}
+
 /* ------------------------------------------------------ Router health
  * Une carte par routeur : ce qu'il dit de lui-meme, lu en direct. Le CPU en
  * detail (moyenne, coeur le plus charge, chaque coeur), le pic et la courbe de
@@ -12831,6 +13006,7 @@ function modeTaux(m) {
 }
 
 function modeDuClient(r, sansScheduler) {
+  if (r.emergency_name && r.limit_source === 'schedule') return { cls: 'crit', text: 'Emergency: ' + r.emergency_name };
   const sched = !sansScheduler && r.limit_source === 'schedule' ? ' · ' + (r.schedule_name || 'scheduler') : '';
   if (r.mode_id) {
     const m = CLI.modes.find((x) => x.id === r.mode_id);
@@ -14472,8 +14648,8 @@ async function loadClientPage() {
       '<span class="spacer"></span><button class="primary" id="cp-plan-save"' + dis + '>Save the plan</button></div>' +
       '<div id="cp-plan-out"></div></div>' +
       '<div class="card"><h3>Emergency bandwidth</h3>' +
-      '<p class="hint" style="display:block">Applied when a <a href="#/management">scheduler</a> gives ' +
-        '<b>their emergency bandwidth</b>: during its hours, or at once with <i>Start now</i>. ' +
+      '<p class="hint" style="display:block">Its own speed in an emergency: used by an <a href="#/emergency">emergency</a> ' +
+        'set to <i>Each client\'s own</i>, or a scheduler giving <i>their emergency bandwidth</i>. ' +
         'Without one, this client keeps its speed.</p>' +
       '<div class="field"><label for="cp-em-down">Download (Mbps)</label><input id="cp-em-down" type="number" min="0.064" step="any" value="' +
         esc(r.emergency_down_mbps || '') + '"' + dis + '></div>' +
@@ -15830,6 +16006,7 @@ const LOADERS = {
   dashboard: loadDashboard,
   exec: loadExec,
   routerhealth: loadRouterHealthPage,
+  emergency: loadEmergencyPage,
   network: loadNetwork,
   plans: loadPlans,
   pops: loadRouters,
@@ -15989,7 +16166,7 @@ function route() {
   // Plus de page Modes : un ancien lien mene aux clients.
   if (vue === 'modes') vue = 'clients';
   if (vue === 'traffic' || vue === 'rules') vue = 'dashboard';
-  if (estLimite() && !['dashboard', 'clients', 'alerts', 'activity', 'management', 'map', 'client'].includes(vue)) vue = 'dashboard';
+  if (estLimite() && !['dashboard', 'clients', 'alerts', 'activity', 'management', 'emergency', 'map', 'client'].includes(vue)) vue = 'dashboard';
   show(vue || 'dashboard');
 }
 

@@ -52,6 +52,7 @@
       <a href="#/dashboard" data-view="dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="2"/><rect x="14" y="3" width="7" height="5" rx="2"/><rect x="14" y="12" width="7" height="9" rx="2"/><rect x="3" y="16" width="7" height="5" rx="2"/></svg><span>Dashboard</span></a>
       <a href="#/clients" data-view="clients"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.8-3.2 3-5 5.5-5s4.7 1.8 5.5 5"/><path d="M15.5 12.5l2 2 4-4.5"/></svg><span>Clients</span></a>
       <a href="#/management" data-view="management"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M4 17h6"/><circle cx="17" cy="7" r="2.5"/><circle cx="13" cy="17" r="2.5"/><path d="M19.5 7H20M15.5 17H20"/></svg><span>Schedulers</span></a>
+      <a href="#/emergency" data-view="emergency"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9.5 17h-19z"/><path d="M12 10v4.5"/><path d="M12 17.5h.01"/></svg><span>Emergency</span></a>
       <a href="#/alerts" data-view="alerts"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 16v-5a6 6 0 0 0-12 0v5l-2 2h16z"/><path d="M10 21h4"/></svg><span>Alerts</span></a>
       <a href="#/activity" data-view="activity"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/></svg><span>Activity</span></a>
       <span class="nav-sep nav-admin">Network</span>
@@ -1000,6 +1001,68 @@
       <div id="limits-alert"></div>
 
       <div class="table-wrap" id="subscribers-table"></div>
+    </section>
+
+    <!-- ------------------------------------------------------- urgences
+         Des debits de crise PREPARES a l'avance (un nom, un debit, des
+         clients), lances d'un bouton : Activate, puis Stop. -->
+    <section id="view-emergency">
+      <p class="hint" style="display:block;margin:0 0 .8rem">Prepare your emergencies in advance: a name, a speed
+        (<b>a % of the plan</b>, <b>a fixed limit</b>, or <b>each client's own emergency bandwidth</b>) and its clients.
+        When it happens, press <b>Activate</b>: it applies at once, before the plans and the schedulers.
+        <b>Stop</b> gives everyone back their plan. Several emergencies can run; on a client in two of them, the last
+        one started wins.</p>
+      <div id="em-list"></div>
+      <div id="em-result"></div>
+      <h3 id="em-form-title" style="margin:1.2rem 0 .4rem">New emergency</h3>
+      <form class="stack card" id="em-form" autocomplete="off">
+        <div class="field">
+          <label for="em-name">Name</label>
+          <input id="em-name" required maxlength="64" placeholder="Backhaul down, Power cut, Weekend…">
+        </div>
+        <div class="field">
+          <label>Speed during the emergency</label>
+          <input type="hidden" id="em-kind" value="percent">
+          <div class="segmented" id="em-kind-seg" role="group" aria-label="Speed">
+            <button type="button" data-v="percent" class="active">A % of the plan</button>
+            <button type="button" data-v="fixed">A fixed limit</button>
+            <button type="button" data-v="client">Each client's own</button>
+          </div>
+        </div>
+        <div class="field" data-em-kind="percent">
+          <label for="em-percent">Percentage of each client's plan</label>
+          <div><input id="em-percent" type="number" min="1" max="100" step="any" value="50" style="width:7rem"> %
+            <span class="hint">50 = half of its plan</span></div>
+        </div>
+        <div class="row-3" data-em-kind="fixed" hidden>
+          <div class="field">
+            <label for="em-down">Download limit (Mbps)</label>
+            <input id="em-down" type="number" min="0.064" step="any" placeholder="8">
+          </div>
+          <div class="field">
+            <label for="em-up">Upload limit (Mbps)</label>
+            <input id="em-up" type="number" min="0.064" step="any" placeholder="3">
+          </div>
+          <p class="hint" style="display:block;align-self:end">A cap: a client whose plan is lower keeps its plan.</p>
+        </div>
+        <p class="hint" data-em-kind="client" hidden style="display:block">Each client gets the emergency
+          bandwidth set on its page (<i>Bandwidth › Emergency bandwidth</i>). A client without one keeps its speed.</p>
+        <div class="field">
+          <label>Clients</label>
+          <input type="hidden" id="em-scope" value="all">
+          <div class="segmented" id="em-scope-seg" role="group" aria-label="Clients">
+            <button type="button" data-v="all" class="active">Everyone</button>
+            <button type="button" data-v="pops">Sites</button>
+            <button type="button" data-v="clients">Chosen clients</button>
+          </div>
+        </div>
+        <div class="em-picker" id="em-picker" hidden></div>
+        <div class="actions">
+          <span class="spacer"></span>
+          <button type="button" class="sm" id="em-cancel" hidden>Cancel</button>
+          <button type="submit" class="primary" id="em-submit">Save the emergency</button>
+        </div>
+      </form>
     </section>
 
     <!-- ------------------------------------------------ sante des routeurs

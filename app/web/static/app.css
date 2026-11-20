@@ -2473,3 +2473,18 @@ body.role-limited .dash-detail { display: none; }
   #rh-summary .today-kpis { grid-template-columns: 1fr; }
   .rh-grid { grid-template-columns: 1fr; }
 }
+
+/* ------------------------------------------------------------ Emergency */
+.em-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; }
+.em-card { display: flex; flex-direction: column; gap: .5rem; }
+.em-card.on { border: 2px solid var(--crit); }
+.em-who { margin: 0; font-size: .92rem; }
+.em-big { min-width: 8rem; font-weight: 600; }
+.em-banner { margin-bottom: 1rem; }
+.em-picker { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .6rem; }
+.em-sites { display: flex; flex-wrap: wrap; gap: .4rem 1.2rem; }
+.em-picker .mc-list { max-height: 320px; overflow: auto; }
+
+button.danger.em-big { background: var(--crit); color: #fff; }
+button.danger.em-big:hover:not(:disabled) { background: color-mix(in srgb, var(--crit) 85%, #000); }
+.em-picker .mc-row { padding: .3rem .6rem; }

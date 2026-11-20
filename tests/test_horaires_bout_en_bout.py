@@ -97,7 +97,7 @@ def banc(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[Test
                     "shaping_policies, enforcement_audit, static_clients, api_keys, app_users, "
                     "app_sessions, topology_nodes, topology_links, bandwidth_modes, "
                     "bandwidth_schedules, client_activity, runtime_flags, runtime_settings, "
-                    "owned_queues, client_emergency_rates"
+                    "owned_queues, client_emergency_rates, emergencies"
                 ).split(", ")
                 if await conn.fetchval("SELECT to_regclass($1)", t) is not None
             ]
