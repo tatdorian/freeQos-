@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="4dd3bb165c9ea371">
+  <meta name="freeqos-docs-source" content="2ddead1429d3cbf6">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2788,7 +2788,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p><strong>Boosts.</strong> A duration (1 minute to 7 days), then either a multiplier of the plan (the interface offers ×2, ×3 and ×5; the API accepts more than 1, up to 50) or explicit rates, and a reason. It is written immediately if writing is allowed and <strong>expires by itself</strong>: a job checks expiries every 30 s and brings the queue back to its normal rate — RouterOS knows nothing about the duration. A boost without an expiry is refused: it would be an override in disguise that never goes away.</p>
 <p><strong>A rate set by hand is written at once.</strong> Setting a subscriber's or a link's rate writes the corresponding queue immediately (the full plan of the router, restricted to that queue), and the reply says what was written, on which router, or what prevented it (<code>apply_now=false</code> only records the intention).</p>
 <h3 id="bandwidth-modes-api-only">Bandwidth modes (API only)</h3>
-<p><em>The interface no longer offers modes (see</em> Plans and schedulers <em>below): what follows describes the API, kept for integrations and for clients put in a mode by an earlier version.</em></p>
+<p><em>The interface no longer offers modes (see</em> Normal and emergency bandwidth <em>below): what follows describes the API, kept for integrations and for clients put in a mode by an earlier version.</em></p>
 <p>A <strong>bandwidth mode</strong> is a named rate given to a client in one click, from the <strong>Clients</strong> page: <em>Backup</em> when the backhaul is degraded, <em>Extreme backup</em> for a crisis or non-payment, <em>Night</em>... The operator picks a name in a list instead of typing rates (<em>Modes</em>, or <code>/api/v1/bandwidth-modes</code>).</p>
 <ul>
 <li><strong>Rate: a fixed speed</strong>, in <strong>kbps</strong> or <strong>Mbps</strong> (the unit is a switch in the form). A rate typed in kbps is stored in Mbps (512 kbps = 0.512 Mbps), and shown again in kbps when the mode is edited. <strong>A mode is never a % of the plan</strong> (<code>rate_kind=percent</code> is refused with <code>400</code>): a client has its plan <em>or</em> a mode, and changing speeds by a percentage is the job of a <strong>scheduler</strong>. A mode created as a % by an earlier version keeps working; the <em>Modes</em> page marks it <em>give it a fixed speed</em>, and editing it asks for its speed in kbps or Mbps.</li>
@@ -2800,11 +2800,17 @@ curl -s http://127.0.0.1:8000/health/ready
 <li><strong>Writing:</strong> like a hand-set rate, a mode change writes the client's queue at once (when writing is allowed) and the reply says what was written.</li>
 <li><strong>Plan and mode coexist.</strong> The plan is the speed of <strong>one</strong> client (no need to create a mode for each particular speed); a mode, when the client has one, applies instead of the plan. Changing a client's plan keeps its mode and its boost: only a manual limit (an override without a mode) is lifted, so that the new plan takes effect.</li>
 </ul>
-<h4 id="plans-and-schedulers-no-more-modes-page">Plans and schedulers — no more Modes page</h4>
-<p><strong>The <em>Modes</em> page is gone.</strong> Each client's <strong>plan</strong> is <strong>set by hand</strong> on its page (<em>Bandwidth</em> tab), and <strong>schedulers</strong> change it by <strong>a %</strong> during their hours (or at once with <em>Start now</em>). A <strong>scheduler for one client</strong> is made on that client's page (<em>Its own scheduler</em>).</p>
+<h4 id="normal-and-emergency-bandwidth-no-more-modes-page">Normal and emergency bandwidth — no more Modes page</h4>
+<p><strong>The <em>Modes</em> page is gone.</strong> Each client's speeds are <strong>set by hand</strong> on its page (<em>Bandwidth</em> tab), and <strong>schedulers</strong> change them:</p>
 <ul>
-<li><strong>No emergency bandwidth in the interface.</strong> The per-client emergency bandwidth and the <em>Their emergency bandwidth</em> scheduler option were removed at the operator's request: for a crisis, use a scheduler in % (for instance 50 % for <em>Everyone</em>, started by hand). The API (<code>/api/v1/clients/{login}/emergency</code>, a window with <code>"emergency": true</code>) is kept for integrations; a scheduler created that way still works and shows <em>each client's emergency bandwidth</em>.</li>
-<li><strong>Clients still in a mode</strong> from an earlier version keep it: their page shows <em>An old mode … still applies</em> with <strong>Back to its plan</strong>. The <code>/api/v1/bandwidth-modes</code> API and the mode actions remain for integrations, but the interface no longer offers modes: no <em>Modes</em> page, no <em>Change mode</em> button, no mode choice on a client, no <em>Modes</em> target or <em>A mode</em> option in schedulers. An old <code>#/modes</code> link opens <em>Clients</em>.</li>
+<li><strong>Normal bandwidth</strong> — its <strong>plan</strong>: the speed it has outside any scheduler.</li>
+<li><strong>Emergency bandwidth</strong> — optional, set on the client's page (<em>Emergency bandwidth</em>, Operator) or with <code>PUT /api/v1/clients/{login}/emergency</code> (<code>{"down_mbps": 8, "up_mbps": 3}</code>, at least 0.064 Mbps each way; <code>GET</code> reads it, <code>DELETE</code> removes it).</li>
+</ul>
+<p>A <strong>scheduler</strong> applies either <strong>a % of their speed</strong> or <strong>their emergency bandwidth</strong> (<em>Schedulers › Applies</em>; API: a window with <code>"emergency": true</code> and no rate). During its hours — or at once with <strong>Start now</strong> — each client it targets gets <strong>its own</strong> emergency bandwidth; a client without one <strong>keeps its speed</strong> (nothing is invented). Outside its hours, or after <strong>Stop</strong>, each client is back on its normal bandwidth. Example: a <em>Storm</em> scheduler on <em>Everyone</em>, started by hand: a client with an emergency bandwidth of 8/3 Mbps goes to 8/3, a client without one stays on its plan.</p>
+<ul>
+<li>Changing a client's emergency bandwidth while an emergency scheduler runs for it applies at once.</li>
+<li>The client list (<code>GET /api/v1/subscribers/latest</code>) carries <code>emergency_down_mbps</code> / <code>emergency_up_mbps</code>, and its <em>effective</em> rate is the one really written. Renaming, merging or removing a client carries its emergency bandwidth along (or deletes it, on removal).</li>
+<li><strong>Clients still in a mode</strong> from an earlier version keep it: their page shows <em>An old mode … still applies</em> with <strong>Back to normal bandwidth</strong>. The <code>/api/v1/bandwidth-modes</code> API and the mode actions remain for integrations (a mode flagged <code>"emergency": true</code> gives each client its emergency bandwidth too), but the interface no longer offers modes: no <em>Modes</em> page, no <em>Change mode</em> button, no mode choice on a client, no <em>Modes</em> target or <em>A mode</em> option in schedulers. An old <code>#/modes</code> link opens <em>Clients</em>.</li>
 </ul>
 <p><strong>Client actions</strong> (<code>POST /api/v1/clients/actions</code>, <code>{"logins": [...], "action": "mode" | "boost" | "stop_boost", ...}</code>) act on one or several clients. The reply gives a result <strong>per client</strong> (<code>succeeded</code>, <code>failed</code>, <code>results[]</code>): a partial failure never looks like a complete success. It needs the Operator level, for one client as for several.</p>
 <p><strong>Boost or temporary plan, from the Clients page.</strong> On one or several selected clients (or from a client's page):</p>
@@ -2975,26 +2981,31 @@ curl -s http://127.0.0.1:8000/health/ready
 </thead>
 <tbody>
 <tr>
-<td><strong>Plan</strong></td>
+<td><strong>Normal bandwidth</strong> (plan)</td>
 <td>The speed of <strong>one</strong> client, set by hand (or pushed by the billing API)</td>
 <td>Client page › <em>Bandwidth</em></td>
 </tr>
 <tr>
+<td><strong>Emergency bandwidth</strong></td>
+<td>The emergency speed of <strong>one</strong> client, set by hand</td>
+<td>Client page › <em>Bandwidth</em></td>
+</tr>
+<tr>
 <td><strong>Scheduler</strong></td>
-<td>During the <strong>hours</strong> you choose (or at once with <em>Start now</em>), a <strong>% of the clients' speed</strong>, for the clients you choose</td>
+<td>During the <strong>hours</strong> you choose (or at once with <em>Start now</em>), a <strong>% of the clients' speed</strong> or <strong>their emergency bandwidth</strong>, for the clients you choose</td>
 <td><em>Schedulers</em> page</td>
 </tr>
 </tbody>
 </table></div>
-<p>There is no <em>Modes</em> page any more: each client's plan is set by hand, and schedulers change it by a %.</p>
+<p>There is no <em>Modes</em> page any more: speeds are set by hand on each client, and schedulers change them.</p>
 <p><strong>A scheduler</strong> (<em>Schedulers</em>, or <code>/api/v1/bandwidth-schedules</code>) has:</p>
 <ul>
-<li><strong>what it applies</strong>: <strong>a % of their speed</strong> (<code>percent</code>: 70 = 30 % slower, 200 = twice as fast). <code>emergency</code> and <code>mode_id</code> stay available through the API only;</li>
+<li><strong>what it applies</strong>: <strong>a % of their speed</strong> (<code>percent</code>: 70 = 30 % slower, 200 = twice as fast) or <strong>their emergency bandwidth</strong> (<code>emergency: true</code>: each client gets its own; a client without one keeps its speed). <code>mode_id</code> (a mode's speed) stays available through the API;</li>
 <li><strong>who</strong>: <em>Clients on their plan</em> (<code>on_plan</code>: every client without an old mode), <em>Clients</em> (<code>subscribers</code>: the clients you tick) or <em>Everyone</em> (<code>all</code>). <code>modes</code>, <code>pops</code> (sites) and <code>plans</code> (plan download rate) stay available through the API;</li>
 <li><strong>its hours</strong>, as many as you need: from → to (tap or drag the time), and the days (<code>days</code>: the days on which the hours <strong>start</strong>; 22:00 → 06:00 crosses midnight; <code>24:00</code> is midnight at the end);</li>
 <li>its <strong>time zone</strong> (IANA, <code>Europe/Paris</code>, <code>Africa/Abidjan</code>…: the hours are local, daylight saving time is handled).</li>
 </ul>
-<p>Outside its hours, clients keep their plan. The client page shows, under <em>Bandwidth</em>, the <strong>scheduler running now</strong> for that client (its name and hours, or <em>started by hand</em>), and says when another limit (a boost, a manual limit) is above it. A <strong>manual limit</strong> (forced limit without a mode, set through the API) stays above every scheduler, and a <strong>boost</strong> above everything.</p>
+<p>Outside its hours, clients keep their normal bandwidth. The client page shows, under <em>Bandwidth</em>, the <strong>scheduler running now</strong> for that client (its name and hours, or <em>started by hand</em>), and says when another limit (a boost, a manual limit) is above it. A <strong>manual limit</strong> (forced limit without a mode, set through the API) stays above every scheduler, and a <strong>boost</strong> above everything.</p>
 <p><strong>As many schedulers as you want.</strong> Two schedulers may share the same hours <strong>as long as they do not change the same clients</strong>: <em>Evening</em> for the clients on their plan and <em>Evening Pro</em> for the mode <em>Pro</em>, both 18:00–23:00, is fine. If the same client would be changed by two schedulers at the same time, saving is refused (<code>409</code>) with <strong>who and when</strong>: <em>'VIP' and 'Evening' would both apply to ACME OFFICE at the same time (Mon 18:00). Change the hours, or choose other clients or modes.</em> Two hours of the same scheduler may not overlap either.</p>
 <p><strong>A scheduler for one client.</strong> On a client's page (<em>Bandwidth</em>), <strong>Its own scheduler</strong> sets a % of its speed during its hours, <strong>for this client only</strong> (100 % = it keeps its speed while a group scheduler runs). It is stored as a scheduler for that single client (<code>scope=subscribers</code>, one target). <strong>What is made for one client goes before the group</strong>: during its hours it wins over every group scheduler, even one started by hand, so it may share hours with a group scheduler; two schedulers of the same client at the same time are still refused. They are listed apart, under <strong>For one client</strong> on the <em>Schedulers</em> page (client name, speed, hours, state, with a link to the client), and the client page says <em>Scheduler: its own</em> while it runs.</p>
 <p>Who decides the speed, from strongest to weakest: a running <strong>boost</strong>; a manual limit set through the API; the client's <strong>own scheduler</strong> during its hours; a <strong>group scheduler</strong> started by hand, then a group scheduler during its hours; the client's <strong>mode</strong>, otherwise its <strong>plan</strong>.</p>
@@ -3536,7 +3547,7 @@ Authorization: Basic base64(&lt;key&gt;:)      # Preseem form
 <tr>
 <td><strong>Operator</strong> (<code>operator</code>)</td>
 <td>Clients</td>
-<td><strong>Manages the clients</strong>: adds them (static IP, VLAN), edits their details and connection, sets their plan, gives boosts on one or many clients, defines schedulers; sees at a glance whether there is a problem</td>
+<td><strong>Manages the clients</strong>: adds them (static IP, VLAN), edits their details and connection, sets their normal and emergency bandwidth, gives boosts on one or many clients, defines schedulers; sees at a glance whether there is a problem</td>
 <td><strong>Dashboard</strong> (today's status), <strong>Clients</strong>, <strong>Schedules</strong>, <strong>Alerts</strong>, <strong>Activity</strong>; no network pages, no Settings (password and log out from the account card)</td>
 </tr>
 <tr>
