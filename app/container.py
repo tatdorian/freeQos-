@@ -29,6 +29,7 @@ from app.collectors.uisp import (
 )
 from app.config import Settings
 from app.db.activity_repo import ActivityRepository
+from app.db.alert_rules_repo import AlertRulesRepository
 from app.db.antennas_repo import AntennasRepository
 from app.db.api_keys_repo import ApiKeysRepository
 from app.db.client_profiles_repo import ClientProfilesRepository
@@ -208,6 +209,7 @@ class Container:
     traffic_rules_repo: TrafficRulesRepository | None = None
     schedules_repo: SchedulesRepository | None = None
     emergencies_repo: EmergenciesRepository | None = None
+    alert_rules_repo: AlertRulesRepository | None = None
     modes_repo: ModesRepository | None = None
     site_locations_repo: SiteLocationsRepository | None = None
     client_locations_repo: SiteLocationsRepository | None = None
@@ -364,6 +366,8 @@ async def build_container(settings: Settings) -> Container:
     schedules_repo = SchedulesRepository(database.pool)
     # Les urgences (page Emergency), lancees d'un bouton.
     emergencies_repo = EmergenciesRepository(database.pool)
+    # Les alertes personnelles : chaque compte recoit les siennes par email.
+    alert_rules_repo = AlertRulesRepository(database.pool)
     # Les modes de debit (Backup, Night...) qu'on donne a un client d'un geste.
     modes_repo = ModesRepository(database.pool)
     # Ou sont les sites, pour la carte.
@@ -753,6 +757,7 @@ async def build_container(settings: Settings) -> Container:
         traffic_rules_repo=traffic_rules_repo,
         schedules_repo=schedules_repo,
         emergencies_repo=emergencies_repo,
+        alert_rules_repo=alert_rules_repo,
         modes_repo=modes_repo,
         site_locations_repo=site_locations_repo,
         client_locations_repo=client_locations_repo,
@@ -878,6 +883,25 @@ async def build_container(settings: Settings) -> Container:
 
     scheduler.add_job(JOB_ROUTER_CPU, INTERVALLE_S, releve_cpu)
     conteneur.watch_sources.append(problemes_cpu)
+
+    async def urgences_en_cours() -> list[dict[str, Any]]:
+        # Une urgence active est un etat a signaler (categorie « emergency »).
+        from app.enforcement.emergency import BOOK as URGENCES
+
+        return [
+            {
+                "key": f"emergency:{u.id}",
+                "category": "emergency",
+                "level": "warn",
+                "title": f"Emergency '{u.name}' running",
+                "detail": f"{u.describe()}, started {u.active_since:%Y-%m-%d %H:%M} UTC"
+                if u.active_since
+                else u.describe(),
+            }
+            for u in URGENCES.active
+        ]
+
+    conteneur.watch_sources.append(urgences_en_cours)
     # LA MEMOIRE DES FILES DE CLIENTS : sans prefixe ni commentaire sur les
     # routeurs, c'est elle qui dit lesquelles sont a freeQoS.
     shaping.owned_pool = database.pool

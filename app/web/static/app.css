@@ -2488,3 +2488,7 @@ body.role-limited .dash-detail { display: none; }
 button.danger.em-big { background: var(--crit); color: #fff; }
 button.danger.em-big:hover:not(:disabled) { background: color-mix(in srgb, var(--crit) 85%, #000); }
 .em-picker .mc-row { padding: .3rem .6rem; }
+
+/* --------------------------------------------------- mes alertes email */
+.ma-checks { display: flex; flex-wrap: wrap; gap: .35rem 1.2rem; }
+#ma-clients .mc-list { max-height: 280px; overflow: auto; }
