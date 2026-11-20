@@ -13827,12 +13827,21 @@ async function ouvrirRetires() {
     '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
     '<div class="modal-body">' + blocDoublons + (lignes.length
       ? '<ul class="result-list" id="rm-list">' + lignes.map((c) =>
-        '<li style="display:flex;align-items:center;gap:.6rem"><b>' + esc(c.login) + '</b>' +
+        '<li style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap"><b>' + esc(c.login) + '</b>' +
+        // Ce que le releve en voit : c'est ce qui dit pourquoi il n'est relie a
+        // aucun client declare.
+        (c.seen
+          ? '<span class="badge" title="Connected now: no declared client has this IP or MAC">connected · ' +
+            esc([c.seen.address, c.seen.mac, c.seen.router].filter(Boolean).join(' · ')) + '</span>'
+          : '<span class="badge" title="Not connected since freeQoS started: its IP is unknown, so it cannot be ' +
+            'compared with the declared clients yet">not seen connected</span>') +
         '<span class="hint" style="display:inline">' + (c.removed_at ? esc(dateLongue(c.removed_at)) : '') +
         (c.removed_by ? ' · ' + esc(c.removed_by) : '') + '</span><span class="spacer" style="flex:1"></span>' +
         '<button class="sm" data-restore="' + esc(c.login) + '">Bring back</button></li>').join('') + '</ul>' +
-        '<p class="hint" style="display:block">Brought back, a client reappears at the next reading, ' +
-        'as a newly found client (no plan, so no queue).</p>'
+        '<p class="hint" style="display:block">Not linked to a declared client: either not connected (its IP is ' +
+        'unknown until it connects), or connected with an IP and a MAC that no declared client has. ' +
+        'Brought back, a client reappears at the next reading as a newly found client: not listed on the ' +
+        'Clients page until declared, and limited by the default plan when it is on.</p>'
       : '<div class="empty">No client removed.</div>') + '</div>' +
     '<div class="modal-foot"><button class="primary" data-modal-close>Close</button></div>');
   m.root.querySelectorAll('[data-restore]').forEach((b) => b.addEventListener('click', async () => {
