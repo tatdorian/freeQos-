@@ -1522,6 +1522,11 @@ CREATE TABLE IF NOT EXISTS excluded_clients (
     removed_by  TEXT,
     removed_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- DOUBLON D'UN CLIENT DECLARE : meme IP, meme MAC ou meme nom qu'un client
+-- declare (ou qui a un forfait). Toujours ignore -- sinon il reviendrait comme
+-- second client -- mais plus montre dans « Removed » : le client declare suffit.
+ALTER TABLE excluded_clients ADD COLUMN IF NOT EXISTS same_as TEXT;
+ALTER TABLE excluded_clients ADD COLUMN IF NOT EXISTS same_reason TEXT;
 
 -- -----------------------------------------------------------------------------
 -- LES FILES DE CLIENTS POSEES PAR FREEQOS, routeur par routeur.

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="freeqos-docs-source" content="81360ba1f81d412e">
+  <meta name="freeqos-docs-source" content="58c44c258f6bdf00">
   <title>freeQoS technical documentation</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235e5ce6'/%3E%3Cstop offset='.55' stop-color='%230a84ff'/%3E%3Cstop offset='1' stop-color='%2330b0c7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url%28%23g%29'/%3E%3Cpath d='M6.34 18.66A8 8 0 1 1 17.66 18.66' fill='none' stroke='%23fff' stroke-opacity='.38' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M6.34 18.66A8 8 0 0 1 16 6.07' fill='none' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Cpath d='M12 13l2.6-4.5' stroke='%23fff' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='12' cy='13' r='1.9' fill='%23fff'/%3E%3C/svg%3E">
   <script src="/static/theme.js?v={{ theme_version }}"></script>
@@ -2676,7 +2676,7 @@ curl -s http://127.0.0.1:8000/health/ready
 <p>The plan belongs to the subscriber, not to the PoP: a PoP has a capacity, not a plan. It is resolved in this order:</p>
 <ol>
 <li><strong>The plan written for this subscriber</strong>, pushed through the API (billing, Preseem integration) or entered on the <em>Plans</em> page. The last write wins.</li>
-<li><strong>A subscriber pushed or declared without a rate</strong> has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (<code>DEFAULT_PLAN_DOWN_MBPS</code> / <code>DEFAULT_PLAN_UP_MBPS</code>, <em>Settings › Default plan</em>, which opens the Plans page; <code>0</code> = none, the default). The <strong>Also PPPoE sessions with no plan</strong> box extends it to sessions seen on a router with no plan; clients with no plan are listed first on the Clients page, marked <strong>No plan</strong>.</li>
+<li><strong>A subscriber pushed or declared without a rate</strong> has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (<code>DEFAULT_PLAN_DOWN_MBPS</code> / <code>DEFAULT_PLAN_UP_MBPS</code>, <em>Settings › Default plan</em>; <code>0</code> = none, the default). In <em>Settings › Default plan</em>, a single <strong>on / off switch</strong>: on, every client without a plan — sessions seen on a router with no plan included — gets its own queue at the default rate (1 kbps unless another rate is set on the Plans page); off, they are only observed. The clients without a plan are listed under the switch, and first on the Clients page, marked <strong>No plan</strong>.</li>
 <li><strong>A subscriber that is only detected</strong> has no plan: it is observed, never throttled to a rate nobody sold, unless <code>DEFAULT_PLAN_FOR_DETECTED_CLIENTS=true</code>.</li>
 </ol>
 <p>Deleting a subscriber's plan removes its queue on the next cycle.</p>
@@ -2935,6 +2935,12 @@ curl -s http://127.0.0.1:8000/health/ready
 <li>the queue <strong>freeQoS</strong> had set for it (named after the client, and remembered by freeQoS) is taken off at freeQoS's next write (within two minutes when writing is on), so no forgotten limit stays. No other line of the router is concerned.</li>
 </ul>
 <p><strong>Removed (N)</strong>, above the list, shows the removed clients; <strong>Bring back</strong> takes one off the list: it reappears at the next reading as a newly found client (no plan, so no queue). API: <code>POST /api/v1/clients/remove</code> with <code>{"logins": [...], "confirm": true}</code>, <code>GET /api/v1/clients/removed</code>, <code>DELETE /api/v1/clients/removed/{login}</code>.</p>
+<p><strong>Removed clients that are a declared client.</strong> Every minute (and when <em>Removed</em> is opened), each removed client is compared with the declared clients (added by hand or pushed by the API) and with the clients that have a plan:</p>
+<ul>
+<li><strong>exactly the same identifier</strong> as a declared client: the removal was hiding that declared client (no queue, not listed). The declaration wins and the removal is lifted;</li>
+<li><strong>same IP</strong> (inside the address or a range of a declared client, or the IP of a client with a plan), <strong>same CPE MAC</strong>, or an <strong>equivalent name</strong> (case, spaces, dashes and dots ignored): it is the same client under another identity. It leaves the <em>Removed</em> count and is listed under <em>Same as a declared client</em>, but freeQoS keeps ignoring it, otherwise the client would appear twice, with a second queue on the same address. If the declared client is deleted, it goes back to <em>Removed</em>.</li>
+</ul>
+<p>A removed client's IP and MAC are known only while it is connected (freeQoS keeps nothing else about it), so an offline removed client is recognised as soon as it connects. API: <code>POST /api/v1/clients/removed/clean</code> runs the comparison now; <code>GET /api/v1/clients/removed</code> returns these clients in <code>duplicates</code>.</p>
 <h3 id="ubiquiti-uisp-antennas">Ubiquiti UISP (antennas)</h3>
 <p><em>Devices › Ubiquiti UISP</em> connects the <strong>UISP controller</strong> (formerly UNMS), which knows every airMAX / airFiber / LTU antenna of the network. An <strong>Administrator</strong> gives its address (<code>https://uisp.example.net</code>) and an <strong>API token</strong> with read access (UISP › Settings › Accounts › API tokens), then <em>Test the connection</em> and <em>Save</em>. The token is stored <strong>encrypted</strong> (same vault as router passwords) and never comes back through the API. Unticking <em>Verify the certificate</em> accepts a self-signed UISP.</p>
 <p>The section then lists the antennas UISP knows: model, role, IP, UISP site, status, <strong>radio capacity</strong> down and up, <strong>signal</strong> and <strong>airtime</strong> — the potential of each link. <strong>Attach</strong> a backhaul antenna to its site: its capacity is read every backhaul cycle and becomes the ceiling of the site's queue, like an antenna added by its own address (<em>Add an antenna</em>). API: <code>GET/PUT/DELETE /api/v1/uisp</code>, <code>POST /api/v1/uisp/test</code>, <code>GET /api/v1/uisp/devices</code>, <code>PUT/DELETE /api/v1/uisp/links/{device_id}</code> (<code>{"name", "pop_name"}</code>). The environment variables <code>BACKHAUL_PROVIDER=uisp</code>, <code>UISP_BASE_URL</code>, <code>UISP_TOKEN</code> keep working for a controller declared in the file.</p>
@@ -5672,7 +5678,7 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 </tbody>
 </table></div>
 <h2 id="appendix-b-api-endpoint-index">Appendix B. API endpoint index</h2>
-<p>The server exposes 232 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
+<p>The server exposes 233 operations. This index is generated from its own OpenAPI description, so it cannot drift from the code; the <em>API guide</em> (<code>/api-guide</code>) gives the parameters and bodies of each one.</p>
 <h3 id="public-api-model">Public API (model)</h3>
 <div class="table-wrap"><table>
 <thead>
@@ -6808,6 +6814,11 @@ make restore DIR=backups/20261008-0300        # replaces the database, asks for 
 <td><code>GET</code></td>
 <td><code>/api/v1/clients/removed</code></td>
 <td>Clients removed from freeQoS</td>
+</tr>
+<tr>
+<td><code>POST</code></td>
+<td><code>/api/v1/clients/removed/clean</code></td>
+<td>Take out of 'Removed' the clients that are a declared client (same IP, MAC or name)</td>
 </tr>
 <tr>
 <td><code>DELETE</code></td>

@@ -1395,14 +1395,21 @@
       <h2>Email alerts</h2>
       <div class="card" id="settings-notif"></div>
 
-      <!-- FORFAIT PAR DEFAUT : la limite des clients SANS forfait. Desactive
-           par defaut (0 = aucune limite) ; son etat est rappele ici. -->
+      <!-- FORFAIT PAR DEFAUT : un interrupteur. Allume, chaque client SANS
+           forfait (saisi sans debit ou session PPPoE sans forfait) recoit SA
+           file a ce debit (1 kbps par defaut) ; eteint, ils sont observes.
+           Les clients sans forfait sont listes juste en dessous. -->
       <h2>Default plan</h2>
-      <div class="card stack">
-        <div><b>Default plan</b> &mdash; the limit given to clients without a plan (for example
-          1 kbps to spot unconfigured clients). Off by default: clients without a plan are only
-          observed. <span id="settings-default-plan-state"></span>
-          <a class="sm" href="#/plans">Set the default plan</a></div>
+      <div class="card stack" id="settings-default-plan">
+        <label class="switch">
+          <input type="checkbox" id="dp-switch"><span class="rail"></span>
+          <span><b>Default plan</b> <span id="dp-state" class="hint" style="display:inline"></span></span>
+        </label>
+        <span class="hint" style="display:block">On: every client without a plan gets its own queue at
+          the default rate (1 kbps unless changed in <a href="#/plans">Plans</a>), so unconfigured
+          clients stand out. Clients that have a plan are never affected. Off (the default): clients
+          without a plan are only observed.</span>
+        <div id="dp-list"></div>
       </div>
 
       <h2>Domain &amp; HTTPS</h2>

@@ -1255,7 +1255,7 @@ A subscriber alone on a quiet sector gets its full plan. When everyone pulls at 
 The plan belongs to the subscriber, not to the PoP: a PoP has a capacity, not a plan. It is resolved in this order:
 
 1. **The plan written for this subscriber**, pushed through the API (billing, Preseem integration) or entered on the *Plans* page. The last write wins.
-2. **A subscriber pushed or declared without a rate** has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (`DEFAULT_PLAN_DOWN_MBPS` / `DEFAULT_PLAN_UP_MBPS`, *Settings › Default plan*, which opens the Plans page; `0` = none, the default). The **Also PPPoE sessions with no plan** box extends it to sessions seen on a router with no plan; clients with no plan are listed first on the Clients page, marked **No plan**.
+2. **A subscriber pushed or declared without a rate** has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (`DEFAULT_PLAN_DOWN_MBPS` / `DEFAULT_PLAN_UP_MBPS`, *Settings › Default plan*; `0` = none, the default). In *Settings › Default plan*, a single **on / off switch**: on, every client without a plan — sessions seen on a router with no plan included — gets its own queue at the default rate (1 kbps unless another rate is set on the Plans page); off, they are only observed. The clients without a plan are listed under the switch, and first on the Clients page, marked **No plan**.
 3. **A subscriber that is only detected** has no plan: it is observed, never throttled to a rate nobody sold, unless `DEFAULT_PLAN_FOR_DETECTED_CLIENTS=true`.
 
 Deleting a subscriber's plan removes its queue on the next cycle.
@@ -1434,6 +1434,13 @@ Keep in freeQoS the clients you want and remove the others: tick them on the *Cl
 - the queue **freeQoS** had set for it (named after the client, and remembered by freeQoS) is taken off at freeQoS's next write (within two minutes when writing is on), so no forgotten limit stays. No other line of the router is concerned.
 
 **Removed (N)**, above the list, shows the removed clients; **Bring back** takes one off the list: it reappears at the next reading as a newly found client (no plan, so no queue). API: `POST /api/v1/clients/remove` with `{"logins": [...], "confirm": true}`, `GET /api/v1/clients/removed`, `DELETE /api/v1/clients/removed/{login}`.
+
+**Removed clients that are a declared client.** Every minute (and when *Removed* is opened), each removed client is compared with the declared clients (added by hand or pushed by the API) and with the clients that have a plan:
+
+- **exactly the same identifier** as a declared client: the removal was hiding that declared client (no queue, not listed). The declaration wins and the removal is lifted;
+- **same IP** (inside the address or a range of a declared client, or the IP of a client with a plan), **same CPE MAC**, or an **equivalent name** (case, spaces, dashes and dots ignored): it is the same client under another identity. It leaves the *Removed* count and is listed under *Same as a declared client*, but freeQoS keeps ignoring it, otherwise the client would appear twice, with a second queue on the same address. If the declared client is deleted, it goes back to *Removed*.
+
+A removed client's IP and MAC are known only while it is connected (freeQoS keeps nothing else about it), so an offline removed client is recognised as soon as it connects. API: `POST /api/v1/clients/removed/clean` runs the comparison now; `GET /api/v1/clients/removed` returns these clients in `duplicates`.
 
 ### Ubiquiti UISP (antennas)
 
