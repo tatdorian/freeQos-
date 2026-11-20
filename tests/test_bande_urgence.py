@@ -201,15 +201,10 @@ def test_un_scheduler_d_urgence_lance_a_la_main(app_client, routeur) -> None:  #
     assert _file(routeur, "10.20.0.10")["max-limit"] == "10000000/20000000"
 
 
-def test_l_interface_ne_propose_plus_de_debit_d_urgence() -> None:
-    """Demande de l'exploitant : pas de debit d'urgence dans l'interface. Un
-    client a son forfait ; les schedulers le changent d'un %. L'API reste."""
+def test_l_interface_propose_les_deux_bandes_passantes() -> None:
     from app.web.ui import STATIC_DIR
 
     js = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
-    html = (STATIC_DIR.parent / "templates" / "index.html").read_text(encoding="utf-8")
-    assert "<h3>Emergency bandwidth</h3>" not in js
-    assert "cp-em-save" not in js
-    assert "'<div class=\"card\"><h3>Plan</h3>'" in js
-    assert '<button type="button" data-v="emergency" hidden>' in html
-    assert "Their emergency bandwidth" not in html
+    assert "<h3>Normal bandwidth (plan)</h3>" in js
+    assert "<h3>Emergency bandwidth</h3>" in js
+    assert "{ emergency: true }" in js
