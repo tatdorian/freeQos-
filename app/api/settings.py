@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Path, status
+from fastapi import APIRouter, HTTPException, Path, Request, status
 from pydantic import BaseModel, Field
 
 from app.api.deps import ContainerDep
@@ -196,3 +196,82 @@ async def clear_setting(
     logger.info("Reglage '%s' remis a son defaut (%r)", name, valeur)
     await _apres_changement(container, name, avant, valeur)
     return {"name": name, "value": valeur, "source": "defaut", "applied": True}
+
+
+# ------------------------------------------------ type de file, par routeur
+class QueueKindChoice(BaseModel):
+    kind: Literal["cake", "fq-codel"] | None = Field(
+        default=None, description="null: this router follows the default type"
+    )
+
+
+@router.get(
+    "/shaping/queue-kinds",
+    summary="Queue type of each router (CAKE or FQ-CoDel), and the default",
+)
+async def queue_kinds(container: ContainerDep) -> dict[str, Any]:
+    shaping = container.shaping
+    choix = await shaping.load_queue_kinds()
+    refus = dict(getattr(shaping, "fq_codel_refused", {}) or {})
+    return {
+        "default": shaping.queue_kind_default(),
+        "routers": [
+            {
+                "router": c.name,
+                "pop_name": c.config.effective_pop_name,
+                "role": str(getattr(c.config.role, "value", c.config.role) or ""),
+                "choice": choix.get(c.name),
+                "kind": shaping.queue_kind_for(c.name),
+                "refused": refus.get(c.name),
+                "write_enabled": bool(getattr(c.config, "write_enabled", True)),
+            }
+            for c in container.registry.collectors
+        ],
+    }
+
+
+@router.put(
+    "/shaping/queue-kinds/{name}",
+    summary="Choose the queue type of one router (null: the default)",
+)
+async def set_queue_kind(
+    payload: QueueKindChoice,
+    request: Request,
+    container: ContainerDep,
+    name: Annotated[str, Path(min_length=1, max_length=128)],
+) -> dict[str, Any]:
+    """Seuls les TYPES des files freeQoS de ce routeur changent, tout de suite
+    (en arriere-plan) : leurs debits ne bougent pas."""
+    from app.api.deps import acteur
+
+    shaping = container.shaping
+    if not any(c.name == name for c in container.registry.collectors):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="unknown router")
+    pool = getattr(shaping, "owned_pool", None)
+    if pool is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="database not initialised"
+        )
+    avant = shaping.queue_kind_for(name)
+    async with pool.acquire() as conn:
+        if payload.kind is None:
+            await conn.execute("DELETE FROM router_queue_kinds WHERE router = $1", name)
+        else:
+            await conn.execute(
+                """
+                INSERT INTO router_queue_kinds (router, kind, updated_by) VALUES ($1, $2, $3)
+                ON CONFLICT (router) DO UPDATE SET kind = EXCLUDED.kind,
+                    updated_by = EXCLUDED.updated_by, updated_at = now()
+                """,
+                name,
+                payload.kind,
+                acteur(request),
+            )
+    if payload.kind == "fq-codel":
+        # Un nouvel essai : le refus d'avant ne tient plus.
+        shaping.fq_codel_refused.pop(name, None)
+    await shaping.load_queue_kinds()
+    apres = shaping.queue_kind_for(name)
+    if avant != apres:
+        await _bascule_type_de_file(container, avant, apres)
+    return {"router": name, "choice": payload.kind, "kind": apres, "switching": avant != apres}

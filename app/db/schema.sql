@@ -1611,3 +1611,14 @@ CREATE TABLE IF NOT EXISTS alert_rule_events (
     notified_at  TIMESTAMPTZ,
     PRIMARY KEY (rule_id, key)
 );
+
+-- -----------------------------------------------------------------------------
+-- TYPE DE FILE PAR ROUTEUR : un routeur liste ici prend ce type (CAKE ou
+-- FQ-CoDel) au lieu du type par defaut (reglage queue_kind). Un routeur qui
+-- refuse FQ-CoDel reste en CAKE, quoi qu'il soit choisi.
+CREATE TABLE IF NOT EXISTS router_queue_kinds (
+    router      TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL CHECK (kind IN ('cake', 'fq-codel')),
+    updated_by  TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);

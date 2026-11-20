@@ -905,6 +905,7 @@ async def build_container(settings: Settings) -> Container:
     # LA MEMOIRE DES FILES DE CLIENTS : sans prefixe ni commentaire sur les
     # routeurs, c'est elle qui dit lesquelles sont a freeQoS.
     shaping.owned_pool = database.pool
+    await shaping.load_queue_kinds()
     try:
         from app.db.owned_queues import load as charger_nos_files
 

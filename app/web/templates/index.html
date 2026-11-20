@@ -1420,15 +1420,18 @@
            reste en CAKE. -->
       <div class="card" id="queue-kind-card" style="margin-bottom:1rem">
         <div class="cp-card-head"><h3>Queue type</h3>
-          <div class="segmented" id="queue-kind-seg" role="group" aria-label="Queue type">
+          <div><span class="hint" style="display:inline;margin-right:.5rem">Default for every router</span>
+          <div class="segmented" id="queue-kind-seg" role="group" aria-label="Default queue type" style="display:inline-flex">
             <button type="button" data-qk="cake">CAKE</button>
             <button type="button" data-qk="fq-codel">FQ-CoDel</button>
-          </div>
+          </div></div>
         </div>
         <p class="hint" style="display:block"><b>CAKE</b>: the most complete (PPPoE overhead, DSCP priority,
           NAT awareness). <b>FQ-CoDel</b>: the same low latency and fairness between flows, for
-          <b>less router CPU</b>. Speeds, modes, schedulers and boosts do not change: switching only
-          rewrites the queue types of freeQoS queues, at once.</p>
+          <b>less router CPU</b>. Speeds, schedulers, emergencies and boosts do not change: switching only
+          rewrites the queue types of freeQoS queues. Each switch asks for confirmation.
+          Below, a router can take its own type instead of the default.</p>
+        <div class="table-wrap" id="queue-kind-routers"></div>
         <div id="queue-kind-out"></div>
       </div>
       <details id="settings-shaping">

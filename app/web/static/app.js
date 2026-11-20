@@ -11891,33 +11891,116 @@ async function loadSettings() {
   if (bloc && bloc.open) await loadShaping();
 }
 
-/** CAKE ou FQ-CoDel, en deux boutons. Un routeur qui refuse FQ-CoDel reste en CAKE. */
+const QK_NOM = { cake: 'CAKE', 'fq-codel': 'FQ-CoDel' };
+
+/** CE QUE LA BASCULE IMPLIQUE, dit avant de la faire. */
+function qkImplications(vers, cible) {
+  const fq = vers === 'fq-codel';
+  return '<p><b>' + esc(cible) + '</b> will use <b>' + QK_NOM[vers] + '</b>.</p>' +
+    '<ul class="qk-list">' +
+    '<li><b>What changes:</b> only the <i>type</i> of the freeQoS queues. freeQoS creates the ' +
+      (fq ? '<code>fq-codel-up</code> / <code>fq-codel-down</code>' : '<code>cake-up</code> / <code>cake-down</code>') +
+      ' types, points every freeQoS client queue to them, then removes the old types once nothing uses them.</li>' +
+    '<li><b>What does not change:</b> every client keeps its speed (plan, schedulers, emergencies, boosts). Queues made by hand are not touched.</li>' +
+    (fq
+      ? '<li><b>Gain:</b> less router CPU — useful on a loaded router (see Router health).</li>' +
+        '<li><b>Loss:</b> no PPPoE overhead compensation, no DSCP priority (voice and video are no longer favoured), ' +
+          'no per-host fairness behind NAT, no ACK filtering. Latency and fairness between flows stay good.</li>' +
+        '<li>A router that refuses FQ-CoDel <b>stays on CAKE</b> by itself, and the page says so.</li>'
+      : '<li><b>Gain:</b> the most complete shaping: PPPoE overhead, DSCP priority, fairness per host behind NAT.</li>' +
+        '<li><b>Cost:</b> more router CPU than FQ-CoDel: check Router health on loaded routers.</li>') +
+    '<li><b>When:</b> at once, router after router, a few seconds each. Traffic is not cut; the queue counters restart from zero.</li>' +
+    '<li>A router where writing is off gets it as soon as writing is allowed.</li></ul>';
+}
+
+/** Confirmer, puis basculer. */
+function qkConfirmer(vers, cible, agir) {
+  const m = openModal('<div class="modal-head"><div><h3>Switch to ' + QK_NOM[vers] + '?</h3>' +
+    '<div class="sub">' + esc(cible) + '</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body">' + qkImplications(vers, cible) + '</div>' +
+    '<div class="modal-foot"><button data-modal-close>Cancel</button>' +
+    '<button class="primary" id="qk-go">Switch to ' + QK_NOM[vers] + '</button></div>');
+  m.root.querySelector('#qk-go').addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    await agir();
+    m.fermer();
+  });
+}
+
+/** CAKE ou FQ-CoDel : le type par defaut, et celui de chaque routeur. Chaque
+ *  bascule passe par une confirmation qui dit ce qu'elle implique. */
 function renderQueueKind(body) {
   const seg = document.getElementById('queue-kind-seg');
   if (!seg) return;
   const actuel = (body.settings.find((x) => x.name === 'queue_kind') || {}).value || 'cake';
+  const out = document.getElementById('queue-kind-out');
   seg.querySelectorAll('[data-qk]').forEach((b) => {
     b.classList.toggle('active', b.dataset.qk === actuel);
     b.disabled = !peut('edit');
-    b.onclick = async () => {
+    b.onclick = () => {
       if (b.dataset.qk === actuel) return;
-      const out = document.getElementById('queue-kind-out');
+      qkConfirmer(b.dataset.qk, 'Every router that follows the default', async () => {
+        try {
+          await api('/settings/queue_kind', { method: 'PUT', body: JSON.stringify({ value: b.dataset.qk }) });
+          out.innerHTML = '<div class="notice ok">Default type: ' + QK_NOM[b.dataset.qk] +
+            '. The routers that follow the default are being switched now (speeds unchanged).</div>';
+          await loadSettings();
+        } catch (err) {
+          out.innerHTML = noticeErreur(err);
+        }
+      });
+    };
+  });
+  loadQueueKindRouters();
+}
+
+/** Le tableau des routeurs : chacun suit le type par defaut, ou prend le sien. */
+async function loadQueueKindRouters() {
+  const host = document.getElementById('queue-kind-routers');
+  if (!host) return;
+  let d;
+  try { d = await api('/shaping/queue-kinds'); } catch (err) { host.innerHTML = noticeErreur(err); return; }
+  const out = document.getElementById('queue-kind-out');
+  const routeurs = d.routers || [];
+  const roles = { pop: 'PoP', core: 'Network core', gateway: 'Gateway' };
+  host.innerHTML = !routeurs.length ? '<div class="empty">No router yet.</div>'
+    : '<table><thead><tr><th>Router</th><th>Queue type now</th><th>Choice</th></tr></thead><tbody>' +
+      routeurs.map((r) => '<tr><td><b>' + esc(r.router) + '</b><span class="hint">' +
+          esc([roles[r.role] || r.role, r.pop_name].filter(Boolean).join(' · ')) + '</span></td>' +
+        '<td><span class="badge' + (r.kind === 'fq-codel' ? ' ok' : '') + '">' + esc(QK_NOM[r.kind] || r.kind) + '</span>' +
+          (r.refused ? '<span class="hint" style="color:var(--warn)">refused FQ-CoDel: stays on CAKE (' + esc(r.refused) + ')</span>' : '') +
+          (r.write_enabled ? '' : '<span class="hint">writing off on this router: applied when it is allowed</span>') + '</td>' +
+        '<td><select data-qk-router="' + esc(r.router) + '" aria-label="Queue type of ' + esc(r.router) + '"' + (peut('edit') ? '' : ' disabled') + '>' +
+          '<option value=""' + (r.choice ? '' : ' selected') + '>Default (' + esc(QK_NOM[d.default]) + ')</option>' +
+          '<option value="cake"' + (r.choice === 'cake' ? ' selected' : '') + '>CAKE</option>' +
+          '<option value="fq-codel"' + (r.choice === 'fq-codel' ? ' selected' : '') + '>FQ-CoDel</option></select></td></tr>').join('') +
+      '</tbody></table>';
+  host.querySelectorAll('[data-qk-router]').forEach((sel) => sel.addEventListener('change', () => {
+    const r = routeurs.find((x) => x.router === sel.dataset.qkRouter);
+    const choix = sel.value || null;
+    const vers = choix || d.default;
+    const remettre = () => { sel.value = r.choice || ''; };
+    const enregistrer = async () => {
       try {
-        await api('/settings/queue_kind', { method: 'PUT', body: JSON.stringify({ value: b.dataset.qk }) });
-        out.innerHTML = '<div class="notice ok">' + (b.dataset.qk === 'fq-codel' ? 'FQ-CoDel' : 'CAKE') +
-          ' chosen: the freeQoS queues are being switched now (speeds unchanged).</div>';
-        await loadSettings();
+        const res = await api('/shaping/queue-kinds/' + encodeURIComponent(r.router), {
+          method: 'PUT', body: JSON.stringify({ kind: choix }) });
+        out.innerHTML = '<div class="notice ok"><b>' + esc(r.router) + '</b>: ' + (choix ? QK_NOM[choix] : 'follows the default (' +
+          QK_NOM[d.default] + ')') + (res.switching ? '. Its queues are being switched now (speeds unchanged).' : '.') + '</div>';
       } catch (err) {
         out.innerHTML = noticeErreur(err);
       }
+      loadQueueKindRouters();
     };
-  });
-  const refus = Object.entries(body.fq_codel_refused || {});
-  const out = document.getElementById('queue-kind-out');
-  if (actuel === 'fq-codel' && refus.length && !out.querySelector('.notice.ok')) {
-    out.innerHTML = '<div class="notice warn">FQ-CoDel did not work on ' +
-      refus.map(([r, m]) => '<b>' + esc(r) + '</b> (' + esc(m) + ')').join(', ') + ': these routers keep CAKE.</div>';
-  }
+    if (vers === r.kind) { enregistrer(); return; }   // rien ne change sur le routeur
+    qkConfirmer(vers, 'Router ' + r.router, enregistrer);
+    // Fermer sans confirmer : le menu reprend sa valeur.
+    setTimeout(() => {
+      const bg = document.getElementById('modal-bg');
+      if (bg) bg.addEventListener('click', (e) => { if (e.target === bg) remettre(); });
+      document.querySelectorAll('[data-modal-close]').forEach((b) => b.addEventListener('click', remettre));
+    }, 0);
+  }));
 }
 
 function settingNotice(html) {

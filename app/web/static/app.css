@@ -2492,3 +2492,5 @@ button.danger.em-big:hover:not(:disabled) { background: color-mix(in srgb, var(-
 /* --------------------------------------------------- mes alertes email */
 .ma-checks { display: flex; flex-wrap: wrap; gap: .35rem 1.2rem; }
 #ma-clients .mc-list { max-height: 280px; overflow: auto; }
+.qk-list { padding-left: 1.1rem; margin: .4rem 0 0; display: grid; gap: .35rem; font-size: .9rem; }
+#queue-kind-routers { margin: .6rem 0; }

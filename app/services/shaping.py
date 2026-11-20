@@ -338,6 +338,9 @@ class ShapingService:
         #: Routeurs qui ont REFUSE le type FQ-CoDel (motif du refus) : ils
         #: restent en CAKE. Oublie au redemarrage, ou un nouvel essai est fait.
         self.fq_codel_refused: dict[str, str] = {}
+        #: Type de file choisi ROUTEUR PAR ROUTEUR (table router_queue_kinds) ;
+        #: un routeur absent prend le type par defaut (reglage queue_kind).
+        self.queue_kinds: dict[str, str] = {}
         #: Pool PostgreSQL de la memoire des files de clients (``owned_queues``).
         self.owned_pool: Any = None
         #: UNE ecriture a la fois par routeur : une reconciliation lancee par une
@@ -3695,10 +3698,28 @@ class ShapingService:
         return plan
 
     # ---------------------------------------------------------------- apply
+    def queue_kind_default(self) -> str:
+        return str(getattr(self.settings, "queue_kind", "cake") or "cake")
+
+    async def load_queue_kinds(self) -> dict[str, str]:
+        """Relit le type de file choisi pour chaque routeur."""
+        pool = getattr(self, "owned_pool", None)
+        if pool is None:
+            return self.queue_kinds
+        try:
+            async with pool.acquire() as conn:
+                lignes = await conn.fetch("SELECT router, kind FROM router_queue_kinds")
+            self.queue_kinds = {str(r["router"]): str(r["kind"]) for r in lignes}
+        except Exception:  # noqa: BLE001 - le choix precedent reste en place
+            logger.exception("Types de file par routeur illisibles")
+        return self.queue_kinds
+
     def queue_kind_for(self, router_name: str) -> str:
-        """Le type des files de CE routeur : le reglage, sauf si le routeur a
-        refuse FQ-CoDel -- il reste alors en CAKE."""
-        voulu = str(getattr(self.settings, "queue_kind", "cake") or "cake")
+        """Le type des files de CE routeur : son choix propre, sinon le type par
+        defaut ; un routeur qui a refuse FQ-CoDel reste en CAKE."""
+        voulu = (getattr(self, "queue_kinds", None) or {}).get(router_name) or str(
+            getattr(self.settings, "queue_kind", "cake") or "cake"
+        )
         if voulu == "fq-codel" and router_name in self.fq_codel_refused:
             return "cake"
         return voulu
