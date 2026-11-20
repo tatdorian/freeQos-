@@ -6586,6 +6586,13 @@ async function buildTreeFromConfig(silencieux) {
   }
 }
 
+/** L'adresse si c'est une IP (v4 ou v6), sinon null. */
+function ipSeule(texte) {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(texte)) return texte;
+  if (/^[0-9a-f:]+$/i.test(texte) && texte.includes(':')) return texte;
+  return null;
+}
+
 function formPayload() {
   const form = document.getElementById('router-form');
   const data = new FormData(form);
@@ -6597,9 +6604,9 @@ function formPayload() {
     username: (data.get('username') || 'qos-ro').trim(),
     role: data.get('role') || 'pop',
     pop_name: (data.get('pop_name') || '').trim() || null,
-    // Vide = a deduire. On envoie null plutot que "" : une chaine vide se
-    // lirait comme une valeur posee.
-    loopback: (data.get('loopback') || '').trim() || null,
+    // L'IP DE CONNEXION EST LA LOOPBACK : pas de champ a part. Un nom (et non
+    // une adresse) laisse la loopback a deduire du routeur.
+    loopback: ipSeule((data.get('host') || '').trim()),
     use_ssl: document.getElementById('f-ssl').checked,
     timeout_s: Number(data.get('timeout_s') || 5),
     pppoe_interface_pattern: data.get('pppoe_interface_pattern') || '<pppoe-{login}>',

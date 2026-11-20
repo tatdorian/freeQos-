@@ -1150,8 +1150,8 @@
               <input id="f-name" name="name" required placeholder="nas-site1">
             </div>
             <div class="field">
-              <label for="f-host">Management address</label>
-              <input id="f-host" name="host" required placeholder="10.10.0.11">
+              <label for="f-host" title="The address freeQoS connects to. It is the router's loopback: its identity in the network tree.">Router IP (loopback)</label>
+              <input id="f-host" name="host" required placeholder="10.255.0.1">
             </div>
             <div class="field">
               <label for="f-port">API port</label>
@@ -1178,13 +1178,8 @@
             </div>
           </div>
 
-          <div class="row-3">
-            <div class="field">
-              <label for="f-loopback">Loopback</label>
-              <input id="f-loopback" name="loopback" placeholder="10.255.0.1 (optional)">
-            </div>
-          </div>
-
+          <!-- Pas de champ « Loopback » a part : l'IP par laquelle on joint le
+               routeur EST sa loopback (demande de l'exploitant). -->
           <div class="row-3">
             <div class="field">
               <label for="f-pop-name">Site label</label>
