@@ -195,3 +195,43 @@ def test_sur_le_routeur_et_en_base(app_client, routeur) -> None:  # noqa: F811
 
     assert app_client.portal is not None
     assert "dupont" in app_client.portal.call(en_base)
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_un_routeur_renomme_garde_la_memoire_de_ses_files(app_client, routeur) -> None:  # noqa: F811
+    """La memoire est rangee par nom de routeur : renommer le routeur la suit,
+    sinon « Remove freeQoS » laisserait ses files de clients en place."""
+    from tests.test_type_de_file import _brancher
+
+    ecriture, _ = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    conteneur = app_client.app.state.container
+
+    async def poser() -> None:
+        async with conteneur.database.pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO owned_queues (router, name) VALUES ('nas-test', 'ACME-OFFICE') "
+                "ON CONFLICT DO NOTHING"
+            )
+        OWNED_QUEUES.setdefault("nas-test", set()).add("ACME-OFFICE")
+
+    async def en_base(nom: str) -> set[str]:
+        async with conteneur.database.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT name FROM owned_queues WHERE router = $1", nom)
+        return {str(r["name"]) for r in rows}
+
+    assert app_client.portal is not None
+    app_client.portal.call(poser)
+    ident = next(
+        r["id"]
+        for r in app_client.get("/api/v1/pops/routers", headers=cle).json()["routers"]
+        if r["name"] == "nas-test"
+    )
+    r = app_client.patch(f"/api/v1/pops/routers/{ident}", headers=cle, json={"name": "nas-renomme"})
+    assert r.status_code == 200, r.text
+
+    assert app_client.portal.call(en_base, "nas-renomme") == {"ACME-OFFICE"}
+    assert app_client.portal.call(en_base, "nas-test") == set()
+    assert "ACME-OFFICE" in OWNED_QUEUES["nas-renomme"]
+    assert "nas-test" not in OWNED_QUEUES
