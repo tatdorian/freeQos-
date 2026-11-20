@@ -614,19 +614,29 @@
         is only a connection point: it has a capacity, not a plan. A client's plan is pushed by
         your billing through the API (<code>PUT /model/v1/services</code>, as often as
         needed), or set here. The last one written wins. A client pushed without a
-        rate gets the default plan; a client only detected on a router is observed, not
-        capped, unless Settings applies the default plan to detected clients too.</p>
+        rate gets the limit for clients without a plan; a client only detected on a router is
+        observed, not capped, unless that limit is applied to detected clients too (below).</p>
       <div class="grid stats" id="plans-stats"></div>
 
-      <h2>Default plan</h2>
-      <div class="card">
+      <!-- CLIENTS SANS FORFAIT : chacun recoit SA file a ce debit (pas une
+           file attrape-tout en bas de liste). A 1 kbps, un client oublie ou mal
+           saisi se signale tout seul ; il est liste plus bas (filtre « No plan »). -->
+      <h2>Clients without a plan</h2>
+      <div class="card stack">
         <form id="plans-default-form" class="lq-rate" style="margin:0">
-          &darr; <input id="plans-default-down" type="number" min="0" step="any" style="width:7rem"> Mbps
-          &nbsp; &uarr; <input id="plans-default-up" type="number" min="0" step="any" style="width:7rem"> Mbps
-          <button class="sm primary" type="submit">Save</button>
-          <span class="hint" style="display:inline">Applied to every client without a plan
-            (0 = no limit).</span>
+          &darr; <input id="plans-default-down" type="number" min="0" step="any" style="width:7rem">
+          <span id="plans-default-down-unit-host"></span>
+          &nbsp; &uarr; <input id="plans-default-up" type="number" min="0" step="any" style="width:7rem">
+          <span id="plans-default-up-unit-host"></span>
+          <button class="sm primary" type="submit">Save and apply</button>
         </form>
+        <label class="chk"><input type="checkbox" id="plans-default-detected">
+          Also PPPoE sessions with no plan (seen on a router, never given a plan)</label>
+        <span class="hint" style="display:block">Each client without a plan gets its own queue at
+          this rate, like any other client: nothing is added at the bottom of the queue list, and
+          clients that have a plan are never affected. Set 1 kbps to make unconfigured clients
+          stand out, then filter the list below on <b>No plan</b>. 0 = no limit (the client is
+          only observed). Clients removed from freeQoS never get a queue.</span>
         <div id="plans-default-result"></div>
       </div>
 
@@ -638,7 +648,8 @@
           <option value="">All sources</option>
           <option value="api">Pushed by the API</option>
           <option value="ui">Set here</option>
-          <option value="default">Default plan</option>
+          <option value="noplan">No plan</option>
+          <option value="default">Default</option>
         </select>
         <span class="spacer"></span>
         <span class="mode" id="plans-count"></span>
@@ -1386,7 +1397,7 @@
            un clic. Le forfait d'un client se change sur sa fiche. -->
       <h2>Plans &amp; map</h2>
       <div class="card stack">
-        <div><b>Plans</b> &mdash; the default plan, and every client's plan in one table (a client's plan is also changed on
+        <div><b>Plans</b> &mdash; the limit for clients without a plan, and every client's plan in one table (a client's plan is also changed on
           its page). <a class="sm" href="#/plans">Open Plans</a></div>
         <div><b>Map</b> &mdash; sites and clients placed on a map. Also opened from the map button of the Clients list.
           <a class="sm" href="#/map">Open the map</a></div>

@@ -12004,17 +12004,25 @@ async function loadPlans() {
   const bas = document.getElementById('plans-default-down');
   const haut = document.getElementById('plans-default-up');
   if (bas && document.activeElement !== bas && document.activeElement !== haut) {
-    bas.value = d.default.down_mbps == null ? 0 : d.default.down_mbps;
-    haut.value = d.default.up_mbps == null ? 0 : d.default.up_mbps;
+    // Avec son unite : 1 kbps s'ecrit 1 kbps, pas 0.001 Mbps.
+    for (const [champ, cle] of [[bas, 'down'], [haut, 'up']]) {
+      const choix = bestUnit(d.default[cle + '_mbps']);
+      champ.value = choix.value === '' ? 0 : choix.value;
+      document.getElementById('plans-default-' + cle + '-unit-host').innerHTML =
+        unitSelect('plans-default-' + cle + '-unit', choix.unit);
+    }
+    document.getElementById('plans-default-detected').checked = !!d.default.detected_clients;
   }
   const s = d.summary || {};
   document.getElementById('plans-stats').innerHTML =
     statCard('', 'Clients', String(s.clients || 0), '', 'every client known to the network') +
     statCard('', 'Pushed by the API', String(s.api || 0), '', 'billing is the source') +
     statCard('', 'Set here', String(s.manual || 0), '', 'until the next API push') +
-    statCard('', 'Default plan', String(s.default || 0), '',
-      d.default.down_mbps ? mbps(d.default.down_mbps) + ' / ' + mbps(d.default.up_mbps || 0)
-        : 'no limit') +
+    statCard('', 'No plan', String(s.no_plan || 0), '',
+      d.default.down_mbps || d.default.up_mbps
+        ? (s.default_applied || 0) + ' limited to ' + mbps(d.default.down_mbps || 0) + ' / ' +
+          mbps(d.default.up_mbps || 0)
+        : 'not limited: observed only') +
     (s.pending
       ? statCard('', 'Waiting for 1st connection', String(s.pending), '',
         'plan received, subscriber not seen yet')
@@ -12844,7 +12852,7 @@ function renderPlanClients() {
   const q = (document.getElementById('plans-search').value || '').trim().toLowerCase();
   const origine = document.getElementById('plans-origin').value;
   const lignes = (d.clients || []).filter((c) =>
-    (!origine || c.origin === origine) &&
+    (!origine || (origine === 'noplan' ? c.no_plan : c.origin === origine)) &&
     (!q || [c.login, c.pop_name, c.address, c.service_id].some((v) =>
       String(v || '').toLowerCase().includes(q))));
   document.getElementById('plans-count').textContent = lignes.length + ' client(s)';
@@ -12855,6 +12863,11 @@ function renderPlanClients() {
     return;
   }
   const debit = (v) => (v == null ? '<span class="na">no limit</span>' : esc(mbps(v)));
+  // Sans forfait : on le dit, et si la limite par defaut lui est posee.
+  const sansForfait = (c) => (c.no_plan
+    ? ' <span class="badge ' + (c.default_applied ? 'warn' : '') + '" title="' +
+      (c.default_applied ? 'No plan: limited by the setting for clients without a plan'
+        : 'No plan: observed, not limited') + '">no plan</span>' : '');
   const forfaits = d.packages || [];
   host.innerHTML = '<table><thead><tr><th>Client</th><th>Site</th><th>Address</th>' +
     '<th class="num">&darr; Download</th><th class="num">&uarr; Upload</th>' +
@@ -12869,6 +12882,7 @@ function renderPlanClients() {
       const force = c.forced_down_mbps != null || c.forced_up_mbps != null;
       const ligne = '<tr' + (PLANS.focus === c.login ? ' class="row-focus"' : '') + '>' +
         '<td><b>' + esc(c.login) + '</b>' + (c.kind === 'static' ? ' <span class="badge">static IP</span>' : '') +
+          sansForfait(c) +
           '</td>' +
         '<td>' + esc(c.pop_name || '-') + '</td>' +
         '<td><code>' + esc(c.address || '-') + '</code></td>' +
@@ -16347,15 +16361,19 @@ document.getElementById('plans-default-form').addEventListener('submit', async (
   try {
     for (const [nom, id] of [['default_plan_down_mbps', 'plans-default-down'],
       ['default_plan_up_mbps', 'plans-default-up']]) {
-      await api('/settings/' + nom, {
-        method: 'PUT',
-        body: JSON.stringify({ value: Number(document.getElementById(id).value) || 0 }),
-      });
+      const valeur = readRate(id, id + '-unit') || 0;
+      if (valeur > 0 && valeur < 0.001) throw new Error('The lowest limit is 1 kbps.');
+      await api('/settings/' + nom, { method: 'PUT', body: JSON.stringify({ value: valeur }) });
     }
+    await api('/settings/default_plan_for_detected_clients', {
+      method: 'PUT',
+      body: JSON.stringify({ value: document.getElementById('plans-default-detected').checked }),
+    });
     const r = await api('/plans/refresh', { method: 'POST' }).catch(() => ({ ok: false }));
     res.innerHTML = r.ok
-      ? '<div class="notice ok">Default plan saved and applied to the clients pushed without a rate.</div>'
-      : '<div class="notice warn">Default plan saved. It reaches the routers at the next cycle ' +
+      ? '<div class="notice ok">Saved and applied: every client without a plan now has its ' +
+        'own queue at this rate.</div>'
+      : '<div class="notice warn">Saved. It reaches the routers at the next cycle ' +
         '(a few minutes).</div>';
   } catch (err) {
     res.innerHTML = noticeErreur(err);
