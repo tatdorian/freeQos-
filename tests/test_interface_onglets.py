@@ -490,3 +490,16 @@ def test_aucune_detection_automatique_des_vlan_dans_l_interface() -> None:
         "Addresses seen, undeclared",
     ):
         assert trace not in HTML and trace not in JS
+
+
+def test_la_barre_de_selection_sans_traffic_et_stop_boost() -> None:
+    """Demande de l'exploitant : le bouton Traffic de la selection ne servait
+    a rien ; « Stop » dit ce qu'il arrete."""
+    assert 'id="cli-sel-traffic"' not in HTML
+    assert '<button type="button" class="sm" id="cli-sel-stop">Stop boost</button>' in HTML
+    assert "openGroupTraffic" not in JS
+
+
+def test_plus_de_bouton_carte_dans_la_liste() -> None:
+    """Demande de l'exploitant : pas de bouton « See on the map » dans Clients."""
+    assert 'id="cli-map"' not in HTML
