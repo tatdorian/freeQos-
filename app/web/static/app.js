@@ -13691,7 +13691,6 @@ function cablerClients() {
   });
   document.getElementById('cli-sel-boost').addEventListener('click', () => openGroupBoost([...CLI.sel]));
   document.getElementById('cli-sel-stop').addEventListener('click', () => stopBoosts([...CLI.sel]));
-  document.getElementById('cli-sel-traffic').addEventListener('click', () => openGroupTraffic([...CLI.sel]));
   document.getElementById('cli-sel-remove').addEventListener('click', () => retirerClients([...CLI.sel]));
   document.getElementById('cli-removed').addEventListener('click', ouvrirRetires);
 }
@@ -13876,84 +13875,6 @@ function rendreResultats(res) {
   return '<div class="notice ' + (res.failed ? 'warn' : 'ok') + '"><b>' + res.succeeded + ' of ' +
     res.requested + ' client(s) done.</b>' + (res.failed ? ' ' + res.failed + ' failed: see below.' : '') +
     '</div><ul class="result-list">' + lignes + '</ul>';
-}
-
-/* --------------------------------------------- trafic des clients choisis
- * Un clic sur « Traffic » avec des clients coches : le total de la selection
- * en courbe, puis chaque client, sa petite courbe, son debit et son volume. */
-const GTR = { minutes: 60 };
-
-function courbeSvg(series, l, h, epais) {
-  // series : [{ v: [nombres], cls }] ; une echelle commune.
-  const max = Math.max(1, ...series.flatMap((x) => x.v));
-  const n = Math.max(2, ...series.map((x) => x.v.length));
-  const pt = (v, i) => (i * l / (n - 1)).toFixed(1) + ',' + (h - 2 - (v / max) * (h - 4)).toFixed(1);
-  return '<svg class="gtr-svg" viewBox="0 0 ' + l + ' ' + h + '" preserveAspectRatio="none">' +
-    series.map((x) => {
-      if (!x.v.length) return '';
-      const ligne = x.v.map(pt).join(' ');
-      return (x.aire ? '<polygon class="' + x.cls + '-a" points="0,' + h + ' ' + ligne + ' ' + l + ',' + h + '"/>' : '') +
-        '<polyline class="' + x.cls + '" fill="none" stroke-width="' + (epais || 1.6) + '" points="' + ligne + '"/>';
-    }).join('') + '</svg>';
-}
-
-async function openGroupTraffic(logins) {
-  const liste = logins.slice(0, 40);
-  const m = openModal('<div class="modal-head"><div><h3>Traffic</h3><div class="sub">' + sousTitreCibles(logins) +
-    (logins.length > liste.length ? ' (first ' + liste.length + ' shown)' : '') + '</div></div>' +
-    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
-    '<div class="modal-body"><div class="segmented" id="gtr-range">' +
-      [[60, '1 hour'], [1440, '24 hours'], [10080, '7 days']].map(([v, t]) =>
-        '<button type="button" data-v="' + v + '"' + (v === GTR.minutes ? ' class="active"' : '') + '>' + t + '</button>').join('') +
-    '</div><div id="gtr-body"><div class="empty">Loading…</div></div></div>');
-  const dessiner = async () => {
-    const corps = m.root.querySelector('#gtr-body');
-    corps.innerHTML = '<div class="empty">Loading…</div>';
-    const pas = GTR.minutes <= 60 ? 60 : GTR.minutes <= 1440 ? 900 : 3600;
-    const res = await Promise.all(liste.map(async (login) => {
-      const r = CLI.rows.find((x) => x.login === login) || { login };
-      const d = r.subscriber_id ? await api('/subscribers/' + r.subscriber_id + '/metrics?minutes=' + GTR.minutes +
-        '&bucket_seconds=' + pas).catch(() => null) : null;
-      return { r, pts: (d && d.points) || [] };
-    }));
-    // Total de la selection, bucket par bucket.
-    const total = {};
-    res.forEach(({ pts }) => pts.forEach((p) => {
-      const t = total[p.bucket] = total[p.bucket] || { d: 0, u: 0 };
-      t.d += Number(p.tx_bps_avg) || 0;
-      t.u += Number(p.rx_bps_avg) || 0;
-    }));
-    const cles = Object.keys(total).sort();
-    const vol = (pts, cle) => pts.reduce((a, p) => a + (Number(p[cle]) || 0) * pas / 8, 0);
-    const volD = res.reduce((a, x) => a + vol(x.pts, 'tx_bps_avg'), 0);
-    const volU = res.reduce((a, x) => a + vol(x.pts, 'rx_bps_avg'), 0);
-    const pic = Math.max(0, ...cles.map((k) => total[k].d));
-    corps.innerHTML = '<div class="gtr-total card">' +
-        '<div class="gtr-head"><b>All selected clients</b><span class="d">&darr; ' + esc(octetsText(volD)) +
-        '</span><span class="u">&uarr; ' + esc(octetsText(volU)) + '</span><span class="hint">peak ' +
-        esc(bpsText(pic)) + '</span></div>' +
-        (cles.length ? courbeSvg([{ v: cles.map((k) => total[k].d), cls: 'gtr-d', aire: true },
-          { v: cles.map((k) => total[k].u), cls: 'gtr-u' }], 600, 120, 2)
-          : '<div class="empty">No measurement over this period.</div>') + '</div>' +
-      '<div class="gtr-list">' + res.map(({ r, pts }) => {
-        const on = clientEnLigne(r);
-        return '<a class="gtr-row" href="#/client/' + encodeURIComponent(r.login) + '">' +
-          '<span class="gtr-name"><i class="dot-co ' + (on ? 'on' : 'off') + '"></i>' + esc(r.login) +
-            '<small>' + esc(r.pop_name || '') + '</small></span>' +
-          '<span class="gtr-spark">' + (pts.length ? courbeSvg([{ v: pts.map((p) => Number(p.tx_bps_avg) || 0), cls: 'gtr-d', aire: true },
-            { v: pts.map((p) => Number(p.rx_bps_avg) || 0), cls: 'gtr-u' }], 200, 36) : '<span class="na">no data</span>') + '</span>' +
-          '<span class="gtr-now">' + (on ? '&darr; ' + esc(bpsText(r.tx_bps)) : 'offline') + '</span>' +
-          '<span class="gtr-vol">' + esc(octetsText(vol(pts, 'tx_bps_avg'))) + '</span></a>';
-      }).join('') + '</div>';
-    corps.querySelectorAll('.gtr-row').forEach((a) => a.addEventListener('click', () => m.fermer()));
-  };
-  m.root.querySelectorAll('#gtr-range [data-v]').forEach((b) => b.addEventListener('click', () => {
-    GTR.minutes = Number(b.dataset.v);
-    m.root.querySelectorAll('#gtr-range [data-v]').forEach((x) => x.classList.toggle('active', x === b));
-    dessiner();
-  }));
-  m.root.classList.add('modal-wide');
-  dessiner();
 }
 
 /** Le debit en vigueur d'un client, boost mis a part (meme regle que le

@@ -1985,31 +1985,8 @@ tr.cli-group td button { float: right; }
   #view-client .kpi-sub .use-bar { width: 100%; }
 }
 
-/* Trafic des clients choisis. */
+/* Fenetre large. */
 .modal.modal-wide { max-width: 760px; width: 100%; }
-#gtr-range { margin-bottom: .8rem; }
-.gtr-total { padding: .9rem 1rem; margin-bottom: .8rem; box-shadow: none; background: var(--surface-2); }
-.gtr-head { display: flex; gap: .8rem; align-items: baseline; flex-wrap: wrap; margin-bottom: .4rem; font-size: .88rem; }
-.gtr-head .d { color: var(--down); font-weight: 600; } .gtr-head .u { color: var(--up); font-weight: 600; }
-.gtr-svg { display: block; width: 100%; height: 100%; }
-.gtr-total .gtr-svg { height: 120px; }
-.gtr-d { stroke: var(--down); } .gtr-d-a { fill: var(--down-dim); }
-.gtr-u { stroke: var(--up); }
-.gtr-list { display: grid; }
-.gtr-row {
-  display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 2fr) 6rem 5rem; gap: .8rem; align-items: center;
-  padding: .55rem .3rem; border-bottom: 1px solid var(--border); color: var(--text); text-decoration: none;
-}
-.gtr-row:hover { background: var(--fill); text-decoration: none; border-radius: 8px; }
-.gtr-name { display: flex; align-items: center; gap: .4rem; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.gtr-name small { color: var(--faint); font-weight: 400; }
-.gtr-spark { height: 36px; }
-.gtr-now, .gtr-vol { font-size: .82rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.gtr-vol { color: var(--muted); }
-@media (max-width: 760px) {
-  .gtr-row { grid-template-columns: minmax(0, 1fr) 5.5rem; grid-template-areas: "name now" "spark spark"; gap: .3rem .6rem; }
-  .gtr-name { grid-area: name; } .gtr-now { grid-area: now; } .gtr-spark { grid-area: spark; } .gtr-vol { display: none; }
-}
 
 /* ================================================================ carte */
 .map-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 1rem; align-items: start; }
