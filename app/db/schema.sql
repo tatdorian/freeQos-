@@ -1168,13 +1168,49 @@ BEGIN
 END
 $$;
 
+-- DERNIER ECHANTILLON PAR ABONNE, tenu a jour a l'ecriture (writer.py).
+-- La vue lisait autrefois TOUT subscriber_metrics (DISTINCT ON sur 90 jours a
+-- 10 s, morceaux compresses compris) : la requete grossissait chaque jour,
+-- depassait le command_timeout (15 s), et les appels en attente epuisaient le
+-- pool -- connexion a l'interface comprise. Une ligne par abonne.
+CREATE TABLE IF NOT EXISTS subscriber_last_sample (
+    subscriber_id    BIGINT PRIMARY KEY REFERENCES subscribers(id) ON DELETE CASCADE,
+    ts               TIMESTAMPTZ NOT NULL,
+    rx_bps           DOUBLE PRECISION,
+    tx_bps           DOUBLE PRECISION,
+    rtt_ms           DOUBLE PRECISION,
+    session_uptime_s INTEGER
+);
+
+-- Amorcage, une seule fois (table vide) : la derniere mesure des 7 derniers
+-- jours (morceaux non compresses), une sonde d'index (subscriber_id, ts) par
+-- abonne. Les ecritures suivantes l'entretiennent.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM subscriber_last_sample) THEN
+        INSERT INTO subscriber_last_sample
+               (subscriber_id, ts, rx_bps, tx_bps, rtt_ms, session_uptime_s)
+        SELECT s.id, m.ts, m.rx_bps, m.tx_bps, m.rtt_ms, m.session_uptime_s
+          FROM subscribers s
+          CROSS JOIN LATERAL (
+                SELECT ts, rx_bps, tx_bps, rtt_ms, session_uptime_s
+                  FROM subscriber_metrics
+                 WHERE subscriber_id = s.id
+                   AND ts > now() - INTERVAL '7 days'
+                 ORDER BY ts DESC
+                 LIMIT 1
+          ) m
+        ON CONFLICT (subscriber_id) DO NOTHING;
+    END IF;
+END
+$$;
+
 -- Vue pratique : dernier echantillon connu par abonne (utilisee par l'API et l'UI).
 -- DROP puis CREATE : la vue a gagne des colonnes en cours de route, et
 -- CREATE OR REPLACE n'autorise que l'ajout en fin de liste.
 DROP VIEW IF EXISTS subscriber_latest;
 CREATE VIEW subscriber_latest AS
-SELECT DISTINCT ON (m.subscriber_id)
-       m.subscriber_id,
+SELECT m.subscriber_id,
        s.login,
        s.kind,
        s.pop_id,
@@ -1189,10 +1225,9 @@ SELECT DISTINCT ON (m.subscriber_id)
        -- Adresse de la derniere session connue. C'est elle que vise la file
        -- de l'abonne ; l'interface doit pouvoir la montrer avant d'ecrire.
        s.last_ip
-FROM subscriber_metrics m
+FROM subscriber_last_sample m
 JOIN subscribers s ON s.id = m.subscriber_id
-LEFT JOIN pops p   ON p.id = s.pop_id
-ORDER BY m.subscriber_id, m.ts DESC;
+LEFT JOIN pops p   ON p.id = s.pop_id;
 
 -- Derniere mesure connue par port. Le DISTINCT ON s'appuie sur l'index de cle
 -- primaire (router_name, interface, ts) : pas de tri supplementaire.
