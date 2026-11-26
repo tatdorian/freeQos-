@@ -2851,6 +2851,107 @@ class ShapingService:
             "_other_simple": [q for q in tables["simple"] if not is_ours(q)],
         }
 
+    async def simple_queue_list(self, router_name: str) -> list[dict[str, Any]]:
+        """TOUTES les files simples du routeur, lues en direct : les notres, celles
+        posees a la main, et les DOUBLONS -- plusieurs files sur une meme adresse,
+        dont RouterOS n'applique que la premiere. Rien n'est ecrit."""
+        collecteur = self._collector(router_name)
+        client = collecteur._client  # noqa: SLF001
+
+        def lire() -> list[dict[str, Any]]:
+            return mark_owned(router_name, list(client.simple_queues() or []))
+
+        lignes = await asyncio.wait_for(
+            asyncio.to_thread(lire), timeout=max(collecteur.config.timeout_s * 4, 10.0)
+        )
+
+        def membres(ligne: dict[str, Any]) -> list[str]:
+            return [
+                m.strip().split("/")[0] if m.strip().endswith(("/32", "/128")) else m.strip()
+                for m in str(ligne.get("target") or "").split(",")
+                if m.strip()
+            ]
+
+        par_cible: dict[str, list[str]] = {}
+        for ligne in lignes:
+            for membre in membres(ligne):
+                par_cible.setdefault(membre, []).append(str(ligne.get("name") or ""))
+        sortie: list[dict[str, Any]] = []
+        for ligne in lignes:
+            nom = str(ligne.get("name") or "")
+            autres = sorted({n for m in membres(ligne) for n in par_cible.get(m, []) if n != nom})
+            sortie.append(
+                {
+                    "id": str(ligne.get(".id") or ""),
+                    "name": nom,
+                    "target": ligne.get("target"),
+                    "max_limit": ligne.get("max-limit"),
+                    "parent": ligne.get("parent"),
+                    "comment": ligne.get("comment"),
+                    "disabled": str(ligne.get("disabled")).lower() in ("true", "yes"),
+                    # Une file DYNAMIQUE (<pppoe-...>, posee par PPP ou RADIUS)
+                    # n'est pas supprimable : le routeur la recree.
+                    "dynamic": str(ligne.get("dynamic")).lower() in ("true", "yes"),
+                    "ours": is_ours(ligne),
+                    "same_target_as": autres,
+                }
+            )
+        return sortie
+
+    async def remove_simple_queues(
+        self, router_name: str, ids: list[str], *, author: str | None = None
+    ) -> dict[str, Any]:
+        """Supprime les files CHOISIES par l'exploitant, et rien d'autre.
+
+        Un retrait ne bride personne : il passe meme sur un routeur en lecture
+        seule, comme « Remove freeQoS ». Une file de freeQoS encore voulue
+        reviendra au passage suivant ; une file posee a la main ne revient pas.
+        """
+        voulues = {str(i) for i in ids if str(i)}
+        lignes = [q for q in await self.simple_queue_list(router_name) if q["id"] in voulues]
+        refusees = [q["name"] for q in lignes if q["dynamic"]]
+        lignes = [q for q in lignes if not q["dynamic"]]
+        inconnues = sorted(
+            voulues
+            - {q["id"] for q in lignes}
+            - {q["id"] for q in await self.simple_queue_list(router_name) if q["dynamic"]}
+        )
+        # Enfants avant parents : RouterOS refuse de retirer un parent occupe.
+        noms = {q["name"] for q in lignes}
+        lignes.sort(key=lambda q: 0 if q.get("parent") in noms else 1)
+        actions = [
+            PlanAction(
+                verb="remove",
+                path="/queue/simple",
+                target_id=q["id"],
+                name=q["name"],
+                reason="removed by hand from freeQoS",
+            )
+            for q in lignes
+        ]
+        retirees = 0
+        erreurs: list[str] = [f"{n}: dynamic queue, set by the router itself" for n in refusees]
+        taille = max(1, self.settings.enforcement_max_actions)
+        for debut in range(0, len(actions), taille):
+            plan = Plan(router_name=router_name, actions=actions[debut : debut + taille])
+            resultat = await self.apply(
+                plan, dry_run=False, author=author, explicit=True, removal=True
+            )
+            retirees += resultat.applied
+            erreurs += [
+                f"{o.action.name or o.action.target_id}: {o.detail}"
+                for o in resultat.outcomes
+                if not o.ok
+            ]
+        self.invalidate_limit_audit()
+        return {
+            "router": router_name,
+            "removed": retirees,
+            "names": [q["name"] for q in lignes],
+            "not_found": inconnues,
+            "errors": erreurs,
+        }
+
     async def uninstall(self, router_name: str, *, author: str | None = None) -> dict[str, Any]:
         """Retire du routeur TOUT ce que freeQoS y a pose, et rien d'autre.
 
