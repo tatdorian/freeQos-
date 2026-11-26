@@ -1294,7 +1294,9 @@ class MetricsRepository:
             "scores_deleted": int(sup.split()[-1]),
         }
 
-    async def latency_by_subscriber(self, *, minutes: int = 60) -> list[dict[str, Any]]:
+    async def latency_by_subscriber(
+        self, *, minutes: int = 60, subscriber_id: int | None = None
+    ) -> list[dict[str, Any]]:
         """Latence mesuree de CHAQUE abonne sur la periode : mediane, p95, meilleure.
 
         La mediane dit l'experience habituelle, le p95 les moments penibles
@@ -1321,9 +1323,12 @@ class MetricsRepository:
                   {JOINTURE_LIMITE_SQL}
                  WHERE m.ts > now() - make_interval(mins => $1)
                    AND m.rtt_ms IS NOT NULL
+                   -- Un seul client (sa fiche) : ne pas calculer tous les autres.
+                   AND ($2::bigint IS NULL OR m.subscriber_id = $2)
                  GROUP BY s.id, p.name
                 """,
                 minutes,
+                subscriber_id,
             )
         return _rows(rows)
 
