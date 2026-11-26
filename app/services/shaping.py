@@ -1626,6 +1626,11 @@ class ShapingService:
                 abonne = await self.metrics.subscriber_at_address(hote)
             except Exception:  # noqa: BLE001 - la localisation par reseau reste
                 abonne = None
+            retires = getattr(self, "exclusions", None)
+            if abonne and retires is not None and str(abonne.get("login")) in retires:
+                # Une session RETIREE n'est plus ce client : sa fiche a IP fixe
+                # garde sa propre file, a son nom.
+                abonne = None
             if abonne and abonne.get("pop_name"):
                 routeurs = await self._routers_for_site(str(abonne["pop_name"]))
                 if routeurs:

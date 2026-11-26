@@ -1,5 +1,11 @@
 """Un client declare a la main sur l'IP d'une session deja connue : UN seul client.
 
+LE CLIENT DECLARE A LA MAIN GAGNE. Si la session n'a ete que DETECTEE (aucun
+forfait, nom, mode ni limite donnes), c'est ELLE qui est retiree de freeQoS,
+comme avec « Remove » ; la fiche declaree reste, avec sa file. La fusion
+ci-dessous ne vaut plus que pour une session elle-meme declaree (forfait pousse
+par l'API, par exemple).
+
 LE BESOIN. Un client existe deja (sa session PPPoE, decouverte sur le routeur)
 et l'exploitant le declare a la main avec son IP fixe, sous un autre nom. Il
 apparaissait alors DEUX fois : la fiche a IP fixe et la session, dans la liste
@@ -112,6 +118,31 @@ async def merge_duplicates(
         if len(candidats) != 1:
             continue
         cible = candidats[0]
+        if (
+            cible_statique is None
+            and retires is not None
+            and not await _session_declaree(container, cible)
+        ):
+            # LE CLIENT DECLARE A LA MAIN GAGNE. La session qui porte son IP n'a
+            # ete que DETECTEE (ni forfait, ni nom, ni mode, ni limite donnes) :
+            # elle est retiree de freeQoS, comme avec « Remove » -- rien n'est
+            # efface, rien n'est touche sur le routeur hors la file que freeQoS
+            # lui avait posee. Le client declare garde sa fiche et sa file.
+            try:
+                await retires.add([cible], actor)
+            except Exception:  # noqa: BLE001 - un retrait rate n'empeche pas les autres
+                logger.exception("Retrait du doublon detecte '%s' impossible", cible)
+                continue
+            fusionnees.add(reference)
+            fusions.append({"removed": cible, "kept": reference, "address": ip})
+            logger.info(
+                "Session detectee '%s' retiree : '%s' est declare a la main sur %s",
+                cible,
+                reference,
+                ip,
+            )
+            await _noter_le_retrait(container, reference, cible, ip, actor)
+            continue
         try:
             await _fusionner(container, fiche, cible, ip, actor, cible_statique=cible_statique)
         except Exception:  # noqa: BLE001 - une fusion ratee n'empeche pas les autres
@@ -121,6 +152,45 @@ async def merge_duplicates(
         fusions.append({"from": reference, "into": cible, "address": ip})
         logger.info("Client '%s' (fiche a la main, %s) fusionne dans '%s'", reference, ip, cible)
     return fusions
+
+
+async def _session_declaree(container: Any, login: str) -> bool:
+    """La session a-t-elle ete DECLAREE (forfait ecrit, nom ou declaration a la
+    main, mode ou limite poses) -- ou seulement detectee sur un routeur ?"""
+    base = getattr(container, "database", None)
+    if base is None:
+        return True  # sans base, on ne retire rien : la fusion d'avant s'applique
+    async with base.pool.acquire() as conn:
+        return bool(
+            await conn.fetchval(
+                """
+                SELECT EXISTS (SELECT 1 FROM client_plans WHERE login = $1)
+                    OR EXISTS (SELECT 1 FROM client_profiles WHERE login = $1
+                                  AND (declared OR display_name IS NOT NULL))
+                    OR EXISTS (SELECT 1 FROM shaping_policies
+                                WHERE scope = 'subscriber' AND target_key = $1)
+                """,
+                login,
+            )
+        )
+
+
+async def _noter_le_retrait(
+    container: Any, reference: str, session: str, ip: str, actor: str
+) -> None:
+    activite = getattr(container, "activity_repo", None)
+    if activite is None:
+        return
+    try:
+        await activite.record(
+            actor=actor,
+            login=reference,
+            action="Duplicate removed",
+            detail=f"session {session} found on the router with {ip}: removed, this client "
+            "(declared by hand) is the one kept",
+        )
+    except Exception:  # noqa: BLE001 - le journal est un plus
+        logger.debug("Journal du retrait de '%s' impossible", session)
 
 
 async def _fusionner(
