@@ -749,6 +749,65 @@ SECTIONS_POSEES: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
 )
 
 
+class QueueRemoval(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=500)
+    confirm: bool = False
+
+
+def _collecte(container: Any, name: str) -> Any:
+    collecteur = next((c for c in container.registry.collectors if c.name == name), None)
+    if collecteur is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"Router '{name}' is not collected"
+        )
+    return collecteur
+
+
+@router.get(
+    "/pops/routers/{name}/simple-queues",
+    summary="Every simple queue on a router, read live, with duplicates (nothing is written)",
+)
+async def router_simple_queues(name: str, container: ContainerDep) -> dict[str, Any]:
+    """TOUTES les files simples du routeur : celles de freeQoS, celles posees a la
+    main, et les doublons (plusieurs files sur une meme adresse)."""
+    _collecte(container, name)
+    try:
+        files = await container.shaping.simple_queue_list(name)
+    except Exception as exc:  # noqa: BLE001 - le routeur dit pourquoi
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"{name} could not be read: {type(exc).__name__}: {exc}",
+        ) from exc
+    return {
+        "router": name,
+        "queues": files,
+        "duplicates": sum(1 for f in files if f["same_target_as"]),
+    }
+
+
+@router.post(
+    "/pops/routers/{name}/simple-queues/remove",
+    summary="Remove the chosen simple queues from a router",
+)
+async def router_remove_simple_queues(
+    name: str, payload: QueueRemoval, container: ContainerDep, user: UserDep
+) -> dict[str, Any]:
+    """Supprime les files CHOISIES, et seulement elles (journalise)."""
+    _collecte(container, name)
+    if not payload.confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Removing queues from a router: 'confirm' must be true",
+        )
+    try:
+        return await container.shaping.remove_simple_queues(name, payload.ids, author=_auteur(user))
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"{name}: queues not removed: {type(exc).__name__}: {exc}",
+        ) from exc
+
+
 @router.get(
     "/pops/routers/{name}/freeqos-lines",
     summary="Everything freeQoS set on a router, read live (nothing is written)",

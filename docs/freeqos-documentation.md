@@ -761,6 +761,10 @@ When a core stays **above 80 % for over a minute**, an alert is raised (*Router 
 
 *Devices › Router settings › Polled routers › Set by freeQoS* reads the router live and lists, table by table, **every line carrying the freeQoS mark**: client queues (`/queue/simple`, with target, limit, queue type and parent), the CAKE queue types, the restriction lines (firewall filter, mangle, queue tree) and address lists, plus the NetFlow export (whether `traffic-flow` is on, and which collector targets freeQoS set). Nothing is written. Queues made by hand or by RADIUS are only counted, never listed as freeQoS's. It is exactly what *Remove freeQoS* would take off. API: `GET /api/v1/pops/routers/{name}/freeqos-lines`.
 
+### Queues: every simple queue of a router, and removing the ones you choose
+
+*Devices › Router settings › Polled routers › Queues* (Administrator) reads **every** simple queue of the router live: freeQoS's, the ones set **by hand**, and the **dynamic** ones set by the router itself (`<pppoe-…>`). Queues that share an address with another queue are flagged **duplicates**: RouterOS applies only the first queue of an address, so the other one neither limits nor measures. The list opens on the duplicates only. Tick the queues to remove and press *Remove*: only those are taken off the router (each removal is recorded in the command log), even on a read-only router, since removing a queue throttles nobody. A dynamic queue cannot be removed (the router sets it again). A freeQoS queue that is still needed comes back at the next pass; a queue set by hand does not. Keep the queue of the client declared by hand and remove the other. API: `GET /api/v1/pops/routers/{name}/simple-queues`, `POST /api/v1/pops/routers/{name}/simple-queues/remove` with `{"ids": [...], "confirm": true}`.
+
 ### Remove freeQoS: the router as it was before
 
 *Devices › Remove freeQoS* leaves a router as it was before freeQoS, in one gesture (Administrator, confirmed in a window):
@@ -1648,7 +1652,7 @@ Each page reads in sections, with a table of contents at the top and a tooltip o
 | **Network tree** | How is the network wired? | Discovered tree, editable with the mouse (move, re-parent, merge, hide) |
 | **Clients** | Who are my clients, and how are they doing? | Every client under its **PoP**, with its connection (PPPoE, static IP, or **VLAN 2060**: a VLAN is how a client is connected, never a site of its own); its mode, boost and usage; *+ Add a client* declares static-IP and VLAN clients (PPPoE clients appear by themselves). |
 | **Plans** (from *Settings › Default plan*) | Which rate for whom? | Default plan, each subscriber's plan and its source, packages pushed by the API |
-| **Devices** | Which equipment? | Connecting a router, router settings (Set up, Set by freeQoS, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health |
+| **Devices** | Which equipment? | Connecting a router, router settings (Set up, Set by freeQoS, Queues, writing, Reset queues, Remove freeQoS, known sites), Ubiquiti, radio health |
 | **API** | How to integrate? | API keys, links to the API guide and to this documentation |
 | **Settings** | How does the tool behave? | Accounts, settings, writing to the routers, caps held or not, command log |
 
