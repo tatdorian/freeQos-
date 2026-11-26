@@ -1276,6 +1276,15 @@ class MetricsRepository:
                 """,
                 hours,
             )
+            # La derniere mesure affichee aussi : sinon la liste garde la
+            # latence fausse jusqu'au prochain echantillon.
+            await conn.execute(
+                """
+                UPDATE subscriber_last_sample SET rtt_ms = NULL
+                 WHERE ts > now() - make_interval(hours => $1) AND rtt_ms IS NOT NULL
+                """,
+                hours,
+            )
             sup = await conn.execute(
                 "DELETE FROM qoe_scores WHERE ts > now() - make_interval(hours => $1)",
                 hours,
