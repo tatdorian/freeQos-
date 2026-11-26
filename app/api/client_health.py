@@ -7,6 +7,7 @@ d'antenne lue, pas de NetFlow, sonde coupee) : sa reponse dit alors
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -18,6 +19,11 @@ from app.services import client_health as sante
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["clients"])
+
+#: Ce qu'une partie LENTE de la fiche (motif sans file, 30 jours d'historique,
+#: applications) a pour repondre : au-dela, elle est rendue vide, et la fiche
+#: s'ouvre quand meme.
+BUDGET_LENT_S = 4.0
 
 
 async def _volumes(repo: Any, sid: int, heures: int, pas: int) -> tuple[float, float]:
@@ -91,7 +97,7 @@ async def client_health(
         for fenetre in (60, 1440):
             latences = [
                 x
-                for x in await repo.latency_by_subscriber(minutes=fenetre)
+                for x in await repo.latency_by_subscriber(minutes=fenetre, subscriber_id=sid)
                 if int(x["subscriber_id"]) == sid
             ]
             if latences:
@@ -150,16 +156,34 @@ async def client_health(
         nom_file = container.shaping.queue_name_for(login)
         file = None
         fait = False
+        # SA FILE : par son nom, sinon par son ADRESSE -- un client a IP fixe
+        # porte par une session PPPoE a sa file au nom de la session. La
+        # chercher par le seul nom le disait « sans file » a tort.
+        hote = str(ligne.get("last_ip") or "").split("/")[0]
+        par_adresse = None
         for routeur in audit.get("routers") or []:
             if not routeur.get("pending"):
                 fait = True
             for q in routeur.get("queues") or []:
                 if q.get("name") == nom_file:
                     file = q
+                elif (
+                    hote
+                    and par_adresse is None
+                    and any(
+                        str(t).split("/")[0] == hote for t in str(q.get("target") or "").split(",")
+                    )
+                ):
+                    par_adresse = q
+        file = file or par_adresse
         pourquoi = None
         if file is None and fait:
             try:
-                pourquoi = await container.shaping.why_no_queue(login)
+                # Le motif recalcule le plan des routeurs (lecture en direct) :
+                # borne, pour que la fiche s'ouvre quoi qu'il arrive.
+                pourquoi = await asyncio.wait_for(
+                    container.shaping.why_no_queue(login), timeout=BUDGET_LENT_S
+                )
             except Exception as exc:  # noqa: BLE001 - le motif est un plus
                 logger.debug("Motif sans file de %s illisible : %s", login, exc)
         sortie["limit"] = sante.limite(file, fait, pourquoi)
@@ -170,11 +194,23 @@ async def client_health(
     # 5. Usage.
     try:
         jb, jh = await _volumes(repo, sid, 24, 300)
-        mb, mh = await _volumes(repo, sid, 24 * 30, 3600)
+        try:
+            # Trente jours d'historique (morceaux compresses) : borne aussi.
+            mb, mh = await asyncio.wait_for(
+                _volumes(repo, sid, 24 * 30, 3600), timeout=BUDGET_LENT_S
+            )
+        except TimeoutError:
+            mb, mh = 0, 0
         apps: list[dict[str, Any]] = []
         flux = getattr(container, "flows_repo", None)
         if flux is not None:
-            apps = await flux.applications(minutes=7 * 24 * 60, subscriber_id=sid, limit=6)
+            try:
+                apps = await asyncio.wait_for(
+                    flux.applications(minutes=7 * 24 * 60, subscriber_id=sid, limit=6),
+                    timeout=BUDGET_LENT_S,
+                )
+            except TimeoutError:
+                apps = []
         sortie["usage"] = sante.usage(jb, jh, mb, mh, apps)
     except Exception as exc:  # noqa: BLE001
         logger.debug("Usage de %s illisible : %s", login, exc)
