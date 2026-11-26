@@ -60,10 +60,16 @@ class PgMetricsWriter:
         ]
         # Le plus recent par abonne, pour subscriber_last_sample : la vue
         # subscriber_latest la lit au lieu de parcourir tout l'historique.
+        #
+        # A SECONDE EGALE, LE PREMIER -- comme l'historique (ON CONFLICT DO
+        # NOTHING ci-dessous). Constate : un client mesure deux fois dans le
+        # meme cycle (session vue sur deux routeurs) gardait la SECONDE mesure,
+        # souvent vide ; la liste l'affichait a 0 alors que l'historique avait
+        # son vrai debit.
         derniers: dict[int, tuple[Any, ...]] = {}
         for ligne in payload:
             actuel = derniers.get(ligne[1])
-            if actuel is None or ligne[0] >= actuel[0]:
+            if actuel is None or ligne[0] > actuel[0]:
                 derniers[ligne[1]] = ligne
         async with self._pool.acquire() as conn, conn.transaction():
             await conn.executemany(
@@ -85,7 +91,7 @@ class PgMetricsWriter:
                    SET ts = EXCLUDED.ts, rx_bps = EXCLUDED.rx_bps,
                        tx_bps = EXCLUDED.tx_bps, rtt_ms = EXCLUDED.rtt_ms,
                        session_uptime_s = EXCLUDED.session_uptime_s
-                 WHERE subscriber_last_sample.ts <= EXCLUDED.ts
+                 WHERE subscriber_last_sample.ts < EXCLUDED.ts
                 """,
                 [(r[0], r[1], r[2], r[3], r[6], r[7]) for r in derniers.values()],
             )
