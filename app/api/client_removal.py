@@ -116,23 +116,6 @@ async def list_removed(container: ContainerDep) -> dict[str, Any]:
         quand = ligne.get("removed_at")
         if quand is not None and hasattr(quand, "isoformat"):
             ligne["removed_at"] = quand.isoformat()
-    # CE QUE LE RELEVE VOIT D'EUX (memoire seule) : connecte, IP, MAC, routeur.
-    # Sans lien, c'est ce qui dit pourquoi : hors ligne (IP inconnue), ou une IP
-    # qui n'est celle d'aucun client declare.
-    collection = getattr(container, "collection", None)
-    vues = dict(getattr(collection, "removed_sessions", {}) or {})
-    for ligne in lignes:
-        vu = vues.get(str(ligne["login"]))
-        ligne["seen"] = (
-            {
-                "address": vu.get("address"),
-                "mac": vu.get("caller_id"),
-                "router": vu.get("router"),
-                "pop_name": vu.get("pop_name"),
-            }
-            if vu
-            else None
-        )
     retires = [ligne for ligne in lignes if not ligne.get("same_as")]
     doublons = [ligne for ligne in lignes if ligne.get("same_as")]
     return {"count": len(retires), "clients": retires, "duplicates": doublons}
