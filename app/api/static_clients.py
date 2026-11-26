@@ -409,10 +409,15 @@ async def create_static_client(
     logger.info("Client statique '%s' declare depuis l'interface", created["reference"])
     # Deja connu par sa session (meme IP) : un seul client, pas deux.
     fusions = await merge_duplicates(container, only_reference=str(created["reference"]))
-    if fusions:
-        created["merged_into"] = fusions[0]["into"]
+    fusion = next((f for f in fusions if f.get("into")), None)
+    if fusion is not None:
+        created["merged_into"] = fusion["into"]
         _redessiner_l_arbre(container)
         return created
+    # La session seulement DETECTEE sur son IP a ete retiree : il reste le seul.
+    retrait = next((f for f in fusions if f.get("removed")), None)
+    if retrait is not None:
+        created["removed_duplicate"] = retrait["removed"]
     created["enforcement"] = await _poser_la_file(
         container,
         reference=created["reference"],

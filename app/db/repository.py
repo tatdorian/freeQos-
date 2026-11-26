@@ -251,6 +251,8 @@ class MetricsRepository:
                  WHERE ($1::int IS NULL OR s.pop_id = $1)
                    AND ($2::text IS NULL OR s.login ILIKE '%' || $2 || '%')
                    AND ($3::text IS NULL OR s.kind = $3)
+                   -- Un client RETIRE de freeQoS n'est plus un client.
+                   AND NOT EXISTS (SELECT 1 FROM excluded_clients x WHERE x.login = s.login)
                  ORDER BY s.login
                  LIMIT $4 OFFSET $5
                 """,
