@@ -1255,7 +1255,7 @@ A subscriber alone on a quiet sector gets its full plan. When everyone pulls at 
 The plan belongs to the subscriber, not to the PoP: a PoP has a capacity, not a plan. It is resolved in this order:
 
 1. **The plan written for this subscriber**, pushed through the API (billing, Preseem integration) or entered on the *Plans* page. The last write wins.
-2. **A subscriber pushed or declared without a rate** has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (`DEFAULT_PLAN_DOWN_MBPS` / `DEFAULT_PLAN_UP_MBPS`, *Settings › Default plan*; `0` = none, the default). In *Settings › Default plan*, a single **on / off switch**: on, every client without a plan — sessions seen on a router with no plan included — gets its own queue at the default rate (1 kbps unless another rate is set on the Plans page); off, they are only observed. The clients without a plan are listed under the switch, and first on the Clients page, marked **No plan**.
+2. **A subscriber pushed or declared without a rate** has no limit and no queue: freeQoS never invents a rate. An operator who wants a cap for those clients sets a default plan on purpose (`DEFAULT_PLAN_DOWN_MBPS` / `DEFAULT_PLAN_UP_MBPS`, *Settings › Default plan*, which opens the Plans page; `0` = none, the default). The **Also PPPoE sessions with no plan** box extends it to sessions seen on a router with no plan; clients with no plan are listed first on the Clients page, marked **No plan**.
 3. **A subscriber that is only detected** has no plan: it is observed, never throttled to a rate nobody sold, unless `DEFAULT_PLAN_FOR_DETECTED_CLIENTS=true`.
 
 Deleting a subscriber's plan removes its queue on the next cycle.
@@ -1368,16 +1368,6 @@ API: `GET/POST /api/v1/emergencies`, `PATCH/DELETE /api/v1/emergencies/{id}`, `P
 
 **Online, for a fixed-IP client.** A fixed-IP client has no session: it counts as online only when freeQoS measures it — counters of its queue, NetFlow, or a ping reply. Without any of them (no queue yet, writing off) it shows **Not measured · no counter yet**, never *connected* at 0.
 
-**Declared clients only (one switch, *Settings › Clients*).** Off by default. On, a client exists only when it is declared: by hand (static IP, or a PPPoE login declared before its session) or by the API (a service or a plan pushed). A client already given a name, a mode or a limit by hand also counts as declared.
-
-- A PPPoE session seen on a router and **not declared** is not a client: no record, no measurement, no queue. It is listed, with its IP address, MAC and router, under *Settings › Default plan*, *Sessions not declared*. When the default plan is on, each of these sessions gets its own queue at that rate (1 kbps by default), and the list says which ones are limited.
-- A session that carries the IP of a declared static-IP client **is** that client: it creates nothing more, and the queue is that client's. No merging into the session any more.
-- Declaring an address that already belongs to another declared client is refused (`409`, naming that client); the *Clients* card lists the addresses already declared twice.
-- *Removed* is emptied: it no longer serves any purpose.
-- The clients that were only detected stay in the database, ignored. Turning the switch off brings everything back, as before.
-
-API: `GET /api/v1/clients/registry` (state, the clients only detected, the addresses declared twice; nothing written), `GET /api/v1/clients/unlisted-sessions` (the sessions not declared and whether the default plan limits them). The switch is the setting `declared_clients_only`.
-
 **Clients page: declared clients only.** The list shows the clients that were declared: added by hand or pushed by the API, given a plan (API, set by hand, RADIUS — not the default rate), given a name, or put in a mode or a limit by hand (a client merged into its PPPoE session keeps its name, so it stays). A PPPoE session only seen on a router, that nobody declared, is not listed; it shows under *Settings › Default plan*, in *Clients without a plan*.
 
 **Clients page.** Four cards on top: *Clients* (and the number of sites), *Connected* (with a bar, green above 80 %, orange from 50 %, red below), *Scheduler now* (clients off their normal bandwidth), *Boosts*. A card is also a filter: tap it to list those clients. For each client, **Usage now** is a bar of its download rate against its limit, with a word: *Quiet* (under 10 %), *Normal*, *Busy* (60 % and more), *At its limit* (90 % and more). The IP address is not shown in the list: it is on the client's page (search by IP still works).
@@ -1446,13 +1436,6 @@ Keep in freeQoS the clients you want and remove the others: tick them on the *Cl
 - the queue **freeQoS** had set for it (named after the client, and remembered by freeQoS) is taken off at freeQoS's next write (within two minutes when writing is on), so no forgotten limit stays. No other line of the router is concerned.
 
 **Removed (N)**, above the list, shows the removed clients; **Bring back** takes one off the list: it reappears at the next reading as a newly found client (no plan, so no queue). API: `POST /api/v1/clients/remove` with `{"logins": [...], "confirm": true}`, `GET /api/v1/clients/removed`, `DELETE /api/v1/clients/removed/{login}`.
-
-**Removed clients that are a declared client.** Every minute (and when *Removed* is opened), each removed client is compared with the declared clients (added by hand or pushed by the API) and with the clients that have a plan:
-
-- **exactly the same identifier** as a declared client: the removal was hiding that declared client (no queue, not listed). The declaration wins and the removal is lifted;
-- **same IP** (inside the address or a range of a declared client, or the IP of a client with a plan), **same CPE MAC**, or an **equivalent name** (case, spaces, dashes and dots ignored): it is the same client under another identity. It leaves the *Removed* count and is listed under *Same as a declared client*, but freeQoS keeps ignoring it, otherwise the client would appear twice, with a second queue on the same address. If the declared client is deleted, it goes back to *Removed*.
-
-A removed client's IP and MAC are known only while it is connected (freeQoS keeps nothing else about it), so an offline removed client is recognised as soon as it connects. API: `POST /api/v1/clients/removed/clean` runs the comparison now; `GET /api/v1/clients/removed` returns these clients in `duplicates`.
 
 ### Ubiquiti UISP (antennas)
 

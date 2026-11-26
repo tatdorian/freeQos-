@@ -14,7 +14,6 @@ from typing import Any
 import asyncpg
 
 from app.services.capacity import SEUIL_PLAFOND
-from app.services.declared import SQL_ABONNE_DECLARE
 
 
 def _rows(records: list[asyncpg.Record]) -> list[dict[str, Any]]:
@@ -136,15 +135,7 @@ def _with_effective_limits(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def declares_seulement(settings: Any) -> bool:
-    """Le mode « clients declares seulement » est-il actif ?"""
-    return bool(getattr(settings, "declared_clients_only", False))
-
-
 class MetricsRepository:
-    #: Les reglages vivants (``declared_clients_only``), branches par le conteneur.
-    settings: Any = None
-
     def __init__(self, pool: asyncpg.Pool) -> None:
         self._pool = pool
 
@@ -674,9 +665,6 @@ class MetricsRepository:
                    AND (s.kind <> 'static'
                         OR EXISTS (SELECT 1 FROM static_clients sc
                                     WHERE sc.reference = s.login))
-                   -- Mode « clients declares seulement » : une session detectee
-                   -- et jamais declaree n'est pas un client.
-                   AND (NOT $6::bool OR {SQL_ABONNE_DECLARE})
                  ORDER BY {order_sql}
                  LIMIT $4
                 """,  # noqa: S608 - order_sql provient d'une liste blanche
@@ -685,7 +673,6 @@ class MetricsRepository:
                 kind,
                 limit,
                 include_unmeasured,
-                declares_seulement(self.settings),
             )
         return [_with_effective_limits(dict(record)) for record in records]
 
@@ -1246,16 +1233,14 @@ class MetricsRepository:
         """Tous les clients connus et le plan qu'ils portent, pour la page Plans."""
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                f"""
+                """
                 SELECT s.id AS subscriber_id, s.login, s.kind, p.name AS pop_name,
                        s.plan_down_mbps, s.plan_up_mbps, s.plan_source,
                        host(s.last_ip) AS address, s.last_seen
                   FROM subscribers s
                   LEFT JOIN pops p ON p.id = s.pop_id
-                 WHERE NOT $1::bool OR {SQL_ABONNE_DECLARE}
                  ORDER BY s.login
-                """,  # noqa: S608 - fragment constant
-                declares_seulement(self.settings),
+                """
             )
         return _rows(rows)
 

@@ -11784,155 +11784,27 @@ function renderDomain() {
   };
 }
 
-/** Settings > Default plan : un interrupteur, et les clients sans forfait.
- *
- *  Allume : la limite par defaut (1 kbps si aucune n'est reglee) est posee a
- *  chaque client SANS forfait, sessions PPPoE comprises ; eteint : aucune
- *  limite, ils sont observes. Le debit se regle dans Plans. */
-const DEBIT_DEFAUT_ALLUME = 0.001;
-
-/** Settings > Clients : UN interrupteur, « Declared clients only ».
- *
- *  Allume : seuls les clients declares (a la main ou par l'API) existent ;
- *  « Removed » est vide, il ne sert plus. Les clients seulement detectes sont
- *  ignores mais gardes en base : eteindre remet tout comme avant. */
-async function chargerClientsDeclares() {
-  const bascule = document.getElementById('dc-switch');
-  const etat = document.getElementById('dc-state');
-  const corps = document.getElementById('dc-body');
-  if (!bascule || !etat || !corps) return;
-  let d;
-  try { d = await api('/clients/registry'); } catch (err) { corps.innerHTML = noticeErreur(err); return; }
-  bascule.checked = !!d.enabled;
-  bascule.disabled = !peut('edit');
-  const detectes = (d.detected || []).length;
-  const conflits = d.conflicts || [];
-  etat.textContent = d.enabled
-    ? 'On' + (detectes ? ' · ' + detectes + ' client(s) only detected are ignored' : '')
-    : 'Off';
-  corps.innerHTML = conflits.length
-    ? '<div class="notice warn"><strong>' + conflits.length + ' address' + (conflits.length > 1 ? 'es are' : ' is') +
-      ' declared twice</strong><span class="hint">' + conflits.map((c) => esc(c.address) + ': ' + esc(c.client) +
-        ' and ' + esc(c.other)).join(' · ') + '. Edit or delete one of the two.</span></div>'
-    : '';
-  bascule.onchange = async () => {
-    const on = bascule.checked;
-    const message = on
-      ? 'Turn “Declared clients only” on?\n\n' + detectes + ' client(s) only detected will be ignored, and ' +
-        '“Removed” emptied. ' + (d.declared || 0) + ' declared client(s) stay as they are.' +
-        (conflits.length ? '\n\nWarning: ' + conflits.length + ' address(es) are declared twice.' : '') +
-        '\n\nTurning it off brings everything back.'
-      : 'Turn “Declared clients only” off?\n\nSessions seen on the routers become clients again, as before.';
-    if (!confirm(message)) { bascule.checked = !on; return; }
-    bascule.disabled = true;
-    try {
-      await api('/settings/declared_clients_only', { method: 'PUT', body: JSON.stringify({ value: on }) });
-      if (on) await api('/clients/removed/clean', { method: 'POST' }).catch(() => null);
-      await api('/plans/refresh', { method: 'POST' }).catch(() => null);
-      toast(on ? 'Declared clients only: on.' : 'Declared clients only: off.', 4000);
-    } catch (err) { toastErreur(err); }
-    await chargerClientsDeclares();
-    await chargerForfaitDefaut();
-    if (typeof majRetires === 'function') majRetires();
-  };
-}
-
-/** Sessions non declarees (mode « declared clients only ») : login, IP, MAC,
- *  routeur, et si la limite par defaut leur est posee. */
-async function chargerSessionsNonDeclarees() {
-  const host = document.getElementById('dp-undeclared');
+/** Settings > Default plan : son etat en un coup d'oeil (desactive par defaut). */
+function etatForfaitDefaut(body) {
+  const host = document.getElementById('settings-default-plan-state');
   if (!host) return;
-  let d;
-  try { d = await api('/clients/unlisted-sessions'); } catch (err) { host.innerHTML = ''; return; }
-  if (!d.enabled) { host.innerHTML = ''; return; }
-  const sessions = d.sessions || [];
-  const lim = d.limit;
-  host.innerHTML = '<h4 style="margin:.8rem 0 .4rem">Sessions not declared (' + sessions.length + ')</h4>' +
-    '<span class="hint" style="display:block">Seen on the routers, declared nowhere: not clients. ' +
-    (lim ? 'The default plan limits each one to ' + esc(mbps(lim.down_mbps || 0)) + ' / ' + esc(mbps(lim.up_mbps || 0)) + '.'
-      : 'The default plan is off: they are not limited.') + '</span>' +
-    (sessions.length
-      ? '<div class="table-wrap"><table><thead><tr><th>Connection</th><th>IP address</th><th>MAC</th>' +
-        '<th>Router</th><th>Now</th></tr></thead><tbody>' +
-        sessions.slice(0, 500).map((x) => '<tr><td><b>' + esc(x.login) + '</b></td><td><code>' + esc(x.address || '-') +
-          '</code></td><td><code>' + esc(x.caller_id || '-') + '</code></td><td>' + esc(x.router || '-') + '</td><td>' +
-          (x.declared_client
-            ? '<span class="badge ok" title="It carries the IP of this declared client: it is that client, with its queue">= ' +
-              esc(x.declared_client) + '</span>'
-            : x.limited ? '<span class="badge warn">limited to ' + esc(mbps((lim && lim.down_mbps) || 0)) + '</span>'
-              : '<span class="badge">not limited</span>') + '</td></tr>').join('') +
-        '</tbody></table></div>'
-      : '<div class="empty">No session that is not declared.</div>');
-}
-
-async function chargerForfaitDefaut() {
-  const etat = document.getElementById('dp-state');
-  const bascule = document.getElementById('dp-switch');
-  const liste = document.getElementById('dp-list');
-  if (!etat || !bascule || !liste) return;
-  let d;
-  try { d = await api('/plans'); } catch (err) { liste.innerHTML = noticeErreur(err); return; }
-  const def = d.default || {};
-  const allume = !!(def.down_mbps || def.up_mbps) && !!def.detected_clients;
-  bascule.checked = allume;
-  bascule.disabled = !peut('edit');
-  etat.textContent = allume
-    ? 'On: ' + mbps(def.down_mbps || 0) + ' / ' + mbps(def.up_mbps || 0) + ' for every client without a plan'
-    : (def.down_mbps || def.up_mbps)
-      ? 'Partly on: ' + mbps(def.down_mbps || 0) + ' / ' + mbps(def.up_mbps || 0) +
-        ' only for clients entered without a rate'
-      : 'Off';
-  const sans = (d.clients || []).filter((c) => c.no_plan);
-  liste.innerHTML = '<h4 style="margin:.4rem 0">Clients without a plan (' + sans.length + ')</h4>' +
-    (sans.length
-      ? '<div class="table-wrap"><table><thead><tr><th>Client</th><th>Site</th><th>Address</th>' +
-        '<th>Now</th></tr></thead><tbody>' +
-        sans.slice(0, 300).map((c) => '<tr class="clickable" data-dp-cli="' + esc(c.login) + '">' +
-          '<td><b>' + esc(c.login) + '</b>' + (c.kind === 'static' ? ' <span class="badge">static IP</span>' : '') +
-          '</td><td>' + esc(c.pop_name || '-') + '</td><td><code>' + esc(c.address || '-') + '</code></td>' +
-          '<td>' + (c.forced_down_mbps != null
-            ? '<span class="badge" title="Limit set by hand: it overrides the default plan">forced ' +
-              esc(mbps(c.forced_down_mbps)) + '</span>'
-            : c.default_applied
-              ? '<span class="badge warn">limited to ' + esc(mbps(c.down_mbps || 0)) + '</span>'
-              : '<span class="badge">not limited</span>') + '</td></tr>').join('') +
-        '</tbody></table></div>' +
-        (sans.length > 300 ? '<p class="hint">First 300 shown: see Plans, filter No plan.</p>' : '')
-      : '<div class="empty">Every client has a plan.</div>');
-  liste.querySelectorAll('[data-dp-cli]').forEach((tr) =>
-    tr.addEventListener('click', () => openClientSheet(tr.dataset.dpCli)));
-  chargerSessionsNonDeclarees();
-  bascule.onchange = async () => {
-    const on = bascule.checked;
-    const debit = on ? (def.down_mbps || DEBIT_DEFAUT_ALLUME) : 0;
-    const montant = on ? (def.up_mbps || DEBIT_DEFAUT_ALLUME) : 0;
-    if (on && !confirm('Turn the default plan on?\n\n' + sans.length + ' client(s) without a plan will ' +
-        'each get a queue at ' + mbps(debit) + ' / ' + mbps(montant) + '. Clients with a plan are not affected.')) {
-      bascule.checked = false;
-      return;
-    }
-    bascule.disabled = true;
-    try {
-      await api('/settings/default_plan_down_mbps', { method: 'PUT', body: JSON.stringify({ value: debit }) });
-      await api('/settings/default_plan_up_mbps', { method: 'PUT', body: JSON.stringify({ value: montant }) });
-      await api('/settings/default_plan_for_detected_clients', { method: 'PUT', body: JSON.stringify({ value: on }) });
-      const r = await api('/plans/refresh', { method: 'POST' }).catch(() => ({ ok: false }));
-      toast(on ? 'Default plan on' + (r.ok ? ': applied.' : ': it reaches the routers within minutes.')
-        : 'Default plan off: clients without a plan are no longer limited.', 5000);
-    } catch (err) {
-      toastErreur(err);
-    }
-    await chargerForfaitDefaut();
-  };
+  const val = (nom) => (body.settings.find((x) => x.name === nom) || {}).value;
+  const bas = Number(val('default_plan_down_mbps')) || 0;
+  const haut = Number(val('default_plan_up_mbps')) || 0;
+  const detectes = val('default_plan_for_detected_clients') === true;
+  host.innerHTML = bas || haut
+    ? '<span class="badge warn">On: ' + esc(mbps(bas)) + ' / ' + esc(mbps(haut)) +
+      (detectes ? ', PPPoE sessions with no plan included' : ', clients entered without a rate only') +
+      '</span>'
+    : '<span class="badge">Off</span>';
 }
 
 async function loadSettings() {
   renderAccounts();
   loadDomain();
   loadNotif();
-  chargerClientsDeclares();
-  chargerForfaitDefaut();
   const body = await api('/settings');
+  etatForfaitDefaut(body);
   const host = document.getElementById('settings-groups');
   const compte = document.getElementById('settings-count');
   if (compte) {
@@ -11960,8 +11832,7 @@ async function loadSettings() {
     '<div class="table-wrap"><table><thead><tr>' +
       '<th>Setting</th><th>Value</th><th>Source</th><th></th>' +
     '</tr></thead><tbody>' +
-    // L'interrupteur « Declared clients only » vit dans sa carte (Clients).
-    body.groups[g].filter((r) => r.name !== 'declared_clients_only').map((r) => settingRow(r, fq)).join('') +
+    body.groups[g].map((r) => settingRow(r, fq)).join('') +
     '</tbody></table></div>').join('');
 
   host.querySelectorAll('[data-set-save]').forEach((b) => {
@@ -13880,45 +13751,19 @@ function retirerClients(logins) {
 async function ouvrirRetires() {
   if (!peut('edit')) return;
   let data;
-  // D'abord, ranger ceux qui sont un client declare (meme IP, MAC ou nom).
-  const range = await api('/clients/removed/clean', { method: 'POST' }).catch(() => null);
   try { data = await api('/clients/removed'); } catch (err) { toastErreur(err); return; }
   const lignes = data.clients || [];
-  const doublons = data.duplicates || [];
-  const leves = (range && range.restored) || [];
-  const blocDoublons = (leves.length
-    ? '<div class="notice ok"><strong>' + leves.length + ' declared client' + (leves.length > 1 ? 's were' : ' was') +
-      ' hidden by a removal under the same name</strong><span class="hint">' + esc(leves.join(', ')) +
-      ': the removal is lifted, the declared client is back.</span></div>' : '') +
-    (doublons.length
-      ? '<details class="card" style="margin-top:.6rem"><summary><b>' + doublons.length + ' same as a declared client</b>' +
-        ' &mdash; no longer counted as removed</summary>' +
-        '<p class="hint" style="display:block">Same IP, MAC or name as a client that is declared or has a plan: it is ' +
-        'that client. freeQoS keeps ignoring this other identity, otherwise the client would appear twice.</p>' +
-        '<ul class="result-list">' + doublons.map((c) => '<li><b>' + esc(c.login) + '</b> = ' + esc(c.same_as) +
-          ' <span class="hint" style="display:inline">(' + esc(c.same_reason || '') + ')</span></li>').join('') +
-        '</ul></details>' : '');
-  majRetires();
   const m = openModal('<div class="modal-head"><div><h3>Removed from freeQoS</h3>' +
     '<div class="sub">' + lignes.length + ' client(s). freeQoS ignores them, even when connected.</div></div>' +
     '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
-    '<div class="modal-body">' + blocDoublons + (lignes.length
+    '<div class="modal-body">' + (lignes.length
       ? '<ul class="result-list" id="rm-list">' + lignes.map((c) =>
-        '<li style="display:flex;align-items:center;gap:.6rem;flex-wrap:wrap"><b>' + esc(c.login) + '</b>' +
-        // Ce que le releve en voit : c'est ce qui dit pourquoi il n'est relie a
-        // aucun client declare.
-        (c.seen
-          ? '<span class="badge" title="Connected now: no declared client has this IP or MAC">connected · ' +
-            esc([c.seen.address, c.seen.mac, c.seen.router].filter(Boolean).join(' · ')) + '</span>'
-          : '<span class="badge" title="Not connected since freeQoS started: its IP is unknown, so it cannot be ' +
-            'compared with the declared clients yet">not seen connected</span>') +
+        '<li style="display:flex;align-items:center;gap:.6rem"><b>' + esc(c.login) + '</b>' +
         '<span class="hint" style="display:inline">' + (c.removed_at ? esc(dateLongue(c.removed_at)) : '') +
         (c.removed_by ? ' · ' + esc(c.removed_by) : '') + '</span><span class="spacer" style="flex:1"></span>' +
         '<button class="sm" data-restore="' + esc(c.login) + '">Bring back</button></li>').join('') + '</ul>' +
-        '<p class="hint" style="display:block">Not linked to a declared client: either not connected (its IP is ' +
-        'unknown until it connects), or connected with an IP and a MAC that no declared client has. ' +
-        'Brought back, a client reappears at the next reading as a newly found client: not listed on the ' +
-        'Clients page until declared, and limited by the default plan when it is on.</p>'
+        '<p class="hint" style="display:block">Brought back, a client reappears at the next reading, ' +
+        'as a newly found client (no plan, so no queue).</p>'
       : '<div class="empty">No client removed.</div>') + '</div>' +
     '<div class="modal-foot"><button class="primary" data-modal-close>Close</button></div>');
   m.root.querySelectorAll('[data-restore]').forEach((b) => b.addEventListener('click', async () => {
