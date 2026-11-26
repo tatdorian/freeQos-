@@ -1,10 +1,9 @@
 """Un client declare a la main sur l'IP d'une session deja connue : UN seul client.
 
-LE CLIENT DECLARE A LA MAIN GAGNE. Si la session n'a ete que DETECTEE (aucun
-forfait, nom, mode ni limite donnes), c'est ELLE qui est retiree de freeQoS,
-comme avec « Remove » ; la fiche declaree reste, avec sa file. La fusion
-ci-dessous ne vaut plus que pour une session elle-meme declaree (forfait pousse
-par l'API, par exemple).
+LE CLIENT DECLARE A LA MAIN GAGNE, TOUJOURS : la session PPPoE qui porte son
+IP est retiree de freeQoS, comme avec « Remove » ; la fiche declaree reste,
+avec sa file. La fusion ci-dessous ne vaut plus que pour DEUX FICHES a IP fixe
+sur la meme adresse (une a la main, une poussee par l'API ou saisie avant).
 
 LE BESOIN. Un client existe deja (sa session PPPoE, decouverte sur le routeur)
 et l'exploitant le declare a la main avec son IP fixe, sous un autre nom. Il
@@ -118,16 +117,15 @@ async def merge_duplicates(
         if len(candidats) != 1:
             continue
         cible = candidats[0]
-        if (
-            cible_statique is None
-            and retires is not None
-            and not await _session_declaree(container, cible)
-        ):
-            # LE CLIENT DECLARE A LA MAIN GAGNE. La session qui porte son IP n'a
-            # ete que DETECTEE (ni forfait, ni nom, ni mode, ni limite donnes) :
-            # elle est retiree de freeQoS, comme avec « Remove » -- rien n'est
-            # efface, rien n'est touche sur le routeur hors la file que freeQoS
-            # lui avait posee. Le client declare garde sa fiche et sa file.
+        if cible_statique is None and retires is not None:
+            # LE CLIENT DECLARE A LA MAIN GAGNE, TOUJOURS. La session qui porte
+            # son IP -- detectee sur le routeur, avec ou sans forfait -- est
+            # retiree de freeQoS, comme avec « Remove » : rien n'est efface,
+            # rien n'est touche sur le routeur hors la file que freeQoS lui
+            # avait posee. Le client declare garde sa fiche et SA file.
+            # Constate : la session gardait sa file (OF0265, 4 Mbps) a cote de
+            # celle du client declare (16 Mbps) sur la meme IP -- conflit, et
+            # un client mesure a 0.
             try:
                 await retires.add([cible], actor)
             except Exception:  # noqa: BLE001 - un retrait rate n'empeche pas les autres
@@ -152,27 +150,6 @@ async def merge_duplicates(
         fusions.append({"from": reference, "into": cible, "address": ip})
         logger.info("Client '%s' (fiche a la main, %s) fusionne dans '%s'", reference, ip, cible)
     return fusions
-
-
-async def _session_declaree(container: Any, login: str) -> bool:
-    """La session a-t-elle ete DECLAREE (forfait ecrit, nom ou declaration a la
-    main, mode ou limite poses) -- ou seulement detectee sur un routeur ?"""
-    base = getattr(container, "database", None)
-    if base is None:
-        return True  # sans base, on ne retire rien : la fusion d'avant s'applique
-    async with base.pool.acquire() as conn:
-        return bool(
-            await conn.fetchval(
-                """
-                SELECT EXISTS (SELECT 1 FROM client_plans WHERE login = $1)
-                    OR EXISTS (SELECT 1 FROM client_profiles WHERE login = $1
-                                  AND (declared OR display_name IS NOT NULL))
-                    OR EXISTS (SELECT 1 FROM shaping_policies
-                                WHERE scope = 'subscriber' AND target_key = $1)
-                """,
-                login,
-            )
-        )
 
 
 async def _noter_le_retrait(

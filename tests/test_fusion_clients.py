@@ -5,8 +5,8 @@ CE QUI EST FIXE ICI
 1. LE CLIENT DECLARE A LA MAIN GAGNE : une session seulement DETECTEE sur son
    IP (ni forfait, ni nom, ni mode) est retiree de freeQoS, comme avec
    « Remove ». La fiche reste, avec sa file a son nom.
-2. Une session elle-meme DECLAREE (forfait) : la fiche y est fusionnee, comme
-   avant. Le nom saisi devient son nom affiche, et sa file est sur la session.
+2. Meme une session AVEC forfait est retiree : il ne reste qu'une file sur
+   l'IP, celle du client declare.
 3. Une fiche declaree AVANT que la session n'apparaisse : la tache periodique
    retire la session detectee ; la fiche garde son mode.
 4. Une fiche poussee par l'API de facturation n'est jamais fusionnee.
@@ -114,51 +114,48 @@ def test_la_session_seulement_detectee_est_retiree(app_client, routeur) -> None:
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
-def test_declarer_a_la_main_un_client_deja_connu_le_fusionne(app_client, routeur) -> None:  # noqa: F811
+def test_meme_une_session_avec_forfait_est_retiree(app_client, routeur) -> None:  # noqa: F811
+    """Le client declare a la main gagne TOUJOURS : une session qui porte son
+    IP part, meme si elle avait un forfait. Sa file a elle disparait, il ne
+    reste que celle du client declare (plus de doublon 16 / 4 Mbps)."""
     ecriture, _lecture = _cles(app_client)
     cle = {"Authorization": f"Bearer {ecriture}"}
     _brancher(app_client, cle)
-    assert "dupont" in _logins(app_client, cle)
-    # La session est DECLAREE elle aussi (un forfait lui a ete pousse) : fusion.
-    r = app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 8, "up_mbps": 2})
+    r = app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 4, "up_mbps": 4})
     assert r.status_code == 200, r.text
+    r = app_client.post(
+        "/api/v1/shaping/apply",
+        headers=cle,
+        json={"router": "nas-test", "dry_run": False, "confirm": True},
+    )
+    assert r.status_code == 200, r.text
+    assert _file(routeur, "10.20.0.10")["name"] == "dupont"
 
     r = app_client.post(
         "/api/v1/static-clients",
         headers=cle,
         json={
             "reference": "ACME OFFICE",
-            "label": "ACME Office",
             "pop_name": "PoP Test",
             "address": "10.20.0.10",
-            "plan_down_mbps": 20,
-            "plan_up_mbps": 5,
+            "plan_down_mbps": 16,
+            "plan_up_mbps": 16,
         },
     )
     assert r.status_code == 201, r.text
-    assert r.json()["merged_into"] == "dupont"
-
-    # Un seul client : la session, sous le nom saisi.
-    assert "ACME OFFICE" not in _references(app_client, cle)
-    logins = _logins(app_client, cle)
-    assert "dupont" in logins
-    assert "ACME OFFICE" not in logins
-    fiche = app_client.get("/api/v1/clients/dupont/profile", headers=cle).json()
-    assert fiche["profile"]["display_name"] == "ACME Office"
-
-    # Son forfait a elle (pousse avant) est garde, et la file est sur la session.
-    forfaits = app_client.get("/api/v1/plans", headers=cle).json()
-    plan = next(c for c in forfaits["clients"] if c["login"] == "dupont")
-    assert plan["down_mbps"] == 8
-    file = _file(routeur, "10.20.0.10")
-    assert file is not None, routeur.simple_queue_rows
-    assert file["max-limit"] == "2000000/8000000"
-    assert "acme" not in str(file.get("name", "")).lower()
-
-    # Le journal du client le dit.
-    activite = app_client.get("/api/v1/activity", headers=cle, params={"login": "dupont"})
-    assert activite.status_code == 200, activite.text
-    assert any(a["action"] == "Merged" for a in activite.json())
+    assert r.json()["removed_duplicate"] == "dupont"
+    assert "merged_into" not in r.json()
+    r = app_client.post(
+        "/api/v1/shaping/apply",
+        headers=cle,
+        json={"router": "nas-test", "dry_run": False, "confirm": True},
+    )
+    assert r.status_code == 200, r.text
+    sur_l_ip = [
+        q for q in routeur.simple_queue_rows if str(q.get("target", "")).startswith("10.20.0.10")
+    ]
+    assert [q["name"] for q in sur_l_ip] == ["ACME-OFFICE"], sur_l_ip
+    assert sur_l_ip[0]["max-limit"] == "16000000/16000000"
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
