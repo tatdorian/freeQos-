@@ -1395,39 +1395,14 @@
       <h2>Email alerts</h2>
       <div class="card" id="settings-notif"></div>
 
-      <!-- CLIENTS DECLARES SEULEMENT : UN interrupteur. Un client n'existe que
-           s'il est declare (a la main ou par l'API). Desactive par defaut ;
-           l'eteindre remet tout comme avant. -->
-      <h2>Clients</h2>
-      <div class="card stack" id="settings-declared">
-        <label class="switch">
-          <input type="checkbox" id="dc-switch"><span class="rail"></span>
-          <span><b>Declared clients only</b> <span id="dc-state" class="hint" style="display:inline"></span></span>
-        </label>
-        <span class="hint" style="display:block">On: a client exists only when it is declared, by hand
-          (static IP or PPPoE login) or by the API. A session seen on a router and not declared is not
-          a client: no record, no measurement, no queue (unless the default plan below covers it). A
-          session that carries the IP of a declared client is that client. No more merging, and
-          “Removed” is emptied. Off (the default): clients are also found on the routers, as before.</span>
-        <div id="dc-body"></div>
-      </div>
-
-      <!-- FORFAIT PAR DEFAUT : un interrupteur. Allume, chaque client SANS
-           forfait (saisi sans debit ou session PPPoE sans forfait) recoit SA
-           file a ce debit (1 kbps par defaut) ; eteint, ils sont observes.
-           Les clients sans forfait sont listes juste en dessous. -->
+      <!-- FORFAIT PAR DEFAUT : la limite des clients SANS forfait. Desactive
+           par defaut (0 = aucune limite) ; son etat est rappele ici. -->
       <h2>Default plan</h2>
-      <div class="card stack" id="settings-default-plan">
-        <label class="switch">
-          <input type="checkbox" id="dp-switch"><span class="rail"></span>
-          <span><b>Default plan</b> <span id="dp-state" class="hint" style="display:inline"></span></span>
-        </label>
-        <span class="hint" style="display:block">On: every client without a plan gets its own queue at
-          the default rate (1 kbps unless changed in <a href="#/plans">Plans</a>), so unconfigured
-          clients stand out. Clients that have a plan are never affected. Off (the default): clients
-          without a plan are only observed.</span>
-        <div id="dp-list"></div>
-        <div id="dp-undeclared"></div>
+      <div class="card stack">
+        <div><b>Default plan</b> &mdash; the limit given to clients without a plan (for example
+          1 kbps to spot unconfigured clients). Off by default: clients without a plan are only
+          observed. <span id="settings-default-plan-state"></span>
+          <a class="sm" href="#/plans">Set the default plan</a></div>
       </div>
 
       <h2>Domain &amp; HTTPS</h2>

@@ -81,13 +81,6 @@ async def _oublier(repo: Any, container: Any, login: str) -> dict[str, Any]:
 
         rapport["emergency_removed"] = await emergency_repo.delete(base.pool, login)
 
-    if base is not None:
-        # Son nom et ses coordonnees : un client retire n'est plus declare (en
-        # mode « clients declares seulement », un nom donne le ferait revenir).
-        async with base.pool.acquire() as conn:
-            supprime = await conn.execute("DELETE FROM client_profiles WHERE login = $1", login)
-        rapport["profile_removed"] = not str(supprime).endswith(" 0")
-
     statiques = getattr(container, "static_clients_repo", None)
     if statiques is not None:
         for ligne in await statiques.list_all():
@@ -113,48 +106,13 @@ async def _oublier(repo: Any, container: Any, login: str) -> dict[str, Any]:
 
 @router.get("/clients/removed", summary="Clients removed from freeQoS")
 async def list_removed(container: ContainerDep) -> dict[str, Any]:
-    """Les clients retires de freeQoS : ils ne reviennent pas, meme connectes.
-
-    Ceux qui SONT un client declare (meme IP, MAC ou nom) sont rendus a part
-    (``duplicates``) : toujours ignores, ils ne comptent plus comme retires.
-    """
+    """Les clients retires de freeQoS : ils ne reviennent pas, meme connectes."""
     lignes = await _liste(container).list()
     for ligne in lignes:
         quand = ligne.get("removed_at")
         if quand is not None and hasattr(quand, "isoformat"):
             ligne["removed_at"] = quand.isoformat()
-    # CE QUE LE RELEVE VOIT D'EUX (memoire seule) : connecte, IP, MAC, routeur.
-    # Sans lien, c'est ce qui dit pourquoi : hors ligne (IP inconnue), ou une IP
-    # qui n'est celle d'aucun client declare.
-    collection = getattr(container, "collection", None)
-    vues = dict(getattr(collection, "removed_sessions", {}) or {})
-    for ligne in lignes:
-        vu = vues.get(str(ligne["login"]))
-        ligne["seen"] = (
-            {
-                "address": vu.get("address"),
-                "mac": vu.get("caller_id"),
-                "router": vu.get("router"),
-                "pop_name": vu.get("pop_name"),
-            }
-            if vu
-            else None
-        )
-    retires = [ligne for ligne in lignes if not ligne.get("same_as")]
-    doublons = [ligne for ligne in lignes if ligne.get("same_as")]
-    return {"count": len(retires), "clients": retires, "duplicates": doublons}
-
-
-@router.post(
-    "/clients/removed/clean",
-    summary="Take out of 'Removed' the clients that are a declared client (same IP, MAC or name)",
-)
-async def clean_removed(container: ContainerDep) -> dict[str, Any]:
-    """Compare tout de suite les clients retires aux clients declares."""
-    from app.services.removed_duplicates import resolve
-
-    _liste(container)
-    return await resolve(container)
+    return {"count": len(lignes), "clients": lignes}
 
 
 @router.post("/clients/remove", summary="Remove clients from freeQoS (not from the router)")

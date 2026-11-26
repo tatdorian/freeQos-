@@ -36,8 +36,6 @@ class ExcludedClients:
     def __init__(self, pool: Any = None) -> None:
         self._pool = pool
         self._logins: set[str] = set()
-        #: Sans base (tests) : login -> (client declare, raison).
-        self._memes: dict[str, tuple[str, str | None]] = {}
 
     def __contains__(self, login: object) -> bool:
         return isinstance(login, str) and login in self._logins
@@ -62,37 +60,14 @@ class ExcludedClients:
     async def list(self) -> builtins.list[dict[str, Any]]:
         if self._pool is None:
             return [
-                {
-                    "login": login,
-                    "removed_by": None,
-                    "removed_at": None,
-                    "same_as": self._memes.get(login, (None, None))[0],
-                    "same_reason": self._memes.get(login, (None, None))[1],
-                }
+                {"login": login, "removed_by": None, "removed_at": None}
                 for login in sorted(self._logins)
             ]
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT login, removed_by, removed_at, same_as, same_reason "
-                "FROM excluded_clients ORDER BY login"
+                "SELECT login, removed_by, removed_at FROM excluded_clients ORDER BY login"
             )
         return [dict(r) for r in rows]
-
-    async def mark_same_as(self, login: str, same_as: str | None, reason: str | None) -> None:
-        """Ce client retire EST un client declare (ou le redevient : None)."""
-        if same_as is None:
-            self._memes.pop(login, None)
-        else:
-            self._memes[login] = (same_as, reason)
-        if self._pool is None:
-            return
-        async with self._pool.acquire() as conn:
-            await conn.execute(
-                "UPDATE excluded_clients SET same_as = $2, same_reason = $3 WHERE login = $1",
-                login,
-                same_as,
-                reason if same_as is not None else None,
-            )
 
     async def add(self, logins: builtins.list[str], actor: str | None) -> None:
         if self._pool is not None:
@@ -113,5 +88,4 @@ class ExcludedClients:
                 )
             trouve = trouve or not resultat.endswith(" 0")
         self._logins.discard(login)
-        self._memes.pop(login, None)
         return trouve
