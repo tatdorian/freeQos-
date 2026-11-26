@@ -160,15 +160,6 @@ REGLAGES: tuple[Reglage, ...] = (
         "throttled; the others are observed, never capped at a rate nobody sold.",
     ),
     Reglage(
-        "declared_clients_only",
-        "shaping",
-        "bool",
-        "Declared clients only: a session seen on a router is a client only when it was "
-        "declared by hand or by the API. Sessions not declared get no record, no "
-        "measurement and no queue (unless the default plan covers them). Turn it on from "
-        "Settings > Clients, which shows what changes first.",
-    ),
-    Reglage(
         "shaping_link_queues",
         "shaping",
         "bool",

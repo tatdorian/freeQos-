@@ -11791,80 +11791,6 @@ function renderDomain() {
  *  limite, ils sont observes. Le debit se regle dans Plans. */
 const DEBIT_DEFAUT_ALLUME = 0.001;
 
-/** Settings > Clients : UN interrupteur, « Declared clients only ».
- *
- *  Allume : seuls les clients declares (a la main ou par l'API) existent ;
- *  « Removed » est vide, il ne sert plus. Les clients seulement detectes sont
- *  ignores mais gardes en base : eteindre remet tout comme avant. */
-async function chargerClientsDeclares() {
-  const bascule = document.getElementById('dc-switch');
-  const etat = document.getElementById('dc-state');
-  const corps = document.getElementById('dc-body');
-  if (!bascule || !etat || !corps) return;
-  let d;
-  try { d = await api('/clients/registry'); } catch (err) { corps.innerHTML = noticeErreur(err); return; }
-  bascule.checked = !!d.enabled;
-  bascule.disabled = !peut('edit');
-  const detectes = (d.detected || []).length;
-  const conflits = d.conflicts || [];
-  etat.textContent = d.enabled
-    ? 'On' + (detectes ? ' · ' + detectes + ' client(s) only detected are ignored' : '')
-    : 'Off';
-  corps.innerHTML = conflits.length
-    ? '<div class="notice warn"><strong>' + conflits.length + ' address' + (conflits.length > 1 ? 'es are' : ' is') +
-      ' declared twice</strong><span class="hint">' + conflits.map((c) => esc(c.address) + ': ' + esc(c.client) +
-        ' and ' + esc(c.other)).join(' · ') + '. Edit or delete one of the two.</span></div>'
-    : '';
-  bascule.onchange = async () => {
-    const on = bascule.checked;
-    const message = on
-      ? 'Turn “Declared clients only” on?\n\n' + detectes + ' client(s) only detected will be ignored, and ' +
-        '“Removed” emptied. ' + (d.declared || 0) + ' declared client(s) stay as they are.' +
-        (conflits.length ? '\n\nWarning: ' + conflits.length + ' address(es) are declared twice.' : '') +
-        '\n\nTurning it off brings everything back.'
-      : 'Turn “Declared clients only” off?\n\nSessions seen on the routers become clients again, as before.';
-    if (!confirm(message)) { bascule.checked = !on; return; }
-    bascule.disabled = true;
-    try {
-      await api('/settings/declared_clients_only', { method: 'PUT', body: JSON.stringify({ value: on }) });
-      if (on) await api('/clients/removed/clean', { method: 'POST' }).catch(() => null);
-      await api('/plans/refresh', { method: 'POST' }).catch(() => null);
-      toast(on ? 'Declared clients only: on.' : 'Declared clients only: off.', 4000);
-    } catch (err) { toastErreur(err); }
-    await chargerClientsDeclares();
-    await chargerForfaitDefaut();
-    if (typeof majRetires === 'function') majRetires();
-  };
-}
-
-/** Sessions non declarees (mode « declared clients only ») : login, IP, MAC,
- *  routeur, et si la limite par defaut leur est posee. */
-async function chargerSessionsNonDeclarees() {
-  const host = document.getElementById('dp-undeclared');
-  if (!host) return;
-  let d;
-  try { d = await api('/clients/unlisted-sessions'); } catch (err) { host.innerHTML = ''; return; }
-  if (!d.enabled) { host.innerHTML = ''; return; }
-  const sessions = d.sessions || [];
-  const lim = d.limit;
-  host.innerHTML = '<h4 style="margin:.8rem 0 .4rem">Sessions not declared (' + sessions.length + ')</h4>' +
-    '<span class="hint" style="display:block">Seen on the routers, declared nowhere: not clients. ' +
-    (lim ? 'The default plan limits each one to ' + esc(mbps(lim.down_mbps || 0)) + ' / ' + esc(mbps(lim.up_mbps || 0)) + '.'
-      : 'The default plan is off: they are not limited.') + '</span>' +
-    (sessions.length
-      ? '<div class="table-wrap"><table><thead><tr><th>Connection</th><th>IP address</th><th>MAC</th>' +
-        '<th>Router</th><th>Now</th></tr></thead><tbody>' +
-        sessions.slice(0, 500).map((x) => '<tr><td><b>' + esc(x.login) + '</b></td><td><code>' + esc(x.address || '-') +
-          '</code></td><td><code>' + esc(x.caller_id || '-') + '</code></td><td>' + esc(x.router || '-') + '</td><td>' +
-          (x.declared_client
-            ? '<span class="badge ok" title="It carries the IP of this declared client: it is that client, with its queue">= ' +
-              esc(x.declared_client) + '</span>'
-            : x.limited ? '<span class="badge warn">limited to ' + esc(mbps((lim && lim.down_mbps) || 0)) + '</span>'
-              : '<span class="badge">not limited</span>') + '</td></tr>').join('') +
-        '</tbody></table></div>'
-      : '<div class="empty">No session that is not declared.</div>');
-}
-
 async function chargerForfaitDefaut() {
   const etat = document.getElementById('dp-state');
   const bascule = document.getElementById('dp-switch');
@@ -11901,7 +11827,6 @@ async function chargerForfaitDefaut() {
       : '<div class="empty">Every client has a plan.</div>');
   liste.querySelectorAll('[data-dp-cli]').forEach((tr) =>
     tr.addEventListener('click', () => openClientSheet(tr.dataset.dpCli)));
-  chargerSessionsNonDeclarees();
   bascule.onchange = async () => {
     const on = bascule.checked;
     const debit = on ? (def.down_mbps || DEBIT_DEFAUT_ALLUME) : 0;
@@ -11930,7 +11855,6 @@ async function loadSettings() {
   renderAccounts();
   loadDomain();
   loadNotif();
-  chargerClientsDeclares();
   chargerForfaitDefaut();
   const body = await api('/settings');
   const host = document.getElementById('settings-groups');
@@ -11960,8 +11884,7 @@ async function loadSettings() {
     '<div class="table-wrap"><table><thead><tr>' +
       '<th>Setting</th><th>Value</th><th>Source</th><th></th>' +
     '</tr></thead><tbody>' +
-    // L'interrupteur « Declared clients only » vit dans sa carte (Clients).
-    body.groups[g].filter((r) => r.name !== 'declared_clients_only').map((r) => settingRow(r, fq)).join('') +
+    body.groups[g].map((r) => settingRow(r, fq)).join('') +
     '</tbody></table></div>').join('');
 
   host.querySelectorAll('[data-set-save]').forEach((b) => {
