@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 import asyncpg
 
@@ -60,7 +60,7 @@ class PgMetricsWriter:
         ]
         # Le plus recent par abonne, pour subscriber_last_sample : la vue
         # subscriber_latest la lit au lieu de parcourir tout l'historique.
-        derniers: dict[int, tuple[object, ...]] = {}
+        derniers: dict[int, tuple[Any, ...]] = {}
         for ligne in payload:
             actuel = derniers.get(ligne[1])
             if actuel is None or ligne[0] >= actuel[0]:
