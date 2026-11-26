@@ -6190,6 +6190,8 @@ async function loadRouters() {
             '<button class="sm" data-freeqos-lines="' + esc(r.name) +
               '" title="Everything freeQoS set on this router: queues, CAKE types, rules, address lists, NetFlow export">' +
               'Set by freeQoS</button>' +
+            (peut('edit') ? '<button class="sm" data-router-queues="' + esc(r.name) +
+              '" title="Every simple queue on this router, duplicates first: remove the ones you choose">Queues</button>' : '') +
             (r.editable
               ? '<button class="sm" data-probe="' + r.id + '">Test</button>' +
                 '<button class="sm" data-toggle="' + r.id + '">' + (r.enabled ? 'Disable' : 'Enable') + '</button>'
@@ -6217,6 +6219,8 @@ async function loadRouters() {
     b.addEventListener('click', () => showRouterExport(b.dataset.config)));
   host.querySelectorAll('[data-freeqos-lines]').forEach((b) =>
     b.addEventListener('click', () => voirLignesFreeqos(b.dataset.freeqosLines)));
+  host.querySelectorAll('[data-router-queues]').forEach((b) =>
+    b.addEventListener('click', () => filesDuRouteur(b.dataset.routerQueues)));
   host.querySelectorAll('[data-provision]').forEach((b) =>
     b.addEventListener('click', async () => {
       const sortie = document.getElementById('router-export');
@@ -13784,6 +13788,90 @@ async function ouvrirRetires() {
  * Sur un routeur, TOUT ce qui porte la marque freeQoS, lu en direct : files
  * des clients, types CAKE, restrictions, listes d'adresses, export NetFlow.
  * C'est exactement ce que « Remove freeQoS » retirerait. Lecture seule. */
+/* ------------------------------------------- files simples d'un routeur
+ * TOUTES les files simples, lues en direct : celles de freeQoS, celles posees a
+ * la main, et les DOUBLONS (plusieurs files sur une meme adresse, dont RouterOS
+ * n'applique que la premiere). L'exploitant coche celles a supprimer. */
+async function filesDuRouteur(routeur) {
+  const m = openModal('<div class="modal-head"><div><h3>Queues on ' + esc(routeur) + '</h3>' +
+    '<div class="sub">Read live from the router. Tick the queues to remove.</div></div>' +
+    '<button class="sm" data-modal-close aria-label="Close">&times;</button></div>' +
+    '<div class="modal-body" id="rq-body"><div class="hint" style="display:block">Reading ' + esc(routeur) +
+    '…</div></div><div class="modal-foot"><label class="chk" style="margin-right:auto">' +
+    '<input type="checkbox" id="rq-dup" checked> Duplicates only</label>' +
+    '<button data-modal-close>Close</button>' +
+    '<button class="danger" id="rq-go" disabled>Remove selected</button></div>');
+  m.root.classList.add('wide');
+  const corps = m.root.querySelector('#rq-body');
+  const bouton = m.root.querySelector('#rq-go');
+  const seulsDoublons = m.root.querySelector('#rq-dup');
+  let files = [];
+  const coches = new Set();
+  const majBouton = () => {
+    bouton.disabled = !coches.size;
+    bouton.textContent = coches.size ? 'Remove ' + coches.size + ' queue' + (coches.size > 1 ? 's' : '') : 'Remove selected';
+  };
+  const dessiner = () => {
+    const vues = files.filter((q) => !seulsDoublons.checked || q.same_target_as.length);
+    corps.innerHTML = (files.some((q) => q.same_target_as.length)
+      ? '<div class="notice warn"><strong>' + files.filter((q) => q.same_target_as.length).length +
+        ' queue(s) share an address with another queue.</strong><span class="hint">RouterOS applies only the ' +
+        'first queue of an address: the other one neither limits nor measures. Keep the queue of the client ' +
+        'declared by hand, remove the other.</span></div>'
+      : '<div class="notice ok">No duplicate: one queue per address.</div>') +
+      (vues.length
+        ? '<div class="table-wrap"><table><thead><tr><th></th><th>Queue</th><th>Target</th><th>Limit</th>' +
+          '<th>Set by</th><th>Same address as</th></tr></thead><tbody>' +
+          vues.map((q) => '<tr><td class="chk"><input type="checkbox" data-rq="' + esc(q.id) + '"' +
+            (coches.has(q.id) ? ' checked' : '') + (q.dynamic ? ' disabled title="Dynamic queue: set by the router itself"' : '') +
+            ' aria-label="Select ' + esc(q.name) + '"></td><td><b>' + esc(q.name) + '</b>' +
+            (q.disabled ? ' <span class="badge">disabled</span>' : '') + '</td><td><code>' + esc(q.target || '-') +
+            '</code></td><td>' + esc(q.max_limit || '-') + '</td><td>' +
+            (q.dynamic ? '<span class="badge">router (dynamic)</span>'
+              : q.ours ? '<span class="badge ok">freeQoS</span>' : '<span class="badge warn">by hand</span>') +
+            '</td><td>' + (q.same_target_as.length ? esc(q.same_target_as.join(', ')) : '<span class="na">-</span>') +
+            '</td></tr>').join('') + '</tbody></table></div>'
+        : '<div class="empty">' + (files.length ? 'No duplicate to show. Untick “Duplicates only” to see every queue.'
+          : 'No simple queue on this router.') + '</div>') +
+      '<p class="hint" style="display:block">A freeQoS queue still needed comes back at the next pass ' +
+      '(within two minutes); a queue set by hand does not.</p>';
+    corps.querySelectorAll('[data-rq]').forEach((c) => c.addEventListener('change', () => {
+      if (c.checked) coches.add(c.dataset.rq); else coches.delete(c.dataset.rq);
+      majBouton();
+    }));
+    majBouton();
+  };
+  const lire = async () => {
+    try {
+      const d = await api('/pops/routers/' + encodeURIComponent(routeur) + '/simple-queues');
+      files = d.queues || [];
+      if (!d.duplicates) seulsDoublons.checked = false;
+      coches.clear();
+      dessiner();
+    } catch (err) {
+      corps.innerHTML = noticeErreur(err);
+    }
+  };
+  seulsDoublons.addEventListener('change', dessiner);
+  bouton.addEventListener('click', async () => {
+    const noms = files.filter((q) => coches.has(q.id)).map((q) => q.name);
+    if (!confirm('Remove ' + noms.length + ' queue(s) from ' + routeur + '?\n\n' + noms.join(', ') +
+        '\n\nThe clients of these queues are no longer limited by them.')) return;
+    bouton.disabled = true;
+    try {
+      const r = await api('/pops/routers/' + encodeURIComponent(routeur) + '/simple-queues/remove', {
+        method: 'POST', body: JSON.stringify({ ids: [...coches], confirm: true }),
+      });
+      toast(r.removed + ' queue(s) removed from ' + esc(routeur) +
+        ((r.errors || []).length ? ' · ' + r.errors.length + ' error(s): ' + esc(r.errors.join('; ')) : '') + '.', 7000);
+    } catch (err) {
+      toastErreur(err);
+    }
+    await lire();
+  });
+  await lire();
+}
+
 async function voirLignesFreeqos(routeur) {
   const m = openModal('<div class="modal-head"><div><h3>Set by freeQoS on ' + esc(routeur) + '</h3>' +
     '<div class="sub">Read live from the router. Nothing is written.</div></div>' +
