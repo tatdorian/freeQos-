@@ -14432,7 +14432,10 @@ const NIVEAU_MOT = { ok: 'lv-ok', warn: 'lv-warn', crit: 'lv-crit', unknown: 'lv
 /** Pourquoi ce peut etre lent : le signal, le site, la limite. Une ligne chacun,
  *  une pastille, une phrase. Ce qui n'est pas mesure le dit, sans alarmer. */
 function carteDiagnostic(sante) {
-  if (!sante) return '';
+  if (!sante) {
+    return FICHE.santeEnCours ? '<div class="card"><h3>Diagnosis</h3><div class="empty">Checking radio, site and ' +
+      'limit on the router…</div></div>' : '';
+  }
   const ligne = (icone, nom, d) => !d ? '' : '<div class="dg-row"><i class="dg-dot lv-' + d.level + '"></i>' +
     '<div class="dg-txt"><span class="dg-name">' + nom + '</span><b>' + esc(d.title) + '</b>' +
     (d.detail ? '<small>' + esc(d.detail) + '</small>' : '') + '</div></div>';
@@ -14677,7 +14680,16 @@ async function loadClientPage() {
   const host = document.getElementById('client-page');
   // Une saisie en cours (forfait) ne doit pas etre effacee par le rafraichissement.
   if (host.contains(document.activeElement) && document.activeElement.matches('input, select')) return;
-  await loadClientsData();
+  // JAMAIS D'ECRAN BLANC : tant que rien n'est arrive, on le dit.
+  if (FICHE.affiche !== login) {
+    host.innerHTML = '<a class="back-link" href="#/clients">&lsaquo; All clients</a>' +
+      '<div class="empty">Loading ' + esc(login || 'client') + '…</div>';
+  }
+  // La liste des clients n'est relue que si elle a plus de 20 s : ouvrir une
+  // fiche depuis la liste ne la recharge pas une seconde fois.
+  if (!CLI.loadedAt || Date.now() - CLI.loadedAt > 20000 || !CLI.rows.some((x) => x.login === login)) {
+    await loadClientsData();
+  }
   const r = CLI.rows.find((x) => x.login === login);
   const titre = document.getElementById('page-title');
   if (titre) titre.textContent = (r && r.display_name) || login || 'Client';
@@ -14687,14 +14699,28 @@ async function loadClientPage() {
     return;
   }
   const pas = FICHE.periode <= 60 ? 30 : FICHE.periode <= 1440 ? 300 : 3600;
-  const [data, journal, sante, fiche, horaires] = await Promise.all([
+  // LE DIAGNOSTIC (sante) EST LE PLUS LENT : il ne retient plus la page. Il
+  // arrive a cote, et la fiche se redessine avec lui ; garde 60 s en memoire.
+  const santeConnue = FICHE.sante && FICHE.sante.login === login && Date.now() - FICHE.sante.at < 60000
+    ? FICHE.sante.data : null;
+  if (FICHE.onglet === 'overview' && !santeConnue && FICHE.santeEnCours !== login) {
+    FICHE.santeEnCours = login;
+    api('/clients/' + encodeURIComponent(login) + '/health').catch(() => null).then((x) => {
+      FICHE.santeEnCours = null;
+      FICHE.sante = { login, data: x, at: Date.now() };
+      if (FICHE.login === login && x) loadClientPage();
+    });
+  }
+  const [data, journal, fiche, horaires] = await Promise.all([
     r.subscriber_id ? api('/subscribers/' + r.subscriber_id + '/metrics?minutes=' + FICHE.periode +
       '&bucket_seconds=' + pas).catch(() => null) : Promise.resolve(null),
     api('/activity?limit=50&login=' + encodeURIComponent(login)).catch(() => []),
-    FICHE.onglet === 'overview' ? api('/clients/' + encodeURIComponent(login) + '/health').catch(() => null) : Promise.resolve(null),
     api('/clients/' + encodeURIComponent(login) + '/profile').catch(() => null),
     FICHE.onglet === 'plan' ? api('/bandwidth-schedules').catch(() => null) : Promise.resolve(null),
   ]);
+  if (FICHE.login !== login) return;
+  const sante = FICHE.onglet === 'overview' ? santeConnue : null;
+  FICHE.affiche = login;
   // SON SCHEDULER PROPRE (fait pour lui seul), s'il en a un.
   FICHE.propre = ((horaires && horaires.schedules) || []).find((f) => f.personal &&
     (f.targets || [])[0] === login) || null;
@@ -16151,6 +16177,7 @@ async function loadClientsData() {
   // personne n'a declaree n'est pas un client de la liste (elle reste dans
   // Settings > Default plan, « Clients without a plan »).
   CLI.rows = rows.filter(clientDeclare);
+  CLI.loadedAt = Date.now();
   // Un site dont AUCUN routeur ne se lit plus : ses clients ne sont pas
   // « hors ligne », ils ne sont plus mesures. Ce n'est pas la meme panne.
   CLI.lecture = {};
