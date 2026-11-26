@@ -391,6 +391,29 @@ async def enforcement_state(container: ContainerDep) -> dict[str, Any]:
     }
 
 
+async def _refuser_un_doublon(
+    container: Any, address: Any, extra: Any, *, ignore: str | None = None
+) -> None:
+    """Clients declares seulement : une adresse deja a un autre client declare
+    est refusee -- le meme client ne doit pas exister deux fois."""
+    from app.services import declared as mode_declares
+
+    if not mode_declares.enabled(container.settings):
+        return
+    try:
+        conflit = mode_declares.overlapping(
+            address, extra, await _require_repository(container).list_all(), ignore=ignore
+        )
+    except InvalidStaticClientError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if conflit is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{conflit['address']} already belongs to the declared client "
+            f"'{conflit['client']}': edit that client instead of declaring it twice",
+        )
+
+
 @router.post(
     "/static-clients",
     status_code=status.HTTP_201_CREATED,
@@ -400,6 +423,7 @@ async def create_static_client(
     payload: StaticClientInput, container: ContainerDep
 ) -> dict[str, Any]:
     repository = _require_repository(container)
+    await _refuser_un_doublon(container, payload.address, payload.extra_prefixes)
     try:
         created = await repository.create(payload.model_dump())
     except DuplicateStaticClientError as exc:
@@ -448,6 +472,15 @@ async def update_static_client(
             await check_new_name_free(database.pool, ancien_nom, payload.reference)
         except ClientNameTakenError as exc:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if payload.address is not None or payload.extra_prefixes is not None:
+        await _refuser_un_doublon(
+            container,
+            payload.address if payload.address is not None else avant.get("address"),
+            payload.extra_prefixes
+            if payload.extra_prefixes is not None
+            else avant.get("extra_prefixes"),
+            ignore=ancien_nom,
+        )
     try:
         modifie = await repository.update(client_id, payload.model_dump(exclude_unset=True))
     except StaticClientNotFoundError as exc:

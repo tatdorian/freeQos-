@@ -1464,6 +1464,16 @@ class ShapingService:
             )
             if service is not None:
                 surcharge = surcharge or surcharges_abonnes.get(service.reference, {})
+            if (
+                service is None
+                and not surcharge
+                and login not in lignes_par_login
+                and self._limite_des_non_declares() is not None
+            ):
+                # Mode « clients declares seulement » : une session NON DECLAREE
+                # n'est pas un client, mais la limite par defaut peut la couvrir
+                # (Settings > Default plan) -- SA file, a ce debit.
+                plan_bas, plan_haut = self._limite_des_non_declares()  # type: ignore[misc]
             if not surcharge and service is None and not (plan_bas or plan_haut):
                 continue
             secteur = rattachements.get(login)
@@ -1647,6 +1657,19 @@ class ShapingService:
                     "pop_name": collecteur.config.effective_pop_name,
                 }
         return None
+
+    def _limite_des_non_declares(self) -> tuple[float | None, float | None] | None:
+        """La limite d'une session NON DECLAREE, en mode « clients declares
+        seulement » : la limite par defaut quand elle couvre aussi les sessions
+        sans forfait, sinon aucune (None : pas de file)."""
+        from app.services import declared as mode_declares
+
+        if not mode_declares.enabled(self.settings):
+            return None
+        if not getattr(self.settings, "default_plan_for_detected_clients", False):
+            return None
+        bas, haut = self._default_plan()
+        return (bas, haut) if (bas or haut) else None
 
     def _plan_du_service(self, client: StaticClient) -> tuple[float | None, float | None]:
         if client.plan_down_mbps is None and client.plan_up_mbps is None:

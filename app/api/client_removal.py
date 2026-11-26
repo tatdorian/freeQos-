@@ -81,6 +81,13 @@ async def _oublier(repo: Any, container: Any, login: str) -> dict[str, Any]:
 
         rapport["emergency_removed"] = await emergency_repo.delete(base.pool, login)
 
+    if base is not None:
+        # Son nom et ses coordonnees : un client retire n'est plus declare (en
+        # mode « clients declares seulement », un nom donne le ferait revenir).
+        async with base.pool.acquire() as conn:
+            supprime = await conn.execute("DELETE FROM client_profiles WHERE login = $1", login)
+        rapport["profile_removed"] = not str(supprime).endswith(" 0")
+
     statiques = getattr(container, "static_clients_repo", None)
     if statiques is not None:
         for ligne in await statiques.list_all():

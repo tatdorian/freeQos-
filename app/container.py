@@ -320,6 +320,8 @@ async def build_container(settings: Settings) -> Container:
 
     writer = PgMetricsWriter(database.pool)
     repository = MetricsRepository(database.pool)
+    # Les reglages VIVANTS : le mode « clients declares seulement » filtre les listes.
+    repository.settings = settings
     directory = PgDirectory(database.pool)
     client_plans_repo = ClientPlansRepository(database.pool)
     plan_provider = build_plan_provider(settings, client_plans_repo)
@@ -452,6 +454,13 @@ async def build_container(settings: Settings) -> Container:
         uisp_source=DbUispSource(uisp_repo, timeout_s=settings.uisp_timeout_s),
     )
     collection.exclusions = exclusions
+    # Mode « clients declares seulement » : la liste des declares, lue a chaque releve.
+    from app.services import declared as mode_declares
+
+    async def lire_declares() -> Any:
+        return await mode_declares.load(database.pool)
+
+    collection.declared_source = lire_declares
     # Le meme dictionnaire, partage : la pose immediate d'un forfait trouve le
     # routeur de la session sans attendre la reconciliation.
     shaping.session_routers = collection.session_routers
@@ -838,8 +847,14 @@ async def build_container(settings: Settings) -> Container:
     from app.services.client_merge import JOB_MERGE, merge_duplicates
 
     async def fusionner_doublons() -> None:
-        await merge_duplicates(conteneur)
-        # Les clients RETIRES qui sont des clients declares (meme IP, MAC, nom).
+        # Mode « clients declares seulement » : le client declare reste toujours
+        # le client -- aucune fusion dans une session, rien a ranger.
+        from app.services import declared as mode_declares
+
+        if not mode_declares.enabled(conteneur.settings):
+            await merge_duplicates(conteneur)
+        # Les clients RETIRES qui sont des clients declares (meme IP, MAC, nom) ;
+        # en mode « clients declares seulement », la liste est videe.
         from app.services.removed_duplicates import resolve as ranger_retires
 
         await ranger_retires(conteneur)

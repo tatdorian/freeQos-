@@ -573,6 +573,10 @@ class Settings(BaseSettings):
     # routeur ne bride que les clients dont le forfait a ete pousse par l'API
     # ou saisi -- les autres sont observes, jamais limites a un debit invente.
     default_plan_for_detected_clients: bool = False
+    # CLIENTS DECLARES SEULEMENT (app/services/declared.py) : une session vue sur
+    # un routeur n'est un client que si elle est declaree (a la main ou par
+    # l'API). Faux par defaut : la decouverte automatique reste celle d'avant.
+    declared_clients_only: bool = False
     # Supprimer nos files devenues inutiles. A desactiver pendant une migration.
     shaping_prune: bool = True
     # Aligner le debit d'une file tierce deja posee sur la cible d'un abonne.

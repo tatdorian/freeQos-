@@ -146,6 +146,17 @@ async def resolve(container: Any) -> dict[str, Any]:
     retires = getattr(container, "exclusions", None)
     if retires is None:
         return {"restored": [], "same_as": [], "back": []}
+    from app.services import declared as mode_declares
+
+    if mode_declares.enabled(getattr(container, "settings", None)):
+        # Clients declares seulement : une session non declaree n'est deja pas
+        # un client -- la liste « Removed » ne sert plus a rien, elle est videe.
+        vides = [str(ligne["login"]) for ligne in await retires.list()]
+        for login in vides:
+            await retires.remove(login)
+        if vides:
+            logger.info("Clients declares seulement : %d retire(s) effaces", len(vides))
+        return {"restored": [], "same_as": [], "back": [], "cleared": vides}
     lignes = await retires.list()
     if not lignes:
         return {"restored": [], "same_as": [], "back": []}
