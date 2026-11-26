@@ -40,6 +40,12 @@ async def merge_duplicates(
     container: Any, *, only_reference: str | None = None, actor: str = "system:merge"
 ) -> list[dict[str, str]]:
     """Fusionne les fiches a la main posees sur l'IP d'une session. Rend les fusions."""
+    from app.services import declared as mode_declares
+
+    if mode_declares.enabled(getattr(container, "settings", None)):
+        # Clients declares seulement : le client declare reste LE client, la
+        # session qui porte son IP n'en est que le support.
+        return []
     statiques = getattr(container, "static_clients_repo", None)
     metriques = getattr(container, "repository", None)
     if statiques is None or metriques is None:

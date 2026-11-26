@@ -147,6 +147,12 @@ class CollectionService:
         self.exclusions: Any = None
         #: Clients retires vus connectes : login -> IP, MAC, routeur (memoire seule).
         self.removed_sessions: dict[str, dict[str, Any]] = {}
+        #: Mode « clients declares seulement » (app/services/declared.py) : la
+        #: source des clients declares, branchee par le conteneur.
+        self.declared_source: Any = None
+        #: Sessions NON DECLAREES vues au dernier releve (memoire seule) :
+        #: login -> IP, MAC, routeur, site. Rien n'est ecrit en base pour elles.
+        self.undeclared_sessions: dict[str, dict[str, Any]] = {}
         self.collectors = list(collectors)
         self.backhaul_provider = backhaul_provider
         # Provider des antennes ajoutees depuis l'interface (airOS en base). Il
@@ -270,6 +276,7 @@ class CollectionService:
                             "pop_name": s.pop_name,
                         }
                 outcome = [s for s in outcome if s.login not in retires]
+            outcome = await self._garder_les_declares(collector, outcome)
             for session in outcome:
                 self.session_routers[session.login] = collector.name
             sessions_by_router.append((collector, outcome))
@@ -745,6 +752,42 @@ class CollectionService:
             hote = _single_host(client.address)
             if hote is not None and collector is not None:
                 rtt_targets.append((subscriber_id, hote, collector))
+
+    async def _garder_les_declares(
+        self, collector: Any, sessions: list[PppoeSession]
+    ) -> list[PppoeSession]:
+        """Mode « clients declares seulement » : seules les sessions DECLAREES
+        deviennent des clients. Les autres -- y compris celle qui porte l'IP d'un
+        client declare a IP fixe, qui EST ce client -- ne creent rien : elles
+        sont gardees en memoire pour la liste de Settings, et c'est tout."""
+        from app.services import declared as mode_declares
+
+        avant = {
+            k for k, v in self.undeclared_sessions.items() if v.get("router") == collector.name
+        }
+        for login in avant:
+            self.undeclared_sessions.pop(login, None)
+        if self.declared_source is None or not mode_declares.enabled(self.settings):
+            return sessions
+        try:
+            declares = await self.declared_source()
+        except Exception:  # noqa: BLE001 - sans la liste, on ne jette rien
+            logger.exception("Clients declares illisibles : releve inchange")
+            return sessions
+        gardees: list[PppoeSession] = []
+        for session in sessions:
+            if session.login in declares.logins:
+                gardees.append(session)
+                continue
+            self.undeclared_sessions[session.login] = {
+                "login": session.login,
+                "address": session.address,
+                "caller_id": session.caller_id,
+                "router": collector.name,
+                "pop_name": session.pop_name,
+                "declared_client": declares.carrier_of(session.address),
+            }
+        return gardees
 
     async def _plans_for_new_logins(self, logins: Sequence[str]) -> dict[str, Plan]:
         """Ne demande un plan que pour les logins jamais vus.

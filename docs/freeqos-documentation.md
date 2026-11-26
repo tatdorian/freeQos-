@@ -1368,6 +1368,16 @@ API: `GET/POST /api/v1/emergencies`, `PATCH/DELETE /api/v1/emergencies/{id}`, `P
 
 **Online, for a fixed-IP client.** A fixed-IP client has no session: it counts as online only when freeQoS measures it — counters of its queue, NetFlow, or a ping reply. Without any of them (no queue yet, writing off) it shows **Not measured · no counter yet**, never *connected* at 0.
 
+**Declared clients only (one switch, *Settings › Clients*).** Off by default. On, a client exists only when it is declared: by hand (static IP, or a PPPoE login declared before its session) or by the API (a service or a plan pushed). A client already given a name, a mode or a limit by hand also counts as declared.
+
+- A PPPoE session seen on a router and **not declared** is not a client: no record, no measurement, no queue. It is listed, with its IP address, MAC and router, under *Settings › Default plan*, *Sessions not declared*. When the default plan is on, each of these sessions gets its own queue at that rate (1 kbps by default), and the list says which ones are limited.
+- A session that carries the IP of a declared static-IP client **is** that client: it creates nothing more, and the queue is that client's. No merging into the session any more.
+- Declaring an address that already belongs to another declared client is refused (`409`, naming that client); the *Clients* card lists the addresses already declared twice.
+- *Removed* is emptied: it no longer serves any purpose.
+- The clients that were only detected stay in the database, ignored. Turning the switch off brings everything back, as before.
+
+API: `GET /api/v1/clients/registry` (state, the clients only detected, the addresses declared twice; nothing written), `GET /api/v1/clients/unlisted-sessions` (the sessions not declared and whether the default plan limits them). The switch is the setting `declared_clients_only`.
+
 **Clients page: declared clients only.** The list shows the clients that were declared: added by hand or pushed by the API, given a plan (API, set by hand, RADIUS — not the default rate), given a name, or put in a mode or a limit by hand (a client merged into its PPPoE session keeps its name, so it stays). A PPPoE session only seen on a router, that nobody declared, is not listed; it shows under *Settings › Default plan*, in *Clients without a plan*.
 
 **Clients page.** Four cards on top: *Clients* (and the number of sites), *Connected* (with a bar, green above 80 %, orange from 50 %, red below), *Scheduler now* (clients off their normal bandwidth), *Boosts*. A card is also a filter: tap it to list those clients. For each client, **Usage now** is a bar of its download rate against its limit, with a word: *Quiet* (under 10 %), *Normal*, *Busy* (60 % and more), *At its limit* (90 % and more). The IP address is not shown in the list: it is on the client's page (search by IP still works).
