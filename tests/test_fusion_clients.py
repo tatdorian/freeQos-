@@ -2,13 +2,14 @@
 
 CE QUI EST FIXE ICI
 -------------------
-1. Declarer a la main (IP fixe) l'adresse d'une session PPPoE deja connue ne
-   cree PAS un second client : la fiche est fusionnee dans la session. Le nom
-   saisi devient son nom affiche, le debit saisi son forfait, et sa file est
-   posee sur la session.
-2. Une fiche declaree AVANT que la session n'apparaisse est fusionnee par la
-   tache periodique, avec son mode.
-3. Une fiche poussee par l'API de facturation n'est jamais fusionnee.
+1. LE CLIENT DECLARE A LA MAIN GAGNE : une session seulement DETECTEE sur son
+   IP (ni forfait, ni nom, ni mode) est retiree de freeQoS, comme avec
+   « Remove ». La fiche reste, avec sa file a son nom.
+2. Une session elle-meme DECLAREE (forfait) : la fiche y est fusionnee, comme
+   avant. Le nom saisi devient son nom affiche, et sa file est sur la session.
+3. Une fiche declaree AVANT que la session n'apparaisse : la tache periodique
+   retire la session detectee ; la fiche garde son mode.
+4. Une fiche poussee par l'API de facturation n'est jamais fusionnee.
 """
 
 from __future__ import annotations
@@ -68,11 +69,59 @@ def _brancher(client, cle) -> None:  # type: ignore[no-untyped-def]
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_la_session_seulement_detectee_est_retiree(app_client, routeur) -> None:  # noqa: F811
+    """Le client declare a la main gagne : la session detectee sur son IP part
+    dans « Removed », la fiche reste avec sa file a son nom."""
+    ecriture, _lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    assert "dupont" in _logins(app_client, cle)
+
+    r = app_client.post(
+        "/api/v1/static-clients",
+        headers=cle,
+        json={
+            "reference": "ACME OFFICE",
+            "pop_name": "PoP Test",
+            "address": "10.20.0.10",
+            "plan_down_mbps": 20,
+            "plan_up_mbps": 5,
+        },
+    )
+    assert r.status_code == 201, r.text
+    assert "merged_into" not in r.json()
+    assert r.json()["removed_duplicate"] == "dupont"
+    assert "ACME OFFICE" in _references(app_client, cle)
+    retires = app_client.get("/api/v1/clients/removed", headers=cle).json()
+    assert [c["login"] for c in retires["clients"]] == ["dupont"]
+
+    # La session ne revient pas, et la file est celle de la fiche.
+    assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
+    logins = _logins(app_client, cle)
+    assert "dupont" not in logins and "ACME OFFICE" in logins
+    r = app_client.post(
+        "/api/v1/shaping/apply",
+        headers=cle,
+        json={"router": "nas-test", "dry_run": False, "confirm": True},
+    )
+    assert r.status_code == 200, r.text
+    file = _file(routeur, "10.20.0.10")
+    assert file is not None, routeur.simple_queue_rows
+    assert file["max-limit"] == "5000000/20000000"
+    assert file["name"] == "ACME-OFFICE"
+    activite = app_client.get("/api/v1/activity", headers=cle, params={"login": "ACME OFFICE"})
+    assert any(a["action"] == "Duplicate removed" for a in activite.json())
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
 def test_declarer_a_la_main_un_client_deja_connu_le_fusionne(app_client, routeur) -> None:  # noqa: F811
     ecriture, _lecture = _cles(app_client)
     cle = {"Authorization": f"Bearer {ecriture}"}
     _brancher(app_client, cle)
     assert "dupont" in _logins(app_client, cle)
+    # La session est DECLAREE elle aussi (un forfait lui a ete pousse) : fusion.
+    r = app_client.put("/api/v1/plans/dupont", headers=cle, json={"down_mbps": 8, "up_mbps": 2})
+    assert r.status_code == 200, r.text
 
     r = app_client.post(
         "/api/v1/static-clients",
@@ -97,13 +146,13 @@ def test_declarer_a_la_main_un_client_deja_connu_le_fusionne(app_client, routeur
     fiche = app_client.get("/api/v1/clients/dupont/profile", headers=cle).json()
     assert fiche["profile"]["display_name"] == "ACME Office"
 
-    # Le debit saisi est son forfait, et sa file est posee sur la session.
+    # Son forfait a elle (pousse avant) est garde, et la file est sur la session.
     forfaits = app_client.get("/api/v1/plans", headers=cle).json()
     plan = next(c for c in forfaits["clients"] if c["login"] == "dupont")
-    assert plan["down_mbps"] == 20
+    assert plan["down_mbps"] == 8
     file = _file(routeur, "10.20.0.10")
     assert file is not None, routeur.simple_queue_rows
-    assert file["max-limit"] == "5000000/20000000"
+    assert file["max-limit"] == "2000000/8000000"
     assert "acme" not in str(file.get("name", "")).lower()
 
     # Le journal du client le dit.
@@ -113,7 +162,7 @@ def test_declarer_a_la_main_un_client_deja_connu_le_fusionne(app_client, routeur
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
-def test_une_fiche_declaree_avant_la_session_est_fusionnee_ensuite(app_client, routeur) -> None:  # noqa: F811
+def test_une_fiche_declaree_avant_la_session_retire_la_session_ensuite(app_client, routeur) -> None:  # noqa: F811
     ecriture, _lecture = _cles(app_client)
     cle = {"Authorization": f"Bearer {ecriture}"}
     _brancher(app_client, cle)
@@ -144,17 +193,18 @@ def test_une_fiche_declaree_avant_la_session_est_fusionnee_ensuite(app_client, r
     )
     assert r.status_code == 200, r.text
 
-    # La session apparait sur la meme IP : la tache periodique fusionne.
+    # Une session seulement detectee apparait sur la meme IP : la tache
+    # periodique la retire, la fiche declaree a la main reste.
     routeur.add_session("martin", address="10.20.0.30")
     assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
     r = app_client.post("/api/v1/jobs/merge_clients/run", headers=cle)
     assert r.status_code == 200, r.text
-    assert "ACME SHOP" not in _references(app_client, cle)
-    assert "martin" in _logins(app_client, cle)
-    fiche = app_client.get("/api/v1/clients/martin/profile", headers=cle).json()
-    assert fiche["profile"]["display_name"] == "ACME Shop"
+    assert "ACME SHOP" in _references(app_client, cle)
+    retires = app_client.get("/api/v1/clients/removed", headers=cle).json()
+    assert "martin" in [c["login"] for c in retires["clients"]]
+    assert "martin" not in _logins(app_client, cle)
 
-    # Le mode a suivi : il vaut pour la session.
+    # Le mode reste sur la fiche.
     depot = app_client.app.state.container.topology_repo
 
     async def politiques() -> dict:  # type: ignore[type-arg]
@@ -162,8 +212,8 @@ def test_une_fiche_declaree_avant_la_session_est_fusionnee_ensuite(app_client, r
 
     assert app_client.portal is not None
     carte = app_client.portal.call(politiques)
-    assert "ACME SHOP" not in carte
-    assert carte["martin"]["mode_id"] == mode.json()["id"]
+    assert carte["ACME SHOP"]["mode_id"] == mode.json()["id"]
+    assert "martin" not in carte
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
