@@ -106,31 +106,13 @@ async def _oublier(repo: Any, container: Any, login: str) -> dict[str, Any]:
 
 @router.get("/clients/removed", summary="Clients removed from freeQoS")
 async def list_removed(container: ContainerDep) -> dict[str, Any]:
-    """Les clients retires de freeQoS : ils ne reviennent pas, meme connectes.
-
-    Ceux qui SONT un client declare (meme IP, MAC ou nom) sont rendus a part
-    (``duplicates``) : toujours ignores, ils ne comptent plus comme retires.
-    """
+    """Les clients retires de freeQoS : ils ne reviennent pas, meme connectes."""
     lignes = await _liste(container).list()
     for ligne in lignes:
         quand = ligne.get("removed_at")
         if quand is not None and hasattr(quand, "isoformat"):
             ligne["removed_at"] = quand.isoformat()
-    retires = [ligne for ligne in lignes if not ligne.get("same_as")]
-    doublons = [ligne for ligne in lignes if ligne.get("same_as")]
-    return {"count": len(retires), "clients": retires, "duplicates": doublons}
-
-
-@router.post(
-    "/clients/removed/clean",
-    summary="Take out of 'Removed' the clients that are a declared client (same IP, MAC or name)",
-)
-async def clean_removed(container: ContainerDep) -> dict[str, Any]:
-    """Compare tout de suite les clients retires aux clients declares."""
-    from app.services.removed_duplicates import resolve
-
-    _liste(container)
-    return await resolve(container)
+    return {"count": len(lignes), "clients": lignes}
 
 
 @router.post("/clients/remove", summary="Remove clients from freeQoS (not from the router)")
