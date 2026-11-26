@@ -257,6 +257,37 @@ async def test_vue_dernier_echantillon(database: Database, now: datetime) -> Non
     assert latest[0]["ts"] == now
 
 
+async def test_derniere_mesure_comme_l_historique(database: Database, now: datetime) -> None:
+    """Deux mesures du MEME client a la MEME seconde (session vue sur deux
+    routeurs) : l'historique garde la premiere (ON CONFLICT DO NOTHING). La
+    derniere mesure affichee doit etre la meme -- sinon la liste montrait 0
+    pour un client dont la seconde lecture venait d'un routeur sans compteur."""
+    directory = PgDirectory(database.pool)
+    writer = PgMetricsWriter(database.pool)
+    repo = MetricsRepository(database.pool)
+    pop_id = await directory.ensure_pop("PoP Altair")
+    client = await directory.ensure_subscriber("double", pop_id=pop_id)
+
+    def sample(rx: float | None, tx: float | None) -> SubscriberSample:
+        return SubscriberSample(
+            ts=now, login="double", router_name="r", pop_name="p", rx_bps=rx, tx_bps=tx
+        )
+
+    await writer.write_subscriber_metrics([(client, sample(2e6, 8e6)), (client, sample(0.0, 0.0))])
+    # Un lot rejoue a la meme seconde n'ecrase rien non plus.
+    await writer.write_subscriber_metrics([(client, sample(None, None))])
+
+    async with database.pool.acquire() as conn:
+        historique = await conn.fetchval(
+            "SELECT tx_bps FROM subscriber_metrics WHERE subscriber_id = $1 AND ts = $2",
+            client,
+            now,
+        )
+    affiche = (await repo.subscriber_latest(limit=10))[0]
+    assert historique == 8e6
+    assert affiche["tx_bps"] == 8e6
+
+
 async def test_metriques_backhaul(database: Database, now: datetime) -> None:
     directory = PgDirectory(database.pool)
     writer = PgMetricsWriter(database.pool)
