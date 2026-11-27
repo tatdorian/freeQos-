@@ -71,9 +71,14 @@ async def repair_schedule_targets(container: Any) -> list[dict[str, str]]:
                  WHERE NOT EXISTS (SELECT 1 FROM subscribers s WHERE s.login = c.cible)
                    AND NOT EXISTS (SELECT 1 FROM static_clients f WHERE f.reference = c.cible)
             )
-            SELECT p.cible, min(pr.login) AS login, count(*) AS n
+            -- Le nom compare SANS casse, espaces, tirets, points ni soulignes :
+            -- le scheduler vise la reference saisie (« ACME-SIEGE »), le client
+            -- fusionne porte le libelle de la fiche (« ACME SIEGE »).
+            SELECT p.cible, min(pr.login) AS login, count(DISTINCT pr.login) AS n
               FROM perdues p
-              JOIN client_profiles pr ON lower(pr.display_name) = lower(p.cible)
+              JOIN client_profiles pr
+                ON regexp_replace(lower(pr.display_name), '[\s._-]+', '', 'g')
+                 = regexp_replace(lower(p.cible), '[\s._-]+', '', 'g')
               JOIN subscribers s ON s.login = pr.login
              GROUP BY p.cible
             """
@@ -186,7 +191,7 @@ async def merge_duplicates(
             # retiree de freeQoS, comme avec « Remove » : rien n'est efface,
             # rien n'est touche sur le routeur hors la file que freeQoS lui
             # avait posee. Le client declare garde sa fiche et SA file.
-            # Constate : la session gardait sa file (OF0265, 4 Mbps) a cote de
+            # Constate : la session gardait sa file (SESS-0042, 4 Mbps) a cote de
             # celle du client declare (16 Mbps) sur la meme IP -- conflit, et
             # un client mesure a 0.
             try:

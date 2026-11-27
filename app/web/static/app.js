@@ -12120,9 +12120,16 @@ function schedWindowText(w) {
 function schedCible(f) {
   if (f.scope === 'all' || f.scope === 'on_plan') return esc(SCHED_PORTEE[f.scope]);
   const nomMode = (id) => ((SCHED.modes || []).find((m) => String(m.id) === String(id)) || {}).name || ('mode ' + id);
-  const cibles = (f.targets || []).map((t) => f.scope === 'modes' ? nomMode(t) : f.scope === 'plans' ? t + ' Mbps' : t);
-  return esc(SCHED_PORTEE[f.scope] || f.scope) + ': ' + esc(cibles.slice(0, 6).join(', ') +
-    (cibles.length > 6 ? ' +' + (cibles.length - 6) : ''));
+  // UN CLIENT PAR SON NOM donne a la main (son identifiant de session au survol),
+  // pas par son login technique (« SESS-0042 »).
+  const nomDuClient = (login) => {
+    const r = (CLI.rows || []).find((x) => x.login === login);
+    return (r && r.display_name) || login;
+  };
+  const cibles = (f.targets || []).map((t) => f.scope === 'modes' ? nomMode(t) : f.scope === 'plans' ? t + ' Mbps'
+    : f.scope === 'subscribers' ? nomDuClient(t) : t);
+  return '<span title="' + esc((f.targets || []).join(', ')) + '">' + esc(SCHED_PORTEE[f.scope] || f.scope) + ': ' +
+    esc(cibles.slice(0, 6).join(', ') + (cibles.length > 6 ? ' +' + (cibles.length - 6) : '')) + '</span>';
 }
 
 /** Ce qu'il applique : celui de ses plages (un scheduler = un debit). */
