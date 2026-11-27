@@ -161,8 +161,10 @@ async def merge_duplicates(
         reference = str(fiche.get("reference") or "")
         if only_reference is not None and reference != only_reference:
             continue
-        if fiche.get("source") != "manual":
-            continue
+        # A la main OU par l'API : une fiche declaree l'emporte sur la session
+        # qui porte son IP. La fusion de deux FICHES, elle, ne vaut que pour une
+        # fiche saisie a la main (celle de l'API reste a l'API, qui la recree).
+        a_la_main = fiche.get("source") == "manual"
         if int(fiche.get("prefix_len") or 32) not in (32, 128):
             continue
         if reference in fusionnees:
@@ -170,7 +172,7 @@ async def merge_duplicates(
         ip = _hote(fiche.get("address"))
         candidats = [c for c in sessions_par_ip.get(ip, []) if c != reference]
         cible_statique: dict[str, Any] | None = None
-        if not candidats:
+        if not candidats and a_la_main:
             doubles = [
                 a
                 for a in fiches_par_ip.get(ip, [])
@@ -185,6 +187,8 @@ async def merge_duplicates(
         if len(candidats) != 1:
             continue
         cible = candidats[0]
+        if cible_statique is None and not a_la_main and retires is None:
+            continue
         if cible_statique is None and retires is not None:
             # LE CLIENT DECLARE A LA MAIN GAGNE, TOUJOURS. La session qui porte
             # son IP -- detectee sur le routeur, avec ou sans forfait -- est
@@ -195,6 +199,12 @@ async def merge_duplicates(
             # celle du client declare (16 Mbps) sur la meme IP -- conflit, et
             # un client mesure a 0.
             try:
+                # SES SCHEDULERS passent au client declare : sinon ils viseraient
+                # une session retiree et ne s'appliqueraient plus a personne.
+                base = getattr(container, "database", None)
+                if base is not None:
+                    async with base.pool.acquire() as conn:
+                        await conn.execute(SQL_CIBLE_RENOMMEE, cible, reference)
                 await retires.add([cible], actor)
             except Exception:  # noqa: BLE001 - un retrait rate n'empeche pas les autres
                 logger.exception("Retrait du doublon detecte '%s' impossible", cible)

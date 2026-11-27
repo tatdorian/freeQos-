@@ -838,10 +838,15 @@ async def build_container(settings: Settings) -> Container:
     from app.services.client_merge import JOB_MERGE, merge_duplicates
 
     async def fusionner_doublons() -> None:
-        await merge_duplicates(conteneur)
-        # Les schedulers restes sur le nom d'un client fusionne : rebranches.
+        # Deux etapes independantes : l'une qui echoue n'empeche pas l'autre,
+        # et le journal dit laquelle (la tache etait signalee « en retard »).
         from app.services.client_merge import repair_schedule_targets
 
+        try:
+            await merge_duplicates(conteneur)
+        except Exception:  # noqa: BLE001
+            logger.exception("Doublons de clients : traitement impossible")
+        # Les schedulers restes sur le nom d'un client fusionne : rebranches.
         await repair_schedule_targets(conteneur)
 
     scheduler.add_job(JOB_MERGE, 60.0, fusionner_doublons)
