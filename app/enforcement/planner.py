@@ -202,6 +202,10 @@ class SubscriberTarget:
     # fixe fusionnee dans la session qui porte son IP. Un geste fait sur la
     # fiche (mode, limite, boost) retrouve ainsi la file de la session.
     aliases: tuple[str, ...] = ()
+    # LE NOM SAISI du client (fiche, ou reference de la fiche a IP fixe portee
+    # par la session). C'est lui que la file porte sur le routeur, comme
+    # l'exploitant l'a ecrit ; le login (« OF0265 ») n'est qu'un repli.
+    label: str | None = None
 
     @property
     def queue_name(self) -> str:
@@ -211,8 +215,8 @@ class SubscriberTarget:
         la file existante, et non une suppression suivie d'une creation.
 
         Le NOM DU CLIENT, sans prefixe (« ACME-OFFICE ») : c'est ce que
-        l'exploitant lit dans Winbox."""
-        return subscriber_queue_name(self.login)
+        l'exploitant lit dans Winbox. Celui SAISI d'abord, le login sinon."""
+        return subscriber_queue_name(self.label or self.login)
 
     def queue_target(self, mode: str = TARGET_ADDRESS) -> str | None:
         """Ce que la file doit viser, ou None si l'abonne n'est pas shapable.
@@ -654,18 +658,34 @@ def desired_state(
                 # NI COMMENTAIRE NI PREFIXE : freeQoS se souvient de ses files
                 # de clients (cf. ``OWNED_QUEUES``).
                 comment="",
-                legacy_names=(legacy_subscriber_queue_name(subscriber.login),),
+                # Ses noms d'avant : « freeqos-<login> », puis le login seul
+                # (avant que la file ne prenne le nom saisi). Renommes en place.
+                legacy_names=tuple(
+                    dict.fromkeys(
+                        n
+                        for n in (
+                            legacy_subscriber_queue_name(subscriber.login),
+                            subscriber_queue_name(subscriber.login),
+                        )
+                        if n != subscriber.queue_name
+                    )
+                ),
             )
         )
     return types, files, ecartes
 
 
-def queues_without_rate(skipped: Iterable[PlanSkip]) -> set[str]:
+def queues_without_rate(
+    skipped: Iterable[PlanSkip], subscribers: Iterable[SubscriberTarget] = ()
+) -> set[str]:
     """Les noms de file des clients ecartes faute de debit (``NO_RATE_SKIP``)."""
+    par_login = {s.login: s.queue_name for s in subscribers}
     noms: set[str] = set()
     for s in skipped:
         if s.reason == NO_RATE_SKIP:
             noms.update((subscriber_queue_name(s.login), legacy_subscriber_queue_name(s.login)))
+            if s.login in par_login:
+                noms.add(par_login[s.login])
     return noms
 
 
