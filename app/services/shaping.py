@@ -2872,6 +2872,19 @@ class ShapingService:
                 if m.strip()
             ]
 
+        # ORPHELINES : nos anciennes files qui masquent celle d'un client (cf.
+        # ``_files_orphelines``). Le plan le sait ; sans lui, rien n'est marque.
+        orphelines: set[str] = set()
+        try:
+            plan = await asyncio.wait_for(self.plan_router(router_name, prune=False), timeout=8.0)
+            orphelines = {
+                a.name
+                for a in plan.actions
+                if a.verb == "remove" and str(a.reason or "").startswith("orphan")
+            }
+        except Exception as exc:  # noqa: BLE001 - la liste reste lisible sans le plan
+            logger.info("Files orphelines de %s non calculees : %s", router_name, exc)
+
         par_cible: dict[str, list[str]] = {}
         for ligne in lignes:
             for membre in membres(ligne):
@@ -2894,6 +2907,7 @@ class ShapingService:
                     "dynamic": str(ligne.get("dynamic")).lower() in ("true", "yes"),
                     "ours": is_ours(ligne),
                     "same_target_as": autres,
+                    "orphan": nom in orphelines,
                 }
             )
         return sortie
