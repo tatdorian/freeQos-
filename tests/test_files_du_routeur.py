@@ -48,7 +48,7 @@ def test_voir_les_doublons_et_retirer_celui_qu_on_choisit(app_client, routeur) -
     assert r.status_code == 200, r.text
     # Une file posee A LA MAIN sur la meme adresse, et une file dynamique.
     routeur.simple_queue_rows.append(
-        {".id": "*MAIN", "name": "OF0040", "target": "10.20.0.40/32", "max-limit": "4M/4M"}
+        {".id": "*MAIN", "name": "SESS-0040", "target": "10.20.0.40/32", "max-limit": "4M/4M"}
     )
     routeur.simple_queue_rows.append(
         {".id": "*DYN", "name": "<pppoe-x>", "target": "<pppoe-x>", "dynamic": "true"}
@@ -57,9 +57,9 @@ def test_voir_les_doublons_et_retirer_celui_qu_on_choisit(app_client, routeur) -
     d = app_client.get("/api/v1/pops/routers/nas-test/simple-queues", headers=cle).json()
     par_nom = {q["name"]: q for q in d["queues"]}
     assert par_nom["ACME-SHOP"]["ours"] is True
-    assert par_nom["ACME-SHOP"]["same_target_as"] == ["OF0040"]
-    assert par_nom["OF0040"]["ours"] is False
-    assert par_nom["OF0040"]["same_target_as"] == ["ACME-SHOP"]
+    assert par_nom["ACME-SHOP"]["same_target_as"] == ["SESS-0040"]
+    assert par_nom["SESS-0040"]["ours"] is False
+    assert par_nom["SESS-0040"]["same_target_as"] == ["ACME-SHOP"]
     assert par_nom["<pppoe-x>"]["dynamic"] is True
     assert d["duplicates"] == 2
 
@@ -76,9 +76,9 @@ def test_voir_les_doublons_et_retirer_celui_qu_on_choisit(app_client, routeur) -
     r = app_client.post(url, headers=cle, json={"ids": ["*MAIN", "*DYN"], "confirm": True})
     assert r.status_code == 200, r.text
     corps = r.json()
-    assert corps["removed"] == 1 and corps["names"] == ["OF0040"]
+    assert corps["removed"] == 1 and corps["names"] == ["SESS-0040"]
     assert any("dynamic" in e for e in corps["errors"])
     noms = {q["name"] for q in routeur.simple_queue_rows}
-    assert "OF0040" not in noms
+    assert "SESS-0040" not in noms
     assert {"ACME-SHOP", "<pppoe-x>"} <= noms
     assert _file(routeur, "10.20.0.40")["max-limit"] == "16000000/16000000"

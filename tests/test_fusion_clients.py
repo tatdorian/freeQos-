@@ -434,8 +434,10 @@ def test_le_scheduler_d_un_client_fusionne_est_rebranche(app_client, routeur) ->
     cle = {"Authorization": f"Bearer {ecriture}"}
     _brancher(app_client, cle)
     # La session « dupont » porte le nom affiche d'une ancienne fiche fusionnee.
+    # Le libelle de la fiche (« ACME HOME », avec une espace) ; le scheduler
+    # vise la reference saisie (« ACME-HOME », avec un tiret).
     r = app_client.put(
-        "/api/v1/clients/dupont/profile", headers=cle, json={"display_name": "ACME-HOME"}
+        "/api/v1/clients/dupont/profile", headers=cle, json={"display_name": "ACME HOME"}
     )
     assert r.status_code == 200, r.text
     r = app_client.post(
