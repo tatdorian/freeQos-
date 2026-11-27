@@ -423,3 +423,38 @@ def test_un_client_supprime_ou_retire_quitte_la_liste(app_client, routeur) -> No
     assert r.status_code == 200, r.text
     assert app_client.post("/api/v1/jobs/collect_subscribers/run", headers=cle).status_code == 200
     assert "dupont" not in _liste_clients(app_client, cle)
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_le_scheduler_d_un_client_fusionne_est_rebranche(app_client, routeur) -> None:  # noqa: F811
+    """Constate : une fiche fusionnee dans sa session laissait son scheduler
+    viser l'ancien nom (« not seen now ») -- il ne s'appliquait plus. La tache
+    de fusion le rebranche sur le client qui porte ce nom affiche."""
+    ecriture, _lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    # La session « dupont » porte le nom affiche d'une ancienne fiche fusionnee.
+    r = app_client.put(
+        "/api/v1/clients/dupont/profile", headers=cle, json={"display_name": "ACME-HOME"}
+    )
+    assert r.status_code == 200, r.text
+    r = app_client.post(
+        "/api/v1/bandwidth-schedules",
+        headers=cle,
+        json={
+            "name": "Night",
+            "timezone": "Africa/Niamey",
+            "scope": "subscribers",
+            "targets": ["ACME-HOME", "client-inconnu"],
+            "windows": [{"start": "22:00", "end": "06:00", "down_mbps": 8, "up_mbps": 8}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    ident = r.json()["id"]
+
+    assert app_client.post("/api/v1/jobs/merge_clients/run", headers=cle).status_code == 200
+    horaires = app_client.get("/api/v1/bandwidth-schedules", headers=cle).json()
+    liste = horaires["schedules"] if isinstance(horaires, dict) else horaires
+    cible = next(h for h in liste if h["id"] == ident)
+    # Rebranche sur le client ; une cible que rien ne designe reste telle quelle.
+    assert sorted(cible["targets"]) == ["client-inconnu", "dupont"]
