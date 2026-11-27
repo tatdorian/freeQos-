@@ -839,6 +839,10 @@ async def build_container(settings: Settings) -> Container:
 
     async def fusionner_doublons() -> None:
         await merge_duplicates(conteneur)
+        # Les schedulers restes sur le nom d'un client fusionne : rebranches.
+        from app.services.client_merge import repair_schedule_targets
+
+        await repair_schedule_targets(conteneur)
 
     scheduler.add_job(JOB_MERGE, 60.0, fusionner_doublons)
 

@@ -1916,6 +1916,16 @@ body[data-view="client"] .page-head { display: none; }
 .use-up { font-size: .72rem; color: var(--faint); font-variant-numeric: tabular-nums; }
 .cli-lim .lim-d, .cli-lim .lim-u { display: block; white-space: nowrap; font-size: .82rem; }
 .cli-lim .lim-u { color: var(--faint); font-size: .74rem; }
+/* La limite vient du scheduler (ou d'une urgence, d'un boost, d'un mode) :
+   on le dit sous la valeur, avec le forfait normal pour comparer. */
+.cli-lim .lim-src {
+  display: inline-block; margin-top: .2rem; padding: .05rem .4rem; border-radius: 6px;
+  font-size: .7rem; font-weight: 600; white-space: nowrap;
+  color: var(--muted); background: color-mix(in srgb, var(--muted) 12%, transparent);
+}
+.cli-lim .lim-src.sched { color: var(--purple); background: color-mix(in srgb, var(--purple) 12%, transparent); }
+.cli-lim .lim-src.emergency { color: var(--crit); background: color-mix(in srgb, var(--crit) 12%, transparent); }
+.cli-lim .lim-plan { display: block; color: var(--faint); font-size: .7rem; white-space: nowrap; }
 
 /* Un site = un intertitre quand on trie par site. */
 tr.cli-group td {

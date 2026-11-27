@@ -32,6 +32,69 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 JOB_MERGE = "merge_clients"
+
+#: Un scheduler qui visait ``$1`` vise desormais ``$2`` (sans doublon).
+SQL_CIBLE_RENOMMEE = """
+    UPDATE bandwidth_schedules
+       SET targets = (
+             SELECT COALESCE(jsonb_agg(DISTINCT CASE WHEN t = to_jsonb($1::text)
+                                                     THEN to_jsonb($2::text)
+                                                     ELSE t END), '[]'::jsonb)
+               FROM jsonb_array_elements(targets) AS t),
+           updated_at = now()
+     WHERE scope = 'subscribers' AND targets ? $1
+"""
+
+
+async def repair_schedule_targets(container: Any) -> list[dict[str, str]]:
+    """Rebranche les schedulers qui visent un client DISPARU sous ce nom, mais
+    qui existe sous un autre identifiant avec ce nom AFFICHE (client fusionne
+    dans sa session avant que la fusion ne suive les schedulers).
+
+    Seulement quand le nom affiche designe UN seul client : sinon on ne devine
+    pas. Rend les reparations faites.
+    """
+    base = getattr(container, "database", None)
+    if base is None:
+        return []
+    reparations: list[dict[str, str]] = []
+    async with base.pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            WITH cibles AS (
+                SELECT DISTINCT t AS cible
+                  FROM bandwidth_schedules b, jsonb_array_elements_text(b.targets) AS t
+                 WHERE b.scope = 'subscribers'
+            ),
+            perdues AS (
+                SELECT cible FROM cibles c
+                 WHERE NOT EXISTS (SELECT 1 FROM subscribers s WHERE s.login = c.cible)
+                   AND NOT EXISTS (SELECT 1 FROM static_clients f WHERE f.reference = c.cible)
+            )
+            SELECT p.cible, min(pr.login) AS login, count(*) AS n
+              FROM perdues p
+              JOIN client_profiles pr ON lower(pr.display_name) = lower(p.cible)
+              JOIN subscribers s ON s.login = pr.login
+             GROUP BY p.cible
+            """
+        )
+        for row in rows:
+            if int(row["n"]) != 1:
+                continue
+            await conn.execute(SQL_CIBLE_RENOMMEE, str(row["cible"]), str(row["login"]))
+            reparations.append({"from": str(row["cible"]), "to": str(row["login"])})
+    for r in reparations:
+        logger.info("Scheduler rebranche : '%s' -> '%s' (client fusionne)", r["from"], r["to"])
+    if reparations:
+        rafraichir = getattr(getattr(container, "shaping", None), "load_schedules", None)
+        if callable(rafraichir):
+            try:
+                await rafraichir()
+            except Exception:  # noqa: BLE001 - les schedulers seront relus au cycle suivant
+                logger.debug("Relecture des schedulers impossible apres reparation")
+    return reparations
+
+
 #: Une session mesuree il y a plus longtemps ne prouve plus qui porte l'IP.
 FRAICHEUR = timedelta(minutes=10)
 _COORDONNEES = ("cpe_mac", "phone", "email", "postal_address", "note")
@@ -251,6 +314,9 @@ async def _fusionner(
         await conn.execute(
             "UPDATE client_activity SET login = $2 WHERE login = $1", reference, cible
         )
+        # SES SCHEDULERS aussi. Constate : la fusion laissait le scheduler viser
+        # l'ancien nom (« not seen now ») -- il ne s'appliquait plus du tout.
+        await conn.execute(SQL_CIBLE_RENOMMEE, reference, cible)
         # Le nom donne a la main devient le nom affiche de la session ; les
         # coordonnees saisies sur la fiche completent les siennes, sans les ecraser.
         ancien = await conn.fetchrow("SELECT * FROM client_profiles WHERE login = $1", reference)

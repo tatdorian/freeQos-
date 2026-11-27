@@ -13527,6 +13527,36 @@ function openExportDialog() {
   m.root.querySelector('#exp-csv').addEventListener('click', () => { exportClientsCsv(); m.fermer(); });
 }
 
+/** D'OU VIENT LA LIMITE AFFICHEE, quand ce n'est pas le forfait : le scheduler
+ *  en cours (son nom, sa plage), une urgence, un boost, un mode ou une limite
+ *  a la main -- avec le forfait normal en dessous, pour comparer. La limite
+ *  affichee est celle ecrite sur le routeur (meme calcul). */
+function origineLimite(r) {
+  const src = r.limit_source;
+  if (!src || src === 'plan' || src === 'none') return '';
+  // LA BASE sur laquelle le scheduler s'applique : le mode (ou la limite a la
+  // main) quand il y en a un, sinon le forfait. Toujours montree dessous.
+  const viaMode = Number(r.override_down_mbps) > 0;
+  const plan = viaMode ? Number(r.override_down_mbps) : (Number(r.plan_down_mbps) || 0);
+  const planHaut = viaMode ? Number(r.override_up_mbps) || 0 : Number(r.plan_up_mbps) || 0;
+  const eff = Number(r.effective_down_mbps) || 0;
+  const nomBase = viaMode ? (r.mode_id ? 'mode' : 'limit') : 'plan';
+  const forfait = plan ? '<span class="lim-plan">' + nomBase + ' &darr; ' + esc(mbps(plan)) + ' &uarr; ' +
+    esc(mbps(planHaut)) + '</span>' : '<span class="lim-plan">no plan</span>';
+  if (src === 'schedule') {
+    const urgence = String(r.schedule_name || '').startsWith('Emergency');
+    // De combien le scheduler l'a monte ou baisse : en % du forfait.
+    const part = plan && eff ? Math.round((eff / plan) * 100) : null;
+    return '<span class="lim-src ' + (urgence ? 'emergency' : 'sched') + '" title="' +
+      esc((urgence ? '' : 'Scheduler ') + (r.schedule_name || '') + (r.schedule_window ? ' · ' + r.schedule_window : '') +
+        (part != null ? ' · ' + part + ' % of the ' + nomBase : '') + ': this limit is the one on the router now') + '">' +
+      (urgence ? '&#9888; ' : '&#9201; ') + esc(r.schedule_name || 'scheduler') +
+      (part != null && part !== 100 ? ' · ' + part + ' %' : '') + '</span>' + forfait;
+  }
+  const libelle = src === 'boost' ? '&#9889; boost' : src === 'override' ? (r.mode_id ? 'mode' : 'manual limit') : esc(src);
+  return '<span class="lim-src">' + libelle + '</span>' + forfait;
+}
+
 function renderClients() {
   if (CLI.focus) {
     // Venu d'une alerte : ses clients sont selectionnes, et seuls montres.
@@ -13598,7 +13628,8 @@ function renderClients() {
         '<td class="cli-usage">' + (on ? usageClair(r)
           : texteHorsLigne(r)) + '</td>' +
         '<td class="num cli-lim">' + (r.effective_down_mbps ? '<span class="lim-d">&darr; ' + esc(mbps(r.effective_down_mbps)) +
-          '</span><span class="lim-u">&uarr; ' + esc(mbps(r.effective_up_mbps || 0)) + '</span>' : '<span class="na">no limit</span>') + '</td>' +
+          '</span><span class="lim-u">&uarr; ' + esc(mbps(r.effective_up_mbps || 0)) + '</span>' + origineLimite(r)
+          : '<span class="na">no limit</span>') + '</td>' +
         '<td class="sticky-actions"><div class="cli-acts">' +
           (b ? '<button class="icon-btn on" data-cli-stop="' + esc(r.login) + '" title="Stop boost" aria-label="Stop boost"' + dis + '>' +
               '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>'
@@ -14701,7 +14732,12 @@ async function loadClientPage() {
       kpi('down', 'k-down', 'Usage now', on ? vd : '0', on ? ud : 'Mbps', jaugeUsage(r, on)) +
       kpi('limit', 'k-lim', 'Limit', s.effective_down_mbps ? sansUnite(s.effective_down_mbps) : 'None',
         s.effective_down_mbps ? 'Mbps' : '', s.effective_down_mbps ? '&uarr; ' + esc(mbps(s.effective_up_mbps || 0)) +
-          ' up · ' + esc(SOURCE_LIMITE[s.limit_source] || '') : 'no limit applied') +
+          ' up · ' + (s.limit_source === 'schedule' && (s.schedule_name || r.schedule_name)
+            // Le scheduler qui la fixe EN CE MOMENT, sa plage, et le forfait normal.
+            ? '<b>' + esc(s.schedule_name || r.schedule_name) + '</b>' +
+              ((s.schedule_window || r.schedule_window) ? ' (' + esc(s.schedule_window || r.schedule_window) + ')' : '') +
+              ((Number(s.plan_down_mbps || r.plan_down_mbps) || 0) ? ' · plan &darr; ' + esc(mbps(s.plan_down_mbps || r.plan_down_mbps)) : '')
+            : esc(SOURCE_LIMITE[s.limit_source] || '')) : 'no limit applied') +
       // L'EXPERIENCE plutot que la latence seule : une note, un mot, et ce
       // qui la fait (latence, lenteur sous charge, pertes).
       (sante && sante.experience && sante.experience.score != null
