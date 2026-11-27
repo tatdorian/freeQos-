@@ -214,7 +214,7 @@ def test_une_fiche_declaree_avant_la_session_retire_la_session_ensuite(app_clien
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
-def test_une_fiche_de_l_api_n_est_jamais_fusionnee(app_client, routeur) -> None:  # noqa: F811
+def test_une_fiche_de_l_api_n_est_jamais_fusionnee_mais_l_emporte(app_client, routeur) -> None:  # noqa: F811
     ecriture, _lecture = _cles(app_client)
     cle = {"Authorization": f"Bearer {ecriture}"}
     _brancher(app_client, cle)
@@ -229,9 +229,30 @@ def test_une_fiche_de_l_api_n_est_jamais_fusionnee(app_client, routeur) -> None:
 
     assert app_client.portal is not None
     app_client.portal.call(marquer_api)
+    # Un scheduler visait la session : il passera a la fiche declaree.
+    r = app_client.post(
+        "/api/v1/bandwidth-schedules",
+        headers=cle,
+        json={
+            "name": "Night",
+            "timezone": "Africa/Niamey",
+            "scope": "subscribers",
+            "targets": ["dupont"],
+            "windows": [{"start": "22:00", "end": "06:00", "down_mbps": 8, "up_mbps": 8}],
+        },
+    )
+    assert r.status_code == 201, r.text
+    ident = r.json()["id"]
     r = app_client.post("/api/v1/jobs/merge_clients/run", headers=cle)
     assert r.status_code == 200, r.text
+    # La fiche de l'API reste (jamais fusionnee) et l'emporte : la session qui
+    # porte son IP est retiree, son scheduler la suit.
     assert "SVC-0042" in _references(app_client, cle)
+    retires = app_client.get("/api/v1/clients/removed", headers=cle).json()
+    assert "dupont" in [c["login"] for c in retires["clients"]]
+    horaires = app_client.get("/api/v1/bandwidth-schedules", headers=cle).json()
+    liste = horaires["schedules"] if isinstance(horaires, dict) else horaires
+    assert next(h for h in liste if h["id"] == ident)["targets"] == ["SVC-0042"]
 
 
 @pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
