@@ -812,6 +812,36 @@ def masked_queues(rows: Sequence[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return masquees
 
 
+def _files_orphelines(
+    desired_queues: Sequence[QueueSpec], actual_queues: Sequence[dict[str, Any]]
+) -> set[str]:
+    """Nos files que personne ne veut, posees sur la cible exacte d'une file voulue.
+
+    Egalite de cible seulement (jamais un recouvrement de sous-reseau : la file
+    d'un lien sur un /24 ne doit pas emporter celle d'un client hors ligne).
+    Sans file voulue sur la cible -- liste de sessions vide le temps d'une
+    coupure --, rien n'est orphelin : le PoP n'est jamais vide par cette regle.
+    """
+    voulues: set[str] = set()
+    cibles: set[str] = set()
+    for spec in desired_queues:
+        voulues.add(spec.name)
+        voulues.update(spec.legacy_names)
+        cible = normalise_field(spec.target) or ""
+        if cible:
+            cibles.add(cible)
+    orphelines: set[str] = set()
+    for row in actual_queues:
+        nom = str(row.get("name") or "")
+        if not nom or nom in voulues or not _is_managed(row):
+            continue
+        if not nom.startswith(PREFIX) and row.get("_freeqos") is not True:
+            continue
+        if (normalise_field(str(row.get("target") or "")) or "") in cibles:
+            orphelines.add(nom)
+    return orphelines
+
+
 def build_plan(
     router_name: str,
     *,
@@ -882,6 +912,12 @@ def build_plan(
     # suit une autre visant le meme trafic ne bride RIEN : corriger son debit
     # donnerait un plan vert sur un abonne qui passe sans plafond. On le dit.
     deja_masquees = masked_queues(actual_queues)
+
+    # ORPHELINES : nos anciennes files, voulues par personne, posees sur la
+    # cible EXACTE d'une file voulue (fiche fusionnee, client renomme). Placees
+    # plus haut, elles prennent tout le trafic du client avec un debit fige ;
+    # la sienne ne mesure et ne bride plus rien. Elles partent, meme sans purge.
+    orphelines = _files_orphelines(desired_queues, actual_queues)
 
     # Files tierces indexees par cible. RouterOS n'evalue les files ``simple``
     # qu'en liste : quand deux files visent la meme cible, seule la PREMIERE
@@ -961,7 +997,7 @@ def build_plan(
             continue
 
         masque = deja_masquees.get(file_spec.name)
-        if masque is not None:
+        if masque is not None and str(masque.get("by") or "") not in orphelines:
             plan.conflicts.append(
                 PlanConflict(
                     name=file_spec.name,
@@ -1018,7 +1054,7 @@ def build_plan(
         else:
             plan.unchanged += 1
 
-    a_retirer = set(remove_names)
+    a_retirer = set(remove_names) | orphelines
     if prune or a_retirer:
         # Nos files devenues inutiles (abonne parti, lien retire). On ne touche
         # qu'a ce qui porte notre marque.
@@ -1041,7 +1077,10 @@ def build_plan(
                     target_id=str(row.get(".id") or row.get("id") or ""),
                     name=nom,
                     reason=(
-                        "no rate any more: a queue that limits nothing is not kept"
+                        "orphan: an old freeQoS queue on a client's target, it shadowed "
+                        "the client's own queue"
+                        if nom in orphelines
+                        else "no rate any more: a queue that limits nothing is not kept"
                         if nom in a_retirer
                         else "no longer in the desired state"
                     ),

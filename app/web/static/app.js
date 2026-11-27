@@ -13855,7 +13855,8 @@ async function filesDuRouteur(routeur) {
       ? '<div class="notice warn"><strong>' + files.filter((q) => q.same_target_as.length).length +
         ' queue(s) share an address with another queue.</strong><span class="hint">RouterOS applies only the ' +
         'first queue of an address: the other one neither limits nor measures. Keep the queue of the client ' +
-        'declared by hand, remove the other.</span></div>'
+        'declared by hand, remove the other. A queue marked “freeQoS · no client” is an old one: freeQoS ' +
+        'removes it by itself at the next pass.</span></div>'
       : '<div class="notice ok">No duplicate: one queue per address.</div>') +
       (vues.length
         ? '<div class="table-wrap"><table><thead><tr><th></th><th>Queue</th><th>Target</th><th>Limit</th>' +
@@ -13866,6 +13867,7 @@ async function filesDuRouteur(routeur) {
             (q.disabled ? ' <span class="badge">disabled</span>' : '') + '</td><td><code>' + esc(q.target || '-') +
             '</code></td><td>' + esc(q.max_limit || '-') + '</td><td>' +
             (q.dynamic ? '<span class="badge">router (dynamic)</span>'
+              : q.orphan ? '<span class="badge crit" title="Old freeQoS queue that belongs to no client and hides the client\'s own queue. freeQoS removes it at the next pass.">freeQoS · no client</span>'
               : q.ours ? '<span class="badge ok">freeQoS</span>' : '<span class="badge warn">by hand</span>') +
             '</td><td>' + (q.same_target_as.length ? esc(q.same_target_as.join(', ')) : '<span class="na">-</span>') +
             '</td></tr>').join('') + '</tbody></table></div>'
