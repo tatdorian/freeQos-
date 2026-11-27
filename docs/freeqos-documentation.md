@@ -1544,7 +1544,7 @@ Points without a queue are listed like the others: a map that only showed what w
 
 ### Client queue names: the client's name, no prefix, no comment
 
-A client's queue is named **after the client** (`ACME-OFFICE`, characters RouterOS dislikes become `-`) and carries **no comment**: Winbox shows a clean list. Link queues and queue types keep their `freeqos-` prefix and `freeqos:managed` comment.
+A client's queue is named **after the client** (`ACME-OFFICE`, characters RouterOS dislikes become `-`) and carries **no comment**: Winbox shows a clean list. For a PPPoE session, the queue takes the **name entered for the client** (its client page, or the client record its session carries), not the PPPoE login: `ACME-SIEGE`, not `SESS-0042`. An existing queue named after the login is **renamed in place** at the next write (same queue, same counters). Two clients with the same name, or a name that is already another client's queue name, keep their login: a queue name never points to two clients. Measurement does not depend on the name (it follows the queue's target). Link queues and queue types keep their `freeqos-` prefix and `freeqos:managed` comment.
 
 **How freeQoS knows which queues are its own.** Since nothing is written on a client queue, freeQoS **remembers**, router by router, the names of the client queues it created itself (table `owned_queues`, reloaded at start). Only those are ever changed or removed. A queue with the same name **set by hand** is never in that memory: freeQoS never touches it, and reports a conflict (*a queue by that name already exists and was not created by freeQoS*) instead of creating a second one.
 

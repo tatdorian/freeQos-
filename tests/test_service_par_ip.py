@@ -148,7 +148,8 @@ async def test_une_ip_de_session_pppoe_donne_son_debit_a_la_session(
     assert rapport["state"] == "file-posee"
     assert rapport["session"] == "dupont"
     files = [a for a in ecriture.executed if a.path == "/queue/simple"]
-    assert [a.name for a in files] == ["dupont"]
+    # Une seule file, celle de la session, au nom SAISI du client.
+    assert [a.name for a in files] == ["svc-dupont"]
     assert files[0].fields["max-limit"] == "20000000/100000000"
 
 

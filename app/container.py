@@ -421,6 +421,7 @@ async def build_container(settings: Settings) -> Container:
     shaping.emergencies_repo = emergencies_repo
     await shaping.load_emergencies()
     shaping.exclusions = exclusions
+    shaping.client_profiles = client_profiles_repo
 
     # Sonde de latence : TOUJOURS instanciee et planifiee. Son execution est
     # gouvernee par un drapeau basculable depuis l'interface (comme l'enforcement),
