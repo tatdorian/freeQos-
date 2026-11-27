@@ -318,6 +318,10 @@ class ShapingService:
         self.registry = registry
         # Clients retires de freeQoS (app/services/exclusions.py), branche par le conteneur.
         self.exclusions: Any = None
+        # Fiches saisies (nom du client) : la file porte ce nom sur le routeur.
+        self.client_profiles: Any = None
+        #: ``login -> nom de sa file``, tel que le dernier plan l'a pose.
+        self.queue_names: dict[str, str] = {}
         #: login -> bande passante d'urgence, relue a chaque construction de cibles.
         self._urgences: dict[str, tuple[float, float]] = {}
         #: Les urgences (page Emergency) ; relues avant chaque plan.
@@ -1435,6 +1439,7 @@ class ShapingService:
             )
             if service is not None and service.reference != login:
                 cible_abo.aliases = (service.reference,)
+                cible_abo.label = service.reference
             abonnes.append(
                 self._horaire(cible_abo, site=ligne.get("pop_name"), maintenant=maintenant)
             )
@@ -1527,8 +1532,45 @@ class ShapingService:
         retires = getattr(self, "exclusions", None)
         if retires is not None and retires.logins:
             abonnes = [a for a in abonnes if a.login not in retires]
+        await self._nommer_les_files(abonnes)
         protect_infrastructure(router_name, liens, abonnes)
         return liens, abonnes
+
+    async def _nommer_les_files(self, abonnes: list[SubscriberTarget]) -> None:
+        """LA FILE PORTE LE NOM SAISI DU CLIENT, pas son login PPPoE.
+
+        Le nom de la fiche (« ACME-SIEGE ») plutot que « OF0265 » : c'est ce que
+        l'exploitant cherche dans Winbox. Deux clients au meme nom, ou un nom qui
+        est deja celui d'une autre file, gardent leur login : un nom de file est
+        une cle, il ne doit jamais designer deux clients.
+        """
+        profils = getattr(self, "client_profiles", None)
+        if profils is not None:
+            try:
+                noms = {
+                    str(p["login"]): str(p.get("display_name") or "").strip()
+                    for p in await profils.list_all()
+                }
+            except Exception as exc:  # noqa: BLE001 - sans fiche, le login nomme la file
+                logger.info("Noms des clients illisibles : %s", exc)
+                noms = {}
+            for abonne in abonnes:
+                if abonne.kind != KIND_STATIC and noms.get(abonne.login):
+                    abonne.label = noms[abonne.login]
+        logins = {subscriber_queue_name(a.login).lower() for a in abonnes}
+        compte: dict[str, int] = {}
+        for abonne in abonnes:
+            compte[abonne.queue_name.lower()] = compte.get(abonne.queue_name.lower(), 0) + 1
+        for abonne in abonnes:
+            if abonne.label is None:
+                continue
+            nom = abonne.queue_name.lower()
+            if compte[nom] > 1 or (
+                nom in logins and nom != subscriber_queue_name(abonne.login).lower()
+            ):
+                abonne.label = None
+        for abonne in abonnes:
+            self.queue_names[abonne.login] = abonne.queue_name
 
     def _ports_par_vlan(self, router_name: str) -> dict[int, list[str]]:
         """``identifiant de VLAN -> ports physiques`` sur ce routeur.
@@ -2018,10 +2060,10 @@ class ShapingService:
     ETAT_CONFLIT = "conflit"
     ETAT_ERREUR = "erreur"
 
-    @staticmethod
-    def queue_name_for(reference: str) -> str:
-        """Le nom de file d'un client declare. Meme regle que le planificateur."""
-        return subscriber_queue_name(reference)
+    def queue_name_for(self, reference: str) -> str:
+        """Le nom de file d'un client. Meme regle que le planificateur : le nom
+        saisi quand le dernier plan l'a pose, le login sinon."""
+        return self.queue_names.get(reference) or subscriber_queue_name(reference)
 
     async def enforce_static_client(
         self,
@@ -2553,6 +2595,13 @@ class ShapingService:
             ligne["state"] = self.ETAT_ERREUR
             ligne["reason"] = f"{type(exc).__name__}: {exc}"
             return ligne
+
+        # Sa file porte son nom SAISI (cf. ``_nommer_les_files``) : c'est le plan
+        # qui le sait, pas le login.
+        propre = next((a for a in abonnes if a.login == reference), None)
+        if propre is not None and propre.queue_name != queue_name:
+            queue_name = propre.queue_name
+            ligne["queue"] = queue_name
 
         # La fiche a IP fixe fusionnee dans une session : sa file est celle de la
         # session. On la retrouve par son alias.
@@ -3719,7 +3768,7 @@ class ShapingService:
             # Un client qui n'a plus aucun debit perd sa file TOUT DE SUITE, meme
             # dans une application automatique sans purge (bascule horaire, boost
             # echu) : sinon il restait bride jusqu'a la reconciliation suivante.
-            remove_names=queues_without_rate(ecartes) | self._files_des_retires(),
+            remove_names=queues_without_rate(ecartes, subscribers) | self._files_des_retires(),
         )
         plan.skipped = ecartes
         return plan
@@ -3732,6 +3781,8 @@ class ShapingService:
         noms: set[str] = set()
         for login in retires.logins:
             noms.update((subscriber_queue_name(login), legacy_subscriber_queue_name(login)))
+            if login in self.queue_names:
+                noms.add(self.queue_names[login])
         return noms
 
     # ------------------------------------------------------ plafonds en amont

@@ -582,4 +582,5 @@ def test_fiche_ip_fixe_fusionnee_dans_une_session_gardee_son_mode_s_applique(
     file = _file(routeur, "10.20.0.50")
     assert file is not None, routeur.simple_queue_rows
     assert file["max-limit"] == "200000000/200000000"
-    assert file["name"] == "sess-0042"
+    # La file de la session porte le nom SAISI de la fiche, pas le login PPPoE.
+    assert file["name"] == "office"
