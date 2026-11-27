@@ -361,9 +361,12 @@ async def _fusionner(
             actor,
         )
         await conn.execute("DELETE FROM client_profiles WHERE login = $1", reference)
-        # La fiche en double, et son abonne (son historique double celui de la session).
+        # La fiche en double disparait. SON ABONNE N'EST PLUS SUPPRIME : la
+        # suppression effacait en cascade tout son historique dans les mesures
+        # compressees -- des minutes, voire sans fin, et la tache restait
+        # bloquee (« merge_clients en retard ») sans traiter les doublons
+        # suivants. Sans fiche, il est cache des listes et n'est plus mesure.
         await conn.execute("DELETE FROM static_clients WHERE id = $1", fiche["id"])
-        await conn.execute("DELETE FROM subscribers WHERE login = $1", reference)
 
     collection = getattr(container, "collection", None)
     if collection is not None:

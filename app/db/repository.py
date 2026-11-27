@@ -253,6 +253,10 @@ class MetricsRepository:
                    AND ($3::text IS NULL OR s.kind = $3)
                    -- Un client RETIRE de freeQoS n'est plus un client.
                    AND NOT EXISTS (SELECT 1 FROM excluded_clients x WHERE x.login = s.login)
+                   -- Ni un client a IP fixe dont la fiche a disparu (fusionnee).
+                   AND (s.kind <> 'static'
+                        OR EXISTS (SELECT 1 FROM static_clients sc
+                                    WHERE sc.reference = s.login))
                  ORDER BY s.login
                  LIMIT $4 OFFSET $5
                 """,

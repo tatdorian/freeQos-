@@ -7,6 +7,7 @@ FastAPI ni a PostgreSQL.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -843,7 +844,13 @@ async def build_container(settings: Settings) -> Container:
         from app.services.client_merge import repair_schedule_targets
 
         try:
-            await merge_duplicates(conteneur)
+            # BORNEE : une etape qui ne rend pas la main ne bloque plus la tache
+            # pour toujours ; elle repart au cycle suivant.
+            faits = await asyncio.wait_for(merge_duplicates(conteneur), timeout=50.0)
+            if faits:
+                logger.info("Doublons de clients traites : %d", len(faits))
+        except TimeoutError:
+            logger.warning("Doublons de clients : plus de 50 s, repris au cycle suivant")
         except Exception:  # noqa: BLE001
             logger.exception("Doublons de clients : traitement impossible")
         # Les schedulers restes sur le nom d'un client fusionne : rebranches.
