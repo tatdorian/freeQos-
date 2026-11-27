@@ -82,3 +82,43 @@ def test_voir_les_doublons_et_retirer_celui_qu_on_choisit(app_client, routeur) -
     assert "SESS-0040" not in noms
     assert {"ACME-SHOP", "<pppoe-x>"} <= noms
     assert _file(routeur, "10.20.0.40")["max-limit"] == "16000000/16000000"
+
+
+@pytest.mark.skipif(not DSN, reason="TEST_DATABASE_URL absent")
+def test_file_orpheline_signalee_puis_retiree(app_client, routeur) -> None:  # noqa: F811
+    """Fiche fusionnee : sa file restait EN TETE, debit fige, sur l'adresse du
+    client. L'ecran la signale ; le passage suivant la retire, sans purge."""
+    from app.enforcement.models import OWNED_QUEUES
+
+    ecriture, _lecture = _cles(app_client)
+    cle = {"Authorization": f"Bearer {ecriture}"}
+    _brancher(app_client, cle)
+    r = app_client.post(
+        "/api/v1/static-clients",
+        headers=cle,
+        json={
+            "reference": "ACME-SHOP",
+            "pop_name": "PoP Test",
+            "address": "10.20.0.40",
+            "plan_down_mbps": 16,
+            "plan_up_mbps": 16,
+        },
+    )
+    assert r.status_code == 201, r.text
+    appliquer = {"router": "nas-test", "dry_run": False, "confirm": True, "prune": False}
+    assert app_client.post("/api/v1/shaping/apply", headers=cle, json=appliquer).status_code == 200
+    # L'ancienne file, posee par freeQoS, EN TETE de liste sur la meme adresse.
+    routeur.simple_queue_rows.insert(
+        0, {".id": "*OLD", "name": "ACME-OLD", "target": "10.20.0.40/32", "max-limit": "8M/8M"}
+    )
+    OWNED_QUEUES.setdefault("nas-test", set()).add("ACME-OLD")
+
+    d = app_client.get("/api/v1/pops/routers/nas-test/simple-queues", headers=cle).json()
+    par_nom = {q["name"]: q for q in d["queues"]}
+    assert par_nom["ACME-OLD"]["orphan"] is True
+    assert par_nom["ACME-SHOP"]["orphan"] is False
+
+    r = app_client.post("/api/v1/shaping/apply", headers=cle, json=appliquer)
+    assert r.status_code == 200, r.text
+    noms = {q["name"] for q in routeur.simple_queue_rows}
+    assert "ACME-OLD" not in noms and "ACME-SHOP" in noms
